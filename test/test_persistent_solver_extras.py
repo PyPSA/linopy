@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from linopy import Model
-from linopy.persistent import RebuildReason
+from linopy.persistent import RebuildReason, UpdatesDisabledError
 from linopy.solvers import Gurobi, Highs, Solver
 
 _BACKENDS: dict[str, tuple[type[Solver], dict[str, Any]]] = {
@@ -52,7 +52,7 @@ def _base_model() -> Model:
 
 def _built(solver_name: str, model: Model) -> Solver:
     cls, opts = _BACKENDS[solver_name]
-    s = cls(model=model, io_api="direct")
+    s = cls(model=model, io_api="direct", track_updates=True)
     s.options = opts
     s._build()
     return s
@@ -381,3 +381,40 @@ def test_solve_without_assign_does_not_mutate_model(solver_name: str) -> None:
 
     s.solve(assign=True)
     assert m.objective._value is not None
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_track_updates_false_skips_snapshot(solver_name: str) -> None:
+    cls, opts = _BACKENDS[solver_name]
+    m = _base_model()
+    s = cls(model=m, io_api="direct", track_updates=False)
+    s.options = opts
+    s._build()
+    assert s.snapshot is None
+    s.solve(assign=True)
+    assert s.snapshot is None
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_track_updates_false_rejects_resolve_with_model(solver_name: str) -> None:
+    cls, opts = _BACKENDS[solver_name]
+    m = _base_model()
+    s = cls(model=m, io_api="direct", track_updates=False)
+    s.options = opts
+    s._build()
+    s.solve(assign=True)
+
+    m.variables["x"].lower.values[...] = 6.0
+    with pytest.raises(UpdatesDisabledError, match="track_updates=False"):
+        s.solve(m, assign=True)
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_track_updates_false_rejects_update(solver_name: str) -> None:
+    cls, opts = _BACKENDS[solver_name]
+    m = _base_model()
+    s = cls(model=m, io_api="direct", track_updates=False)
+    s.options = opts
+    s._build()
+    with pytest.raises(UpdatesDisabledError, match="track_updates=False"):
+        s.update(m)

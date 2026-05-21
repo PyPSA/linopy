@@ -14,3 +14,10 @@ class RebuildRequiredError(RuntimeError):
     def __init__(self, reason: object, message: str | None = None) -> None:
         self.reason = reason
         super().__init__(message or f"rebuild required: {reason}")
+
+
+class UpdatesDisabledError(RuntimeError):
+    """Raised when an in-place update is requested on a solver built with
+    ``track_updates=False``. Reconstruct the solver with ``track_updates=True``
+    to enable diff-based updates.
+    """

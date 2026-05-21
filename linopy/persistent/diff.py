@@ -9,6 +9,8 @@ import numpy as np
 from collections.abc import Iterable
 
 from linopy.persistent.snapshot import (
+    ContainerConBuffers,
+    ContainerVarBuffers,
     ModelSnapshot,
     _coord_snapshot,
     _extract_con_buffers,
@@ -17,7 +19,9 @@ from linopy.persistent.snapshot import (
 )
 
 if TYPE_CHECKING:
+    from linopy.constraints import ConstraintBase
     from linopy.model import Model
+    from linopy.variables import Variable
 
 
 class RebuildReason(enum.Enum):
@@ -179,7 +183,60 @@ class ModelDiff:
         per-container coord-equality on every dim *not* in the set — a
         mismatch triggers ``RebuildReason.COORD_REINDEX``.
         """
-        return _compute_diff(snapshot, model, same_model, ignore_dims)
+        check_coords = ignore_dims is not None
+        ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
+        diff = cls()
+
+        var_names = tuple(model.variables)
+        con_names = tuple(model.constraints)
+        if (
+            snapshot.structural_key.var_container_names != var_names
+            or snapshot.structural_key.con_container_names != con_names
+        ):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_CONTAINERS
+            return diff
+
+        var_label_index = model.variables.label_index
+        con_label_index = model.constraints.label_index
+        if not np.array_equal(snapshot.structural_key.vlabels, var_label_index.vlabels):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
+            return diff
+        if not np.array_equal(snapshot.structural_key.clabels, con_label_index.clabels):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
+            return diff
+
+        var_l2p = var_label_index.label_to_pos
+        con_l2p = con_label_index.label_to_pos
+
+        for name, var in model.variables.items():
+            base_coords = snapshot.var_coords[name] if check_coords else None
+            reason = _diff_var_container(
+                diff, name, var, snapshot.var_buffers[name],
+                base_coords, var_l2p, ignored, check_coords,
+            )
+            if reason is not None:
+                diff.rebuild_reason = reason
+                return diff
+
+        for name, con in model.constraints.items():
+            base_coords = snapshot.con_coords[name] if check_coords else None
+            skip_coef_compare = same_model and not con._coef_dirty
+            reason = _diff_con_container(
+                diff, name, con, snapshot.con_buffers[name],
+                base_coords, var_l2p, con_l2p, ignored, check_coords,
+                skip_coef_compare,
+            )
+            if reason is not None:
+                diff.rebuild_reason = reason
+                return diff
+
+        reason = _diff_objective(
+            diff, model,
+            snapshot.obj_c, snapshot.obj_quad_present, snapshot.obj_sense,
+        )
+        if reason is not None:
+            diff.rebuild_reason = reason
+        return diff
 
     @classmethod
     def from_models(
@@ -188,15 +245,73 @@ class ModelDiff:
         model_b: Model,
         ignore_dims: Iterable[str] | None = None,
     ) -> ModelDiff:
-        """Diff two linopy models directly.
+        """Diff two linopy models directly, without capturing a snapshot.
 
-        ``model_a`` is the baseline (snapshotted internally), ``model_b`` is
-        the target. ``same_model`` is forced to ``False`` so the coefficient
-        compare runs unconditionally — no ``_coef_dirty`` shortcut applies
-        between independently-built models.
+        ``model_a`` is the baseline, ``model_b`` is the target. The
+        coefficient comparison runs unconditionally — no ``_coef_dirty``
+        shortcut applies between independently-built models.
         """
-        snapshot = ModelSnapshot.capture(model_a)
-        return _compute_diff(snapshot, model_b, same_model=False, ignore_dims=ignore_dims)
+        check_coords = ignore_dims is not None
+        ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
+        diff = cls()
+
+        var_names_a = tuple(model_a.variables)
+        con_names_a = tuple(model_a.constraints)
+        if (
+            var_names_a != tuple(model_b.variables)
+            or con_names_a != tuple(model_b.constraints)
+        ):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_CONTAINERS
+            return diff
+
+        var_idx_a = model_a.variables.label_index
+        con_idx_a = model_a.constraints.label_index
+        var_idx_b = model_b.variables.label_index
+        con_idx_b = model_b.constraints.label_index
+        if not np.array_equal(var_idx_a.vlabels, var_idx_b.vlabels):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
+            return diff
+        if not np.array_equal(con_idx_a.clabels, con_idx_b.clabels):
+            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
+            return diff
+
+        var_l2p = var_idx_b.label_to_pos
+        con_l2p = con_idx_b.label_to_pos
+
+        for name, var_b in model_b.variables.items():
+            var_a = model_a.variables[name]
+            base_buf = _extract_var_buffers(var_a)
+            base_coords = _coord_snapshot(var_a) if check_coords else None
+            reason = _diff_var_container(
+                diff, name, var_b, base_buf,
+                base_coords, var_l2p, ignored, check_coords,
+            )
+            if reason is not None:
+                diff.rebuild_reason = reason
+                return diff
+
+        for name, con_b in model_b.constraints.items():
+            con_a = model_a.constraints[name]
+            base_buf = _extract_con_buffers(con_a, var_l2p)
+            base_coords = _coord_snapshot(con_a) if check_coords else None
+            reason = _diff_con_container(
+                diff, name, con_b, base_buf,
+                base_coords, var_l2p, con_l2p, ignored, check_coords,
+                skip_coef_compare=False,
+            )
+            if reason is not None:
+                diff.rebuild_reason = reason
+                return diff
+
+        reason = _diff_objective(
+            diff, model_b,
+            _objective_linear_vector(model_a),
+            model_a.objective.is_quadratic,
+            model_a.objective.sense,
+        )
+        if reason is not None:
+            diff.rebuild_reason = reason
+        return diff
 
 
 def _coords_equal(
@@ -209,150 +324,131 @@ def _coords_equal(
     return all(np.array_equal(a[k], b[k]) for k in keys_a)
 
 
-def _compute_diff(
-    snapshot: ModelSnapshot,
+def _diff_var_container(
+    diff: ModelDiff,
+    name: str,
+    var: Variable,
+    base_buf: ContainerVarBuffers,
+    base_coords: dict[str, np.ndarray] | None,
+    var_l2p: np.ndarray,
+    ignored: frozenset[str],
+    check_coords: bool,
+) -> RebuildReason | None:
+    new_buf = _extract_var_buffers(var)
+    if new_buf.lower.shape != base_buf.lower.shape:
+        return RebuildReason.COORD_REINDEX
+    if not np.array_equal(new_buf.active_labels, base_buf.active_labels):
+        return RebuildReason.STRUCTURAL_LABELS
+    if check_coords and not _coords_equal(base_coords, _coord_snapshot(var), ignored):
+        return RebuildReason.COORD_REINDEX
+
+    lower_diff = new_buf.lower != base_buf.lower
+    upper_diff = new_buf.upper != base_buf.upper
+    type_changed = new_buf.type != base_buf.type
+
+    bound_mask = lower_diff | upper_diff
+    if not (bound_mask.any() or type_changed):
+        return None
+
+    update = ContainerVarUpdate(type_change=new_buf.type if type_changed else None)
+    if bound_mask.any():
+        local_idx = np.flatnonzero(bound_mask)
+        update.bounds_indices = var_l2p[
+            new_buf.active_labels[local_idx]
+        ].astype(np.int32, copy=False)
+        update.lower = new_buf.lower[local_idx]
+        update.upper = new_buf.upper[local_idx]
+    diff.vars[name] = update
+    return None
+
+
+def _diff_con_container(
+    diff: ModelDiff,
+    name: str,
+    con: ConstraintBase,
+    base_buf: ContainerConBuffers,
+    base_coords: dict[str, np.ndarray] | None,
+    var_l2p: np.ndarray,
+    con_l2p: np.ndarray,
+    ignored: frozenset[str],
+    check_coords: bool,
+    skip_coef_compare: bool,
+) -> RebuildReason | None:
+    new_buf = _extract_con_buffers(con, var_l2p)
+    if new_buf.coeffs.shape != base_buf.coeffs.shape:
+        return RebuildReason.SPARSITY
+    if not np.array_equal(new_buf.active_labels, base_buf.active_labels):
+        return RebuildReason.STRUCTURAL_LABELS
+    if check_coords and not _coords_equal(base_coords, _coord_snapshot(con), ignored):
+        return RebuildReason.COORD_REINDEX
+
+    n_rows = new_buf.active_labels.size
+    if n_rows == 0:
+        return None
+
+    if skip_coef_compare:
+        row_value_changed = np.zeros(n_rows, dtype=bool)
+        row_struct_changed = np.zeros(n_rows, dtype=bool)
+    else:
+        row_struct_changed = np.any(new_buf.vars != base_buf.vars, axis=-1)
+        row_value_changed = np.any(new_buf.coeffs != base_buf.coeffs, axis=-1)
+
+    if row_struct_changed.any():
+        return RebuildReason.SPARSITY
+
+    rhs_changed = new_buf.rhs != base_buf.rhs
+    sign_changed = new_buf.sign != base_buf.sign
+
+    if not (row_value_changed.any() or rhs_changed.any() or sign_changed.any()):
+        return None
+
+    update = ContainerRowUpdate()
+    if row_value_changed.any():
+        idx = np.flatnonzero(row_value_changed)
+        update.coef_row_indices = con_l2p[
+            new_buf.active_labels[idx]
+        ].astype(np.int32, copy=False)
+        update.coef_vars = new_buf.vars[idx]
+        update.coef_values = new_buf.coeffs[idx]
+    if rhs_changed.any():
+        idx = np.flatnonzero(rhs_changed)
+        update.rhs_row_indices = con_l2p[
+            new_buf.active_labels[idx]
+        ].astype(np.int32, copy=False)
+        update.rhs_values = new_buf.rhs[idx]
+        update.rhs_signs = new_buf.sign[idx]
+    if sign_changed.any():
+        idx = np.flatnonzero(sign_changed)
+        update.sign_row_indices = con_l2p[
+            new_buf.active_labels[idx]
+        ].astype(np.int32, copy=False)
+        update.sign_values = new_buf.sign[idx]
+    diff.cons[name] = update
+    return None
+
+
+def _diff_objective(
+    diff: ModelDiff,
     model: Model,
-    same_model: bool,
-    ignore_dims: Iterable[str] | None,
-) -> ModelDiff:
-    check_coords = ignore_dims is not None
-    ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
-    diff = ModelDiff()
-
-    var_names = tuple(model.variables)
-    con_names = tuple(model.constraints)
-    if (
-        snapshot.structural_key.var_container_names != var_names
-        or snapshot.structural_key.con_container_names != con_names
-    ):
-        diff.rebuild_reason = RebuildReason.STRUCTURAL_CONTAINERS
-        return diff
-
-    var_label_index = model.variables.label_index
-    con_label_index = model.constraints.label_index
-    if not np.array_equal(snapshot.structural_key.vlabels, var_label_index.vlabels):
-        diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
-        return diff
-    if not np.array_equal(snapshot.structural_key.clabels, con_label_index.clabels):
-        diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
-        return diff
-
-    var_l2p = var_label_index.label_to_pos
-    con_l2p = con_label_index.label_to_pos
-
-    for name, var in model.variables.items():
-        snap_buf = snapshot.var_buffers[name]
-        new_buf = _extract_var_buffers(var)
-        if new_buf.lower.shape != snap_buf.lower.shape:
-            diff.rebuild_reason = RebuildReason.COORD_REINDEX
-            return diff
-        if not np.array_equal(new_buf.active_labels, snap_buf.active_labels):
-            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
-            return diff
-        if check_coords and not _coords_equal(
-            snapshot.var_coords[name], _coord_snapshot(var), ignored
-        ):
-            diff.rebuild_reason = RebuildReason.COORD_REINDEX
-            return diff
-
-        lower_diff = new_buf.lower != snap_buf.lower
-        upper_diff = new_buf.upper != snap_buf.upper
-        type_changed = new_buf.type != snap_buf.type
-
-        bound_mask = lower_diff | upper_diff
-        if not (bound_mask.any() or type_changed):
-            continue
-
-        update = ContainerVarUpdate(type_change=new_buf.type if type_changed else None)
-        if bound_mask.any():
-            local_idx = np.flatnonzero(bound_mask)
-            update.bounds_indices = var_l2p[
-                new_buf.active_labels[local_idx]
-            ].astype(np.int32, copy=False)
-            update.lower = new_buf.lower[local_idx]
-            update.upper = new_buf.upper[local_idx]
-        diff.vars[name] = update
-
-    for name, con in model.constraints.items():
-        snap_buf = snapshot.con_buffers[name]
-        new_buf = _extract_con_buffers(con, var_l2p)
-
-        if new_buf.coeffs.shape != snap_buf.coeffs.shape:
-            diff.rebuild_reason = RebuildReason.SPARSITY
-            return diff
-        if not np.array_equal(new_buf.active_labels, snap_buf.active_labels):
-            diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
-            return diff
-        if check_coords and not _coords_equal(
-            snapshot.con_coords[name], _coord_snapshot(con), ignored
-        ):
-            diff.rebuild_reason = RebuildReason.COORD_REINDEX
-            return diff
-
-        n_rows = new_buf.active_labels.size
-        if n_rows == 0:
-            continue
-
-        skip_coef_compare = same_model and not con._coef_dirty
-        if skip_coef_compare:
-            row_value_changed = np.zeros(n_rows, dtype=bool)
-            row_struct_changed = np.zeros(n_rows, dtype=bool)
-        else:
-            row_struct_changed = np.any(new_buf.vars != snap_buf.vars, axis=-1)
-            row_value_changed = np.any(new_buf.coeffs != snap_buf.coeffs, axis=-1)
-
-        if row_struct_changed.any():
-            diff.rebuild_reason = RebuildReason.SPARSITY
-            return diff
-
-        rhs_changed = new_buf.rhs != snap_buf.rhs
-        sign_changed = new_buf.sign != snap_buf.sign
-
-        if not (row_value_changed.any() or rhs_changed.any() or sign_changed.any()):
-            continue
-
-        update = ContainerRowUpdate()
-        if row_value_changed.any():
-            idx = np.flatnonzero(row_value_changed)
-            update.coef_row_indices = con_l2p[
-                new_buf.active_labels[idx]
-            ].astype(np.int32, copy=False)
-            update.coef_vars = new_buf.vars[idx]
-            update.coef_values = new_buf.coeffs[idx]
-        if rhs_changed.any():
-            idx = np.flatnonzero(rhs_changed)
-            update.rhs_row_indices = con_l2p[
-                new_buf.active_labels[idx]
-            ].astype(np.int32, copy=False)
-            update.rhs_values = new_buf.rhs[idx]
-            update.rhs_signs = new_buf.sign[idx]
-        if sign_changed.any():
-            idx = np.flatnonzero(sign_changed)
-            update.sign_row_indices = con_l2p[
-                new_buf.active_labels[idx]
-            ].astype(np.int32, copy=False)
-            update.sign_values = new_buf.sign[idx]
-        diff.cons[name] = update
-
+    base_obj_c: np.ndarray,
+    base_obj_quad: bool,
+    base_obj_sense: str,
+) -> RebuildReason | None:
     obj_quad_present = model.objective.is_quadratic
-    if obj_quad_present != snapshot.obj_quad_present:
-        diff.rebuild_reason = RebuildReason.QUAD_OBJ
-        return diff
+    if obj_quad_present != base_obj_quad:
+        return RebuildReason.QUAD_OBJ
     if obj_quad_present:
-        diff.rebuild_reason = RebuildReason.QUAD_OBJ
-        return diff
+        return RebuildReason.QUAD_OBJ
 
     obj_c = _objective_linear_vector(model)
-    if obj_c.shape != snapshot.obj_c.shape:
-        diff.rebuild_reason = RebuildReason.COORD_REINDEX
-        return diff
-    obj_diff_mask = obj_c != snapshot.obj_c
+    if obj_c.shape != base_obj_c.shape:
+        return RebuildReason.COORD_REINDEX
+    obj_diff_mask = obj_c != base_obj_c
     if obj_diff_mask.any():
         idx = np.flatnonzero(obj_diff_mask).astype(np.int32, copy=False)
         diff.obj_c_indices = idx
         diff.obj_c_values = obj_c[idx]
 
-    if model.objective.sense != snapshot.obj_sense:
+    if model.objective.sense != base_obj_sense:
         diff.obj_sense = model.objective.sense
-
-    return diff
+    return None

@@ -66,7 +66,7 @@ def other_model() -> Model:
 
 
 def _built(model: Model) -> FakeSolver:
-    s = FakeSolver(model=model, io_api="direct")
+    s = FakeSolver(model=model, io_api="direct", track_updates=True)
     s._build()
     return s
 

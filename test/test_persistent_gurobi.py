@@ -21,7 +21,7 @@ def _base_model() -> Model:
 
 
 def _built(model: Model) -> Gurobi:
-    s = Gurobi(model=model, io_api="direct")
+    s = Gurobi(model=model, io_api="direct", track_updates=True)
     s.options = {"OutputFlag": 0}
     s._build()
     return s

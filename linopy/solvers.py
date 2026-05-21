@@ -52,6 +52,7 @@ from linopy.persistent import (
     RebuildReason,
     RebuildRequiredError,
     UnsupportedUpdate,
+    UpdatesDisabledError,
 )
 
 
@@ -393,11 +394,22 @@ class Solver(ABC, Generic[EnvType]):
     Subclasses provide ``_build_direct`` / ``_run_direct`` (when supporting the
     direct API) and ``_run_file`` (when supporting LP/MPS files). Construction
     goes via :meth:`Solver.from_name` or :meth:`Solver.from_model`.
+
+    ``track_updates`` toggles persistent-update support:
+
+    * ``False`` (default) — one-shot mode. No :class:`ModelSnapshot` is
+      captured at build time; any later ``solve(model=...)`` or
+      ``update(model)`` raises :class:`UpdatesDisabledError`. Use for
+      throw-away solver instances and high-level ``Model.solve(...)``.
+    * ``True`` — long-lived mode. A snapshot is captured at build time and
+      re-captured after each successful in-place update, enabling
+      diff-based ``solve(model=...)`` / ``update(model)`` across iterations.
     """
 
     model: Model | None = None
     io_api: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
+    track_updates: bool = False
 
     # Runtime state — never set via constructor.
     status: Status | None = field(init=False, default=None, repr=False)
@@ -510,6 +522,7 @@ class Solver(ABC, Generic[EnvType]):
         model: Model | None = None,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
+        track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
         """Construct the solver subclass registered as ``name``.
@@ -517,14 +530,30 @@ class Solver(ABC, Generic[EnvType]):
         With ``model`` supplied, the solver is built immediately. Without it,
         an unbuilt instance is returned and the first ``solve(model, ...)``
         call performs the build.
+
+        ``track_updates=False`` (default) is the one-shot mode: no
+        :class:`ModelSnapshot` is captured at build time, and any subsequent
+        ``solver.solve(model=...)`` / ``solver.update(model)`` raises
+        :class:`UpdatesDisabledError`. Pass ``track_updates=True`` for
+        long-lived solvers that want in-place diff-based updates across
+        iterations.
         """
         cls = _solver_class_for(name)
         if cls is None:
             raise ValueError(f"unknown solver: {name}")
         if model is None:
-            return cls(model=None, io_api=io_api, options=options or {})
+            return cls(
+                model=None,
+                io_api=io_api,
+                options=options or {},
+                track_updates=track_updates,
+            )
         return cls.from_model(
-            model, io_api=io_api, options=options or {}, **build_kwargs
+            model,
+            io_api=io_api,
+            options=options or {},
+            track_updates=track_updates,
+            **build_kwargs,
         )
 
     @classmethod
@@ -533,10 +562,19 @@ class Solver(ABC, Generic[EnvType]):
         model: Model,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
+        track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
-        """Instantiate and build the solver against ``model``."""
-        instance = cls(model=model, io_api=io_api, options=options or {})
+        """Instantiate and build the solver against ``model``.
+
+        See :meth:`from_name` for ``track_updates`` semantics.
+        """
+        instance = cls(
+            model=model,
+            io_api=io_api,
+            options=options or {},
+            track_updates=track_updates,
+        )
         instance._build(**build_kwargs)
         return instance
 
@@ -557,8 +595,9 @@ class Solver(ABC, Generic[EnvType]):
         self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
-            self.snapshot = ModelSnapshot.capture(self.model)
-            _clear_coef_dirty(self.model.constraints)
+            if self.track_updates:
+                self.snapshot = ModelSnapshot.capture(self.model)
+                _clear_coef_dirty(self.model.constraints)
         else:
             self._build_file(**build_kwargs)
 
@@ -640,7 +679,10 @@ class Solver(ABC, Generic[EnvType]):
         Run the prepared solver and return a :class:`Result`.
 
         With ``model`` supplied, diff against the held snapshot and either
-        apply in place or rebuild before running. Requires ``io_api='direct'``.
+        apply in place or rebuild before running. Requires ``io_api='direct'``
+        and ``track_updates=True`` at construction time; otherwise resolving
+        with a model raises :class:`UpdatesDisabledError` (the initial build
+        on the first ``solve(model, ...)`` is still allowed).
         With ``assign=True`` the Result is written back to the target Model
         via :meth:`Model.assign_result`.
 
@@ -662,6 +704,13 @@ class Solver(ABC, Generic[EnvType]):
                     self.model = model
                     self._build()
                 else:
+                    if not self.track_updates:
+                        raise UpdatesDisabledError(
+                            "Solver was constructed with track_updates=False; "
+                            "in-place updates are not available. Reconstruct "
+                            "with Solver.from_name(..., track_updates=True) "
+                            "to enable diff-based updates across solves."
+                        )
                     self._update_locked(
                         model,
                         apply=True,
@@ -698,8 +747,15 @@ class Solver(ABC, Generic[EnvType]):
     ) -> ModelDiff:
         if self.io_api != "direct":
             raise ValueError("update requires io_api='direct'")
-        if self.snapshot is None or self.solver_model is None:
+        if self.solver_model is None:
             raise RuntimeError("Solver has not been built")
+        if not self.track_updates:
+            raise UpdatesDisabledError(
+                "Solver was constructed with track_updates=False; "
+                "in-place updates are not available. Reconstruct with "
+                "Solver.from_name(..., track_updates=True) to enable "
+                "diff-based updates."
+            )
         with self._lock:
             return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
 

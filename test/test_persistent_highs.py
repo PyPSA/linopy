@@ -21,7 +21,7 @@ def _base_model() -> Model:
 
 
 def _built(model: Model) -> Highs:
-    s = Highs(model=model, io_api="direct")
+    s = Highs(model=model, io_api="direct", track_updates=True)
     s.options = {"output_flag": False}
     s._build()
     return s
