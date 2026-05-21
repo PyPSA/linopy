@@ -126,13 +126,42 @@ def _coords_to_dict(
     return result
 
 
+def _sanitize_pandas(arr: pd.Series | pd.DataFrame) -> DataArray | None:
+    """
+    Attempt to convert the pandas series or dataframe into a datarray with named coords.
+    """
+    if isinstance(arr, pd.DataFrame):
+        # A pandas dataframe, possible with multi-level columns and multi-level index
+        # Unstack all layers of columns
+        while isinstance(arr, pd.DataFrame):
+            arr = arr.unstack()  # type: ignore
+        if not isinstance(arr, pd.Series):
+            # This should not happen
+            logger.warning("Failed to unstack dataframe")
+            return None
+
+    assert isinstance(arr, pd.Series)
+    # A pandas series, possible with a multi-level index
+    index = arr.index
+
+    # We can only process pandas series/dataframes with named dimensions
+    if isinstance(index, pd.MultiIndex):
+        for name in index.names:
+            if name is None:
+                return None
+    else:
+        if index.name is None:
+            return None
+    return arr.to_xarray()
+
+
 def _validate_dataarray_bounds(
     arr: DataArray | pd.Series | pd.DataFrame | Any, coords: Any
 ) -> Any:
     """
-    Validate and expand DataArray or pandas bounds against explicit coords.
+    Validate and expand DataArray (or pandas array with all named dimensions) against explicit coords.
 
-    If ``arr`` is not a DataArray or pandas, it will be returned unchanged.
+    If ``arr`` is not a DataArray or pandas with all named dimensions, it will be returned unchanged.
     If ``arr`` is a pandas series or dataframe, it will be converted to a DataArray.
 
     - Raises ``ValueError`` if the array has dimensions not in coords.
@@ -142,13 +171,16 @@ def _validate_dataarray_bounds(
     if not isinstance(arr, (DataArray, pd.Series, pd.DataFrame)):
         return arr
 
-    type_name = "DataArray"
-    if isinstance(arr, pd.Series):
-        type_name = "Series"
-        xarr: DataArray = arr.to_xarray()
-    elif isinstance(arr, pd.DataFrame):
-        type_name = "DataFrame"
-        xarr: DataArray = arr.unstack().to_xarray()  # type: ignore
+    type_name = {
+        pd.Series: "Series",
+        pd.DataFrame: "DataFrame",
+        DataArray: "DataArray",
+    }[type(arr)]
+
+    if isinstance(arr, (pd.Series, pd.DataFrame)):
+        xarr = _sanitize_pandas(arr)
+        if xarr is None:
+            return arr
     else:
         xarr = arr
 
