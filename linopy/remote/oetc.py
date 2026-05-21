@@ -552,6 +552,9 @@ class OetcHandler:
         logger.info(f"OETC - Waiting for job {job_uuid} to complete...")
 
         while True:
+            if self.jwt.is_expired:
+                logger.info("OETC - Auth token expired; re-authenticating.")
+                self.jwt = self.__sign_in()
             try:
                 job_result = self._get_job(job_uuid)
 
@@ -883,8 +886,14 @@ class Oetc:
         return _oetc_deps_available
 
     def _session(self) -> OetcHandler:
-        """Return the authenticated handler, building it on first use."""
-        if self._handler is None:
+        """
+        Return the authenticated handler.
+
+        Builds it on first use, and rebuilds it (re-authenticating) once
+        the previous auth token has expired — so a long-lived ``Oetc``
+        keeps working across the token lifetime.
+        """
+        if self._handler is None or self._handler.jwt.is_expired:
             self._handler = OetcHandler(self.settings, _internal=True)
         return self._handler
 

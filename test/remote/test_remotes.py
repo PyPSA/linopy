@@ -59,6 +59,7 @@ def _settings_ssh() -> SshSettings:
 def _fake_oetc_handler() -> MagicMock:
     """A MagicMock(spec=OetcHandler) with the methods Oetc.submit/status/collect call."""
     h = MagicMock(spec=OetcHandler)
+    h.jwt = MagicMock(is_expired=False)  # a freshly authenticated handler
     h._upload_file_to_gcp = MagicMock(return_value="model.nc.gz")
     h._submit_job_to_compute_service = MagicMock(return_value="job-uuid")
     job_result = MagicMock()
@@ -183,6 +184,24 @@ class TestOetcClass:
         )
         result = collector.collect(job_uuid)
         assert isinstance(result, Model)
+
+    def test_expired_token_triggers_reauth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stale auth token makes the next call rebuild the handler."""
+        oetc = Oetc(_settings_oetc())
+        stale = _fake_oetc_handler()
+        stale.jwt = MagicMock(is_expired=True)
+        oetc._handler = stale
+
+        rebuilt = _fake_oetc_handler()
+        monkeypatch.setattr(
+            "linopy.remote.oetc.OetcHandler",
+            lambda settings, _internal=False: rebuilt,
+        )
+
+        assert oetc.status("job-uuid") == "RUNNING"
+        assert oetc._handler is rebuilt  # expired token -> reconnected
 
 
 # ---------------------------------------------------------------------------

@@ -776,7 +776,7 @@ class TestFileCompression:
 
             handler = OetcHandler.__new__(OetcHandler)
             handler.settings = settings
-            handler.jwt = Mock()
+            handler.jwt = Mock(is_expired=False)
             handler.cloud_provider_credentials = Mock()
 
             return handler
@@ -865,7 +865,7 @@ class TestGcpUpload:
 
             handler = OetcHandler.__new__(OetcHandler)
             handler.settings = settings
-            handler.jwt = Mock()
+            handler.jwt = Mock(is_expired=False)
             handler.cloud_provider_credentials = gcp_creds
 
             return handler
@@ -1009,7 +1009,7 @@ class TestFileDecompression:
 
             handler = OetcHandler.__new__(OetcHandler)
             handler.settings = settings
-            handler.jwt = Mock()
+            handler.jwt = Mock(is_expired=False)
             handler.cloud_provider_credentials = Mock()
 
             return handler
@@ -1151,7 +1151,7 @@ class TestGcpDownload:
 
             handler = OetcHandler.__new__(OetcHandler)
             handler.settings = settings
-            handler.jwt = Mock()
+            handler.jwt = Mock(is_expired=False)
             handler.cloud_provider_credentials = gcp_creds
 
             return handler
@@ -1512,7 +1512,7 @@ class TestSolveOnOetc:
 
             handler = OetcHandler.__new__(OetcHandler)
             handler.settings = settings
-            handler.jwt = Mock()
+            handler.jwt = Mock(is_expired=False)
             handler.cloud_provider_credentials = gcp_creds
 
             return handler
@@ -1637,7 +1637,7 @@ class TestSolveOnOetcWithJobSubmission:
 
         handler = OetcHandler.__new__(OetcHandler)
         handler.settings = settings
-        handler.jwt = Mock()
+        handler.jwt = Mock(is_expired=False)
         handler.cloud_provider_credentials = gcp_creds
 
         return handler
