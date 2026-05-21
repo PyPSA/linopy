@@ -13,17 +13,10 @@ import warnings
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from linopy import Model
-from linopy.constants import (
-    Result,
-    Solution,
-    SolverReport,
-    Status,
-)
 from linopy.remote import (
     Oetc,
     OetcCredentials,
@@ -64,7 +57,7 @@ def _settings_ssh() -> SshSettings:
 
 
 def _fake_oetc_handler() -> MagicMock:
-    """A MagicMock(spec=OetcHandler) with the methods Oetc.upload/submit/collect call."""
+    """A MagicMock(spec=OetcHandler) with the methods Oetc.submit/status/collect call."""
     h = MagicMock(spec=OetcHandler)
     h._upload_file_to_gcp = MagicMock(return_value="model.nc.gz")
     h._submit_job_to_compute_service = MagicMock(return_value="job-uuid")
@@ -72,6 +65,7 @@ def _fake_oetc_handler() -> MagicMock:
     job_result.output_files = [{"name": "result.nc.gz"}]
     job_result.duration_in_seconds = 42
     h.wait_and_get_job_data = MagicMock(return_value=job_result)
+    h._get_job = MagicMock(return_value=MagicMock(status="RUNNING"))
     h._download_file_from_gcp = MagicMock(return_value="/tmp/fake-result.nc")
     return h
 
@@ -98,11 +92,11 @@ def _solved_model_like(m: Model) -> Model:
 
 
 class TestOetcClass:
-    def test_solve_runs_upload_submit_collect(
+    def test_solve_runs_submit_and_collect(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         m = _build_model()
-        oetc = Oetc(settings=_settings_oetc(), solver_name="highs")
+        oetc = Oetc(_settings_oetc())
         oetc._handler = _fake_oetc_handler()  # bypass auth
 
         monkeypatch.setattr(
@@ -110,10 +104,9 @@ class TestOetcClass:
             lambda path: _solved_model_like(m),
         )
 
-        result = oetc.solve(m)
+        result = oetc.solve(m, "highs")
 
-        assert isinstance(result, Result)
-        assert result.solver_name == "highs"
+        assert isinstance(result, Model)
         oetc._handler._upload_file_to_gcp.assert_called_once()
         oetc._handler._submit_job_to_compute_service.assert_called_once()
         oetc._handler.wait_and_get_job_data.assert_called_once_with("job-uuid")
@@ -121,47 +114,75 @@ class TestOetcClass:
 
     def test_validates_unknown_solver_name(self) -> None:
         m = _build_model()
-        oetc = Oetc(settings=_settings_oetc(), solver_name="not-a-solver")
+        oetc = Oetc(_settings_oetc())
         oetc._handler = _fake_oetc_handler()
         with pytest.raises(ValueError, match="Unknown solver"):
-            oetc.solve(m)
+            oetc.solve(m, "not-a-solver")
 
-    def test_upload_submit_collect_separable(
+    def test_submit_collect_separable_by_uuid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The three-step lifecycle can be driven manually, e.g. for async work."""
+        """The submit/collect seam can be driven manually for async work."""
         m = _build_model()
-        oetc = Oetc(settings=_settings_oetc(), solver_name="highs")
+        oetc = Oetc(_settings_oetc())
         oetc._handler = _fake_oetc_handler()
         monkeypatch.setattr(
             "linopy.remote.oetc.linopy.read_netcdf",
             lambda path: _solved_model_like(m),
         )
 
-        oetc.upload(m)
-        assert oetc._input_file_name == "model.nc.gz"
+        job_uuid = oetc.submit(m, "highs")
+        assert job_uuid == "job-uuid"
         assert oetc._handler._upload_file_to_gcp.call_count == 1
-
-        job_id = oetc.submit()
-        assert job_id == "job-uuid"
         assert oetc._handler._submit_job_to_compute_service.call_count == 1
 
-        result = oetc.collect(m)
-        assert isinstance(result, Result)
-        assert oetc._handler.wait_and_get_job_data.call_count == 1
+        result = oetc.collect(job_uuid)
+        assert isinstance(result, Model)
+        oetc._handler.wait_and_get_job_data.assert_called_once_with("job-uuid")
 
-    def test_submit_before_upload_raises(self) -> None:
-        oetc = Oetc(settings=_settings_oetc(), solver_name="highs")
+    def test_status_returns_job_state(self) -> None:
+        oetc = Oetc(_settings_oetc())
         oetc._handler = _fake_oetc_handler()
-        with pytest.raises(RuntimeError, match="upload"):
-            oetc.submit()
+        assert oetc.status("job-uuid") == "RUNNING"
+        oetc._handler._get_job.assert_called_once_with("job-uuid")
 
-    def test_collect_before_submit_raises(self) -> None:
+    def test_one_connection_drives_multiple_jobs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A single Oetc connection submits and collects many models."""
+        models = [_build_model() for _ in range(3)]
+        oetc = Oetc(_settings_oetc())
+        oetc._handler = _fake_oetc_handler()
+        monkeypatch.setattr(
+            "linopy.remote.oetc.linopy.read_netcdf",
+            lambda path: _solved_model_like(models[0]),
+        )
+
+        uuids = [oetc.submit(m, "highs") for m in models]
+        assert len(uuids) == 3
+        solved = [oetc.collect(u) for u in uuids]
+        assert all(isinstance(s, Model) for s in solved)
+        assert oetc._handler._submit_job_to_compute_service.call_count == 3
+        assert oetc._handler.wait_and_get_job_data.call_count == 3
+
+    def test_collect_by_uuid_from_a_fresh_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A job uuid can be collected by an Oetc that never submitted it."""
         m = _build_model()
-        oetc = Oetc(settings=_settings_oetc(), solver_name="highs")
-        oetc._handler = _fake_oetc_handler()
-        with pytest.raises(RuntimeError, match="upload.*submit"):
-            oetc.collect(m)
+        submitter = Oetc(_settings_oetc())
+        submitter._handler = _fake_oetc_handler()
+        job_uuid = submitter.submit(m, "highs")
+
+        # Simulate a separate process: a brand-new Oetc, given only the uuid.
+        collector = Oetc(_settings_oetc())
+        collector._handler = _fake_oetc_handler()
+        monkeypatch.setattr(
+            "linopy.remote.oetc.linopy.read_netcdf",
+            lambda path: _solved_model_like(m),
+        )
+        result = collector.collect(job_uuid)
+        assert isinstance(result, Model)
 
 
 # ---------------------------------------------------------------------------
@@ -172,20 +193,19 @@ class TestSSHClass:
     def test_solve_runs_setup_commands_then_delegates(self) -> None:
         m = _build_model()
         ssh = SSH(
-            settings=SshSettings(
+            SshSettings(
                 hostname="example.org",
                 setup_commands=["conda activate linopy-env", "export FOO=bar"],
-            ),
-            solver_name="highs",
+            )
         )
         fake_handler = MagicMock(spec=RemoteHandler)
         fake_handler.execute = MagicMock()
         fake_handler.solve_on_remote = MagicMock(return_value=_solved_model_like(m))
         ssh._handler = fake_handler
 
-        result = ssh.solve(m)
+        result = ssh.solve(m, "highs")
 
-        assert isinstance(result, Result)
+        assert isinstance(result, Model)
         # solve_on_remote is the public surface from the deprecated handler
         fake_handler.solve_on_remote.assert_called_once()
         # setup_commands run only on first handler construction; here _handler
@@ -198,11 +218,10 @@ class TestSSHClass:
         """First .solve() with a fresh SSH builds a RemoteHandler and runs setup."""
         m = _build_model()
         ssh = SSH(
-            settings=SshSettings(
+            SshSettings(
                 hostname="example.org",
                 setup_commands=["conda activate linopy-env"],
-            ),
-            solver_name="highs",
+            )
         )
 
         built: list[Any] = []
@@ -215,7 +234,7 @@ class TestSSHClass:
                 built.append(self)
 
         monkeypatch.setattr("linopy.remote.ssh.RemoteHandler", FakeRemoteHandler)
-        ssh.solve(m)
+        ssh.solve(m, "highs")
 
         assert len(built) == 1
         built[0].execute.assert_called_once_with("conda activate linopy-env")
@@ -223,10 +242,10 @@ class TestSSHClass:
 
     def test_validates_unknown_solver_name(self) -> None:
         m = _build_model()
-        ssh = SSH(settings=_settings_ssh(), solver_name="not-a-solver")
+        ssh = SSH(_settings_ssh())
         ssh._handler = MagicMock(spec=RemoteHandler)
         with pytest.raises(ValueError, match="Unknown solver"):
-            ssh.solve(m)
+            ssh.solve(m, "not-a-solver")
 
 
 # ---------------------------------------------------------------------------
@@ -240,20 +259,13 @@ class TestModelSolveRemote:
         m = _build_model()
         captured: dict[str, Any] = {}
 
-        def fake_solve(self: Oetc, model: Model) -> Result:
-            captured["solver_name"] = self.solver_name
-            captured["options"] = self.options
+        def fake_solve(
+            self: Oetc, model: Model, solver_name: str, **options: Any
+        ) -> Model:
+            captured["solver_name"] = solver_name
+            captured["options"] = options
             captured["instance"] = self
-            return Result(
-                status=Status.from_termination_condition("optimal"),
-                solution=Solution(
-                    primal=np.zeros(model._xCounter, dtype=float),
-                    dual=np.full(model._cCounter, np.nan, dtype=float),
-                    objective=0.0,
-                ),
-                solver_name=self.solver_name,
-                report=SolverReport(runtime=1.0),
-            )
+            return _solved_model_like(model)
 
         monkeypatch.setattr(Oetc, "solve", fake_solve)
 
@@ -264,25 +276,53 @@ class TestModelSolveRemote:
         assert m.remote is captured["instance"]
         assert m.solver is None  # remote-solve clears any prior local solver
 
+    def test_oetc_settings_solver_used_when_no_solver_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        The deprecated `OetcSettings.solver` is the fallback when
+        `Model.solve(remote=...)` is called without a `solver_name`.
+        """
+        m = _build_model()
+        captured: dict[str, Any] = {}
+
+        def fake_solve(
+            self: Oetc, model: Model, solver_name: str, **options: Any
+        ) -> Model:
+            captured["solver_name"] = solver_name
+            captured["options"] = options
+            return _solved_model_like(model)
+
+        monkeypatch.setattr(Oetc, "solve", fake_solve)
+
+        with pytest.warns(DeprecationWarning, match=r"OetcSettings\.solver"):
+            settings = OetcSettings(
+                email="a@b.com",
+                password="pw",
+                name="test-job",
+                authentication_server_url="https://auth",
+                orchestrator_server_url="https://orch",
+                solver="cplex",
+                solver_options={"TimeLimit": 10},
+            )
+        m.solve(remote=settings)
+
+        assert captured["solver_name"] == "cplex"
+        assert captured["options"] == {"TimeLimit": 10}
+
     def test_ssh_settings_dispatches_to_ssh(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         m = _build_model()
         captured: dict[str, Any] = {}
 
-        def fake_solve(self: SSH, model: Model) -> Result:
-            captured["solver_name"] = self.solver_name
-            captured["options"] = self.options
+        def fake_solve(
+            self: SSH, model: Model, solver_name: str, **options: Any
+        ) -> Model:
+            captured["solver_name"] = solver_name
+            captured["options"] = options
             captured["instance"] = self
-            return Result(
-                status=Status.from_termination_condition("optimal"),
-                solution=Solution(
-                    primal=np.zeros(model._xCounter, dtype=float),
-                    dual=np.full(model._cCounter, np.nan, dtype=float),
-                    objective=0.0,
-                ),
-                solver_name=self.solver_name,
-            )
+            return _solved_model_like(model)
 
         monkeypatch.setattr(SSH, "solve", fake_solve)
 
@@ -291,6 +331,39 @@ class TestModelSolveRemote:
         assert captured["solver_name"] == "highs"
         assert captured["options"] == {"presolve": "on"}
         assert m.remote is captured["instance"]
+
+    @pytest.mark.parametrize(
+        ("remote_cls", "settings_factory", "solver"),
+        [(Oetc, _settings_oetc, "gurobi"), (SSH, _settings_ssh, "highs")],
+    )
+    def test_remote_solve_writes_solution_onto_caller_model(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        remote_cls: type,
+        settings_factory: Any,
+        solver: str,
+    ) -> None:
+        """
+        `Model.solve(remote=...)` folds the solved model into the caller's
+        own model in place and returns the (status, termination_condition)
+        tuple — it never hands back the round-tripped model object.
+        """
+        m = _build_model()
+
+        def fake_solve(
+            self: Any, model: Model, solver_name: str, **options: Any
+        ) -> Model:
+            return _solved_model_like(model)
+
+        monkeypatch.setattr(remote_cls, "solve", fake_solve)
+
+        result = m.solve(solver, remote=settings_factory())
+
+        assert result == ("ok", "optimal")
+        assert m.status == "ok"
+        assert m.termination_condition == "optimal"
+        assert m.objective.value == 0.0
+        assert float(m.variables["x"].solution.sum()) == 0.0
 
 
 # ---------------------------------------------------------------------------

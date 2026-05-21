@@ -1,20 +1,15 @@
 """
-Shared helpers for the standalone remote-handler classes (``Oetc``, ``SSH``).
+Shared helper for the standalone remote classes (``Oetc``, ``SSH``).
 
-These handlers do not inherit from :class:`linopy.solvers.Solver` — they're
-a parallel concept. The helpers here cover the two pieces of plumbing
-both handlers need: validating the inner-solver string locally, and
-mapping a round-tripped solved :class:`~linopy.model.Model` back onto
-the source model's label space.
+These classes do not inherit from :class:`linopy.solvers.Solver` — they're
+a parallel concept. The helper here validates the solver string locally
+before the round-trip to the worker, so an unknown name or an unsupported
+feature fails fast instead of after the upload.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
-import numpy as np
-
-from linopy.constants import Solution
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -56,30 +51,3 @@ def _validate_inner_solver(inner_solver_name: str, model: Model) -> None:
             "Reformulate first via `Model.solve(reformulate_sos=True)` or "
             "`model.apply_sos_reformulation()`, or pick a solver that supports SOS."
         )
-
-
-def _scatter_solution_from_solved_model(
-    local_model: Model, solved: Model, n_vars: int, n_cons: int
-) -> Solution:
-    """
-    Build a label-indexed :class:`~linopy.constants.Solution` from a
-    round-tripped solved model.
-
-    The labels on ``solved`` match ``local_model`` because both sides
-    serialize/load with the same linopy version; we use the local labels
-    as the index. Missing slots stay ``NaN``; constraints without
-    ``dual`` are skipped.
-    """
-    primal = np.full(n_vars, np.nan, dtype=float)
-    dual = np.full(n_cons, np.nan, dtype=float)
-    for name, var in local_model.variables.items():
-        sol = solved.variables[name].solution
-        primal[var.labels.values.ravel()] = sol.values.ravel()
-    for name, con in local_model.constraints.items():
-        if "dual" not in solved.constraints[name]:
-            continue
-        dual[con.labels.values.ravel()] = solved.constraints[name].dual.values.ravel()
-
-    objective_value = solved.objective.value
-    objective = float(objective_value) if objective_value is not None else float("nan")
-    return Solution(primal=primal, dual=dual, objective=objective)

@@ -1530,14 +1530,9 @@ class TestSolveOnOetc:
         """Test solve_on_oetc method complete workflow"""
         # Setup
         mock_model = Mock()
-        mock_model._xCounter = 0
-        mock_model._cCounter = 0
-        mock_model.variables.items.return_value = []
-        mock_model.constraints.items.return_value = []
         mock_solved_model = Mock()
         mock_solved_model.status = "optimal"
         mock_solved_model.objective.value = 42.0
-        mock_solved_model.termination_condition = "optimal"
 
         mock_temp_file = Mock()
         mock_temp_file.name = "/tmp/linopy-abc123.nc"
@@ -1660,14 +1655,9 @@ class TestSolveOnOetcWithJobSubmission:
         """Test solve_on_oetc method including job submission, waiting, and download"""
         # Setup
         mock_model = Mock()
-        mock_model._xCounter = 0
-        mock_model._cCounter = 0
-        mock_model.variables.items.return_value = []
-        mock_model.constraints.items.return_value = []
         mock_solved_model = Mock()
         mock_solved_model.status = "optimal"
         mock_solved_model.objective.value = 100.5
-        mock_solved_model.termination_condition = "optimal"
 
         mock_temp_file = Mock()
         mock_temp_file.name = "/tmp/linopy-abc123.nc"

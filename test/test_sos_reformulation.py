@@ -6,6 +6,7 @@ import logging
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -1194,27 +1195,24 @@ class TestRemoteBracket:
         """
         Replace ``linopy.remote.ssh.SSH.solve`` with a stub that records
         whether the model arrives in reformulated form, exercises the
-        ``to_netcdf`` warning path, and returns a synthetic
-        :class:`Result` so ``Model.assign_result`` is exercised end to end.
+        ``to_netcdf`` warning path, and returns a synthetic solved
+        :class:`Model` so ``Model._assign_from_solved_model`` is exercised
+        end to end.
         """
-        from linopy.constants import Result, Solution, Status
         from linopy.remote.ssh import SSH
 
-        def fake_solve(self: SSH, model: Model) -> Result:
+        def fake_solve(
+            self: SSH, model: Model, solver_name: str, **options: Any
+        ) -> Model:
             observed["state_active"] = model._sos_reformulation_state is not None
-            observed["solver_name_arg"] = self.solver_name
+            observed["solver_name_arg"] = solver_name
             model.to_netcdf(tmp_path / "sent.nc")  # triggers any to_netcdf warning
-            n_vars = model._xCounter
-            n_cons = model._cCounter
-            return Result(
-                status=Status.from_termination_condition("optimal"),
-                solution=Solution(
-                    primal=np.zeros(n_vars, dtype=float),
-                    dual=np.full(n_cons, np.nan, dtype=float),
-                    objective=0.0,
-                ),
-                solver_name=self.solver_name,
-            )
+            for _name, var in model.variables.items():
+                var.solution = var.labels * 0.0
+            model.objective._value = 0.0
+            model.status = "ok"
+            model.termination_condition = "optimal"
+            return model
 
         monkeypatch.setattr(SSH, "solve", fake_solve)
 

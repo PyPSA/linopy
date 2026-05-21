@@ -343,14 +343,14 @@ class Model:
     @property
     def remote(self) -> Any:
         """
-        Standalone remote-handler instance from the most recent solve, or ``None``.
+        Standalone remote instance (``Oetc`` / ``SSH``) from the most recent
+        solve, or ``None``.
 
         Set by :meth:`solve` when called with ``remote=<Settings>``; lets
-        callers introspect handler state after the solve (e.g.
-        ``model.remote._job_uuid`` on OETC). ``None`` for local solves
-        and after a legacy ``remote=OetcHandler/RemoteHandler`` solve
-        (those are routed through the same path but the legacy handlers
-        aren't designed for post-solve inspection).
+        callers reuse the authenticated connection after the solve (e.g.
+        ``model.remote.submit(...)`` for further OETC jobs). ``None`` for
+        local solves and after a legacy ``remote=OetcHandler/RemoteHandler``
+        solve.
         """
         return self._remote
 
@@ -1857,30 +1857,26 @@ class Model:
         """
         Dispatch a remote solve from an ``OetcSettings`` / ``SshSettings`` instance.
 
-        The new standalone remote handlers (``Oetc``, ``SSH`` in
+        The standalone remote classes (``Oetc``, ``SSH`` in
         :mod:`linopy.remote`) are *not* :class:`linopy.solvers.Solver`
         subclasses — they're a parallel concept. The instance is attached
-        to :attr:`Model.remote` after the call so callers can introspect
-        e.g. the OETC job uuid.
+        to :attr:`Model.remote` after the call so callers can reuse the
+        authenticated connection.
         """
-        effective_inner: str | None
-        effective_options: dict[str, Any]
+        effective_inner: str | None = inner_solver
+        effective_options: dict[str, Any] = solver_options
         if OetcSettings is not None and isinstance(settings, OetcSettings):
             from linopy.remote.oetc import Oetc
 
             remote_cls: Any = Oetc
-            # ``OetcSettings`` carries defaults for solver/solver_options
-            # (preserves the legacy ``OetcHandler(settings).solve_on_oetc``
-            # config style). Outer ``Model.solve(solver_name, **opts)``
-            # wins when given.
+            # Deprecated fallback to `OetcSettings.solver` / `solver_options`
+            # when `Model.solve` is called without a `solver_name`.
             effective_inner = inner_solver or settings.solver
-            effective_options = {**settings.solver_options, **solver_options}
+            effective_options = {**(settings.solver_options or {}), **solver_options}
         elif isinstance(settings, SshSettings):
             from linopy.remote.ssh import SSH
 
             remote_cls = SSH
-            effective_inner = inner_solver
-            effective_options = solver_options
         else:
             raise TypeError(  # pragma: no cover — checked by _REMOTE_SETTINGS_TYPES
                 f"Unknown remote settings type: {type(settings).__name__}"
@@ -1910,15 +1906,13 @@ class Model:
             self, effective_inner, reformulate_sos
         ) as applied:
             with suppress_serialization_warning(active=applied):
-                remote_instance = remote_cls(
-                    settings=settings,
-                    solver_name=effective_inner,
-                    options=effective_options,
-                )
+                remote_instance = remote_cls(settings)
                 self.remote = remote_instance
                 self.solver = None  # remote-solve clears any prior local solver
-                result = remote_instance.solve(self)
-            return self.assign_result(result)
+                solved = remote_instance.solve(
+                    self, effective_inner, **effective_options
+                )
+            return self._assign_from_solved_model(solved)
 
     def _solve_via_legacy_remote(
         self,
@@ -2002,16 +1996,7 @@ class Model:
                 **solver_options,
             )
 
-        if solved.objective.value is not None:
-            self.objective.set_value(float(solved.objective.value))
-        self.status = solved.status
-        self.termination_condition = solved.termination_condition
-        for k, v in self.variables.items():
-            v.solution = solved.variables[k].solution
-        for k, c in self.constraints.items():
-            if "dual" in solved.constraints[k]:
-                c.dual = solved.constraints[k].dual
-        return self.status, self.termination_condition
+        return self._assign_from_solved_model(solved)
 
     def assign_result(
         self,
@@ -2074,6 +2059,27 @@ class Model:
                 )
 
         return status_value, termination_condition
+
+    def _assign_from_solved_model(self, solved: Model) -> tuple[str, str]:
+        """
+        Fold a round-tripped solved model back onto this model in place.
+
+        A remote worker produces a fully solved ``Model`` — variable
+        solutions, constraint duals, objective value, status. This copies
+        that data onto ``self`` (the model the caller invoked ``solve()``
+        on), keyed by name. Used by the ``remote=`` paths of :meth:`solve`;
+        the local-solver path uses :meth:`assign_result` instead.
+        """
+        if solved.objective.value is not None:
+            self.objective.set_value(float(solved.objective.value))
+        self.status = solved.status
+        self.termination_condition = solved.termination_condition
+        for name, var in self.variables.items():
+            var.solution = solved.variables[name].solution
+        for name, con in self.constraints.items():
+            if "dual" in solved.constraints[name]:
+                con.dual = solved.constraints[name].dual
+        return self.status, self.termination_condition
 
     def _mock_solve(
         self,

@@ -13,8 +13,6 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
-from linopy.constants import Result, SolverReport, Status
-
 if TYPE_CHECKING:
     from linopy.model import Model
 
@@ -68,14 +66,13 @@ class OetcCredentials:
 @dataclass
 class OetcSettings:
     """
-    Config for the OET Cloud (OETC) remote service.
+    Transport config for the OET Cloud (OETC) remote service.
 
-    Carries the auth/orchestrator endpoints, the worker resource sizing,
-    and **defaults** for the solver and its options. The defaults
-    can be overridden per call:
+    Carries the auth/orchestrator endpoints and the worker resource
+    sizing. The solver is chosen per call — pass it to
+    :meth:`Model.solve` or :meth:`Oetc.submit`:
 
     >>> m.solve("gurobi", remote=OetcSettings(...), Method=2)  # doctest: +SKIP
-    >>> m.solve(remote=OetcSettings(..., solver="gurobi"))  # doctest: +SKIP
     """
 
     name: str
@@ -85,8 +82,8 @@ class OetcSettings:
     password: str | None = None
     credentials: OetcCredentials | None = None
     compute_provider: ComputeProvider = ComputeProvider.GCP
-    solver: str = "highs"
-    solver_options: dict[str, Any] = field(default_factory=dict)
+    solver: str | None = None
+    solver_options: dict[str, Any] | None = None
     cpu_cores: int = 2
     disk_space_gb: int = 10
     delete_worker_on_error: bool = False
@@ -103,6 +100,16 @@ class OetcSettings:
             self.credentials = None
         if not self.email or not self.password:
             raise ValueError("`OetcSettings` requires `email` and `password`.")
+        if self.solver is not None or self.solver_options is not None:
+            warnings.warn(
+                "`OetcSettings.solver` and `OetcSettings.solver_options` are "
+                "deprecated and consulted only by the deprecated `OetcHandler`. "
+                "Pass the solver to `Model.solve(solver_name, remote=...)` or "
+                "`Oetc.submit(model, solver_name, ...)`. These fields will be "
+                "removed together with `OetcHandler`.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     @classmethod
     def from_env(
@@ -483,6 +490,38 @@ class OetcHandler:
             logger.warning(f"OETC - Error fetching logs for job {job_uuid}: {e}")
             return f"[Error fetching logs: {e}]"
 
+    def _get_job(self, job_uuid: str) -> JobResult:
+        """
+        Fetch the current job record in a single request (no polling).
+
+        Raises ``RequestException`` on a failed request and ``KeyError``
+        if the response is missing required fields.
+        """
+        response = requests.get(
+            f"{self.settings.orchestrator_server_url}/compute-job/{job_uuid}",
+            headers={
+                "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        job_data_dict = response.json()
+        return JobResult(
+            uuid=job_data_dict["uuid"],
+            status=job_data_dict["status"],
+            name=job_data_dict.get("name"),
+            owner=job_data_dict.get("owner"),
+            solver=job_data_dict.get("solver"),
+            duration_in_seconds=job_data_dict.get("duration_in_seconds"),
+            solving_duration_in_seconds=job_data_dict.get(
+                "solving_duration_in_seconds"
+            ),
+            input_files=job_data_dict.get("input_files", []),
+            output_files=job_data_dict.get("output_files", []),
+            created_at=job_data_dict.get("created_at"),
+        )
+
     def wait_and_get_job_data(
         self,
         job_uuid: str,
@@ -514,32 +553,7 @@ class OetcHandler:
 
         while True:
             try:
-                response = requests.get(
-                    f"{self.settings.orchestrator_server_url}/compute-job/{job_uuid}",
-                    headers={
-                        "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=30,
-                )
-
-                response.raise_for_status()
-                job_data_dict = response.json()
-
-                job_result = JobResult(
-                    uuid=job_data_dict["uuid"],
-                    status=job_data_dict["status"],
-                    name=job_data_dict.get("name"),
-                    owner=job_data_dict.get("owner"),
-                    solver=job_data_dict.get("solver"),
-                    duration_in_seconds=job_data_dict.get("duration_in_seconds"),
-                    solving_duration_in_seconds=job_data_dict.get(
-                        "solving_duration_in_seconds"
-                    ),
-                    input_files=job_data_dict.get("input_files", []),
-                    output_files=job_data_dict.get("output_files", []),
-                    created_at=job_data_dict.get("created_at"),
-                )
+                job_result = self._get_job(job_uuid)
 
                 consecutive_failures = 0
 
@@ -728,30 +742,28 @@ class OetcHandler:
         linopy.model.Model
             Solved model.
         """
-        # Delegates to ``Oetc.solve`` so the upload→submit→poll→download
-        # orchestration lives in one place. This handler is reused as the
-        # underlying transport so existing auth/credentials are not refetched.
-        effective_solver = solver_name or self.settings.solver
-        merged_solver_options = {**self.settings.solver_options, **solver_options}
+        # Delegates to ``Oetc`` so the upload→submit→poll→download
+        # orchestration lives in one place.
+        effective_solver = solver_name or self.settings.solver or "highs"
+        merged_solver_options = {
+            **(self.settings.solver_options or {}),
+            **solver_options,
+        }
 
-        oetc = Oetc(
-            settings=self.settings,
-            solver_name=effective_solver,
-            options=merged_solver_options,
-        )
-        oetc._handler = self
+        oetc = Oetc(settings=self.settings)
+        oetc._handler = self  # reuse this handler so auth is not refetched
         try:
             with sos_reformulation_context(
                 model, effective_solver, reformulate_sos
             ) as applied:
                 with suppress_serialization_warning(active=applied):
-                    oetc.upload(model)
-                oetc.submit()
-                oetc.collect(model)
+                    job_uuid = oetc.submit(
+                        model, effective_solver, **merged_solver_options
+                    )
+                solved_model = oetc.collect(job_uuid)
         except Exception as e:
             raise Exception(f"Error solving model on OETC: {e}") from e
 
-        solved_model = oetc._solved_model
         logger.info(f"OETC - Model solved successfully. Status: {solved_model.status}")
         if solved_model.objective.value is not None:
             logger.info(f"OETC - Objective value: {solved_model.objective.value:.2e}")
@@ -842,109 +854,85 @@ class OetcHandler:
 @dataclass
 class Oetc:
     """
-    Remote handler that solves a linopy model on the OET Cloud (OETC) service.
+    A connection to the OET Cloud (OETC) compute service.
 
     This is a standalone class — *not* a :class:`linopy.solvers.Solver`
-    subclass. It ships a netcdf to a cloud worker which runs the inner
-    solver (``solver_name``) and returns a solved netcdf. The lifecycle
-    splits into ``upload`` / ``submit`` / ``collect`` so future async work
-    can drive the seam without changing callers.
+    subclass. An ``Oetc`` instance is a *connection*, not a job: it
+    authenticates once and can submit and collect any number of jobs.
+
+    A job is identified solely by the uuid string returned from
+    :meth:`submit`. Because the handle is just a string, the lifecycle is
+    async-friendly — submit many models, hold their uuids, and
+    :meth:`collect` each when convenient, even from a different process
+    (a fresh ``Oetc(settings)`` re-authenticates and collects by uuid).
 
     Parameters
     ----------
     settings : OetcSettings
         Auth + orchestrator config (where to talk to).
-    solver_name : str
-        Solver to run on the worker (e.g. ``"gurobi"``, ``"highs"``).
-    options : dict, optional
-        Solver options passed through to the solver.
-
-    Notes
-    -----
-    Construction is cheap; network I/O happens at :meth:`upload` /
-    :meth:`submit` / :meth:`collect`. :meth:`solve` runs all three
-    synchronously.
     """
 
     settings: OetcSettings
-    solver_name: str
-    options: dict[str, Any] = field(default_factory=dict)
 
     _handler: OetcHandler | None = field(init=False, default=None, repr=False)
-    _input_file_name: str | None = field(init=False, default=None, repr=False)
-    _job_uuid: str | None = field(init=False, default=None, repr=False)
-    _solved_model: Any = field(init=False, default=None, repr=False)
-    _n_vars: int = field(init=False, default=0, repr=False)
-    _n_cons: int = field(init=False, default=0, repr=False)
 
     @classmethod
     def is_available(cls) -> bool:
         """Return True iff the OETC network deps are importable."""
         return _oetc_deps_available
 
-    def upload(self, model: Model) -> None:
-        """Serialize the model to netcdf and upload it to the cloud bucket."""
+    def _connection(self) -> OetcHandler:
+        """Return the authenticated handler, building it on first use."""
         if self._handler is None:
             self._handler = OetcHandler(self.settings, _internal=True)
-        self._n_vars = model._xCounter
-        self._n_cons = model._cCounter
+        return self._handler
 
+    def submit(self, model: Model, solver_name: str, **options: Any) -> str:
+        """
+        Serialize and upload the model, submit the job, and return its uuid.
+
+        The uuid is the only handle a job needs — persist it and
+        :meth:`collect` later, from this or any other process.
+        """
+        handler = self._connection()
         with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
             fn.file.close()
             model.to_netcdf(fn.name)
-            self._input_file_name = self._handler._upload_file_to_gcp(fn.name)
-
-    def submit(self) -> str:
-        """Submit the prepared job to the orchestrator; return the job uuid."""
-        if self._handler is None or self._input_file_name is None:
-            raise RuntimeError("Call `upload(model)` before `submit()`.")
-        self._job_uuid = self._handler._submit_job_to_compute_service(
-            self._input_file_name, self.solver_name, dict(self.options)
+            input_file_name = handler._upload_file_to_gcp(fn.name)
+        return handler._submit_job_to_compute_service(
+            input_file_name, solver_name, dict(options)
         )
-        return self._job_uuid
 
-    def collect(self, model: Model) -> Result:
-        """Poll, download, parse, and return a label-indexed Result."""
-        from linopy.remote._common import _scatter_solution_from_solved_model
+    def status(self, job_uuid: str) -> str:
+        """Return the current job status in a single, non-blocking request."""
+        return self._connection()._get_job(job_uuid).status
 
-        if self._handler is None or self._job_uuid is None:
-            raise RuntimeError(
-                "Call `upload(model)` and `submit()` before `collect()`."
-            )
+    def collect(self, job_uuid: str) -> Model:
+        """
+        Block until the job finishes, download, and return the solved model.
 
-        job_result = self._handler.wait_and_get_job_data(self._job_uuid)
+        Needs only the uuid and the connection, so it can run in a
+        different process than the one that called :meth:`submit`.
+        """
+        handler = self._connection()
+        job_result = handler.wait_and_get_job_data(job_uuid)
         if not job_result.output_files:
             raise Exception("No output files found in completed job")
         output_file_name = job_result.output_files[0]
         if isinstance(output_file_name, dict) and "name" in output_file_name:
             output_file_name = output_file_name["name"]
 
-        solution_file_path = self._handler._download_file_from_gcp(output_file_name)
+        solution_file_path = handler._download_file_from_gcp(output_file_name)
         try:
-            solved = linopy.read_netcdf(solution_file_path)
+            return linopy.read_netcdf(solution_file_path)
         finally:
             with contextlib.suppress(OSError):
                 os.remove(solution_file_path)
 
-        self._solved_model = solved
-
-        status = Status.from_termination_condition(solved.termination_condition)
-        solution = _scatter_solution_from_solved_model(
-            model, solved, self._n_vars, self._n_cons
-        )
-        report = SolverReport(runtime=job_result.duration_in_seconds)
-        return Result(
-            status=status,
-            solution=solution,
-            solver_name=self.solver_name,
-            report=report,
-        )
-
-    def solve(self, model: Model) -> Result:
-        """Run the full upload → submit → collect pipeline synchronously."""
+    def solve(self, model: Model, solver_name: str, **options: Any) -> Model:
+        """Submit the model and block until the solved model is back."""
         from linopy.remote._common import _validate_inner_solver
 
-        _validate_inner_solver(self.solver_name, model)
-        self.upload(model)
-        self.submit()
-        return self.collect(model)
+        _validate_inner_solver(solver_name, model)
+        job_uuid = self.submit(model, solver_name, **options)
+        return self.collect(job_uuid)

@@ -101,12 +101,26 @@ def test_from_env_defaults_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
 
     s = OetcSettings.from_env()
-    assert s.solver == "highs"
-    assert s.solver_options == {}
+    assert s.solver is None
+    assert s.solver_options is None
     assert s.cpu_cores == 2
     assert s.disk_space_gb == 10
     assert s.compute_provider == ComputeProvider.GCP
     assert s.delete_worker_on_error is False
+
+
+def test_solver_fields_emit_deprecation_warning() -> None:
+    base: dict[str, Any] = dict(
+        email="a@b.com",
+        password="pw",
+        name="test",
+        authentication_server_url="https://auth",
+        orchestrator_server_url="https://orch",
+    )
+    with pytest.warns(DeprecationWarning, match=r"OetcSettings\.solver"):
+        OetcSettings(**base, solver="gurobi")
+    with pytest.warns(DeprecationWarning, match=r"OetcSettings\.solver"):
+        OetcSettings(**base, solver_options={"TimeLimit": 100})
 
 
 def test_from_env_cpu_cores_valid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,7 +197,7 @@ def _default_settings(**overrides: Any) -> OetcSettings:
 def test_solve_on_oetc_mutation_safety() -> None:
     settings = _default_settings()
     handler = _make_handler(settings)
-    original_opts = dict(settings.solver_options)
+    original_opts = dict(settings.solver_options or {})
 
     mock_model = MagicMock()
     mock_solved = MagicMock()

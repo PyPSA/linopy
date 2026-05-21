@@ -13,7 +13,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
-from linopy.constants import Result
 from linopy.io import read_netcdf
 from linopy.sos_reformulation import (
     sos_reformulation_context,
@@ -305,49 +304,35 @@ class RemoteHandler:
 @dataclass
 class SSH:
     """
-    Remote handler that solves a linopy model on a remote machine over SSH.
+    A connection to a remote machine that solves linopy models over SSH.
 
     This is a standalone class — *not* a :class:`linopy.solvers.Solver`
     subclass. It ships the model to a remote host and runs
     ``read_netcdf(...).solve(solver_name=...)`` there, pulling the solved
-    netcdf back.
+    model back. Unlike :class:`Oetc` the remote shell job is short-lived
+    and synchronous, so there is no submit/collect seam — just
+    :meth:`solve`.
 
     Parameters
     ----------
     settings : SshSettings
         Connection + remote-execution paths.
-    solver_name : str
-        Solver to run on the remote (e.g. ``"gurobi"``).
-    options : dict, optional
-        Solver options passed through to the solver.
-
-    Notes
-    -----
-    Synchronous; unlike OETC the remote shell job is short-lived and
-    doesn't expose a useful submit/collect seam.
     """
 
     settings: SshSettings
-    solver_name: str
-    options: dict[str, Any] = field(default_factory=dict)
 
     _handler: "RemoteHandler | None" = field(init=False, default=None, repr=False)
-    _solved_model: Any = field(init=False, default=None, repr=False)
 
     @classmethod
     def is_available(cls) -> bool:
         """Return True iff paramiko is importable."""
         return paramiko_present
 
-    def solve(self, model: "Model") -> Result:
-        """Ship the model, run the solver on the remote, return a Result."""
-        from linopy.constants import Status
-        from linopy.remote._common import (
-            _scatter_solution_from_solved_model,
-            _validate_inner_solver,
-        )
+    def solve(self, model: "Model", solver_name: str, **options: Any) -> "Model":
+        """Ship the model, run the solver on the remote, return the solved model."""
+        from linopy.remote._common import _validate_inner_solver
 
-        _validate_inner_solver(self.solver_name, model)
+        _validate_inner_solver(solver_name, model)
 
         if self._handler is None:
             self._handler = RemoteHandler(
@@ -364,18 +349,5 @@ class SSH:
             for cmd in self.settings.setup_commands:
                 self._handler.execute(cmd)
 
-        solve_kwargs: dict[str, Any] = {"solver_name": self.solver_name}
-        if self.options:
-            solve_kwargs.update(self.options)
-        solved = self._handler.solve_on_remote(model, **solve_kwargs)
-        self._solved_model = solved
-
-        status = Status.from_termination_condition(solved.termination_condition)
-        solution = _scatter_solution_from_solved_model(
-            model, solved, model._xCounter, model._cCounter
-        )
-        return Result(
-            status=status,
-            solution=solution,
-            solver_name=self.solver_name,
-        )
+        solve_kwargs: dict[str, Any] = {"solver_name": solver_name, **options}
+        return self._handler.solve_on_remote(model, **solve_kwargs)
