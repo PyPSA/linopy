@@ -41,7 +41,7 @@ m.to_netcdf("{model_solved_file}")
 @dataclass
 class SshSettings:
     """
-    Transport-only config for the :class:`~linopy.remote.SSH` remote.
+    Connection config for the :class:`~linopy.remote.SSH` remote.
 
     Solver name and solver options come from :meth:`Model.solve` —
     ``m.solve("gurobi", remote=SshSettings(hostname=...), presolve="on")``.
@@ -172,9 +172,9 @@ class RemoteHandler:
 
         if not self._internal:
             warnings.warn(
-                "`RemoteHandler` is deprecated; use `SSH(settings, solver_name, "
-                "options)` from `linopy.remote` or `Model.solve(remote=SshSettings"
-                "(hostname=...))`. `RemoteHandler` will be removed in a future release.",
+                "`RemoteHandler` is deprecated; use `SSH(settings)` from "
+                "`linopy.remote` or `Model.solve(remote=SshSettings(hostname=...))`. "
+                "`RemoteHandler` will be removed in a future release.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -304,14 +304,15 @@ class RemoteHandler:
 @dataclass
 class SSH:
     """
-    A connection to a remote machine that solves linopy models over SSH.
+    A connection to a remote machine you run yourself, reached over SSH.
 
     This is a standalone class — *not* a :class:`linopy.solvers.Solver`
     subclass. It ships the model to a remote host and runs
     ``read_netcdf(...).solve(solver_name=...)`` there, pulling the solved
-    model back. Unlike :class:`Oetc` the remote shell job is short-lived
-    and synchronous, so there is no submit/collect seam — just
-    :meth:`solve`.
+    model back. Where :class:`Oetc` targets a managed cloud service,
+    ``SSH`` targets a machine you provide. The SSH shell job is
+    short-lived and synchronous, so there is no submit/collect seam —
+    just :meth:`solve`.
 
     Parameters
     ----------

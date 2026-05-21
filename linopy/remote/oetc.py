@@ -66,7 +66,7 @@ class OetcCredentials:
 @dataclass
 class OetcSettings:
     """
-    Transport config for the OET Cloud (OETC) remote service.
+    Connection config for the OET Cloud (OETC) remote service.
 
     Carries the auth/orchestrator endpoints and the worker resource
     sizing. The solver is chosen per call — pass it to
@@ -243,7 +243,7 @@ class OetcHandler:
         Use :class:`~linopy.remote.Oetc` or :meth:`Model.solve(remote=OetcSettings(...))
         <linopy.model.Model.solve>` instead. This class will be removed in a
         future release. The new :class:`Oetc` class owns the public lifecycle
-        (``upload`` / ``submit`` / ``collect`` / ``solve``); ``OetcHandler``
+        (``submit`` / ``status`` / ``collect`` / ``solve``); ``OetcHandler``
         remains only for back-compat with code that holds a long-lived
         handler instance.
     """
@@ -256,9 +256,9 @@ class OetcHandler:
             )
         if not _internal:
             warnings.warn(
-                "`OetcHandler` is deprecated; use `Oetc(settings, solver_name, "
-                "options)` from `linopy.remote` or `Model.solve(remote=OetcSettings"
-                "(...))`. `OetcHandler` will be removed in a future release.",
+                "`OetcHandler` is deprecated; use `Oetc(settings)` from "
+                "`linopy.remote` or `Model.solve(remote=OetcSettings(...))`. "
+                "`OetcHandler` will be removed in a future release.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -854,11 +854,12 @@ class OetcHandler:
 @dataclass
 class Oetc:
     """
-    A connection to the OET Cloud (OETC) compute service.
+    A session with the OET Cloud (OETC) managed compute service.
 
     This is a standalone class — *not* a :class:`linopy.solvers.Solver`
-    subclass. An ``Oetc`` instance is a *connection*, not a job: it
-    authenticates once and can submit and collect any number of jobs.
+    subclass. An ``Oetc`` instance is a *session*, not a job: it holds an
+    auth token — not a persistent connection — and can submit and collect
+    any number of jobs over HTTPS.
 
     A job is identified solely by the uuid string returned from
     :meth:`submit`. Because the handle is just a string, the lifecycle is
@@ -881,7 +882,7 @@ class Oetc:
         """Return True iff the OETC network deps are importable."""
         return _oetc_deps_available
 
-    def _connection(self) -> OetcHandler:
+    def _session(self) -> OetcHandler:
         """Return the authenticated handler, building it on first use."""
         if self._handler is None:
             self._handler = OetcHandler(self.settings, _internal=True)
@@ -894,7 +895,7 @@ class Oetc:
         The uuid is the only handle a job needs — persist it and
         :meth:`collect` later, from this or any other process.
         """
-        handler = self._connection()
+        handler = self._session()
         with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
             fn.file.close()
             model.to_netcdf(fn.name)
@@ -905,16 +906,16 @@ class Oetc:
 
     def status(self, job_uuid: str) -> str:
         """Return the current job status in a single, non-blocking request."""
-        return self._connection()._get_job(job_uuid).status
+        return self._session()._get_job(job_uuid).status
 
     def collect(self, job_uuid: str) -> Model:
         """
         Block until the job finishes, download, and return the solved model.
 
-        Needs only the uuid and the connection, so it can run in a
+        Needs only the uuid and the session, so it can run in a
         different process than the one that called :meth:`submit`.
         """
-        handler = self._connection()
+        handler = self._session()
         job_result = handler.wait_and_get_job_data(job_uuid)
         if not job_result.output_files:
             raise Exception("No output files found in completed job")
