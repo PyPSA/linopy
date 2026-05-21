@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from linopy.persistent.diff import (
-    ContainerRowUpdate,
-    ContainerVarUpdate,
+    ConSlice,
     ModelDiff,
     RebuildReason,
+    VarSlice,
 )
 from linopy.persistent.errors import (
     RebuildRequiredError,
@@ -22,10 +22,9 @@ from linopy.persistent.snapshot import (
 )
 
 __all__ = [
+    "ConSlice",
     "ContainerConBuffers",
-    "ContainerRowUpdate",
     "ContainerVarBuffers",
-    "ContainerVarUpdate",
     "ModelDiff",
     "ModelSnapshot",
     "RebuildReason",
@@ -34,4 +33,5 @@ __all__ = [
     "UnsupportedUpdate",
     "UpdatesDisabledError",
     "VarKind",
+    "VarSlice",
 ]

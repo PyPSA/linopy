@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
@@ -24,6 +25,12 @@ if TYPE_CHECKING:
     from linopy.variables import Variable, VariableLabelIndex
 
 
+_EMPTY_I32 = np.empty(0, dtype=np.int32)
+_EMPTY_F64 = np.empty(0, dtype=np.float64)
+_EMPTY_U1 = np.empty(0, dtype="U1")
+_EMPTY_KIND: np.ndarray = np.empty(0, dtype=object)
+
+
 class RebuildReason(enum.Enum):
     NONE = "none"
     STRUCTURAL_LABELS = "vlabels/clabels mismatch"
@@ -34,43 +41,213 @@ class RebuildReason(enum.Enum):
     BACKEND_REJECTED = "backend raised UnsupportedUpdate"
 
 
-@dataclass
-class ContainerVarUpdate:
-    bounds_indices: np.ndarray | None = None
-    lower: np.ndarray | None = None
-    upper: np.ndarray | None = None
-    type_change: VarKind | None = None
+@dataclass(frozen=True)
+class VarSlice:
+    bounds: slice
+    type: slice
+
+
+@dataclass(frozen=True)
+class ConSlice:
+    coef: slice
+    rhs: slice
+    sign: slice
+
+
+def _empty_slice() -> slice:
+    return slice(0, 0)
 
 
 @dataclass
-class ContainerRowUpdate:
-    coef_row_indices: np.ndarray | None = None
-    coef_indptr: np.ndarray | None = None
-    coef_indices: np.ndarray | None = None
-    coef_data: np.ndarray | None = None
-    rhs_row_indices: np.ndarray | None = None
-    rhs_values: np.ndarray | None = None
-    rhs_signs: np.ndarray | None = None
-    sign_row_indices: np.ndarray | None = None
-    sign_values: np.ndarray | None = None
+class _DiffBuilder:
+    var_bounds_idx: list[np.ndarray] = field(default_factory=list)
+    var_bounds_lo: list[np.ndarray] = field(default_factory=list)
+    var_bounds_up: list[np.ndarray] = field(default_factory=list)
+    var_type_pos: list[np.ndarray] = field(default_factory=list)
+    var_type_kinds: list[np.ndarray] = field(default_factory=list)
+
+    con_coef_rows: list[np.ndarray] = field(default_factory=list)
+    con_coef_cols: list[np.ndarray] = field(default_factory=list)
+    con_coef_vals: list[np.ndarray] = field(default_factory=list)
+
+    con_rhs_idx: list[np.ndarray] = field(default_factory=list)
+    con_rhs_vals: list[np.ndarray] = field(default_factory=list)
+    con_rhs_signs: list[np.ndarray] = field(default_factory=list)
+
+    con_sign_idx: list[np.ndarray] = field(default_factory=list)
+    con_sign_vals: list[np.ndarray] = field(default_factory=list)
+
+    var_slices: dict[str, VarSlice] = field(default_factory=dict)
+    con_slices: dict[str, ConSlice] = field(default_factory=dict)
+
+    obj_c_indices: np.ndarray | None = None
+    obj_c_values: np.ndarray | None = None
+    obj_sense: str | None = None
+
+    _vb_cur: int = 0
+    _vt_cur: int = 0
+    _cc_cur: int = 0
+    _cr_cur: int = 0
+    _cs_cur: int = 0
+
+    def push_var(
+        self,
+        name: str,
+        bounds_idx: np.ndarray | None,
+        lower: np.ndarray | None,
+        upper: np.ndarray | None,
+        type_positions: np.ndarray | None,
+        type_kind: VarKind | None,
+    ) -> None:
+        b_start = self._vb_cur
+        if bounds_idx is not None:
+            self.var_bounds_idx.append(bounds_idx)
+            self.var_bounds_lo.append(lower)
+            self.var_bounds_up.append(upper)
+            self._vb_cur += bounds_idx.size
+        t_start = self._vt_cur
+        if type_positions is not None:
+            self.var_type_pos.append(type_positions)
+            self.var_type_kinds.append(
+                np.full(type_positions.size, type_kind, dtype=object)
+            )
+            self._vt_cur += type_positions.size
+        self.var_slices[name] = VarSlice(
+            bounds=slice(b_start, self._vb_cur),
+            type=slice(t_start, self._vt_cur),
+        )
+
+    def push_con(
+        self,
+        name: str,
+        coef_rows: np.ndarray | None,
+        coef_cols: np.ndarray | None,
+        coef_vals: np.ndarray | None,
+        rhs_idx: np.ndarray | None,
+        rhs_vals: np.ndarray | None,
+        rhs_signs: np.ndarray | None,
+        sign_idx: np.ndarray | None,
+        sign_vals: np.ndarray | None,
+    ) -> None:
+        c_start = self._cc_cur
+        if coef_rows is not None:
+            self.con_coef_rows.append(coef_rows)
+            self.con_coef_cols.append(coef_cols)
+            self.con_coef_vals.append(coef_vals)
+            self._cc_cur += coef_rows.size
+        r_start = self._cr_cur
+        if rhs_idx is not None:
+            self.con_rhs_idx.append(rhs_idx)
+            self.con_rhs_vals.append(rhs_vals)
+            self.con_rhs_signs.append(rhs_signs)
+            self._cr_cur += rhs_idx.size
+        s_start = self._cs_cur
+        if sign_idx is not None:
+            self.con_sign_idx.append(sign_idx)
+            self.con_sign_vals.append(sign_vals)
+            self._cs_cur += sign_idx.size
+        self.con_slices[name] = ConSlice(
+            coef=slice(c_start, self._cc_cur),
+            rhs=slice(r_start, self._cr_cur),
+            sign=slice(s_start, self._cs_cur),
+        )
+
+    def set_objective(
+        self,
+        c_indices: np.ndarray | None,
+        c_values: np.ndarray | None,
+        sense: str | None,
+    ) -> None:
+        self.obj_c_indices = c_indices
+        self.obj_c_values = c_values
+        self.obj_sense = sense
+
+    def finalize(self, diff: ModelDiff) -> None:
+        diff.obj_c_indices = self.obj_c_indices
+        diff.obj_c_values = self.obj_c_values
+        diff.obj_sense = self.obj_sense
+        diff.var_bounds_indices = _cat(self.var_bounds_idx, np.int32)
+        diff.var_bounds_lower = _cat(self.var_bounds_lo, np.float64)
+        diff.var_bounds_upper = _cat(self.var_bounds_up, np.float64)
+        diff.var_type_positions = _cat(self.var_type_pos, np.int32)
+        diff.var_type_kinds = _cat_obj(self.var_type_kinds)
+        diff.con_coef_rows = _cat(self.con_coef_rows, np.int32)
+        diff.con_coef_cols = _cat(self.con_coef_cols, np.int32)
+        diff.con_coef_vals = _cat(self.con_coef_vals, np.float64)
+        diff.con_rhs_indices = _cat(self.con_rhs_idx, np.int32)
+        diff.con_rhs_values = _cat(self.con_rhs_vals, np.float64)
+        diff.con_rhs_signs = _cat_str(self.con_rhs_signs)
+        diff.con_sign_indices = _cat(self.con_sign_idx, np.int32)
+        diff.con_sign_values = _cat_str(self.con_sign_vals)
+        diff.var_slices = {
+            n: s
+            for n, s in self.var_slices.items()
+            if s.bounds.stop > s.bounds.start or s.type.stop > s.type.start
+        }
+        diff.con_slices = {
+            n: s
+            for n, s in self.con_slices.items()
+            if s.coef.stop > s.coef.start
+            or s.rhs.stop > s.rhs.start
+            or s.sign.stop > s.sign.start
+        }
+
+
+def _cat(parts: list[np.ndarray], dtype: type) -> np.ndarray:
+    if not parts:
+        return np.empty(0, dtype=dtype)
+    return np.concatenate(parts).astype(dtype, copy=False)
+
+
+def _cat_obj(parts: list[np.ndarray]) -> np.ndarray:
+    if not parts:
+        return _EMPTY_KIND
+    return np.concatenate(parts)
+
+
+def _cat_str(parts: list[np.ndarray]) -> np.ndarray:
+    if not parts:
+        return _EMPTY_U1
+    return np.concatenate(parts)
 
 
 @dataclass
 class ModelDiff:
     rebuild_reason: RebuildReason = RebuildReason.NONE
-    vars: dict[str, ContainerVarUpdate] = field(default_factory=dict)
-    cons: dict[str, ContainerRowUpdate] = field(default_factory=dict)
+
+    var_bounds_indices: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    var_bounds_lower: np.ndarray = field(default_factory=lambda: _EMPTY_F64)
+    var_bounds_upper: np.ndarray = field(default_factory=lambda: _EMPTY_F64)
+    var_type_positions: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    var_type_kinds: np.ndarray = field(default_factory=lambda: _EMPTY_KIND)
+
+    con_coef_rows: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    con_coef_cols: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    con_coef_vals: np.ndarray = field(default_factory=lambda: _EMPTY_F64)
+
+    con_rhs_indices: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    con_rhs_values: np.ndarray = field(default_factory=lambda: _EMPTY_F64)
+    con_rhs_signs: np.ndarray = field(default_factory=lambda: _EMPTY_U1)
+
+    con_sign_indices: np.ndarray = field(default_factory=lambda: _EMPTY_I32)
+    con_sign_values: np.ndarray = field(default_factory=lambda: _EMPTY_U1)
+
     obj_c_indices: np.ndarray | None = None
     obj_c_values: np.ndarray | None = None
     obj_sense: str | None = None
-    n_coef_updates: int = 0
+
+    var_slices: dict[str, VarSlice] = field(default_factory=dict)
+    con_slices: dict[str, ConSlice] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
         return (
             self.rebuild_reason is RebuildReason.NONE
-            and not self.vars
-            and not self.cons
+            and self.var_bounds_indices.size == 0
+            and self.var_type_positions.size == 0
+            and self.con_coef_rows.size == 0
+            and self.con_rhs_indices.size == 0
+            and self.con_sign_indices.size == 0
             and self.obj_c_indices is None
             and self.obj_sense is None
         )
@@ -81,64 +258,66 @@ class ModelDiff:
 
     @property
     def changed_variables(self) -> set[str]:
-        return set(self.vars)
+        return set(self.var_slices)
 
     @property
     def changed_constraints(self) -> set[str]:
-        return set(self.cons)
+        return set(self.con_slices)
+
+    @property
+    def n_coef_updates(self) -> int:
+        return int(self.con_coef_vals.size)
+
+    def con_rhs_as_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return (lower, upper) row-bounds form of the RHS updates."""
+        vals = self.con_rhs_values
+        signs = self.con_rhs_signs
+        lower = np.where(signs == short_LESS_EQUAL, -np.inf, vals)
+        upper = np.where(signs == short_GREATER_EQUAL, np.inf, vals)
+        return lower, upper
 
     def summary(self) -> dict[str, int | bool | str | None]:
-        n_var_lb = sum(1 for u in self.vars.values() if u.lower is not None)
-        n_var_ub = sum(1 for u in self.vars.values() if u.upper is not None)
-        n_var_type = sum(1 for u in self.vars.values() if u.type_change is not None)
-        n_con_rhs = sum(1 for u in self.cons.values() if u.rhs_values is not None)
-        n_con_sign = sum(1 for u in self.cons.values() if u.sign_values is not None)
-        n_con_coef = sum(1 for u in self.cons.values() if u.coef_data is not None)
         return {
             "rebuild_reason": self.rebuild_reason.value,
-            "var_lb": n_var_lb,
-            "var_ub": n_var_ub,
-            "var_type": n_var_type,
-            "con_rhs": n_con_rhs,
-            "con_sign": n_con_sign,
-            "con_coef_updates": n_con_coef,
-            "n_coef_values": self.n_coef_updates,
+            "var_bounds": int(self.var_bounds_indices.size),
+            "var_type": int(self.var_type_positions.size),
+            "con_rhs": int(self.con_rhs_indices.size),
+            "con_sign": int(self.con_sign_indices.size),
+            "con_coef_updates": int(self.con_coef_vals.size),
             "obj_linear_changed": self.obj_c_indices is not None,
             "obj_sense_changed_to": self.obj_sense,
         }
 
     def inspect_variable(self, name: str) -> dict[str, object]:
-        if name not in self.vars:
+        sl = self.var_slices.get(name)
+        if sl is None:
             return {}
-        u = self.vars[name]
         entry: dict[str, object] = {}
-        if u.lower is not None:
-            entry["lower"] = u.lower
-        if u.upper is not None:
-            entry["upper"] = u.upper
-        if u.type_change is not None:
-            entry["type"] = u.type_change
+        if sl.bounds.stop > sl.bounds.start:
+            entry["bounds_indices"] = self.var_bounds_indices[sl.bounds]
+            entry["lower"] = self.var_bounds_lower[sl.bounds]
+            entry["upper"] = self.var_bounds_upper[sl.bounds]
+        if sl.type.stop > sl.type.start:
+            entry["type_positions"] = self.var_type_positions[sl.type]
+            entry["type_kinds"] = self.var_type_kinds[sl.type]
         return entry
 
     def inspect_constraint(self, name: str) -> dict[str, object]:
-        if name not in self.cons:
+        sl = self.con_slices.get(name)
+        if sl is None:
             return {}
-        u = self.cons[name]
         entry: dict[str, object] = {}
-        if u.rhs_values is not None:
-            entry["rhs"] = u.rhs_values
-        if u.sign_values is not None:
-            entry["sign"] = u.sign_values
-        if u.coef_data is not None:
-            indptr = u.coef_indptr
-            indices = u.coef_indices
-            data = u.coef_data
-            assert indptr is not None and indices is not None
-            entry["coef_rows"] = [
-                (indices[indptr[i] : indptr[i + 1]],
-                 data[indptr[i] : indptr[i + 1]])
-                for i in range(len(indptr) - 1)
-            ]
+        if sl.coef.stop > sl.coef.start:
+            entry["coef_rows"] = self.con_coef_rows[sl.coef]
+            entry["coef_cols"] = self.con_coef_cols[sl.coef]
+            entry["coef_vals"] = self.con_coef_vals[sl.coef]
+        if sl.rhs.stop > sl.rhs.start:
+            entry["rhs_indices"] = self.con_rhs_indices[sl.rhs]
+            entry["rhs_values"] = self.con_rhs_values[sl.rhs]
+            entry["rhs_signs"] = self.con_rhs_signs[sl.rhs]
+        if sl.sign.stop > sl.sign.start:
+            entry["sign_indices"] = self.con_sign_indices[sl.sign]
+            entry["sign_values"] = self.con_sign_values[sl.sign]
         return entry
 
     def __repr__(self) -> str:
@@ -194,11 +373,12 @@ class ModelDiff:
 
         var_l2p = var_label_index.label_to_pos
         con_l2p = con_label_index.label_to_pos
+        builder = _DiffBuilder()
 
         for name, var in model.variables.items():
             base_coords = snapshot.var_coords[name] if check_coords else None
             reason = _diff_var_container(
-                diff, name, var, snapshot.var_buffers[name],
+                builder, name, var, snapshot.var_buffers[name],
                 base_coords, var_l2p, ignored, check_coords,
             )
             if reason is not None:
@@ -209,7 +389,7 @@ class ModelDiff:
             base_coords = snapshot.con_coords[name] if check_coords else None
             skip_coef_compare = same_model and not con._coef_dirty
             reason = _diff_con_container(
-                diff, name, con, snapshot.con_buffers[name],
+                builder, name, con, snapshot.con_buffers[name],
                 base_coords, var_label_index, con_l2p, ignored, check_coords,
                 skip_coef_compare,
             )
@@ -218,11 +398,14 @@ class ModelDiff:
                 return diff
 
         reason = _diff_objective(
-            diff, model,
+            builder, model,
             snapshot.obj_c, snapshot.obj_quad_present, snapshot.obj_sense,
         )
         if reason is not None:
             diff.rebuild_reason = reason
+            return diff
+
+        builder.finalize(diff)
         return diff
 
     @classmethod
@@ -265,13 +448,14 @@ class ModelDiff:
 
         var_l2p = var_idx_b.label_to_pos
         con_l2p = con_idx_b.label_to_pos
+        builder = _DiffBuilder()
 
         for name, var_b in model_b.variables.items():
             var_a = model_a.variables[name]
             base_buf = _extract_var_buffers(var_a)
             base_coords = _coord_snapshot(var_a) if check_coords else None
             reason = _diff_var_container(
-                diff, name, var_b, base_buf,
+                builder, name, var_b, base_buf,
                 base_coords, var_l2p, ignored, check_coords,
             )
             if reason is not None:
@@ -283,7 +467,7 @@ class ModelDiff:
             base_buf = _extract_con_buffers(con_a, var_idx_a)
             base_coords = _coord_snapshot(con_a) if check_coords else None
             reason = _diff_con_container(
-                diff, name, con_b, base_buf,
+                builder, name, con_b, base_buf,
                 base_coords, var_idx_b, con_l2p, ignored, check_coords,
                 skip_coef_compare=False,
             )
@@ -292,13 +476,16 @@ class ModelDiff:
                 return diff
 
         reason = _diff_objective(
-            diff, model_b,
+            builder, model_b,
             _objective_linear_vector(model_a),
             model_a.objective.is_quadratic,
             model_a.objective.sense,
         )
         if reason is not None:
             diff.rebuild_reason = reason
+            return diff
+
+        builder.finalize(diff)
         return diff
 
 
@@ -311,8 +498,16 @@ def _coords_equal(
     return all(np.array_equal(a[k], b[k]) for k in keys)
 
 
+def _active_container_positions(
+    var: Variable, var_l2p: np.ndarray
+) -> np.ndarray:
+    labels = var.labels.values.ravel()
+    active = labels[labels != -1]
+    return var_l2p[active].astype(np.int32, copy=False)
+
+
 def _diff_var_container(
-    diff: ModelDiff,
+    builder: _DiffBuilder,
     name: str,
     var: Variable,
     base_buf: ContainerVarBuffers,
@@ -337,20 +532,27 @@ def _diff_var_container(
     if not (bound_mask.any() or type_changed):
         return None
 
-    update = ContainerVarUpdate(type_change=new_buf.type if type_changed else None)
+    bounds_idx = lower = upper = None
     if bound_mask.any():
         local_idx = np.flatnonzero(bound_mask)
-        update.bounds_indices = var_l2p[
+        bounds_idx = var_l2p[
             new_buf.active_labels[local_idx]
         ].astype(np.int32, copy=False)
-        update.lower = new_buf.lower[local_idx]
-        update.upper = new_buf.upper[local_idx]
-    diff.vars[name] = update
+        lower = new_buf.lower[local_idx].astype(np.float64, copy=False)
+        upper = new_buf.upper[local_idx].astype(np.float64, copy=False)
+
+    type_positions = None
+    type_kind: VarKind | None = None
+    if type_changed:
+        type_positions = _active_container_positions(var, var_l2p)
+        type_kind = new_buf.type
+
+    builder.push_var(name, bounds_idx, lower, upper, type_positions, type_kind)
     return None
 
 
 def _diff_con_container(
-    diff: ModelDiff,
+    builder: _DiffBuilder,
     name: str,
     con: ConstraintBase,
     base_buf: ContainerConBuffers,
@@ -379,6 +581,7 @@ def _diff_con_container(
 
     if skip_coef_compare:
         row_value_changed = np.zeros(n_rows, dtype=bool)
+        data_diff = None
     else:
         data_diff = new_buf.data != base_buf.data
         if data_diff.any():
@@ -395,48 +598,65 @@ def _diff_con_container(
     if not (row_value_changed.any() or rhs_changed.any() or sign_changed.any()):
         return None
 
-    update = ContainerRowUpdate()
+    coef_rows = coef_cols = coef_vals = None
     if row_value_changed.any():
-        idx = np.flatnonzero(row_value_changed)
-        update.coef_row_indices = con_l2p[
-            new_buf.active_labels[idx]
-        ].astype(np.int32, copy=False)
-        new_indptr = new_buf.indptr
-        nnz_per_changed = (new_indptr[idx + 1] - new_indptr[idx]).astype(np.int32)
-        payload_indptr = np.empty(len(idx) + 1, dtype=np.int32)
-        payload_indptr[0] = 0
-        np.cumsum(nnz_per_changed, out=payload_indptr[1:])
-        total_nnz = int(payload_indptr[-1])
-        payload_indices = np.empty(total_nnz, dtype=new_buf.indices.dtype)
-        payload_data = np.empty(total_nnz, dtype=np.float64)
-        for j, i in enumerate(idx):
-            s, e = int(new_indptr[i]), int(new_indptr[i + 1])
-            ps, pe = int(payload_indptr[j]), int(payload_indptr[j + 1])
-            payload_indices[ps:pe] = new_buf.indices[s:e]
-            payload_data[ps:pe] = new_buf.data[s:e]
-        update.coef_indptr = payload_indptr
-        update.coef_indices = payload_indices
-        update.coef_data = payload_data
-        diff.n_coef_updates += total_nnz
+        coef_rows, coef_cols, coef_vals = _expand_coefs_coo(
+            new_buf, con_l2p, row_value_changed
+        )
+
+    rhs_idx = rhs_vals = rhs_signs_arr = None
     if rhs_changed.any():
         idx = np.flatnonzero(rhs_changed)
-        update.rhs_row_indices = con_l2p[
+        rhs_idx = con_l2p[
             new_buf.active_labels[idx]
         ].astype(np.int32, copy=False)
-        update.rhs_values = new_buf.rhs[idx]
-        update.rhs_signs = new_buf.sign[idx]
+        rhs_vals = new_buf.rhs[idx].astype(np.float64, copy=False)
+        rhs_signs_arr = new_buf.sign[idx]
+
+    sign_idx = sign_vals = None
     if sign_changed.any():
         idx = np.flatnonzero(sign_changed)
-        update.sign_row_indices = con_l2p[
+        sign_idx = con_l2p[
             new_buf.active_labels[idx]
         ].astype(np.int32, copy=False)
-        update.sign_values = new_buf.sign[idx]
-    diff.cons[name] = update
+        sign_vals = new_buf.sign[idx]
+
+    builder.push_con(
+        name,
+        coef_rows, coef_cols, coef_vals,
+        rhs_idx, rhs_vals, rhs_signs_arr,
+        sign_idx, sign_vals,
+    )
     return None
 
 
+def _expand_coefs_coo(
+    new_buf: ContainerConBuffers,
+    con_l2p: np.ndarray,
+    row_value_changed: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    idx = np.flatnonzero(row_value_changed)
+    row_positions = con_l2p[
+        new_buf.active_labels[idx]
+    ].astype(np.int32, copy=False)
+    indptr = new_buf.indptr
+    nnz_per_changed = (indptr[idx + 1] - indptr[idx]).astype(np.int32)
+    total_nnz = int(nnz_per_changed.sum())
+    rows = np.repeat(row_positions, nnz_per_changed)
+    cols = np.empty(total_nnz, dtype=np.int32)
+    vals = np.empty(total_nnz, dtype=np.float64)
+    cursor = 0
+    for i in idx:
+        s, e = int(indptr[i]), int(indptr[i + 1])
+        n = e - s
+        cols[cursor:cursor + n] = new_buf.indices[s:e]
+        vals[cursor:cursor + n] = new_buf.data[s:e]
+        cursor += n
+    return rows, cols, vals
+
+
 def _diff_objective(
-    diff: ModelDiff,
+    builder: _DiffBuilder,
     model: Model,
     base_obj_c: np.ndarray,
     base_obj_quad: bool,
@@ -448,12 +668,14 @@ def _diff_objective(
     obj_c = _objective_linear_vector(model)
     if obj_c.shape != base_obj_c.shape:
         return RebuildReason.COORD_REINDEX
+    c_indices = c_values = None
     obj_diff_mask = obj_c != base_obj_c
     if obj_diff_mask.any():
-        idx = np.flatnonzero(obj_diff_mask).astype(np.int32, copy=False)
-        diff.obj_c_indices = idx
-        diff.obj_c_values = obj_c[idx]
+        c_indices = np.flatnonzero(obj_diff_mask).astype(np.int32, copy=False)
+        c_values = obj_c[c_indices].astype(np.float64, copy=False)
 
-    if model.objective.sense != base_obj_sense:
-        diff.obj_sense = model.objective.sense
+    sense = (
+        model.objective.sense if model.objective.sense != base_obj_sense else None
+    )
+    builder.set_objective(c_indices, c_values, sense)
     return None

@@ -452,5 +452,6 @@ def test_track_updates_false_cross_instance_update(solver_name: str) -> None:
     m2 = _base_model()
     m2.constraints["c1"].rhs = 8.0
     diff = s.update(m2, apply=False)
-    assert diff.summary()["con_rhs"] == 1
+    assert diff.summary()["con_rhs"] == 3
+    assert "c1" in diff.changed_constraints
     assert s.snapshot is None
