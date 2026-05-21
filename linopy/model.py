@@ -134,7 +134,7 @@ def _sanitize_pandas(arr: pd.Series | pd.DataFrame) -> DataArray | None:
         # A pandas dataframe, possible with multi-level columns and multi-level index
         # Unstack all layers of columns
         while isinstance(arr, pd.DataFrame):
-            arr = arr.unstack()  # type: ignore
+            arr = arr.unstack()
         if not isinstance(arr, pd.Series):
             # This should not happen
             logger.warning("Failed to unstack dataframe")
