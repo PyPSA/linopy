@@ -1,6 +1,6 @@
-# Arithmetic convention — design & transitioning goals
+# The v1 convention — design & transitioning goals
 
-Goals for linopy's strict ("v1") arithmetic convention. The bugs that motivate
+Goals for linopy's strict ("v1") convention. The bugs that motivate
 it are catalogued in [#714]; the convention itself is in
 [`convention.md`](convention.md).
 

@@ -1,6 +1,6 @@
-# The v1 arithmetic convention
+# The v1 convention
 
-The strict ("v1") arithmetic convention for linopy. Goals and rollout plan:
+The strict ("v1") convention for linopy. Goals and rollout plan:
 [`goals.md`](goals.md). The bugs it fixes are catalogued in [#714].
 
 Thirteen sections in three groups: absence (§1–§7), coordinate alignment
