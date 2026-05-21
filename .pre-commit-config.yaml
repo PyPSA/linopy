@@ -32,8 +32,10 @@ repos:
     -   id: codespell
         types_or: [python, rst, markdown]
         files: ^(linopy|doc)/
--   repo: https://github.com/aflc/pre-commit-jupyter
-    rev: v1.2.1
+-   repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
     hooks:
-    -   id: jupyter-notebook-cleanup
+    -   id: nbstripout
+        args:
+          - --extra-keys=cell.metadata.ExecuteTime cell.metadata.execution
         exclude: examples/solve-on-remote.ipynb

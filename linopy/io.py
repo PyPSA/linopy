@@ -424,15 +424,22 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs[SOS_TYPE_ATTR]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
-            ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
+            # Per-set id = max member label: unique per set (labels are globally
+            # unique); a fully-masked set reduces to -1 and is dropped below.
+            ds["sos_labels"] = ds["labels"].max(sos_dim)
             ds["weights"] = ds.coords[sos_dim]
             df = to_polars(ds)
+
+            # Drop masked members
+            df = df.filter((pl.col("labels") != -1) & (pl.col("sos_labels") != -1))
+            if df.is_empty():
+                continue
 
             df = df.group_by("sos_labels").agg(
                 pl.concat_str(
@@ -593,8 +600,6 @@ def to_file(
     """
     Write out a model to a lp or mps file.
     """
-    m._check_sos_unmasked()
-
     if fn is None:
         fn = Path(m.get_problem_file())
     if isinstance(fn, str):
@@ -695,13 +700,11 @@ def to_xpress(
     set_names: bool = True,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
-    solver = solvers.Xpress.from_model(
+    return solvers.Xpress._build_solver_model(
         m,
-        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
-    return solver.solver_model
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:

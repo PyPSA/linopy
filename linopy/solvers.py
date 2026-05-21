@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 from packaging.specifiers import SpecifierSet
 from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
@@ -116,6 +115,25 @@ def _solution_from_labels(
         return np.array([], dtype=float)
     assert labels is not None
     return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
+
+
+def _iter_sos_sets(model: Model) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """Yield ``(sos_type, positions, weights)`` per active SOS set in ``model``."""
+    label_to_pos = model.variables.label_index.label_to_pos
+    for var_name in model.variables.sos:
+        var = model.variables.sos[var_name]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
+
+        labels = var.labels.transpose(sos_dim, ...)
+        weights = labels.coords[sos_dim].values
+        arr = labels.values.reshape(labels.shape[0], -1)
+
+        for i in range(arr.shape[1]):
+            col = arr[:, i]
+            mask = col != -1
+            if mask.any():
+                yield sos_type, label_to_pos[col[mask]], weights[mask]
 
 
 class SolverFeature(Enum):
@@ -581,7 +599,6 @@ class Solver(ABC, Generic[EnvType]):
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
         self._validate_model()
-        self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
             if self.track_updates:
@@ -1851,25 +1868,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 names = print_constraints(M.clabels)
                 c.setAttr("ConstrName", names)
 
-        if model.variables.sos:
-            for var_name in model.variables.sos:
-                var = model.variables.sos[var_name]
-                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                    s = s.squeeze()
-                    indices = s.values.flatten().tolist()
-                    weights = s.coords[sos_dim].values.tolist()
-                    gm.addSOS(sos_type, x[indices].tolist(), weights)
-
-                others = [dim for dim in var.labels.dims if dim != sos_dim]
-                if not others:
-                    add_sos(var.labels, sos_type, sos_dim)
-                else:
-                    stacked = var.labels.stack(_sos_group=others)
-                    for _, s in stacked.groupby("_sos_group"):
-                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
 
         gm.update()
         return gm
@@ -2537,11 +2537,14 @@ class Xpress(Solver[None]):
     ) -> None:
         model = self.model
         assert model is not None
+        self.close()
+        self._env_stack = contextlib.ExitStack()
         problem = self._build_solver_model(
             model,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
+        self._env_stack.enter_context(problem)
         self.solver_model = problem
         self.io_api = "direct"
         self.sense = model.sense
@@ -2620,34 +2623,76 @@ class Xpress(Solver[None]):
             entind = None
             coltype = None
 
-        problem.loadproblem(
+        objcoef = np.asarray(M.c, dtype=float)
+        has_q = objqcol1 is not None
+        has_int = coltype is not None
+        base_kwargs: dict[str, Any] = dict(
             probname="linopy",
             rowtype=rowtype,
             rhs=rhs,
             rng=None,
-            objcoef=np.asarray(M.c, dtype=float),
+            objcoef=objcoef,
             start=start,
             collen=None,
             rowind=rowind,
             rowcoef=rowcoef,
             lb=lb,
             ub=ub,
-            objqcol1=objqcol1,
-            objqcol2=objqcol2,
-            objqcoef=objqcoef,
-            qrowind=None,
-            nrowqcoefs=None,
-            rowqcol1=None,
-            rowqcol2=None,
-            rowqcoef=None,
-            coltype=coltype,
-            entind=entind,
-            limit=None,
-            settype=None,
-            setstart=None,
-            setind=None,
-            refval=None,
         )
+        try:  # Try new API first (Xpress 9.8+)
+            if has_q and has_int:
+                problem.loadMIQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            elif has_q:
+                problem.loadQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                )
+            elif has_int:
+                problem.loadMIP(
+                    **base_kwargs,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            else:
+                problem.loadLP(**base_kwargs)
+        except AttributeError:  # Fallback to old API
+            problem.loadproblem(
+                probname="linopy",
+                rowtype=rowtype,
+                rhs=rhs,
+                rng=None,
+                objcoef=objcoef,
+                start=start,
+                collen=None,
+                rowind=rowind,
+                rowcoef=rowcoef,
+                lb=lb,
+                ub=ub,
+                objqcol1=objqcol1,
+                objqcol2=objqcol2,
+                objqcoef=objqcoef,
+                qrowind=None,
+                nrowqcoefs=None,
+                rowqcol1=None,
+                rowqcol2=None,
+                rowqcoef=None,
+                coltype=coltype,
+                entind=entind,
+                limit=None,
+                settype=None,
+                setstart=None,
+                setind=None,
+                refval=None,
+            )
 
         if model.objective.sense == "max":
             problem.chgobjsense(xpress.maximize)
@@ -2658,30 +2703,23 @@ class Xpress(Solver[None]):
             )
             vnames = print_variable(M.vlabels)
             if vnames:
-                problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
             cnames = print_constraint(M.clabels)
             if cnames:
-                problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
-        if model.variables.sos:
-            for var_name in model.variables.sos:
-                var = model.variables.sos[var_name]
-                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                    s = s.squeeze()
-                    indices = s.values.flatten().tolist()
-                    weights = s.coords[sos_dim].values.tolist()
-                    problem.addSOS(indices, weights, type=sos_type)
-
-                others = [dim for dim in var.labels.dims if dim != sos_dim]
-                if not others:
-                    add_sos(var.labels, sos_type, sos_dim)
-                else:
-                    stacked = var.labels.stack(_sos_group=others)
-                    for _, s in stacked.groupby("_sos_group"):
-                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            problem.addSOS(positions.tolist(), weights.tolist(), type=sos_type)
 
         return problem
 
@@ -2724,8 +2762,13 @@ class Xpress(Solver[None]):
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
-        m = xpress.problem()
-        m.read(path_to_string(problem_fn))
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        m = self._env_stack.enter_context(xpress.problem())
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
 
         return self._solve(
             m,
@@ -2761,25 +2804,40 @@ class Xpress(Solver[None]):
             m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(path_to_string(log_fn))
+            try:  # Try new API first
+                m.setLogFile(path_to_string(log_fn))
+            except AttributeError:  # Fallback to old API
+                m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(path_to_string(warmstart_fn))
+            try:  # Try new API first
+                m.readBasis(path_to_string(warmstart_fn))
+            except AttributeError:  # Fallback to old API
+                m.readbasis(path_to_string(warmstart_fn))
 
         m.optimize()
 
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
-            m.postsolve()
+            try:  # Try new API first
+                m.postSolve()
+            except AttributeError:  # Fallback to old API
+                m.postsolve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(path_to_string(basis_fn))
+                try:  # Try new API first
+                    m.writeBasis(path_to_string(basis_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebasis(path_to_string(basis_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                m.writebinsol(path_to_string(solution_fn))
+                try:  # Try new API first
+                    m.writeBinSol(path_to_string(solution_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebinsol(path_to_string(solution_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -2805,7 +2863,10 @@ class Xpress(Solver[None]):
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    dual_values = np.asarray(m.getDual(), dtype=float)
+                    try:  # getDuals introduced in 9.5; fallback for 9.4
+                        dual_values = np.asarray(m.getDuals(), dtype=float)
+                    except AttributeError:
+                        dual_values = np.asarray(m.getDual(), dtype=float)
                     if from_file:
                         dual = _solution_from_names(
                             dual_values,
@@ -3113,8 +3174,8 @@ class Mosek(Solver[None]):
 
     @classmethod
     def _license_probe(cls) -> None:
-        t = mosek.Task()
-        t.optimize()
+        with mosek.Env() as env, env.Task(0, 0) as task:
+            task.optimize()
 
     def apply_update(
         self,
@@ -3219,7 +3280,8 @@ class Mosek(Solver[None]):
         assert model is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
-        task = self._env_stack.enter_context(mosek.Task())
+        env = self._env_stack.enter_context(mosek.Env())
+        task = self._env_stack.enter_context(env.Task(0, 0))
         m = self._build_solver_model(
             model,
             task,
@@ -3334,7 +3396,8 @@ class Mosek(Solver[None]):
         assert problem_fn is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
-        m = self._env_stack.enter_context(mosek.Task())
+        mosek_env = self._env_stack.enter_context(mosek.Env())
+        m = self._env_stack.enter_context(mosek_env.Task(0, 0))
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)
@@ -3601,7 +3664,8 @@ class COPT(Solver[None]):
 
     @classmethod
     def _license_probe(cls) -> None:
-        coptpy.Envr()
+        env = coptpy.Envr()
+        env.close()
 
     def _run_file(
         self,
@@ -3635,70 +3699,71 @@ class COPT(Solver[None]):
         if env is None:
             env_ = coptpy.Envr()
 
-        m = env_.createModel()
+        try:
+            m = env_.createModel()
 
-        m.read(path_to_string(problem_fn))
+            m.read(path_to_string(problem_fn))
 
-        if log_fn is not None:
-            m.setLogFile(path_to_string(log_fn))
+            if log_fn is not None:
+                m.setLogFile(path_to_string(log_fn))
 
-        for k, v in self.solver_options.items():
-            m.setParam(k, v)
+            for k, v in self.solver_options.items():
+                m.setParam(k, v)
 
-        if warmstart_fn is not None:
-            m.readBasis(path_to_string(warmstart_fn))
+            if warmstart_fn is not None:
+                m.readBasis(path_to_string(warmstart_fn))
 
-        m.solve()
+            m.solve()
 
-        if basis_fn and m.HasBasis:
-            try:
-                m.write(path_to_string(basis_fn))
-            except coptpy.CoptError as err:
-                logger.info("No model basis stored. Raised error: %s", err)
+            if basis_fn and m.HasBasis:
+                try:
+                    m.write(path_to_string(basis_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model basis stored. Raised error: %s", err)
 
-        if solution_fn:
-            try:
-                m.write(path_to_string(solution_fn))
-            except coptpy.CoptError as err:
-                logger.info("No model solution stored. Raised error: %s", err)
+            if solution_fn:
+                try:
+                    m.write(path_to_string(solution_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model solution stored. Raised error: %s", err)
 
-        # TODO: check if this suffices
-        condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, str(condition))
-        status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = str(condition)
-
-        def get_solver_solution() -> Solution:
             # TODO: check if this suffices
-            objective = m.BestObj if m.ismip else m.LpObjVal
+            condition = m.MipStatus if m.ismip else m.LpStatus
+            termination_condition = CONDITION_MAP.get(condition, str(condition))
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = str(condition)
 
-            vars_ = m.getVars()
-            sol = _solution_from_names(
-                np.array([v.x for v in vars_], dtype=float),
-                [v.name for v in vars_],
-                self._n_vars,
-            )
+            def get_solver_solution() -> Solution:
+                # TODO: check if this suffices
+                objective = m.BestObj if m.ismip else m.LpObjVal
 
-            try:
-                cons = m.getConstrs()
-                dual = _solution_from_names(
-                    np.array([c.pi for c in cons], dtype=float),
-                    [c.name for c in cons],
-                    self._n_cons,
+                vars_ = m.getVars()
+                sol = _solution_from_names(
+                    np.array([v.x for v in vars_], dtype=float),
+                    [v.name for v in vars_],
+                    self._n_vars,
                 )
-            except (coptpy.CoptError, AttributeError):
-                logger.warning("Dual values of MILP couldn't be parsed")
-                dual = np.array([], dtype=float)
 
-            return Solution(sol, dual, objective)
+                try:
+                    cons = m.getConstrs()
+                    dual = _solution_from_names(
+                        np.array([c.pi for c in cons], dtype=float),
+                        [c.name for c in cons],
+                        self._n_cons,
+                    )
+                except (coptpy.CoptError, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = np.array([], dtype=float)
 
-        solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+                return Solution(sol, dual, objective)
 
-        env_.close()
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        self.io_api = io_api
-        return self._make_result(status, solution, solver_model=m)
+            self.io_api = io_api
+            return self._make_result(status, solution, solver_model=m)
+        finally:
+            env_.close()
 
 
 class MindOpt(Solver[None]):
@@ -3734,7 +3799,8 @@ class MindOpt(Solver[None]):
 
     @classmethod
     def _license_probe(cls) -> None:
-        mindoptpy.Env()
+        env = mindoptpy.Env()
+        env.dispose()
 
     def _run_file(
         self,
@@ -3771,69 +3837,73 @@ class MindOpt(Solver[None]):
         if env is None:
             env_ = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
 
-        env_.start()
+        m = None
+        try:
+            env_.start()
 
-        m = mindoptpy.read(path_to_string(problem_fn), env_)
+            m = mindoptpy.read(path_to_string(problem_fn), env_)
 
-        for k, v in self.solver_options.items():
-            m.setParam(k, v)
+            for k, v in self.solver_options.items():
+                m.setParam(k, v)
 
-        if warmstart_fn:
-            try:
-                m.read(path_to_string(warmstart_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("Model basis could not be read. Raised error: %s", err)
+            if warmstart_fn:
+                try:
+                    m.read(path_to_string(warmstart_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("Model basis could not be read. Raised error: %s", err)
 
-        m.optimize()
+            m.optimize()
 
-        if basis_fn:
-            try:
-                m.write(path_to_string(basis_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("No model basis stored. Raised error: %s", err)
+            if basis_fn:
+                try:
+                    m.write(path_to_string(basis_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("No model basis stored. Raised error: %s", err)
 
-        if solution_fn:
-            try:
-                m.write(path_to_string(solution_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("No model solution stored. Raised error: %s", err)
+            if solution_fn:
+                try:
+                    m.write(path_to_string(solution_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("No model solution stored. Raised error: %s", err)
 
-        condition = m.status
-        termination_condition = CONDITION_MAP.get(condition, condition)
-        status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+            condition = m.status
+            termination_condition = CONDITION_MAP.get(condition, condition)
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = condition
 
-        def get_solver_solution() -> Solution:
-            objective = m.objval
+            def get_solver_solution() -> Solution:
+                assert m is not None
+                objective = m.objval
 
-            vars_ = m.getVars()
-            sol = _solution_from_names(
-                np.array([v.X for v in vars_], dtype=float),
-                [v.VarName for v in vars_],
-                self._n_vars,
-            )
-
-            try:
-                cons = m.getConstrs()
-                dual = _solution_from_names(
-                    np.array([c.DualSoln for c in cons], dtype=float),
-                    [c.ConstrName for c in cons],
-                    self._n_cons,
+                vars_ = m.getVars()
+                sol = _solution_from_names(
+                    np.array([v.X for v in vars_], dtype=float),
+                    [v.VarName for v in vars_],
+                    self._n_vars,
                 )
-            except (mindoptpy.MindoptError, AttributeError):
-                logger.warning("Dual values of MILP couldn't be parsed")
-                dual = np.array([], dtype=float)
 
-            return Solution(sol, dual, objective)
+                try:
+                    cons = m.getConstrs()
+                    dual = _solution_from_names(
+                        np.array([c.DualSoln for c in cons], dtype=float),
+                        [c.ConstrName for c in cons],
+                        self._n_cons,
+                    )
+                except (mindoptpy.MindoptError, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = np.array([], dtype=float)
 
-        solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+                return Solution(sol, dual, objective)
 
-        m.dispose()
-        env_.dispose()
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        self.io_api = io_api
-        return self._make_result(status, solution, solver_model=m)
+            self.io_api = io_api
+            return self._make_result(status, solution, solver_model=m)
+        finally:
+            if m is not None:
+                m.dispose()
+            env_.dispose()
 
 
 class PIPS(Solver[None]):
