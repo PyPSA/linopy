@@ -698,10 +698,11 @@ class Solver(ABC, Generic[EnvType]):
         :class:`RebuildRequiredError` instead. The initial build on the first
         ``solve(model, ...)`` is still allowed.
         """
-        if model is not None:
-            if self.io_api != "direct":
-                raise ValueError("solve(model=...) requires io_api='direct'")
-            with self._lock:
+        if model is not None and self.io_api != "direct":
+            raise ValueError("solve(model=...) requires io_api='direct'")
+
+        with self._lock:
+            if model is not None:
                 if self.solver_model is None:
                     self.model = model
                     self._build()
@@ -720,26 +721,26 @@ class Solver(ABC, Generic[EnvType]):
                         ignore_dims=ignore_dims,
                         disallow_rebuild=disallow_rebuild,
                     )
-            target = model
-        else:
-            target = self.model  # type: ignore[assignment]
+                target = model
+            else:
+                target = self.model  # type: ignore[assignment]
 
-        if self.model is not None and self.model.objective.expression.empty:
-            raise ValueError(
-                "No objective has been set on the model. Use `m.add_objective(...)` "
-                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
-            )
-        if self.io_api == "direct" or self.solver_model is not None:
-            result = self._run_direct(**run_kwargs)
-        elif self._problem_fn is not None:
-            result = self._run_file(**run_kwargs)
-        else:
-            raise RuntimeError(
-                "Solver has not been built; call Solver.from_name(...) or _build() first."
-            )
+            if self.model is not None and self.model.objective.expression.empty:
+                raise ValueError(
+                    "No objective has been set on the model. Use `m.add_objective(...)` "
+                    "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+                )
+            if self.io_api == "direct" or self.solver_model is not None:
+                result = self._run_direct(**run_kwargs)
+            elif self._problem_fn is not None:
+                result = self._run_file(**run_kwargs)
+            else:
+                raise RuntimeError(
+                    "Solver has not been built; call Solver.from_name(...) or _build() first."
+                )
 
-        if assign and target is not None:
-            target.assign_result(result, solver=self)
+            if assign and target is not None:
+                target.assign_result(result, solver=self)
         return result
 
     def update(
@@ -1942,6 +1943,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 )
 
         if diff.obj_c_indices is not None:
+            assert diff.obj_c_values is not None
             var_subset = [gurobi_vars[int(i)] for i in diff.obj_c_indices]
             gm.setAttr("Obj", var_subset, diff.obj_c_values.tolist())
 
@@ -2515,6 +2517,7 @@ class Xpress(Solver[None]):
             )
 
         if diff.obj_c_indices is not None:
+            assert diff.obj_c_values is not None
             p.chgobj(
                 diff.obj_c_indices.astype(np.int64, copy=False).tolist(),
                 diff.obj_c_values.astype(float, copy=False).tolist(),
@@ -3237,6 +3240,7 @@ class Mosek(Solver[None]):
             )
 
         if diff.obj_c_indices is not None:
+            assert diff.obj_c_values is not None
             t.putclist(
                 diff.obj_c_indices.astype(np.int32, copy=False).tolist(),
                 diff.obj_c_values.astype(float, copy=False).tolist(),

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from linopy import expressions
+from linopy.constraints import Constraint
 
 if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
@@ -156,7 +157,8 @@ class ModelSnapshot:
         }
 
         for con in model.constraints.data.values():
-            con._coef_dirty = False
+            if isinstance(con, Constraint):
+                con._coef_dirty = False
 
         return cls(
             structural_key=structural_key,

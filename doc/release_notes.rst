@@ -40,6 +40,12 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * Opt in globally via ``Model(freeze_constraints=True)`` or per-call via ``model.add_constraints(..., freeze=True)``.
 * Lossless conversion both ways with ``Constraint.freeze()`` / ``CSRConstraint.mutable()``.
 
+*In-place solver updates (persistent re-solve)*
+
+* A built solver can now be re-solved against a mutated ``Model`` without a full rebuild. Construct with ``Solver.from_name(..., track_updates=True)`` and re-call ``solver.solve(model)`` after edits — the diff against the previous build is applied in place when the backend supports it, falling back to a rebuild otherwise. Supported on HiGHS, Gurobi, Xpress, and Mosek (``io_api="direct"``).
+* Pass ``disallow_rebuild=True`` to ``solve(model, ...)`` to guarantee an in-place update or raise ``RebuildRequiredError``. Inspect ``solver._last_rebuild_reason`` (a ``RebuildReason``) to understand why a rebuild was triggered.
+* New ``linopy.persistent`` module exposes ``ModelSnapshot``, ``ModelDiff``, and ``RebuildReason`` for users who want to introspect or build the diff themselves.
+
 **Performance**
 
 * ~10× faster direct solver communication (``io_api="direct"``), thanks to the new CSR-based matrix construction. Conversion helpers like ``to_highspy`` benefit too.

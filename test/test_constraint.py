@@ -421,7 +421,7 @@ def test_constraint_sign_setter_invalid(
 
 def test_constraint_rhs_setter(mc: linopy.constraints.Constraint) -> None:
     sizes = mc.sizes
-    mc.rhs = 2  # type: ignore
+    mc.rhs = 2
     assert (mc.rhs == 2).all()
     assert mc.sizes == sizes
 
@@ -429,7 +429,7 @@ def test_constraint_rhs_setter(mc: linopy.constraints.Constraint) -> None:
 def test_constraint_rhs_setter_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.rhs = x  # type: ignore
+    mc.rhs = x
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 2

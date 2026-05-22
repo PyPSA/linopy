@@ -24,11 +24,11 @@ class FakeSolver(Solver[None]):
     supports_persistent_update = False
 
     @classmethod
-    def is_available(cls) -> bool:
+    def is_available(cls) -> bool:  # type: ignore[override]
         return True
 
     @property
-    def solver_name(self):  # type: ignore[override]
+    def solver_name(self) -> Any:
         class _N:
             value = "fake"
 

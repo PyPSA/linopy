@@ -1153,7 +1153,7 @@ class Constraint(ConstraintBase):
         return self.data.rhs
 
     @rhs.setter
-    def rhs(self, value: ExpressionLike) -> None:
+    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
@@ -1512,14 +1512,14 @@ class Constraints:
         return r
 
     @overload
-    def __getitem__(self, names: str) -> ConstraintBase: ...
+    def __getitem__(self, names: str) -> Constraint: ...
 
     @overload
     def __getitem__(self, names: list[str]) -> Constraints: ...
 
-    def __getitem__(self, names: str | list[str]) -> ConstraintBase | Constraints:
+    def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
         if isinstance(names, str):
-            return self.data[names]
+            return self.data[names]  # type: ignore[return-value]
         return Constraints({name: self.data[name] for name in names}, self.model)
 
     def __getattr__(self, name: str) -> ConstraintBase:

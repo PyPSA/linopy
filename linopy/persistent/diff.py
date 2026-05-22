@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
+from linopy.constraints import Constraint
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
@@ -101,6 +102,7 @@ class _DiffBuilder:
     ) -> None:
         b_start = self._vb_cur
         if bounds_idx is not None:
+            assert lower is not None and upper is not None
             self.var_bounds_idx.append(bounds_idx)
             self.var_bounds_lo.append(lower)
             self.var_bounds_up.append(upper)
@@ -131,18 +133,21 @@ class _DiffBuilder:
     ) -> None:
         c_start = self._cc_cur
         if coef_rows is not None:
+            assert coef_cols is not None and coef_vals is not None
             self.con_coef_rows.append(coef_rows)
             self.con_coef_cols.append(coef_cols)
             self.con_coef_vals.append(coef_vals)
             self._cc_cur += coef_rows.size
         r_start = self._cr_cur
         if rhs_idx is not None:
+            assert rhs_vals is not None and rhs_signs is not None
             self.con_rhs_idx.append(rhs_idx)
             self.con_rhs_vals.append(rhs_vals)
             self.con_rhs_signs.append(rhs_signs)
             self._cr_cur += rhs_idx.size
         s_start = self._cs_cur
         if sign_idx is not None:
+            assert sign_vals is not None
             self.con_sign_idx.append(sign_idx)
             self.con_sign_vals.append(sign_vals)
             self._cs_cur += sign_idx.size
@@ -393,7 +398,8 @@ class ModelDiff:
 
         for name, con in model.constraints.items():
             base_coords = snapshot.con_coords[name] if check_coords else None
-            skip_coef_compare = same_model and not con._coef_dirty
+            coef_dirty = isinstance(con, Constraint) and con._coef_dirty
+            skip_coef_compare = same_model and not coef_dirty
             reason = _diff_con_container(
                 builder,
                 name,
@@ -467,14 +473,14 @@ class ModelDiff:
 
         for name, var_b in model_b.variables.items():
             var_a = model_a.variables[name]
-            base_buf = _extract_var_buffers(var_a)
-            base_coords = _coord_snapshot(var_a) if check_coords else None
+            var_base_buf = _extract_var_buffers(var_a)
+            var_base_coords = _coord_snapshot(var_a) if check_coords else None
             reason = _diff_var_container(
                 builder,
                 name,
                 var_b,
-                base_buf,
-                base_coords,
+                var_base_buf,
+                var_base_coords,
                 var_l2p,
                 ignored,
                 check_coords,
@@ -485,14 +491,14 @@ class ModelDiff:
 
         for name, con_b in model_b.constraints.items():
             con_a = model_a.constraints[name]
-            base_buf = _extract_con_buffers(con_a, var_idx_a)
-            base_coords = _coord_snapshot(con_a) if check_coords else None
+            con_base_buf = _extract_con_buffers(con_a, var_idx_a)
+            con_base_coords = _coord_snapshot(con_a) if check_coords else None
             reason = _diff_con_container(
                 builder,
                 name,
                 con_b,
-                base_buf,
-                base_coords,
+                con_base_buf,
+                con_base_coords,
                 var_idx_b,
                 con_l2p,
                 ignored,
@@ -548,8 +554,10 @@ def _diff_var_container(
         return RebuildReason.COORD_REINDEX
     if not np.array_equal(new_buf.active_labels, base_buf.active_labels):
         return RebuildReason.STRUCTURAL_LABELS
-    if check_coords and not _coords_equal(base_coords, _coord_snapshot(var), ignored):
-        return RebuildReason.COORD_REINDEX
+    if check_coords:
+        assert base_coords is not None
+        if not _coords_equal(base_coords, _coord_snapshot(var), ignored):
+            return RebuildReason.COORD_REINDEX
 
     lower_diff = new_buf.lower != base_buf.lower
     upper_diff = new_buf.upper != base_buf.upper
@@ -595,8 +603,10 @@ def _diff_con_container(
         return RebuildReason.COORD_REINDEX
     if not np.array_equal(new_buf.active_labels, base_buf.active_labels):
         return RebuildReason.STRUCTURAL_LABELS
-    if check_coords and not _coords_equal(base_coords, _coord_snapshot(con), ignored):
-        return RebuildReason.COORD_REINDEX
+    if check_coords:
+        assert base_coords is not None
+        if not _coords_equal(base_coords, _coord_snapshot(con), ignored):
+            return RebuildReason.COORD_REINDEX
     if not np.array_equal(new_buf.indptr, base_buf.indptr):
         return RebuildReason.SPARSITY
     if not np.array_equal(new_buf.indices, base_buf.indices):

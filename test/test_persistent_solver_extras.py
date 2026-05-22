@@ -58,17 +58,23 @@ def _built(solver_name: str, model: Model) -> Solver:
     return s
 
 
+def _obj(model: Model) -> float:
+    value = model.objective.value
+    assert value is not None
+    return float(value)
+
+
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
 def test_noop_resolve_increments_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    first_obj = float(m.objective.value)
+    first_obj = _obj(m)
 
     s.solve(m, assign=True)
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
-    assert np.isclose(float(m.objective.value), first_obj)
+    assert np.isclose(_obj(m), first_obj)
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
@@ -82,7 +88,7 @@ def test_two_consecutive_solves_no_stale_state(solver_name: str) -> None:
     s.solve(m, assign=True)
     assert s.status is not first_status
     assert s.solution is not None
-    assert np.isclose(float(s.solution.objective), float(m.objective.value))
+    assert np.isclose(float(s.solution.objective), _obj(m))
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
@@ -95,7 +101,7 @@ def test_cross_model_scenario_sweep(solver_name: str) -> None:
 
     s = _built(solver_name, m1)
     s.solve(assign=True)
-    obj1 = float(m1.objective.value)
+    obj1 = _obj(m1)
     sol1 = m1.solution
 
     s.solve(m2, assign=True)
@@ -117,7 +123,7 @@ def test_cross_model_scenario_sweep(solver_name: str) -> None:
             fresh.variables["x"].lower.values[...] = 2.0
         s_fresh = _built(solver_name, fresh)
         s_fresh.solve(assign=True)
-        assert np.isclose(float(mk.objective.value), float(fresh.objective.value))
+        assert np.isclose(_obj(mk), _obj(fresh))
         s_fresh.close()
 
 
@@ -184,7 +190,7 @@ def test_dirty_flag_ignored_across_models(solver_name: str) -> None:
     cf.coeffs = cf.coeffs * 3
     s_fresh = _built(solver_name, fresh)
     s_fresh.solve(assign=True)
-    assert np.isclose(float(m2.objective.value), float(fresh.objective.value))
+    assert np.isclose(_obj(m2), _obj(fresh))
     s_fresh.close()
 
 
@@ -216,7 +222,7 @@ def test_model_pickle_round_trip_no_native_handle(solver_name: str) -> None:
     assert s2.solver_model is not None
     s2.solve(assign=True)
     assert s2._rebuilds == 0
-    assert np.isclose(float(m.objective.value), float(m2.objective.value))
+    assert np.isclose(_obj(m), _obj(m2))
     s2.close()
 
 
@@ -257,7 +263,7 @@ def test_concurrent_solves_serialize(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    expected = float(m.objective.value)
+    expected = _obj(m)
 
     barrier = threading.Barrier(2)
     results: list[float] = []
@@ -267,6 +273,7 @@ def test_concurrent_solves_serialize(solver_name: str) -> None:
         try:
             barrier.wait()
             res = s.solve(m, assign=True)
+            assert res.solution is not None
             results.append(float(res.solution.objective))
         except BaseException as e:
             errors.append(e)
@@ -338,7 +345,7 @@ def test_scenario_sweep_in_place(
     _apply_scenario(fresh, scenario)
     s_fresh = _built(solver_name, fresh)
     s_fresh.solve(assign=True)
-    assert np.isclose(float(target.objective.value), float(fresh.objective.value))
+    assert np.isclose(_obj(target), _obj(fresh))
     s_fresh.close()
 
 
@@ -428,7 +435,7 @@ def test_track_updates_false_cross_instance_resolve(solver_name: str) -> None:
     s.options = opts
     s._build()
     s.solve(assign=True)
-    base_obj = float(m1.objective.value)
+    base_obj = _obj(m1)
 
     m2 = _base_model()
     m2.constraints["c1"].rhs = 8.0
@@ -437,6 +444,7 @@ def test_track_updates_false_cross_instance_resolve(solver_name: str) -> None:
     assert s._rebuilds == 0
     assert s.snapshot is None
     assert s.model is m2
+    assert result.solution is not None
     assert float(result.solution.objective) > base_obj
 
 

@@ -71,7 +71,14 @@ def _built(solver_name: str, model: Model) -> Solver:
 
 def _solve(solver: Solver, model: Model) -> float:
     result = solver.solve(model, assign=True)
+    assert result.solution is not None
     return float(result.solution.objective)
+
+
+def _obj(model: Model) -> float:
+    value = model.objective.value
+    assert value is not None
+    return float(value)
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
@@ -79,7 +86,7 @@ def test_var_lb_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    base_obj = float(m.objective.value)
+    base_obj = _obj(m)
 
     m.variables["x"].lower.values[...] = 5.0
     obj = _solve(s, m)
@@ -106,7 +113,7 @@ def test_rhs_only_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    base_obj = float(m.objective.value)
+    base_obj = _obj(m)
 
     c = m.constraints["c1"]
     c.rhs = 8.0
@@ -122,7 +129,7 @@ def test_constraint_coef_change_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    base_obj = float(m.objective.value)
+    base_obj = _obj(m)
 
     c = m.constraints["c1"]
     c.coeffs = c.coeffs * 2
@@ -137,7 +144,7 @@ def test_objective_linear_change_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    base_obj = float(m.objective.value)
+    base_obj = _obj(m)
 
     x = m.variables["x"]
     y = m.variables["y"]
@@ -153,7 +160,7 @@ def test_objective_sense_flip_in_place(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)
     s.solve(assign=True)
-    min_obj = float(m.objective.value)
+    min_obj = _obj(m)
 
     m.objective.sense = "max"
     max_obj = _solve(s, m)
@@ -191,12 +198,12 @@ def test_cross_model_in_place(solver_name: str) -> None:
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
 
-    cross_obj = float(m2.objective.value)
+    cross_obj = _obj(m2)
     m3 = _base_model()
     m3.constraints["c1"].rhs = 8.0
     s_fresh = _built(solver_name, m3)
     s_fresh.solve(assign=True)
-    assert np.isclose(cross_obj, float(m3.objective.value))
+    assert np.isclose(cross_obj, _obj(m3))
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
