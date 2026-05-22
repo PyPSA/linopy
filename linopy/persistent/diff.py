@@ -344,18 +344,18 @@ class ModelDiff:
         snapshot: ModelSnapshot,
         model: Model,
         same_model: bool = True,
-        ignore_dims: Iterable[str] | None = None,
+        ignore_dims: Iterable[str] = (),
     ) -> ModelDiff:
         """
         Diff ``model`` against a captured ``snapshot``.
 
-        Coordinate values are not compared by default. Pass ``ignore_dims``
-        (e.g. ``ignore_dims=()`` or ``ignore_dims={"snapshot"}``) to opt into
-        per-container coord-equality on every dim *not* in the set — a
-        mismatch triggers ``RebuildReason.COORD_REINDEX``.
+        Coordinate values are compared on every dim *not* in ``ignore_dims``;
+        a mismatch triggers ``RebuildReason.COORD_REINDEX``. Pass
+        ``ignore_dims={"snapshot"}`` for rolling-horizon use cases where the
+        snapshot coord legitimately shifts between solves.
         """
-        check_coords = ignore_dims is not None
-        ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
+        ignored = frozenset(ignore_dims)
+        check_coords = True
         diff = cls()
 
         var_names = tuple(model.variables)
@@ -435,17 +435,18 @@ class ModelDiff:
         cls,
         model_a: Model,
         model_b: Model,
-        ignore_dims: Iterable[str] | None = None,
+        ignore_dims: Iterable[str] = (),
     ) -> ModelDiff:
         """
         Diff two linopy models directly, without capturing a snapshot.
 
         ``model_a`` is the baseline, ``model_b`` is the target. The
         coefficient comparison runs unconditionally — no ``_coef_dirty``
-        shortcut applies between independently-built models.
+        shortcut applies between independently-built models. Coordinates
+        are compared on every dim not in ``ignore_dims``.
         """
-        check_coords = ignore_dims is not None
-        ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
+        ignored = frozenset(ignore_dims)
+        check_coords = True
         diff = cls()
 
         var_names_a = tuple(model_a.variables)

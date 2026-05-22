@@ -676,7 +676,7 @@ class Solver(ABC, Generic[EnvType]):
         self,
         model: Model | None = None,
         assign: bool = False,
-        ignore_dims: Iterable[str] | None = None,
+        ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
         **run_kwargs: Any,
     ) -> Result:
@@ -688,9 +688,9 @@ class Solver(ABC, Generic[EnvType]):
         With ``assign=True`` the Result is written back to the target Model
         via :meth:`Model.assign_result`.
 
-        Pass ``ignore_dims`` (e.g. ``{"snapshot"}``) to opt into per-container
-        coordinate-equality checking on every dim *not* in the set. Default
-        (``None``) skips the coord check entirely.
+        Coordinate alignment is checked on every dim by default. Pass
+        ``ignore_dims`` to exclude dims whose coord values legitimately shift
+        between solves.
 
         Pass ``disallow_rebuild=True`` to guarantee that an existing solver
         model is updated in place — any condition that would force a rebuild
@@ -747,7 +747,7 @@ class Solver(ABC, Generic[EnvType]):
         self,
         model: Model,
         apply: bool = True,
-        ignore_dims: Iterable[str] | None = None,
+        ignore_dims: Iterable[str] = (),
     ) -> ModelDiff:
         if self.io_api != "direct":
             raise ValueError("update requires io_api='direct'")
@@ -768,7 +768,7 @@ class Solver(ABC, Generic[EnvType]):
         self,
         model: Model,
         apply: bool,
-        ignore_dims: Iterable[str] | None = None,
+        ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
     ) -> ModelDiff:
         if apply and not type(self).supports_persistent_update:

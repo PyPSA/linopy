@@ -188,8 +188,7 @@ def test_ignore_dims_detects_coord_change() -> None:
     m2.add_constraints(m2.variables["x"] >= 0, name="c1")
     m2.add_objective(m2.variables["x"].sum())
 
-    assert ModelDiff.from_snapshot(snap, m2).rebuild_reason is RebuildReason.NONE
-    assert ModelDiff.from_snapshot(snap, m2, ignore_dims=()).rebuild_reason is (
+    assert ModelDiff.from_snapshot(snap, m2).rebuild_reason is (
         RebuildReason.COORD_REINDEX
     )
     assert ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"}).rebuild_reason is (
