@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
+import warnings
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
+
+from linopy.config import (
+    LEGACY_SEMANTICS,
+    V1_SEMANTICS,
+    VALID_SEMANTICS,
+    LinopySemanticsWarning,
+    options,
+)
 
 if TYPE_CHECKING:
     from linopy import Model, Variable
@@ -25,6 +35,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest with custom markers and behavior."""
     config.addinivalue_line("markers", "gpu: marks tests as requiring GPU hardware")
+    for sem in sorted(VALID_SEMANTICS):
+        config.addinivalue_line(
+            "markers", f"{sem}: run this test only under the {sem} semantics"
+        )
 
     # Set environment variable so test modules can check if GPU tests are enabled
     # This is needed because parametrize happens at import time
@@ -61,6 +75,32 @@ def pytest_collection_modifyitems(
             if solver_supports(solver, SolverFeature.GPU_ONLY):
                 item.add_marker(skip_gpu)
                 item.add_marker(pytest.mark.gpu)
+
+
+@pytest.fixture(autouse=True, params=[LEGACY_SEMANTICS, V1_SEMANTICS])
+def semantics(request: pytest.FixtureRequest) -> Generator[str, None, None]:
+    """
+    Run every test under both arithmetic semantics by default.
+
+    A test marked with a semantics name (``@pytest.mark.legacy`` or
+    ``@pytest.mark.v1``) runs only under that semantics. Under ``legacy``,
+    ``LinopySemanticsWarning`` is suppressed so test output stays clean;
+    ``test_convention.py`` verifies the warnings are actually emitted.
+    """
+    item = request.node
+    for sem in VALID_SEMANTICS:
+        if item.get_closest_marker(sem) and request.param != sem:
+            pytest.skip(f"{sem}-only test")
+
+    old = options["semantics"]
+    options["semantics"] = request.param
+    if request.param == LEGACY_SEMANTICS:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", LinopySemanticsWarning)
+            yield request.param
+    else:
+        yield request.param
+    options["semantics"] = old
 
 
 @pytest.fixture
