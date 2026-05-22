@@ -60,6 +60,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
 * ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
 * ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
+* Drop Python 3.10 support. Minimum supported version is now Python 3.11.
 
 **Internal**
 
