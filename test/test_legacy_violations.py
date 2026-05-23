@@ -18,6 +18,9 @@ Slice C — absence propagation (§3, §6, §7):
     §6  Absence propagates through every operator → #712 (absent-as-zero)
     §3  isnull() is the unifying predicate        → #711
     §7  fillna()/.where() resolve absence         → (positive coverage)
+
+Slice D — Variable.reindex / .reindex_like (§4 absence creation):
+    §4  Reindexing extends coords and marks new slots absent
 """
 
 from __future__ import annotations
@@ -520,3 +523,58 @@ class TestFillnaResolves:
         # The constraint x + y.fillna(0) >= 10 binds at every slot.
         rhs = m.constraints["con0"].rhs.values
         assert not np.isnan(rhs).any()
+
+
+# =====================================================================
+# §4 — Variable.reindex / .reindex_like create absence
+# =====================================================================
+
+
+class TestVariableReindex:
+    """
+    Reindexing past the original coords marks the new positions
+    absent (labels=-1, lower/upper=NaN); §4 lists this as one of the
+    named mechanisms for creating absence. Runs under both semantics:
+    this is a new API that didn't exist on master.
+    """
+
+    def test_reindex_extends_with_absent(self, x, time: pd.RangeIndex) -> None:
+        extended = pd.RangeIndex(8, name="time")
+        result = x.reindex(time=extended)
+        assert result.sizes["time"] == 8
+        # Original slots 0..4 are preserved
+        assert int(result.labels.values[0]) == int(x.labels.values[0])
+        # New slots 5..7 are absent
+        assert (result.labels.values[5:] == -1).all()
+        assert np.isnan(result.lower.values[5:]).all()
+        assert np.isnan(result.upper.values[5:]).all()
+
+    def test_reindex_subset_drops_coords(self, x) -> None:
+        """
+        Reindex to a strict subset shrinks the variable (no absence
+        introduced — those slots are just gone).
+        """
+        result = x.reindex(time=pd.RangeIndex(3, name="time"))
+        assert result.sizes["time"] == 3
+        assert not (result.labels.values == -1).any()
+
+    def test_reindex_like_extends_with_absent(self, m: Model, x) -> None:
+        wider = m.add_variables(
+            lower=0, coords=[pd.RangeIndex(7, name="time")], name="wider"
+        )
+        result = x.reindex_like(wider)
+        assert result.sizes["time"] == 7
+        assert (result.labels.values[5:] == -1).all()
+
+    @pytest.mark.v1
+    def test_reindexed_variable_propagates_absence_in_arithmetic(
+        self, x, time: pd.RangeIndex
+    ) -> None:
+        """
+        §4 + §6 hand-off: a reindex-introduced absence flows through
+        the next operator and is visible via isnull().
+        """
+        wider = x.reindex(time=pd.RangeIndex(7, name="time"))
+        expr = wider * 3
+        assert bool(expr.isnull().values[5:].all())
+        assert not bool(expr.isnull().values[:5].any())

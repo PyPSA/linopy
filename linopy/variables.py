@@ -1296,6 +1296,48 @@ class Variable:
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        **indexers_kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to a new set of coordinates.
+
+        New positions are marked absent (``labels = -1``,
+        ``lower = upper = NaN``); existing positions are preserved. This
+        is one of the named mechanisms in convention.md §4 for creating
+        absence.
+        """
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=self._fill_value, **indexers_kwargs),
+            self.model,
+            self.name,
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        **kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to another object's coordinates.
+
+        New positions are marked absent with the sentinel fill values
+        (see :meth:`reindex`).
+        """
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
+        return self.__class__(
+            self.data.reindex_like(ref, fill_value=self._fill_value, **kwargs),
+            self.model,
+            self.name,
+        )
+
     swap_dims = varwrap(Dataset.swap_dims)
 
     set_index = varwrap(Dataset.set_index)
