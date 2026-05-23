@@ -29,6 +29,7 @@ from xarray.core.types import T_Chunks
 from linopy import solvers
 from linopy.common import (
     as_dataarray,
+    as_dataarray_in_coords,
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
@@ -110,135 +111,6 @@ if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
 
 logger = logging.getLogger(__name__)
-
-
-def _coords_to_dict(
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
-) -> dict[str, Any]:
-    """Normalize coords to a dict mapping dim names to coordinate values."""
-    if isinstance(coords, Mapping):
-        return dict(coords)
-    # Sequence of indexes
-    result: dict[str, Any] = {}
-    for c in coords:
-        if isinstance(c, pd.Index) and c.name:
-            result[c.name] = c
-    return result
-
-
-def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | None:
-    """
-    Convert a pandas Series or DataFrame with fully named axes to a DataArray.
-
-    Multi-level columns are unstacked so each level becomes its own dimension.
-    Returns ``None`` if any axis (or MultiIndex level) is unnamed, signalling
-    that the caller should fall back to ``as_dataarray``.
-    """
-    if isinstance(arr, pd.DataFrame):
-        while isinstance(arr, pd.DataFrame):
-            arr = arr.unstack()
-        if not isinstance(arr, pd.Series):
-            return None
-
-    index = arr.index
-    if isinstance(index, pd.MultiIndex):
-        if any(n is None for n in index.names):
-            return None
-    elif index.name is None:
-        return None
-
-    return arr.to_xarray()
-
-
-def _as_dataarray_in_coords(arr: Any, coords: Any, **kwargs: Any) -> DataArray:
-    """
-    Coerce ``arr`` into a DataArray that matches the model ``coords``.
-
-    ``coords`` is the source of truth: the returned DataArray has the
-    dimensions, dimension order, and coordinate values of ``coords``,
-    regardless of the input type. Pandas inputs with fully named axes
-    are converted via ``to_xarray`` so their axis names map to
-    dimensions; scalars, numpy arrays, and unnamed pandas go through
-    ``as_dataarray``. The result is then validated, expanded over
-    missing dims, and transposed; ``expand_dims`` and ``transpose``
-    are no-ops when the array already matches.
-
-    - Raises ``ValueError`` if the input has dimensions not in
-      ``coords``.
-    - Raises ``ValueError`` if shared dimension coordinates differ in
-      values. Same-values-different-order coordinates are reindexed.
-    """
-    if coords is None:
-        return as_dataarray(arr, coords, **kwargs)
-
-    expected = _coords_to_dict(coords)
-    if not expected:
-        return as_dataarray(arr, coords, **kwargs)
-
-    orig_type_name = type(arr).__name__
-
-    if isinstance(arr, pd.Series | pd.DataFrame):
-        converted = _named_pandas_to_dataarray(arr)
-        if converted is not None:
-            arr = converted
-
-    if not isinstance(arr, DataArray):
-        return as_dataarray(arr, coords, **kwargs)
-
-    extra = set(arr.dims) - set(expected)
-    if extra:
-        raise ValueError(
-            f"{orig_type_name} has extra dimensions not in coords: {extra}"
-        )
-
-    for dim, coord_values in expected.items():
-        if dim not in arr.dims:
-            continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
-            continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
-        actual_idx = arr.coords[dim].to_index()
-        if not actual_idx.equals(expected_idx):
-            # Same values, different order → reindex to match expected order
-            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
-                expected_idx
-            ):
-                arr = arr.reindex({dim: expected_idx})
-            else:
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' do not match: "
-                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-                )
-
-    # expand_dims prepends new dimensions and their coordinate variables;
-    # the subsequent transpose restores coords order. Both are no-ops when
-    # the array already matches. Reconstruct so the DataArray's coords
-    # iteration order also follows coords (a Dataset built from this picks
-    # up its dim order from coord insertion).
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if expand:
-        arr = arr.expand_dims(expand)
-
-    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
-        d for d in arr.dims if d not in expected
-    )
-    arr = arr.transpose(*target_dims)
-
-    coord_order = [c for c in target_dims if c in arr.coords] + [
-        c for c in arr.coords if c not in target_dims
-    ]
-    if list(arr.coords) != coord_order:
-        arr = DataArray(
-            arr.variable,
-            coords={c: arr.coords[c] for c in coord_order},
-            name=arr.name,
-        )
-
-    return arr
 
 
 class Model:
@@ -831,8 +703,8 @@ class Model:
 
         data = Dataset(
             {
-                "lower": _as_dataarray_in_coords(lower, coords, **kwargs),
-                "upper": _as_dataarray_in_coords(upper, coords, **kwargs),
+                "lower": as_dataarray_in_coords(lower, coords, **kwargs),
+                "upper": as_dataarray_in_coords(upper, coords, **kwargs),
                 "labels": -1,
             }
         )
