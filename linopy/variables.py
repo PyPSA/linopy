@@ -414,8 +414,14 @@ class Variable:
         try:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
-
-            return self.to_linexpr(other)
+            # Scalars can take the fast path; for arrays / expressions go
+            # through the LinearExpression operator so semantics-aware
+            # alignment and NaN checks apply.
+            if np.isscalar(other):
+                if isinstance(other, float) and np.isnan(other):
+                    return self.to_linexpr() * other
+                return self.to_linexpr(other)
+            return self.to_linexpr() * other
         except TypeError:
             return NotImplemented
 

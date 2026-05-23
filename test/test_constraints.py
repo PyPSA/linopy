@@ -346,7 +346,13 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
+@pytest.mark.legacy
 class TestConstraintCoordinateAlignment:
+    """
+    Constraint-side counterpart of TestCoordinateAlignment — legacy-only;
+    v1 raises on subset/superset/NaN-RHS (see convention.md §5/§8/§12).
+    """
+
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "xarray":

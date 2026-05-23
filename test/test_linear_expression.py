@@ -538,7 +538,17 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
+@pytest.mark.legacy
 class TestCoordinateAlignment:
+    """
+    Documents legacy positional/left-join alignment and silent NaN fill.
+
+    The whole block is legacy-only: v1 raises on these cases (see
+    `test_legacy_violations.py` and convention.md §5/§8). Once later slices
+    flesh out v1's equivalent coverage, individual tests here can be
+    reclassified or removed.
+    """
+
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "da":

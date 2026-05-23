@@ -68,7 +68,12 @@ from linopy.common import (
     to_dataframe,
     to_polars,
 )
-from linopy.config import options
+from linopy.config import (
+    LEGACY_SEMANTICS_MESSAGE,
+    V1_SEMANTICS,
+    LinopySemanticsWarning,
+    options,
+)
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -131,6 +136,35 @@ def _expr_unwrap(
         return maybe_expr.data
 
     return maybe_expr
+
+
+def _shared_coords_differ(a: DataArray, b: DataArray) -> bool:
+    """True if a and b share a dimension whose coordinate labels disagree."""
+    for dim in set(a.dims) & set(b.dims):
+        if dim in a.coords and dim in b.coords:
+            if not a.coords[dim].equals(b.coords[dim]):
+                return True
+    return False
+
+
+_USER_NAN_MESSAGE = (
+    "NaN in a user-supplied constant. Resolve it explicitly with .fillna(...) "
+    "or .where(...) before passing it to linopy."
+)
+
+
+def _check_user_nan_scalar() -> None:
+    """Enforce §5 for a scalar: v1 raises, legacy warns once."""
+    if options["semantics"] == V1_SEMANTICS:
+        raise ValueError(_USER_NAN_MESSAGE)
+    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
+
+
+def _check_user_nan_array() -> None:
+    """Enforce §5 for a DataArray operand: v1 raises, legacy warns once."""
+    if options["semantics"] == V1_SEMANTICS:
+        raise ValueError(_USER_NAN_MESSAGE)
+    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
 
 
 logger = logging.getLogger(__name__)
@@ -544,7 +578,9 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses size-aware default behavior.
+            Alignment method. If None, the default is determined by
+            ``options["semantics"]`` — ``"exact"`` under ``v1``, the
+            legacy size-aware behavior under ``legacy``.
 
         Returns
         -------
@@ -556,23 +592,53 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            if other.sizes == self.const.sizes:
-                return self.const, other.assign_coords(coords=self.coords), False
+            if options["semantics"] == V1_SEMANTICS:
+                join = "exact"
+            else:
+                # Legacy default: positional when sizes match, else left-join.
+                if other.sizes == self.const.sizes:
+                    if _shared_coords_differ(self.const, other):
+                        warn(
+                            LEGACY_SEMANTICS_MESSAGE,
+                            LinopySemanticsWarning,
+                            stacklevel=4,
+                        )
+                    return self.const, other.assign_coords(coords=self.coords), False
+                warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
+                return (
+                    self.const,
+                    other.reindex_like(self.const, fill_value=fill_value),
+                    False,
+                )
+
+        if join == "override":
+            return self.const, other.assign_coords(coords=self.coords), False
+        if join == "left":
             return (
                 self.const,
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        elif join == "override":
-            return self.const, other.assign_coords(coords=self.coords), False
-        else:
+        try:
             self_const, aligned = xr.align(
                 self.const,
                 other,
                 join=join,
                 fill_value=fill_value,
             )
-            return self_const, aligned, True
+        except ValueError as e:
+            if "exact" in str(e):
+                raise ValueError(
+                    f"{e}\n"
+                    "Use .add()/.sub()/.mul()/.div() with an explicit join= "
+                    "parameter:\n"
+                    '  .add(other, join="inner")    # intersection of coordinates\n'
+                    '  .add(other, join="outer")    # union of coordinates (with fill)\n'
+                    '  .add(other, join="left")     # keep left operand\'s coordinates\n'
+                    '  .add(other, join="override") # positional alignment'
+                ) from None
+            raise
+        return self_const, aligned, True
 
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
@@ -580,8 +646,12 @@ class BaseExpression(ABC):
         # NaN values in self.const or other are filled with 0 (additive identity)
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
+            if isinstance(other, float) and np.isnan(other):
+                _check_user_nan_scalar()
             return self.assign(const=self.const.fillna(0) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        if da.isnull().any():
+            _check_user_nan_array()
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -610,7 +680,11 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
+        if isinstance(other, float) and np.isnan(other):
+            _check_user_nan_scalar()
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        if factor.isnull().any():
+            _check_user_nan_array()
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )

@@ -1229,6 +1229,7 @@ def test_auto_mask_variable_model(
     assert y.solution[:-2].notnull().all()
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_auto_mask_constraint_model(
     auto_mask_constraint_model: Model,
@@ -1236,7 +1237,11 @@ def test_auto_mask_constraint_model(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    """Test that auto_mask=True correctly masks constraints with NaN RHS."""
+    """
+    Test that auto_mask=True correctly masks constraints with NaN RHS.
+
+    Legacy-only: v1 forbids NaN constraint RHS (see convention.md §5/§12).
+    """
     auto_mask_constraint_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
