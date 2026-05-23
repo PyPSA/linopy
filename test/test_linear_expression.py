@@ -1647,15 +1647,18 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
-    expr1 = z.sel(dim_0=0).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    # ``drop=True`` so the scalar ``dim_0`` coord doesn't survive each .sel
+    # and trip §11's aux-coord-conflict check (the two picks pin dim_0=0
+    # vs dim_0=1).
+    expr1 = z.sel(dim_0=0, drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
-    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1), drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3

@@ -196,10 +196,12 @@ def _merge_shared_user_coords_differ(
 
     Helper dims (``_term``, ``_factor``) and the concat dim itself are
     excluded — those legitimately vary across the operands being merged.
+    Compares the bare dimension index (``d.indexes[k]``) so non-dim
+    (auxiliary) coords are ignored — those are §11's job.
     """
     skip = set(HELPER_DIMS) | {concat_dim}
     per_ds = [
-        {k: d.coords[k] for k in d.dims if k not in skip and k in d.coords}
+        {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
         for d in datasets
     ]
     shared = set.intersection(*(set(p.keys()) for p in per_ds)) if per_ds else set()
@@ -209,6 +211,40 @@ def _merge_shared_user_coords_differ(
             if not ref.equals(p[d_name]):
                 return True
     return False
+
+
+def _conflicting_aux_coord(datasets: Sequence[Any]) -> str | None:
+    """
+    Return the name of an auxiliary (non-dim) coord that two or more
+    operands carry with disagreeing values — None if no conflict.
+
+    Per §11, an auxiliary coord either propagates (values agree across
+    operands) or surfaces as an error; xarray's default silently drops
+    the conflict and is what this check intercepts under v1.
+    """
+    if not datasets:
+        return None
+    all_names: set[str] = set()
+    for d in datasets:
+        all_names.update(d.coords)
+    for name in all_names:
+        present = [
+            d.coords[name].values
+            for d in datasets
+            if name in d.coords and name not in d.dims
+        ]
+        if len(present) < 2:
+            continue
+        ref = present[0]
+        # ``equal_nan`` is only meaningful (and only well-defined) for
+        # float dtypes — string/object coord values would crash isnan.
+        equal_nan = np.issubdtype(ref.dtype, np.floating)
+        for vals in present[1:]:
+            if ref.shape != vals.shape or not np.array_equal(
+                ref, vals, equal_nan=equal_nan
+            ):
+                return str(name)
+    return None
 
 
 logger = logging.getLogger(__name__)
@@ -636,6 +672,22 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
+            # §11: silently dropping a conflicting aux coord is what
+            # xarray does by default — v1 raises, legacy warns.
+            aux_conflict = _conflicting_aux_coord([self.const, other])
+            if aux_conflict is not None:
+                if options["semantics"] == V1_SEMANTICS:
+                    raise ValueError(
+                        f"Auxiliary coordinate '{aux_conflict}' has "
+                        "conflicting values across operands. Drop it "
+                        "explicitly with `.drop_vars(...)` or "
+                        "`.isel(..., drop=True)` before combining."
+                    )
+                warn(
+                    LEGACY_SEMANTICS_MESSAGE,
+                    LinopySemanticsWarning,
+                    stacklevel=4,
+                )
             if options["semantics"] == V1_SEMANTICS:
                 join = "exact"
             else:
@@ -2569,6 +2621,20 @@ def merge(
                 "`join=` argument."
             )
         if differ:
+            warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
+
+        # §11: auxiliary (non-dim) coords either propagate (values agree)
+        # or surface as an error. xarray silently drops the conflict — v1
+        # raises so the caller resolves it explicitly with .drop_vars(...).
+        aux_conflict = _conflicting_aux_coord(data)
+        if aux_conflict is not None:
+            if options["semantics"] == V1_SEMANTICS:
+                raise ValueError(
+                    f"Auxiliary coordinate '{aux_conflict}' has conflicting "
+                    "values across operands. Drop it explicitly with "
+                    "`.drop_vars(...)` or `.isel(..., drop=True)` before "
+                    "combining."
+                )
             warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
 
     if join is not None:

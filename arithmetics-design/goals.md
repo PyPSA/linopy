@@ -23,7 +23,9 @@ The convention serves four goals, in priority order:
 4. **Least surprise.** linopy is built on xarray and its users know xarray. The
    convention should behave the way xarray already taught them — align by
    label, broadcast non-shared dimensions, resolve mismatches with a named
-   join — not invent linopy-specific rules.
+   join — not invent linopy-specific rules. Auxiliary coordinates the user
+   attached are the user's; linopy validates and carries them through,
+   never silently dropped or rewritten.
 
 ## Transitioning goals
 

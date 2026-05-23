@@ -139,8 +139,17 @@ the identities — holds for same-coordinate operands.
 
 ### §11. Auxiliary-coordinate conflicts raise
 
-Non-dimension (auxiliary) coordinates propagate when operands agree on them. A
-conflict raises, rather than silently keeping one side ([#295]).
+Auxiliary (non-dimension) coordinates are user-attached metadata: a coord
+defined on some dimension but not itself a dimension, like a `B(A)` group
+label on dimension `A`. linopy *validates* them (the conflict-raise rule
+below) and *propagates* them through arithmetic unchanged, but never
+*computes* with them — they describe the data, they don't enter the math.
+
+When two operands carry an aux coord with the same name and values agree,
+the coord propagates to the result. When the values disagree, the operator
+raises — `xarray` silently drops the conflict, which is the [#295] bug. The
+caller resolves it explicitly with `.drop_vars(name)` (remove the coord) or
+`.assign_coords(name=...)` (relabel one side).
 
 ## Constraints and reductions
 

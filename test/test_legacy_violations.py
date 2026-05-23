@@ -29,6 +29,9 @@ Slice E — named-method join= + constraint RHS (§10, §12):
 
 Slice G — reductions skip absent slots (§13):
     §13 sum / groupby.sum skip absent, sum of none is the zero expression
+
+Slice F — auxiliary-coordinate conflicts (§11):
+    §11 Non-dim coord conflict raises (v1)             → #295
 """
 
 from __future__ import annotations
@@ -794,3 +797,99 @@ class TestReductionsSkipAbsent:
         result = (xs + 5).groupby(groups).sum()
         # group 0: [NaN, 5] → 5; group 1: [5, 5, 5] → 15
         assert result.const.values.tolist() == [5.0, 15.0]
+
+
+# =====================================================================
+# §11 — auxiliary (non-dim) coordinate conflicts raise (covers #295)
+# =====================================================================
+
+
+class TestAuxCoordConflict:
+    """
+    Per §11, an auxiliary (non-dim) coord that two operands carry
+    with disagreeing values must raise — xarray silently drops the
+    conflict in arithmetic, which is the #295 bug.
+    """
+
+    @pytest.fixture
+    def A(self) -> pd.Index:
+        return pd.Index([1, 2, 3], name="A")
+
+    @pytest.mark.v1
+    def test_expr_plus_dataarray_aux_conflict_raises(self, m: Model, A) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v + const
+
+    @pytest.mark.v1
+    def test_var_plus_var_aux_conflict_raises(self, m: Model, A) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
+            B=("A", [400, 400, 500])
+        )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v + w
+
+    @pytest.mark.v1
+    def test_scalar_isel_aux_conflict_raises(self, m: Model, A) -> None:
+        """
+        Scalar isels leave the indexed dim as a non-dim coord whose
+        value differs between operands picked at different positions.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v")
+        a0 = (1 * v).isel({"A": 0})  # scalar A=1
+        a1 = (1 * v).isel({"A": 1})  # scalar A=2
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            a0 + a1
+
+    @pytest.mark.v1
+    def test_isel_with_drop_true_avoids_conflict(self, m: Model, A) -> None:
+        """
+        The §11 escape hatch the convention recommends: drop the
+        leftover scalar coord with ``isel(..., drop=True)``.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v")
+        a0 = (1 * v).isel({"A": 0}, drop=True)
+        a1 = (1 * v).isel({"A": 1}, drop=True)
+        result = a0 + a1  # no aux coord → no conflict
+        assert "A" not in result.coords
+
+    @pytest.mark.legacy
+    def test_aux_conflict_silently_keeps_left(self, m: Model, A) -> None:
+        """
+        Document legacy: a conflict is silently resolved by keeping
+        the left operand's aux coord — the right operand's [400,400,500]
+        disappears with no signal to the caller.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        result = v + const
+        assert result.coords["B"].values.tolist() == [311, 311, 322]
+
+    @pytest.mark.legacy
+    def test_warn_on_aux_conflict(self, m: Model, A, unsilenced) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        with pytest.warns(LinopySemanticsWarning):
+            v + const
