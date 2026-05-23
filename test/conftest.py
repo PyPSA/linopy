@@ -10,16 +10,18 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
-from linopy.config import (
-    LEGACY_SEMANTICS,
-    V1_SEMANTICS,
-    VALID_SEMANTICS,
-    LinopySemanticsWarning,
-    options,
-)
-
 if TYPE_CHECKING:
     from linopy import Model, Variable
+
+# ``linopy`` is intentionally NOT imported at module level — doing so
+# loads it from site-packages before pytest's ``--doctest-modules``
+# collection walks the ``linopy/`` source tree, and the resulting
+# __file__ mismatch breaks the whole run on Windows CI (and elsewhere).
+# Same reasoning as the ``filterwarnings`` comment in ``pyproject.toml``.
+# Values mirror ``linopy.config.LEGACY_SEMANTICS`` / ``V1_SEMANTICS``.
+_LEGACY_SEMANTICS = "legacy"
+_V1_SEMANTICS = "v1"
+_VALID_SEMANTICS = {_LEGACY_SEMANTICS, _V1_SEMANTICS}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -35,7 +37,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest with custom markers and behavior."""
     config.addinivalue_line("markers", "gpu: marks tests as requiring GPU hardware")
-    for sem in sorted(VALID_SEMANTICS):
+    for sem in sorted(_VALID_SEMANTICS):
         config.addinivalue_line(
             "markers", f"{sem}: run this test only under the {sem} semantics"
         )
@@ -77,7 +79,7 @@ def pytest_collection_modifyitems(
                 item.add_marker(pytest.mark.gpu)
 
 
-@pytest.fixture(autouse=True, params=[LEGACY_SEMANTICS, V1_SEMANTICS])
+@pytest.fixture(autouse=True, params=[_LEGACY_SEMANTICS, _V1_SEMANTICS])
 def semantics(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     """
     Run every test under both arithmetic semantics by default.
@@ -87,14 +89,17 @@ def semantics(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     ``LinopySemanticsWarning`` is suppressed so test output stays clean;
     ``test_convention.py`` verifies the warnings are actually emitted.
     """
+    # Deferred import (see top-of-file comment).
+    from linopy.config import LinopySemanticsWarning, options
+
     item = request.node
-    for sem in VALID_SEMANTICS:
+    for sem in _VALID_SEMANTICS:
         if item.get_closest_marker(sem) and request.param != sem:
             pytest.skip(f"{sem}-only test")
 
     old = options["semantics"]
     options["semantics"] = request.param
-    if request.param == LEGACY_SEMANTICS:
+    if request.param == _LEGACY_SEMANTICS:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", LinopySemanticsWarning)
             yield request.param

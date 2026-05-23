@@ -48,6 +48,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.config import LinopySemanticsWarning
+from linopy.variables import Variable
 
 
 @pytest.fixture
@@ -61,7 +62,7 @@ def time() -> pd.RangeIndex:
 
 
 @pytest.fixture
-def x(m: Model, time: pd.RangeIndex):
+def x(m: Model, time: pd.RangeIndex) -> Variable:
     return m.add_variables(lower=0, coords=[time], name="x")
 
 
@@ -89,7 +90,7 @@ _OPS = {
 class TestExactAlignmentConstant:
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_same_size_different_labels_raises(self, x, op) -> None:
+    def test_same_size_different_labels_raises(self, x: Variable, op: str) -> None:
         """
         #708 / #550 — same shape, different labels: legacy aligns by
         position; v1 raises. Holds for every binary operator.
@@ -104,7 +105,7 @@ class TestExactAlignmentConstant:
 
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_subset_constant_raises(self, x, op) -> None:
+    def test_subset_constant_raises(self, x: Variable, op: str) -> None:
         """
         #711 / #708 — constant covers only some of the variable's
         coords. Legacy left-joins (silently drops the gap); v1 raises.
@@ -116,7 +117,7 @@ class TestExactAlignmentConstant:
             _OPS[op](x, subset)
 
     @pytest.mark.legacy
-    def test_add_same_size_different_labels_silent(self, x) -> None:
+    def test_add_same_size_different_labels_silent(self, x: Variable) -> None:
         """Document the legacy behaviour: silent positional alignment."""
         other = xr.DataArray(
             [1.0, 2.0, 3.0, 4.0, 5.0],
@@ -129,7 +130,7 @@ class TestExactAlignmentConstant:
         assert result.const.values.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
 
     @pytest.mark.legacy
-    def test_add_subset_constant_silent(self, x) -> None:
+    def test_add_subset_constant_silent(self, x: Variable) -> None:
         """Document the legacy behaviour: silent left-join (gaps → 0)."""
         subset = xr.DataArray(
             [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
@@ -147,7 +148,7 @@ class TestBroadcastNonSharedDim:
     Runs under both semantics: this is unchanged behaviour.
     """
 
-    def test_add_broadcast_introduces_new_dim(self, x) -> None:
+    def test_add_broadcast_introduces_new_dim(self, x: Variable) -> None:
         bcast = xr.DataArray(
             [10.0, 20.0], dims=["scenario"], coords={"scenario": [0, 1]}
         )
@@ -155,7 +156,7 @@ class TestBroadcastNonSharedDim:
         assert set(result.const.dims) == {"time", "scenario"}
         assert result.const.sizes == {"time": 5, "scenario": 2}
 
-    def test_mul_broadcast_introduces_new_dim(self, x) -> None:
+    def test_mul_broadcast_introduces_new_dim(self, x: Variable) -> None:
         bcast = xr.DataArray([2.0, 3.0], dims=["scenario"], coords={"scenario": [0, 1]})
         result = x * bcast
         assert set(result.coeffs.dims) == {"time", "scenario", "_term"}
@@ -169,7 +170,9 @@ class TestBroadcastNonSharedDim:
 class TestUserNaNRaises:
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_nan_dataarray_raises(self, x, time: pd.RangeIndex, op) -> None:
+    def test_nan_dataarray_raises(
+        self, x: Variable, time: pd.RangeIndex, op: str
+    ) -> None:
         # Use [2, NaN, 3, 4, 5] so div doesn't trip on a 0 divisor at slot 0.
         nan_data = xr.DataArray(
             [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
@@ -179,7 +182,7 @@ class TestUserNaNRaises:
 
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul"])
-    def test_nan_scalar_raises(self, x, op) -> None:
+    def test_nan_scalar_raises(self, x: Variable, op: str) -> None:
         # Skip div: ``x / nan`` raises *before* our check (TypeError on
         # the unary negation in ``__div__``); the scalar-NaN scenario for
         # div is the same code path as for mul.
@@ -187,7 +190,9 @@ class TestUserNaNRaises:
             _OPS[op](x, float("nan"))
 
     @pytest.mark.v1
-    def test_pypsa_1683_inf_times_zero_raises(self, x, time: pd.RangeIndex) -> None:
+    def test_pypsa_1683_inf_times_zero_raises(
+        self, x: Variable, time: pd.RangeIndex
+    ) -> None:
         """
         PyPSA #1683 — ``min_pu * nominal_fix`` with ``p_nom=inf`` and
         ``p_min_pu=0`` yields a NaN bound. v1 surfaces this at construction,
@@ -208,7 +213,7 @@ class TestUserNaNRaises:
 
     @pytest.mark.legacy
     def test_add_nan_dataarray_silently_fills_with_zero(
-        self, x, time: pd.RangeIndex
+        self, x: Variable, time: pd.RangeIndex
     ) -> None:
         """Document legacy: NaN in addend silently becomes 0 (#713)."""
         nan_data = xr.DataArray(
@@ -219,7 +224,7 @@ class TestUserNaNRaises:
 
     @pytest.mark.legacy
     def test_mul_nan_dataarray_silently_fills_with_zero(
-        self, x, time: pd.RangeIndex
+        self, x: Variable, time: pd.RangeIndex
     ) -> None:
         """
         Document legacy: NaN in multiplier silently becomes 0 — variable
@@ -244,7 +249,7 @@ class TestLegacyWarning:
     """
 
     @pytest.mark.legacy
-    def test_warn_on_mismatched_coords(self, x, unsilenced) -> None:
+    def test_warn_on_mismatched_coords(self, x: Variable, unsilenced: None) -> None:
         other = xr.DataArray(
             [1.0, 2.0, 3.0, 4.0, 5.0],
             dims=["time"],
@@ -254,7 +259,7 @@ class TestLegacyWarning:
             x + other
 
     @pytest.mark.legacy
-    def test_warn_on_subset_constant(self, x, unsilenced) -> None:
+    def test_warn_on_subset_constant(self, x: Variable, unsilenced: None) -> None:
         subset = xr.DataArray(
             [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
@@ -263,7 +268,7 @@ class TestLegacyWarning:
 
     @pytest.mark.legacy
     def test_warn_on_nan_in_user_constant(
-        self, x, time: pd.RangeIndex, unsilenced
+        self, x: Variable, time: pd.RangeIndex, unsilenced: None
     ) -> None:
         nan_data = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
@@ -279,7 +284,7 @@ class TestLegacyWarning:
 
 class TestExactAlignmentMerge:
     @pytest.fixture
-    def x_other(self, m: Model):
+    def x_other(self, m: Model) -> Variable:
         # Same shape, different labels — legacy uses positional override.
         return m.add_variables(
             lower=0,
@@ -288,7 +293,7 @@ class TestExactAlignmentMerge:
         )
 
     @pytest.fixture
-    def x_subset(self, m: Model):
+    def x_subset(self, m: Model) -> Variable:
         # Subset coords on the same dim — legacy outer-joins (and pads).
         return m.add_variables(
             lower=0,
@@ -297,22 +302,28 @@ class TestExactAlignmentMerge:
         )
 
     @pytest.mark.v1
-    def test_var_plus_var_different_labels_raises(self, x, x_other) -> None:
+    def test_var_plus_var_different_labels_raises(
+        self, x: Variable, x_other: Variable
+    ) -> None:
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             x + x_other
 
     @pytest.mark.v1
-    def test_expr_plus_expr_different_labels_raises(self, x, x_other) -> None:
+    def test_expr_plus_expr_different_labels_raises(
+        self, x: Variable, x_other: Variable
+    ) -> None:
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             (1 * x) + (1 * x_other)
 
     @pytest.mark.v1
-    def test_var_plus_var_subset_raises(self, x, x_subset) -> None:
+    def test_var_plus_var_subset_raises(self, x: Variable, x_subset: Variable) -> None:
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             x + x_subset
 
     @pytest.mark.v1
-    def test_var_minus_var_different_labels_raises(self, x, x_other) -> None:
+    def test_var_minus_var_different_labels_raises(
+        self, x: Variable, x_other: Variable
+    ) -> None:
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             x - x_other
 
@@ -339,7 +350,9 @@ class TestExactAlignmentMerge:
         assert set(result.coord_dims) == {"time", "scenario"}
 
     @pytest.mark.legacy
-    def test_var_plus_var_different_labels_silent(self, x, x_other) -> None:
+    def test_var_plus_var_different_labels_silent(
+        self, x: Variable, x_other: Variable
+    ) -> None:
         """
         Document legacy: same-shape var+var aligns by position via
         override; the right-hand labels are silently dropped.
@@ -351,7 +364,7 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.legacy
     def test_warn_on_var_plus_var_different_labels(
-        self, x, x_other, unsilenced
+        self, x: Variable, x_other: Variable, unsilenced: None
     ) -> None:
         with pytest.warns(LinopySemanticsWarning):
             x + x_other
@@ -365,12 +378,12 @@ class TestExactAlignmentMerge:
 
 class TestAbsencePropagation:
     @pytest.fixture
-    def xs(self, x):
+    def xs(self, x: Variable) -> Variable:
         # x.shift(time=1) → absent at time=0, present elsewhere.
         return x.shift(time=1)
 
     @pytest.mark.v1
-    def test_to_linexpr_marks_absent_with_nan_const(self, xs) -> None:
+    def test_to_linexpr_marks_absent_with_nan_const(self, xs: Variable) -> None:
         """
         Variable.to_linexpr() encodes absence as NaN const + NaN
         coeff + vars=-1, so §6 has something to propagate.
@@ -382,7 +395,7 @@ class TestAbsencePropagation:
         assert not np.isnan(expr.const.values[1:]).any()
 
     @pytest.mark.v1
-    def test_isnull_reports_absent_slot(self, xs) -> None:
+    def test_isnull_reports_absent_slot(self, xs: Variable) -> None:
         """§3: isnull() reports the absent slot on a LinearExpression."""
         expr = xs.to_linexpr()
         assert bool(expr.isnull().values[0])
@@ -390,7 +403,7 @@ class TestAbsencePropagation:
 
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_scalar_op_preserves_absence(self, xs, op) -> None:
+    def test_scalar_op_preserves_absence(self, xs: Variable, op: str) -> None:
         """
         #712 — `shifted OP scalar` stays absent at the shifted slot.
         Holds for every binary operator: const and coeffs both NaN.
@@ -404,7 +417,9 @@ class TestAbsencePropagation:
         assert (result.const.values[1:] == expected_const).all()
 
     @pytest.mark.v1
-    def test_add_present_variable_propagates_absence(self, xs, x) -> None:
+    def test_add_present_variable_propagates_absence(
+        self, xs: Variable, x: Variable
+    ) -> None:
         """`x + xs` is absent wherever xs is, even though x is fine there."""
         result = xs + x
         assert np.isnan(result.const.values[0])
@@ -412,7 +427,9 @@ class TestAbsencePropagation:
         assert not bool(result.isnull().values[1:].any())
 
     @pytest.mark.v1
-    def test_merge_absorbs_dead_terms_at_absent_slot(self, xs, x) -> None:
+    def test_merge_absorbs_dead_terms_at_absent_slot(
+        self, xs: Variable, x: Variable
+    ) -> None:
         """
         §1/§2 storage invariant — ``const.isnull()`` at a slot implies
         every term at that slot has ``coeffs = NaN`` and ``vars = -1``.
@@ -443,7 +460,7 @@ class TestAbsencePropagation:
         assert (~np.isnan(result.coeffs.values[1:])).all()
 
     @pytest.mark.v1
-    def test_absent_distinguishable_from_zero(self, x, xs) -> None:
+    def test_absent_distinguishable_from_zero(self, x: Variable, xs: Variable) -> None:
         """
         #712 — under v1, ``x.shift(time=1) * 3`` and ``x * 0`` are
         distinct: the first is absent, the second is a present zero.
@@ -454,7 +471,7 @@ class TestAbsencePropagation:
         assert not bool(zero.isnull().values[0])
 
     @pytest.mark.legacy
-    def test_legacy_collapses_absent_to_zero(self, xs) -> None:
+    def test_legacy_collapses_absent_to_zero(self, xs: Variable) -> None:
         """
         Document the #712 bug: legacy treats absent as 0 after `* 3`.
 
@@ -473,18 +490,18 @@ class TestFillnaResolves:
     """§7 — fillna()/.where() are how the caller resolves an absent slot."""
 
     @pytest.fixture
-    def xs(self, x):
+    def xs(self, x: Variable) -> Variable:
         return x.shift(time=1)
 
     @pytest.mark.v1
-    def test_expr_fillna_replaces_absent_const(self, xs) -> None:
+    def test_expr_fillna_replaces_absent_const(self, xs: Variable) -> None:
         result = xs.to_linexpr().fillna(42)
         assert result.const.values[0] == 42.0
         assert result.const.values[1:].tolist() == [0.0, 0.0, 0.0, 0.0]
         assert not bool(result.isnull().values.any())
 
     @pytest.mark.v1
-    def test_variable_fillna_numeric_returns_expression(self, xs) -> None:
+    def test_variable_fillna_numeric_returns_expression(self, xs: Variable) -> None:
         """
         A constant fill is not a variable, so the return type is a
         LinearExpression.
@@ -496,8 +513,13 @@ class TestFillnaResolves:
         assert result.const.values[0] == 42.0
 
     @pytest.mark.v1
-    def test_variable_fillna_zero_revives_slot_as_present_zero(self, xs) -> None:
+    def test_variable_fillna_zero_revives_slot_as_present_zero(
+        self, xs: Variable
+    ) -> None:
+        from linopy import LinearExpression
+
         result = xs.fillna(0)
+        assert isinstance(result, LinearExpression)  # numeric fill → expression
         assert not bool(result.isnull().values[0])
         assert result.const.values[0] == 0.0
 
@@ -563,7 +585,9 @@ class TestVariableReindex:
     this is a new API that didn't exist on master.
     """
 
-    def test_reindex_extends_with_absent(self, x, time: pd.RangeIndex) -> None:
+    def test_reindex_extends_with_absent(
+        self, x: Variable, time: pd.RangeIndex
+    ) -> None:
         extended = pd.RangeIndex(8, name="time")
         result = x.reindex(time=extended)
         assert result.sizes["time"] == 8
@@ -574,7 +598,7 @@ class TestVariableReindex:
         assert np.isnan(result.lower.values[5:]).all()
         assert np.isnan(result.upper.values[5:]).all()
 
-    def test_reindex_subset_drops_coords(self, x) -> None:
+    def test_reindex_subset_drops_coords(self, x: Variable) -> None:
         """
         Reindex to a strict subset shrinks the variable (no absence
         introduced — those slots are just gone).
@@ -583,7 +607,7 @@ class TestVariableReindex:
         assert result.sizes["time"] == 3
         assert not (result.labels.values == -1).any()
 
-    def test_reindex_like_extends_with_absent(self, m: Model, x) -> None:
+    def test_reindex_like_extends_with_absent(self, m: Model, x: Variable) -> None:
         wider = m.add_variables(
             lower=0, coords=[pd.RangeIndex(7, name="time")], name="wider"
         )
@@ -593,7 +617,7 @@ class TestVariableReindex:
 
     @pytest.mark.v1
     def test_reindexed_variable_propagates_absence_in_arithmetic(
-        self, x, time: pd.RangeIndex
+        self, x: Variable, time: pd.RangeIndex
     ) -> None:
         """
         §4 + §6 hand-off: a reindex-introduced absence flows through
@@ -623,30 +647,34 @@ class TestNamedMethodJoin:
         )
 
     @pytest.mark.v1
-    def test_add_join_inner_intersects(self, x, subset) -> None:
+    def test_add_join_inner_intersects(self, x: Variable, subset: xr.DataArray) -> None:
         """`.add(other, join="inner")` picks the intersection of coords."""
         result = x.add(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
 
     @pytest.mark.v1
-    def test_add_join_outer_fills(self, x, subset) -> None:
+    def test_add_join_outer_fills(self, x: Variable, subset: xr.DataArray) -> None:
         """`.add(other, join="outer")` unions coords (gaps are filled)."""
         result = x.add(subset, join="outer")
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
     @pytest.mark.v1
-    def test_mul_join_inner(self, x, subset) -> None:
+    def test_mul_join_inner(self, x: Variable, subset: xr.DataArray) -> None:
         result = x.mul(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
 
     @pytest.mark.v1
-    def test_le_join_inner_on_subset_rhs(self, x, subset) -> None:
+    def test_le_join_inner_on_subset_rhs(
+        self, x: Variable, subset: xr.DataArray
+    ) -> None:
         """`.le(rhs, join="inner")` lets a subset RHS through cleanly."""
         result = x.le(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
 
     @pytest.mark.v1
-    def test_bare_op_still_raises_on_mismatch(self, x, subset) -> None:
+    def test_bare_op_still_raises_on_mismatch(
+        self, x: Variable, subset: xr.DataArray
+    ) -> None:
         """`x + subset` (no `join=`) still raises — opt-in is required."""
         with pytest.raises(ValueError, match="exact"):
             x + subset
@@ -659,7 +687,7 @@ class TestNamedMethodJoin:
 
 class TestConstraintRHS:
     @pytest.mark.v1
-    def test_subset_rhs_raises(self, x) -> None:
+    def test_subset_rhs_raises(self, x: Variable) -> None:
         subset = xr.DataArray(
             [10.0, 20.0],
             dims=["time"],
@@ -669,7 +697,7 @@ class TestConstraintRHS:
             x <= subset
 
     @pytest.mark.v1
-    def test_nan_rhs_raises(self, x, time: pd.RangeIndex) -> None:
+    def test_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex) -> None:
         """
         §5/§12 — a NaN in a user-supplied RHS raises, never silently
         becomes "no constraint" the way legacy auto_mask treats it.
@@ -681,7 +709,7 @@ class TestConstraintRHS:
             x <= nan_rhs
 
     @pytest.mark.v1
-    def test_pypsa_1683_nan_rhs_raises(self, x, time: pd.RangeIndex) -> None:
+    def test_pypsa_1683_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex) -> None:
         """
         PyPSA #1683 on the constraint side — ``min_pu * nominal_fix``
         with ``p_nom=inf`` and ``p_min_pu=0`` yields NaN at the bad slot;
@@ -698,7 +726,7 @@ class TestConstraintRHS:
 
     @pytest.mark.v1
     def test_absence_propagates_to_rhs_drops_constraint(
-        self, x, time: pd.RangeIndex
+        self, x: Variable, time: pd.RangeIndex
     ) -> None:
         """
         §6 → §12: a constraint over an absent LHS slot yields NaN RHS,
@@ -713,7 +741,7 @@ class TestConstraintRHS:
         assert (rhs[1:] == 10).all()
 
     @pytest.mark.v1
-    def test_subset_rhs_eq_raises(self, x) -> None:
+    def test_subset_rhs_eq_raises(self, x: Variable) -> None:
         """§12 — equality comparison aligns by §8 like ``<=``/``>=``."""
         subset = xr.DataArray(
             [10.0, 20.0],
@@ -724,7 +752,7 @@ class TestConstraintRHS:
             x == subset
 
     @pytest.mark.v1
-    def test_nan_rhs_eq_raises(self, x, time: pd.RangeIndex) -> None:
+    def test_nan_rhs_eq_raises(self, x: Variable, time: pd.RangeIndex) -> None:
         """§5/§12 — a NaN in an equality RHS raises like ``<=`` does."""
         nan_rhs = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
@@ -733,7 +761,7 @@ class TestConstraintRHS:
             x == nan_rhs
 
     @pytest.mark.v1
-    def test_absence_propagates_to_rhs_eq_drops_constraint(self, x) -> None:
+    def test_absence_propagates_to_rhs_eq_drops_constraint(self, x: Variable) -> None:
         """§6 → §12 on equality — absent LHS slot drops the constraint."""
         xs = x.shift(time=1)
         constraint = xs == 10
@@ -743,7 +771,7 @@ class TestConstraintRHS:
 
     @pytest.mark.legacy
     def test_nan_rhs_silently_treated_as_unconstrained(
-        self, x, time: pd.RangeIndex
+        self, x: Variable, time: pd.RangeIndex
     ) -> None:
         """
         Document the legacy auto_mask path: a NaN RHS is silently
@@ -756,7 +784,9 @@ class TestConstraintRHS:
         assert np.isnan(constraint.rhs.values[1])
 
     @pytest.mark.legacy
-    def test_warn_on_nan_rhs(self, x, time: pd.RangeIndex, unsilenced) -> None:
+    def test_warn_on_nan_rhs(
+        self, x: Variable, time: pd.RangeIndex, unsilenced: None
+    ) -> None:
         nan_rhs = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
@@ -783,11 +813,11 @@ class TestReductionsSkipAbsent:
     """
 
     @pytest.fixture
-    def xs(self, x):
+    def xs(self, x: Variable) -> Variable:
         return x.shift(time=1)
 
     @pytest.mark.v1
-    def test_sum_over_dim_skips_absent(self, xs) -> None:
+    def test_sum_over_dim_skips_absent(self, xs: Variable) -> None:
         """
         ``(xs + 5).sum('time')`` skips the absent slot at t=0 and
         sums the four present 5s → 20.
@@ -796,12 +826,12 @@ class TestReductionsSkipAbsent:
         assert float(result.const) == 20.0
 
     @pytest.mark.v1
-    def test_sum_no_dim_skips_absent(self, xs) -> None:
+    def test_sum_no_dim_skips_absent(self, xs: Variable) -> None:
         result = (xs + 5).sum()
         assert float(result.const) == 20.0
 
     @pytest.mark.v1
-    def test_sum_of_all_absent_is_zero(self, x) -> None:
+    def test_sum_of_all_absent_is_zero(self, x: Variable) -> None:
         """§13 — "the sum of none is the zero expression.""" ""
         all_absent = x.shift(time=10).to_linexpr()
         assert bool(all_absent.isnull().all().item())
@@ -809,7 +839,7 @@ class TestReductionsSkipAbsent:
         assert float(result.const) == 0.0
 
     @pytest.mark.v1
-    def test_groupby_sum_skips_absent(self, xs) -> None:
+    def test_groupby_sum_skips_absent(self, xs: Variable) -> None:
         """Each group's sum drops absent members, just like ``.sum``."""
         groups = xr.DataArray(
             [0, 0, 1, 1, 1], dims=["time"], coords={"time": xs.coords["time"]}
@@ -836,7 +866,9 @@ class TestAuxCoordConflict:
         return pd.Index([1, 2, 3], name="A")
 
     @pytest.mark.v1
-    def test_expr_plus_dataarray_aux_conflict_raises(self, m: Model, A) -> None:
+    def test_expr_plus_dataarray_aux_conflict_raises(
+        self, m: Model, A: pd.Index
+    ) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
@@ -849,7 +881,7 @@ class TestAuxCoordConflict:
             v + const
 
     @pytest.mark.v1
-    def test_var_plus_var_aux_conflict_raises(self, m: Model, A) -> None:
+    def test_var_plus_var_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
@@ -860,7 +892,7 @@ class TestAuxCoordConflict:
             v + w
 
     @pytest.mark.v1
-    def test_mul_constant_aux_conflict_raises(self, m: Model, A) -> None:
+    def test_mul_constant_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
         """Same rule on the multiplication path — not just ``+``."""
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
@@ -874,7 +906,7 @@ class TestAuxCoordConflict:
             v * const
 
     @pytest.mark.v1
-    def test_constraint_aux_conflict_raises(self, m: Model, A) -> None:
+    def test_constraint_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
         """§11 reaches constraint construction via the same machinery."""
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
@@ -888,7 +920,7 @@ class TestAuxCoordConflict:
             v == const
 
     @pytest.mark.v1
-    def test_scalar_isel_aux_conflict_raises(self, m: Model, A) -> None:
+    def test_scalar_isel_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
         """
         Scalar isels leave the indexed dim as a non-dim coord whose
         value differs between operands picked at different positions.
@@ -900,7 +932,7 @@ class TestAuxCoordConflict:
             a0 + a1
 
     @pytest.mark.v1
-    def test_isel_with_drop_true_avoids_conflict(self, m: Model, A) -> None:
+    def test_isel_with_drop_true_avoids_conflict(self, m: Model, A: pd.Index) -> None:
         """
         The §11 escape hatch the convention recommends: drop the
         leftover scalar coord with ``isel(..., drop=True)``.
@@ -912,7 +944,7 @@ class TestAuxCoordConflict:
         assert "A" not in result.coords
 
     @pytest.mark.legacy
-    def test_aux_conflict_silently_keeps_left(self, m: Model, A) -> None:
+    def test_aux_conflict_silently_keeps_left(self, m: Model, A: pd.Index) -> None:
         """
         Document legacy: a conflict is silently resolved by keeping
         the left operand's aux coord — the right operand's [400,400,500]
@@ -930,7 +962,9 @@ class TestAuxCoordConflict:
         assert result.coords["B"].values.tolist() == [311, 311, 322]
 
     @pytest.mark.legacy
-    def test_warn_on_aux_conflict(self, m: Model, A, unsilenced) -> None:
+    def test_warn_on_aux_conflict(
+        self, m: Model, A: pd.Index, unsilenced: None
+    ) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
@@ -953,19 +987,21 @@ class TestAuxCoordPropagation:
     def A(self) -> pd.Index:
         return pd.Index([1, 2, 3], name="A")
 
-    def test_aux_coord_survives_scalar_mul(self, m: Model, A) -> None:
+    def test_aux_coord_survives_scalar_mul(self, m: Model, A: pd.Index) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
         assert "B" in (3 * v).coords
 
-    def test_aux_coord_survives_scalar_add(self, m: Model, A) -> None:
+    def test_aux_coord_survives_scalar_add(self, m: Model, A: pd.Index) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
         assert "B" in (v + 5).coords
 
-    def test_aux_coord_propagates_through_var_plus_var(self, m: Model, A) -> None:
+    def test_aux_coord_propagates_through_var_plus_var(
+        self, m: Model, A: pd.Index
+    ) -> None:
         B = ("A", [311, 311, 322])
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(B=B)
         w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(B=B)
@@ -973,14 +1009,16 @@ class TestAuxCoordPropagation:
         assert "B" in result.coords
         assert result.coords["B"].values.tolist() == [311, 311, 322]
 
-    def test_aux_coord_propagates_into_constraint(self, m: Model, A) -> None:
+    def test_aux_coord_propagates_into_constraint(self, m: Model, A: pd.Index) -> None:
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
         c = v <= 10
         assert "B" in c.coords
 
-    def test_aux_coord_only_on_dataarray_propagates(self, m: Model, A) -> None:
+    def test_aux_coord_only_on_dataarray_propagates(
+        self, m: Model, A: pd.Index
+    ) -> None:
         """
         ``x * a`` where ``a`` carries an aux coord and ``x`` doesn't —
         the coord propagates through every binary operator and into the
@@ -998,7 +1036,7 @@ class TestAuxCoordPropagation:
         c = x <= a
         assert "B" in c.coords
 
-    def test_aux_coord_only_on_one_side_propagates(self, m: Model, A) -> None:
+    def test_aux_coord_only_on_one_side_propagates(self, m: Model, A: pd.Index) -> None:
         """Var+var counterpart of the above — hits the `merge` path."""
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
