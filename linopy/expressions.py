@@ -69,6 +69,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import (
+    LEGACY_SEMANTICS,
     LEGACY_SEMANTICS_MESSAGE,
     V1_SEMANTICS,
     LinopySemanticsWarning,
@@ -666,12 +667,19 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        # NaN values in self.const or other are filled with 0 (additive identity)
-        # so that missing data does not silently propagate through arithmetic.
+        # Under legacy, NaN in self.const or the user constant is filled
+        # with 0 (additive identity) so missing data is silently dropped.
+        # Under v1 (§6), absence propagates: self.const NaN stays NaN, and
+        # user-supplied NaN raised before we got here.
+        is_v1 = options["semantics"] == V1_SEMANTICS
+
+        def fillna0(da: DataArray) -> DataArray:
+            return da if is_v1 else da.fillna(0)
+
         if np.isscalar(other) and join is None:
             if isinstance(other, float) and np.isnan(other):
                 _check_user_nan_scalar()
-            return self.assign(const=self.const.fillna(0) + other)
+            return self.assign(const=fillna0(self.const) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if da.isnull().any():
             _check_user_nan_array()
@@ -679,7 +687,7 @@ class BaseExpression(ABC):
             da, fill_value=0, join=join
         )
         da = da.fillna(0)
-        self_const = self_const.fillna(0)
+        self_const = fillna0(self_const)
         if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
@@ -699,10 +707,16 @@ class BaseExpression(ABC):
         """
         Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
 
-        NaN values are filled with neutral elements before the operation:
-        - factor (other) is filled with fill_value (0 for mul, 1 for div)
-        - coeffs and const are filled with 0 (additive identity)
+        Under legacy, NaN values are silently filled with neutral elements
+        (0 for add path, ``fill_value`` for the factor). Under v1 (§6),
+        absence propagates: self.coeffs / self.const NaN stays NaN, and a
+        user-supplied NaN in the factor would have raised at §5.
         """
+        is_v1 = options["semantics"] == V1_SEMANTICS
+
+        def fillna0(da: DataArray) -> DataArray:
+            return da if is_v1 else da.fillna(0)
+
         if isinstance(other, float) and np.isnan(other):
             _check_user_nan_scalar()
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -711,18 +725,19 @@ class BaseExpression(ABC):
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        factor = factor.fillna(fill_value)
-        self_const = self_const.fillna(0)
+        if not is_v1:
+            factor = factor.fillna(fill_value)
+        self_const = fillna0(self_const)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            coeffs = data.coeffs.fillna(0)
+            coeffs = fillna0(data.coeffs)
             return self.__class__(
                 assign_multiindex_safe(
                     data, coeffs=op(coeffs, factor), const=op(self_const, factor)
                 ),
                 self.model,
             )
-        coeffs = self.coeffs.fillna(0)
+        coeffs = fillna0(self.coeffs)
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
@@ -1239,12 +1254,20 @@ class BaseExpression(ABC):
 
     def isnull(self) -> DataArray:
         """
-        Get a boolean mask with true values where there is only missing values in an expression.
+        Get a boolean mask reporting which slots are absent.
 
-        Returns
-        -------
-        xr.DataArray
+        Under v1 (§3), a slot is absent iff ``const`` is NaN — every
+        operator propagates const NaN whenever an operand is absent, so
+        this is the universal signal. A term with ``vars == -1`` is a
+        *dead term* (contributes nothing), not a slot-level absence
+        signal; ``fillna(value)`` can revive an absent slot to a present
+        constant while leaving the dead sentinel term in place. The
+        legacy convention has no real absence concept (``const`` is
+        always filled with 0); the historical AND of "all vars
+        sentinel" and "const NaN" is preserved verbatim under legacy.
         """
+        if options["semantics"] == V1_SEMANTICS:
+            return self.const.isnull()
         helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
@@ -2530,7 +2553,13 @@ def merge(
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
         subkwargs = {**kwargs, "fill_value": 0}
-        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
+        # Under v1, §6 requires that an absent slot in any operand stays
+        # absent in the result; ``sum(skipna=False)`` propagates NaN
+        # rather than collapsing it to 0.
+        skipna = options["semantics"] == LEGACY_SEMANTICS
+        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
+            TERM_DIM, skipna=skipna
+        )
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)

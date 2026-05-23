@@ -327,12 +327,26 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
+        from linopy.config import V1_SEMANTICS
+
+        is_v1 = options["semantics"] == V1_SEMANTICS
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
-        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
-        coefficient = coefficient.fillna(0)
+        if is_v1:
+            # Under v1 the LinearExpression must carry absence (NaN at
+            # `labels == -1`) so §6 propagation through downstream
+            # arithmetic works.
+            coefficient = coefficient.reindex_like(self.labels, fill_value=np.nan)
+            absent = self.labels == -1
+            coefficient = coefficient.where(~absent)
+        else:
+            coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+            coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
+        if is_v1:
+            const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
+            ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
@@ -1149,19 +1163,28 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
-    ) -> Variable:
+        fill_value: int
+        | float
+        | ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset,
+    ) -> Variable | expressions.LinearExpression:
         """
-        Fill missing values with a variable.
+        Fill missing (absent) slots.
 
-        This operation call ``xarray.DataArray.fillna`` but ensures preserving
-        the linopy.Variable type.
+        A numeric ``fill_value`` substitutes a *constant* for the absent
+        variable slots, so the result is a :class:`LinearExpression` (a
+        constant is not a variable). A Variable / ScalarVariable
+        ``fill_value`` keeps the result a Variable.
 
         Parameters
         ----------
-        fill_value : Variable/ScalarVariable
-            Variable to use for filling.
+        fill_value : numeric, Variable, or ScalarVariable
+            Value to fill the absent slots with.
         """
+        if isinstance(fill_value, int | float | np.integer | np.floating):
+            return self.to_linexpr().fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:

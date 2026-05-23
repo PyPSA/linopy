@@ -13,6 +13,11 @@ Slice A — constant operand path (§5, §8, §9):
 
 Slice B — expression-OP-expression / variable-OP-variable (§8 via `merge`):
     §8  Shared dimensions must match exactly  → #708 / #570 (expr+expr branch)
+
+Slice C — absence propagation (§3, §6, §7):
+    §6  Absence propagates through every operator → #712 (absent-as-zero)
+    §3  isnull() is the unifying predicate        → #711
+    §7  fillna()/.where() resolve absence         → (positive coverage)
 """
 
 from __future__ import annotations
@@ -369,3 +374,149 @@ class TestExactAlignmentMerge:
     ) -> None:
         with pytest.warns(LinopySemanticsWarning):
             x + x_other
+
+
+# =====================================================================
+# §6 — Absence propagates through every operator
+# §3 — isnull() reports absent slots (covers #712 absent-as-zero)
+# =====================================================================
+
+
+class TestAbsencePropagation:
+    @pytest.fixture
+    def xs(self, x):
+        # x.shift(time=1) → absent at time=0, present elsewhere.
+        return x.shift(time=1)
+
+    @pytest.mark.v1
+    def test_to_linexpr_marks_absent_with_nan_const(self, xs) -> None:
+        """
+        Variable.to_linexpr() encodes absence as NaN const + NaN
+        coeff + vars=-1, so §6 has something to propagate.
+        """
+        expr = xs.to_linexpr()
+        assert np.isnan(expr.const.values[0])
+        assert np.isnan(expr.coeffs.values[0, 0])
+        assert int(expr.vars.values[0, 0]) == -1
+        assert not np.isnan(expr.const.values[1:]).any()
+
+    @pytest.mark.v1
+    def test_isnull_reports_absent_slot(self, xs) -> None:
+        """§3: isnull() reports the absent slot on a LinearExpression."""
+        expr = xs.to_linexpr()
+        assert bool(expr.isnull().values[0])
+        assert not bool(expr.isnull().values[1:].any())
+
+    @pytest.mark.v1
+    def test_mul_scalar_preserves_absence(self, xs) -> None:
+        """#712 — ``shifted * 3`` stays absent (not coeff=3, const=0)."""
+        result = xs * 3
+        assert np.isnan(result.const.values[0])
+        assert np.isnan(result.coeffs.values[0, 0])
+        assert bool(result.isnull().values[0])
+
+    @pytest.mark.v1
+    def test_add_scalar_preserves_absence(self, xs) -> None:
+        """`shifted + 5` is absent at the shifted slot, not const=5."""
+        result = xs + 5
+        assert np.isnan(result.const.values[0])
+        assert result.const.values[1:].tolist() == [5.0, 5.0, 5.0, 5.0]
+
+    @pytest.mark.v1
+    def test_sub_scalar_preserves_absence(self, xs) -> None:
+        result = xs - 5
+        assert np.isnan(result.const.values[0])
+        assert result.const.values[1:].tolist() == [-5.0, -5.0, -5.0, -5.0]
+
+    @pytest.mark.v1
+    def test_div_scalar_preserves_absence(self, xs) -> None:
+        result = xs / 2
+        assert np.isnan(result.const.values[0])
+        assert np.isnan(result.coeffs.values[0, 0])
+
+    @pytest.mark.v1
+    def test_add_present_variable_propagates_absence(self, xs, x) -> None:
+        """`x + xs` is absent wherever xs is, even though x is fine there."""
+        result = xs + x
+        assert np.isnan(result.const.values[0])
+        assert bool(result.isnull().values[0])
+        assert not bool(result.isnull().values[1:].any())
+
+    @pytest.mark.v1
+    def test_absent_distinguishable_from_zero(self, x, xs) -> None:
+        """
+        #712 — under v1, ``x.shift(time=1) * 3`` and ``x * 0`` are
+        distinct: the first is absent, the second is a present zero.
+        """
+        absent = xs * 3
+        zero = x * 0
+        assert bool(absent.isnull().values[0])
+        assert not bool(zero.isnull().values[0])
+
+    @pytest.mark.legacy
+    def test_legacy_collapses_absent_to_zero(self, xs) -> None:
+        """
+        Document the #712 bug: legacy treats absent as 0 after `* 3`.
+
+        The term ends up as ``coeffs=3 * vars=-1 + const=0`` — a
+        ``coeff*sentinel`` term that evaluates to 0 at the solver layer.
+        There is no NaN signal anywhere, so ``isnull()`` returns False and
+        downstream code can't tell ``xs * 3`` apart from ``x * 0``.
+        """
+        result = xs * 3
+        assert not np.isnan(result.const.values[0])
+        assert not np.isnan(result.coeffs.values[0, 0])
+        assert not bool(result.isnull().values[0])
+
+
+class TestFillnaResolves:
+    """§7 — fillna()/.where() are how the caller resolves an absent slot."""
+
+    @pytest.fixture
+    def xs(self, x):
+        return x.shift(time=1)
+
+    @pytest.mark.v1
+    def test_expr_fillna_replaces_absent_const(self, xs) -> None:
+        result = xs.to_linexpr().fillna(42)
+        assert result.const.values[0] == 42.0
+        assert result.const.values[1:].tolist() == [0.0, 0.0, 0.0, 0.0]
+        assert not bool(result.isnull().values.any())
+
+    @pytest.mark.v1
+    def test_variable_fillna_numeric_returns_expression(self, xs) -> None:
+        """
+        A constant fill is not a variable, so the return type is a
+        LinearExpression.
+        """
+        from linopy import LinearExpression
+
+        result = xs.fillna(42)
+        assert isinstance(result, LinearExpression)
+        assert result.const.values[0] == 42.0
+
+    @pytest.mark.v1
+    def test_variable_fillna_zero_revives_slot_as_present_zero(self, xs) -> None:
+        result = xs.fillna(0)
+        assert not bool(result.isnull().values[0])
+        assert result.const.values[0] == 0.0
+
+    @pytest.mark.v1
+    def test_masked_variable_constraint_via_fillna(self) -> None:
+        """
+        v1 counterpart of ``test_masked_variable_model`` — under §6 the
+        constraint ``x + y >= 10`` drops at the masked y slots, so the
+        caller must say ``y.fillna(0)`` to keep ``x >= 10`` there.
+        """
+        m = Model()
+        lower = pd.Series(0, range(10))
+        x = m.add_variables(lower, name="x")
+        mask = pd.Series([True] * 8 + [False, False])
+        y = m.add_variables(lower, name="y", mask=mask)
+        m.add_constraints(x + y.fillna(0), ">=", 10)
+        m.add_constraints(y, ">=", 0)
+        m.add_objective(2 * x + y)
+
+        # The constraint x + y.fillna(0) >= 10 binds at every slot.
+        rhs = m.constraints["con0"].rhs.values
+        assert not np.isnan(rhs).any()

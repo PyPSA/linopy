@@ -946,6 +946,7 @@ def test_modified_model(
     assert (modified_model.solution.y == 10).all()
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_masked_variable_model(
     masked_variable_model: Model,
@@ -953,6 +954,14 @@ def test_masked_variable_model(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
+    """
+    Legacy-only: asserts that ``x + y >= 10`` with ``y`` masked still
+    binds ``x >= 10`` at the masked slots — which only works because
+    legacy collapses the absent ``y`` to 0. Under v1 §6 the absence in
+    ``y`` propagates into the constraint and the constraint is dropped
+    at the masked slots, so ``x`` is free to be 0 there. The v1 way to
+    express the legacy intent is ``x + y.fillna(0) >= 10``.
+    """
     masked_variable_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
