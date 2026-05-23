@@ -432,6 +432,14 @@ class TestAddVariablesBoundsWithCoords:
         with pytest.raises(ValueError, match="extra dimensions"):
             model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
 
+    def test_dataarray_coord_reorder(self, model: "Model") -> None:
+        """A bound whose coords differ only in order is reindexed to coords."""
+        lower = DataArray([3, 1, 2], dims=["x"], coords={"x": ["c", "a", "b"]})
+        var = model.add_variables(
+            lower=lower, coords=[pd.Index(["a", "b", "c"], name="x")], name="x"
+        )
+        assert (var.data.lower == [1, 2, 3]).all()
+
     # -- Broadcasting missing dims -----------------------------------------
 
     @pytest.mark.parametrize(
@@ -452,6 +460,35 @@ class TestAddVariablesBoundsWithCoords:
                     data=[[1], [2], [3]],
                 ),
                 id="DataFrame",
+            ),
+            pytest.param(
+                pd.Series(
+                    index=pd.MultiIndex.from_product(
+                        [pd.RangeIndex(3), ["red"]], names=("time", "colour")
+                    ),
+                    data=[1, 2, 3],
+                ),
+                id="Series-multiindex",
+            ),
+            pytest.param(
+                pd.DataFrame(
+                    index=pd.RangeIndex(3, name="time"),
+                    columns=pd.MultiIndex.from_product(
+                        [["a", "b"], ["red"]], names=("space", "colour")
+                    ),
+                    data=[[1, 1], [2, 2], [3, 3]],
+                ),
+                id="DataFrame-multicolumns",
+            ),
+            pytest.param(
+                pd.DataFrame(
+                    index=pd.MultiIndex.from_product(
+                        [pd.RangeIndex(3), ["a", "b"]], names=("time", "space")
+                    ),
+                    columns=pd.Index(["red"], name="colour"),
+                    data=[[1], [1], [2], [2], [3], [3]],
+                ),
+                id="DataFrame-multiindex",
             ),
         ],
     )
