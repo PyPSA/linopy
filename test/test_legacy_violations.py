@@ -37,6 +37,7 @@ Slice F — auxiliary-coordinate conflicts (§11):
 
 from __future__ import annotations
 
+import operator
 import warnings
 from collections.abc import Generator
 
@@ -77,14 +78,21 @@ def unsilenced() -> Generator[None, None, None]:
 # =====================================================================
 
 
+_OPS = {
+    "add": operator.add,
+    "sub": operator.sub,
+    "mul": operator.mul,
+    "div": operator.truediv,
+}
+
+
 class TestExactAlignmentConstant:
     @pytest.mark.v1
-    def test_add_same_size_different_labels_raises(
-        self, x, time: pd.RangeIndex
-    ) -> None:
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    def test_same_size_different_labels_raises(self, x, op) -> None:
         """
         #708 / #550 — same shape, different labels: legacy aligns by
-        position; v1 raises.
+        position; v1 raises. Holds for every binary operator.
         """
         other = xr.DataArray(
             [1.0, 2.0, 3.0, 4.0, 5.0],
@@ -92,30 +100,11 @@ class TestExactAlignmentConstant:
             coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
         )
         with pytest.raises(ValueError, match="exact"):
-            x + other
+            _OPS[op](x, other)
 
     @pytest.mark.v1
-    def test_mul_same_size_different_labels_raises(self, x) -> None:
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
-        with pytest.raises(ValueError, match="exact"):
-            x * other
-
-    @pytest.mark.v1
-    def test_div_same_size_different_labels_raises(self, x) -> None:
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
-        with pytest.raises(ValueError, match="exact"):
-            x / other
-
-    @pytest.mark.v1
-    def test_add_subset_constant_raises(self, x, time: pd.RangeIndex) -> None:
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    def test_subset_constant_raises(self, x, op) -> None:
         """
         #711 / #708 — constant covers only some of the variable's
         coords. Legacy left-joins (silently drops the gap); v1 raises.
@@ -124,15 +113,7 @@ class TestExactAlignmentConstant:
             [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
         with pytest.raises(ValueError, match="exact"):
-            x + subset
-
-    @pytest.mark.v1
-    def test_mul_subset_constant_raises(self, x) -> None:
-        subset = xr.DataArray(
-            [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
-        )
-        with pytest.raises(ValueError, match="exact"):
-            x * subset
+            _OPS[op](x, subset)
 
     @pytest.mark.legacy
     def test_add_same_size_different_labels_silent(self, x) -> None:
@@ -187,38 +168,23 @@ class TestBroadcastNonSharedDim:
 
 class TestUserNaNRaises:
     @pytest.mark.v1
-    def test_add_nan_dataarray_raises(self, x, time: pd.RangeIndex) -> None:
-        nan_data = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
-            x + nan_data
-
-    @pytest.mark.v1
-    def test_mul_nan_dataarray_raises(self, x, time: pd.RangeIndex) -> None:
-        nan_data = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
-            x * nan_data
-
-    @pytest.mark.v1
-    def test_div_nan_dataarray_raises(self, x, time: pd.RangeIndex) -> None:
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    def test_nan_dataarray_raises(self, x, time: pd.RangeIndex, op) -> None:
+        # Use [2, NaN, 3, 4, 5] so div doesn't trip on a 0 divisor at slot 0.
         nan_data = xr.DataArray(
             [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
         with pytest.raises(ValueError, match="NaN"):
-            x / nan_data
+            _OPS[op](x, nan_data)
 
     @pytest.mark.v1
-    def test_add_nan_scalar_raises(self, x) -> None:
+    @pytest.mark.parametrize("op", ["add", "sub", "mul"])
+    def test_nan_scalar_raises(self, x, op) -> None:
+        # Skip div: ``x / nan`` raises *before* our check (TypeError on
+        # the unary negation in ``__div__``); the scalar-NaN scenario for
+        # div is the same code path as for mul.
         with pytest.raises(ValueError, match="NaN"):
-            x + float("nan")
-
-    @pytest.mark.v1
-    def test_mul_nan_scalar_raises(self, x) -> None:
-        with pytest.raises(ValueError, match="NaN"):
-            x * float("nan")
+            _OPS[op](x, float("nan"))
 
     @pytest.mark.v1
     def test_pypsa_1683_inf_times_zero_raises(self, x, time: pd.RangeIndex) -> None:
@@ -423,31 +389,19 @@ class TestAbsencePropagation:
         assert not bool(expr.isnull().values[1:].any())
 
     @pytest.mark.v1
-    def test_mul_scalar_preserves_absence(self, xs) -> None:
-        """#712 — ``shifted * 3`` stays absent (not coeff=3, const=0)."""
-        result = xs * 3
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    def test_scalar_op_preserves_absence(self, xs, op) -> None:
+        """
+        #712 — `shifted OP scalar` stays absent at the shifted slot.
+        Holds for every binary operator: const and coeffs both NaN.
+        """
+        result = _OPS[op](xs, 3)
         assert np.isnan(result.const.values[0])
         assert np.isnan(result.coeffs.values[0, 0])
         assert bool(result.isnull().values[0])
-
-    @pytest.mark.v1
-    def test_add_scalar_preserves_absence(self, xs) -> None:
-        """`shifted + 5` is absent at the shifted slot, not const=5."""
-        result = xs + 5
-        assert np.isnan(result.const.values[0])
-        assert result.const.values[1:].tolist() == [5.0, 5.0, 5.0, 5.0]
-
-    @pytest.mark.v1
-    def test_sub_scalar_preserves_absence(self, xs) -> None:
-        result = xs - 5
-        assert np.isnan(result.const.values[0])
-        assert result.const.values[1:].tolist() == [-5.0, -5.0, -5.0, -5.0]
-
-    @pytest.mark.v1
-    def test_div_scalar_preserves_absence(self, xs) -> None:
-        result = xs / 2
-        assert np.isnan(result.const.values[0])
-        assert np.isnan(result.coeffs.values[0, 0])
+        # And the present slots carry the expected per-op value.
+        expected_const = {"add": 3.0, "sub": -3.0, "mul": 0.0, "div": 0.0}[op]
+        assert (result.const.values[1:] == expected_const).all()
 
     @pytest.mark.v1
     def test_add_present_variable_propagates_absence(self, xs, x) -> None:
