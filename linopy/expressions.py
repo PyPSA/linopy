@@ -69,9 +69,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import (
-    LEGACY_SEMANTICS,
     LEGACY_SEMANTICS_MESSAGE,
-    V1_SEMANTICS,
     LinopySemanticsWarning,
     options,
 )
@@ -86,6 +84,15 @@ from linopy.constants import (
     LESS_EQUAL,
     STACKED_TERM_DIM,
     TERM_DIM,
+)
+from linopy.semantics import (
+    absorb_absence,
+    check_user_nan_array,
+    check_user_nan_scalar,
+    conflicting_aux_coord,
+    dim_coords_differ,
+    is_v1,
+    merge_shared_user_coords_differ,
 )
 from linopy.types import (
     ConstantLike,
@@ -137,114 +144,6 @@ def _expr_unwrap(
         return maybe_expr.data
 
     return maybe_expr
-
-
-def _shared_coords_differ(a: DataArray, b: DataArray) -> bool:
-    """True if a and b share a dimension whose coordinate labels disagree."""
-    for dim in set(a.dims) & set(b.dims):
-        if dim in a.coords and dim in b.coords:
-            if not a.coords[dim].equals(b.coords[dim]):
-                return True
-    return False
-
-
-_USER_NAN_MESSAGE = (
-    "NaN in a user-supplied constant. Resolve it explicitly with .fillna(...) "
-    "or .where(...) before passing it to linopy."
-)
-
-
-def _check_user_nan_scalar() -> None:
-    """Enforce §5 for a scalar: v1 raises, legacy warns once."""
-    if options["semantics"] == V1_SEMANTICS:
-        raise ValueError(_USER_NAN_MESSAGE)
-    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
-
-
-def _check_user_nan_array() -> None:
-    """Enforce §5 for a DataArray operand: v1 raises, legacy warns once."""
-    if options["semantics"] == V1_SEMANTICS:
-        raise ValueError(_USER_NAN_MESSAGE)
-    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
-
-
-def _absorb_absence(ds: Dataset) -> Dataset:
-    """
-    Enforce the v1 dead-term invariant on a merged dataset.
-
-    ``const.isnull()`` at a slot ⇒ every term at that slot must have
-    ``coeffs = NaN`` and ``vars = -1``. After ``merge`` concatenates two
-    expressions along ``_term``, a slot that's absent in one operand
-    still carries the *other* operand's valid term in its row; this
-    helper masks those away so the §1/§2 storage invariant holds.
-    """
-    if "const" not in ds or "coeffs" not in ds or "vars" not in ds:
-        return ds
-    mask = ds["const"].isnull()
-    if not bool(mask.any()):
-        return ds
-    coeffs = ds["coeffs"].where(~mask, np.nan)
-    vars_ = ds["vars"].where(~mask, -1)
-    return ds.assign(coeffs=coeffs, vars=vars_)
-
-
-def _merge_shared_user_coords_differ(
-    datasets: Sequence[Dataset], concat_dim: str
-) -> bool:
-    """
-    True if the datasets disagree on the labels of any shared user dim.
-
-    Helper dims (``_term``, ``_factor``) and the concat dim itself are
-    excluded — those legitimately vary across the operands being merged.
-    Compares the bare dimension index (``d.indexes[k]``) so non-dim
-    (auxiliary) coords are ignored — those are §11's job.
-    """
-    skip = set(HELPER_DIMS) | {concat_dim}
-    per_ds = [
-        {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
-        for d in datasets
-    ]
-    shared = set.intersection(*(set(p.keys()) for p in per_ds)) if per_ds else set()
-    for d_name in shared:
-        ref = per_ds[0][d_name]
-        for p in per_ds[1:]:
-            if not ref.equals(p[d_name]):
-                return True
-    return False
-
-
-def _conflicting_aux_coord(datasets: Sequence[Any]) -> str | None:
-    """
-    Return the name of an auxiliary (non-dim) coord that two or more
-    operands carry with disagreeing values — None if no conflict.
-
-    Per §11, an auxiliary coord either propagates (values agree across
-    operands) or surfaces as an error; xarray's default silently drops
-    the conflict and is what this check intercepts under v1.
-    """
-    if not datasets:
-        return None
-    all_names: set[str] = set()
-    for d in datasets:
-        all_names.update(d.coords)
-    for name in all_names:
-        present = [
-            d.coords[name].values
-            for d in datasets
-            if name in d.coords and name not in d.dims
-        ]
-        if len(present) < 2:
-            continue
-        ref = present[0]
-        # ``equal_nan`` is only meaningful (and only well-defined) for
-        # float dtypes — string/object coord values would crash isnan.
-        equal_nan = np.issubdtype(ref.dtype, np.floating)
-        for vals in present[1:]:
-            if ref.shape != vals.shape or not np.array_equal(
-                ref, vals, equal_nan=equal_nan
-            ):
-                return str(name)
-    return None
 
 
 logger = logging.getLogger(__name__)
@@ -674,9 +573,9 @@ class BaseExpression(ABC):
         if join is None:
             # §11: silently dropping a conflicting aux coord is what
             # xarray does by default — v1 raises, legacy warns.
-            aux_conflict = _conflicting_aux_coord([self.const, other])
+            aux_conflict = conflicting_aux_coord([self.const, other])
             if aux_conflict is not None:
-                if options["semantics"] == V1_SEMANTICS:
+                if is_v1():
                     raise ValueError(
                         f"Auxiliary coordinate '{aux_conflict}' has "
                         "conflicting values across operands. Drop it "
@@ -688,12 +587,12 @@ class BaseExpression(ABC):
                     LinopySemanticsWarning,
                     stacklevel=4,
                 )
-            if options["semantics"] == V1_SEMANTICS:
+            if is_v1():
                 join = "exact"
             else:
                 # Legacy default: positional when sizes match, else left-join.
                 if other.sizes == self.const.sizes:
-                    if _shared_coords_differ(self.const, other):
+                    if dim_coords_differ(self.const, other):
                         warn(
                             LEGACY_SEMANTICS_MESSAGE,
                             LinopySemanticsWarning,
@@ -743,18 +642,16 @@ class BaseExpression(ABC):
         # with 0 (additive identity) so missing data is silently dropped.
         # Under v1 (§6), absence propagates: self.const NaN stays NaN, and
         # user-supplied NaN raised before we got here.
-        is_v1 = options["semantics"] == V1_SEMANTICS
-
         def fillna0(da: DataArray) -> DataArray:
-            return da if is_v1 else da.fillna(0)
+            return da if is_v1() else da.fillna(0)
 
         if np.isscalar(other) and join is None:
             if isinstance(other, float) and np.isnan(other):
-                _check_user_nan_scalar()
+                check_user_nan_scalar()
             return self.assign(const=fillna0(self.const) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if da.isnull().any():
-            _check_user_nan_array()
+            check_user_nan_array()
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -784,20 +681,19 @@ class BaseExpression(ABC):
         absence propagates: self.coeffs / self.const NaN stays NaN, and a
         user-supplied NaN in the factor would have raised at §5.
         """
-        is_v1 = options["semantics"] == V1_SEMANTICS
 
         def fillna0(da: DataArray) -> DataArray:
-            return da if is_v1 else da.fillna(0)
+            return da if is_v1() else da.fillna(0)
 
         if isinstance(other, float) and np.isnan(other):
-            _check_user_nan_scalar()
+            check_user_nan_scalar()
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if factor.isnull().any():
-            _check_user_nan_array()
+            check_user_nan_array()
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        if not is_v1:
+        if not is_v1():
             factor = factor.fillna(fill_value)
         self_const = fillna0(self_const)
         if needs_data_reindex:
@@ -1285,7 +1181,7 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if options["semantics"] == V1_SEMANTICS:
+        if is_v1():
             # §5 + §12: the RHS is a user-supplied constant just like any
             # operand in arithmetic. Validate NaN here (raise) and let
             # ``self.sub(rhs)`` do the §8 alignment — no silent
@@ -1303,7 +1199,7 @@ class BaseExpression(ABC):
                         f"Consider collapsing the dimensions by taking min/max."
                     )
                 if rhs.isnull().any():
-                    raise ValueError(_USER_NAN_MESSAGE)
+                    check_user_nan_array()
             all_to_lhs = self.sub(rhs, join=join).data
             computed_rhs = -all_to_lhs.const
             data = assign_multiindex_safe(
@@ -1366,7 +1262,7 @@ class BaseExpression(ABC):
         always filled with 0); the historical AND of "all vars
         sentinel" and "const NaN" is preserved verbatim under legacy.
         """
-        if options["semantics"] == V1_SEMANTICS:
+        if is_v1():
             return self.const.isnull()
         helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
@@ -2612,8 +2508,8 @@ def merge(
     # validate user dims separately and keep xr.concat on join="outer"
     # (which doesn't enforce "exact" — that's what this check is for).
     if join is None:
-        differ = _merge_shared_user_coords_differ(data, concat_dim=dim)
-        if options["semantics"] == V1_SEMANTICS and differ:
+        differ = merge_shared_user_coords_differ(data, concat_dim=dim)
+        if is_v1() and differ:
             raise ValueError(
                 "Coordinate mismatch on a shared dimension while merging "
                 "expressions. Use `linopy.align(...)` or `.sel(...)` to "
@@ -2626,9 +2522,9 @@ def merge(
         # §11: auxiliary (non-dim) coords either propagate (values agree)
         # or surface as an error. xarray silently drops the conflict — v1
         # raises so the caller resolves it explicitly with .drop_vars(...).
-        aux_conflict = _conflicting_aux_coord(data)
+        aux_conflict = conflicting_aux_coord(data)
         if aux_conflict is not None:
-            if options["semantics"] == V1_SEMANTICS:
+            if is_v1():
                 raise ValueError(
                     f"Auxiliary coordinate '{aux_conflict}' has conflicting "
                     "values across operands. Drop it explicitly with "
@@ -2670,7 +2566,7 @@ def merge(
         # Under v1, §6 requires that an absent slot in any operand stays
         # absent in the result; ``sum(skipna=False)`` propagates NaN
         # rather than collapsing it to 0.
-        skipna = options["semantics"] == LEGACY_SEMANTICS
+        skipna = not is_v1()
         const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
             TERM_DIM, skipna=skipna
         )
@@ -2686,8 +2582,8 @@ def merge(
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
 
-    if options["semantics"] == V1_SEMANTICS:
-        ds = _absorb_absence(ds)
+    if is_v1():
+        ds = absorb_absence(ds)
 
     return cls(ds, model)
 

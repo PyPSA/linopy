@@ -327,11 +327,10 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        from linopy.config import V1_SEMANTICS
+        from linopy.semantics import is_v1
 
-        is_v1 = options["semantics"] == V1_SEMANTICS
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
-        if is_v1:
+        if is_v1():
             # Under v1 the LinearExpression must carry absence (NaN at
             # `labels == -1`) so §6 propagation through downstream
             # arithmetic works.
@@ -344,7 +343,7 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
-        if is_v1:
+        if is_v1():
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
             ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
