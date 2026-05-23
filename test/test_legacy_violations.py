@@ -458,6 +458,37 @@ class TestAbsencePropagation:
         assert not bool(result.isnull().values[1:].any())
 
     @pytest.mark.v1
+    def test_merge_absorbs_dead_terms_at_absent_slot(self, xs, x) -> None:
+        """
+        §1/§2 storage invariant — ``const.isnull()`` at a slot implies
+        every term at that slot has ``coeffs = NaN`` and ``vars = -1``.
+        ``xs + x`` merges xs's absent slot with x's live term; the live
+        term must be absorbed, not silently kept alongside a NaN const.
+        Regression guard for ``_absorb_absence`` (commit 4d87a05).
+        """
+        result = xs + x
+        assert np.isnan(result.coeffs.values[0]).all()
+        assert (result.vars.values[0] == -1).all()
+
+    @pytest.mark.v1
+    def test_merge_absorbs_dead_terms_multi_operand(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """
+        Same invariant on a 3-operand merge: a regression that absorbs
+        only on the binary path would still leave one live term at the
+        absent slot here.
+        """
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        xs = x.shift(time=1)
+        result = (1 * x) + (1 * y) + xs
+        assert np.isnan(result.coeffs.values[0]).all()
+        assert (result.vars.values[0] == -1).all()
+        # And the present rows still carry all three live terms.
+        assert (~np.isnan(result.coeffs.values[1:])).all()
+
+    @pytest.mark.v1
     def test_absent_distinguishable_from_zero(self, x, xs) -> None:
         """
         #712 — under v1, ``x.shift(time=1) * 3`` and ``x * 0`` are
@@ -727,6 +758,35 @@ class TestConstraintRHS:
         assert np.isnan(rhs[0])
         assert (rhs[1:] == 10).all()
 
+    @pytest.mark.v1
+    def test_subset_rhs_eq_raises(self, x) -> None:
+        """§12 — equality comparison aligns by §8 like ``<=``/``>=``."""
+        subset = xr.DataArray(
+            [10.0, 20.0],
+            dims=["time"],
+            coords={"time": pd.Index([1, 3], name="time")},
+        )
+        with pytest.raises(ValueError, match="exact"):
+            x == subset
+
+    @pytest.mark.v1
+    def test_nan_rhs_eq_raises(self, x, time: pd.RangeIndex) -> None:
+        """§5/§12 — a NaN in an equality RHS raises like ``<=`` does."""
+        nan_rhs = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            x == nan_rhs
+
+    @pytest.mark.v1
+    def test_absence_propagates_to_rhs_eq_drops_constraint(self, x) -> None:
+        """§6 → §12 on equality — absent LHS slot drops the constraint."""
+        xs = x.shift(time=1)
+        constraint = xs == 10
+        rhs = constraint.rhs.values
+        assert np.isnan(rhs[0])
+        assert (rhs[1:] == 10).all()
+
     @pytest.mark.legacy
     def test_nan_rhs_silently_treated_as_unconstrained(
         self, x, time: pd.RangeIndex
@@ -761,6 +821,11 @@ class TestReductionsSkipAbsent:
     propagating them — the only asymmetry against §6's binary-operator
     rule. The expected behaviour falls out of xarray's ``skipna=True``
     default; these tests pin it under v1 so future changes don't drift.
+
+    Scope: §13 also names ``mean``, ``resample``, and ``coarsen``, but
+    those are not yet exposed on ``LinearExpression`` (see #703). The
+    spec text is the rule they will follow when implemented; tests
+    belong with the implementation PR.
     """
 
     @pytest.fixture
@@ -839,6 +904,34 @@ class TestAuxCoordConflict:
         )
         with pytest.raises(ValueError, match="Auxiliary coordinate"):
             v + w
+
+    @pytest.mark.v1
+    def test_mul_constant_aux_conflict_raises(self, m: Model, A) -> None:
+        """Same rule on the multiplication path — not just ``+``."""
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [2.0, 3.0, 4.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v * const
+
+    @pytest.mark.v1
+    def test_constraint_aux_conflict_raises(self, m: Model, A) -> None:
+        """§11 reaches constraint construction via the same machinery."""
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v == const
 
     @pytest.mark.v1
     def test_scalar_isel_aux_conflict_raises(self, m: Model, A) -> None:

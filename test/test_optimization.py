@@ -976,6 +976,70 @@ def test_masked_variable_model(
     assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
 
+@pytest.mark.v1
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_masked_variable_model_v1_drops_constraint(
+    masked_variable_model: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """
+    v1 counterpart of ``test_masked_variable_model``. Under §6 the
+    absence of ``y`` at the last two slots propagates into ``x + y``
+    and from there into the constraint, so the constraint drops at
+    those slots — ``x`` is no longer pinned to 10 there and the
+    objective ``2x + y`` drives it to 0 where it's still bound.
+
+    Pin two things together:
+    1. Model structure: con0 is masked at the absent slots (its label
+       is -1, no row emitted to the solver). This is the v1 invariant
+       that distinguishes us from legacy and is solver-independent.
+    2. Solver outcome on the bound slots: ``x[:8]`` solves to 0 (the
+       constraint binds via ``y[:8] = 10``). ``x[-2:]`` is solver-
+       dependent — some solvers presolve away free variables and the
+       solution comes back as NaN — so we don't pin it here.
+    """
+    con = masked_variable_model.constraints["con0"]
+    assert (con.labels.values[-2:] == -1).all()
+    assert (con.labels.values[:-2] != -1).all()
+
+    masked_variable_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    x = masked_variable_model.variables.x
+    y = masked_variable_model.variables.y
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert y.solution[-2:].isnull().all()
+    assert (np.isclose(x.solution[:-2], 0, atol=tol)).all()
+
+
+@pytest.mark.v1
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_masked_variable_model_v1_fillna_binds(
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """
+    §7 escape hatch under v1: ``x + y.fillna(0) >= 10`` revives the
+    masked slots as a present zero, so the constraint binds and the
+    legacy outcome (``x[-2:] == 10``) is recovered. The placement of
+    ``fillna`` is the caller's explicit statement of intent.
+    """
+    m = Model()
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    mask = pd.Series([True] * 8 + [False, False])
+    y = m.add_variables(lower, name="y", mask=mask)
+    m.add_constraints(x + y.fillna(0), GREATER_EQUAL, 10)
+    m.add_constraints(y, GREATER_EQUAL, 0)
+    m.add_objective(2 * x + y)
+    m.solve(solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names)
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert (np.isclose(m.variables.x.solution[-2:], 10, rtol=tol)).all()
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_masked_constraint_model(
     masked_constraint_model: Model,
