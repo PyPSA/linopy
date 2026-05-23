@@ -26,6 +26,9 @@ Slice E — named-method join= + constraint RHS (§10, §12):
     §10 .add/.sub/.mul/.div/.le/.ge/.eq accept explicit join=
     §12 NaN in constraint RHS raises (v1)              → PyPSA #1683
     §12 Coord mismatch in RHS raises (v1)              → #707
+
+Slice G — reductions skip absent slots (§13):
+    §13 sum / groupby.sum skip absent, sum of none is the zero expression
 """
 
 from __future__ import annotations
@@ -741,3 +744,53 @@ class TestConstraintRHS:
         )
         with pytest.warns(LinopySemanticsWarning):
             x <= nan_rhs
+
+
+# =====================================================================
+# §13 — reductions skip absent slots (not propagate)
+# =====================================================================
+
+
+class TestReductionsSkipAbsent:
+    """
+    Per §13, ``sum`` / ``groupby.sum`` skip absent slots rather than
+    propagating them — the only asymmetry against §6's binary-operator
+    rule. The expected behaviour falls out of xarray's ``skipna=True``
+    default; these tests pin it under v1 so future changes don't drift.
+    """
+
+    @pytest.fixture
+    def xs(self, x):
+        return x.shift(time=1)
+
+    @pytest.mark.v1
+    def test_sum_over_dim_skips_absent(self, xs) -> None:
+        """
+        ``(xs + 5).sum('time')`` skips the absent slot at t=0 and
+        sums the four present 5s → 20.
+        """
+        result = (xs + 5).sum("time")
+        assert float(result.const) == 20.0
+
+    @pytest.mark.v1
+    def test_sum_no_dim_skips_absent(self, xs) -> None:
+        result = (xs + 5).sum()
+        assert float(result.const) == 20.0
+
+    @pytest.mark.v1
+    def test_sum_of_all_absent_is_zero(self, x) -> None:
+        """§13 — "the sum of none is the zero expression.""" ""
+        all_absent = x.shift(time=10).to_linexpr()
+        assert bool(all_absent.isnull().all().item())
+        result = all_absent.sum("time")
+        assert float(result.const) == 0.0
+
+    @pytest.mark.v1
+    def test_groupby_sum_skips_absent(self, xs) -> None:
+        """Each group's sum drops absent members, just like ``.sum``."""
+        groups = xr.DataArray(
+            [0, 0, 1, 1, 1], dims=["time"], coords={"time": xs.coords["time"]}
+        )
+        result = (xs + 5).groupby(groups).sum()
+        # group 0: [NaN, 5] → 5; group 1: [5, 5, 5] → 15
+        assert result.const.values.tolist() == [5.0, 15.0]
