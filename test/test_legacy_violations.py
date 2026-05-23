@@ -1044,3 +1044,82 @@ class TestAuxCoordPropagation:
         w = m.add_variables(lower=0, coords=[A], name="w")  # no B
         result = v + w
         assert "B" in result.coords
+
+
+# =====================================================================
+# Error-message content (raise self-description)
+# =====================================================================
+
+
+class TestErrorMessageContent:
+    """
+    The three v1 raises must be self-describing: name the dim or
+    coord and show the disagreeing values so the user can act on the
+    message without re-running with extra prints. Substring assertions
+    elsewhere don't cover this — these tests pin the rich content.
+    """
+
+    @pytest.fixture
+    def A(self) -> pd.Index:
+        return pd.Index([1, 2, 3], name="A")
+
+    @pytest.mark.v1
+    def test_user_nan_message_separates_intents(self, x: Variable) -> None:
+        """
+        The §5 raise must not collapse `data error` and `absence` into a
+        single suggestion — they need different fixes.
+        """
+        with pytest.raises(ValueError) as exc:
+            x + float("nan")
+        msg = str(exc.value)
+        assert "data error" in msg and ".fillna(value)" in msg
+        assert "absent" in msg and "mask=" in msg
+        assert ".reindex" in msg or ".where(cond)" in msg
+
+    @pytest.mark.v1
+    def test_shared_dim_message_names_dim_and_values(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """
+        The merge-path §8 raise must name the offending dim and show
+        both sides' labels — otherwise the user can't tell which dim
+        out of many.
+        """
+        other = m.add_variables(
+            lower=0, coords=[pd.Index([10, 11, 12, 13, 14], name="time")], name="other"
+        )
+        x_local = m.add_variables(lower=0, coords=[time], name="x_local")
+        with pytest.raises(ValueError) as exc:
+            x_local + other
+        msg = str(exc.value)
+        assert "'time'" in msg
+        assert "[0, 1, 2, 3, 4]" in msg
+        assert "[10, 11, 12, 13, 14]" in msg
+
+    @pytest.mark.v1
+    def test_aux_conflict_message_names_coord_and_values(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        The §11 raise must name the conflicting coord and show both
+        sides' values — and mention `.assign_coords` as a fix, not only
+        `.drop_vars` and `isel(drop=True)`.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        with pytest.raises(ValueError) as exc:
+            v + const
+        msg = str(exc.value)
+        assert "'B'" in msg
+        assert "[311, 311, 322]" in msg
+        assert "[400, 400, 500]" in msg
+        # All three resolution paths from §11 should be listed.
+        assert ".drop_vars" in msg
+        assert ".assign_coords" in msg
+        assert ".isel" in msg

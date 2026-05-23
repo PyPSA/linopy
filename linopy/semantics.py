@@ -27,10 +27,54 @@ from linopy.config import (
 )
 from linopy.constants import HELPER_DIMS
 
-_USER_NAN_MESSAGE = (
-    "NaN in a user-supplied constant. Resolve it explicitly with .fillna(...) "
-    "or .where(...) before passing it to linopy."
-)
+
+def _user_nan_message() -> str:
+    """User-NaN error text — distinguishes the two intents a user might have."""
+    return (
+        "NaN found in a user-supplied constant. linopy treats this as "
+        "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
+        "if you meant *absent at this slot*, mark it on the variable "
+        "instead (mask=, .where(cond), .reindex(...), .shift(...))."
+    )
+
+
+def _shared_dim_mismatch_message(dim: str, left: Any, right: Any) -> str:
+    """Shared-dim error text — names the dim and shows the disagreeing labels."""
+    return (
+        f"Coordinate mismatch on shared dimension {dim!r}: "
+        f"left={_short_repr(left)}, right={_short_repr(right)}. "
+        "Resolve with `.sel(...)` / `.reindex(...)` to align before "
+        "combining, with `.assign_coords(...)` to relabel one side "
+        "(positional alignment, made explicit), with `linopy.align(...)` "
+        "to pre-align several operands at once, or by passing an explicit "
+        "`join=` argument to `.add` / `.sub` / `.mul` / `.div` / `.le` / "
+        "`.ge` / `.eq` (accepts inner / outer / left / right / override)."
+    )
+
+
+def _aux_conflict_message(name: str, left: Any, right: Any) -> str:
+    """Aux-coord error text — names the coord and shows the disagreeing values."""
+    return (
+        f"Auxiliary coordinate {name!r} has conflicting values across "
+        f"operands: left={_short_repr(left)}, right={_short_repr(right)}. "
+        "xarray would silently drop the conflict; linopy raises so the "
+        f"caller resolves it. Use `.drop_vars({name!r})` to remove the "
+        f"coord, `.assign_coords({name}=...)` to relabel one side, or "
+        "`.isel(..., drop=True)` if the coord was introduced by a "
+        "scalar isel."
+    )
+
+
+def _short_repr(values: Any, limit: int = 6) -> str:
+    """Render an array-like as a short, readable string for error messages."""
+    arr = np.asarray(values)
+    if arr.ndim == 0:
+        return repr(arr.item())
+    flat = arr.ravel()
+    if flat.size <= limit:
+        return repr(flat.tolist())
+    head = ", ".join(repr(v) for v in flat[:limit].tolist())
+    return f"[{head}, ... ({flat.size} total)]"
 
 
 def is_v1() -> bool:
@@ -41,14 +85,14 @@ def is_v1() -> bool:
 def check_user_nan_scalar() -> None:
     """Enforce §5 for a scalar: v1 raises, legacy warns once."""
     if is_v1():
-        raise ValueError(_USER_NAN_MESSAGE)
+        raise ValueError(_user_nan_message())
     warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
 
 
 def check_user_nan_array() -> None:
     """Enforce §5 for a DataArray operand: v1 raises, legacy warns once."""
     if is_v1():
-        raise ValueError(_USER_NAN_MESSAGE)
+        raise ValueError(_user_nan_message())
     warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
 
 
@@ -61,16 +105,18 @@ def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
     return False
 
 
-def merge_shared_user_coords_differ(
+def merge_shared_user_coord_mismatch(
     datasets: Sequence[Dataset], concat_dim: str
-) -> bool:
+) -> tuple[str, Any, Any] | None:
     """
-    True if the datasets disagree on the labels of any shared user dim.
+    Find a shared user dim where the operands' labels disagree.
 
-    Helper dims (``_term``, ``_factor``) and the concat dim itself are
-    excluded — those legitimately vary across the operands being merged.
-    Compares the bare dimension index (``d.indexes[k]``) so non-dim
-    (auxiliary) coords are ignored — those are §11's job.
+    Returns ``(dim_name, left_labels, right_labels)`` for the first
+    mismatch found, or ``None`` if all operands agree. Helper dims
+    (``_term``, ``_factor``) and the concat dim itself are excluded —
+    those legitimately vary across the operands being merged. Compares
+    bare dimension indexes (``d.indexes[k]``) so non-dim (auxiliary)
+    coords are ignored — those are §11's job.
     """
     skip = set(HELPER_DIMS) | {concat_dim}
     per_ds = [
@@ -82,18 +128,22 @@ def merge_shared_user_coords_differ(
         ref = per_ds[0][d_name]
         for p in per_ds[1:]:
             if not ref.equals(p[d_name]):
-                return True
-    return False
+                return str(d_name), ref.values, p[d_name].values
+    return None
 
 
-def conflicting_aux_coord(datasets: Sequence[Any]) -> str | None:
+def conflicting_aux_coord(
+    datasets: Sequence[Any],
+) -> tuple[str, Any, Any] | None:
     """
-    Return the name of an auxiliary (non-dim) coord that two or more
-    operands carry with disagreeing values — None if no conflict.
+    Find an auxiliary (non-dim) coord that two or more operands carry with
+    disagreeing values.
 
-    Per §11, an auxiliary coord either propagates (values agree across
-    operands) or surfaces as an error; xarray's default silently drops
-    the conflict and is what this check intercepts under v1.
+    Returns ``(name, left_values, right_values)`` for the first conflict
+    found, or ``None`` if every shared aux coord agrees. Per §11, an aux
+    coord either propagates (values agree across operands) or surfaces as
+    an error; xarray's default silently drops the conflict and is what
+    this check intercepts under v1.
     """
     if not datasets:
         return None
@@ -116,7 +166,7 @@ def conflicting_aux_coord(datasets: Sequence[Any]) -> str | None:
             if ref.shape != vals.shape or not np.array_equal(
                 ref, vals, equal_nan=equal_nan
             ):
-                return str(name)
+                return str(name), ref, vals
     return None
 
 

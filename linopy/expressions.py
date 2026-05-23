@@ -86,13 +86,15 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.semantics import (
+    _aux_conflict_message,
+    _shared_dim_mismatch_message,
     absorb_absence,
     check_user_nan_array,
     check_user_nan_scalar,
     conflicting_aux_coord,
     dim_coords_differ,
     is_v1,
-    merge_shared_user_coords_differ,
+    merge_shared_user_coord_mismatch,
 )
 from linopy.types import (
     ConstantLike,
@@ -576,12 +578,7 @@ class BaseExpression(ABC):
             aux_conflict = conflicting_aux_coord([self.const, other])
             if aux_conflict is not None:
                 if is_v1():
-                    raise ValueError(
-                        f"Auxiliary coordinate '{aux_conflict}' has "
-                        "conflicting values across operands. Drop it "
-                        "explicitly with `.drop_vars(...)` or "
-                        "`.isel(..., drop=True)` before combining."
-                    )
+                    raise ValueError(_aux_conflict_message(*aux_conflict))
                 warn(
                     LEGACY_SEMANTICS_MESSAGE,
                     LinopySemanticsWarning,
@@ -626,12 +623,13 @@ class BaseExpression(ABC):
             if "exact" in str(e):
                 raise ValueError(
                     f"{e}\n"
-                    "Use .add()/.sub()/.mul()/.div() with an explicit join= "
-                    "parameter:\n"
-                    '  .add(other, join="inner")    # intersection of coordinates\n'
-                    '  .add(other, join="outer")    # union of coordinates (with fill)\n'
-                    '  .add(other, join="left")     # keep left operand\'s coordinates\n'
-                    '  .add(other, join="override") # positional alignment'
+                    "Resolve with `.sel(...)` / `.reindex(...)` / "
+                    "`.reindex_like(...)` to align before combining, with "
+                    "`.assign_coords(...)` to relabel one side, with "
+                    "`linopy.align(...)` to pre-align several operands, or "
+                    "by passing an explicit `join=` argument to `.add` / "
+                    "`.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+                    "(accepts inner / outer / left / right / override)."
                 ) from None
             raise
         return self_const, aligned, True
@@ -2570,16 +2568,11 @@ def merge(
     # validate user dims separately and keep xr.concat on join="outer"
     # (which doesn't enforce "exact" — that's what this check is for).
     if join is None:
-        differ = merge_shared_user_coords_differ(data, concat_dim=dim)
-        if is_v1() and differ:
-            raise ValueError(
-                "Coordinate mismatch on a shared dimension while merging "
-                "expressions. Use `linopy.align(...)` or `.sel(...)` to "
-                "bring operands into agreement, or pass an explicit "
-                "`join=` argument."
-            )
+        mismatch = merge_shared_user_coord_mismatch(data, concat_dim=dim)
+        if is_v1() and mismatch is not None:
+            raise ValueError(_shared_dim_mismatch_message(*mismatch))
         # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
-        if differ:
+        if mismatch is not None:
             warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
 
         # §11: auxiliary (non-dim) coords either propagate (values agree)
@@ -2588,12 +2581,7 @@ def merge(
         aux_conflict = conflicting_aux_coord(data)
         if aux_conflict is not None:
             if is_v1():
-                raise ValueError(
-                    f"Auxiliary coordinate '{aux_conflict}' has conflicting "
-                    "values across operands. Drop it explicitly with "
-                    "`.drop_vars(...)` or `.isel(..., drop=True)` before "
-                    "combining."
-                )
+                raise ValueError(_aux_conflict_message(*aux_conflict))
             # LEGACY: remove at 1.0.
             warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
 
