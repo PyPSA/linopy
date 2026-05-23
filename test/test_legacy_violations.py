@@ -505,6 +505,34 @@ class TestFillnaResolves:
         assert result.const.values[0] == 0.0
 
     @pytest.mark.v1
+    def test_outer_fillna_then_add_collapses_to_just_added(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """
+        Interpretation A — once `(x + y.shift())` is absent at slot 0,
+        ``.fillna(0)`` revives the slot as the constant 0 (dead terms
+        stay dead), and a subsequent ``+ x`` re-introduces only ``x[0]``.
+        Compare ``x + y.shift().fillna(0) + x`` which would double-count
+        ``x`` at slot 0 — the placement of fillna is load-bearing.
+        """
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        expr = (x + y.shift(time=1)).fillna(0) + x
+
+        # At slot 0 the only live term is 1·x[0]; const is 0 → result == x[0].
+        coeffs0 = expr.coeffs.values[0]
+        vars0 = expr.vars.values[0]
+        live = ~np.isnan(coeffs0)
+        assert int(live.sum()) == 1
+        assert float(coeffs0[live][0]) == 1.0
+        assert int(vars0[live][0]) == int(x.labels.values[0])
+        assert float(expr.const.values[0]) == 0.0
+
+        # At slots 1+ all three terms are live (x[i] + y[i-1] + x[i]) — the
+        # outer ``+ x`` is genuinely additive where y.shift was present.
+        assert int((~np.isnan(expr.coeffs.values[1])).sum()) == 3
+
+    @pytest.mark.v1
     def test_masked_variable_constraint_via_fillna(self) -> None:
         """
         v1 counterpart of ``test_masked_variable_model`` — under §6 the

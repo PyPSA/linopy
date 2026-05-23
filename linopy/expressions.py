@@ -168,6 +168,26 @@ def _check_user_nan_array() -> None:
     warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
 
 
+def _absorb_absence(ds: Dataset) -> Dataset:
+    """
+    Enforce the v1 dead-term invariant on a merged dataset.
+
+    ``const.isnull()`` at a slot ⇒ every term at that slot must have
+    ``coeffs = NaN`` and ``vars = -1``. After ``merge`` concatenates two
+    expressions along ``_term``, a slot that's absent in one operand
+    still carries the *other* operand's valid term in its row; this
+    helper masks those away so the §1/§2 storage invariant holds.
+    """
+    if "const" not in ds or "coeffs" not in ds or "vars" not in ds:
+        return ds
+    mask = ds["const"].isnull()
+    if not bool(mask.any()):
+        return ds
+    coeffs = ds["coeffs"].where(~mask, np.nan)
+    vars_ = ds["vars"].where(~mask, -1)
+    return ds.assign(coeffs=coeffs, vars=vars_)
+
+
 def _merge_shared_user_coords_differ(
     datasets: Sequence[Dataset], concat_dim: str
 ) -> bool:
@@ -2571,6 +2591,9 @@ def merge(
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
+
+    if options["semantics"] == V1_SEMANTICS:
+        ds = _absorb_absence(ds)
 
     return cls(ds, model)
 

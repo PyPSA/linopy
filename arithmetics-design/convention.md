@@ -26,6 +26,13 @@ The *marker* is how an absent slot is stored: `NaN` in floating-point fields
 variable's `labels`, an expression's `vars`, which cannot hold a NaN). The two
 encodings are one concept — an absent slot, whatever the dtype.
 
+Within a single slot, the markers move together: `const.isnull()` at a slot
+implies *every* term at that slot has `coeffs = NaN` and `vars = -1`. Operators
+that introduce absence at a slot also absorb any live terms there, so the
+storage never carries a half-absent row. A term at a *present* slot may still
+carry `vars = -1` after `fillna(value)` revives the slot — that's a *dead
+term*, inert at the solver layer, and only meaningful as storage book-keeping.
+
 ### §3. Testing absence
 
 `isnull()` is the one predicate for absence. It reads the marker — `NaN` or
