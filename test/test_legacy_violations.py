@@ -628,6 +628,54 @@ class TestVariableReindex:
         assert bool(expr.isnull().values[5:].all())
         assert not bool(expr.isnull().values[:5].any())
 
+    def test_where_creates_absence(self, x: Variable) -> None:
+        """§4 — ``.where(cond)`` marks slots absent in place."""
+        cond = xr.DataArray(
+            [True, True, False, False, False],
+            dims=["time"],
+            coords={"time": x.coords["time"]},
+        )
+        masked = x.where(cond)
+        assert (masked.labels.values[2:] == -1).all()
+        assert not (masked.labels.values[:2] == -1).any()
+
+    def test_unstack_creates_absence_at_missing_combinations(self, m: Model) -> None:
+        """
+        §4 — ``.unstack`` of a non-rectangular MultiIndex leaves the
+        missing combinations as absent slots.
+        """
+        # Three (region, year) observations that don't form a full grid:
+        # (DE, 2030) and (DE, 2040) exist but (FR, 2030) only — so
+        # unstacking (FR, 2040) becomes absent.
+        idx = pd.MultiIndex.from_tuples(
+            [("DE", 2030), ("DE", 2040), ("FR", 2030)],
+            names=("region", "year"),
+        )
+        v = m.add_variables(coords=[idx], name="v")
+        unstacked = v.unstack("dim_0")
+        assert unstacked.sizes == {"region": 2, "year": 2}
+        # (FR, 2040) missing → absent
+        assert int(unstacked.labels.sel(region="FR", year=2040).item()) == -1
+        # The three present cells stay present
+        assert int(unstacked.labels.sel(region="DE", year=2030).item()) != -1
+
+    @pytest.mark.parametrize("method", ["roll", "sel", "isel"])
+    def test_data_preserving_methods_do_not_create_absence(
+        self, x: Variable, method: str
+    ) -> None:
+        """
+        §4 negative — operations that *move or select* existing data
+        never introduce absent slots. Pins the spec's contrast against
+        the absence-creating mechanisms.
+        """
+        results = {
+            "roll": lambda: x.roll(time=2),
+            "sel": lambda: x.sel(time=[0, 2, 4]),
+            "isel": lambda: x.isel(time=[0, 2, 4]),
+        }
+        result = results[method]()
+        assert not (result.labels.values == -1).any()
+
 
 # =====================================================================
 # §10 — named-method join= argument (opt-in alignment)
@@ -679,34 +727,114 @@ class TestNamedMethodJoin:
         with pytest.raises(ValueError, match="exact"):
             x + subset
 
+    @pytest.mark.v1
+    def test_add_join_override_aligns_positionally(self, x: Variable) -> None:
+        """
+        ``join="override"`` is the explicit-positional mode — the right
+        operand's labels are dropped and the left's are reused. The mode
+        is opt-in precisely because it can silently mis-pair if the user
+        didn't mean it.
+        """
+        relabelled = xr.DataArray(
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            dims=["time"],
+            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        )
+        result = x.add(relabelled, join="override")
+        # Override keeps the left operand's labels — and silently re-uses
+        # the right's values at those positions.
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+        assert result.const.values.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+    @pytest.mark.v1
+    def test_reindex_like_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
+        """
+        §10 names ``.reindex(...)`` / ``.reindex_like(...)`` as
+        canonical resolutions — pre-aligning lets the bare operator
+        accept the once-mismatched operand without ``join=``.
+        """
+        other = xr.DataArray(
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            dims=["time"],
+            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        )
+        aligned = other.reindex_like(x.labels, fill_value=0)
+        result = x + aligned  # bare + succeeds because coords now match
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+
+    @pytest.mark.v1
+    def test_assign_coords_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
+        """
+        ``.assign_coords(...)`` is the explicit-positional escape —
+        relabels one side outright so the bare operator's exact-join
+        check passes.
+        """
+        other = xr.DataArray(
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            dims=["time"],
+            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        )
+        relabelled = other.assign_coords(time=x.coords["time"])
+        result = x + relabelled  # bare + succeeds after relabel
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+
 
 # =====================================================================
 # §12 — constraints follow the same rules
 # =====================================================================
 
 
+_SIGNS = {
+    "le": operator.le,
+    "ge": operator.ge,
+    "eq": operator.eq,
+}
+
+
 class TestConstraintRHS:
     @pytest.mark.v1
-    def test_subset_rhs_raises(self, x: Variable) -> None:
+    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
+    def test_subset_rhs_raises(self, x: Variable, sign: str) -> None:
+        """§12 — all three comparison signs align by §8 the same way."""
         subset = xr.DataArray(
             [10.0, 20.0],
             dims=["time"],
             coords={"time": pd.Index([1, 3], name="time")},
         )
         with pytest.raises(ValueError, match="exact"):
-            x <= subset
+            _SIGNS[sign](x, subset)
 
     @pytest.mark.v1
-    def test_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex) -> None:
+    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
+    def test_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex, sign: str) -> None:
         """
-        §5/§12 — a NaN in a user-supplied RHS raises, never silently
-        becomes "no constraint" the way legacy auto_mask treats it.
+        §5/§12 — a NaN in a user-supplied RHS raises for every sign,
+        never silently becomes "no constraint" the way legacy auto_mask
+        treats it.
         """
         nan_rhs = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
         with pytest.raises(ValueError, match="NaN"):
-            x <= nan_rhs
+            _SIGNS[sign](x, nan_rhs)
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
+    def test_absence_propagates_to_rhs_drops_constraint(
+        self, x: Variable, sign: str
+    ) -> None:
+        """
+        §6 → §12 for every sign: a constraint over an absent LHS slot
+        yields NaN RHS, which downstream auto-mask interprets as "no
+        constraint here".
+        """
+        xs = x.shift(time=1)
+        # xs is absent at time=0; the constraint's RHS at that slot
+        # should be NaN (no constraint), not 10.
+        constraint = _SIGNS[sign](xs, 10)
+        rhs = constraint.rhs.values
+        assert np.isnan(rhs[0])
+        assert (rhs[1:] == 10).all()
 
     @pytest.mark.v1
     def test_pypsa_1683_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex) -> None:
@@ -723,51 +851,6 @@ class TestConstraintRHS:
         bound = min_pu * nominal  # 0*inf = NaN at time=1
         with pytest.raises(ValueError, match="NaN"):
             x >= bound
-
-    @pytest.mark.v1
-    def test_absence_propagates_to_rhs_drops_constraint(
-        self, x: Variable, time: pd.RangeIndex
-    ) -> None:
-        """
-        §6 → §12: a constraint over an absent LHS slot yields NaN RHS,
-        which downstream auto-mask interprets as "no constraint here".
-        """
-        xs = x.shift(time=1)
-        # xs is absent at time=0; the constraint's RHS at that slot
-        # should be NaN (no constraint), not 10.
-        constraint = xs >= 10
-        rhs = constraint.rhs.values
-        assert np.isnan(rhs[0])
-        assert (rhs[1:] == 10).all()
-
-    @pytest.mark.v1
-    def test_subset_rhs_eq_raises(self, x: Variable) -> None:
-        """§12 — equality comparison aligns by §8 like ``<=``/``>=``."""
-        subset = xr.DataArray(
-            [10.0, 20.0],
-            dims=["time"],
-            coords={"time": pd.Index([1, 3], name="time")},
-        )
-        with pytest.raises(ValueError, match="exact"):
-            x == subset
-
-    @pytest.mark.v1
-    def test_nan_rhs_eq_raises(self, x: Variable, time: pd.RangeIndex) -> None:
-        """§5/§12 — a NaN in an equality RHS raises like ``<=`` does."""
-        nan_rhs = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
-            x == nan_rhs
-
-    @pytest.mark.v1
-    def test_absence_propagates_to_rhs_eq_drops_constraint(self, x: Variable) -> None:
-        """§6 → §12 on equality — absent LHS slot drops the constraint."""
-        xs = x.shift(time=1)
-        constraint = xs == 10
-        rhs = constraint.rhs.values
-        assert np.isnan(rhs[0])
-        assert (rhs[1:] == 10).all()
 
     @pytest.mark.legacy
     def test_nan_rhs_silently_treated_as_unconstrained(
@@ -942,6 +1025,44 @@ class TestAuxCoordConflict:
         a1 = (1 * v).isel({"A": 1}, drop=True)
         result = a0 + a1  # no aux coord → no conflict
         assert "A" not in result.coords
+
+    @pytest.mark.v1
+    def test_assign_coords_resolves_conflict(self, m: Model, A: pd.Index) -> None:
+        """
+        §11's third escape hatch: relabel one side with
+        ``.assign_coords`` so the coord values agree across operands.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        relabelled = const.assign_coords(B=v.coords["B"])
+        result = v + relabelled
+        assert result.coords["B"].values.tolist() == [311, 311, 322]
+
+    @pytest.mark.v1
+    def test_multi_operand_merge_aux_conflict_raises(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        The merge-path check inspects all operands, not just two —
+        a 3-way ``sum(...)`` where the third disagrees still raises.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        u = m.add_variables(lower=0, coords=[A], name="u").assign_coords(
+            B=("A", [999, 999, 999])
+        )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v + w + u
 
     @pytest.mark.legacy
     def test_aux_conflict_silently_keeps_left(self, m: Model, A: pd.Index) -> None:

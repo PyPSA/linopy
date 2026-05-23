@@ -1347,7 +1347,10 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
-    unstack = varwrap(Dataset.unstack)
+    # ``fill_value=_fill_value`` so missing (region, year) combinations end up
+    # as the absent-slot sentinel (labels=-1, lower=upper=NaN) instead of as
+    # NaN labels — §2 storage invariant + §4 absence-creation guarantee.
+    unstack = varwrap(Dataset.unstack, fill_value=_fill_value)
 
     iterate_slices = iterate_slices
 
