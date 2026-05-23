@@ -32,6 +32,7 @@ Slice G — reductions skip absent slots (§13):
 
 Slice F — auxiliary-coordinate conflicts (§11):
     §11 Non-dim coord conflict raises (v1)             → #295
+    §11 Non-conflicting aux coords propagate through arithmetic
 """
 
 from __future__ import annotations
@@ -893,3 +894,68 @@ class TestAuxCoordConflict:
         )
         with pytest.warns(LinopySemanticsWarning):
             v + const
+
+
+class TestAuxCoordPropagation:
+    """
+    Non-conflicting aux coords must propagate through arithmetic and
+    into constraints — the positive half of §11.
+    """
+
+    @pytest.fixture
+    def A(self) -> pd.Index:
+        return pd.Index([1, 2, 3], name="A")
+
+    def test_aux_coord_survives_scalar_mul(self, m: Model, A) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        assert "B" in (3 * v).coords
+
+    def test_aux_coord_survives_scalar_add(self, m: Model, A) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        assert "B" in (v + 5).coords
+
+    def test_aux_coord_propagates_through_var_plus_var(self, m: Model, A) -> None:
+        B = ("A", [311, 311, 322])
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(B=B)
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(B=B)
+        result = v + w
+        assert "B" in result.coords
+        assert result.coords["B"].values.tolist() == [311, 311, 322]
+
+    def test_aux_coord_propagates_into_constraint(self, m: Model, A) -> None:
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        c = v <= 10
+        assert "B" in c.coords
+
+    def test_aux_coord_only_on_dataarray_propagates(self, m: Model, A) -> None:
+        """
+        ``x * a`` where ``a`` carries an aux coord and ``x`` doesn't —
+        the coord propagates through every binary operator and into the
+        constraint. Hits the `_align_constant` path (var-OP-DataArray)
+        distinct from the `merge` path tested below.
+        """
+        x = m.add_variables(lower=0, coords=[A], name="x")
+        a = xr.DataArray(
+            [2.0, 3.0, 4.0], dims=["A"], coords={"A": A, "B": ("A", [10, 20, 30])}
+        )
+        for expr in (x * a, x + a, x / a):
+            assert "B" in expr.coords
+            assert expr.coords["B"].values.tolist() == [10, 20, 30]
+        # And into the constraint
+        c = x <= a
+        assert "B" in c.coords
+
+    def test_aux_coord_only_on_one_side_propagates(self, m: Model, A) -> None:
+        """Var+var counterpart of the above — hits the `merge` path."""
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        w = m.add_variables(lower=0, coords=[A], name="w")  # no B
+        result = v + w
+        assert "B" in result.coords
