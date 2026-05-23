@@ -49,10 +49,15 @@ _any_solvers = [
     s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
 ]
 
-pytestmark = pytest.mark.skipif(
-    not (_sos2_solvers and _any_solvers),
-    reason="need an SOS2-capable LP/MIP solver",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not (_sos2_solvers and _any_solvers),
+        reason="need an SOS2-capable LP/MIP solver",
+    ),
+    # Legacy-only until ``linopy/piecewise.py`` is made v1-aware — see the
+    # module docstring of ``test_piecewise_constraints.py``.
+    pytest.mark.legacy,
+]
 
 
 # ---------------------------------------------------------------------------

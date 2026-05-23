@@ -167,6 +167,29 @@ def _check_user_nan_array() -> None:
     warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
 
 
+def _merge_shared_user_coords_differ(
+    datasets: Sequence[Dataset], concat_dim: str
+) -> bool:
+    """
+    True if the datasets disagree on the labels of any shared user dim.
+
+    Helper dims (``_term``, ``_factor``) and the concat dim itself are
+    excluded — those legitimately vary across the operands being merged.
+    """
+    skip = set(HELPER_DIMS) | {concat_dim}
+    per_ds = [
+        {k: d.coords[k] for k in d.dims if k not in skip and k in d.coords}
+        for d in datasets
+    ]
+    shared = set.intersection(*(set(p.keys()) for p in per_ds)) if per_ds else set()
+    for d_name in shared:
+        ref = per_ds[0][d_name]
+        for p in per_ds[1:]:
+            if not ref.equals(p[d_name]):
+                return True
+    return False
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -2458,6 +2481,25 @@ def merge(
 
     model = exprs[0].model
 
+    data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
+    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
+
+    # §8: shared *user* dimension coordinates must match exactly across all
+    # operands. Helper dims (_term, _factor) legitimately differ, so we
+    # validate user dims separately and keep xr.concat on join="outer"
+    # (which doesn't enforce "exact" — that's what this check is for).
+    if join is None:
+        differ = _merge_shared_user_coords_differ(data, concat_dim=dim)
+        if options["semantics"] == V1_SEMANTICS and differ:
+            raise ValueError(
+                "Coordinate mismatch on a shared dimension while merging "
+                "expressions. Use `linopy.align(...)` or `.sel(...)` to "
+                "bring operands into agreement, or pass an explicit "
+                "`join=` argument."
+            )
+        if differ:
+            warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
+
     if join is not None:
         override = join == "override"
     elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
@@ -2467,9 +2509,6 @@ def merge(
         override = check_common_keys_values(coord_dims)  # type: ignore
     else:
         override = False
-
-    data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
-    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
     if not kwargs:
         kwargs = {

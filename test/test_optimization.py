@@ -597,6 +597,7 @@ def test_duplicated_variables(
     assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=tol))
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_non_aligned_variables(
     model_with_non_aligned_variables: Model,
@@ -604,6 +605,10 @@ def test_non_aligned_variables(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
+    """
+    Legacy-only: var+var on the same dim with different coords (see
+    convention.md §8). Under v1, the model construction itself raises.
+    """
     status, condition = model_with_non_aligned_variables.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )

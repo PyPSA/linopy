@@ -388,9 +388,12 @@ def test_linear_expression_substraction(
     assert res.data.notnull().all().to_array().all()
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -410,9 +413,12 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum_with_const(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
 
@@ -1888,9 +1894,12 @@ class TestJoinParameter:
         return m2.variables["c"]
 
     class TestAddition:
+        @pytest.mark.legacy
         def test_add_join_none_preserves_default(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a and b have different coords on dim ``i``;
+            # under v1 both arithmetic forms raise (see convention.md §8).
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
@@ -2149,9 +2158,11 @@ class TestJoinParameter:
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
     class TestQuadratic:
+        @pytest.mark.legacy
         def test_quadratic_add_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
@@ -2163,9 +2174,11 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.data.indexes["i"]) == [0, 1]
 
+        @pytest.mark.legacy
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")

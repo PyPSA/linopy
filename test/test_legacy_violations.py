@@ -10,6 +10,9 @@ Slice A — constant operand path (§5, §8, §9):
     §8  Shared dimensions must match exactly  → #708 / #586 / #550
     §5  User-supplied NaN raises              → #713 / PyPSA #1683
     §9  Non-shared dimensions broadcast       → (positive regression guard)
+
+Slice B — expression-OP-expression / variable-OP-variable (§8 via `merge`):
+    §8  Shared dimensions must match exactly  → #708 / #570 (expr+expr branch)
 """
 
 from __future__ import annotations
@@ -281,3 +284,88 @@ class TestLegacyWarning:
         )
         with pytest.warns(LinopySemanticsWarning):
             x + nan_data
+
+
+# =====================================================================
+# §8 — Shared dimensions must match exactly (expr+expr / var+var, merge path)
+# =====================================================================
+
+
+class TestExactAlignmentMerge:
+    @pytest.fixture
+    def x_other(self, m: Model):
+        # Same shape, different labels — legacy uses positional override.
+        return m.add_variables(
+            lower=0,
+            coords=[pd.Index([10, 11, 12, 13, 14], name="time")],
+            name="x_other",
+        )
+
+    @pytest.fixture
+    def x_subset(self, m: Model):
+        # Subset coords on the same dim — legacy outer-joins (and pads).
+        return m.add_variables(
+            lower=0,
+            coords=[pd.Index([1, 3], name="time")],
+            name="x_subset",
+        )
+
+    @pytest.mark.v1
+    def test_var_plus_var_different_labels_raises(self, x, x_other) -> None:
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            x + x_other
+
+    @pytest.mark.v1
+    def test_expr_plus_expr_different_labels_raises(self, x, x_other) -> None:
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            (1 * x) + (1 * x_other)
+
+    @pytest.mark.v1
+    def test_var_plus_var_subset_raises(self, x, x_subset) -> None:
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            x + x_subset
+
+    @pytest.mark.v1
+    def test_var_minus_var_different_labels_raises(self, x, x_other) -> None:
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            x - x_other
+
+    @pytest.mark.v1
+    def test_var_plus_var_same_coords_works(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """Same coords on a shared dim is fine — regression guard."""
+        a = m.add_variables(lower=0, coords=[time], name="a")
+        b = m.add_variables(lower=0, coords=[time], name="b")
+        result = a + b
+        assert result.sizes["time"] == 5
+
+    @pytest.mark.v1
+    def test_var_plus_var_broadcast_non_shared_dim_works(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """§9 regression guard for the merge path: non-shared dims broadcast."""
+        a = m.add_variables(lower=0, coords=[time], name="a")
+        b = m.add_variables(
+            lower=0, coords=[pd.Index([0, 1], name="scenario")], name="b"
+        )
+        result = a + b
+        assert set(result.coord_dims) == {"time", "scenario"}
+
+    @pytest.mark.legacy
+    def test_var_plus_var_different_labels_silent(self, x, x_other) -> None:
+        """
+        Document legacy: same-shape var+var aligns by position via
+        override; the right-hand labels are silently dropped.
+        """
+        result = x + x_other
+        # Left wins via override → time coords are x's [0..4], even though
+        # x_other was time=[10..14]. The two terms are paired by position.
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+
+    @pytest.mark.legacy
+    def test_warn_on_var_plus_var_different_labels(
+        self, x, x_other, unsilenced
+    ) -> None:
+        with pytest.warns(LinopySemanticsWarning):
+            x + x_other

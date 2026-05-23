@@ -1,4 +1,14 @@
-"""Tests for the new piecewise linear constraints API."""
+"""
+Tests for the new piecewise linear constraints API.
+
+Marked legacy module-wide: ``linopy/piecewise.py`` builds internal
+expressions by ``.isel(...)``-slicing variables on the piece dimension
+and then comparing the two slices (``delta_hi <= delta_lo`` and
+similar). The slices share the dim but carry *different* coordinate
+labels, which v1 §8 rejects. A dedicated slice to make piecewise.py
+v1-aware (e.g. reset coords after slicing, or use ``join="override"``
+explicitly) will remove this file-level mark.
+"""
 
 from __future__ import annotations
 
@@ -66,6 +76,8 @@ _SOS_PATHS = [
 _any_solvers = [
     s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
 ]
+
+pytestmark = pytest.mark.legacy
 
 # Solver-output tolerance for solution-value assertions in this file.  Matches
 # the convention in ``test_piecewise_feasibility.py``.
