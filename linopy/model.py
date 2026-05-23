@@ -152,21 +152,21 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
 
 def _as_dataarray_in_coords(arr: Any, coords: Any, **kwargs: Any) -> DataArray:
     """
-    Convert ``arr`` to a DataArray broadcast against the model ``coords``.
+    Coerce ``arr`` into a DataArray that matches the model ``coords``.
 
-    Folds the conversion (scalars, numpy arrays, pandas, ``DataArray``) and
-    the coords-driven broadcast into a single step:
+    ``coords`` is the source of truth: the returned DataArray has the
+    dimensions, dimension order, and coordinate values of ``coords``,
+    regardless of the input type. Pandas inputs with fully named axes
+    are converted via ``to_xarray`` so their axis names map to
+    dimensions; scalars, numpy arrays, and unnamed pandas go through
+    ``as_dataarray``. The result is then validated, expanded over
+    missing dims, and transposed; ``expand_dims`` and ``transpose``
+    are no-ops when the array already matches.
 
-    - Pandas inputs with fully named axes are converted via ``to_xarray`` so
-      their axis names map to dimensions; other inputs go through
-      ``as_dataarray``.
-    - Raises ``ValueError`` if the resulting array has dimensions not in
+    - Raises ``ValueError`` if the input has dimensions not in
       ``coords``.
-    - Raises ``ValueError`` if shared dimension coordinates differ in values;
-      same-values-different-order coordinates are reindexed.
-    - Missing dimensions are expanded; the result is transposed so the
-      dimension and coordinate order follow ``coords``. Both operations are
-      no-ops when the array already matches.
+    - Raises ``ValueError`` if shared dimension coordinates differ in
+      values. Same-values-different-order coordinates are reindexed.
     """
     if coords is None:
         return as_dataarray(arr, coords, **kwargs)
@@ -745,11 +745,13 @@ class Model:
             Upper bound of the variable(s). Ignored if `binary` is True.
             The default is inf.
         coords : list/xarray.Coordinates, optional
-            The coords of the variable array.
-            These are directly passed to the DataArray creation of
-            `lower` and `upper`. For every single combination of
-            coordinates a optimization variable is added to the model.
-            The default is None.
+            The coords of the variable array. When provided, ``coords``
+            is the source of truth for the variable's dimensions,
+            dimension order, and coordinate values; ``lower`` and
+            ``upper`` are broadcast and aligned to match. One
+            optimization variable is added per combination of
+            coordinates. The default is None, in which case the shape
+            is inferred from the bounds.
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
