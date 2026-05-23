@@ -1233,6 +1233,32 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
+        if options["semantics"] == V1_SEMANTICS:
+            # §5 + §12: the RHS is a user-supplied constant just like any
+            # operand in arithmetic. Validate NaN here (raise) and let
+            # ``self.sub(rhs)`` do the §8 alignment — no silent
+            # reindex_like-pad that would mask a coordinate mismatch.
+            # An absent slot in ``self.const`` (propagated from §6) flows
+            # through ``sub`` into the RHS and reaches downstream
+            # auto-mask handling as "no constraint at this row" (§12).
+            if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+                extra_dims = set(rhs.dims) - set(self.coord_dims)
+                if extra_dims:
+                    logger.warning(
+                        f"Constant RHS contains dimensions {extra_dims} not present "
+                        f"in the expression, which might lead to inefficiencies. "
+                        f"Consider collapsing the dimensions by taking min/max."
+                    )
+                if rhs.isnull().any():
+                    raise ValueError(_USER_NAN_MESSAGE)
+            all_to_lhs = self.sub(rhs, join=join).data
+            computed_rhs = -all_to_lhs.const
+            data = assign_multiindex_safe(
+                all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
+            )
+            return constraints.Constraint(data, model=self.model)
+
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
@@ -1250,6 +1276,8 @@ class BaseExpression(ABC):
         # expression arithmetic.
         if isinstance(rhs, DataArray):
             rhs_nan_mask = rhs.isnull()
+            if rhs_nan_mask.any():
+                warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
         else:
             rhs_nan_mask = None
 

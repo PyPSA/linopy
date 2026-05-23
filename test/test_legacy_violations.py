@@ -21,6 +21,11 @@ Slice C — absence propagation (§3, §6, §7):
 
 Slice D — Variable.reindex / .reindex_like (§4 absence creation):
     §4  Reindexing extends coords and marks new slots absent
+
+Slice E — named-method join= + constraint RHS (§10, §12):
+    §10 .add/.sub/.mul/.div/.le/.ge/.eq accept explicit join=
+    §12 NaN in constraint RHS raises (v1)              → PyPSA #1683
+    §12 Coord mismatch in RHS raises (v1)              → #707
 """
 
 from __future__ import annotations
@@ -606,3 +611,133 @@ class TestVariableReindex:
         expr = wider * 3
         assert bool(expr.isnull().values[5:].all())
         assert not bool(expr.isnull().values[:5].any())
+
+
+# =====================================================================
+# §10 — named-method join= argument (opt-in alignment)
+# =====================================================================
+
+
+class TestNamedMethodJoin:
+    """
+    Under v1 the bare operators raise on coord mismatch (§8). The
+    named methods let the caller opt in to a specific join mode.
+    """
+
+    @pytest.fixture
+    def subset(self, time: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(
+            [10.0, 30.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
+        )
+
+    @pytest.mark.v1
+    def test_add_join_inner_intersects(self, x, subset) -> None:
+        """`.add(other, join="inner")` picks the intersection of coords."""
+        result = x.add(subset, join="inner")
+        assert list(result.coords["time"].values) == [1, 3]
+
+    @pytest.mark.v1
+    def test_add_join_outer_fills(self, x, subset) -> None:
+        """`.add(other, join="outer")` unions coords (gaps are filled)."""
+        result = x.add(subset, join="outer")
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+
+    @pytest.mark.v1
+    def test_mul_join_inner(self, x, subset) -> None:
+        result = x.mul(subset, join="inner")
+        assert list(result.coords["time"].values) == [1, 3]
+
+    @pytest.mark.v1
+    def test_le_join_inner_on_subset_rhs(self, x, subset) -> None:
+        """`.le(rhs, join="inner")` lets a subset RHS through cleanly."""
+        result = x.le(subset, join="inner")
+        assert list(result.coords["time"].values) == [1, 3]
+
+    @pytest.mark.v1
+    def test_bare_op_still_raises_on_mismatch(self, x, subset) -> None:
+        """`x + subset` (no `join=`) still raises — opt-in is required."""
+        with pytest.raises(ValueError, match="exact"):
+            x + subset
+
+
+# =====================================================================
+# §12 — constraints follow the same rules
+# =====================================================================
+
+
+class TestConstraintRHS:
+    @pytest.mark.v1
+    def test_subset_rhs_raises(self, x) -> None:
+        subset = xr.DataArray(
+            [10.0, 20.0],
+            dims=["time"],
+            coords={"time": pd.Index([1, 3], name="time")},
+        )
+        with pytest.raises(ValueError, match="exact"):
+            x <= subset
+
+    @pytest.mark.v1
+    def test_nan_rhs_raises(self, x, time: pd.RangeIndex) -> None:
+        """
+        §5/§12 — a NaN in a user-supplied RHS raises, never silently
+        becomes "no constraint" the way legacy auto_mask treats it.
+        """
+        nan_rhs = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            x <= nan_rhs
+
+    @pytest.mark.v1
+    def test_pypsa_1683_nan_rhs_raises(self, x, time: pd.RangeIndex) -> None:
+        """
+        PyPSA #1683 on the constraint side — ``min_pu * nominal_fix``
+        with ``p_nom=inf`` and ``p_min_pu=0`` yields NaN at the bad slot;
+        v1 raises at construction instead of silently passing NaN to
+        the solver.
+        """
+        nominal = xr.DataArray([np.inf] * 5, dims=["time"], coords={"time": time})
+        min_pu = xr.DataArray(
+            [1.0, 0.0, 1.0, 1.0, 1.0], dims=["time"], coords={"time": time}
+        )
+        bound = min_pu * nominal  # 0*inf = NaN at time=1
+        with pytest.raises(ValueError, match="NaN"):
+            x >= bound
+
+    @pytest.mark.v1
+    def test_absence_propagates_to_rhs_drops_constraint(
+        self, x, time: pd.RangeIndex
+    ) -> None:
+        """
+        §6 → §12: a constraint over an absent LHS slot yields NaN RHS,
+        which downstream auto-mask interprets as "no constraint here".
+        """
+        xs = x.shift(time=1)
+        # xs is absent at time=0; the constraint's RHS at that slot
+        # should be NaN (no constraint), not 10.
+        constraint = xs >= 10
+        rhs = constraint.rhs.values
+        assert np.isnan(rhs[0])
+        assert (rhs[1:] == 10).all()
+
+    @pytest.mark.legacy
+    def test_nan_rhs_silently_treated_as_unconstrained(
+        self, x, time: pd.RangeIndex
+    ) -> None:
+        """
+        Document the legacy auto_mask path: a NaN RHS is silently
+        kept as NaN and the constraint at that row is later dropped.
+        """
+        nan_rhs = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        constraint = x <= nan_rhs
+        assert np.isnan(constraint.rhs.values[1])
+
+    @pytest.mark.legacy
+    def test_warn_on_nan_rhs(self, x, time: pd.RangeIndex, unsilenced) -> None:
+        nan_rhs = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.warns(LinopySemanticsWarning):
+            x <= nan_rhs
