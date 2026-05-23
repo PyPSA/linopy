@@ -590,6 +590,7 @@ class BaseExpression(ABC):
             if is_v1():
                 join = "exact"
             else:
+                # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
                 # Legacy default: positional when sizes match, else left-join.
                 if other.sizes == self.const.sizes:
                     if dim_coords_differ(self.const, other):
@@ -638,17 +639,45 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        # Under legacy, NaN in self.const or the user constant is filled
-        # with 0 (additive identity) so missing data is silently dropped.
-        # Under v1 (§6), absence propagates: self.const NaN stays NaN, and
-        # user-supplied NaN raised before we got here.
-        def fillna0(da: DataArray) -> DataArray:
-            return da if is_v1() else da.fillna(0)
+        if is_v1():
+            return self._add_constant_v1(other, join)
+        return self._add_constant_legacy(other, join)
 
+    def _add_constant_v1(
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None
+    ) -> GenericExpression:
+        # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
+        # §5: user NaN raised in check_user_nan_*; never reaches the math here.
         if np.isscalar(other) and join is None:
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan_scalar()
-            return self.assign(const=fillna0(self.const) + other)
+            return self.assign(const=self.const + other)
+        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        if da.isnull().any():
+            check_user_nan_array()
+        self_const, da, needs_data_reindex = self._align_constant(
+            da, fill_value=0, join=join
+        )
+        if needs_data_reindex:
+            return self.__class__(
+                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
+                    const=self_const + da
+                ),
+                self.model,
+            )
+        return self.assign(const=self_const + da)
+
+    # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+    def _add_constant_legacy(
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None
+    ) -> GenericExpression:
+        # NaN values in self.const or other are silently filled with 0
+        # (additive identity) so missing data does not propagate through
+        # arithmetic. ``check_user_nan_*`` only warns under legacy.
+        if np.isscalar(other) and join is None:
+            if isinstance(other, float) and np.isnan(other):
+                check_user_nan_scalar()
+            return self.assign(const=self.const.fillna(0) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if da.isnull().any():
             check_user_nan_array()
@@ -656,7 +685,7 @@ class BaseExpression(ABC):
             da, fill_value=0, join=join
         )
         da = da.fillna(0)
-        self_const = fillna0(self_const)
+        self_const = self_const.fillna(0)
         if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
@@ -673,18 +702,20 @@ class BaseExpression(ABC):
         fill_value: float,
         join: JoinOptions | None = None,
     ) -> GenericExpression:
-        """
-        Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
+        """Apply a constant operation (mul, div) to this expression."""
+        if is_v1():
+            return self._apply_constant_op_v1(other, op, fill_value, join)
+        return self._apply_constant_op_legacy(other, op, fill_value, join)
 
-        Under legacy, NaN values are silently filled with neutral elements
-        (0 for add path, ``fill_value`` for the factor). Under v1 (§6),
-        absence propagates: self.coeffs / self.const NaN stays NaN, and a
-        user-supplied NaN in the factor would have raised at §5.
-        """
-
-        def fillna0(da: DataArray) -> DataArray:
-            return da if is_v1() else da.fillna(0)
-
+    def _apply_constant_op_v1(
+        self: GenericExpression,
+        other: ConstantLike,
+        op: Callable[[DataArray, DataArray], DataArray],
+        fill_value: float,
+        join: JoinOptions | None,
+    ) -> GenericExpression:
+        # §6: NaN in coeffs/const propagates through op (NaN * x = NaN).
+        # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan_scalar()
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -693,19 +724,48 @@ class BaseExpression(ABC):
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        if not is_v1():
-            factor = factor.fillna(fill_value)
-        self_const = fillna0(self_const)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            coeffs = fillna0(data.coeffs)
+            return self.__class__(
+                assign_multiindex_safe(
+                    data,
+                    coeffs=op(data.coeffs, factor),
+                    const=op(self_const, factor),
+                ),
+                self.model,
+            )
+        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
+
+    # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+    def _apply_constant_op_legacy(
+        self: GenericExpression,
+        other: ConstantLike,
+        op: Callable[[DataArray, DataArray], DataArray],
+        fill_value: float,
+        join: JoinOptions | None,
+    ) -> GenericExpression:
+        # NaN values are silently filled with neutral elements before the op:
+        # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
+        if isinstance(other, float) and np.isnan(other):
+            check_user_nan_scalar()
+        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        if factor.isnull().any():
+            check_user_nan_array()
+        self_const, factor, needs_data_reindex = self._align_constant(
+            factor, fill_value=fill_value, join=join
+        )
+        factor = factor.fillna(fill_value)
+        self_const = self_const.fillna(0)
+        if needs_data_reindex:
+            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
+            coeffs = data.coeffs.fillna(0)
             return self.__class__(
                 assign_multiindex_safe(
                     data, coeffs=op(coeffs, factor), const=op(self_const, factor)
                 ),
                 self.model,
             )
-        coeffs = fillna0(self.coeffs)
+        coeffs = self.coeffs.fillna(0)
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
@@ -1207,6 +1267,12 @@ class BaseExpression(ABC):
             )
             return constraints.Constraint(data, model=self.model)
 
+        # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+        # Legacy auto-mask path: NaN RHS is silently preserved as "no
+        # constraint at this row" (the legacy reindex_like-pad fills
+        # subset coords with NaN, then `sub` would fill them with 0 as
+        # part of normal arithmetic, so we restore the original NaN mask
+        # afterward).
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
@@ -1219,9 +1285,6 @@ class BaseExpression(ABC):
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
 
-        # Remember where RHS is NaN (meaning "no constraint") before the
-        # subtraction, which may fill NaN with 0 as part of normal
-        # expression arithmetic.
         if isinstance(rhs, DataArray):
             rhs_nan_mask = rhs.isnull()
             if rhs_nan_mask.any():
@@ -1232,8 +1295,6 @@ class BaseExpression(ABC):
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
 
-        # Restore NaN at positions where the original constant RHS had no
-        # value so that downstream code still treats them as unconstrained.
         if rhs_nan_mask is not None and rhs_nan_mask.any():
             computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
 
@@ -1264,6 +1325,7 @@ class BaseExpression(ABC):
         """
         if is_v1():
             return self.const.isnull()
+        # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
         helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
@@ -2516,6 +2578,7 @@ def merge(
                 "bring operands into agreement, or pass an explicit "
                 "`join=` argument."
             )
+        # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
         if differ:
             warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
 
@@ -2531,6 +2594,7 @@ def merge(
                     "`.drop_vars(...)` or `.isel(..., drop=True)` before "
                     "combining."
                 )
+            # LEGACY: remove at 1.0.
             warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
 
     if join is not None:
