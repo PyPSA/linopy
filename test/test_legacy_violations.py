@@ -181,11 +181,8 @@ class TestUserNaNRaises:
             _OPS[op](x, nan_data)
 
     @pytest.mark.v1
-    @pytest.mark.parametrize("op", ["add", "sub", "mul"])
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
     def test_nan_scalar_raises(self, x: Variable, op: str) -> None:
-        # Skip div: ``x / nan`` raises *before* our check (TypeError on
-        # the unary negation in ``__div__``); the scalar-NaN scenario for
-        # div is the same code path as for mul.
         with pytest.raises(ValueError, match="NaN"):
             _OPS[op](x, float("nan"))
 
@@ -1244,3 +1241,48 @@ class TestErrorMessageContent:
         assert ".drop_vars" in msg
         assert ".assign_coords" in msg
         assert ".isel" in msg
+
+
+# =====================================================================
+# Rough edges — catches NaN that slips past the operator-level check
+# =====================================================================
+
+
+class TestUserNaNEdgeCases:
+    """
+    Regression guards for three NaN-entry routes that were untested.
+    The first two are already caught upstream (at the operator that
+    constructs the expression); the third needed an ``add_objective``
+    boundary check because a hand-built expression with NaN const
+    skips the operator path entirely.
+    """
+
+    @pytest.mark.v1
+    def test_nan_in_expression_used_in_objective_raises(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """
+        ``add_objective((x * nan_costs).sum())`` raises at the ``*``
+        before the objective even sees the expression — guard against
+        a regression that lets NaN-cost objectives slip through.
+        """
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        nan_costs = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            m.add_objective((x * nan_costs).sum())
+
+    @pytest.mark.v1
+    def test_nan_in_constraint_lhs_raises(self, m: Model, time: pd.RangeIndex) -> None:
+        """
+        ``(x + nan_da) <= 5`` raises at the ``+`` on the LHS — the
+        RHS path is tested elsewhere; this guards the symmetric LHS
+        case.
+        """
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        nan_da = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            (x + nan_da) <= 5
