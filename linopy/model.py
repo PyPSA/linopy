@@ -126,27 +126,70 @@ def _coords_to_dict(
     return result
 
 
-def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
+def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | None:
     """
-    Validate and expand DataArray bounds against explicit coords.
+    Convert a pandas Series or DataFrame with fully named axes to a DataArray.
 
-    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
-    will handle conversion). For DataArray inputs:
-
-    - Raises ``ValueError`` if the array has dimensions not in coords.
-    - Raises ``ValueError`` if shared dimension coordinates don't match.
-    - Expands missing dimensions via ``expand_dims``.
+    Multi-level columns are unstacked so each level becomes its own dimension.
+    Returns ``None`` if any axis (or MultiIndex level) is unnamed, signalling
+    that the caller should fall back to ``as_dataarray``.
     """
-    if not isinstance(arr, DataArray):
-        return arr
+    if isinstance(arr, pd.DataFrame):
+        while isinstance(arr, pd.DataFrame):
+            arr = arr.unstack()
+        if not isinstance(arr, pd.Series):
+            return None
+
+    index = arr.index
+    if isinstance(index, pd.MultiIndex):
+        if any(n is None for n in index.names):
+            return None
+    elif index.name is None:
+        return None
+
+    return arr.to_xarray()
+
+
+def _as_dataarray_in_coords(arr: Any, coords: Any, **kwargs: Any) -> DataArray:
+    """
+    Convert ``arr`` to a DataArray broadcast against the model ``coords``.
+
+    Folds the conversion (scalars, numpy arrays, pandas, ``DataArray``) and
+    the coords-driven broadcast into a single step:
+
+    - Pandas inputs with fully named axes are converted via ``to_xarray`` so
+      their axis names map to dimensions; other inputs go through
+      ``as_dataarray``.
+    - Raises ``ValueError`` if the resulting array has dimensions not in
+      ``coords``.
+    - Raises ``ValueError`` if shared dimension coordinates differ in values;
+      same-values-different-order coordinates are reindexed.
+    - Missing dimensions are expanded; the result is transposed so the
+      dimension and coordinate order follow ``coords``. Both operations are
+      no-ops when the array already matches.
+    """
+    if coords is None:
+        return as_dataarray(arr, coords, **kwargs)
 
     expected = _coords_to_dict(coords)
     if not expected:
-        return arr
+        return as_dataarray(arr, coords, **kwargs)
+
+    orig_type_name = type(arr).__name__
+
+    if isinstance(arr, pd.Series | pd.DataFrame):
+        converted = _named_pandas_to_dataarray(arr)
+        if converted is not None:
+            arr = converted
+
+    if not isinstance(arr, DataArray):
+        return as_dataarray(arr, coords, **kwargs)
 
     extra = set(arr.dims) - set(expected)
     if extra:
-        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+        raise ValueError(
+            f"{orig_type_name} has extra dimensions not in coords: {extra}"
+        )
 
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
@@ -171,10 +214,29 @@ def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
                     f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
                 )
 
-    # Expand missing dimensions
+    # expand_dims prepends new dimensions and their coordinate variables;
+    # the subsequent transpose restores coords order. Both are no-ops when
+    # the array already matches. Reconstruct so the DataArray's coords
+    # iteration order also follows coords (a Dataset built from this picks
+    # up its dim order from coord insertion).
     expand = {k: v for k, v in expected.items() if k not in arr.dims}
     if expand:
         arr = arr.expand_dims(expand)
+
+    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
+        d for d in arr.dims if d not in expected
+    )
+    arr = arr.transpose(*target_dims)
+
+    coord_order = [c for c in target_dims if c in arr.coords] + [
+        c for c in arr.coords if c not in target_dims
+    ]
+    if list(arr.coords) != coord_order:
+        arr = DataArray(
+            arr.variable,
+            coords={c: arr.coords[c] for c in coord_order},
+            name=arr.name,
+        )
 
     return arr
 
@@ -765,14 +827,10 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        if coords is not None:
-            lower = _validate_dataarray_bounds(lower, coords)
-            upper = _validate_dataarray_bounds(upper, coords)
-
         data = Dataset(
             {
-                "lower": as_dataarray(lower, coords, **kwargs),
-                "upper": as_dataarray(upper, coords, **kwargs),
+                "lower": _as_dataarray_in_coords(lower, coords, **kwargs),
+                "upper": _as_dataarray_in_coords(upper, coords, **kwargs),
                 "labels": -1,
             }
         )

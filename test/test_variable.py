@@ -434,17 +434,71 @@ class TestAddVariablesBoundsWithCoords:
 
     # -- Broadcasting missing dims -----------------------------------------
 
-    def test_dataarray_broadcast_missing_dim(self, model: "Model") -> None:
+    @pytest.mark.parametrize(
+        "bound",
+        [
+            pytest.param(
+                DataArray([1, 2, 3], dims=["time"], coords={"time": range(3)}),
+                id="DataArray",
+            ),
+            pytest.param(
+                pd.Series(index=pd.RangeIndex(3, name="time"), data=[1, 2, 3]),
+                id="Series",
+            ),
+            pytest.param(
+                pd.DataFrame(
+                    index=pd.RangeIndex(3, name="time"),
+                    columns=pd.Index(["red"], name="colour"),
+                    data=[[1], [2], [3]],
+                ),
+                id="DataFrame",
+            ),
+        ],
+    )
+    def test_bound_broadcast_missing_dim(
+        self, model: "Model", bound: DataArray | pd.Series | pd.DataFrame
+    ) -> None:
+        """Pandas / DataArray bounds missing dims are broadcast to coords."""
         time = pd.RangeIndex(3, name="time")
         space = pd.Index(["a", "b"], name="space")
-        lower = DataArray([1, 2, 3], dims=["time"], coords={"time": range(3)})
-        var = model.add_variables(lower=lower, coords=[time, space], name="x")
-        assert set(var.data.dims) == {"time", "space"}
-        assert var.data.sizes == {"time": 3, "space": 2}
-        # Verify broadcast filled with actual values, not NaN
+        colour = pd.Index(["red"], name="colour")
+        var = model.add_variables(
+            lower=-bound, upper=bound, coords=[time, space, colour], name="x"
+        )
+        assert var.dims == ("time", "space", "colour")
+        assert var.data.lower.dims == ("time", "space", "colour")
+        assert var.data.upper.dims == ("time", "space", "colour")
+        assert var.data.sizes == {"time": 3, "space": 2, "colour": 1}
         assert not var.data.lower.isnull().any()
-        assert (var.data.lower.sel(space="a") == [1, 2, 3]).all()
-        assert (var.data.lower.sel(space="b") == [1, 2, 3]).all()
+        assert (var.data.lower.sel(space="a", colour="red") == [-1, -2, -3]).all()
+        assert (var.data.lower.sel(space="b", colour="red") == [-1, -2, -3]).all()
+        assert (var.data.upper.sel(space="a", colour="red") == [1, 2, 3]).all()
+
+    @pytest.mark.parametrize(
+        "lower, upper",
+        [
+            pytest.param(0, "da", id="scalar-lower+da-upper"),
+            pytest.param("da", 1, id="da-lower+scalar-upper"),
+            pytest.param("da", "da", id="da-lower+da-upper"),
+        ],
+    )
+    def test_dataarray_broadcast_missing_dim_order(
+        self, model: "Model", lower: Any, upper: Any
+    ) -> None:
+        """Dimension order follows coords, not the type of the bounds (#706)."""
+        x = pd.Index(["a", "b", "c"], name="x")
+        y = pd.Index(["X", "Y"], name="y")
+        full = DataArray(
+            np.arange(6).reshape(3, 2), coords={"x": x, "y": y}, dims=["x", "y"]
+        )
+        # bounds are DataArrays missing the 'y' dimension
+        da = full.sum("y")
+        lower = da if lower == "da" else lower
+        upper = da if upper == "da" else upper
+        var = model.add_variables(lower=lower, upper=upper, coords=[x, y], name="x")
+        assert var.dims == ("x", "y")
+        assert var.data.lower.dims == ("x", "y")
+        assert var.data.upper.dims == ("x", "y")
 
     # -- Special coord formats ---------------------------------------------
 

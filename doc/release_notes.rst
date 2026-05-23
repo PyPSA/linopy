@@ -52,6 +52,9 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Bug Fixes**
 
+* ``Model.add_variables`` now broadcasts pandas ``Series``/``DataFrame`` bounds that are missing dimensions in ``coords`` to the full coords shape, matching ``DataArray`` behaviour. Previously the missing dimension was silently dropped when both bounds were pandas objects (`#709 <https://github.com/PyPSA/linopy/issues/709>`__).
+* ``Model.add_variables`` now preserves ``coords`` dimension order when broadcasting ``DataArray``/pandas bounds that are missing dimensions. Previously the result depended on the bound type — scalar bounds kept ``coords`` order, while two array bounds missing the same dimension produced a prepended order (`#706 <https://github.com/PyPSA/linopy/issues/706>`__).
+* ``add_piecewise_formulation`` now produces a reproducible dimension order in the broadcast breakpoint array. The previous set-based expansion gave a hash-randomized order that varied between processes.
 * SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
 * ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
 
