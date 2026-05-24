@@ -84,15 +84,12 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.semantics import (
-    _aux_conflict_message,
-    _legacy_aux_conflict_message,
     _legacy_coord_mismatch_message,
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
-    check_user_nan_array,
-    check_user_nan_scalar,
-    conflicting_aux_coord,
+    check_user_nan,
+    enforce_aux_conflict,
     first_mismatched_dim,
     is_v1,
     merge_shared_user_coord_mismatch,
@@ -586,11 +583,7 @@ class BaseExpression(ABC):
         # the §8 dim check) would leave ``join="override"`` etc. silently
         # dropping the conflicting coord, which is the #295 bug v1 is
         # meant to close. v1 raises; legacy warns.
-        aux_conflict = conflicting_aux_coord([self.const, other])
-        if aux_conflict is not None:
-            if is_v1():
-                raise ValueError(_aux_conflict_message(*aux_conflict))
-            warn_legacy(_legacy_aux_conflict_message(*aux_conflict), stacklevel=4)
+        enforce_aux_conflict([self.const, other], stacklevel=4)
         if join is None:
             if is_v1():
                 join = "exact"
@@ -682,14 +675,14 @@ class BaseExpression(ABC):
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None
     ) -> GenericExpression:
         # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
-        # §5: user NaN raised in check_user_nan_*; never reaches the math here.
+        # §5: user NaN raised in check_user_nan; never reaches the math here.
         if np.isscalar(other) and join is None:
             if isinstance(other, float) and np.isnan(other):
-                check_user_nan_scalar()
+                check_user_nan()
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if da.isnull().any():
-            check_user_nan_array()
+            check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -708,14 +701,14 @@ class BaseExpression(ABC):
     ) -> GenericExpression:
         # NaN values in self.const or other are silently filled with 0
         # (additive identity) so missing data does not propagate through
-        # arithmetic. ``check_user_nan_*`` only warns under legacy.
+        # arithmetic. ``check_user_nan`` only warns under legacy.
         if np.isscalar(other) and join is None:
             if isinstance(other, float) and np.isnan(other):
-                check_user_nan_scalar()
+                check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if da.isnull().any():
-            check_user_nan_array()
+            check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -754,10 +747,10 @@ class BaseExpression(ABC):
         # §6: NaN in coeffs/const propagates through op (NaN * x = NaN).
         # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
-            check_user_nan_scalar(op_kind=op_kind)
+            check_user_nan(op_kind=op_kind)
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if factor.isnull().any():
-            check_user_nan_array(op_kind=op_kind)
+            check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -785,10 +778,10 @@ class BaseExpression(ABC):
         # NaN values are silently filled with neutral elements before the op:
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
         if isinstance(other, float) and np.isnan(other):
-            check_user_nan_scalar(op_kind=op_kind)
+            check_user_nan(op_kind=op_kind)
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if factor.isnull().any():
-            check_user_nan_array(op_kind=op_kind)
+            check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1301,7 +1294,7 @@ class BaseExpression(ABC):
                         f"Consider collapsing the dimensions by taking min/max."
                     )
                 if rhs.isnull().any():
-                    check_user_nan_array()
+                    check_user_nan()
             all_to_lhs = self.sub(rhs, join=join).data
             computed_rhs = -all_to_lhs.const
             data = assign_multiindex_safe(
@@ -2619,12 +2612,7 @@ def merge(
     # the conflicting aux coord, which is the #295 bug v1 closes; we must
     # raise (v1) / warn (legacy) before xr.concat sees the data, regardless
     # of how the caller resolves the §8 dim mismatch.
-    aux_conflict = conflicting_aux_coord(data)
-    if aux_conflict is not None:
-        if is_v1():
-            raise ValueError(_aux_conflict_message(*aux_conflict))
-        # LEGACY: remove at 1.0.
-        warn_legacy(_legacy_aux_conflict_message(*aux_conflict))
+    enforce_aux_conflict(data)
 
     # §8: shared *user* dimension coordinates must match exactly across all
     # operands. Helper dims (_term, _factor) legitimately differ, so we

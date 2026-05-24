@@ -64,7 +64,7 @@ from linopy.constants import (
 )
 from linopy.semantics import (
     _legacy_masked_variable_message,
-    check_user_nan_array,
+    check_user_nan,
     is_v1,
     warn_legacy,
 )
@@ -339,7 +339,7 @@ class Variable:
         # and otherwise enters the expression silently. The default
         # coefficient ``1`` carries no NaN, so the check is a no-op there.
         if coefficient.isnull().any():
-            check_user_nan_array(op_kind="mul")
+            check_user_nan(op_kind="mul")
         if is_v1():
             # Under v1 the LinearExpression must carry absence (NaN at
             # `labels == -1`) so §6 propagation through downstream

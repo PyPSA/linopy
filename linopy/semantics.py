@@ -93,35 +93,29 @@ _OPT_IN_HINT = (
 )
 
 
-def _legacy_nan_constant_add_message() -> str:
-    """``+`` / ``-`` legacy fill-with-0 for NaN constants."""
-    return (
+# Per-op opening clause for ``_legacy_nan_constant_message`` — operand
+# noun and the historical fill value (`+`/`*` filled with 0; `/` filled
+# with 1, a different fill that's worth calling out at the warn site).
+_LEGACY_NAN_FILL_CLAUSE = {
+    "add": (
         "NaN in the constant operand was silently treated as 0 by legacy"
-        " (additive identity). Under v1 this raises ValueError."
-        "\n  Resolve:   `.fillna(value)` (data error)"
-        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-        "on the variable (intended absence)." + _OPT_IN_HINT
-    )
-
-
-def _legacy_nan_constant_mul_message() -> str:
-    """``*`` legacy fill-with-0 for NaN constants."""
-    return (
+        " (additive identity)."
+    ),
+    "mul": (
         "NaN in the multiplicative factor was silently treated as 0 by"
         " legacy (so the variable was zeroed out at that slot)."
-        " Under v1 this raises ValueError."
-        "\n  Resolve:   `.fillna(value)` (data error)"
-        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-        "on the variable (intended absence)." + _OPT_IN_HINT
-    )
-
-
-def _legacy_nan_constant_div_message() -> str:
-    """``/`` legacy fill-with-1 for NaN constants."""
-    return (
+    ),
+    "div": (
         "NaN in the divisor was silently treated as 1 by legacy (a"
-        " different fill from `+`/`*` which use 0). Under v1 this raises"
-        " ValueError."
+        " different fill from `+`/`*` which use 0)."
+    ),
+}
+
+
+def _legacy_nan_constant_message(op_kind: str) -> str:
+    """Legacy NaN-fill warning for `+`/`*`/`/`, keyed by ``op_kind``."""
+    return (
+        _LEGACY_NAN_FILL_CLAUSE[op_kind] + " Under v1 this raises ValueError."
         "\n  Resolve:   `.fillna(value)` (data error)"
         "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
         "on the variable (intended absence)." + _OPT_IN_HINT
@@ -158,12 +152,7 @@ def _legacy_coord_mismatch_message(
     )
 
 
-def _legacy_aux_conflict_message(
-    name: str,
-    left: Any = None,
-    right: Any = None,
-    kind: str = "value",
-) -> str:
+def _legacy_aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
     """
     Conflicting aux coord silently dropped by xarray under legacy.
 
@@ -171,15 +160,10 @@ def _legacy_aux_conflict_message(
     as the v1-raise text so the user sees the same information at warn
     time as at raise time.
     """
-    if left is not None and right is not None:
-        if kind == "shape":
-            diff = f"\n  Shapes:    left={np.shape(left)}, right={np.shape(right)}"
-        else:
-            diff = (
-                f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
-            )
+    if kind == "shape":
+        diff = f"\n  Shapes:    left={np.shape(left)}, right={np.shape(right)}"
     else:
-        diff = ""
+        diff = f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
     return (
         f"Auxiliary coordinate {name!r} was conflicting across operands"
         " and silently dropped by legacy (xarray's default)."
@@ -265,31 +249,30 @@ def is_v1() -> bool:
     return options["semantics"] == V1_SEMANTICS
 
 
-def check_user_nan_scalar(*, op_kind: str = "add") -> None:
+def check_user_nan(*, op_kind: str = "add") -> None:
     """
-    Enforce §5 for a scalar: v1 raises, legacy warns with op-specific text.
+    Enforce §5 for a user-supplied constant (scalar or array).
 
-    ``op_kind`` is one of ``"add"`` (covers +/-), ``"mul"``, ``"div"``.
+    v1 raises ``ValueError`` with the generic user-NaN message; legacy
+    warns with operator-specific text (``"add"`` covers +/-, ``"mul"``,
+    ``"div"`` — they differ in which fill value legacy applied).
     """
     if is_v1():
         raise ValueError(_user_nan_message())
-    warn_legacy(_legacy_message_for_op(op_kind), stacklevel=5)
+    warn_legacy(_legacy_nan_constant_message(op_kind), stacklevel=5)
 
 
-def check_user_nan_array(*, op_kind: str = "add") -> None:
-    """Enforce §5 for a DataArray operand: v1 raises, legacy warns once."""
+def enforce_aux_conflict(datasets: Sequence[Any], *, stacklevel: int = 5) -> None:
+    """
+    Enforce §11 across the given operands: v1 raises on aux-coord
+    conflict, legacy warns (xarray would silently drop it).
+    """
+    conflict = conflicting_aux_coord(datasets)
+    if conflict is None:
+        return
     if is_v1():
-        raise ValueError(_user_nan_message())
-    warn_legacy(_legacy_message_for_op(op_kind), stacklevel=5)
-
-
-def _legacy_message_for_op(op_kind: str) -> str:
-    """Pick the per-operator legacy NaN-fill message."""
-    return {
-        "add": _legacy_nan_constant_add_message,
-        "mul": _legacy_nan_constant_mul_message,
-        "div": _legacy_nan_constant_div_message,
-    }[op_kind]()
+        raise ValueError(_aux_conflict_message(*conflict))
+    warn_legacy(_legacy_aux_conflict_message(*conflict), stacklevel=stacklevel)
 
 
 def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
