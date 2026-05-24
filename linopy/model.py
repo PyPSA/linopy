@@ -29,7 +29,7 @@ from xarray.core.types import T_Chunks
 from linopy import solvers
 from linopy.common import (
     as_dataarray,
-    as_dataarray_in_coords,
+    assert_compatible_with_coords,
     assign_multiindex_safe,
     best_int,
     maybe_replace_signs,
@@ -700,10 +700,14 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
+        lower_da = as_dataarray(lower, coords, **kwargs)
+        upper_da = as_dataarray(upper, coords, **kwargs)
+        assert_compatible_with_coords(lower_da, coords)
+        assert_compatible_with_coords(upper_da, coords)
         data = Dataset(
             {
-                "lower": as_dataarray_in_coords(lower, coords, **kwargs),
-                "upper": as_dataarray_in_coords(upper, coords, **kwargs),
+                "lower": lower_da,
+                "upper": upper_da,
                 "labels": -1,
             }
         )
@@ -712,7 +716,8 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray_in_coords(mask, data.coords).astype(bool)
+            mask = as_dataarray(mask, data.coords).astype(bool)
+            assert_compatible_with_coords(mask, data.coords)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -976,7 +981,8 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray_in_coords(mask, data.coords).astype(bool)
+            mask = as_dataarray(mask, data.coords).astype(bool)
+            assert_compatible_with_coords(mask, data.coords)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:

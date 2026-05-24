@@ -213,30 +213,20 @@ def numpy_to_dataarray(
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
-def as_dataarray(
+def _as_dataarray_lax(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
-    Convert an object to a DataArray.
+    Type-dispatched DataArray conversion without any coords validation.
 
-    Parameters
-    ----------
-        arr:
-            The input object.
-        coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Union[list, None]):
-            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
-        **kwargs:
-            Additional keyword arguments to be passed to the DataArray constructor.
-
-    Returns
-    -------
-        DataArray:
-            The converted DataArray.
+    This is the conversion primitive used by ``as_dataarray``: it picks the
+    right constructor for each supported input type but does not check the
+    result against ``coords``. Callers that need ``coords`` to govern the
+    output (dim order, shared-dim values, missing-dim expansion) should use
+    ``as_dataarray`` instead.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -275,18 +265,193 @@ def as_dataarray(
     return arr
 
 
+def as_dataarray(
+    arr: Any,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
+) -> DataArray:
+    """
+    Convert ``arr`` to a DataArray and broadcast it against ``coords``.
+
+    When ``coords`` carries named dimensions, the result is aligned with
+    those coords:
+
+    - positional inputs (numpy, polars, unnamed pandas, scalar) are labeled
+      with the coord dim names by position;
+    - for every dim shared between ``arr`` and ``coords``, same-values-
+      different-order coordinates are reindexed to ``coords`` order;
+    - dims present in ``coords`` but not in ``arr`` are expanded to the
+      ``coords`` shape;
+    - the result is transposed to ``coords`` order.
+
+    Dimensions present in ``arr`` but not in ``coords`` are preserved so
+    standard xarray broadcasting keeps working. Disagreeing coord values
+    on a shared dim (i.e. value sets that are not equal as sets) are
+    passed through unchanged: downstream xarray alignment decides how to
+    combine them. To enforce that ``arr.dims`` ⊆ ``coords.dims`` and that
+    shared coord values match, use ``assert_compatible_with_coords``.
+
+    Parameters
+    ----------
+    arr
+        Input scalar / list / numpy / polars / pandas / DataArray.
+    coords
+        Mapping of dim name → coord values, or a sequence of ``pd.Index``
+        / unnamed sequences. ``None`` falls back to xarray's default
+        labeling (no broadcasting).
+    dims
+        Optional dim-names hint, used for positional inputs and to bias
+        pandas-axis interpretation.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        Broadcast against ``coords`` (extra dims preserved).
+    """
+    if coords is None:
+        return _as_dataarray_lax(arr, coords, dims, **kwargs)
+
+    expected = _coords_to_dict(coords)
+    if not expected:
+        return _as_dataarray_lax(arr, coords, dims, **kwargs)
+
+    if isinstance(arr, pd.Series | pd.DataFrame):
+        converted = _named_pandas_to_dataarray(arr)
+        if converted is not None:
+            arr = converted
+
+    if not isinstance(arr, DataArray):
+        # numpy/polars/unnamed-pandas inputs are positional — their only
+        # meaningful information is the values; any axis labels are
+        # auto-generated. Default dims to coords' keys so the lax conversion
+        # labels axes correctly (instead of dim_0/dim_1), then re-assign
+        # coords from expected so positional inputs align to coords by
+        # position. A shape mismatch surfaces here as a clear xarray
+        # "conflicting sizes" error rather than a confusing
+        # "coordinates do not match" further down.
+        if dims is None:
+            dims = list(expected)
+        arr = _as_dataarray_lax(arr, coords, dims=dims, **kwargs)
+        # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
+        # a FutureWarning and isn't needed (the lax pass already used it).
+        arr = arr.assign_coords(
+            {
+                d: expected[d]
+                for d in arr.dims
+                if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
+            }
+        )
+
+    for dim, coord_values in expected.items():
+        if dim not in arr.dims:
+            continue
+        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+            continue
+        expected_idx = (
+            coord_values
+            if isinstance(coord_values, pd.Index)
+            else pd.Index(coord_values)
+        )
+        actual_idx = arr.coords[dim].to_index()
+        if actual_idx.equals(expected_idx):
+            continue
+        # Same values, different order → reindex to match expected order.
+        # Different value sets are left alone: downstream xarray alignment
+        # (e.g. xr.align in arithmetic) handles them. Callers needing strict
+        # value matching (add_variables / add_constraints) should use
+        # ``assert_compatible_with_coords`` after this call.
+        if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
+            expected_idx
+        ):
+            arr = arr.reindex({dim: expected_idx})
+
+    # expand_dims prepends new dimensions and their coordinate variables;
+    # the subsequent transpose restores coords order. Both are no-ops when
+    # the array already matches. Reconstruct so the DataArray's coords
+    # iteration order also follows coords (a Dataset built from this picks
+    # up its dim order from coord insertion).
+    expand = {k: v for k, v in expected.items() if k not in arr.dims}
+    if expand:
+        arr = arr.expand_dims(expand)
+
+    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
+        d for d in arr.dims if d not in expected
+    )
+    arr = arr.transpose(*target_dims)
+
+    coord_order = [c for c in target_dims if c in arr.coords] + [
+        c for c in arr.coords if c not in target_dims
+    ]
+    if list(arr.coords) != coord_order:
+        arr = DataArray(
+            arr.variable,
+            coords={c: arr.coords[c] for c in coord_order},
+            name=arr.name,
+        )
+
+    return arr
+
+
+def assert_compatible_with_coords(arr: DataArray, coords: CoordsLike | None) -> None:
+    """
+    Raise ``ValueError`` if ``arr`` is incompatible with ``coords``.
+
+    ``arr`` is compatible with ``coords`` when both of the following hold:
+
+    - every dim in ``arr.dims`` is also a dim in ``coords`` (no extras);
+    - for every dim shared between ``arr`` and ``coords``, the coord
+      values are equal.
+
+    No-op when ``coords`` is ``None`` or carries no named dimensions.
+    """
+    if coords is None:
+        return
+    expected = _coords_to_dict(coords)
+    if not expected:
+        return
+    extra = set(arr.dims) - set(expected)
+    if extra:
+        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+    for dim, coord_values in expected.items():
+        if dim not in arr.dims:
+            continue
+        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+            continue
+        expected_idx = (
+            coord_values
+            if isinstance(coord_values, pd.Index)
+            else pd.Index(coord_values)
+        )
+        actual_idx = arr.coords[dim].to_index()
+        if not actual_idx.equals(expected_idx):
+            raise ValueError(
+                f"Coordinates for dimension '{dim}' do not match: "
+                f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
+            )
+
+
 def _coords_to_dict(
     coords: Sequence[Sequence | pd.Index] | Mapping,
 ) -> dict[str, Any]:
     """
     Normalize coords to a dict mapping dim names to coordinate values.
 
-    Entries must be ``pd.Index`` (named or not) or unnamed sequences
-    (``list`` / ``tuple`` / ``range`` / ``np.ndarray``). Other types —
-    notably ``xarray.DataArray`` — raise ``TypeError`` rather than
-    being silently dropped: callers should convert via
-    ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
+    For ``xarray.Coordinates`` (and ``DataArray.coords``), only entries
+    that are actual dimensions are kept; derived MultiIndex level coords
+    are dropped here and re-attached by xarray downstream. Plain mappings
+    are returned as-is. For sequence inputs, entries must be ``pd.Index``
+    (named or not) or unnamed sequences (``list`` / ``tuple`` / ``range``
+    / ``np.ndarray``). Other types — notably ``xarray.DataArray`` — raise
+    ``TypeError`` rather than being silently dropped: callers should
+    convert via ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
     """
+    if isinstance(coords, Coordinates):
+        # Coordinates iterates over every coord variable, including
+        # MultiIndex level coords. Keep only the entries that are dims.
+        return {d: coords[d] for d in coords.dims if d in coords}
     if isinstance(coords, Mapping):
         return dict(coords)
     result: dict[str, Any] = {}
@@ -327,116 +492,6 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
         arr = arr.stack(list(range(arr.columns.nlevels)), future_stack=True)
 
     return arr.to_xarray()
-
-
-def as_dataarray_in_coords(arr: Any, coords: Any, **kwargs: Any) -> DataArray:
-    """
-    Coerce ``arr`` into a DataArray that matches ``coords``.
-
-    Strict-coords counterpart to ``as_dataarray``: ``coords`` is the
-    source of truth, so the returned DataArray has the dimensions,
-    dimension order, and coordinate values of ``coords``, regardless
-    of the input type. Pandas inputs with fully named axes are
-    converted via ``to_xarray`` so their axis names map to dimensions;
-    scalars, numpy arrays, and unnamed pandas go through
-    ``as_dataarray``. The result is then validated, expanded over
-    missing dims, and transposed; ``expand_dims`` and ``transpose``
-    are no-ops when the array already matches.
-
-    - Raises ``ValueError`` if the input has dimensions not in
-      ``coords``.
-    - Raises ``ValueError`` if shared dimension coordinates differ in
-      values. Same-values-different-order coordinates are reindexed.
-    """
-    if coords is None:
-        return as_dataarray(arr, coords, **kwargs)
-
-    expected = _coords_to_dict(coords)
-    if not expected:
-        return as_dataarray(arr, coords, **kwargs)
-
-    orig_type_name = type(arr).__name__
-
-    if isinstance(arr, pd.Series | pd.DataFrame):
-        converted = _named_pandas_to_dataarray(arr)
-        if converted is not None:
-            arr = converted
-
-    if not isinstance(arr, DataArray):
-        # numpy/polars/unnamed-pandas inputs are positional — their only
-        # meaningful information is the values; any axis labels are
-        # auto-generated. Default dims to coords' keys so as_dataarray
-        # labels axes correctly (instead of dim_0/dim_1), then re-assign
-        # coords from expected so positional inputs align to coords by
-        # position. A shape mismatch surfaces here as a clear xarray
-        # "conflicting sizes" error rather than a confusing
-        # "coordinates do not match" further down.
-        kwargs.setdefault("dims", list(expected))
-        arr = as_dataarray(arr, coords, **kwargs)
-        # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
-        # a FutureWarning and isn't needed (as_dataarray already used it).
-        arr = arr.assign_coords(
-            {
-                d: expected[d]
-                for d in arr.dims
-                if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
-            }
-        )
-
-    extra = set(arr.dims) - set(expected)
-    if extra:
-        raise ValueError(
-            f"{orig_type_name} has extra dimensions not in coords: {extra}"
-        )
-
-    for dim, coord_values in expected.items():
-        if dim not in arr.dims:
-            continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
-            continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
-        actual_idx = arr.coords[dim].to_index()
-        if not actual_idx.equals(expected_idx):
-            # Same values, different order → reindex to match expected order
-            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
-                expected_idx
-            ):
-                arr = arr.reindex({dim: expected_idx})
-            else:
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' do not match: "
-                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-                )
-
-    # expand_dims prepends new dimensions and their coordinate variables;
-    # the subsequent transpose restores coords order. Both are no-ops when
-    # the array already matches. Reconstruct so the DataArray's coords
-    # iteration order also follows coords (a Dataset built from this picks
-    # up its dim order from coord insertion).
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if expand:
-        arr = arr.expand_dims(expand)
-
-    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
-        d for d in arr.dims if d not in expected
-    )
-    arr = arr.transpose(*target_dims)
-
-    coord_order = [c for c in target_dims if c in arr.coords] + [
-        c for c in arr.coords if c not in target_dims
-    ]
-    if list(arr.coords) != coord_order:
-        arr = DataArray(
-            arr.variable,
-            coords={c: arr.coords[c] for c in coord_order},
-            name=arr.name,
-        )
-
-    return arr
 
 
 def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:

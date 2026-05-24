@@ -428,7 +428,9 @@ class TestAddVariablesBoundsWithCoords:
             model.add_variables(upper=upper, coords=self.SEQ_COORDS, name="x")
 
     def test_dataarray_extra_dims(self, model: "Model") -> None:
-        lower = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+        lower = DataArray(
+            [[1, 2], [3, 4], [5, 6]], dims=["x", "y"], coords={"x": [0, 1, 2]}
+        )
         with pytest.raises(ValueError, match="extra dimensions"):
             model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
 
