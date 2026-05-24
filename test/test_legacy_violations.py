@@ -208,6 +208,24 @@ class TestUserNaNRaises:
         with pytest.raises(ValueError, match="NaN"):
             x * bound
 
+    @pytest.mark.v1
+    def test_to_linexpr_coefficient_nan_raises(
+        self, x: Variable, time: pd.RangeIndex
+    ) -> None:
+        """
+        §5 on the direct ``Variable.to_linexpr(coefficient)`` entry —
+        callers can construct an expression bypassing the operator
+        overloads. NaN in the explicit coefficient is still user data
+        and must raise (otherwise the NaN flows into ``coeffs`` and
+        §6 silently propagates absence from what was actually a
+        data error).
+        """
+        nan_coeff = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            x.to_linexpr(nan_coeff)
+
     @pytest.mark.legacy
     def test_add_nan_dataarray_silently_fills_with_zero(
         self, x: Variable, time: pd.RangeIndex

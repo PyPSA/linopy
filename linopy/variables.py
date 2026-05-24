@@ -329,11 +329,18 @@ class Variable:
         """
         from linopy.semantics import (
             _legacy_masked_variable_message,
+            check_user_nan_array,
             is_v1,
             warn_legacy,
         )
 
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        # §5: user-supplied NaN in the coefficient must raise (v1) / warn
+        # (legacy) — it's the multiplicative analogue of ``x + nan_data``
+        # and otherwise enters the expression silently. The default
+        # coefficient ``1`` carries no NaN, so the check is a no-op there.
+        if coefficient.isnull().any():
+            check_user_nan_array(op_kind="mul")
         if is_v1():
             # Under v1 the LinearExpression must carry absence (NaN at
             # `labels == -1`) so §6 propagation through downstream
