@@ -1270,6 +1270,48 @@ class TestAuxCoordConflict:
         with pytest.raises(ValueError, match="Auxiliary coordinate"):
             v + w + u
 
+    @pytest.mark.v1
+    def test_aux_conflict_raises_under_explicit_join_constant(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        §11 is independent of §8 — an explicit ``join=`` must not
+        silence the aux-coord raise. Regression for the
+        ``if join is None:`` gating bug where ``.add(const, join="override")``
+        would silently drop the conflicting coord.
+        """
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        const = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["A"],
+            coords={"A": A, "B": ("A", [400, 400, 500])},
+        )
+        for join in ("override", "inner", "outer", "left", "right", "exact"):
+            with pytest.raises(ValueError, match="Auxiliary coordinate"):
+                v.add(const, join=join)
+
+    @pytest.mark.v1
+    def test_aux_conflict_raises_under_explicit_join_merge(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        Same rule on the merge path: ``linopy.merge([v, w], join="override")``
+        with a conflicting aux coord must raise.
+        """
+        import linopy
+
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
+            B=("A", [400, 400, 500])
+        )
+        for join in ("override", "inner", "outer", "left", "right", "exact"):
+            with pytest.raises(ValueError, match="Auxiliary coordinate"):
+                linopy.merge([1 * v, 1 * w], join=join)
+
     @pytest.mark.legacy
     def test_aux_conflict_silently_keeps_left(self, m: Model, A: pd.Index) -> None:
         """

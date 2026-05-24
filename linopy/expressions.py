@@ -574,14 +574,17 @@ class BaseExpression(ABC):
         needs_data_reindex : bool
             Whether the expression's data needs reindexing.
         """
+        # §11: aux-coord conflict is independent of dim alignment — fires
+        # on every join path. Gating it behind ``join is None`` (alongside
+        # the §8 dim check) would leave ``join="override"`` etc. silently
+        # dropping the conflicting coord, which is the #295 bug v1 is
+        # meant to close. v1 raises; legacy warns.
+        aux_conflict = conflicting_aux_coord([self.const, other])
+        if aux_conflict is not None:
+            if is_v1():
+                raise ValueError(_aux_conflict_message(*aux_conflict))
+            warn_legacy(_legacy_aux_conflict_message(*aux_conflict), stacklevel=4)
         if join is None:
-            # §11: silently dropping a conflicting aux coord is what
-            # xarray does by default — v1 raises, legacy warns.
-            aux_conflict = conflicting_aux_coord([self.const, other])
-            if aux_conflict is not None:
-                if is_v1():
-                    raise ValueError(_aux_conflict_message(*aux_conflict))
-                warn_legacy(_legacy_aux_conflict_message(*aux_conflict), stacklevel=4)
             if is_v1():
                 join = "exact"
             else:
@@ -2570,6 +2573,18 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
+    # §11: aux-coord conflict is independent of dim alignment — fires on
+    # every join path. xr.concat(..., compat="override") silently drops
+    # the conflicting aux coord, which is the #295 bug v1 closes; we must
+    # raise (v1) / warn (legacy) before xr.concat sees the data, regardless
+    # of how the caller resolves the §8 dim mismatch.
+    aux_conflict = conflicting_aux_coord(data)
+    if aux_conflict is not None:
+        if is_v1():
+            raise ValueError(_aux_conflict_message(*aux_conflict))
+        # LEGACY: remove at 1.0.
+        warn_legacy(_legacy_aux_conflict_message(*aux_conflict))
+
     # §8: shared *user* dimension coordinates must match exactly across all
     # operands. Helper dims (_term, _factor) legitimately differ, so we
     # validate user dims separately and keep xr.concat on join="outer"
@@ -2583,16 +2598,6 @@ def merge(
             warn_legacy(
                 _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch),
             )
-
-        # §11: auxiliary (non-dim) coords either propagate (values agree)
-        # or surface as an error. xarray silently drops the conflict — v1
-        # raises so the caller resolves it explicitly with .drop_vars(...).
-        aux_conflict = conflicting_aux_coord(data)
-        if aux_conflict is not None:
-            if is_v1():
-                raise ValueError(_aux_conflict_message(*aux_conflict))
-            # LEGACY: remove at 1.0.
-            warn_legacy(_legacy_aux_conflict_message(*aux_conflict))
 
     if join is not None:
         override = join == "override"
