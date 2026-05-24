@@ -538,11 +538,18 @@ class BaseExpression(ABC):
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
         res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
-        # deal with cross terms c1 * v2 + c2 * v1
+        # deal with cross terms c1 * v2 + c2 * v1. The ``const`` factors
+        # are internal §6-propagated fields — NaN at absent slots, not
+        # user-supplied data. ``fillna(0)`` makes them safe to pass back
+        # through the public-API ``*`` (which §5-checks user NaN); the
+        # zeroed cross-term contribution at an absent slot adds nothing,
+        # and ``res`` already carries the absence marker from the
+        # FACTOR_DIM merge above (NaN + 0 = NaN), so absence survives
+        # and ``absorb_absence`` enforces the storage invariant.
         if self.has_constant:
-            res = res + self.const * other.reset_const()
+            res = res + other.reset_const() * self.const.fillna(0)
         if other.has_constant:
-            res = res + self.reset_const() * other.const
+            res = res + self.reset_const() * other.const.fillna(0)
         return cast(QuadraticExpression, res)
 
     def _align_constant(
@@ -2639,8 +2646,16 @@ def merge(
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
+        # §6 also applies to the quadratic build: an absent factor must
+        # stay absent (``prod(skipna=False)`` → NaN) rather than collapse
+        # to multiplicative identity 1. Matches the TERM_DIM branch above.
+        skipna = not is_v1()
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
+            FACTOR_DIM, skipna=skipna
+        )
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
+            FACTOR_DIM, skipna=skipna
+        )
         ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
     else:
         ds = xr.concat(data, dim, **kwargs)

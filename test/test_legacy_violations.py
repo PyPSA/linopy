@@ -676,6 +676,31 @@ class TestAbsencePropagation:
         assert bool(absent.isnull().values[0])
         assert not bool(zero.isnull().values[0])
 
+    @pytest.mark.v1
+    def test_quadratic_absence_propagates_through_factor_product(
+        self, xs: Variable, x: Variable
+    ) -> None:
+        """
+        §6 on the quadratic build path — ``var * var`` merges along
+        ``_factor`` and the per-factor product must propagate absence
+        (NaN) rather than collapse to multiplicative identity 1.
+
+        Regression for ``prod(skipna=True)`` on the FACTOR_DIM branch:
+        with ``skipna`` left at xarray's default, an absent factor was
+        silently treated as ``1`` and the slot came back present.
+        """
+        quad = xs * x  # xs absent at t=0, x present everywhere
+        # absent slot stays absent in the resulting quadratic
+        assert bool(quad.isnull().values[0])
+        # and the storage invariant (§1/§2) holds at the absent slot:
+        # every factor at t=0 has coeffs NaN and vars -1.
+        assert np.isnan(quad.coeffs.values[0]).all()
+        assert (quad.vars.values[0] == -1).all()
+        # And the present slots stay present (cross-term storage may carry
+        # vars=-1 as the "no second factor" sentinel inside a term — that's
+        # not absence, so check the slot-level isnull predicate, not vars).
+        assert not bool(quad.isnull().values[1:].any())
+
     @pytest.mark.legacy
     def test_legacy_collapses_absent_to_zero(self, xs: Variable) -> None:
         """
