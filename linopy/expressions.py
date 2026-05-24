@@ -630,7 +630,10 @@ class BaseExpression(ABC):
             # to prevent. Raise with a clear message instead of letting
             # xarray broadcast / error opaquely downstream.
             shared = set(self.const.dims) & set(other.dims)
-            bad = sorted(d for d in shared if self.const.sizes[d] != other.sizes[d])
+            bad = sorted(
+                (d for d in shared if self.const.sizes[d] != other.sizes[d]),
+                key=str,
+            )
             if bad:
                 sizes = ", ".join(
                     f"{d!r}: left={self.const.sizes[d]}, right={other.sizes[d]}"
