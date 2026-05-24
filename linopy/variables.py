@@ -62,6 +62,12 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
 )
+from linopy.semantics import (
+    _legacy_masked_variable_message,
+    check_user_nan_array,
+    is_v1,
+    warn_legacy,
+)
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -327,13 +333,6 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        from linopy.semantics import (
-            _legacy_masked_variable_message,
-            check_user_nan_array,
-            is_v1,
-            warn_legacy,
-        )
-
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         # §5: user-supplied NaN in the coefficient must raise (v1) / warn
         # (legacy) — it's the multiplicative analogue of ``x + nan_data``
