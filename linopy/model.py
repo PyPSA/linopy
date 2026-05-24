@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, ndarray
+from numpy import inf
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
@@ -32,7 +32,6 @@ from linopy.common import (
     as_dataarray_in_coords,
     assign_multiindex_safe,
     best_int,
-    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -593,7 +592,7 @@ class Model:
         upper: Any = inf,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         name: str | None = None,
-        mask: DataArray | ndarray | Series | None = None,
+        mask: MaskLike | None = None,
         binary: bool = False,
         integer: bool = False,
         semi_continuous: bool = False,
@@ -713,8 +712,7 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = as_dataarray_in_coords(mask, data.coords).astype(bool)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -978,8 +976,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = as_dataarray_in_coords(mask, data.coords).astype(bool)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
