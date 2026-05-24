@@ -278,11 +278,16 @@ def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | N
     """
     Return ``(dim, a_labels, b_labels)`` for the first shared dim that
     disagrees on coordinate labels OR size, or ``None`` if all agree.
+
+    Uses ``indexes[dim]`` (the bare pandas Index) rather than
+    ``coords[dim]`` — a coord DataArray's ``equals`` compares attached
+    aux coords too, which gives a false positive when only one operand
+    carries an aux coord on the shared dim (§11's territory, not §8's).
     """
     for dim in set(a.dims) & set(b.dims):
-        if dim in a.coords and dim in b.coords:
-            if not a.coords[dim].equals(b.coords[dim]):
-                return str(dim), a.coords[dim].values, b.coords[dim].values
+        if dim in a.indexes and dim in b.indexes:
+            if not a.indexes[dim].equals(b.indexes[dim]):
+                return str(dim), a.indexes[dim].values, b.indexes[dim].values
         elif a.sizes[dim] != b.sizes[dim]:
             return str(dim), None, None
     return None

@@ -100,7 +100,7 @@ class TestExactAlignmentConstant:
             dims=["time"],
             coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
         )
-        with pytest.raises(ValueError, match="exact"):
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             _OPS[op](x, other)
 
     @pytest.mark.v1
@@ -113,7 +113,7 @@ class TestExactAlignmentConstant:
         subset = xr.DataArray(
             [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
-        with pytest.raises(ValueError, match="exact"):
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             _OPS[op](x, subset)
 
     @pytest.mark.legacy
@@ -990,7 +990,7 @@ class TestNamedMethodJoin:
         self, x: Variable, subset: xr.DataArray
     ) -> None:
         """`x + subset` (no `join=`) still raises — opt-in is required."""
-        with pytest.raises(ValueError, match="exact"):
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             x + subset
 
     @pytest.mark.v1
@@ -1085,7 +1085,7 @@ class TestConstraintRHS:
             dims=["time"],
             coords={"time": pd.Index([1, 3], name="time")},
         )
-        with pytest.raises(ValueError, match="exact"):
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             _SIGNS[sign](x, subset)
 
     @pytest.mark.v1

@@ -649,26 +649,23 @@ class BaseExpression(ABC):
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        try:
-            self_const, aligned = xr.align(
-                self.const,
-                other,
-                join=join,
-                fill_value=fill_value,
-            )
-        except ValueError as e:
-            if "exact" in str(e):
-                raise ValueError(
-                    f"{e}\n"
-                    "Resolve with `.sel(...)` / `.reindex(...)` / "
-                    "`.reindex_like(...)` to align before combining, with "
-                    "`.assign_coords(...)` to relabel one side, with "
-                    "`linopy.align(...)` to pre-align several operands, or "
-                    "by passing an explicit `join=` argument to `.add` / "
-                    "`.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
-                    "(accepts inner / outer / left / right / override)."
-                ) from None
-            raise
+        # ``xr.align(..., join="exact")`` raises with a wording that's not
+        # API-stable across xarray releases; matching on ``"exact" in str(e)``
+        # would silently degrade if upstream rephrases. Do the §8 check
+        # ourselves and raise the canonical ``_shared_dim_mismatch_message``
+        # (same text as the v1-default and merge paths). Other joins
+        # (inner / outer / right) handle coord mismatches via the join
+        # mode and don't error here.
+        if join == "exact":
+            mismatch = first_mismatched_dim(self.const, other)
+            if mismatch is not None:
+                raise ValueError(_shared_dim_mismatch_message(*mismatch))
+        self_const, aligned = xr.align(
+            self.const,
+            other,
+            join=join,
+            fill_value=fill_value,
+        )
         return self_const, aligned, True
 
     def _add_constant(
