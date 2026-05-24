@@ -301,7 +301,9 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
     names = list(arr.index.names)
     if isinstance(arr, pd.DataFrame):
         names += list(arr.columns.names)
-    if any(n is None for n in names):
+    # pd.Index.names entries can be any hashable (tuples, ints, ...). Only
+    # strings map cleanly to xarray dim names; everything else falls through.
+    if any(not isinstance(n, str) for n in names):
         return None
 
     if isinstance(arr, pd.DataFrame):
