@@ -293,22 +293,19 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
     """
     Convert a pandas Series or DataFrame with fully named axes to a DataArray.
 
-    Multi-level columns are unstacked so each level becomes its own dimension.
-    Returns ``None`` if any axis (or MultiIndex level) is unnamed, signalling
-    that the caller should fall back to ``as_dataarray``.
+    DataFrame columns (and column-MultiIndex levels) are stacked into the row
+    MultiIndex so each axis name becomes its own dimension. Returns ``None``
+    if any axis (or MultiIndex level) is unnamed, so the caller can fall back
+    to ``as_dataarray``.
     """
+    names = list(arr.index.names)
     if isinstance(arr, pd.DataFrame):
-        while isinstance(arr, pd.DataFrame):
-            arr = arr.unstack()
-        if not isinstance(arr, pd.Series):
-            return None
-
-    index = arr.index
-    if isinstance(index, pd.MultiIndex):
-        if any(n is None for n in index.names):
-            return None
-    elif index.name is None:
+        names += list(arr.columns.names)
+    if any(n is None for n in names):
         return None
+
+    if isinstance(arr, pd.DataFrame):
+        arr = arr.stack(list(range(arr.columns.nlevels)), future_stack=True)
 
     return arr.to_xarray()
 

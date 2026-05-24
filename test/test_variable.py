@@ -440,6 +440,31 @@ class TestAddVariablesBoundsWithCoords:
         )
         assert (var.data.lower == [1, 2, 3]).all()
 
+    def test_pandas_bound_with_unnamed_axis_falls_through(self, model: "Model") -> None:
+        """Pandas bound with any unnamed axis falls through to as_dataarray."""
+        unnamed_series = pd.Series([1, 2, 3])
+        var = model.add_variables(
+            upper=unnamed_series,
+            coords=[pd.Index([0, 1, 2], name="dim_0")],
+            name="x",
+        )
+        assert (var.data.upper.values.flatten() == [1, 2, 3]).all()
+
+    def test_unnamed_coords_short_circuit(self, model: "Model") -> None:
+        """Coords as a list of unnamed indexes leaves the bound unchanged."""
+        bound = DataArray([1, 2, 3], dims=["dim_0"])
+        var = model.add_variables(upper=bound, coords=[pd.Index([0, 1, 2])], name="x")
+        assert (var.data.upper == [1, 2, 3]).all()
+
+    def test_dataarray_bound_with_multiindex_coord(self, model: "Model") -> None:
+        """A DataArray bound carrying a MultiIndex coord skips the value check."""
+        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+        midx.name = "multi"
+        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
+        var = model.add_variables(upper=bound, coords=[midx], name="x")
+        assert var.shape == (4,)
+        assert (var.data.upper == [1, 2, 3, 4]).all()
+
     # -- Broadcasting missing dims -----------------------------------------
 
     @pytest.mark.parametrize(
