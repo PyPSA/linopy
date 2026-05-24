@@ -677,23 +677,40 @@ class TestAbsencePropagation:
         assert not bool(zero.isnull().values[0])
 
     @pytest.mark.v1
-    def test_quadratic_absence_propagates_through_factor_product(
-        self, xs: Variable, x: Variable
+    @pytest.mark.parametrize(
+        "build",
+        [
+            "var_mul_var",
+            "var_pow_2",
+            "expr_mul_var",
+            "expr_mul_expr",
+            "quad_plus_linexpr",
+            "quad_times_scalar",
+        ],
+    )
+    def test_quadratic_absence_propagates(
+        self, xs: Variable, x: Variable, build: str
     ) -> None:
         """
-        §6 on the quadratic build path — ``var * var`` merges along
-        ``_factor`` and the per-factor product must propagate absence
-        (NaN) rather than collapse to multiplicative identity 1.
+        §6 on the quadratic build paths — every entry point that ends
+        in a QuadraticExpression must keep an absent factor absent.
 
-        Regression for ``prod(skipna=True)`` on the FACTOR_DIM branch:
-        with ``skipna`` left at xarray's default, an absent factor was
-        silently treated as ``1`` and the slot came back present.
+        Regression for ``prod(skipna=True)`` on the FACTOR_DIM branch
+        and the cross-term ``self.const * other.reset_const()`` path,
+        plus the downstream operators on the resulting quadratic.
         """
-        quad = xs * x  # xs absent at t=0, x present everywhere
+        builders = {
+            "var_mul_var": lambda: xs * x,
+            "var_pow_2": lambda: xs**2,
+            "expr_mul_var": lambda: (1 * xs) * x,
+            "expr_mul_expr": lambda: (1 * xs) * (1 * x),
+            "quad_plus_linexpr": lambda: (xs * x) + (2 * x),
+            "quad_times_scalar": lambda: (xs * x) * 3,
+        }
+        quad = builders[build]()
         # absent slot stays absent in the resulting quadratic
         assert bool(quad.isnull().values[0])
-        # and the storage invariant (§1/§2) holds at the absent slot:
-        # every factor at t=0 has coeffs NaN and vars -1.
+        # and §1/§2: every term at the absent slot has coeffs NaN and vars -1.
         assert np.isnan(quad.coeffs.values[0]).all()
         assert (quad.vars.values[0] == -1).all()
         # And the present slots stay present (cross-term storage may carry
