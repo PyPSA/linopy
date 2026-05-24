@@ -440,15 +440,47 @@ class TestAddVariablesBoundsWithCoords:
         )
         assert (var.data.lower == [1, 2, 3]).all()
 
-    def test_pandas_bound_with_unnamed_axis_falls_through(self, model: "Model") -> None:
-        """Pandas bound with any unnamed axis falls through to as_dataarray."""
-        unnamed_series = pd.Series([1, 2, 3])
-        var = model.add_variables(
-            upper=unnamed_series,
-            coords=[pd.Index([0, 1, 2], name="dim_0")],
-            name="x",
+    def test_positional_bound_aligns_to_coords(self, model: "Model") -> None:
+        """
+        Numpy / unnamed-pandas bounds align to coords positionally,
+        even when the input's auto-generated coord values would not match.
+        """
+        coords = [pd.Index(list("abc"), name="x")]
+        # numpy array — no labels at all, positional alignment.
+        v_np = model.add_variables(upper=np.array([1, 2, 3]), coords=coords, name="np")
+        assert v_np.dims == ("x",)
+        assert (v_np.data.upper.sel(x="a") == 1).all()
+        assert (v_np.data.upper.sel(x="c") == 3).all()
+        # Unnamed Series — pandas index is auto-generated, ignored in favour
+        # of coords (positional alignment, principle: coords is source of truth).
+        v_s = model.add_variables(
+            upper=pd.Series([10, 20, 30]), coords=coords, name="s"
         )
-        assert (var.data.upper.values.flatten() == [1, 2, 3]).all()
+        assert v_s.dims == ("x",)
+        assert (v_s.data.upper.sel(x="a") == 10).all()
+        assert (v_s.data.upper.sel(x="c") == 30).all()
+        # Unnamed DataFrame — both axes positional.
+        v_df = model.add_variables(
+            upper=pd.DataFrame([[1, 2], [3, 4], [5, 6]]),
+            coords=[pd.Index(list("abc"), name="x"), pd.Index(list("xy"), name="y")],
+            name="df",
+        )
+        assert v_df.dims == ("x", "y")
+        assert (v_df.data.upper.sel(x="a", y="x") == 1).all()
+        assert (v_df.data.upper.sel(x="c", y="y") == 6).all()
+
+    def test_positional_bound_wrong_size_raises_clear_error(
+        self, model: "Model"
+    ) -> None:
+        """
+        Shape mismatch on positional inputs surfaces as a size error,
+        not a 'coordinates do not match' error.
+        """
+        coords = [pd.Index(list("abc"), name="x")]
+        with pytest.raises(Exception, match="conflicting sizes|do not match"):
+            model.add_variables(upper=np.array([1, 2]), coords=coords, name="np_bad")
+        with pytest.raises(Exception, match="conflicting sizes|do not match"):
+            model.add_variables(upper=pd.Series([1, 2]), coords=coords, name="s_bad")
 
     def test_unnamed_coords_short_circuit(self, model: "Model") -> None:
         """Coords as a list of unnamed indexes leaves the bound unchanged."""

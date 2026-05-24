@@ -346,7 +346,25 @@ def as_dataarray_in_coords(arr: Any, coords: Any, **kwargs: Any) -> DataArray:
             arr = converted
 
     if not isinstance(arr, DataArray):
-        return as_dataarray(arr, coords, **kwargs)
+        # numpy/polars/unnamed-pandas inputs are positional — their only
+        # meaningful information is the values; any axis labels are
+        # auto-generated. Default dims to coords' keys so as_dataarray
+        # labels axes correctly (instead of dim_0/dim_1), then re-assign
+        # coords from expected so positional inputs align to coords by
+        # position. A shape mismatch surfaces here as a clear xarray
+        # "conflicting sizes" error rather than a confusing
+        # "coordinates do not match" further down.
+        kwargs.setdefault("dims", list(expected))
+        arr = as_dataarray(arr, coords, **kwargs)
+        # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
+        # a FutureWarning and isn't needed (as_dataarray already used it).
+        arr = arr.assign_coords(
+            {
+                d: expected[d]
+                for d in arr.dims
+                if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
+            }
+        )
 
     extra = set(arr.dims) - set(expected)
     if extra:
