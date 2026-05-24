@@ -69,8 +69,6 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import (
-    LEGACY_SEMANTICS_MESSAGE,
-    LinopySemanticsWarning,
     options,
 )
 from linopy.constants import (
@@ -87,6 +85,9 @@ from linopy.constants import (
 )
 from linopy.semantics import (
     _aux_conflict_message,
+    _legacy_aux_conflict_message,
+    _legacy_coord_mismatch_message,
+    _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
     check_user_nan_array,
@@ -95,6 +96,7 @@ from linopy.semantics import (
     dim_coords_differ,
     is_v1,
     merge_shared_user_coord_mismatch,
+    warn_legacy,
 )
 from linopy.types import (
     ConstantLike,
@@ -579,11 +581,7 @@ class BaseExpression(ABC):
             if aux_conflict is not None:
                 if is_v1():
                     raise ValueError(_aux_conflict_message(*aux_conflict))
-                warn(
-                    LEGACY_SEMANTICS_MESSAGE,
-                    LinopySemanticsWarning,
-                    stacklevel=4,
-                )
+                warn_legacy(_legacy_aux_conflict_message(aux_conflict[0]), stacklevel=4)
             if is_v1():
                 join = "exact"
             else:
@@ -591,13 +589,17 @@ class BaseExpression(ABC):
                 # Legacy default: positional when sizes match, else left-join.
                 if other.sizes == self.const.sizes:
                     if dim_coords_differ(self.const, other):
-                        warn(
-                            LEGACY_SEMANTICS_MESSAGE,
-                            LinopySemanticsWarning,
+                        warn_legacy(
+                            _legacy_coord_mismatch_message(
+                                "this operator's constant operand"
+                            ),
                             stacklevel=4,
                         )
                     return self.const, other.assign_coords(coords=self.coords), False
-                warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
+                warn_legacy(
+                    _legacy_coord_mismatch_message("this operator's constant operand"),
+                    stacklevel=4,
+                )
                 return (
                     self.const,
                     other.reindex_like(self.const, fill_value=fill_value),
@@ -744,11 +746,12 @@ class BaseExpression(ABC):
     ) -> GenericExpression:
         # NaN values are silently filled with neutral elements before the op:
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
+        op_kind = "div" if fill_value == 1 else "mul"
         if isinstance(other, float) and np.isnan(other):
-            check_user_nan_scalar()
+            check_user_nan_scalar(op_kind=op_kind)
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if factor.isnull().any():
-            check_user_nan_array()
+            check_user_nan_array(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1286,7 +1289,7 @@ class BaseExpression(ABC):
         if isinstance(rhs, DataArray):
             rhs_nan_mask = rhs.isnull()
             if rhs_nan_mask.any():
-                warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
+                warn_legacy(_legacy_nan_rhs_constraint_message())
         else:
             rhs_nan_mask = None
 
@@ -2573,7 +2576,9 @@ def merge(
             raise ValueError(_shared_dim_mismatch_message(*mismatch))
         # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
         if mismatch is not None:
-            warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
+            warn_legacy(
+                _legacy_coord_mismatch_message(f"merge along dim {dim!r}"),
+            )
 
         # §11: auxiliary (non-dim) coords either propagate (values agree)
         # or surface as an error. xarray silently drops the conflict — v1
@@ -2583,7 +2588,7 @@ def merge(
             if is_v1():
                 raise ValueError(_aux_conflict_message(*aux_conflict))
             # LEGACY: remove at 1.0.
-            warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=3)
+            warn_legacy(_legacy_aux_conflict_message(aux_conflict[0]))
 
     if join is not None:
         override = join == "override"

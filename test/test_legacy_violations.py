@@ -241,37 +241,108 @@ class TestUserNaNRaises:
 
 class TestLegacyWarning:
     """
-    One representative case per divergence class — not a tautology
-    check; verifies the rollout signal users will actually see.
+    One ``match=``-pinned case per divergence class — verifies that
+    the rollout signal users will actually see names the right rule for
+    the operation they just ran (goal #2: actionable warnings).
     """
 
     @pytest.mark.legacy
-    def test_warn_on_mismatched_coords(self, x: Variable, unsilenced: None) -> None:
+    def test_warn_on_mismatched_coords_names_align_path(
+        self, x: Variable, unsilenced: None
+    ) -> None:
         other = xr.DataArray(
             [1.0, 2.0, 3.0, 4.0, 5.0],
             dims=["time"],
             coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
         )
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match="Coordinate mismatch"):
             x + other
 
     @pytest.mark.legacy
-    def test_warn_on_subset_constant(self, x: Variable, unsilenced: None) -> None:
+    def test_warn_on_subset_constant_names_align_path(
+        self, x: Variable, unsilenced: None
+    ) -> None:
         subset = xr.DataArray(
             [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match="Coordinate mismatch"):
             x + subset
 
     @pytest.mark.legacy
-    def test_warn_on_nan_in_user_constant(
+    def test_warn_on_nan_addend_names_fill_with_0(
         self, x: Variable, time: pd.RangeIndex, unsilenced: None
     ) -> None:
+        """`+`/`-` legacy fills NaN with 0 — message says so."""
         nan_data = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match="treated as 0"):
             x + nan_data
+
+    @pytest.mark.legacy
+    def test_warn_on_nan_multiplier_names_fill_with_0(
+        self, x: Variable, time: pd.RangeIndex, unsilenced: None
+    ) -> None:
+        """
+        `*` legacy fills NaN with 0 — message says "multiplicative
+        factor" so it's distinguishable from the `+`/`-` case.
+        """
+        nan_factor = xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.warns(
+            LinopySemanticsWarning,
+            match=r"(?s)multiplicative factor.*treated as 0",
+        ):
+            x * nan_factor
+
+    @pytest.mark.legacy
+    def test_warn_on_nan_divisor_names_fill_with_1(
+        self, x: Variable, time: pd.RangeIndex, unsilenced: None
+    ) -> None:
+        """
+        `/` legacy fills NaN with 1 — the asymmetric fill that
+        motivated #713. The message must name the different fill.
+        """
+        nan_divisor = xr.DataArray(
+            [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
+        with pytest.warns(LinopySemanticsWarning, match=r"(?s)divisor.*treated as 1"):
+            x / nan_divisor
+
+    @pytest.mark.legacy
+    def test_warn_on_masked_variable_in_arithmetic_names_propagation(
+        self, time: pd.RangeIndex, unsilenced: None
+    ) -> None:
+        """
+        The masked-variable warning is the one that catches the
+        ``2 * x + y`` (no fillna) divergence — no other site fires for
+        this case. Message must name the variable and tell the user
+        the fillna(0) fix.
+        """
+        m = Model()
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        mask = xr.DataArray(
+            [True, True, True, True, False], dims=["time"], coords={"time": time}
+        )
+        y = m.add_variables(lower=0, coords=[time], name="y", mask=mask)
+        with pytest.warns(LinopySemanticsWarning, match=r"(?s)'y'.*fillna"):
+            _ = 2 * x + y
+
+    @pytest.mark.legacy
+    def test_warn_on_merge_coord_mismatch_names_merge_dim(
+        self, m: Model, time: pd.RangeIndex, unsilenced: None
+    ) -> None:
+        """
+        The merge-path coord-mismatch warning is distinct from the
+        const-operand path. Message names that it's a merge.
+        """
+        x_local = m.add_variables(lower=0, coords=[time], name="x_local")
+        other = m.add_variables(
+            lower=0, coords=[pd.Index([10, 11, 12, 13, 14], name="time")], name="other"
+        )
+        with pytest.warns(LinopySemanticsWarning, match="merge along dim"):
+            x_local + other
 
 
 # =====================================================================
@@ -363,7 +434,7 @@ class TestExactAlignmentMerge:
     def test_warn_on_var_plus_var_different_labels(
         self, x: Variable, x_other: Variable, unsilenced: None
     ) -> None:
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match="merge along dim"):
             x + x_other
 
 
@@ -870,7 +941,7 @@ class TestConstraintRHS:
         nan_rhs = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match="no constraint at this row"):
             x <= nan_rhs
 
 
@@ -1091,7 +1162,7 @@ class TestAuxCoordConflict:
             dims=["A"],
             coords={"A": A, "B": ("A", [400, 400, 500])},
         )
-        with pytest.warns(LinopySemanticsWarning):
+        with pytest.warns(LinopySemanticsWarning, match=r"(?s)'B'.*silently dropped"):
             v + const
 
 

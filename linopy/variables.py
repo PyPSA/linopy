@@ -327,7 +327,11 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        from linopy.semantics import is_v1
+        from linopy.semantics import (
+            _legacy_masked_variable_message,
+            is_v1,
+            warn_legacy,
+        )
 
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         if is_v1():
@@ -338,6 +342,14 @@ class Variable:
             absent = self.labels == -1
             coefficient = coefficient.where(~absent)
         else:
+            # LEGACY: warn if the variable carries absent slots — those
+            # silently contribute 0 here, but v1 will propagate the
+            # absence and produce a different result downstream. This is
+            # the origin of the most common legacy↔v1 divergence (masked
+            # variables in arithmetic) that no other warn-site catches.
+            has_absence = bool((self.labels == -1).any())
+            if has_absence:
+                warn_legacy(_legacy_masked_variable_message(self.name))
             coefficient = coefficient.reindex_like(self.labels, fill_value=0)
             coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(

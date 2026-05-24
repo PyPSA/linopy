@@ -20,7 +20,6 @@ import numpy as np
 from xarray import DataArray, Dataset
 
 from linopy.config import (
-    LEGACY_SEMANTICS_MESSAGE,
     V1_SEMANTICS,
     LinopySemanticsWarning,
     options,
@@ -65,6 +64,114 @@ def _aux_conflict_message(name: str, left: Any, right: Any) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Legacy-deprecation warnings — actionable, per-site (goal #2 in goals.md:
+# tell the user *what* will change for the op they just ran).
+# Each helper returns the message; ``warn_legacy(msg)`` issues it.
+# ---------------------------------------------------------------------------
+
+
+_OPT_IN_HINT = (
+    "\n  Opt in:    linopy.options['semantics'] = 'v1'"
+    "\n  Silence:   warnings.filterwarnings('ignore', "
+    "category=LinopySemanticsWarning)"
+)
+
+
+def _legacy_nan_constant_add_message() -> str:
+    """``+`` / ``-`` legacy fill-with-0 for NaN constants."""
+    return (
+        "NaN in the constant operand was silently treated as 0 by legacy"
+        " (additive identity). Under v1 this raises ValueError."
+        "\n  Resolve:   `.fillna(value)` (data error)"
+        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+        "on the variable (intended absence)." + _OPT_IN_HINT
+    )
+
+
+def _legacy_nan_constant_mul_message() -> str:
+    """``*`` legacy fill-with-0 for NaN constants."""
+    return (
+        "NaN in the multiplicative factor was silently treated as 0 by"
+        " legacy (so the variable was zeroed out at that slot)."
+        " Under v1 this raises ValueError."
+        "\n  Resolve:   `.fillna(value)` (data error)"
+        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+        "on the variable (intended absence)." + _OPT_IN_HINT
+    )
+
+
+def _legacy_nan_constant_div_message() -> str:
+    """``/`` legacy fill-with-1 for NaN constants."""
+    return (
+        "NaN in the divisor was silently treated as 1 by legacy (a"
+        " different fill from `+`/`*` which use 0). Under v1 this raises"
+        " ValueError."
+        "\n  Resolve:   `.fillna(value)` (data error)"
+        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+        "on the variable (intended absence)." + _OPT_IN_HINT
+    )
+
+
+def _legacy_coord_mismatch_message(context: str) -> str:
+    """Mismatched dim coords silently aligned (positional or left-join)."""
+    return (
+        f"Coordinate mismatch in {context} silently aligned by legacy"
+        " (positional when sizes match, otherwise left-join)."
+        " Under v1 this raises ValueError."
+        "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+        "\n             `.assign_coords(...)` to relabel one side"
+        "\n             `linopy.align(...)` to pre-align several operands"
+        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+    )
+
+
+def _legacy_aux_conflict_message(name: str) -> str:
+    """Conflicting aux coord silently dropped by xarray under legacy."""
+    return (
+        f"Auxiliary coordinate {name!r} was conflicting across operands"
+        " and silently dropped by legacy (xarray's default)."
+        " Under v1 this raises ValueError."
+        f"\n  Resolve:   `.drop_vars({name!r})`"
+        f"\n             `.assign_coords({name}=...)` to relabel one side"
+        "\n             or `.isel(..., drop=True)` if a scalar isel "
+        "introduced it." + _OPT_IN_HINT
+    )
+
+
+def _legacy_nan_rhs_constraint_message() -> str:
+    """Constraint RHS NaN silently kept as 'no constraint at this row'."""
+    return (
+        "NaN in the constraint RHS was silently kept as 'no constraint"
+        " at this row' by legacy auto-mask. Under v1 this raises"
+        " ValueError."
+        "\n  Resolve:   `mask=` on the variable for explicit per-row "
+        "masking"
+        "\n             or `.fillna(value)` if the NaN was a data error." + _OPT_IN_HINT
+    )
+
+
+def _legacy_masked_variable_message(name: str) -> str:
+    """A masked/shifted/reindexed variable used in arithmetic under legacy."""
+    return (
+        f"Variable {name!r} has absent slots (from `mask=` / `.where()`"
+        " / `.shift()` / `.reindex()`). Under legacy each absent slot"
+        " contributes 0 to the resulting expression's terms (so `x + y"
+        " >= 10` reduces to `x >= 10` there). Under v1 the absence"
+        " propagates through arithmetic instead (`x + y` becomes absent"
+        " at the slot and the constraint drops)."
+        f"\n  Resolve:   wrap with `{name}.fillna(0)` for the legacy"
+        " behaviour under v1"
+        "\n             (no fix needed if you only use the variable in a"
+        " constraint LHS alone — `y >= 0` drops the same way in both)." + _OPT_IN_HINT
+    )
+
+
+def warn_legacy(message: str, *, stacklevel: int = 3) -> None:
+    """Emit a `LinopySemanticsWarning` with the given site-specific message."""
+    warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
+
+
 def _short_repr(values: Any, limit: int = 6) -> str:
     """Render an array-like as a short, readable string for error messages."""
     arr = np.asarray(values)
@@ -82,18 +189,31 @@ def is_v1() -> bool:
     return options["semantics"] == V1_SEMANTICS
 
 
-def check_user_nan_scalar() -> None:
-    """Enforce §5 for a scalar: v1 raises, legacy warns once."""
+def check_user_nan_scalar(*, op_kind: str = "add") -> None:
+    """
+    Enforce §5 for a scalar: v1 raises, legacy warns with op-specific text.
+
+    ``op_kind`` is one of ``"add"`` (covers +/-), ``"mul"``, ``"div"``.
+    """
     if is_v1():
         raise ValueError(_user_nan_message())
-    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
+    warn_legacy(_legacy_message_for_op(op_kind), stacklevel=5)
 
 
-def check_user_nan_array() -> None:
+def check_user_nan_array(*, op_kind: str = "add") -> None:
     """Enforce §5 for a DataArray operand: v1 raises, legacy warns once."""
     if is_v1():
         raise ValueError(_user_nan_message())
-    warn(LEGACY_SEMANTICS_MESSAGE, LinopySemanticsWarning, stacklevel=4)
+    warn_legacy(_legacy_message_for_op(op_kind), stacklevel=5)
+
+
+def _legacy_message_for_op(op_kind: str) -> str:
+    """Pick the per-operator legacy NaN-fill message."""
+    return {
+        "add": _legacy_nan_constant_add_message,
+        "mul": _legacy_nan_constant_mul_message,
+        "div": _legacy_nan_constant_div_message,
+    }[op_kind]()
 
 
 def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
