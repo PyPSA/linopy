@@ -59,7 +59,10 @@ replaces today's silent per-operator fills, which guessed a different value for
 every operator ([#713]). To mark slots absent, use the mechanisms of §4 — a
 bare NaN in a constant is not one of them.
 
-**Open question:** whether user NaN should instead be read as "absent" — [#627].
+The alternative — reading user NaN as "absent" instead of raising — was
+discussed in [#627] and closed: ambiguous overload of a numeric value
+defeats goal #1, since a data-error NaN is silently re-labelled as
+intentional absence.
 
 ### §6. Absence propagates through every operator
 
