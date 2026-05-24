@@ -1013,6 +1013,24 @@ class TestNamedMethodJoin:
         assert result.const.values.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
 
     @pytest.mark.v1
+    def test_add_join_override_size_mismatch_raises(self, x: Variable) -> None:
+        """
+        §10 / ``override`` documentation says "positional alignment, made
+        explicit". Positional pairing is only well-defined when the
+        shared-dim sizes match; with mismatched sizes ``override`` would
+        silently mis-pair (or raise opaquely from xarray) instead of
+        producing a clear error. Regression for the dropped legacy
+        ``other.sizes == self.const.sizes`` gate.
+        """
+        shorter = xr.DataArray(
+            [10.0, 20.0, 30.0],
+            dims=["time"],
+            coords={"time": pd.Index([0, 1, 2], name="time")},
+        )
+        with pytest.raises(ValueError, match="join='override' requires matching"):
+            x.add(shorter, join="override")
+
+    @pytest.mark.v1
     def test_reindex_like_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
         """
         §10 names ``.reindex(...)`` / ``.reindex_like(...)`` as

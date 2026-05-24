@@ -621,6 +621,27 @@ class BaseExpression(ABC):
                 )
 
         if join == "override":
+            # §10: ``override`` is the *explicit* form of the legacy
+            # positional alignment. Positional pairing requires the
+            # shared dims to have matching sizes on both sides — without
+            # that the labels we're about to ``assign_coords`` on would
+            # be a coord-rename of mismatched data, which is exactly the
+            # silent-wrong-answer hazard ``override`` was tightened up
+            # to prevent. Raise with a clear message instead of letting
+            # xarray broadcast / error opaquely downstream.
+            shared = set(self.const.dims) & set(other.dims)
+            bad = sorted(d for d in shared if self.const.sizes[d] != other.sizes[d])
+            if bad:
+                sizes = ", ".join(
+                    f"{d!r}: left={self.const.sizes[d]}, right={other.sizes[d]}"
+                    for d in bad
+                )
+                raise ValueError(
+                    f"join='override' requires matching sizes on shared "
+                    f"dimensions, but sizes differ on {sizes}. Use "
+                    f"join='inner' / 'outer' / 'left' / 'right' to combine "
+                    f"by label, or reshape one side first."
+                )
             return self.const, other.assign_coords(coords=self.coords), False
         if join == "left":
             return (
