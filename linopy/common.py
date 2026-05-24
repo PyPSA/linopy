@@ -281,11 +281,12 @@ def _coords_to_dict(
     """Normalize coords to a dict mapping dim names to coordinate values."""
     if isinstance(coords, Mapping):
         return dict(coords)
-    # Sequence of indexes
+    # Sequence of named coords (pd.Index, xarray DataArray, etc.).
     result: dict[str, Any] = {}
     for c in coords:
-        if isinstance(c, pd.Index) and c.name:
-            result[c.name] = c
+        name = getattr(c, "name", None)
+        if name:
+            result[name] = c
     return result
 
 
