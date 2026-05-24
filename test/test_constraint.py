@@ -442,11 +442,16 @@ def test_constraint_update_no_kwargs_is_noop(
     assert (mc.sign == old_sign).all()
 
 
-def test_constraint_update_rejects_variable_rhs(
+def test_constraint_update_rearranges_variable_rhs(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    with pytest.raises(TypeError, match="only accepts constants"):
-        mc.update(rhs=x)
+    """
+    Variable / Expression rhs is moved onto lhs; only the constant
+    part lands on rhs (mirrors add_constraints and the .rhs setter).
+    """
+    mc.update(rhs=x + 3)
+    assert (mc.rhs == 3).all()
+    assert mc.lhs.nterm == 2  # original term + the rearranged -x
 
 
 def test_constraint_update_returns_self(

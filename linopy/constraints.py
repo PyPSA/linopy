@@ -1152,36 +1152,13 @@ class Constraint(ConstraintBase):
 
     @rhs.setter
     def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """
-        Set RHS. Constants go through :meth:`Constraint.update`; non-constant
-        rhs (Variable/Expression) is rearranged to LHS in place.
-        """
-        # Constant path: route through the canonical update API.
-        if not isinstance(
-            value,
-            variables.Variable
-            | variables.ScalarVariable
-            | expressions.LinearExpression
-            | expressions.QuadraticExpression,
-        ):
-            self.update(rhs=value)
-            return
-        # Non-constant rhs: existing rearrange-to-lhs behaviour (kept for
-        # backward compatibility; an explicit method would be cleaner).
-        expr = expressions.as_expression(
-            value, self.model, coords=self.coords, dims=self.coord_dims
-        )
-        residual = expr.reset_const()
-        if residual.nterm == 0:
-            self._data = assign_multiindex_safe(self.data, rhs=expr.const)
-            return
-        self.lhs = self.lhs - residual
-        self._data = assign_multiindex_safe(self.data, rhs=expr.const)
+        """Shim — forwards to :meth:`Constraint.update`."""
+        self.update(rhs=value)
 
     def update(
         self,
         *,
-        rhs: ConstantLike | None = None,
+        rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         sign: SignLike | None = None,
     ) -> Constraint:
         """
@@ -1192,10 +1169,11 @@ class Constraint(ConstraintBase):
 
         Parameters
         ----------
-        rhs : ConstantLike, optional
-            New constant RHS. Variable / Expression RHS is not supported
-            here; use the (legacy) ``c.rhs = expression`` setter, which
-            rearranges the residual into ``c.lhs``.
+        rhs : ExpressionLike / VariableLike / ConstantLike, optional
+            New right-hand side. Variable / Expression rhs is rearranged
+            onto the lhs (matching ``add_constraints`` and the legacy
+            ``c.rhs = expr`` setter): the residual is subtracted from
+            ``c.lhs`` and only the constant part lands on ``c.rhs``.
         sign : SignLike, optional
             New sign. One of ``"<=" / "==" / ">="`` (or their ``< > =``
             aliases).
@@ -1208,27 +1186,26 @@ class Constraint(ConstraintBase):
         if rhs is None and sign is None:
             return self
 
-        if rhs is not None and isinstance(
-            rhs,
-            variables.Variable
-            | variables.ScalarVariable
-            | expressions.LinearExpression
-            | expressions.QuadraticExpression,
-        ):
-            raise TypeError(
-                "Constraint.update(rhs=...) only accepts constants; "
-                f"got {type(rhs).__name__}. Use the legacy `c.rhs = expr` "
-                "setter or rebuild via add_constraints(...) for "
-                "expression / Variable rhs."
+        if rhs is not None:
+            expr = expressions.as_expression(
+                rhs, self.model, coords=self.coords, dims=self.coord_dims
             )
+            residual = expr.reset_const()
+            if residual.nterm != 0:
+                # Move the non-constant part of `rhs` onto lhs, then store
+                # the constant part on rhs.
+                self.lhs = self.lhs - residual
+            new_rhs = expr.const
+        else:
+            new_rhs = None
 
         updates: dict[str, DataArray] = {}
-        if rhs is not None:
-            new_rhs = DataArray(rhs).broadcast_like(self.rhs)
+        if new_rhs is not None:
             updates["rhs"] = new_rhs
         if sign is not None:
-            new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
-            updates["sign"] = new_sign
+            updates["sign"] = maybe_replace_signs(DataArray(sign)).broadcast_like(
+                self.sign
+            )
 
         self._data = assign_multiindex_safe(self.data, **updates)
         return self

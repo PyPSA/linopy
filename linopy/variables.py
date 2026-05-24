@@ -924,8 +924,11 @@ class Variable:
         Parameters
         ----------
         lower : ConstantLike, optional
-            New lower bound. Aligned via xarray broadcast against the
-            variable's existing shape; new dims are rejected.
+            New lower bound. Accepts any constant — scalars, numpy
+            arrays, pandas Series / DataFrame, xarray DataArray (e.g.
+            time-varying bounds). Aligned via xarray broadcast against
+            the variable's existing shape; new dims are rejected.
+            Decision variables / linear expressions are not accepted.
         upper : ConstantLike, optional
             New upper bound. Same.
 
@@ -937,7 +940,8 @@ class Variable:
         Raises
         ------
         TypeError
-            If either bound is a Variable / Expression instead of a constant.
+            If either bound is a Variable / Expression (bounds must be
+            numeric, not symbolic).
         ValueError
             If the new bound introduces dimensions not in the variable's
             coords, or if the resulting ``lower > upper`` anywhere.
