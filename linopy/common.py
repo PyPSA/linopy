@@ -276,17 +276,33 @@ def as_dataarray(
 
 
 def _coords_to_dict(
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
+    coords: Sequence[Sequence | pd.Index] | Mapping,
 ) -> dict[str, Any]:
-    """Normalize coords to a dict mapping dim names to coordinate values."""
+    """
+    Normalize coords to a dict mapping dim names to coordinate values.
+
+    Entries must be ``pd.Index`` (named or not) or unnamed sequences
+    (``list`` / ``tuple`` / ``range`` / ``np.ndarray``). Other types —
+    notably ``xarray.DataArray`` — raise ``TypeError`` rather than
+    being silently dropped: callers should convert via
+    ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
+    """
     if isinstance(coords, Mapping):
         return dict(coords)
-    # Sequence of named coords (pd.Index, xarray DataArray, etc.).
     result: dict[str, Any] = {}
     for c in coords:
-        name = getattr(c, "name", None)
-        if name:
-            result[name] = c
+        if isinstance(c, pd.Index):
+            if c.name:
+                result[c.name] = c
+        elif isinstance(c, list | tuple | range | np.ndarray):
+            pass  # unnamed sequence contributes no named dim
+        else:
+            raise TypeError(
+                f"coords entries must be pd.Index or an unnamed sequence "
+                f"(list / tuple / range / numpy.ndarray); got "
+                f"{type(c).__name__}. For an xarray DataArray coord, pass "
+                f"`variable.indexes[<dim>]` (a pd.Index) instead."
+            )
     return result
 
 

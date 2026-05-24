@@ -1844,7 +1844,7 @@ class LinearExpression(BaseExpression):
         cls,
         model: Model,
         rule: Callable,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from a rule and a set of coordinates.

@@ -591,7 +591,7 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         name: str | None = None,
         mask: DataArray | ndarray | Series | None = None,
         binary: bool = False,
@@ -823,7 +823,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
     ) -> Constraint: ...
@@ -839,7 +839,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
     ) -> CSRConstraint: ...
@@ -854,7 +854,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
         freeze: bool | None = None,
     ) -> ConstraintBase:
@@ -1360,7 +1360,7 @@ class Model:
 
     @overload
     def linexpr(
-        self, *args: Sequence[Sequence | pd.Index | DataArray] | Mapping
+        self, *args: Sequence[Sequence | pd.Index] | Mapping
     ) -> LinearExpression: ...
 
     @overload
@@ -1373,7 +1373,7 @@ class Model:
         *args: tuple[ConstantLike, str | Variable | ScalarVariable]
         | ConstantLike
         | Callable
-        | Sequence[Sequence | pd.Index | DataArray]
+        | Sequence[Sequence | pd.Index]
         | Mapping,
     ) -> LinearExpression:
         """
