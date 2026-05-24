@@ -1160,6 +1160,49 @@ class TestConstraintRHS:
         with pytest.warns(LinopySemanticsWarning, match="no constraint at this row"):
             x <= nan_rhs
 
+    @pytest.mark.legacy
+    def test_warn_on_coord_mismatch_rhs_distinguishes_from_nan(
+        self, x: Variable, unsilenced: None
+    ) -> None:
+        """
+        A subset RHS has no user NaN — legacy's ``reindex_like`` is what
+        introduces the NaN at the unmatched positions. The warning should
+        diagnose the *coord mismatch* (fix: ``.sel`` / ``.reindex``), not
+        the NaN-RHS auto-mask (fix: ``mask=`` / ``.fillna``). Regression
+        for the conflated warn text where both causes used the same
+        ``_legacy_nan_rhs_constraint_message``.
+        """
+        subset = xr.DataArray(
+            [10.0, 20.0],
+            dims=["time"],
+            coords={"time": pd.Index([1, 3], name="time")},
+        )
+        with pytest.warns(
+            LinopySemanticsWarning, match="Coordinate mismatch in constraint RHS"
+        ):
+            x <= subset
+
+    @pytest.mark.legacy
+    def test_both_warnings_fire_when_rhs_has_user_nan_and_mismatch(
+        self, x: Variable, unsilenced: None
+    ) -> None:
+        """
+        Independent causes — when the RHS is both subset (mismatch) and
+        carries a user NaN, both fix-hints should surface so the caller
+        sees each problem with its own resolution.
+        """
+        both = xr.DataArray(
+            [10.0, np.nan],
+            dims=["time"],
+            coords={"time": pd.Index([1, 3], name="time")},
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", LinopySemanticsWarning)
+            x <= both
+        messages = [str(w.message) for w in caught]
+        assert any("Coordinate mismatch in constraint RHS" in m for m in messages)
+        assert any("no constraint at this row" in m for m in messages)
+
 
 # =====================================================================
 # §13 — reductions skip absent slots (not propagate)

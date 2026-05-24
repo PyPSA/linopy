@@ -1319,12 +1319,19 @@ class BaseExpression(ABC):
                     f"in the expression, which might lead to inefficiencies. "
                     f"Consider collapsing the dimensions by taking min/max."
                 )
+            # Two legacy paths can introduce NaN into ``rhs`` and the
+            # ``rhs_nan_mask`` below treats both the same (auto-mask drops
+            # the row). The fix-hints differ though, so check each cause
+            # before the reindex obscures them, and warn the right one.
+            mismatch = first_mismatched_dim(self.const, rhs)
+            if mismatch is not None:
+                warn_legacy(_legacy_coord_mismatch_message("constraint RHS", *mismatch))
+            if bool(rhs.isnull().any()):
+                warn_legacy(_legacy_nan_rhs_constraint_message())
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
 
         if isinstance(rhs, DataArray):
             rhs_nan_mask = rhs.isnull()
-            if rhs_nan_mask.any():
-                warn_legacy(_legacy_nan_rhs_constraint_message())
         else:
             rhs_nan_mask = None
 
