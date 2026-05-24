@@ -732,27 +732,29 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
+        op_kind: str,
         join: JoinOptions | None = None,
     ) -> GenericExpression:
         """Apply a constant operation (mul, div) to this expression."""
         if is_v1():
-            return self._apply_constant_op_v1(other, op, fill_value, join)
-        return self._apply_constant_op_legacy(other, op, fill_value, join)
+            return self._apply_constant_op_v1(other, op, fill_value, op_kind, join)
+        return self._apply_constant_op_legacy(other, op, fill_value, op_kind, join)
 
     def _apply_constant_op_v1(
         self: GenericExpression,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
+        op_kind: str,
         join: JoinOptions | None,
     ) -> GenericExpression:
         # §6: NaN in coeffs/const propagates through op (NaN * x = NaN).
         # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
-            check_user_nan_scalar()
+            check_user_nan_scalar(op_kind=op_kind)
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         if factor.isnull().any():
-            check_user_nan_array()
+            check_user_nan_array(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -774,11 +776,11 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
+        op_kind: str,
         join: JoinOptions | None,
     ) -> GenericExpression:
         # NaN values are silently filled with neutral elements before the op:
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
-        op_kind = "div" if fill_value == 1 else "mul"
         if isinstance(other, float) and np.isnan(other):
             check_user_nan_scalar(op_kind=op_kind)
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -804,12 +806,16 @@ class BaseExpression(ABC):
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
+        return self._apply_constant_op(
+            other, operator.mul, fill_value=0, op_kind="mul", join=join
+        )
 
     def _divide_by_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
+        return self._apply_constant_op(
+            other, operator.truediv, fill_value=1, op_kind="div", join=join
+        )
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
         try:
