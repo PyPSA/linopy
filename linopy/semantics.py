@@ -12,6 +12,8 @@ implement and ``arithmetics-design/goals.md`` for the design intent.
 
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Sequence
 from typing import Any
 from warnings import warn
@@ -113,26 +115,54 @@ def _legacy_nan_constant_div_message() -> str:
     )
 
 
-def _legacy_coord_mismatch_message(context: str) -> str:
-    """Mismatched dim coords silently aligned (positional or left-join)."""
+def _legacy_coord_mismatch_message(
+    context: str,
+    dim: str | None = None,
+    left: Any = None,
+    right: Any = None,
+) -> str:
+    """
+    Mismatched dim coords silently aligned (positional or left-join).
+
+    When ``dim`` / ``left`` / ``right`` are given, the message names the
+    offending dim and shows the diff — same shape as the v1-raise text
+    so the user sees the same information at warn time as at raise time.
+    """
+    diff = (
+        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
+        if dim is not None
+        else ""
+    )
     return (
         f"Coordinate mismatch in {context} silently aligned by legacy"
         " (positional when sizes match, otherwise left-join)."
         " Under v1 this raises ValueError."
-        "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+        + diff
+        + "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
         "\n             `.assign_coords(...)` to relabel one side"
         "\n             `linopy.align(...)` to pre-align several operands"
         "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
     )
 
 
-def _legacy_aux_conflict_message(name: str) -> str:
-    """Conflicting aux coord silently dropped by xarray under legacy."""
+def _legacy_aux_conflict_message(name: str, left: Any = None, right: Any = None) -> str:
+    """
+    Conflicting aux coord silently dropped by xarray under legacy.
+
+    When ``left`` / ``right`` are given, the message shows the
+    conflicting values — same shape as the v1-raise text.
+    """
+    diff = (
+        f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
+        if left is not None and right is not None
+        else ""
+    )
     return (
         f"Auxiliary coordinate {name!r} was conflicting across operands"
         " and silently dropped by legacy (xarray's default)."
         " Under v1 this raises ValueError."
-        f"\n  Resolve:   `.drop_vars({name!r})`"
+        + diff
+        + f"\n  Resolve:   `.drop_vars({name!r})`"
         f"\n             `.assign_coords({name}=...)` to relabel one side"
         "\n             or `.isel(..., drop=True)` if a scalar isel "
         "introduced it." + _OPT_IN_HINT
@@ -167,9 +197,32 @@ def _legacy_masked_variable_message(name: str) -> str:
     )
 
 
-def warn_legacy(message: str, *, stacklevel: int = 3) -> None:
-    """Emit a `LinopySemanticsWarning` with the given site-specific message."""
-    warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
+_LINOPY_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def warn_legacy(message: str, *, stacklevel: int | None = None) -> None:
+    """
+    Emit a `LinopySemanticsWarning` whose source-frame points at the
+    first call-stack frame *outside* the linopy package.
+
+    Static ``stacklevel`` doesn't fit here — the call-chain depth from
+    ``warn_legacy`` to the user's code varies per site (e.g. masked-var
+    via ``__add__`` is 5 frames deep, via ``Variable.fillna`` is 4). On
+    Python 3.12+ we use the stdlib ``skip_file_prefixes`` argument
+    (implemented and tested in CPython); on 3.11 we fall back to a
+    static ``stacklevel=5``, good enough for the common merge chain.
+    Pass an explicit ``stacklevel`` to override (e.g. for tests).
+    """
+    if stacklevel is not None:
+        warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
+    elif sys.version_info >= (3, 12):
+        warn(
+            message,
+            LinopySemanticsWarning,
+            skip_file_prefixes=(_LINOPY_ROOT,),
+        )
+    else:
+        warn(message, LinopySemanticsWarning, stacklevel=5)
 
 
 def _short_repr(values: Any, limit: int = 6) -> str:
@@ -218,11 +271,21 @@ def _legacy_message_for_op(op_kind: str) -> str:
 
 def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
     """True if a and b share a dimension whose coordinate labels disagree."""
+    return first_mismatched_dim(a, b) is not None
+
+
+def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | None:
+    """
+    Return ``(dim, a_labels, b_labels)`` for the first shared dim that
+    disagrees on coordinate labels OR size, or ``None`` if all agree.
+    """
     for dim in set(a.dims) & set(b.dims):
         if dim in a.coords and dim in b.coords:
             if not a.coords[dim].equals(b.coords[dim]):
-                return True
-    return False
+                return str(dim), a.coords[dim].values, b.coords[dim].values
+        elif a.sizes[dim] != b.sizes[dim]:
+            return str(dim), None, None
+    return None
 
 
 def merge_shared_user_coord_mismatch(

@@ -93,7 +93,7 @@ from linopy.semantics import (
     check_user_nan_array,
     check_user_nan_scalar,
     conflicting_aux_coord,
-    dim_coords_differ,
+    first_mismatched_dim,
     is_v1,
     merge_shared_user_coord_mismatch,
     warn_legacy,
@@ -581,23 +581,27 @@ class BaseExpression(ABC):
             if aux_conflict is not None:
                 if is_v1():
                     raise ValueError(_aux_conflict_message(*aux_conflict))
-                warn_legacy(_legacy_aux_conflict_message(aux_conflict[0]), stacklevel=4)
+                warn_legacy(_legacy_aux_conflict_message(*aux_conflict), stacklevel=4)
             if is_v1():
                 join = "exact"
             else:
                 # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
                 # Legacy default: positional when sizes match, else left-join.
+                mismatch = first_mismatched_dim(self.const, other)
                 if other.sizes == self.const.sizes:
-                    if dim_coords_differ(self.const, other):
+                    if mismatch is not None:
                         warn_legacy(
                             _legacy_coord_mismatch_message(
-                                "this operator's constant operand"
+                                "this operator's constant operand", *mismatch
                             ),
                             stacklevel=4,
                         )
                     return self.const, other.assign_coords(coords=self.coords), False
                 warn_legacy(
-                    _legacy_coord_mismatch_message("this operator's constant operand"),
+                    _legacy_coord_mismatch_message(
+                        "this operator's constant operand",
+                        *(mismatch or (None, None, None)),
+                    ),
                     stacklevel=4,
                 )
                 return (
@@ -2577,7 +2581,7 @@ def merge(
         # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
         if mismatch is not None:
             warn_legacy(
-                _legacy_coord_mismatch_message(f"merge along dim {dim!r}"),
+                _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch),
             )
 
         # §11: auxiliary (non-dim) coords either propagate (values agree)
@@ -2588,7 +2592,7 @@ def merge(
             if is_v1():
                 raise ValueError(_aux_conflict_message(*aux_conflict))
             # LEGACY: remove at 1.0.
-            warn_legacy(_legacy_aux_conflict_message(aux_conflict[0]))
+            warn_legacy(_legacy_aux_conflict_message(*aux_conflict))
 
     if join is not None:
         override = join == "override"
