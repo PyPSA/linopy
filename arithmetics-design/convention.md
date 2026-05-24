@@ -149,10 +149,13 @@ below) and *propagates* them through arithmetic unchanged, but never
 *computes* with them — they describe the data, they don't enter the math.
 
 When two operands carry an aux coord with the same name and values agree,
-the coord propagates to the result. When the values disagree, the operator
-raises — `xarray` silently drops the conflict, which is the [#295] bug. The
-caller resolves it explicitly with `.drop_vars(name)` (remove the coord) or
-`.assign_coords(name=...)` (relabel one side).
+the coord propagates to the result. When only one operand carries the
+coord, it propagates from that operand unchanged — asymmetric presence is
+not a conflict. When the values *do* disagree (same name on both sides,
+different values), the operator raises — `xarray` silently drops the
+conflict, which is the [#295] bug. The caller resolves it explicitly with
+`.drop_vars(name)` (remove the coord) or `.assign_coords(name=...)`
+(relabel one side).
 
 ## Constraints and reductions
 

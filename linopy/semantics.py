@@ -19,6 +19,7 @@ from typing import Any
 from warnings import warn
 
 import numpy as np
+import pandas as pd
 from xarray import DataArray, Dataset
 
 from linopy.config import (
@@ -53,12 +54,24 @@ def _shared_dim_mismatch_message(dim: str, left: Any, right: Any) -> str:
     )
 
 
-def _aux_conflict_message(name: str, left: Any, right: Any) -> str:
-    """Aux-coord error text — names the coord and shows the disagreeing values."""
+def _aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
+    """
+    Aux-coord error text — names the coord, the failure mode (shape vs
+    value), and shows the disagreeing values.
+    """
+    if kind == "shape":
+        problem = (
+            f"Auxiliary coordinate {name!r} has differing shapes across "
+            f"operands: left.shape={np.shape(left)}, "
+            f"right.shape={np.shape(right)}. "
+        )
+    else:
+        problem = (
+            f"Auxiliary coordinate {name!r} has conflicting values across "
+            f"operands: left={_short_repr(left)}, right={_short_repr(right)}. "
+        )
     return (
-        f"Auxiliary coordinate {name!r} has conflicting values across "
-        f"operands: left={_short_repr(left)}, right={_short_repr(right)}. "
-        "xarray would silently drop the conflict; linopy raises so the "
+        problem + "xarray would silently drop the conflict; linopy raises so the "
         f"caller resolves it. Use `.drop_vars({name!r})` to remove the "
         f"coord, `.assign_coords({name}=...)` to relabel one side, or "
         "`.isel(..., drop=True)` if the coord was introduced by a "
@@ -145,18 +158,28 @@ def _legacy_coord_mismatch_message(
     )
 
 
-def _legacy_aux_conflict_message(name: str, left: Any = None, right: Any = None) -> str:
+def _legacy_aux_conflict_message(
+    name: str,
+    left: Any = None,
+    right: Any = None,
+    kind: str = "value",
+) -> str:
     """
     Conflicting aux coord silently dropped by xarray under legacy.
 
-    When ``left`` / ``right`` are given, the message shows the
-    conflicting values — same shape as the v1-raise text.
+    The diff line names the failure mode (shape vs value) — same shape
+    as the v1-raise text so the user sees the same information at warn
+    time as at raise time.
     """
-    diff = (
-        f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
-        if left is not None and right is not None
-        else ""
-    )
+    if left is not None and right is not None:
+        if kind == "shape":
+            diff = f"\n  Shapes:    left={np.shape(left)}, right={np.shape(right)}"
+        else:
+            diff = (
+                f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
+            )
+    else:
+        diff = ""
     return (
         f"Auxiliary coordinate {name!r} was conflicting across operands"
         " and silently dropped by legacy (xarray's default)."
@@ -322,16 +345,23 @@ def merge_shared_user_coord_mismatch(
 
 def conflicting_aux_coord(
     datasets: Sequence[Any],
-) -> tuple[str, Any, Any] | None:
+) -> tuple[str, Any, Any, str] | None:
     """
     Find an auxiliary (non-dim) coord that two or more operands carry with
     disagreeing values.
 
-    Returns ``(name, left_values, right_values)`` for the first conflict
-    found, or ``None`` if every shared aux coord agrees. Per §11, an aux
-    coord either propagates (values agree across operands) or surfaces as
-    an error; xarray's default silently drops the conflict and is what
-    this check intercepts under v1.
+    Returns ``(name, left_values, right_values, kind)`` for the first
+    conflict found, or ``None`` if every shared aux coord agrees. ``kind``
+    is ``"shape"`` if the two operands carry differently-shaped values for
+    the coord (e.g. one is a vector, the other a scalar), or ``"value"``
+    if shapes agree but the values themselves disagree. The two failure
+    modes get different error text downstream.
+
+    Per §11, an aux coord either propagates (values agree across operands)
+    or surfaces as an error; xarray's default silently drops the conflict
+    and is what this check intercepts under v1. When only one operand
+    carries the coord (``len(present) < 2``), it propagates from that
+    operand unchanged.
     """
     if not datasets:
         return None
@@ -344,18 +374,34 @@ def conflicting_aux_coord(
             for d in datasets
             if name in d.coords and name not in d.dims
         ]
+        # §11 asymmetric-presence: when only one operand carries the coord,
+        # it propagates unchanged — no conflict to surface.
         if len(present) < 2:
             continue
         ref = present[0]
-        # ``equal_nan`` is only meaningful (and only well-defined) for
-        # float dtypes — string/object coord values would crash isnan.
-        equal_nan = np.issubdtype(ref.dtype, np.floating)
         for vals in present[1:]:
-            if ref.shape != vals.shape or not np.array_equal(
-                ref, vals, equal_nan=equal_nan
-            ):
-                return str(name), ref, vals
+            if ref.shape != vals.shape:
+                return str(name), ref, vals, "shape"
+            if not _aux_values_equal(ref, vals):
+                return str(name), ref, vals, "value"
     return None
+
+
+def _aux_values_equal(a: np.ndarray, b: np.ndarray) -> bool:
+    """
+    Equality for aux-coord value arrays with NaN-equal-NaN semantics
+    on every dtype.
+
+    ``np.array_equal(..., equal_nan=True)`` only works on float dtypes
+    (it calls ``isnan`` which crashes on object/string). Aux coords on
+    object dtype can embed ``np.nan`` placeholders (e.g. ragged category
+    labels), and we want two operands with identical NaN placement to
+    compare equal — pandas' element-equality already treats NaN as
+    self-equal for object dtypes, so route through ``pd.Series.equals``.
+    """
+    if np.issubdtype(a.dtype, np.floating):
+        return bool(np.array_equal(a, b, equal_nan=True))
+    return bool(pd.Series(a.ravel()).equals(pd.Series(b.ravel())))
 
 
 def absorb_absence(ds: Dataset) -> Dataset:

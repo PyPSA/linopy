@@ -1535,6 +1535,23 @@ class TestAuxCoordPropagation:
         result = v + w
         assert "B" in result.coords
 
+    def test_aux_coord_object_dtype_with_nan_compares_equal(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        Aux coords with object dtype can embed NaN placeholders (e.g.
+        ragged category labels). Two operands with identical NaN
+        placement must compare equal — `np.array_equal` alone treats
+        NaN as self-unequal on object dtype, so the §11 raise would
+        false-positive without the pandas-equals fallback.
+        """
+        B = np.array([311, np.nan, 322], dtype=object)
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(B=("A", B))
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(B=("A", B))
+        # Same B on both sides, NaN at the same slot — should propagate, not raise.
+        result = v + w
+        assert "B" in result.coords
+
 
 # =====================================================================
 # Error-message content (raise self-description)
@@ -1607,12 +1624,35 @@ class TestErrorMessageContent:
             v + const
         msg = str(exc.value)
         assert "'B'" in msg
+        assert "conflicting values" in msg  # value-mismatch failure mode
         assert "[311, 311, 322]" in msg
         assert "[400, 400, 500]" in msg
         # All three resolution paths from §11 should be listed.
         assert ".drop_vars" in msg
         assert ".assign_coords" in msg
         assert ".isel" in msg
+
+    @pytest.mark.v1
+    def test_aux_conflict_message_distinguishes_shape_vs_value(
+        self, m: Model, A: pd.Index
+    ) -> None:
+        """
+        Shape mismatch and value disagreement are different failure
+        modes — surface that in the message text so the caller can
+        diagnose without re-reading both arrays.
+        """
+        # scalar-isel leaves a 0-d aux coord on one side; the full vector
+        # on the other has a different shape, not a different value.
+        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+            B=("A", [311, 311, 322])
+        )
+        scalar_side = (1 * v).isel({"A": 0})  # B becomes a 0-d scalar coord
+        full_side = 1 * v
+        with pytest.raises(ValueError, match="differing shapes") as exc:
+            scalar_side + full_side
+        msg = str(exc.value)
+        assert "'B'" in msg
+        assert "shape" in msg
 
 
 # =====================================================================
