@@ -1129,7 +1129,7 @@ class Constraint(ConstraintBase):
     @vars.setter
     def vars(self, value: variables.Variable | DataArray) -> None:
         """Shim — forwards to :meth:`Constraint.update`."""
-        self.update(vars=value)
+        self.update(variables=value)
 
     @property
     def sign(self) -> DataArray:
@@ -1181,7 +1181,7 @@ class Constraint(ConstraintBase):
         rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         sign: SignLike | None = None,
         coeffs: ConstantLike | None = None,
-        vars: variables.Variable | DataArray | None = None,
+        variables: variables.Variable | DataArray | None = None,
     ) -> Constraint:
         """
         Update the constraint in place.
@@ -1194,7 +1194,7 @@ class Constraint(ConstraintBase):
         lhs : ExpressionLike / VariableLike / ConstantLike, optional
             Replace the LHS expression. Any constant part is moved to
             ``rhs`` so ``c.lhs`` stays pure-variable. Cannot be combined
-            with ``coeffs`` / ``vars``. Sets the internal
+            with ``coeffs`` / ``variables``. Sets the internal
             ``_coef_dirty`` flag.
         rhs : ExpressionLike / VariableLike / ConstantLike, optional
             New right-hand side. Variable / Expression rhs is rearranged
@@ -1207,22 +1207,24 @@ class Constraint(ConstraintBase):
         coeffs : ConstantLike, optional
             Replace coefficient values (same sparsity / term structure).
             Lower-level than ``lhs=``; sets ``_coef_dirty``.
-        vars : Variable / DataArray, optional
+        variables : Variable / DataArray, optional
             Replace variable label array (same sparsity / term
             structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
+            Mirrors the ``c.vars`` attribute; spelled out here to avoid
+            shadowing Python's ``vars()`` builtin in the kwarg name.
 
         Returns
         -------
         Constraint
             ``self`` for chaining.
         """
-        if all(v is None for v in (lhs, rhs, sign, coeffs, vars)):
+        if all(v is None for v in (lhs, rhs, sign, coeffs, variables)):
             return self
 
-        if lhs is not None and (coeffs is not None or vars is not None):
+        if lhs is not None and (coeffs is not None or variables is not None):
             raise TypeError(
                 "Constraint.update: pass either `lhs=` (replace the whole "
-                "expression) or `coeffs=` / `vars=` (partial array "
+                "expression) or `coeffs=` / `variables=` (partial array "
                 "replacement), not both."
             )
 
@@ -1245,19 +1247,21 @@ class Constraint(ConstraintBase):
             else:
                 self._data = assign_multiindex_safe(self.data, rhs=expr.const)
 
-        # 3. coeffs / vars partial updates (only valid without lhs=).
+        # 3. coeffs / variables partial updates (only valid without lhs=).
         if coeffs is not None:
             new_coeffs = DataArray(coeffs).broadcast_like(
                 self.vars, exclude=[self.term_dim]
             )
             self._data = assign_multiindex_safe(self.data, coeffs=new_coeffs)
             self._coef_dirty = True
-        if vars is not None:
-            v = vars.labels if isinstance(vars, variables.Variable) else vars
+        if variables is not None:
+            from linopy.variables import Variable as _Variable
+
+            v = variables.labels if isinstance(variables, _Variable) else variables
             if not isinstance(v, DataArray):
                 raise TypeError(
-                    "Constraint.update(vars=...) expects a DataArray or "
-                    f"Variable; got {type(vars).__name__}."
+                    "Constraint.update(variables=...) expects a DataArray or "
+                    f"Variable; got {type(variables).__name__}."
                 )
             new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
             self._data = assign_multiindex_safe(self.data, vars=new_vars)
@@ -1373,7 +1377,7 @@ class Constraint(ConstraintBase):
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
         return self.update(
-            vars=self.vars.where(not_zero, -1),
+            variables=self.vars.where(not_zero, -1),
             coeffs=self.coeffs.where(not_zero),
         )
 
