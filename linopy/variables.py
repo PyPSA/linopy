@@ -48,7 +48,6 @@ from linopy.common import (
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -891,18 +890,9 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @require_constant
     def upper(self, value: ConstantLike) -> None:
-        """
-        Set the upper bounds of the variables.
-
-        The function raises an error in case no model is set as a
-        reference.
-        """
-        value = DataArray(value).broadcast_like(self.upper)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, upper=value)
+        """Shim — forwards to :meth:`Variable.update`."""
+        self.update(upper=value)
 
     @property
     def lower(self) -> DataArray:
@@ -915,18 +905,83 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @require_constant
     def lower(self, value: ConstantLike) -> None:
-        """
-        Set the lower bounds of the variables.
+        """Shim — forwards to :meth:`Variable.update`."""
+        self.update(lower=value)
 
-        The function raises an error in case no model is set as a
-        reference.
+    def update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> Variable:
         """
-        value = DataArray(value).broadcast_like(self.lower)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, lower=value)
+        Update variable bounds in place.
+
+        Canonical mutation API. Validation and coord alignment live here.
+        Single-attribute setters (`var.lower = …`) forward to this method.
+
+        Parameters
+        ----------
+        lower : ConstantLike, optional
+            New lower bound. Aligned via xarray broadcast against the
+            variable's existing shape; new dims are rejected.
+        upper : ConstantLike, optional
+            New upper bound. Same.
+
+        Returns
+        -------
+        Variable
+            ``self`` for chaining.
+
+        Raises
+        ------
+        TypeError
+            If either bound is a Variable / Expression instead of a constant.
+        ValueError
+            If the new bound introduces dimensions not in the variable's
+            coords, or if the resulting ``lower > upper`` anywhere.
+        """
+        if lower is None and upper is None:
+            return self
+
+        from linopy import expressions
+
+        non_constant = (
+            Variable,
+            ScalarVariable,
+            expressions.LinearExpression,
+            expressions.QuadraticExpression,
+        )
+        for name, val in (("lower", lower), ("upper", upper)):
+            if val is not None and isinstance(val, non_constant):
+                raise TypeError(
+                    f"Variable.update({name}=...) must be a constant; "
+                    f"got {type(val).__name__}."
+                )
+
+        updates: dict[str, DataArray] = {}
+        own_dims = self.model.variables[self.name].dims
+        if lower is not None:
+            new_lower = DataArray(lower).broadcast_like(self.lower)
+            if not set(new_lower.dims).issubset(own_dims):
+                raise ValueError("Cannot assign new dimensions to existing variable.")
+            updates["lower"] = new_lower
+        if upper is not None:
+            new_upper = DataArray(upper).broadcast_like(self.upper)
+            if not set(new_upper.dims).issubset(own_dims):
+                raise ValueError("Cannot assign new dimensions to existing variable.")
+            updates["upper"] = new_upper
+
+        final_lower = updates.get("lower", self.lower)
+        final_upper = updates.get("upper", self.upper)
+        if bool((final_lower > final_upper).any()):
+            raise ValueError(
+                "Variable.update would leave lower > upper at one or more coordinates."
+            )
+
+        self._data = assign_multiindex_safe(self.data, **updates)
+        return self
 
     @property
     @has_optimized_model

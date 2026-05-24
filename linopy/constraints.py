@@ -55,7 +55,6 @@ from linopy.common import (
     maybe_group_terms_polars,
     maybe_replace_signs,
     replace_by_map,
-    require_constant,
     save_join,
     to_dataframe,
     to_polars,
@@ -1143,10 +1142,9 @@ class Constraint(ConstraintBase):
         return self.data.sign
 
     @sign.setter
-    @require_constant
     def sign(self, value: SignLike) -> None:
-        value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
-        self._data = assign_multiindex_safe(self.data, sign=value)
+        """Shim — forwards to :meth:`Constraint.update`."""
+        self.update(sign=value)
 
     @property
     def rhs(self) -> DataArray:
@@ -1154,15 +1152,86 @@ class Constraint(ConstraintBase):
 
     @rhs.setter
     def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        value = expressions.as_expression(
+        """
+        Set RHS. Constants go through :meth:`Constraint.update`; non-constant
+        rhs (Variable/Expression) is rearranged to LHS in place.
+        """
+        # Constant path: route through the canonical update API.
+        if not isinstance(
+            value,
+            variables.Variable
+            | variables.ScalarVariable
+            | expressions.LinearExpression
+            | expressions.QuadraticExpression,
+        ):
+            self.update(rhs=value)
+            return
+        # Non-constant rhs: existing rearrange-to-lhs behaviour (kept for
+        # backward compatibility; an explicit method would be cleaner).
+        expr = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
-        residual = value.reset_const()
+        residual = expr.reset_const()
         if residual.nterm == 0:
-            self._data = assign_multiindex_safe(self.data, rhs=value.const)
+            self._data = assign_multiindex_safe(self.data, rhs=expr.const)
             return
         self.lhs = self.lhs - residual
-        self._data = assign_multiindex_safe(self.data, rhs=value.const)
+        self._data = assign_multiindex_safe(self.data, rhs=expr.const)
+
+    def update(
+        self,
+        *,
+        rhs: ConstantLike | None = None,
+        sign: SignLike | None = None,
+    ) -> Constraint:
+        """
+        Update the constraint's RHS and/or sign in place.
+
+        Canonical mutation API. Single-attribute setters (`c.rhs = …`,
+        `c.sign = …`) forward to this method.
+
+        Parameters
+        ----------
+        rhs : ConstantLike, optional
+            New constant RHS. Variable / Expression RHS is not supported
+            here; use the (legacy) ``c.rhs = expression`` setter, which
+            rearranges the residual into ``c.lhs``.
+        sign : SignLike, optional
+            New sign. One of ``"<=" / "==" / ">="`` (or their ``< > =``
+            aliases).
+
+        Returns
+        -------
+        Constraint
+            ``self`` for chaining.
+        """
+        if rhs is None and sign is None:
+            return self
+
+        if rhs is not None and isinstance(
+            rhs,
+            variables.Variable
+            | variables.ScalarVariable
+            | expressions.LinearExpression
+            | expressions.QuadraticExpression,
+        ):
+            raise TypeError(
+                "Constraint.update(rhs=...) only accepts constants; "
+                f"got {type(rhs).__name__}. Use the legacy `c.rhs = expr` "
+                "setter or rebuild via add_constraints(...) for "
+                "expression / Variable rhs."
+            )
+
+        updates: dict[str, DataArray] = {}
+        if rhs is not None:
+            new_rhs = DataArray(rhs).broadcast_like(self.rhs)
+            updates["rhs"] = new_rhs
+        if sign is not None:
+            new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
+            updates["sign"] = new_sign
+
+        self._data = assign_multiindex_safe(self.data, **updates)
+        return self
 
     @property
     def lhs(self) -> expressions.LinearExpression:

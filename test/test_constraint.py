@@ -426,6 +426,36 @@ def test_constraint_rhs_setter(mc: linopy.constraints.Constraint) -> None:
     assert mc.sizes == sizes
 
 
+def test_constraint_update_rhs_and_sign(mc: linopy.constraints.Constraint) -> None:
+    mc.update(rhs=5, sign=EQUAL)
+    assert (mc.rhs == 5).all()
+    assert (mc.sign == EQUAL).all()
+
+
+def test_constraint_update_no_kwargs_is_noop(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    old_rhs = mc.rhs.copy()
+    old_sign = mc.sign.copy()
+    mc.update()
+    assert (mc.rhs == old_rhs).all()
+    assert (mc.sign == old_sign).all()
+
+
+def test_constraint_update_rejects_variable_rhs(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    with pytest.raises(TypeError, match="only accepts constants"):
+        mc.update(rhs=x)
+
+
+def test_constraint_update_returns_self(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    out = mc.update(rhs=7)
+    assert out is mc
+
+
 def test_constraint_rhs_setter_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
