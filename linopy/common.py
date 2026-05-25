@@ -21,9 +21,9 @@ import polars as pl
 from numpy import arange, nan, signedinteger
 from polars.datatypes import DataTypeClass
 from xarray import Coordinates, DataArray, Dataset, apply_ufunc, broadcast
-from xarray.core.coordinates import CoordinateValidationError
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
+from xarray.core.coordinates import CoordinateValidationError
 from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
 
@@ -475,12 +475,8 @@ def align_to_coords(
     try:
         da = as_dataarray(value, coords, **kwargs)
     except (ValueError, TypeError, CoordinateValidationError) as err:
-        raise ValueError(
-            f"{label} could not be aligned to coords: {err}"
-        ) from err
-    assert_compatible_with_coords(
-        da, coords, dims=kwargs.get("dims"), label=label
-    )
+        raise ValueError(f"{label} could not be aligned to coords: {err}") from err
+    assert_compatible_with_coords(da, coords, dims=kwargs.get("dims"), label=label)
     return da
 
 

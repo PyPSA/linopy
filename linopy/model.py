@@ -745,9 +745,7 @@ class Model:
         ``coords=[[...]], dims=[...]``).
 
         >>> m = Model()
-        >>> m.add_variables(
-        ...     mask=bad, coords=[[0, 1, 2]], dims=["x"], name="wm"
-        ... )
+        >>> m.add_variables(mask=bad, coords=[[0, 1, 2]], dims=["x"], name="wm")
         Traceback (most recent call last):
         ...
         ValueError: mask has dimension(s) ['extra'] not declared in coords ...

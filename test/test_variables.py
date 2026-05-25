@@ -138,7 +138,9 @@ def test_variables_mask_broadcast() -> None:
         dims=["dim_0"],
         coords={"dim_0": range(5)},
     )
-    with pytest.raises(ValueError, match=r"mask: coordinate values for dimension 'dim_0'"):
+    with pytest.raises(
+        ValueError, match=r"mask: coordinate values for dimension 'dim_0'"
+    ):
         m.add_variables(lower, upper, name="z", mask=mask3)
 
     # Mask with extra dimension not in data should raise

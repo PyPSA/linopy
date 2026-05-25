@@ -273,7 +273,9 @@ def test_masked_constraints_broadcast() -> None:
         dims=["dim_0"],
         coords={"dim_0": range(5)},
     )
-    with pytest.raises(ValueError, match=r"mask: coordinate values for dimension 'dim_0'"):
+    with pytest.raises(
+        ValueError, match=r"mask: coordinate values for dimension 'dim_0'"
+    ):
         m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc3", mask=mask3)
 
     # Mask with extra dimension not in data should raise

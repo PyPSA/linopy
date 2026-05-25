@@ -435,7 +435,7 @@ class TestAddVariablesBoundsWithCoords:
             model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
 
     def test_mask_extra_dims_with_unnamed_coords_and_dims(self, model: "Model") -> None:
-        """mask is validated against coords + dims= like lower/upper."""
+        """Mask is validated against coords + dims= like lower/upper."""
         mask = DataArray(
             [[True, False], [True, False], [False, True]],
             dims=["x", "extra"],
