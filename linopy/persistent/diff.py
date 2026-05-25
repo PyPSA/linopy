@@ -343,7 +343,7 @@ class ModelDiff:
         cls,
         snapshot: ModelSnapshot,
         model: Model,
-        same_model: bool = True,
+        same_model: bool = False,
         ignore_dims: Iterable[str] = (),
     ) -> ModelDiff:
         """
@@ -353,6 +353,14 @@ class ModelDiff:
         a mismatch triggers ``RebuildReason.COORD_REINDEX``. Pass
         ``ignore_dims={"snapshot"}`` for rolling-horizon use cases where the
         snapshot coord legitimately shifts between solves.
+
+        ``same_model`` is a perf hint, **default False**. When True, the
+        diff trusts ``Constraint._coef_dirty`` to short-circuit the CSR
+        walk for unchanged containers (`skip_coef_compare`). That's only
+        safe if every coefficient mutation went through ``Constraint.update``
+        (or the setters that forward there) — direct ``c.coeffs.values[...]``
+        writes bypass the flag and would silently miss changes. Pass
+        ``same_model=True`` only when you own the mutation contract.
         """
         ignored = frozenset(ignore_dims)
         check_coords = True
