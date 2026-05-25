@@ -891,7 +891,10 @@ class Variable:
 
     @upper.setter
     def upper(self, value: ConstantLike) -> None:
-        """Shim — forwards to :meth:`Variable.update`."""
+        """
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
+        """
         self.update(upper=value)
 
     @property
@@ -906,7 +909,10 @@ class Variable:
 
     @lower.setter
     def lower(self, value: ConstantLike) -> None:
-        """Shim — forwards to :meth:`Variable.update`."""
+        """
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
+        """
         self.update(lower=value)
 
     def update(

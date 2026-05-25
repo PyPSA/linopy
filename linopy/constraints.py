@@ -1120,7 +1120,7 @@ class Constraint(ConstraintBase):
 
     @coeffs.setter
     def coeffs(self, value: ConstantLike) -> None:
-        """Shim — forwards to :meth:`Constraint.update`."""
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         self.update(coeffs=value)
 
     @property
@@ -1129,7 +1129,7 @@ class Constraint(ConstraintBase):
 
     @vars.setter
     def vars(self, value: variables.Variable | DataArray) -> None:
-        """Shim — forwards to :meth:`Constraint.update`."""
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         self.update(variables=value)
 
     @property
@@ -1138,7 +1138,7 @@ class Constraint(ConstraintBase):
 
     @sign.setter
     def sign(self, value: SignLike) -> None:
-        """Shim — forwards to :meth:`Constraint.update`."""
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         self.update(sign=value)
 
     @property
@@ -1147,7 +1147,7 @@ class Constraint(ConstraintBase):
 
     @rhs.setter
     def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Shim — forwards to :meth:`Constraint.update`."""
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         self.update(rhs=value)
 
     @property
@@ -1157,7 +1157,7 @@ class Constraint(ConstraintBase):
 
     @lhs.setter
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Shim — forwards to :meth:`Constraint.update`."""
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         self.update(lhs=value)
 
     def _assign_lhs_expr(
