@@ -314,7 +314,7 @@ def as_dataarray(
     if coords is None:
         return _as_dataarray_lax(arr, coords, dims, **kwargs)
 
-    expected = _coords_to_dict(coords)
+    expected = _coords_to_dict(coords, dims=dims)
     if not expected:
         return _as_dataarray_lax(arr, coords, dims, **kwargs)
 
@@ -395,7 +395,11 @@ def as_dataarray(
     return arr
 
 
-def assert_compatible_with_coords(arr: DataArray, coords: CoordsLike | None) -> None:
+def assert_compatible_with_coords(
+    arr: DataArray,
+    coords: CoordsLike | None,
+    dims: DimsLike | None = None,
+) -> None:
     """
     Raise ``ValueError`` if ``arr`` is incompatible with ``coords``.
 
@@ -405,11 +409,16 @@ def assert_compatible_with_coords(arr: DataArray, coords: CoordsLike | None) -> 
     - for every dim shared between ``arr`` and ``coords``, the coord
       values are equal.
 
+    ``dims`` mirrors the ``dims`` argument of ``as_dataarray``: it names
+    unnamed entries in a sequence-form ``coords`` by position, so
+    ``coords=[[1, 2, 3]], dims=["x"]`` is enforced the same way as
+    ``coords={"x": [1, 2, 3]}``.
+
     No-op when ``coords`` is ``None`` or carries no named dimensions.
     """
     if coords is None:
         return
-    expected = _coords_to_dict(coords)
+    expected = _coords_to_dict(coords, dims=dims)
     if not expected:
         return
     extra = set(arr.dims) - set(expected)
@@ -435,6 +444,7 @@ def assert_compatible_with_coords(arr: DataArray, coords: CoordsLike | None) -> 
 
 def _coords_to_dict(
     coords: Sequence[Sequence | pd.Index] | Mapping,
+    dims: DimsLike | None = None,
 ) -> dict[str, Any]:
     """
     Normalize coords to a dict mapping dim names to coordinate values.
@@ -447,6 +457,11 @@ def _coords_to_dict(
     / ``np.ndarray``). Other types — notably ``xarray.DataArray`` — raise
     ``TypeError`` rather than being silently dropped: callers should
     convert via ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
+
+    Unnamed sequence entries (or unnamed ``pd.Index``) gain a dim name
+    from ``dims`` by position when ``dims`` is provided, so callers that
+    pass ``coords=[[1, 2, 3]], dims=["x"]`` get the same strict
+    enforcement as ``coords={"x": [1, 2, 3]}``.
     """
     if isinstance(coords, Coordinates):
         # Coordinates iterates over every coord variable, including
@@ -454,13 +469,22 @@ def _coords_to_dict(
         return {d: coords[d] for d in coords.dims if d in coords}
     if isinstance(coords, Mapping):
         return dict(coords)
+    dim_names: list[Any] | None = None
+    if dims is not None:
+        dim_names = list(dims) if isinstance(dims, list | tuple) else [dims]
     result: dict[str, Any] = {}
-    for c in coords:
+    for i, c in enumerate(coords):
         if isinstance(c, pd.Index):
-            if c.name:
-                result[c.name] = c
+            name = (
+                c.name
+                if c.name
+                else (dim_names[i] if dim_names and i < len(dim_names) else None)
+            )
+            if name is not None:
+                result[name] = c
         elif isinstance(c, list | tuple | range | np.ndarray):
-            pass  # unnamed sequence contributes no named dim
+            if dim_names and i < len(dim_names):
+                result[dim_names[i]] = pd.Index(c, name=dim_names[i])
         else:
             raise TypeError(
                 f"coords entries must be pd.Index or an unnamed sequence "

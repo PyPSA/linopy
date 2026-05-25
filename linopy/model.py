@@ -615,14 +615,27 @@ class Model:
         upper : TYPE, optional
             Upper bound of the variable(s). Ignored if `binary` is True.
             The default is inf.
-        coords : list/xarray.Coordinates, optional
-            The coords of the variable array. When provided, ``coords``
+        coords : list/dict/xarray.Coordinates, optional
+            The coords of the variable array. When provided with **named
+            dimensions** (a ``Mapping``, ``xarray.Coordinates``, a
+            sequence of named ``pd.Index`` objects, or an unnamed
+            sequence paired with ``dims=`` in ``**kwargs``), ``coords``
             is the source of truth for the variable's dimensions,
-            dimension order, and coordinate values; ``lower`` and
-            ``upper`` are broadcast and aligned to match. One
-            optimization variable is added per combination of
-            coordinates. The default is None, in which case the shape
-            is inferred from the bounds.
+            order, and values. ``lower``, ``upper`` and ``mask`` are
+            aligned to this contract:
+
+            - dims of every bound must be a subset of ``coords.dims``;
+              extra dims raise ``ValueError``;
+            - dim order in the variable always follows ``coords``;
+            - shared-dim coordinate values must equal ``coords``; same
+              values in a different order are auto-reindexed, different
+              value sets raise ``ValueError``;
+            - dims listed in ``coords`` but missing from a bound are
+              broadcast to ``coords`` shape.
+
+            One optimization variable is added per combination of
+            coordinates. The default is ``None``, in which case the
+            shape is inferred from the bounds.
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
@@ -675,6 +688,58 @@ class Model:
         [7]: x[7] ∈ [0, inf]
         [8]: x[8] ∈ [0, inf]
         [9]: x[9] ∈ [0, inf]
+
+        Strict coords-as-truth: a bound with an extra dim raises.
+
+        >>> import xarray as xr
+        >>> m = Model()
+        >>> bad = xr.DataArray(
+        ...     [[1.0, 2.0, 3.0]] * 2,
+        ...     dims=["extra", "x"],
+        ...     coords={"x": [0, 1, 2]},
+        ... )
+        >>> m.add_variables(lower=bad, coords=[pd.Index([0, 1, 2], name="x")], name="v")
+        Traceback (most recent call last):
+        ...
+        ValueError: DataArray has extra dimensions not in coords: {'extra'}
+
+        Strict coords-as-truth: a bound whose shared-dim values don't
+        match raises.
+
+        >>> m = Model()
+        >>> wrong = xr.DataArray(
+        ...     [1.0, 2.0, 3.0], dims=["x"], coords={"x": [10, 20, 30]}
+        ... )
+        >>> m.add_variables(
+        ...     lower=wrong, coords=[pd.Index([0, 1, 2], name="x")], name="v"
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValueError: Coordinates for dimension 'x' do not match: expected [0, 1, 2], got [10, 20, 30]
+
+        Strict coords-as-truth, helpful side: a bound whose coord values
+        match ``coords`` only in a different order is auto-reindexed.
+
+        >>> m = Model()
+        >>> reordered = xr.DataArray(
+        ...     [3.0, 1.0, 2.0], dims=["x"], coords={"x": ["c", "a", "b"]}
+        ... )
+        >>> v = m.add_variables(
+        ...     lower=reordered,
+        ...     coords=[pd.Index(["a", "b", "c"], name="x")],
+        ...     name="r",
+        ... )
+        >>> list(v.data.lower.values)
+        [1.0, 2.0, 3.0]
+
+        Unnamed-coords sequence + ``dims=`` opts into the same strict
+        enforcement as a named index — extra dims still raise.
+
+        >>> m = Model()
+        >>> m.add_variables(lower=bad, coords=[[0, 1, 2]], dims=["x"], name="w")
+        Traceback (most recent call last):
+        ...
+        ValueError: DataArray has extra dimensions not in coords: {'extra'}
         """
         if name is None:
             name = f"var{self._varnameCounter}"
@@ -702,8 +767,8 @@ class Model:
 
         lower_da = as_dataarray(lower, coords, **kwargs)
         upper_da = as_dataarray(upper, coords, **kwargs)
-        assert_compatible_with_coords(lower_da, coords)
-        assert_compatible_with_coords(upper_da, coords)
+        assert_compatible_with_coords(lower_da, coords, dims=kwargs.get("dims"))
+        assert_compatible_with_coords(upper_da, coords, dims=kwargs.get("dims"))
         data = Dataset(
             {
                 "lower": lower_da,
