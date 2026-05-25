@@ -21,6 +21,7 @@ import polars as pl
 from numpy import arange, nan, signedinteger
 from polars.datatypes import DataTypeClass
 from xarray import Coordinates, DataArray, Dataset, apply_ufunc, broadcast
+from xarray.core.coordinates import CoordinateValidationError
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
 from xarray.core.types import JoinOptions, T_Alignable
@@ -290,7 +291,10 @@ def as_dataarray(
     on a shared dim (i.e. value sets that are not equal as sets) are
     passed through unchanged: downstream xarray alignment decides how to
     combine them. To enforce that ``arr.dims`` ⊆ ``coords.dims`` and that
-    shared coord values match, use ``assert_compatible_with_coords``.
+    shared coord values match, use ``assert_compatible_with_coords`` (called
+    automatically for ``lower``, ``upper``, and ``mask`` in
+    :meth:`~linopy.model.Model.add_variables` and for ``mask`` in
+    :meth:`~linopy.model.Model.add_constraints`).
 
     Parameters
     ----------
@@ -399,6 +403,8 @@ def assert_compatible_with_coords(
     arr: DataArray,
     coords: CoordsLike | None,
     dims: DimsLike | None = None,
+    *,
+    label: str | None = None,
 ) -> None:
     """
     Raise ``ValueError`` if ``arr`` is incompatible with ``coords``.
@@ -414,6 +420,8 @@ def assert_compatible_with_coords(
     ``coords=[[1, 2, 3]], dims=["x"]`` is enforced the same way as
     ``coords={"x": [1, 2, 3]}``.
 
+    ``label`` names the argument in error messages (e.g. ``"lower bound"``).
+
     No-op when ``coords`` is ``None`` or carries no named dimensions.
     """
     if coords is None:
@@ -421,9 +429,15 @@ def assert_compatible_with_coords(
     expected = _coords_to_dict(coords, dims=dims)
     if not expected:
         return
-    extra = set(arr.dims) - set(expected)
+    subject = label or "Value"
+    expected_dims = set(expected)
+    extra = set(arr.dims) - expected_dims
     if extra:
-        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+        raise ValueError(
+            f"{subject} has dimension(s) {sorted(extra)} not declared in coords "
+            f"({sorted(expected_dims)}). Add them to coords or remove them from "
+            f"{subject.lower()}."
+        )
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
             continue
@@ -437,9 +451,37 @@ def assert_compatible_with_coords(
         actual_idx = arr.coords[dim].to_index()
         if not actual_idx.equals(expected_idx):
             raise ValueError(
-                f"Coordinates for dimension '{dim}' do not match: "
-                f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
+                f"{subject}: coordinate values for dimension {dim!r} do not match "
+                f"coords — expected {expected_idx.tolist()}, got "
+                f"{actual_idx.tolist()}."
             )
+
+
+def align_to_coords(
+    value: Any,
+    coords: CoordsLike | None,
+    *,
+    label: str,
+    **kwargs: Any,
+) -> DataArray:
+    """
+    Convert ``value`` with :func:`as_dataarray` and enforce the coords contract.
+
+    Used by :meth:`~linopy.model.Model.add_variables` for ``lower``, ``upper``,
+    and ``mask``, and by :meth:`~linopy.model.Model.add_constraints` for
+    ``mask``. Raises :class:`ValueError` with a message that names ``label``
+    when conversion or validation fails.
+    """
+    try:
+        da = as_dataarray(value, coords, **kwargs)
+    except (ValueError, TypeError, CoordinateValidationError) as err:
+        raise ValueError(
+            f"{label} could not be aligned to coords: {err}"
+        ) from err
+    assert_compatible_with_coords(
+        da, coords, dims=kwargs.get("dims"), label=label
+    )
+    return da
 
 
 def _coords_to_dict(

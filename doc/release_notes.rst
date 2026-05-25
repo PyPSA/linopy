@@ -67,6 +67,14 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Internal**
 
+* ``linopy.common.as_dataarray`` is now the single broadcasting primitive;
+  strict subset-dim / coord-value checks live in
+  ``assert_compatible_with_coords`` (via ``align_to_coords`` in
+  ``add_variables`` / ``add_constraints``). Validation errors name the
+  argument (``lower bound``, ``upper bound``, ``mask``) and explain whether
+  dimensions or coordinate values disagree with ``coords``. When ``coords`` is
+  a mapping, extra keys beyond the positional ``dims`` are broadcast in rather
+  than dropped.
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.

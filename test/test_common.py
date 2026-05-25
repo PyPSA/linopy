@@ -18,6 +18,7 @@ from xarray.testing.assertions import assert_equal
 from linopy import LinearExpression, Model, Variable
 from linopy.common import (
     align,
+    align_to_coords,
     as_dataarray,
     assert_compatible_with_coords,
     assign_multiindex_safe,
@@ -512,13 +513,13 @@ def test_assert_compatible_with_coords_rejects_extra_dims() -> None:
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
     )
-    with pytest.raises(ValueError, match="extra dimensions"):
+    with pytest.raises(ValueError, match=r"not declared in coords"):
         assert_compatible_with_coords(arr, {"a": [0, 1]})
 
 
 def test_assert_compatible_with_coords_rejects_value_mismatch() -> None:
     arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
-    with pytest.raises(ValueError, match="do not match"):
+    with pytest.raises(ValueError, match="do not match coords"):
         assert_compatible_with_coords(arr, {"a": [10, 20, 30]})
 
 
@@ -526,6 +527,31 @@ def test_assert_compatible_with_coords_allows_subset_dims() -> None:
     """arr.dims ⊂ coords.dims is fine (broadcasting fills the missing dim)."""
     arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
     assert_compatible_with_coords(arr, {"a": [0, 1, 2], "b": [10, 20]})  # no raise
+
+
+def test_assert_compatible_with_coords_unnamed_coords_and_dims() -> None:
+    """coords=[[...]], dims=[...] enforces the same contract as a named mapping."""
+    arr = DataArray([1, 2, 3], dims=["x"], coords={"x": [0, 1, 2]})
+    assert_compatible_with_coords(arr, [[0, 1, 2]], dims=["x"])  # no raise
+
+    bad = DataArray(
+        [[1, 2], [3, 4]], dims=["x", "y"], coords={"x": [0, 1], "y": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        assert_compatible_with_coords(bad, [[0, 1]], dims=["x"])
+
+
+def test_assert_compatible_with_coords_label_in_error() -> None:
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"lower bound has dimension\(s\) \['b'\]"):
+        assert_compatible_with_coords(arr, {"a": [0, 1]}, label="lower bound")
+
+
+def test_align_to_coords_wraps_conversion_errors() -> None:
+    with pytest.raises(ValueError, match=r"lower bound could not be aligned"):
+        align_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")
 
 
 def test_best_int() -> None:

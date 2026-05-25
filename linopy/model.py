@@ -28,8 +28,8 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.common import (
+    align_to_coords,
     as_dataarray,
-    assert_compatible_with_coords,
     assign_multiindex_safe,
     best_int,
     maybe_replace_signs,
@@ -701,7 +701,7 @@ class Model:
         >>> m.add_variables(lower=bad, coords=[pd.Index([0, 1, 2], name="x")], name="v")
         Traceback (most recent call last):
         ...
-        ValueError: DataArray has extra dimensions not in coords: {'extra'}
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
 
         Strict coords-as-truth: a bound whose shared-dim values don't
         match raises.
@@ -715,7 +715,7 @@ class Model:
         ... )
         Traceback (most recent call last):
         ...
-        ValueError: Coordinates for dimension 'x' do not match: expected [0, 1, 2], got [10, 20, 30]
+        ValueError: lower bound: coordinate values for dimension 'x' do not match coords ...
 
         Strict coords-as-truth, helpful side: a bound whose coord values
         match ``coords`` only in a different order is auto-reindexed.
@@ -739,7 +739,18 @@ class Model:
         >>> m.add_variables(lower=bad, coords=[[0, 1, 2]], dims=["x"], name="w")
         Traceback (most recent call last):
         ...
-        ValueError: DataArray has extra dimensions not in coords: {'extra'}
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
+
+        The same strict contract applies to ``mask`` (including with
+        ``coords=[[...]], dims=[...]``).
+
+        >>> m = Model()
+        >>> m.add_variables(
+        ...     mask=bad, coords=[[0, 1, 2]], dims=["x"], name="wm"
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValueError: mask has dimension(s) ['extra'] not declared in coords ...
         """
         if name is None:
             name = f"var{self._varnameCounter}"
@@ -765,10 +776,8 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        lower_da = as_dataarray(lower, coords, **kwargs)
-        upper_da = as_dataarray(upper, coords, **kwargs)
-        assert_compatible_with_coords(lower_da, coords, dims=kwargs.get("dims"))
-        assert_compatible_with_coords(upper_da, coords, dims=kwargs.get("dims"))
+        lower_da = align_to_coords(lower, coords, label="lower bound", **kwargs)
+        upper_da = align_to_coords(upper, coords, label="upper bound", **kwargs)
         data = Dataset(
             {
                 "lower": lower_da,
@@ -781,8 +790,14 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, data.coords).astype(bool)
-            assert_compatible_with_coords(mask, data.coords)
+            if coords is not None:
+                mask_da = align_to_coords(mask, coords, label="mask", **kwargs)
+            else:
+                mask_kw = {k: v for k, v in kwargs.items() if k != "dims"}
+                mask_da = align_to_coords(
+                    mask, data.coords, label="mask", dims=data.dims, **mask_kw
+                )
+            mask = mask_da.astype(bool).broadcast_like(data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -1046,8 +1061,8 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, data.coords).astype(bool)
-            assert_compatible_with_coords(mask, data.coords)
+            mask_da = align_to_coords(mask, data.coords, label="mask")
+            mask = mask_da.astype(bool).broadcast_like(data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
