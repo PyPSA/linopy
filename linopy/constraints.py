@@ -1196,6 +1196,22 @@ class Constraint(ConstraintBase):
         * ``c.update(lhs=, rhs=, sign=, coeffs=, variables=)`` — pass
           only what you want to change.
 
+        Use the keyword form for targeted changes — it skips the
+        unchanged attributes entirely. The positional form always
+        rewrites lhs / sign / rhs (and flips ``_coef_dirty``), so it
+        is the wrong shape for hot loops that only touch one part:
+
+        .. code-block:: python
+
+            # Hot loop, rhs is the only thing changing per iteration:
+            for k in scenarios:
+                c.update(rhs=rhs_k)  # ← targeted, cheap
+
+            # Same loop written positionally rebuilds lhs every
+            # iteration even though it never changes:
+            for k in scenarios:
+                c.update(big_lhs_expr <= rhs_k)  # ← avoid
+
         Parameters
         ----------
         constraint : ConstraintLike, optional
