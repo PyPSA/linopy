@@ -71,6 +71,7 @@ from linopy.constants import (
 )
 from linopy.types import (
     ConstantLike,
+    ConstraintLike,
     CoordsLike,
     ExpressionLike,
     SignLike,
@@ -1176,6 +1177,7 @@ class Constraint(ConstraintBase):
 
     def update(
         self,
+        constraint: ConstraintLike | None = None,
         *,
         lhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
@@ -1186,11 +1188,19 @@ class Constraint(ConstraintBase):
         """
         Update the constraint in place.
 
-        The only mutation API; setters forward here. All keyword
-        arguments are optional; pass only what you want to change.
+        The only mutation API; setters forward here. Two call shapes:
+
+        * ``c.update(x + 5 <= 3)`` — pass a complete constraint
+          expression (mirroring ``add_constraints``). Replaces lhs,
+          sign, and rhs at once.
+        * ``c.update(lhs=, rhs=, sign=, coeffs=, variables=)`` — pass
+          only what you want to change.
 
         Parameters
         ----------
+        constraint : ConstraintLike, optional
+            A complete constraint expression (e.g. ``x + 5 <= 3``).
+            Mutually exclusive with the keyword arguments below.
         lhs : ExpressionLike / VariableLike / ConstantLike, optional
             Replace the LHS expression. Any constant part is moved to
             ``rhs`` so ``c.lhs`` stays pure-variable. Cannot be combined
@@ -1218,6 +1228,24 @@ class Constraint(ConstraintBase):
         Constraint
             ``self`` for chaining.
         """
+        if constraint is not None:
+            if any(x is not None for x in (lhs, rhs, sign, coeffs, variables)):
+                raise TypeError(
+                    "Constraint.update: positional `constraint` argument "
+                    "cannot be combined with keyword arguments."
+                )
+            if isinstance(constraint, AnonymousScalarConstraint):
+                con = constraint.to_constraint()
+            elif isinstance(constraint, ConstraintBase):
+                con = constraint
+            else:
+                raise TypeError(
+                    "Constraint.update: positional argument must be a "
+                    "ConstraintLike (e.g. `x + 5 <= 3`); got "
+                    f"{type(constraint).__name__}."
+                )
+            lhs, sign, rhs = con.lhs, con.sign, con.rhs
+
         if all(v is None for v in (lhs, rhs, sign, coeffs, variables)):
             return self
 
@@ -1376,10 +1404,9 @@ class Constraint(ConstraintBase):
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
-        return self.update(
-            variables=self.vars.where(not_zero, -1),
-            coeffs=self.coeffs.where(not_zero),
-        )
+        self.vars = self.vars.where(not_zero, -1)
+        self.coeffs = self.coeffs.where(not_zero)
+        return self
 
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""

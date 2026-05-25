@@ -461,6 +461,32 @@ def test_constraint_update_returns_self(
     assert out is mc
 
 
+def test_constraint_update_positional_constraint_expression(
+    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """``c.update(x + 5 <= 3)`` replaces lhs / sign / rhs in one call."""
+    mc.update(x + y <= 7)
+    assert (mc.rhs == 7).all()
+    assert (mc.sign == LESS_EQUAL).all()
+    assert mc.lhs.nterm == 2
+
+
+def test_constraint_update_positional_rejects_mixing_kwargs(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """Positional constraint can't be combined with keyword updates."""
+    with pytest.raises(TypeError, match="cannot be combined with keyword"):
+        mc.update(x <= 3, sign=EQUAL)
+
+
+def test_constraint_update_positional_rejects_non_constraint(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    """Random objects are rejected with a clear error."""
+    with pytest.raises(TypeError, match="must be a ConstraintLike"):
+        mc.update("not a constraint")  # type: ignore
+
+
 def test_constraint_rhs_setter_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
