@@ -788,14 +788,12 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            if coords is not None:
-                mask_da = align_to_coords(mask, coords, label="mask", **kwargs)
-            else:
-                mask_kw = {k: v for k, v in kwargs.items() if k != "dims"}
-                mask_da = align_to_coords(
-                    mask, data.coords, label="mask", dims=data.dims, **mask_kw
-                )
-            mask = mask_da.astype(bool).broadcast_like(data.labels)
+            mask = align_to_coords(
+                mask,
+                coords if coords is not None else data.coords,
+                label="mask",
+                **kwargs,
+            ).astype(bool)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -1059,8 +1057,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask_da = align_to_coords(mask, data.coords, label="mask")
-            mask = mask_da.astype(bool).broadcast_like(data.labels)
+            mask = align_to_coords(mask, data.coords, label="mask").astype(bool)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:

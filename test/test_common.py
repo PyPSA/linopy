@@ -554,6 +554,12 @@ def test_align_to_coords_wraps_conversion_errors() -> None:
         align_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")
 
 
+def test_align_to_coords_preserves_type_errors() -> None:
+    """Unsupported input types stay TypeError (don't become ValueError)."""
+    with pytest.raises(TypeError, match=r"lower bound could not be aligned"):
+        align_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
+
+
 def test_best_int() -> None:
     # Test for int8
     assert best_int(127) == np.int8

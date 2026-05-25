@@ -474,7 +474,9 @@ def align_to_coords(
     """
     try:
         da = as_dataarray(value, coords, **kwargs)
-    except (ValueError, TypeError, CoordinateValidationError) as err:
+    except TypeError as err:
+        raise TypeError(f"{label} could not be aligned to coords: {err}") from err
+    except (ValueError, CoordinateValidationError) as err:
         raise ValueError(f"{label} could not be aligned to coords: {err}") from err
     assert_compatible_with_coords(da, coords, dims=kwargs.get("dims"), label=label)
     return da
