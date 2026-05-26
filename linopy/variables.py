@@ -14,6 +14,7 @@ from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    cast,
     overload,
 )
 from warnings import warn
@@ -26,32 +27,41 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
+    VariableLabelIndex,
     as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
+    format_single_variable,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
-    is_constant,
     iterate_slices,
-    print_coord,
-    print_single_variable,
+    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import (
+    FIX_CONSTRAINT_PREFIX,
+    HELPER_DIMS,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+    TERM_DIM,
+)
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -193,6 +203,14 @@ class Variable:
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
+        if SOS_TYPE_ATTR in data.attrs or SOS_DIM_ATTR in data.attrs:
+            if (sos_type := data.attrs.get(SOS_TYPE_ATTR)) not in (1, 2):
+                raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
+            if (sos_dim := data.attrs.get(SOS_DIM_ATTR)) not in data.dims:
+                raise ValueError(
+                    f"sos_dim must name a variable dimension, got {sos_dim}"
+                )
+
         self._data = data
         self._model = model
 
@@ -280,9 +298,15 @@ class Variable:
 
     @property
     def loc(self) -> LocIndexer:
+        """
+        Indexing the variable using coordinates.
+        """
         return LocIndexer(self)
 
     def to_pandas(self) -> pd.Series:
+        """
+        Convert the variable labels to a pandas Series.
+        """
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -304,6 +328,8 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+        coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -318,6 +344,8 @@ class Variable:
         dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
+        sos_type = self.attrs.get(SOS_TYPE_ATTR)
+        sos_dim = self.attrs.get(SOS_DIM_ATTR)
         lines = []
 
         if dims:
@@ -330,22 +358,24 @@ class Variable:
                     ]
                     label = self.labels.values[indices]
                     line = (
-                        print_coord(coord)
+                        format_coord(coord)
                         + ": "
-                        + print_single_variable(self.model, label)
+                        + format_single_variable(self.model, label)
                     )
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            sos_str = f" - sos{sos_type} on {sos_dim}" if sos_type and sos_dim else ""
             lines.insert(
                 0,
-                f"Variable ({shape_str}){mask_str}\n{'-' * (len(shape_str) + len(mask_str) + 11)}",
+                f"Variable ({shape_str}){mask_str}{sos_str}\n"
+                f"{'-' * (len(shape_str) + len(mask_str) + len(sos_str) + 11)}",
             )
         else:
             lines.append(
-                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{format_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -406,7 +436,9 @@ class Variable:
             return NotImplemented
         if other == 2:
             expr = self.to_linexpr()
-            return expr._multiply_by_linear_expression(expr)
+            return cast(
+                "QuadraticExpression", expr._multiply_by_linear_expression(expr)
+            )
         raise ValueError("Can only raise to the power of 2")
 
     @overload
@@ -426,7 +458,7 @@ class Variable:
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: float | int | LinearExpression | Variable
+        self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -437,10 +469,10 @@ class Variable:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self.to_linexpr(1 / other)
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
-        self, coefficient: float | int | LinearExpression | Variable
+        self, coefficient: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -511,7 +543,7 @@ class Variable:
     def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -527,29 +559,118 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: Variable) -> LinearExpression:
+    def add(
+        self, other: SideLike, join: JoinOptions | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
-        """
-        return self.__add__(other)
 
-    def sub(self, other: Variable) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().add(other, join=join)
+
+    def sub(
+        self, other: SideLike, join: JoinOptions | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
-        """
-        return self.__sub__(other)
 
-    def mul(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().sub(other, join=join)
+
+    def mul(
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
-        """
-        return self.__mul__(other)
 
-    def div(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : constant-like
+            The coefficient to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().mul(other, join=join)
+
+    def div(
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__div__(other)
+        return self.to_linexpr().div(other, join=join)
+
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().le(rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().ge(rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().eq(rhs, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """
@@ -712,15 +833,23 @@ class Variable:
             return "Integer Variable"
         elif self.attrs["binary"]:
             return "Binary Variable"
+        elif self.attrs.get("semi_continuous"):
+            return "Semi-continuous Variable"
         else:
             return "Continuous Variable"
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        """
+        Get the coordinate dimensions of the variable.
+        """
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
+        """
+        Get the coordinate sizes of the variable.
+        """
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -762,7 +891,7 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @is_constant
+    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
         Set the upper bounds of the variables.
@@ -786,7 +915,7 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @is_constant
+    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
         Set the lower bounds of the variables.
@@ -847,8 +976,12 @@ class Variable:
         -------
         xr.DataArray
         """
+        from linopy.solver_capabilities import SolverFeature, solver_supports
+
         solver_model = self.model.solver_model
-        if self.model.solver_name != "gurobi":
+        if not solver_supports(
+            self.model.solver_name or "", SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+        ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."
             )
@@ -1092,6 +1225,19 @@ class Variable:
         return self
 
     def equals(self, other: Variable) -> bool:
+        """
+        Check if this Variable is equal to another.
+
+        Parameters
+        ----------
+        other : Variable
+            The Variable to compare with.
+
+        Returns
+        -------
+        bool
+            True if the variables have equal labels, False otherwise.
+        """
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1135,6 +1281,134 @@ class Variable:
 
     iterate_slices = iterate_slices
 
+    def relax(self) -> None:
+        """
+        Relax the integrality of this variable.
+
+        Converts binary or integer variables to continuous. The original type
+        is stored in the model's ``_relaxed_registry`` so that
+        :meth:`unrelax` can restore it.
+
+        Semi-continuous variables are not supported and will raise a
+        ``NotImplementedError``.
+
+        For binary variables, the existing [0, 1] bounds are preserved,
+        which is the correct LP relaxation. For integer variables, the
+        existing bounds are preserved as-is.
+
+        If the variable is already continuous, this method is a no-op.
+        """
+        attrs = self.attrs
+        if attrs.get("semi_continuous"):
+            msg = (
+                f"Relaxation of semi-continuous variable '{self.name}' is not "
+                "supported. The LP relaxation of a semi-continuous variable "
+                "requires changing bounds, which is not handled by relax()."
+            )
+            raise NotImplementedError(msg)
+
+        for attr in ("binary", "integer"):
+            if attrs.get(attr):
+                self.model._relaxed_registry[self.name] = attr
+                attrs[attr] = False
+                return
+
+    def unrelax(self) -> None:
+        """
+        Restore the original integrality type of a relaxed variable.
+
+        Reverses the effect of :meth:`relax`. If the variable was not
+        previously relaxed, this is a no-op.
+        """
+        registry = self.model._relaxed_registry
+        original_type = registry.pop(self.name, None)
+        if original_type is not None:
+            self.attrs[original_type] = True
+
+    @property
+    def relaxed(self) -> bool:
+        """
+        Return whether the variable is currently relaxed.
+        """
+        return self.name in self.model._relaxed_registry
+
+    def fix(
+        self,
+        value: ConstantLike | None = None,
+        decimals: int = 8,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix the variable to a given value by adding an equality constraint.
+
+        If no value is given, the current solution value is used.
+
+        Parameters
+        ----------
+        value : float/array_like, optional
+            Value to fix the variable to. If None, the current solution is used.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+            Integer and binary variables are always rounded to 0 decimal places.
+            Default is 8.
+        overwrite : bool, optional
+            If True (default), overwrite an existing fix constraint for this
+            variable. If False, raise an error if the variable is already fixed.
+        """
+        if value is None:
+            try:
+                value = self.solution
+            except AttributeError:
+                msg = (
+                    f"Cannot fix variable '{self.name}': no solution value "
+                    "available. Solve the model first or provide an explicit "
+                    "value."
+                )
+                raise ValueError(msg) from None
+
+        value = as_dataarray(value).broadcast_like(self.labels)
+
+        if self.attrs.get("integer") or self.attrs.get("binary"):
+            value = value.round(0)
+        else:
+            value = value.round(decimals)
+
+        if (value < self.lower).any() or (value > self.upper).any():
+            msg = (
+                f"Fix values for variable '{self.name}' are outside the "
+                "variable bounds."
+            )
+            raise ValueError(msg)
+
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+
+        if constraint_name in self.model.constraints:
+            if not overwrite:
+                msg = (
+                    f"Variable '{self.name}' is already fixed. Use "
+                    "overwrite=True to replace the existing fix constraint."
+                )
+                raise ValueError(msg)
+            self.model.remove_constraints(constraint_name)
+
+        self.model.add_constraints(self, "=", value, name=constraint_name)
+
+    def unfix(self) -> None:
+        """
+        Remove the fix constraint for this variable.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if constraint_name in self.model.constraints:
+            self.model.remove_constraints(constraint_name)
+
+    @property
+    def fixed(self) -> bool:
+        """
+        Return whether the variable is currently fixed.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        return constraint_name in self.model.constraints
+
 
 class AtIndexer:
     __slots__ = ("object",)
@@ -1166,6 +1440,8 @@ class Variables:
 
     data: dict[str, Variable]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
+    _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1213,23 +1489,38 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Variables"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format variable items, optionally excluding names in a group."""
+        r = ""
+        count = 0
         for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
             coords = (
                 " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
                 if ds.coords
                 else ""
             )
+            if (sos_type := ds.attrs.get(SOS_TYPE_ATTR)) in (1, 2) and (
+                sos_dim := ds.attrs.get(SOS_DIM_ATTR)
+            ):
+                coords += f" - sos{sos_type} on {sos_dim}"
+            if ds.attrs.get("semi_continuous", False):
+                coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
-        if not len(list(self)):
+        if count == 0:
             r += "<empty>\n"
+        return r
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the variables container.
+        """
+        r = "linopy.model.Variables"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
         return r
 
     def __len__(self) -> int:
@@ -1256,12 +1547,28 @@ class Variables:
         Add a variable to the variables container.
         """
         self.data[variable.name] = variable
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
+        if self._variable_label_index is not None:
+            self._variable_label_index.invalidate()
+
+    @property
+    def label_index(self) -> VariableLabelIndex:
+        """Index for O(1) label->position mapping and compact vlabels array."""
+        if self._variable_label_index is None:
+            self._variable_label_index = VariableLabelIndex(self)
+        return self._variable_label_index
 
     @property
     def attrs(self) -> dict[Any, Any]:
@@ -1321,7 +1628,14 @@ class Variables:
 
         These excludes variables with missing labels.
         """
-        return len(self.flat.labels.unique())
+        total = 0
+        for var in self.data.values():
+            labels = var.labels.values
+            if var.mask is not None:
+                total += int((labels[var.mask.values] != -1).sum())
+            else:
+                total += int((labels != -1).sum())
+        return total
 
     @property
     def binaries(self) -> Variables:
@@ -1352,8 +1666,114 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+                if not self[name].attrs["integer"]
+                and not self[name].attrs["binary"]
+                and not self[name].attrs.get("semi_continuous", False)
             },
+            self.model,
+        )
+
+    @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("semi_continuous", False)
+            },
+            self.model,
+        )
+
+    @property
+    def sos(self) -> Variables:
+        """
+        Get all variables involved in an sos constraint.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get(SOS_DIM_ATTR)
+                and self[name].attrs.get(SOS_TYPE_ATTR) in (1, 2)
+            },
+            self.model,
+        )
+
+    def fix(
+        self,
+        value: int | float | None = None,
+        decimals: int = 8,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix all variables in this container to their solution or a scalar value.
+
+        Delegates to each variable's ``fix()`` method. See
+        :meth:`Variable.fix` for details.
+
+        Parameters
+        ----------
+        value : int/float, optional
+            Scalar value to fix all variables to. Only scalar values are
+            accepted to avoid shape mismatches across differently-shaped
+            variables. If None, each variable is fixed to its current solution.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+        overwrite : bool, optional
+            If True, overwrite existing fix constraints.
+        """
+        for var in self.data.values():
+            var.fix(value=value, decimals=decimals, overwrite=overwrite)
+
+    def unfix(self) -> None:
+        """
+        Unfix all variables in this container.
+
+        Delegates to each variable's ``unfix()`` method.
+        """
+        for var in self.data.values():
+            var.unfix()
+
+    @property
+    def fixed(self) -> Variables:
+        """
+        Get all currently fixed variables.
+        """
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].fixed},
+            self.model,
+        )
+
+    def relax(self) -> None:
+        """
+        Relax integrality of all integer/binary variables in this container.
+
+        Delegates to each variable's :meth:`Variable.relax` method.
+        Semi-continuous variables will raise ``NotImplementedError``.
+        """
+        for var in self.data.values():
+            var.relax()
+
+    def unrelax(self) -> None:
+        """
+        Restore integrality of all previously relaxed variables in this
+        container.
+
+        Delegates to each variable's :meth:`Variable.unrelax` method.
+        """
+        for var in self.data.values():
+            var.unrelax()
+
+    @property
+    def relaxed(self) -> Variables:
+        """
+        Get all currently relaxed variables.
+        """
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].relaxed},
             self.model,
         )
 
@@ -1418,20 +1838,67 @@ class Variables:
     def get_label_position(self, values: int | ndarray) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position(self, values, self._label_position_index)
+
+    def get_label_position_with_index(
+        self, label: int
+    ) -> tuple[str, dict, tuple[int, ...]] | tuple[None, None, None]:
+        """
+        Get name, coordinate, and raw numpy index for a single variable label.
+
+        This is an optimized version that also returns the raw index for direct
+        numpy array access, avoiding xarray's .sel() overhead.
+
+        Parameters
+        ----------
+        label : int
+            The variable label to look up.
+
+        Returns
+        -------
+        tuple
+            (name, coord, index) where index is a tuple for numpy indexing,
+            or (None, None, None) if label is -1.
+        """
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return self._label_position_index.find_single_with_index(label)
+
+    def format_labels(self, values: list[int]) -> str:
+        """
+        Get a string representation of a selection of variable labels.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of variable labels.
+
+        Returns
+        -------
+        str
+            String representation of the selected variables.
+        """
+        res = [format_single_variable(self.model, v) for v in values]
+        return "\n".join(res)
 
     def print_labels(self, values: list[int]) -> None:
         """
         Print a selection of labels of the variables.
 
-        Parameters
-        ----------
-        values : list, array-like
-            One dimensional array of constraint labels.
+        .. deprecated::
+            Use :meth:`format_labels` instead.
         """
-        res = [print_single_variable(self.model, v) for v in values]
-        print("\n".join(res))
+        warn(
+            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1500,7 +1967,7 @@ class ScalarVariable:
         if self.label == -1:
             return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
-        coord_string = print_coord(coord)
+        coord_string = format_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
 
     @property
@@ -1574,7 +2041,7 @@ class ScalarVariable:
     def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
-    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
+    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore[override]
         return self.to_scalar_linexpr(1).__eq__(other)
 
     def __gt__(self, other: Any) -> None:

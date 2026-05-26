@@ -32,6 +32,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Benchmarks (new pytest-benchmark suite)
+.benchmarks/
+
+# Benchmarks (old Snakemake suite in benchmark/)
 benchmark/*.pdf
 benchmark/benchmarks
 benchmark/.snakemake
@@ -49,3 +53,5 @@ benchmark/scripts/leftovers/
 
 # direnv
 .envrc
+AGENTS.md
+coverage.xml

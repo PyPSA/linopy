@@ -5,25 +5,29 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import LinearExpression, Variable
+from linopy import LinearExpression, Model, Variable
 from linopy.common import (
     align,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
+    is_constant,
     iterate_slices,
+    maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
+from linopy.types import CoordsLike
 
 
 def test_as_dataarray_with_series_dims_default() -> None:
@@ -89,17 +93,6 @@ def test_as_dataarray_with_series_dims_superset() -> None:
     s = pd.Series([1, 2, 3], index=target_index)
     dims = [target_dim, "other"]
     da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_override_coords() -> None:
-    target_dim = "dim_0"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(s, coords=[[1, 2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
     assert list(da.coords[target_dim].values) == target_index
@@ -206,19 +199,6 @@ def test_as_dataarray_dataframe_dims_superset() -> None:
     df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
     dims = [*target_dims, "other"]
     da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_override_coords() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(df, coords=[[1, 2], [2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == target_dims
     assert list(da.coords[target_dims[0]].values) == target_index
@@ -368,8 +348,10 @@ def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError):
-        as_dataarray(arr, coords=target_coords, dims=target_dims)
+    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
+    assert da.dims == target_dims
+    assert list(da.coords["dim_0"].values) == ["a", "b"]
+    assert "dim_2" not in da.coords
 
 
 def test_as_dataarray_with_number() -> None:
@@ -402,6 +384,72 @@ def test_as_dataarray_with_number_and_coords() -> None:
     assert isinstance(da, DataArray)
     assert da.dims == ("a",)
     assert list(da.coords["a"].values) == list(range(10))
+
+
+@pytest.mark.parametrize(
+    ("arr", "expected_values"),
+    [
+        (np.float64(3.0), [3.0, 3.0]),
+        (3, [3, 3]),
+        (3.0, [3.0, 3.0]),
+        (np.array([10.0, 20.0]), [10.0, 20.0]),
+    ],
+    ids=["np_number", "python_int", "python_float", "numpy_array"],
+)
+def test_as_dataarray_with_multiindex_coords(
+    arr: object, expected_values: list[float]
+) -> None:
+    """Level names in multi-index coords must not be treated as extra dims."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
+
+    da = as_dataarray(arr, coords=source.coords)
+
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
+    assert list(da.coords["letter"].values) == ["a", "b"]
+    assert list(da.coords["num"].values) == [1, 2]
+    assert da.coords["letter"].dims == ("station",)
+    assert da.coords["num"].dims == ("station",)
+    assert list(da.values) == expected_values
+
+
+@pytest.mark.parametrize(
+    "coords_factory",
+    [
+        lambda mi: xr.Coordinates.from_pandas_multiindex(mi, "station"),
+        lambda mi: {"station": mi},
+        lambda mi: DataArray([1.0, 2.0], coords={"station": mi}, dims="station").coords,
+    ],
+    ids=["xarray_Coordinates", "plain_dict", "dataarray_coords"],
+)
+def test_as_dataarray_with_various_multiindex_coord_inputs(
+    coords_factory: Callable[[pd.MultiIndex], CoordsLike],
+) -> None:
+    """Users may pass a MultiIndex via Coordinates, a dict, or another DataArray's coords."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    coords = coords_factory(mi)
+
+    da = as_dataarray(3.0, coords=coords)
+
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
+    assert da.coords["letter"].dims == ("station",)
+    assert da.coords["num"].dims == ("station",)
+    assert (da.values == 3.0).all()
+
+
+def test_as_dataarray_with_scalar_and_explicit_dims_over_multiindex_coords() -> None:
+    """Explicit dims must win over any inference from Coordinates."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
+
+    da = as_dataarray(3.0, coords=source.coords, dims=["station"])
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
 
 
 def test_as_dataarray_with_dataarray() -> None:
@@ -711,3 +759,45 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     assert expr_obs.shape == (1, 1)  # _term dim
     assert isinstance(expr_obs, LinearExpression)
     assert_linequal(expr_obs, expr.loc[[1]])
+
+
+def test_is_constant() -> None:
+    model = Model()
+    index = pd.Index(range(10), name="t")
+    a = model.add_variables(name="a", coords=[index])
+    b = a.sel(t=1)
+    c = a * 2
+    d = a * a
+
+    non_constant = [a, b, c, d]
+    for nc in non_constant:
+        assert not is_constant(nc)
+
+    constant_values = [
+        5,
+        3.14,
+        np.int32(7),
+        np.float64(2.71),
+        pd.Series([1, 2, 3]),
+        np.array([4, 5, 6]),
+        xr.DataArray([k for k in range(10)], coords=[index]),
+    ]
+    for cv in constant_values:
+        assert is_constant(cv)
+
+
+def test_maybe_group_terms_polars_no_duplicates() -> None:
+    """Fast path: distinct (labels, vars) pairs skip group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 2], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (2, 3)
+    assert result.columns == ["labels", "vars", "coeffs"]
+    assert result["coeffs"].to_list() == [3.0, 4.0]
+
+
+def test_maybe_group_terms_polars_with_duplicates() -> None:
+    """Slow path: duplicate (labels, vars) pairs trigger group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 1], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (1, 3)
+    assert result["coeffs"].to_list() == [7.0]

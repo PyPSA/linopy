@@ -1,0 +1,58 @@
+name: Test Notebooks
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+  schedule:
+  - cron: "0 5 * * TUE"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notebooks:
+    name: Test documentation notebooks
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install package and dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[docs]"
+
+    - name: Execute notebooks
+      run: |
+        EXIT_CODE=0
+        for notebook in examples/*.ipynb; do
+          name=$(basename "$notebook")
+
+          # Skip notebooks that require credentials or special setup
+          case "$name" in
+            solve-on-oetc.ipynb|solve-on-remote.ipynb)
+              echo "Skipping $name (requires credentials or special setup)"
+              continue
+              ;;
+          esac
+
+          echo "::group::Running $name"
+          if jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 "$notebook"; then
+            echo "✓ $name passed"
+          else
+            echo "::error::✗ $name failed"
+            EXIT_CODE=1
+          fi
+          echo "::endgroup::"
+        done
+        exit $EXIT_CODE

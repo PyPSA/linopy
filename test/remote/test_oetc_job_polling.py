@@ -9,9 +9,11 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
-from requests import RequestException
 
-from linopy.remote.oetc import (
+requests = pytest.importorskip("requests")
+from requests import RequestException  # noqa: E402
+
+from linopy.remote.oetc import (  # noqa: E402
     AuthenticationResult,
     ComputeProvider,
     OetcCredentials,

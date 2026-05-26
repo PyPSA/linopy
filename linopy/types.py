@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, TypeAlias, Union
 
 import numpy
 import polars as pl
@@ -11,7 +11,10 @@ from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import (
+        AnonymousScalarConstraint,
+        ConstraintBase,
+    )
     from linopy.expressions import (
         LinearExpression,
         QuadraticExpression,
@@ -19,34 +22,34 @@ if TYPE_CHECKING:
     )
     from linopy.variables import ScalarVariable, Variable
 
-# Type aliases using Union for Python 3.9 compatibility
-CoordsLike = Union[  # noqa: UP007
-    Sequence[Sequence | Index | DataArray],
-    Mapping,
-    DataArrayCoordinates,
-    DatasetCoordinates,
-]
-DimsLike = Union[str, Iterable[Hashable]]  # noqa: UP007
+CoordsLike: TypeAlias = (
+    Sequence[Sequence | Index | DataArray]
+    | Mapping
+    | DataArrayCoordinates
+    | DatasetCoordinates
+)
+DimsLike: TypeAlias = str | Iterable[Hashable]
 
-ConstantLike = Union[  # noqa: UP007
-    int,
-    float,
-    numpy.floating,
-    numpy.integer,
-    numpy.ndarray,
-    DataArray,
-    Series,
-    DataFrame,
-    pl.Series,
+ConstantLike: TypeAlias = (
+    int
+    | float
+    | numpy.floating
+    | numpy.integer
+    | numpy.ndarray
+    | DataArray
+    | Series
+    | DataFrame
+    | pl.Series
+)
+SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
+MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
+PathLike: TypeAlias = str | Path
+
+# These reference types only available under TYPE_CHECKING, so use Union with strings
+VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
+ExpressionLike: TypeAlias = Union[
+    "ScalarLinearExpression", "LinearExpression", "QuadraticExpression"
 ]
-SignLike = Union[str, numpy.ndarray, DataArray, Series, DataFrame]  # noqa: UP007
-VariableLike = Union["ScalarVariable", "Variable"]
-ExpressionLike = Union[
-    "ScalarLinearExpression",
-    "LinearExpression",
-    "QuadraticExpression",
-]
-ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
-MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]  # noqa: UP007
+ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
+LinExprLike = Union["Variable", "LinearExpression"]
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007
-PathLike = Union[str, Path]  # noqa: UP007

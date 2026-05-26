@@ -45,7 +45,7 @@
 So far **linopy** is available on the PyPI repository
 
 ```bash
-pip install linopy
+uv pip install linopy
 ```
 
 or on conda-forge
@@ -143,12 +143,14 @@ Fri    0          4
 
 * [Cbc](https://projects.coin-or.org/Cbc)
 * [GLPK](https://www.gnu.org/software/glpk/)
-* [HiGHS](https://www.maths.ed.ac.uk/hall/HiGHS/)
+* [HiGHS](https://highs.dev/)
 * [Gurobi](https://www.gurobi.com/)
 * [Xpress](https://www.fico.com/en/products/fico-xpress-solver)
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
 * [MOSEK](https://www.mosek.com/)
 * [COPT](https://www.shanshu.ai/copt)
+* [cuPDLPx](https://github.com/MIT-Lu-Lab/cuPDLPx)
+* [Knitro](https://www.artelys.com/solvers/knitro/)
 
 Note that these do have to be installed by the user separately.
 
@@ -157,10 +159,8 @@ Note that these do have to be installed by the user separately.
 To set up a local development environment for linopy and to run the same tests that are run in the CI, you can run:
 
 ```sh
-python -m venv venv
-source venv/bin/activate
-pip install uv
-uv pip install -e .[dev,solvers]
+uv sync --extra dev --extra solvers
+source .venv/bin/activate
 pytest
 ```
 

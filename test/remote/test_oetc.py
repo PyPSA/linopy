@@ -5,10 +5,11 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
-import requests
-from requests import RequestException
 
-from linopy.remote.oetc import (
+requests = pytest.importorskip("requests")
+from requests import RequestException  # noqa: E402
+
+from linopy.remote.oetc import (  # noqa: E402
     AuthenticationResult,
     ComputeProvider,
     GcpCredentials,
@@ -1391,7 +1392,9 @@ class TestJobSubmission:
         mock_post.return_value = mock_response
 
         # Execute
-        result = handler_with_auth_setup._submit_job_to_compute_service(input_file_name)
+        result = handler_with_auth_setup._submit_job_to_compute_service(
+            input_file_name, "gurobi", {}
+        )
 
         # Verify request
         expected_payload = {
@@ -1433,7 +1436,9 @@ class TestJobSubmission:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_auth_setup._submit_job_to_compute_service(input_file_name)
+            handler_with_auth_setup._submit_job_to_compute_service(
+                input_file_name, "highs", {}
+            )
 
         assert "Failed to submit job to compute service" in str(exc_info.value)
 
@@ -1451,7 +1456,9 @@ class TestJobSubmission:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_auth_setup._submit_job_to_compute_service(input_file_name)
+            handler_with_auth_setup._submit_job_to_compute_service(
+                input_file_name, "highs", {}
+            )
 
         assert "Invalid job submission response format: missing field 'uuid'" in str(
             exc_info.value
@@ -1468,7 +1475,9 @@ class TestJobSubmission:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_auth_setup._submit_job_to_compute_service(input_file_name)
+            handler_with_auth_setup._submit_job_to_compute_service(
+                input_file_name, "highs", {}
+            )
 
         assert "Failed to submit job to compute service" in str(exc_info.value)
 
@@ -1567,7 +1576,9 @@ class TestSolveOnOetc:
                             "/tmp/linopy-abc123.nc"
                         )
                         mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                        mock_submit.assert_called_once_with("uploaded_file.nc.gz")
+                        mock_submit.assert_called_once_with(
+                            "uploaded_file.nc.gz", "highs", {}
+                        )
                         mock_wait.assert_called_once_with("test-job-uuid")
                         mock_download.assert_called_once_with("result.nc.gz")
                         mock_read_netcdf.assert_called_once_with(
@@ -1693,7 +1704,9 @@ class TestSolveOnOetcWithJobSubmission:
                             "/tmp/linopy-abc123.nc"
                         )
                         mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                        mock_submit.assert_called_once_with(uploaded_file_name)
+                        mock_submit.assert_called_once_with(
+                            uploaded_file_name, "highs", {}
+                        )
                         mock_wait.assert_called_once_with(job_uuid)
                         mock_download.assert_called_once_with("result.nc.gz")
                         mock_read_netcdf.assert_called_once_with(

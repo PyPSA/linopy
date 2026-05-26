@@ -98,13 +98,13 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert_linequal(x + data, x + other_datatype)
     assert_linequal(x - data, x - other_datatype)
     assert_linequal(x * data, x * other_datatype)
-    assert_linequal(x / data, x / other_datatype)  # type: ignore
-    assert_linequal(data * x, other_datatype * x)  # type: ignore
+    assert_linequal(x / data, x / other_datatype)
+    assert_linequal(data * x, other_datatype * x)  # type: ignore[arg-type]
     assert x.__add__(object()) is NotImplemented
     assert x.__sub__(object()) is NotImplemented
     assert x.__mul__(object()) is NotImplemented
-    assert x.__truediv__(object()) is NotImplemented  # type: ignore
-    assert x.__pow__(object()) is NotImplemented  # type: ignore
+    assert x.__truediv__(object()) is NotImplemented
+    assert x.__pow__(object()) is NotImplemented  # type: ignore[operator]
     with pytest.raises(ValueError):
         x.__pow__(3)
 

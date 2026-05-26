@@ -225,7 +225,7 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
 def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
     expr: QuadraticExpression = x * y  # type: ignore
     with pytest.warns(DeprecationWarning):
-        merge(expr, expr)  # type: ignore
+        merge(expr, expr)
 
 
 def test_merge_linear_expression_and_quadratic_expression(
@@ -238,11 +238,11 @@ def test_merge_linear_expression_and_quadratic_expression(
     with pytest.raises(ValueError):
         merge([linexpr, quadexpr], cls=QuadraticExpression)
 
-    new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])  # type: ignore
+    new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])
     assert isinstance(new_quad_ex, QuadraticExpression)
 
     with pytest.warns(DeprecationWarning):
-        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore
+        merge(quadexpr, quadexpr, cls=QuadraticExpression)
 
     quadexpr_2 = linexpr.to_quadexpr()
     merged_expr = merge([quadexpr_2, quadexpr], cls=QuadraticExpression)
@@ -287,13 +287,29 @@ def test_quadratic_expression_flat(x: Variable, y: Variable) -> None:
     assert len(expr.flat) == 2
 
 
-def test_linear_expression_to_polars(x: Variable, y: Variable) -> None:
+def test_quadratic_expression_to_polars(x: Variable, y: Variable) -> None:
     expr = x * y + x + 5
     df = expr.to_polars()
     assert isinstance(df, pl.DataFrame)
     assert "vars1" in df.columns
     assert "vars2" in df.columns
     assert len(df) == expr.nterm * 2
+
+
+def test_quadratic_expression_constant_to_polars() -> None:
+    m = Model()
+    arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
+    lin_expr = LinearExpression.from_constant(model=m, constant=arr)
+    quad_expr = lin_expr.to_quadexpr()
+
+    assert quad_expr.is_constant
+    df = quad_expr.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert df.columns == ["vars1", "vars2", "coeffs", "const"]
+    assert all(df["vars1"].is_null())
+    assert all(df["vars2"].is_null())
+    assert all(df["coeffs"].is_null())
+    assert all(arr.to_numpy() == df["const"].to_numpy())
 
 
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:

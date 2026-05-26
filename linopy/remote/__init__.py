@@ -8,8 +8,12 @@ on remote systems:
 - OetcHandler: Cloud-based execution via OET Cloud service
 """
 
-from linopy.remote.oetc import OetcCredentials, OetcHandler, OetcSettings
 from linopy.remote.ssh import RemoteHandler
+
+try:
+    from linopy.remote.oetc import OetcCredentials, OetcHandler, OetcSettings
+except ImportError:
+    pass
 
 __all__ = [
     "RemoteHandler",

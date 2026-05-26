@@ -5,10 +5,13 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import copy as _copy
+import json
 import logging
 import shutil
 import time
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,15 +21,15 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
-from numpy import ones_like, zeros_like
-from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.constants import CONCAT_DIM
+from linopy.common import to_polars
+from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
+    from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
     from linopy.model import Model
@@ -51,39 +54,85 @@ def clean_name(name: str) -> str:
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def _format_and_write(
+    df: pl.DataFrame, columns: list[pl.Expr], f: BufferedWriter
+) -> None:
+    """
+    Format columns via concat_str and write to file.
 
-    coord = print_coord(coord).translate(coord_sanitizer)
+    Uses Polars streaming engine for better memory efficiency.
+    """
+    df.lazy().select(pl.concat_str(columns, ignore_nulls=True)).collect(
+        engine="streaming"
+    ).write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
+
+
+def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
+    """
+    Return polars expressions for a signed number string, handling -0.0 correctly.
+
+    Parameters
+    ----------
+    expr : pl.Expr
+        Numeric value
+
+    Returns
+    -------
+    tuple[pl.Expr, pl.Expr]
+        value_string with sign
+    """
+    return (
+        pl.when(expr >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.when(expr == 0).then(pl.lit("0.0")).otherwise(expr.cast(pl.String)),
+    )
+
+
+def format_coord(coord: str) -> str:
+    from linopy.common import format_coord
+
+    coord = format_coord(coord).translate(coord_sanitizer)
     return coord
 
 
 def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
-    """Get printer functions for scalar values (non-polars)."""
+    """
+    Get batch printer functions for numpy label arrays (non-polars).
+
+    Returns two callables that take an int64 numpy array of labels and return
+    a list of name strings.
+    """
     if explicit_coordinate_names:
 
-        def print_variable(var: Any) -> str:
+        def _fmt_var(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
-        def print_constraint(cons: Any) -> str:
+        def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
-        return print_variable, print_constraint
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_var)(labels).tolist()
+
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_con)(labels).tolist()
+
+        return print_variables, print_constraints
     else:
 
-        def print_variable(var: Any) -> str:
-            return f"x{var}"
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return ("x" + pl.Series(labels).cast(pl.String)).to_list()
 
-        def print_constraint(cons: Any) -> str:
-            return f"c{cons}"
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return ("c" + pl.Series(labels).cast(pl.String)).to_list()
 
-        return print_variable, print_constraint
+        return print_variables, print_constraints
 
 
 def get_printers(
@@ -95,12 +144,12 @@ def get_printers(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -129,31 +178,23 @@ def objective_write_linear_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").cast(pl.String),
+        *signed_number(pl.col("coeffs")),
         *print_variable(pl.col("vars")),
     ]
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
 
 
 def objective_write_quadratic_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").mul(2).cast(pl.String),
+        *signed_number(pl.col("coeffs").mul(2)),
         *print_variable(pl.col("vars1")),
         pl.lit(" *"),
         *print_variable(pl.col("vars2")),
     ]
     f.write(b"+ [\n")
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
     f.write(b"] / 2\n")
 
 
@@ -204,7 +245,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
@@ -226,20 +271,14 @@ def bounds_to_file(
             df = var_slice.to_polars()
 
             columns = [
-                pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("lower").cast(pl.String),
+                *signed_number(pl.col("lower")),
                 pl.lit(" <= "),
                 *print_variable(pl.col("labels")),
                 pl.lit(" <= "),
-                pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("upper").cast(pl.String),
+                *signed_number(pl.col("upper")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def binaries_to_file(
@@ -277,11 +316,45 @@ def binaries_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
+
+
+def semi_continuous_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out semi-continuous variables of a model to a lp file.
+    """
+    names = m.variables.semi_continuous
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsemi-continuous\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing semi-continuous variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
+
+            columns = [
+                *print_variable(pl.col("labels")),
+            ]
+
+            _format_and_write(df, columns, f)
 
 
 def integers_to_file(
@@ -320,11 +393,70 @@ def integers_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
+            _format_and_write(df, columns, f)
+
+
+def sos_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out SOS constraints of a model to an LP file.
+    """
+    names = m.variables.sos
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsos\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing sos constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
+
+        other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+        for var_slice in var.iterate_slices(slice_size, other_dims):
+            ds = var_slice.labels.to_dataset()
+            # Per-set id = max member label: unique per set (labels are globally
+            # unique); a fully-masked set reduces to -1 and is dropped below.
+            ds["sos_labels"] = ds["labels"].max(sos_dim)
+            ds["weights"] = ds.coords[sos_dim]
+            df = to_polars(ds)
+
+            # Drop masked members
+            df = df.filter((pl.col("labels") != -1) & (pl.col("sos_labels") != -1))
+            if df.is_empty():
+                continue
+
+            df = df.group_by("sos_labels").agg(
+                pl.concat_str(
+                    *print_variable(pl.col("labels")), pl.lit(":"), pl.col("weights")
+                )
+                .str.join(" ")
+                .alias("var_weights")
             )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+
+            columns = [
+                pl.lit("s"),
+                pl.col("sos_labels"),
+                pl.lit(f": S{sos_type} :: "),
+                pl.col("var_weights"),
+            ]
+
+            _format_and_write(df, columns, f)
 
 
 def constraints_to_file(
@@ -361,59 +493,32 @@ def constraints_to_file(
             if df.height == 0:
                 continue
 
-            # Ensure each constraint has both coefficient and RHS terms
-            analysis = df.group_by("labels").agg(
-                [
-                    pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
-                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
-                ]
-            )
-
-            valid = analysis.filter(
-                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
-            )
-
-            if valid.height == 0:
-                continue
-
-            # Keep only constraints that have both parts
-            df = df.join(valid.select("labels"), on="labels", how="inner")
-
             # Sort by labels and mark first/last occurrences
             df = df.sort("labels").with_columns(
                 [
-                    pl.when(pl.col("labels").is_first_distinct())
-                    .then(pl.col("labels"))
-                    .otherwise(pl.lit(None))
-                    .alias("labels_first"),
+                    pl.col("labels").is_first_distinct().alias("is_first_in_group"),
                     (pl.col("labels") != pl.col("labels").shift(-1))
                     .fill_null(True)
                     .alias("is_last_in_group"),
                 ]
             )
 
-            row_labels = print_constraint(pl.col("labels_first"))
+            row_labels = print_constraint(pl.col("labels"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[0]),
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[1]),
-                pl.when(pl.col("labels_first").is_not_null())
-                .then(pl.lit(":\n"))
-                .alias(":"),
-                pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
-                pl.col("coeffs").cast(pl.String),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[0]),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[1]),
+                pl.when(pl.col("is_first_in_group")).then(pl.lit(":\n")).alias(":"),
+                *signed_number(pl.col("coeffs")),
+                col_labels[0],
+                col_labels[1],
+                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
                 pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
             # in the future, we could use lazy dataframes when they support appending
             # tp existent files
@@ -459,6 +564,20 @@ def to_lp_file(
         integers_to_file(
             m,
             integer_label=integer_label,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        semi_continuous_to_file(
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        sos_to_file(
+            m,
             f=f,
             progress=progress,
             slice_size=slice_size,
@@ -512,7 +631,9 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = solvers.Highs._build_solver_model(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -523,237 +644,73 @@ def to_file(
 
 
 def to_mosek(
-    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    task: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
-    """
-    Export model to MOSEK.
-
-    Export the model directly to MOSEK without writing files.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    task : empty MOSEK task
-
-    Returns
-    -------
-    task : MOSEK Task object
-    """
-
+    """Build the MOSEK task for `m`."""
     import mosek
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
 
     if task is None:
         task = mosek.Task()
-
-    task.appendvars(m.nvars)
-    task.appendcons(m.ncons)
-
-    M = m.matrices
-    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
-    #    task.putvarname(j, n)
-
-    labels = np.vectorize(print_variable)(M.vlabels).astype(object)
-    task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+    return solvers.Mosek._build_solver_model(
+        m,
+        task,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
     )
-
-    ## Variables
-
-    # MOSEK uses bound keys (free, bounded below or above, ranged and fixed)
-    # plus bound values (lower and upper), and it is considered an error to
-    # input an infinite value for a finite bound.
-    # bkx and bkc define the boundkeys based on upper and lower bound, and blx,
-    # bux, blc and buc define the finite bounds. The numerical value of a bound
-    # indicated to be infinite by the bound key is ignored by MOSEK.
-    bkx = [
-        (
-            (
-                (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
-                if ub < np.inf
-                else mosek.boundkey.lo
-            )
-            if (lb > -np.inf)
-            else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
-        )
-        for (lb, ub) in zip(M.lb, M.ub)
-    ]
-    blx = [b if b > -np.inf else 0.0 for b in M.lb]
-    bux = [b if b < np.inf else 0.0 for b in M.ub]
-    task.putvarboundslice(0, m.nvars, bkx, blx, bux)
-
-    if len(m.binaries.labels) + len(m.integers.labels) > 0:
-        idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
-        task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-        if len(m.binaries.labels) > 0:
-            bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
-            task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
-
-    ## Constraints
-
-    if len(m.constraints) > 0:
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        for i, n in enumerate(names):
-            task.putconname(i, n)
-        bkc = [
-            (
-                (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
-                if s == "<"
-                else (
-                    (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
-                    if s == ">"
-                    else mosek.boundkey.fx
-                )
-            )
-            for s, b in zip(M.sense, M.b)
-        ]
-        blc = [b if b > -np.inf else 0.0 for b in M.b]
-        buc = [b if b < np.inf else 0.0 for b in M.b]
-        # blc = M.b
-        # buc = M.b
-        if M.A is not None:
-            A = M.A.tocsr()
-            task.putarowslice(
-                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
-            )
-            task.putconboundslice(0, m.ncons, bkc, blc, buc)
-
-    ## Objective
-    if M.Q is not None:
-        Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
-        task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(list(np.arange(m.nvars)), M.c)
-
-    if m.objective.sense == "max":
-        task.putobjsense(mosek.objsense.maximize)
-    else:
-        task.putobjsense(mosek.objsense.minimize)
-    return task
 
 
 def to_gurobipy(
-    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    env: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
-    """
-    Export the model to gurobipy.
+    """Build the gurobipy.Model for `m`."""
+    solver = solvers.Gurobi.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+        env=env,
+    )
+    return solver.solver_model
 
-    This function does not write the model to intermediate files but directly
-    passes it to gurobipy. Note that for large models this is not
-    computationally efficient.
 
-    Parameters
-    ----------
-    m : linopy.Model
-    env : gurobipy.Env
+def to_highspy(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Highs:
+    """Build the highspy.Highs instance for `m`."""
+    solver = solvers.Highs.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
+    return solver.solver_model
 
-    Returns
-    -------
-    model : gurobipy.Model
-    """
-    import gurobipy
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
+def to_xpress(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Any:
+    """Build the xpress.problem instance for `m`."""
+    return solvers.Xpress._build_solver_model(
+        m,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
     )
 
-    m.constraints.sanitize_missings()
-    model = gurobipy.Model(env=env)
 
-    M = m.matrices
-
-    names = np.vectorize(print_variable)(M.vlabels).astype(object)
-    kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels):
-        kwargs["vtype"] = M.vtypes
-    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
-
-    if m.is_quadratic:
-        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
-    else:
-        model.setObjective(M.c @ x)
-
-    if m.objective.sense == "max":
-        model.ModelSense = -1
-
-    if len(m.constraints):
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
-        c.setAttr("ConstrName", list(names))  # type: ignore
-
-    model.update()
-    return model
-
-
-def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
-    """
-    Export the model to highspy.
-
-    This function does not write the model to intermediate files but directly
-    passes it to highspy.
-
-    Note, this function does not track variable and constraint labels.
-
-    Parameters
-    ----------
-    m : linopy.Model
-
-    Returns
-    -------
-    model : highspy.Highs
-    """
-    import highspy
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    M = m.matrices
-    h = highspy.Highs()
-    h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers):
-        vtypes = M.vtypes
-        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
-        n = len(labels)
-        h.changeColsIntegrality(n, labels, ones_like(labels))
-        if len(m.binaries):
-            labels = np.arange(len(vtypes))[vtypes == "B"]
-            n = len(labels)
-            h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
-
-    # linear objective
-    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
-
-    # linear constraints
-    A = M.A
-    if A is not None:
-        A = A.tocsr()
-        num_cons = A.shape[0]
-        lower = np.where(M.sense != "<", M.b, -np.inf)
-        upper = np.where(M.sense != ">", M.b, np.inf)
-        h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
-
-    lp = h.getLp()
-    lp.col_names_ = np.vectorize(print_variable)(M.vlabels).astype(object)
-    if len(M.clabels):
-        lp.row_names_ = np.vectorize(print_constraint)(M.clabels).astype(object)
-    h.passModel(lp)
-
-    # quadrative objective
-    Q = M.Q
-    if Q is not None:
-        Q = triu(Q)
-        Q = Q.tocsr()
-        num_vars = Q.shape[0]
-        h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
-
-    # change objective sense
-    if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
-
-    return h
+def to_cupdlpx(m: Model) -> cupdlpxModel:
+    """Build the cupdlpx.Model for `m`."""
+    solver = solvers.cuPDLPx.from_model(m, io_api="direct")
+    return solver.solver_model
 
 
 def to_block_files(m: Model, fn: Path) -> None:
@@ -893,7 +850,29 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token lives only on the in-memory
+    Model and is not persisted. If the model has an active SOS
+    reformulation at serialization time, the netcdf contains the
+    reformulated MILP form (aux binaries and cardinality constraints)
+    and a :class:`UserWarning` is emitted to flag that the deserialized
+    copy will not be able to undo the reformulation.
+
+    ``Model.solve(remote=...)`` invokes ``to_netcdf`` internally on the
+    reformulated model and suppresses this warning.
     """
+    if m._sos_reformulation_state is not None:
+        warnings.warn(
+            "Serializing a model with an active SOS reformulation. The "
+            "netcdf will contain the reformulated MILP form; the "
+            "reformulation lifecycle token is not persisted, so a "
+            "reader cannot undo it. Call `model.undo_sos_reformulation()` "
+            "first if you want the original SOS form on disk.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -906,7 +885,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
                 prefix_len = len(prefix) + 1  # leave original index level name
                 names = [n[prefix_len:] for n in ds[dim].to_index().names]
                 ds = ds.reset_index(dim)
-                ds.attrs[f"{dim}_multiindex"] = list(names)
+                # scipy netCDF3 backend cannot write unicode-array attrs.
+                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
 
         return ds
 
@@ -914,7 +894,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
     cons = [
-        with_prefix(con.data, f"constraints-{name}")
+        with_prefix(con.to_netcdf_ds(), f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
     objective = m.objective.data
@@ -927,6 +907,20 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
+    if m._piecewise_formulations:
+        ds.attrs["_piecewise_formulations"] = json.dumps(
+            {
+                name: {
+                    "method": pwl.method,
+                    "variable_names": pwl.variable_names,
+                    "constraint_names": pwl.constraint_names,
+                    "convexity": pwl.convexity,
+                }
+                for name, pwl in m._piecewise_formulations.items()
+            }
+        )
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -949,15 +943,23 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Returns
     -------
     m : linopy.Model
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token is not persisted by
+    :func:`to_netcdf`. If the saved model was in reformulated form,
+    the deserialized Model is too, but
+    :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.model import (
+    from linopy.constraints import (
         Constraint,
+        ConstraintBase,
         Constraints,
-        LinearExpression,
-        Model,
-        Variable,
-        Variables,
+        CSRConstraint,
     )
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model
+    from linopy.variables import Variable, Variables
 
     if isinstance(path, str):
         path = Path(path)
@@ -971,11 +973,20 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
+    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+        # str = JSON (new); iterable = legacy list from older linopy.
+        if isinstance(value, str):
+            return [str(n) for n in json.loads(value)]
+        return [str(n) for n in value]
+
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
         multiindexes = []
         for dim in ds.dims:
-            for name in ds.attrs.get(f"{dim}_multiindex", []):
+            attr = ds.attrs.get(f"{dim}_multiindex")
+            if attr is None:
+                continue
+            for name in parse_multiindex_attr(attr):
                 multiindexes.append(prefix + "-" + name)
         ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -988,8 +999,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
         for dim in ds.dims:
             if f"{dim}_multiindex" in ds.attrs:
-                names = ds.attrs.pop(f"{dim}_multiindex")
-                ds = ds.set_index({dim: names})
+                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
+                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
 
         return ds
 
@@ -1004,10 +1015,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     cons = [str(k) for k in ds if str(k).startswith("constraints")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
-    constraints = {}
+    constraints: dict[str, ConstraintBase] = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
-        constraints[name] = Constraint(get_prefix(ds, k), m, name)
+        con_ds = get_prefix(ds, k)
+        if con_ds.attrs.get("_linopy_format") == "csr":
+            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
+        else:
+            constraints[name] = Constraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1019,6 +1034,148 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = get_prefix(ds, "parameters")
 
     for k in m.scalar_attrs:
-        setattr(m, k, ds.attrs.get(k))
+        if k in ds.attrs:
+            setattr(m, k, ds.attrs[k])
+
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
+
+    if "_piecewise_formulations" in ds.attrs:
+        from linopy.piecewise import PiecewiseFormulation
+
+        for name, d in json.loads(ds.attrs["_piecewise_formulations"]).items():
+            m._piecewise_formulations[name] = PiecewiseFormulation(
+                name=name,
+                method=d["method"],
+                variable_names=d["variable_names"],
+                constraint_names=d["constraint_names"],
+                model=m,
+                convexity=d["convexity"],
+            )
 
     return m
+
+
+def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
+    """
+    Return a copy of this model.
+
+    With ``deep=True`` (default), variables, constraints, objective,
+    parameters, blocks, and scalar attributes are copied to a fully
+    independent model. With ``deep=False``, returns a shallow copy.
+
+    :meth:`Model.copy` defaults to deep copy for workflow safety.
+    In contrast, ``copy.copy(model)`` is shallow via ``__copy__``, and
+    ``copy.deepcopy(model)`` is deep via ``__deepcopy__``.
+
+    Solver runtime metadata (for example, ``solver_name`` and
+    ``solver_model``) is intentionally not copied. Solver backend state
+    is recreated on ``solve()``.
+
+    Parameters
+    ----------
+    m : Model
+        The model to copy.
+    include_solution : bool, optional
+        Whether to include solution and dual values in the copy.
+        If False (default), solve artifacts are excluded: solution/dual data,
+        objective value, and solve status are reset to initialized state.
+        If True, these values are copied when present. For unsolved models,
+        this has no additional effect.
+    deep : bool, optional
+        Whether to return a deep copy (default) or shallow copy. If False,
+        the returned model uses independent wrapper objects that share
+        underlying data buffers with the source model.
+
+    Returns
+    -------
+    Model
+        A deep or shallow copy of the model.
+    """
+    from linopy.constraints import Constraint, Constraints
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model, Objective
+    from linopy.variables import Variable, Variables
+
+    SOLVE_STATE_ATTRS = {"status", "termination_condition"}
+
+    new_model = Model(
+        chunk=m._chunk,
+        force_dim_names=m._force_dim_names,
+        auto_mask=m._auto_mask,
+        freeze_constraints=m.freeze_constraints,
+        set_names_in_solver_io=m.set_names_in_solver_io,
+        solver_dir=str(m._solver_dir),
+    )
+
+    new_model._variables = Variables(
+        {
+            name: Variable(
+                var.data.copy(deep=deep)
+                if include_solution
+                else var.data[m.variables.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, var in m.variables.items()
+        },
+        new_model,
+    )
+
+    new_model._constraints = Constraints(
+        {
+            name: Constraint(
+                con.mutable().data.copy(deep=deep)
+                if include_solution
+                else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, con in m.constraints.items()
+        },
+        new_model,
+    )
+
+    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    new_model._objective._value = (
+        float(m.objective.value)
+        if (include_solution and m.objective.value is not None)
+        else None
+    )
+
+    new_model._parameters = m._parameters.copy(deep=deep)
+    new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
+
+    for attr in m.scalar_attrs:
+        if include_solution or attr not in SOLVE_STATE_ATTRS:
+            setattr(new_model, attr, getattr(m, attr))
+
+    if m._sos_reformulation_state is not None:
+        new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
+
+    return new_model
+
+
+def shallowcopy(m: Model) -> Model:
+    """
+    Support Python's ``copy.copy`` protocol for ``Model``.
+
+    Returns a shallow copy with independent wrapper objects that share
+    underlying array buffers with ``m``. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    return copy(m, include_solution=False, deep=False)
+
+
+def deepcopy(m: Model, memo: dict[int, Any]) -> Model:
+    """
+    Support Python's ``copy.deepcopy`` protocol for ``Model``.
+
+    Returns a deep, structurally independent copy and records it in ``memo``
+    as required by Python's copy protocol. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    new_model = copy(m, include_solution=False, deep=True)
+    memo[id(m)] = new_model
+    return new_model
