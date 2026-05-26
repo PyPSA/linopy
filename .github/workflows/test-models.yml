@@ -89,7 +89,7 @@ jobs:
           pixi remove pypsa
           pixi remove linopy
           pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          pixi add pypsa
+          pixi add --pypi pypsa
 
       - name: Run snakemake test workflows
         if: env.pinned == 'false'
