@@ -1121,6 +1121,12 @@ class Constraint(ConstraintBase):
     @coeffs.setter
     def coeffs(self, value: ConstantLike) -> None:
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.coeffs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(coeffs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(coeffs=value)
 
     @property
@@ -1130,6 +1136,12 @@ class Constraint(ConstraintBase):
     @vars.setter
     def vars(self, value: variables.Variable | DataArray) -> None:
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.vars setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(variables=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(variables=value)
 
     @property
@@ -1139,6 +1151,12 @@ class Constraint(ConstraintBase):
     @sign.setter
     def sign(self, value: SignLike) -> None:
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.sign setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(sign=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(sign=value)
 
     @property
@@ -1148,6 +1166,12 @@ class Constraint(ConstraintBase):
     @rhs.setter
     def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.rhs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(rhs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(rhs=value)
 
     @property
@@ -1158,6 +1182,12 @@ class Constraint(ConstraintBase):
     @lhs.setter
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.lhs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(lhs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(lhs=value)
 
     def _assign_lhs_expr(
@@ -1420,9 +1450,10 @@ class Constraint(ConstraintBase):
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
-        self.vars = self.vars.where(not_zero, -1)
-        self.coeffs = self.coeffs.where(not_zero)
-        return self
+        return self.update(
+            variables=self.vars.where(not_zero, -1),
+            coeffs=self.coeffs.where(not_zero),
+        )
 
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""

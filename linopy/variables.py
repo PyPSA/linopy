@@ -895,6 +895,12 @@ class Variable:
         Syntactic sugar for :meth:`Variable.update`. Do not add logic
         here; mutate via ``update`` so the contract stays single-sourced.
         """
+        warn(
+            "Variable.upper setter is deprecated and will be removed in a "
+            "future release; use Variable.update(upper=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(upper=value)
 
     @property
@@ -913,6 +919,12 @@ class Variable:
         Syntactic sugar for :meth:`Variable.update`. Do not add logic
         here; mutate via ``update`` so the contract stays single-sourced.
         """
+        warn(
+            "Variable.lower setter is deprecated and will be removed in a "
+            "future release; use Variable.update(lower=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.update(lower=value)
 
     def update(
