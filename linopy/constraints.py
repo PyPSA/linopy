@@ -1253,10 +1253,25 @@ class Constraint(ConstraintBase):
             with ``coeffs`` / ``variables``. Sets the internal
             ``_coef_dirty`` flag.
         rhs : ExpressionLike / VariableLike / ConstantLike, optional
-            New right-hand side. Variable / Expression rhs is rearranged
-            onto the lhs (matching ``add_constraints``): the residual is
-            subtracted from ``c.lhs`` and only the constant part lands
-            on ``c.rhs``.
+            New right-hand side.
+
+            * Constant rhs (scalar, array, DataArray) → assigned directly
+              to ``c.rhs``; ``c.lhs`` is untouched.
+            * Variable / Expression rhs → rearranged onto the lhs to
+              preserve the invariant that ``c.rhs`` is constant-only,
+              matching ``add_constraints``. **This rewrites ``c.lhs``.**
+
+            Example — the two calls below produce the same final state::
+
+                # Form A: explicit, only changes rhs
+                c.update(rhs=5)
+
+                # Form B: rhs carries a variable, so lhs is rewritten too.
+                # Starting from `2*x <= 3`, this gives `2*x - y <= 5`:
+                c.update(rhs=y + 5)
+
+            If you want the rewrite to be loud, use the positional form
+            (``c.update(2*x - y <= 5)``) which makes both sides explicit.
         sign : SignLike, optional
             New sign. One of ``"<=" / "==" / ">="`` (or their ``< > =``
             aliases).

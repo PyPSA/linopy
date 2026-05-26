@@ -225,6 +225,21 @@ def test_variable_update_array_invalid_dim(x: linopy.Variable) -> None:
         x.update(lower=pd.Series(range(15, 25)))
 
 
+def test_variable_update_upper_only(z: linopy.Variable) -> None:
+    """upper= alone changes upper; lower untouched."""
+    old_lower = z.lower.copy()
+    z.update(upper=25)
+    assert (z.upper == 25).all()
+    assert (z.lower == old_lower).all()
+
+
+def test_variable_update_with_array(x: linopy.Variable) -> None:
+    """Array bound that aligns on the variable's coord is accepted."""
+    lower = pd.Series(range(10, 20), index=pd.RangeIndex(10, name="first"))
+    x.update(lower=lower)
+    np.testing.assert_array_equal(x.lower.values, lower.values)
+
+
 def test_variable_sum(x: linopy.Variable) -> None:
     res = x.sum()
     assert res.nterm == 10

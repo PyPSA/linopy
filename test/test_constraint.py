@@ -487,6 +487,54 @@ def test_constraint_update_positional_rejects_non_constraint(
         mc.update("not a constraint")  # type: ignore
 
 
+def test_constraint_update_lhs_only(
+    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """lhs= alone replaces the expression; rhs and sign untouched."""
+    old_rhs = mc.rhs.copy()
+    old_sign = mc.sign.copy()
+    mc.update(lhs=5 * x + 7 * y)
+    assert (mc.rhs == old_rhs).all()
+    assert (mc.sign == old_sign).all()
+    assert mc.lhs.nterm == 2
+
+
+def test_constraint_update_coeffs_only_keeps_values(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    """coeffs= alone replaces the coef array element-wise; vars untouched."""
+    old_vars = mc.vars.copy()
+    mc.update(coeffs=mc.coeffs * 10)
+    assert (mc.vars == old_vars).all()
+    # original was mc.lhs with leading coeff; *10 → all coeffs *10
+    assert mc.coeffs.max() >= 10
+
+
+def test_constraint_update_lhs_and_sign_together(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """Compound updates compose: lhs replacement + sign flip in one call."""
+    mc.update(lhs=2 * x, sign=EQUAL)
+    assert (mc.sign == EQUAL).all()
+    assert mc.lhs.nterm == 1
+
+
+def test_constraint_update_lhs_and_coeffs_rejected(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """lhs= (full replacement) and coeffs= (partial) are mutually exclusive."""
+    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
+        mc.update(lhs=2 * x, coeffs=mc.coeffs * 2)
+
+
+def test_constraint_update_lhs_and_variables_rejected(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """lhs= (full replacement) and variables= (partial) are mutually exclusive."""
+    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
+        mc.update(lhs=2 * x, variables=mc.vars)
+
+
 def test_constraint_rhs_setter_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
