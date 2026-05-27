@@ -318,9 +318,9 @@ def as_dataarray(
     if coords is None:
         return _as_dataarray_lax(arr, coords, dims, **kwargs)
 
-    if not isinstance(coords, Coordinates | Mapping):
-        # xarray reads bare `(a, b)` as `(dim_name, values)`; normalize here
-        # so a coords entry passed as a tuple behaves identically to a list.
+    if isinstance(coords, list | tuple) and any(isinstance(c, tuple) for c in coords):
+        # xarray reads bare `(a, b)` as `(dim_name, values)`; normalize so a
+        # coords entry passed as a tuple behaves identically to a list.
         coords = [list(c) if isinstance(c, tuple) else c for c in coords]
 
     expected = _coords_to_dict(coords, dims=dims)
