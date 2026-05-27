@@ -441,7 +441,15 @@ def assert_compatible_with_coords(
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
             continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+        expected_is_mi = isinstance(coord_values, pd.MultiIndex)
+        actual_is_mi = isinstance(arr.indexes.get(dim), pd.MultiIndex)
+        if expected_is_mi or actual_is_mi:
+            if expected_is_mi and actual_is_mi:
+                if not arr.indexes[dim].equals(coord_values):
+                    raise ValueError(
+                        f"{subject}: MultiIndex for dimension {dim!r} does not "
+                        f"match coords."
+                    )
             continue
         expected_idx = (
             coord_values
@@ -494,9 +502,11 @@ def _coords_to_dict(
     are dropped here and re-attached by xarray downstream. Plain mappings
     are returned as-is. For sequence inputs, entries must be ``pd.Index``
     (named or not) or unnamed sequences (``list`` / ``tuple`` / ``range``
-    / ``np.ndarray``). Other types — notably ``xarray.DataArray`` — raise
-    ``TypeError`` rather than being silently dropped: callers should
-    convert via ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
+    / ``np.ndarray``). A ``pd.MultiIndex`` must have ``.name`` set —
+    xarray requires a single dimension name for the flattened index.
+    Other types — notably ``xarray.DataArray`` — raise ``TypeError``
+    rather than being silently dropped: callers should convert via
+    ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
 
     Unnamed sequence entries (or unnamed ``pd.Index``) gain a dim name
     from ``dims`` by position when ``dims`` is provided, so callers that
@@ -514,7 +524,15 @@ def _coords_to_dict(
         dim_names = list(dims) if isinstance(dims, list | tuple) else [dims]
     result: dict[str, Any] = {}
     for i, c in enumerate(coords):
-        if isinstance(c, pd.Index):
+        if isinstance(c, pd.MultiIndex):
+            if not c.name:
+                raise TypeError(
+                    "MultiIndex coords entries must have .name set so "
+                    "xarray can use it as the dimension name. Set it via "
+                    "`idx.name = 'my_dim'` before passing to coords."
+                )
+            result[c.name] = c
+        elif isinstance(c, pd.Index):
             name = (
                 c.name
                 if c.name
@@ -539,21 +557,22 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
     """
     Convert a pandas Series or DataFrame with fully named axes to a DataArray.
 
-    DataFrame columns (and column-MultiIndex levels) are stacked into the row
-    MultiIndex so each axis name becomes its own dimension. Returns ``None``
-    if any axis (or MultiIndex level) is unnamed, so the caller can fall back
-    to ``as_dataarray``.
+    Returns ``None`` if any axis (or MultiIndex level) is unnamed or
+    non-string, so the caller can fall back to ``as_dataarray``.
     """
     names = list(arr.index.names)
     if isinstance(arr, pd.DataFrame):
         names += list(arr.columns.names)
-    # pd.Index.names entries can be any hashable (tuples, ints, ...). Only
-    # strings map cleanly to xarray dim names; everything else falls through.
     if any(not isinstance(n, str) for n in names):
         return None
 
     if isinstance(arr, pd.DataFrame):
-        arr = arr.stack(list(range(arr.columns.nlevels)), future_stack=True)
+        if isinstance(arr.index, pd.MultiIndex) or isinstance(
+            arr.columns, pd.MultiIndex
+        ):
+            arr = arr.stack(list(range(arr.columns.nlevels)), future_stack=True)
+            return arr.to_xarray()
+        return DataArray(arr)
 
     return arr.to_xarray()
 

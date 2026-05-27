@@ -505,15 +505,6 @@ class TestAddVariablesBoundsWithCoords:
         var = model.add_variables(upper=bound, coords=[pd.Index([0, 1, 2])], name="x")
         assert (var.data.upper == [1, 2, 3]).all()
 
-    def test_dataarray_bound_with_multiindex_coord(self, model: "Model") -> None:
-        """A DataArray bound carrying a MultiIndex coord skips the value check."""
-        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-        midx.name = "multi"
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
-        var = model.add_variables(upper=bound, coords=[midx], name="x")
-        assert var.shape == (4,)
-        assert (var.data.upper == [1, 2, 3, 4]).all()
-
     # -- Broadcasting missing dims -----------------------------------------
 
     @pytest.mark.parametrize(
@@ -612,14 +603,6 @@ class TestAddVariablesBoundsWithCoords:
         assert var.data.upper.dims == ("x", "y")
 
     # -- Special coord formats ---------------------------------------------
-
-    def test_multiindex_coords(self, model: "Model") -> None:
-        idx = pd.MultiIndex.from_product(
-            [[1, 2], ["a", "b"]], names=("level1", "level2")
-        )
-        idx.name = "multi"
-        var = model.add_variables(lower=0, upper=1, coords=[idx], name="x")
-        assert var.shape == (4,)
 
     def test_xarray_coordinates_object(self, model: "Model") -> None:
         time = pd.RangeIndex(3, name="time")
@@ -828,3 +811,54 @@ class TestAddVariablesBoundsWithCoords:
                 coords={"region": ["north", "south", "east"]},
                 name="x",
             )
+
+
+class TestAddVariablesMultiIndexCoords:
+    """MultiIndex-specific coord handling in add_variables."""
+
+    @pytest.fixture
+    def model(self) -> "Model":
+        return Model()
+
+    @pytest.fixture
+    def midx(self) -> pd.MultiIndex:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+        mi.name = "multi"
+        return mi
+
+    def test_scalar_bounds(self, model: "Model", midx: pd.MultiIndex) -> None:
+        var = model.add_variables(lower=0, upper=1, coords=[midx], name="x")
+        assert var.shape == (4,)
+        assert var.dims == ("multi",)
+
+    def test_dataarray_bound(self, model: "Model", midx: pd.MultiIndex) -> None:
+        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
+        var = model.add_variables(upper=bound, coords=[midx], name="x")
+        assert var.shape == (4,)
+        assert (var.data.upper == [1, 2, 3, 4]).all()
+
+    def test_dataarray_bound_broadcast(
+        self, model: "Model", midx: pd.MultiIndex
+    ) -> None:
+        time = pd.Index([10, 20, 30], name="time")
+        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
+        var = model.add_variables(
+            lower=-bound, upper=bound, coords=[midx, time], name="x"
+        )
+        assert var.dims == ("multi", "time")
+        assert var.shape == (4, 3)
+        assert (var.data.upper.sel(time=10) == [1, 2, 3, 4]).all()
+
+    def test_without_name_raises(self, model: "Model") -> None:
+        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+        with pytest.raises(TypeError, match="MultiIndex.*must have .name set"):
+            model.add_variables(lower=0, upper=1, coords=[midx], name="x")
+
+    def test_mismatched_multiindex_raises(
+        self, model: "Model", midx: pd.MultiIndex
+    ) -> None:
+        other = pd.MultiIndex.from_product([[0, 1], ["x", "y"]], names=("l1", "l2"))
+        other.name = "multi"
+        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": other})
+        with pytest.raises(ValueError, match="MultiIndex.*does not match"):
+            model.add_variables(upper=bound, coords=[midx], name="x")
