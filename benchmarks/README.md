@@ -1,8 +1,38 @@
 # Internal Performance Benchmarks
 
-Measures linopy's own performance (build time, LP write speed, memory usage) across problem sizes using [pytest-benchmark](https://pytest-benchmark.readthedocs.io/) and [pytest-memray](https://pytest-memray.readthedocs.io/). Use these to check whether a code change introduces a regression or improvement.
+This suite benchmarks the **linopy part end-to-end** in two phases:
 
-> **Note:** The `benchmark/` directory (singular) contains *external* benchmarks comparing linopy against other modeling frameworks. This directory (`benchmarks/`) is for *internal* performance tracking only.
+1. **Build**: construct the linopy model.
+2. **Solver handoff**: convert a built model into solver-consumable form.
+
+> **Note:** `benchmark/` (singular) is for external framework comparisons. `benchmarks/` is only for internal linopy performance tracking.
+
+## What is covered
+
+- **Build** (`benchmarks/test_build.py`): variable creation, expression construction, constraints, objective.
+- **Solver handoff**:
+  - canonical in-memory (`benchmarks/test_matrices.py`) via `A`, `b`, `c`, bounds, labels (**required**),
+  - file handoff (`benchmarks/test_lp_write.py`) via LP serialization (**optional**),
+  - direct API handoff (e.g. `to_highspy`) when enabled (**optional**, solver-specific).
+
+## What is not covered
+
+- Solver algorithm performance (optimize/solve runtime).
+- Cross-solver ranking.
+- Nonlinear/quadratic benchmark suites.
+
+## Models
+
+Core models:
+
+- `basic`
+- `knapsack`
+- `expression_arithmetic`
+- `sparse_network`
+
+Extended (optional dependency):
+
+- `pypsa_scigrid`
 
 ## Setup
 
@@ -10,85 +40,37 @@ Measures linopy's own performance (build time, LP write speed, memory usage) acr
 pip install -e ".[benchmarks]"
 ```
 
-## Running benchmarks
+## Run benchmarks
 
 ```bash
-# Quick smoke test (small sizes only)
+# Quick smoke run
 pytest benchmarks/ --quick
 
-# Full timing benchmarks
-pytest benchmarks/test_build.py benchmarks/test_lp_write.py benchmarks/test_matrices.py
+# Full timing run (build + handoff)
+pytest benchmarks/test_build.py benchmarks/test_matrices.py benchmarks/test_lp_write.py
 
-# Run a specific model
+# Single model
 pytest benchmarks/test_build.py -k basic
 ```
 
-## Comparing timing between branches
+## Metrics
+
+- **Time**: pytest-benchmark median runtime (IQR for stability).
+- **Memory**: pytest-memray peak RSS (MiB), primarily tracked for Build.
+
+## Results and history
+
+- Raw outputs live in `.benchmarks/` (gitignored).
+- Store comparison snapshots as JSON and compare to a rolling `master` baseline.
 
 ```bash
-# Save baseline results on master
-git checkout master
-pytest benchmarks/test_build.py --benchmark-save=master
+# Timing snapshot
+pytest benchmarks/test_build.py benchmarks/test_matrices.py benchmarks/test_lp_write.py \
+  --benchmark-json ".benchmarks/timing-$(date +%Y%m%d-%H%M%S).json"
 
-# Switch to feature branch and compare
-git checkout my-feature
-pytest benchmarks/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
+# Memory snapshot (Build by default)
+python benchmarks/memory.py save "$(git rev-parse --short HEAD)"
 
-# Compare saved results without re-running
-pytest-benchmark compare 0001_master 0002_my-feature --columns=median,iqr
+# Compare memory snapshots
+python benchmarks/memory.py compare <baseline-label> <candidate-label>
 ```
-
-Results are stored in `.benchmarks/` (gitignored).
-
-## Memory benchmarks
-
-`memory.py` runs each test in a separate process with pytest-memray to get accurate per-test peak memory (including C/numpy allocations). Results are saved as JSON and can be compared across branches.
-
-By default, only the build phase (`test_build.py`) is measured. Unlike timing benchmarks where `benchmark()` isolates the measured function, memray tracks all allocations within a test — including model construction in setup. This means LP write and matrix tests would report build + phase memory combined, making the phase-specific contribution impossible to isolate. Since model construction dominates memory usage, measuring build alone gives the most actionable numbers.
-
-```bash
-# Save baseline on master
-git checkout master
-python benchmarks/memory.py save master
-
-# Save feature branch
-git checkout my-feature
-python benchmarks/memory.py save my-feature
-
-# Compare
-python benchmarks/memory.py compare master my-feature
-
-# Quick mode (smaller sizes, faster)
-python benchmarks/memory.py save master --quick
-
-# Measure a specific phase (includes build overhead)
-python benchmarks/memory.py save master --test-path benchmarks/test_lp_write.py
-```
-
-Results are stored in `.benchmarks/memory/` (gitignored). Requires Linux or macOS (memray is not available on Windows).
-
-> **Note:** Small tests (~5 MiB) are near the import-overhead floor and may show noise of ~1 MiB between runs. Focus on larger tests for meaningful memory comparisons. Do not combine `--memray` with timing benchmarks — memray adds ~2x overhead that invalidates timing results.
-
-## Models
-
-| Model | Description | Sizes |
-|-------|-------------|-------|
-| `basic` | Dense N*N model, 2*N^2 vars/cons | 10 — 1600 |
-| `knapsack` | N binary variables, 1 constraint | 100 — 1M |
-| `expression_arithmetic` | Broadcasting, scaling, summation across dims | 10 — 1000 |
-| `sparse_network` | Ring network with mismatched bus/line coords | 10 — 1000 |
-| `pypsa_scigrid` | Real power system (requires `pypsa`) | 10 — 200 snapshots |
-
-## Phases
-
-| Phase | File | What it measures |
-|-------|------|------------------|
-| Build | `test_build.py` | Model construction (add_variables, add_constraints, add_objective) |
-| LP write | `test_lp_write.py` | Writing the model to an LP file |
-| Matrices | `test_matrices.py` | Generating sparse matrices (A, b, c, bounds) from the model |
-
-## Adding a new model
-
-1. Create `benchmarks/models/my_model.py` with a `build_my_model(n)` function and a `SIZES` list
-2. Add parametrized tests in the relevant `test_*.py` files
-3. Add a quick threshold in `conftest.py`
