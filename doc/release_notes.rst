@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
+
 **Features**
 
 *Inspect the solver after solving*
