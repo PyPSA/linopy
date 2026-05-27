@@ -18,6 +18,7 @@ from xarray.testing.assertions import assert_equal
 from linopy import LinearExpression, Model, Variable
 from linopy.common import (
     align,
+    align_to_coords,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
@@ -25,6 +26,7 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
 from linopy.types import CoordsLike
@@ -345,13 +347,15 @@ def test_as_dataarray_with_ndarray_coords_dict_dims_aligned() -> None:
 
 
 def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
+    """Coords is source of truth: extra coord entries broadcast into the result."""
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
     da = as_dataarray(arr, coords=target_coords, dims=target_dims)
-    assert da.dims == target_dims
+    # dims labels the positional axes; coords adds dim_2 by broadcast.
+    assert set(da.dims) == {"dim_0", "dim_1", "dim_2"}
     assert list(da.coords["dim_0"].values) == ["a", "b"]
-    assert "dim_2" not in da.coords
+    assert list(da.coords["dim_2"].values) == ["A", "B"]
 
 
 def test_as_dataarray_with_number() -> None:
@@ -481,6 +485,79 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
+
+
+def test_as_dataarray_preserves_extra_dims_for_broadcasting() -> None:
+    """Extra dims in the input are not rejected — they broadcast downstream."""
+    arr = DataArray(
+        [[1, 2], [3, 4], [5, 6]],
+        dims=["a", "t"],
+        coords={"a": [0, 1, 2], "t": [10, 20]},
+    )
+    coords = {"a": [0, 1, 2]}
+    da = as_dataarray(arr, coords=coords)
+    assert set(da.dims) == {"a", "t"}
+    assert list(da.coords["t"].values) == [10, 20]
+
+
+def test_as_dataarray_keeps_disjoint_shared_dim_values() -> None:
+    """Different value sets on a shared dim are passed through (xr.align handles)."""
+    arr = DataArray([1, 2, 3, 4, 5], dims=["a"], coords={"a": [0, 1, 2, 3, 4]})
+    coords = {"a": [2, 3]}
+    da = as_dataarray(arr, coords=coords)
+    # No exception, no reindex; downstream alignment intersects.
+    assert list(da.coords["a"].values) == [0, 1, 2, 3, 4]
+
+
+def test_validate_alignment_rejects_extra_dims() -> None:
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        validate_alignment(arr, {"a": [0, 1]})
+
+
+def test_validate_alignment_rejects_value_mismatch() -> None:
+    arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match coords"):
+        validate_alignment(arr, {"a": [10, 20, 30]})
+
+
+def test_validate_alignment_allows_subset_dims() -> None:
+    """arr.dims ⊂ coords.dims is fine (broadcasting fills the missing dim)."""
+    arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
+    validate_alignment(arr, {"a": [0, 1, 2], "b": [10, 20]})  # no raise
+
+
+def test_validate_alignment_unnamed_coords_and_dims() -> None:
+    """coords=[[...]], dims=[...] enforces the same contract as a named mapping."""
+    arr = DataArray([1, 2, 3], dims=["x"], coords={"x": [0, 1, 2]})
+    validate_alignment(arr, [[0, 1, 2]], dims=["x"])  # no raise
+
+    bad = DataArray(
+        [[1, 2], [3, 4]], dims=["x", "y"], coords={"x": [0, 1], "y": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        validate_alignment(bad, [[0, 1]], dims=["x"])
+
+
+def test_validate_alignment_label_in_error() -> None:
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"lower bound has dimension\(s\) \['b'\]"):
+        validate_alignment(arr, {"a": [0, 1]}, label="lower bound")
+
+
+def test_align_to_coords_wraps_conversion_errors() -> None:
+    with pytest.raises(ValueError, match=r"lower bound could not be aligned"):
+        align_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")
+
+
+def test_align_to_coords_preserves_type_errors() -> None:
+    """Unsupported input types stay TypeError (don't become ValueError)."""
+    with pytest.raises(TypeError, match=r"lower bound could not be aligned"):
+        align_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
 
 
 def test_best_int() -> None:

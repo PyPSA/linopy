@@ -419,18 +419,35 @@ class TestAddVariablesBoundsWithCoords:
     )
     def test_dataarray_coord_mismatch(self, model: "Model", coords: Any) -> None:
         lower = DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]})
-        with pytest.raises(ValueError, match="do not match"):
+        with pytest.raises(ValueError, match="lower bound.*do not match coords"):
             model.add_variables(lower=lower, coords=coords, name="x")
 
     def test_dataarray_coord_mismatch_upper(self, model: "Model") -> None:
         upper = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
-        with pytest.raises(ValueError, match="do not match"):
+        with pytest.raises(ValueError, match="upper bound.*do not match coords"):
             model.add_variables(upper=upper, coords=self.SEQ_COORDS, name="x")
 
     def test_dataarray_extra_dims(self, model: "Model") -> None:
-        lower = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
-        with pytest.raises(ValueError, match="extra dimensions"):
+        lower = DataArray(
+            [[1, 2], [3, 4], [5, 6]], dims=["x", "y"], coords={"x": [0, 1, 2]}
+        )
+        with pytest.raises(ValueError, match=r"lower bound has dimension\(s\) \['y'\]"):
             model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
+
+    def test_mask_extra_dims_with_unnamed_coords_and_dims(self, model: "Model") -> None:
+        """Mask is validated against coords + dims= like lower/upper."""
+        mask = DataArray(
+            [[True, False], [True, False], [False, True]],
+            dims=["x", "extra"],
+            coords={"x": [0, 1, 2]},
+        )
+        with pytest.raises(ValueError, match=r"mask has dimension\(s\) \['extra'\]"):
+            model.add_variables(
+                mask=mask,
+                coords=[[0, 1, 2]],
+                dims=["x"],
+                name="m",
+            )
 
     def test_dataarray_coord_reorder(self, model: "Model") -> None:
         """A bound whose coords differ only in order is reindexed to coords."""
@@ -477,9 +494,9 @@ class TestAddVariablesBoundsWithCoords:
         not a 'coordinates do not match' error.
         """
         coords = [pd.Index(list("abc"), name="x")]
-        with pytest.raises(Exception, match="conflicting sizes|do not match"):
+        with pytest.raises(ValueError, match=r"upper bound could not be aligned"):
             model.add_variables(upper=np.array([1, 2]), coords=coords, name="np_bad")
-        with pytest.raises(Exception, match="conflicting sizes|do not match"):
+        with pytest.raises(ValueError, match=r"upper bound could not be aligned"):
             model.add_variables(upper=pd.Series([1, 2]), coords=coords, name="s_bad")
 
     def test_unnamed_coords_short_circuit(self, model: "Model") -> None:
@@ -658,7 +675,7 @@ class TestAddVariablesBoundsWithCoords:
         """Only the mismatched bound should raise, regardless of the other."""
         lower = DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]})
         upper = DataArray([1, 1], dims=["x"], coords={"x": [10, 20]})
-        with pytest.raises(ValueError, match="do not match"):
+        with pytest.raises(ValueError, match=r"upper bound.*do not match coords"):
             model.add_variables(
                 lower=lower, upper=upper, coords=self.SEQ_COORDS, name="x"
             )
@@ -760,7 +777,7 @@ class TestAddVariablesBoundsWithCoords:
     def test_reordered_coords_different_values_raises(self, model: "Model") -> None:
         """Overlapping but not identical coord sets must still raise."""
         lower = DataArray([10, 20], dims=["x"], coords={"x": ["a", "b"]})
-        with pytest.raises(ValueError, match="do not match"):
+        with pytest.raises(ValueError, match=r"lower bound.*do not match coords"):
             model.add_variables(lower=lower, coords={"x": ["a", "c"]}, name="x")
 
     # -- String and datetime coordinates -----------------------------------
@@ -788,7 +805,7 @@ class TestAddVariablesBoundsWithCoords:
         lower = DataArray(
             [0, 0], dims=["region"], coords={"region": ["north", "south"]}
         )
-        with pytest.raises(ValueError, match="do not match"):
+        with pytest.raises(ValueError, match=r"lower bound.*do not match coords"):
             model.add_variables(
                 lower=lower,
                 coords={"region": ["north", "south", "east"]},
