@@ -3,579 +3,625 @@
 Piecewise Linear Constraints
 ============================
 
-Piecewise linear (PWL) constraints approximate nonlinear functions as connected
-linear segments, allowing you to model cost curves, efficiency curves, or
-production functions within a linear programming framework.
+Piecewise linear (PWL) constraints approximate nonlinear functions as
+connected linear pieces, allowing you to model cost curves, efficiency
+curves, or production functions within a linear programming framework.
 
-Use :py:func:`~linopy.piecewise.piecewise` to describe the function and
-:py:meth:`~linopy.model.Model.add_piecewise_constraints` to add it to a model.
+Throughout this page: a **breakpoint** is a knot where the slope can
+change; a **piece** is the linear part between adjacent breakpoints; a
+**segment** is a disjoint operating region in the disjunctive
+formulation.  Per-tuple breakpoint arrays are paired by index — the
+``i``-th entries across all tuples together define one knot.
 
 .. contents::
    :local:
    :depth: 2
 
+
 Quick Start
 -----------
+
+**Equality — lock variables onto the piecewise curve:**
 
 .. code-block:: python
 
     import linopy
 
     m = linopy.Model()
-    x = m.add_variables(name="x", lower=0, upper=100)
-    y = m.add_variables(name="y")
+    power = m.add_variables(name="power", lower=0, upper=100)
+    fuel = m.add_variables(name="fuel")
 
-    # y equals a piecewise linear function of x
-    x_pts = linopy.breakpoints([0, 30, 60, 100])
-    y_pts = linopy.breakpoints([0, 36, 84, 170])
+    # fuel = f(power) on the piecewise curve defined by these breakpoints
+    m.add_piecewise_formulation(
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 36, 84, 170]),
+    )
 
-    m.add_piecewise_constraints(linopy.piecewise(x, x_pts, y_pts) == y)
+**Inequality — bound one expression by the curve:**
 
-The ``piecewise()`` call creates a lazy descriptor. Comparing it with a
-variable (``==``, ``<=``, ``>=``) produces a
-:class:`~linopy.piecewise.PiecewiseConstraintDescriptor` that
-``add_piecewise_constraints`` knows how to process.
+.. code-block:: python
 
-.. note::
+    # fuel >= f(power) on the same heat-rate curve as above.
+    m.add_piecewise_formulation(
+        (fuel, [0, 36, 84, 170], ">="),
+        (power, [0, 30, 60, 100]),
+    )
 
-   The ``piecewise(...)`` expression can appear on either side of the
-   comparison operator. These forms are equivalent::
+Over-fuelling is physically admissible but wasteful, so minimising
+fuel pulls the operating point onto the curve.  ``method="auto"``
+picks the cheapest correct formulation: pure LP (chord constraints)
+here, since convex + ``">="`` is LP-applicable; SOS2/incremental
+otherwise.
 
-      piecewise(x, x_pts, y_pts) == y
-      y == piecewise(x, x_pts, y_pts)
-
-
-Formulations
-------------
-
-SOS2 (Convex Combination)
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Given breakpoints :math:`b_0, b_1, \ldots, b_n`, the SOS2 formulation
-introduces interpolation variables :math:`\lambda_i` such that:
-
-.. math::
-
-   \lambda_i \in [0, 1], \quad
-   \sum_{i=0}^{n} \lambda_i = 1, \quad
-   x = \sum_{i=0}^{n} \lambda_i \, b_i
-
-The SOS2 constraint ensures that **at most two adjacent** :math:`\lambda_i` can
-be non-zero, so :math:`x` is interpolated within one segment.
-
-.. note::
-
-   SOS2 is a combinatorial constraint handled via branch-and-bound, similar to
-   integer variables. Prefer the incremental method
-   (``method="incremental"`` or ``method="auto"``) when breakpoints are
-   monotonic.
-
-Incremental (Delta) Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **strictly monotonic** breakpoints :math:`b_0 < b_1 < \cdots < b_n`, the
-incremental formulation uses fill-fraction variables:
-
-.. math::
-
-   \delta_i \in [0, 1], \quad
-   \delta_{i+1} \le \delta_i, \quad
-   x = b_0 + \sum_{i=1}^{n} \delta_i \, (b_i - b_{i-1})
-
-The filling-order constraints enforce that segment :math:`i+1` cannot be
-partially filled unless segment :math:`i` is completely filled. Binary
-indicator variables enforce integrality.
-
-**Limitation:** Breakpoints must be strictly monotonic. For non-monotonic
-curves, use SOS2.
-
-LP (Tangent-Line) Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **inequality** constraints where the function is **convex** (for ``>=``)
-or **concave** (for ``<=``), a pure LP formulation adds one tangent-line
-constraint per segment — no SOS2 or binary variables needed.
-
-.. math::
-
-   y \le m_k \, x + c_k \quad \text{for each segment } k \text{ (concave case)}
-
-Domain bounds :math:`x_{\min} \le x \le x_{\max}` are added automatically.
-
-**Limitation:** Only valid for inequality constraints with the correct
-convexity; not valid for equality constraints.
-
-Disjunctive (Disaggregated Convex Combination)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **disconnected segments** (with gaps), the disjunctive formulation selects
-exactly one segment via binary indicators and applies SOS2 within it. No big-M
-constants are needed, giving a tight LP relaxation.
-
-Given :math:`K` segments, each with breakpoints :math:`b_{k,0}, \ldots, b_{k,n_k}`:
-
-.. math::
-
-   y_k \in \{0, 1\}, \quad \sum_{k} y_k = 1
-
-   \lambda_{k,i} \in [0, 1], \quad
-   \sum_{i} \lambda_{k,i} = y_k, \quad
-   x = \sum_{k} \sum_{i} \lambda_{k,i} \, b_{k,i}
+Each ``(expression, breakpoints[, sign])`` tuple pairs a variable with
+its breakpoint values.  The optional sign (default ``"=="``) is ``"<="``
+or ``">="`` to mark that expression as bounded by the curve.  With every
+sign ``"=="``, all tuples land on the same point of the piecewise curve
+— see *Per-tuple sign* below for the geometry of the inequality cases.
 
 
-.. _choosing-a-formulation:
+API
+---
 
-Choosing a Formulation
+``add_piecewise_formulation``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (expr1, breakpoints1),  # sign defaults to "==" (equality role)
+        (expr2, breakpoints2, "<="),  # or with an explicit sign
+        ...,
+        method="auto",  # "auto", "sos2", "incremental", or "lp"
+        active=None,  # binary variable to gate the constraint
+        name=None,  # base name for generated variables/constraints
+    )
+
+Adds constraints — and, depending on the resolved method, auxiliary
+variables — for either an all-equality joint (every tuple at the same
+point on the curve, the default) or a one-sided bound on a single
+tuple.  The pure-LP path adds chord and domain constraints only; SOS2,
+incremental, and disjunctive also add interpolation weights and/or
+binaries (see *Formulation Methods* below).
+
+
+Breakpoint Construction
+-----------------------
+
+Each tuple's breakpoints come from :func:`~linopy.breakpoints` (a
+single connected curve) or :func:`~linopy.segments` (disjoint
+operating bands).  :class:`~linopy.Slopes` can stand in for
+:func:`~linopy.breakpoints` when per-piece slopes are the natural
+input — it resolves to a breakpoints array.
+
+``breakpoints()`` — a connected curve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Values along a single **connected** piecewise curve — the default case
+for efficiency curves, heat rates, and cost curves.
+
+The simplest form passes a Python list directly in the tuple:
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 36, 84, 170]),
+    )
+
+Equivalent, but explicit about the DataArray construction:
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, linopy.breakpoints([0, 30, 60, 100])),
+        (fuel, linopy.breakpoints([0, 36, 84, 170])),
+    )
+
+**Per-entity curves.**  Different generators can have different
+curves.  Pass a dict to ``breakpoints()`` with entity names as keys:
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (
+            power,
+            linopy.breakpoints(
+                {"gas": [0, 30, 60, 100], "coal": [0, 50, 100, 150]}, dim="gen"
+            ),
+        ),
+        (
+            fuel,
+            linopy.breakpoints(
+                {"gas": [0, 40, 90, 180], "coal": [0, 55, 130, 225]}, dim="gen"
+            ),
+        ),
+    )
+
+Ragged lengths are NaN-padded automatically.  Breakpoints are auto-
+broadcast over remaining dimensions (e.g. ``time``).
+
+**Specifying by slopes.**  :class:`linopy.Slopes` resolves to a
+breakpoint array from per-piece slopes plus an initial ``y0``,
+instead of from absolute y-values — useful when slopes are the
+natural input (e.g. marginal costs).  The x grid is borrowed from
+the sibling tuple, so the y breakpoints don't have to be computed
+by hand:
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, [0, 50, 100, 150]),
+        (cost, linopy.Slopes([1.1, 1.5, 1.9], y0=0)),
+    )
+    # cost breakpoints resolve to: [0, 55, 130, 225]
+
+For standalone resolution outside ``add_piecewise_formulation``, call
+:meth:`linopy.Slopes.to_breakpoints` with an explicit x grid::
+
+    bp = linopy.Slopes([1.1, 1.5, 1.9], y0=0).to_breakpoints([0, 50, 100, 150])
+
+``segments()`` — disjoint operating bands
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For equipment with disconnected operating bands.  Each segment is one
+band's ``(range, curve)``; a binary picks exactly one per operating
+point, with continuous interpolation within the chosen band.
+
+.. code-block:: python
+
+    # Stepped pump with two speed bands.
+    m.add_piecewise_formulation(
+        (flow, linopy.segments([(5, 25), (40, 100)])),
+        (power, linopy.segments([(1, 7), (15, 50)])),
+    )
+
+Bounded tuples (``"<="`` / ``">="``) are supported on disjunctive
+curves too.
+
+For a single on/off gate on one continuous curve, prefer ``active=...``
+(see :ref:`piecewise-active`) — using a degenerate ``(0, 0)`` segment
+to encode "off" mixes the disjunctive concept with on/off logic.
+
+N-variable linking
+~~~~~~~~~~~~~~~~~~
+
+Independent of the building block used, any number of variables can be
+linked through shared breakpoints (joint equality):
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 40, 85, 160]),
+        (heat, [0, 25, 55, 95]),
+    )
+
+All variables are symmetric here; every feasible point is the same
+``λ``-weighted combination of breakpoints across all three.  Sign
+restrictions apply (see *Per-tuple sign* below) — for ``N ≥ 3`` tuples
+all signs must be ``"=="``.
+
+
+Per-tuple sign — equality vs inequality
+----------------------------------------
+
+Roles and restrictions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Pass ``method="auto"`` (the default) and linopy will pick the best
-formulation automatically:
+Each tuple's optional third element is a sign:
 
-- **Equality + monotonic x** → incremental
-- **Inequality + correct convexity** → LP
-- Otherwise → SOS2
-- Disjunctive (segments) → always SOS2 with binary selection
+- ``"=="`` (default) — **equality role**: the tuple enters as an
+  equality.
+- ``"<="`` / ``">="`` — **bounded**: the expression undershoots /
+  overshoots the curve.
+
+.. note::
+
+   **Current restrictions.**
+
+   - At most one tuple may carry a non-equality sign — a single bounded side.
+   - With **3 or more** tuples, all signs must be ``"=="``.
+
+   Multi-bounded and N≥3-inequality use cases aren't supported yet.
+   If you have a concrete use case, please open an issue at
+   https://github.com/PyPSA/linopy/issues so we can scope it properly.
+
+Geometry
+~~~~~~~~
+
+What the formulation actually constrains depends on the tuple count and
+signs:
+
+- **All-equality (default).**  Shared interpolation weights put the
+  joint :math:`(e_1, \ldots, e_N)` exactly on the curve.
+- **One bounded + one equality (2 tuples).**  The joint :math:`(x, y)`
+  lies in the **hypograph** (``"<="`` on a concave :math:`f`) or
+  **epigraph** (``">="`` on a convex :math:`f`):
+
+  .. math::
+
+     \{ (x, y) \ :\ x_{\min} \le x \le x_{\max},\ y \le f(x) \}
+     \qquad \text{(hypograph)}
+
+  The equality axis is just confined to its breakpoint domain
+  :math:`[x_{\min}, x_{\max}]` — a single coordinate can't locate a
+  curve point.  Same projection in LP (enforced directly) and
+  SOS2/incremental (enforced via the weight link).
+- **Mismatched sign + curvature** (convex + ``"<="``, or concave +
+  ``">="``) describes a *non-convex* region — ``method="auto"`` falls
+  back to SOS2/incremental and ``method="lp"`` raises.
+
+.. code-block:: python
+
+    # All-equality: joint (x, y) on the curve.
+    m.add_piecewise_formulation((y, y_pts), (x, x_pts))
+
+    # Bounded: joint (x, y) in the hypograph — y ≤ f(x), x ∈ [x_min, x_max].
+    m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
+
+    # Bounded: joint (x, y) in the epigraph — y ≥ f(x), x ∈ [x_min, x_max].
+    m.add_piecewise_formulation((y, y_pts, ">="), (x, x_pts))
+
+    # 3-variable all-equality (CHP): joint (power, fuel, heat) on the curve.
+    m.add_piecewise_formulation((power, p_pts), (fuel, f_pts), (heat, h_pts))
+
+Choice of bounded tuple and sign
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pick the sign matching the physically admissible direction for that
+expression:
+
+- ``"<="`` for a quantity with a controllable *dissipation path* — heat
+  rejection via cooling tower (*thermal curtailment*), electrical
+  curtailment, emissions after post-treatment — so undershooting the
+  curve is realisable.
+- ``">="`` for an *input* whose over-supply is admissible but wasteful —
+  fuel, raw materials — so overshooting the curve is realisable
+  (objective pressure then pulls the operating point onto the curve).
+
+The wrong direction (``"<="`` on fuel, ``">="`` on a non-curtailable
+output) yields a valid but **loose** formulation that admits operating
+points the plant cannot physically realise; an objective rewarding the
+wrong direction may then find a non-physical optimum — safe only when
+no such objective pressure exists.
+
+When is a one-sided bound wanted?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For *continuous* curves, the main reason to reach for ``"<="`` /
+``">="`` is to unlock the **LP chord formulation** — no SOS2, no
+binaries, just pure LP.  On a convex/concave curve with a matching
+sign, the chord inequalities are as tight as SOS2, so you get the same
+optimum with a cheaper model.  Inequality formulations also tighten
+the LP relaxation of SOS2/incremental, which can reduce branch-and-
+bound work even when LP itself is not applicable.
+
+For *disjunctive* curves (``segments(...)``), the per-tuple sign is a
+first-class tool in its own right: disconnected operating regions with
+a bounded output, always exact regardless of segment curvature (see
+the disjunctive section below).
+
+If the curvature doesn't match the sign (convex + ``"<="``, or concave +
+``">="``), LP is not applicable — ``method="auto"`` falls back to
+SOS2/incremental with the signed link, which gives a valid but much
+more expensive model.  In that case prefer ``"=="`` unless you
+genuinely need the one-sided semantics.  See the
+:doc:`piecewise-inequality-bounds-tutorial` notebook for a full
+walkthrough.
+
+Formulation Methods
+-------------------
+
+Pass ``method="auto"`` (the default) and linopy picks the cheapest correct
+formulation based on ``sign``, curvature and breakpoint layout:
+
+- **2-variable inequality on a convex/concave curve** → ``lp`` (chord lines,
+  no auxiliary variables)
+- **All breakpoints monotonic** → ``incremental``
+- **Otherwise** → ``sos2``
+- **Disjunctive (segments)** → SOS2 applied per segment with binary
+  segment selection (the disjunctive formulation in the table below).
+
+The resolved choice is exposed on the returned ``PiecewiseFormulation``
+via ``.method`` (and ``.convexity`` when well-defined).  An
+``INFO``-level log line explains the resolution whenever
+``method="auto"`` is in play.
+
+At-a-glance comparison:
 
 .. list-table::
    :header-rows: 1
-   :widths: 25 20 20 15 20
+   :widths: 26 18 18 18 20
 
    * - Property
-     - SOS2
-     - Incremental
-     - LP
+     - ``lp``
+     - ``incremental``
+     - ``sos2``
      - Disjunctive
-   * - Segments
+   * - Curve layout
      - Connected
      - Connected
      - Connected
      - Disconnected
-   * - Constraint type
-     - ``==``, ``<=``, ``>=``
-     - ``==``, ``<=``, ``>=``
-     - ``<=``, ``>=`` only
-     - ``==``, ``<=``, ``>=``
+   * - Supported per-tuple sign
+     - one ``<=`` or ``>=`` (required)
+     - all ``==`` or one ``<=``/``>=``
+     - all ``==`` or one ``<=``/``>=``
+     - all ``==`` or one ``<=``/``>=``
+   * - Number of tuples
+     - Exactly 2
+     - ≥ 2 (3+ requires all ``==``)
+     - ≥ 2 (3+ requires all ``==``)
+     - ≥ 2 (3+ requires all ``==``)
    * - Breakpoint order
-     - Any
      - Strictly monotonic
-     - Strictly increasing
+     - Strictly monotonic
+     - Any
      - Any (per segment)
-   * - Convexity requirement
+   * - Curvature requirement
+     - Concave (``<=``) or convex (``>=``)
      - None
      - None
-     - Concave (≤) or convex (≥)
      - None
-   * - Variable types
-     - Continuous + SOS2
+   * - Auxiliary variables
+     - **None**
      - Continuous + binary
-     - Continuous only
-     - Binary + SOS2
-   * - Solver support
-     - SOS2-capable
-     - MIP-capable
+     - Continuous + SOS2
+     - Continuous + binary + SOS2
+   * - ``active=`` supported
+     - No
+     - Yes
+     - Yes
+     - Yes
+   * - Solver requirement
      - **Any LP solver**
-     - SOS2 + MIP
+     - MIP-capable
+     - SOS2-capable (or MIP via :ref:`Big-M reformulation <sos-reformulation>`)
+     - SOS2 + MIP (or MIP via :ref:`Big-M reformulation <sos-reformulation>`)
 
+.. note::
 
-Basic Usage
------------
+   Disjunctive formulations report ``method="sos2"`` (the underlying
+   per-segment encoding uses SOS2), but the table treats them as a
+   separate column because the per-segment binaries change the
+   auxiliary-variable structure and solver requirements.
 
-Equality constraint
-~~~~~~~~~~~~~~~~~~~
+LP (chord-line) formulation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Link ``y`` to a piecewise linear function of ``x``:
+For **2-variable inequality** on a **convex** or **concave** curve.
+Adds one chord inequality per piece plus a domain bound — no auxiliary
+variables and no MIP relaxation:
 
-.. code-block:: python
+.. math::
 
-    import linopy
+   &y \ \text{sign}\ m_k \cdot x + c_k
+   \quad \forall\ \text{pieces } k
 
-    m = linopy.Model()
-    x = m.add_variables(name="x", lower=0, upper=100)
-    y = m.add_variables(name="y")
+   &x_{\min} \le x \le x_{\max}
 
-    x_pts = linopy.breakpoints([0, 30, 60, 100])
-    y_pts = linopy.breakpoints([0, 36, 84, 170])
+where :math:`m_k = (y_{k+1} - y_k)/(x_{k+1} - x_k)` and
+:math:`c_k = y_k - m_k\, x_k`.  The domain bound uses :math:`x_{\min}`
+and :math:`x_{\max}` rather than the first/last breakpoint so that
+descending x grids work too — strictly-monotonic breakpoints are
+accepted in either order.  For concave :math:`f` with ``sign="<="``,
+the intersection of all chord inequalities equals the hypograph of
+:math:`f` on its domain.
 
-    m.add_piecewise_constraints(linopy.piecewise(x, x_pts, y_pts) == y)
-
-Inequality constraints
-~~~~~~~~~~~~~~~~~~~~~~
-
-Use ``<=`` or ``>=`` to bound ``y`` by the piecewise function:
-
-.. code-block:: python
-
-    pw = linopy.piecewise(x, x_pts, y_pts)
-
-    # y must be at most the piecewise function of x  (pw >= y  ↔  y <= pw)
-    m.add_piecewise_constraints(pw >= y)
-
-    # y must be at least the piecewise function of x  (pw <= y  ↔  y >= pw)
-    m.add_piecewise_constraints(pw <= y)
-
-Choosing a method
-~~~~~~~~~~~~~~~~~
+The LP dispatch requires curvature and sign to match: ``sign="<="``
+needs concave (or linear); ``sign=">="`` needs convex (or linear).  A
+mismatch is *not* just a loose bound — it describes the wrong region
+(see the :doc:`piecewise-inequality-bounds-tutorial`).
+``method="auto"`` detects this and falls back; ``method="lp"`` raises.
 
 .. code-block:: python
 
-    pw = linopy.piecewise(x, x_pts, y_pts)
+    # y <= f(x) on a concave f — auto picks LP
+    m.add_piecewise_formulation((y, yp, "<="), (x, xp))
 
-    # Explicit SOS2
-    m.add_piecewise_constraints(pw == y, method="sos2")
+    # Or explicitly:
+    m.add_piecewise_formulation((y, yp, "<="), (x, xp), method="lp")
 
-    # Explicit incremental (requires monotonic x_pts)
-    m.add_piecewise_constraints(pw == y, method="incremental")
+**Not supported with** ``method="lp"``: all-equality, more than 2
+tuples, and ``active``.  ``method="auto"`` falls back to
+SOS2/incremental in all three cases.
 
-    # Explicit LP (requires inequality + correct convexity + increasing x_pts)
-    m.add_piecewise_constraints(pw >= y, method="lp")
+Chord expressions as a building block
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    # Auto-select best method (default)
-    m.add_piecewise_constraints(pw == y, method="auto")
-
-Disjunctive (disconnected segments)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Use :func:`~linopy.piecewise.segments` to define breakpoints with gaps:
-
-.. code-block:: python
-
-    m = linopy.Model()
-    x = m.add_variables(name="x", lower=0, upper=100)
-    y = m.add_variables(name="y")
-
-    # Two disconnected segments: [0,10] and [50,100]
-    x_seg = linopy.segments([(0, 10), (50, 100)])
-    y_seg = linopy.segments([(0, 15), (60, 130)])
-
-    m.add_piecewise_constraints(linopy.piecewise(x, x_seg, y_seg) == y)
-
-The disjunctive formulation is selected automatically when
-``x_points`` / ``y_points`` have a segment dimension (created by
-:func:`~linopy.piecewise.segments`).
-
-
-Breakpoints Factory
--------------------
-
-The :func:`~linopy.piecewise.breakpoints` factory creates DataArrays with
-the correct ``_breakpoint`` dimension. It accepts several input types
-(``BreaksLike``):
-
-From a list
-~~~~~~~~~~~
+The underlying chord expressions are also exposed as a standalone
+helper, :func:`~linopy.tangent_lines`, which returns the per-piece
+chord as a :class:`~linopy.expressions.LinearExpression` with no
+variables created.  Use it directly when you want to compose the chord
+bound with other constraints by hand, without the domain bound that
+``method="lp"`` adds automatically:
 
 .. code-block:: python
 
-    # 1D breakpoints (dims: [_breakpoint])
-    bp = linopy.breakpoints([0, 50, 100])
+    chord = linopy.tangent_lines(x, x_pts, y_pts)
+    m.add_constraints(y <= chord + slack)
 
-From a pandas Series
-~~~~~~~~~~~~~~~~~~~~
+Incremental (Delta) formulation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The default MIP encoding when ``method="auto"`` is in play and breakpoints
+are **strictly monotonic** — produces a tight MIP directly, without going
+through an SOS2 layer.  Uses fill-fraction variables :math:`\delta_i` with
+binary indicators :math:`z_i`:
+
+.. math::
+
+   &\delta_i \in [0, 1], \quad z_i \in \{0, 1\}
+
+   &\delta_{i+1} \le \delta_i, \quad z_{i+1} \le \delta_i, \quad \delta_i \le z_i
+
+   &e_j = B_{j,0} + \sum_{i=1}^{n} \delta_i \, (B_{j,i} - B_{j,i-1})
+
+With a bounded tuple, the link to that tuple's expression flips to the
+requested sign while the equality-signed tuples keep the equality above.
 
 .. code-block:: python
 
-    import pandas as pd
+    m.add_piecewise_formulation((power, xp), (fuel, yp), method="incremental")
 
-    bp = linopy.breakpoints(pd.Series([0, 50, 100]))
+**Limitation:** breakpoint sequences must be strictly monotonic.
 
-From a DataFrame (per-entity, requires ``dim``)
+SOS2 (Convex combination)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Fallback when breakpoints aren't strictly monotonic (the only case
+``method="auto"`` does not pick incremental for a connected curve).
+Introduces interpolation weights :math:`\lambda_i` with an SOS2
+adjacency constraint:
+
+.. math::
+
+   &\sum_{i=0}^{n} \lambda_i = 1, \qquad
+   \text{SOS2}(\lambda_0, \ldots, \lambda_n)
+
+   &e_j = \sum_{i=0}^{n} \lambda_i \, B_{j,i}
+   \quad \text{for each expression } j
+
+The SOS2 constraint ensures at most two adjacent :math:`\lambda_i` are
+non-zero, so every expression is interpolated within the same piece.
+With a bounded tuple, the bounded link flips to the requested sign as
+above.
+
+.. note::
+
+   Solvers with native SOS2 support handle the adjacency constraint via
+   branch-and-bound.  Solvers without it see the Big-M reformulation
+   linopy applies (controlled by ``reformulate_sos=`` on ``solve``) —
+   see :ref:`sos-reformulation` for the reformulated MIP form, which is
+   the model those solvers actually receive.  When breakpoints are
+   monotonic, prefer ``method="incremental"`` (or just ``"auto"``): it
+   builds a similar MIP encoding directly and does not depend on
+   solver SOS2 support or the reformulation step.
+
+.. code-block:: python
+
+    m.add_piecewise_formulation((power, xp), (fuel, yp), method="sos2")
+
+Disjunctive (Disaggregated convex combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+For **disconnected segments** (gaps between operating regions).  Binary
+indicators :math:`z_k` select exactly one segment; SOS2 applies within it:
 
-    # rows = entities, columns = breakpoints
-    df = pd.DataFrame(
-        {"bp0": [0, 0], "bp1": [50, 80], "bp2": [100, float("nan")]},
-        index=["gen1", "gen2"],
-    )
-    bp = linopy.breakpoints(df, dim="generator")
+.. math::
 
-From a dict (per-entity, ragged lengths allowed)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   &z_k \in \{0, 1\}, \quad \sum_{k} z_k = 1
 
-.. code-block:: python
+   &\sum_{i} \lambda_{k,i} = z_k, \qquad
+   e_j = \sum_{k} \sum_{i} \lambda_{k,i} \, B_{j,k,i}
 
-    # NaN-padded to the longest entry
-    bp = linopy.breakpoints(
-        {"gen1": [0, 50, 100], "gen2": [0, 80]},
-        dim="generator",
-    )
+No big-M constants are needed, giving a tight LP relaxation.
 
-From a DataArray (pass-through)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    import xarray as xr
-
-    arr = xr.DataArray([0, 50, 100], dims=["_breakpoint"])
-    bp = linopy.breakpoints(arr)  # returned as-is
-
-Slopes mode
-~~~~~~~~~~~
-
-Compute y-breakpoints from segment slopes and an initial y-value:
-
-.. code-block:: python
-
-    y_pts = linopy.breakpoints(
-        slopes=[1.2, 1.4, 1.7],
-        x_points=[0, 30, 60, 100],
-        y0=0,
-    )
-    # Equivalent to breakpoints([0, 36, 78, 146])
+**Disjunctive + bounded tuple.**  A per-tuple ``"<="`` / ``">="`` works
+here too, applied to the bounded tuple exactly as for the continuous
+methods.  Because the disjunctive machinery already carries a
+per-segment binary, there is **no curvature requirement** on the
+segments — inequality is always exact on the hypograph (or epigraph) of
+the active segment, whatever its slope pattern.  This makes disjunctive
+plus a bounded tuple a first-class tool for "bounded output on
+disconnected operating regions" that ``method="lp"`` cannot handle.
 
 
-Segments Factory
-----------------
-
-The :func:`~linopy.piecewise.segments` factory creates DataArrays with both
-``_segment`` and ``_breakpoint`` dimensions (``SegmentsLike``):
-
-From a list of sequences
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    # dims: [_segment, _breakpoint]
-    seg = linopy.segments([(0, 10), (50, 100)])
-
-From a dict (per-entity)
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    seg = linopy.segments(
-        {"gen1": [(0, 10), (50, 100)], "gen2": [(0, 80)]},
-        dim="generator",
-    )
-
-From a DataFrame
-~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    # rows = segments, columns = breakpoints
-    seg = linopy.segments(pd.DataFrame([[0, 10], [50, 100]]))
-
-
-Auto-broadcasting
+Advanced Features
 -----------------
 
-Breakpoints are automatically broadcast to match the dimensions of the
-expressions. You don't need ``expand_dims`` when your variables have extra
-dimensions (e.g. ``time``):
+.. _piecewise-active:
+
+Active parameter (unit commitment)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``active`` parameter gates the piecewise function with a binary variable.
+When ``active=0``, all auxiliary variables (and thus the linked expressions)
+are forced to zero:
 
 .. code-block:: python
 
-    import pandas as pd
-    import linopy
+    commit = m.add_variables(name="commit", binary=True, coords=[time])
+    m.add_piecewise_formulation(
+        (power, [30, 60, 100]),
+        (fuel, [40, 90, 170]),
+        active=commit,
+    )
 
-    m = linopy.Model()
+- ``commit=1``: power operates in [30, 100], fuel = f(power)
+- ``commit=0``: power = 0, fuel = 0
+
+Not supported with ``method="lp"`` (gating needs a binary).  Use
+``method="auto"``, or *Chord expressions as a building block* for
+manual gating.
+
+.. warning::
+
+   With a bounded tuple and ``active=0``, the output is only forced to
+   ``0`` on the signed side — the complementary bound still comes from
+   the output variable's own lower/upper bound.  In the common case of
+   non-negative outputs (fuel, cost, heat), set ``lower=0`` on that
+   variable: combined with the ``y ≤ 0`` constraint from deactivation,
+   this forces ``y = 0`` automatically.
+
+Auto-broadcasting
+~~~~~~~~~~~~~~~~~
+
+Breakpoints are automatically broadcast to match expression dimensions — you
+don't need ``expand_dims``:
+
+.. code-block:: python
+
     time = pd.Index([1, 2, 3], name="time")
     x = m.add_variables(name="x", lower=0, upper=100, coords=[time])
     y = m.add_variables(name="y", coords=[time])
 
     # 1D breakpoints auto-expand to match x's time dimension
-    x_pts = linopy.breakpoints([0, 50, 100])
-    y_pts = linopy.breakpoints([0, 70, 150])
-    m.add_piecewise_constraints(linopy.piecewise(x, x_pts, y_pts) == y)
+    m.add_piecewise_formulation((x, [0, 50, 100]), (y, [0, 70, 150]))
 
+NaN masking
+~~~~~~~~~~~
 
-Method Signatures
------------------
-
-``piecewise``
-~~~~~~~~~~~~~
+Trailing NaN values in breakpoints mask the corresponding lambda / delta
+variables (and, for LP, the corresponding chord constraints).  This is useful
+for per-entity breakpoints with ragged lengths:
 
 .. code-block:: python
 
-    linopy.piecewise(expr, x_points, y_points)
+    # gen1 has 3 breakpoints, gen2 has 2 (NaN-padded)
+    bp = linopy.breakpoints({"gen1": [0, 50, 100], "gen2": [0, 80]}, dim="gen")
 
-- ``expr`` -- ``Variable`` or ``LinearExpression``. The "x" side expression.
-- ``x_points`` -- ``BreaksLike``. Breakpoint x-coordinates.
-- ``y_points`` -- ``BreaksLike``. Breakpoint y-coordinates.
+Interior NaN values (gaps in the middle) are not supported and raise an error.
 
-Returns a :class:`~linopy.piecewise.PiecewiseExpression` that supports
-``==``, ``<=``, ``>=`` comparison with another expression.
+Inspecting generated objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``add_piecewise_constraints``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    Model.add_piecewise_constraints(
-        descriptor,
-        method="auto",
-        name=None,
-        skip_nan_check=False,
-    )
-
-- ``descriptor`` -- :class:`~linopy.piecewise.PiecewiseConstraintDescriptor`.
-  Created by comparing a ``PiecewiseExpression`` with an expression, e.g.
-  ``piecewise(x, x_pts, y_pts) == y``.
-- ``method`` -- ``"auto"`` (default), ``"sos2"``, ``"incremental"``, or ``"lp"``.
-- ``name`` -- ``str``, optional. Base name for generated variables/constraints.
-- ``skip_nan_check`` -- ``bool``, default ``False``.
-
-Returns a :class:`~linopy.constraints.Constraint`, but the returned object is
-formulation-dependent: typically ``{name}_convex`` (SOS2), ``{name}_fill`` or
-``{name}_y_link`` (incremental), and ``{name}_select`` (disjunctive). For
-inequality constraints, the returned constraint is the core piecewise
-formulation constraint, not ``{name}_ineq``.
-
-``breakpoints``
-~~~~~~~~~~~~~~~~
+The returned :class:`PiecewiseFormulation` exposes ``.variables`` and
+``.constraints`` as live views into the model — use them to introspect
+exactly what was generated, rather than relying on documented name
+conventions:
 
 .. code-block:: python
 
-    linopy.breakpoints(values, dim=None)
-    linopy.breakpoints(slopes, x_points, y0, dim=None)
+    f = m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
+    print(f)  # method, convexity, vars/cons summary
 
-- ``values`` -- ``BreaksLike`` (list, Series, DataFrame, DataArray, or dict).
-- ``slopes``, ``x_points``, ``y0`` -- for slopes mode (mutually exclusive with
-  ``values``).
-- ``dim`` -- ``str``, required when ``values`` or ``slopes`` is a DataFrame or dict.
-
-``segments``
-~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    linopy.segments(values, dim=None)
-
-- ``values`` -- ``SegmentsLike`` (list of sequences, DataFrame, DataArray, or
-  dict).
-- ``dim`` -- ``str``, required when ``values`` is a dict.
+The comparison table above describes the *kind* of auxiliary objects each
+method creates (continuous + SOS2, binary + SOS2, none, …); exact name
+suffixes are an implementation detail and may evolve.
 
 
-Generated Variables and Constraints
-------------------------------------
+Tutorials
+---------
 
-Given base name ``name``, the following objects are created:
+.. toctree::
+   :maxdepth: 1
 
-**SOS2 method:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Name
-     - Type
-     - Description
-   * - ``{name}_lambda``
-     - Variable
-     - Interpolation weights :math:`\lambda_i \in [0, 1]` (SOS2).
-   * - ``{name}_convex``
-     - Constraint
-     - :math:`\sum_i \lambda_i = 1`.
-   * - ``{name}_x_link``
-     - Constraint
-     - :math:`x = \sum_i \lambda_i \, x_i`.
-   * - ``{name}_y_link``
-     - Constraint
-     - :math:`y = \sum_i \lambda_i \, y_i`.
-   * - ``{name}_aux``
-     - Variable
-     - Auxiliary variable :math:`z` (inequality constraints only).
-   * - ``{name}_ineq``
-     - Constraint
-     - :math:`y \le z` or :math:`y \ge z` (inequality only).
-
-**Incremental method:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Name
-     - Type
-     - Description
-   * - ``{name}_delta``
-     - Variable
-     - Fill-fraction variables :math:`\delta_i \in [0, 1]`.
-   * - ``{name}_inc_binary``
-     - Variable
-     - Binary indicators for each segment.
-   * - ``{name}_inc_link``
-     - Constraint
-     - :math:`\delta_i \le y_i` (delta bounded by binary).
-   * - ``{name}_fill``
-     - Constraint
-     - :math:`\delta_{i+1} \le \delta_i` (fill order, 3+ breakpoints).
-   * - ``{name}_inc_order``
-     - Constraint
-     - :math:`y_{i+1} \le \delta_i` (binary ordering, 3+ breakpoints).
-   * - ``{name}_x_link``
-     - Constraint
-     - :math:`x = x_0 + \sum_i \delta_i \, \Delta x_i`.
-   * - ``{name}_y_link``
-     - Constraint
-     - :math:`y = y_0 + \sum_i \delta_i \, \Delta y_i`.
-   * - ``{name}_aux``
-     - Variable
-     - Auxiliary variable :math:`z` (inequality constraints only).
-   * - ``{name}_ineq``
-     - Constraint
-     - :math:`y \le z` or :math:`y \ge z` (inequality only).
-
-**LP method:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Name
-     - Type
-     - Description
-   * - ``{name}_lp``
-     - Constraint
-     - Tangent-line constraints (one per segment).
-   * - ``{name}_lp_domain_lo``
-     - Constraint
-     - :math:`x \ge x_{\min}`.
-   * - ``{name}_lp_domain_hi``
-     - Constraint
-     - :math:`x \le x_{\max}`.
-
-**Disjunctive method:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Name
-     - Type
-     - Description
-   * - ``{name}_binary``
-     - Variable
-     - Segment indicators :math:`y_k \in \{0, 1\}`.
-   * - ``{name}_select``
-     - Constraint
-     - :math:`\sum_k y_k = 1`.
-   * - ``{name}_lambda``
-     - Variable
-     - Per-segment interpolation weights (SOS2).
-   * - ``{name}_convex``
-     - Constraint
-     - :math:`\sum_i \lambda_{k,i} = y_k`.
-   * - ``{name}_x_link``
-     - Constraint
-     - :math:`x = \sum_k \sum_i \lambda_{k,i} \, x_{k,i}`.
-   * - ``{name}_y_link``
-     - Constraint
-     - :math:`y = \sum_k \sum_i \lambda_{k,i} \, y_{k,i}`.
-   * - ``{name}_aux``
-     - Variable
-     - Auxiliary variable :math:`z` (inequality constraints only).
-   * - ``{name}_ineq``
-     - Constraint
-     - :math:`y \le z` or :math:`y \ge z` (inequality only).
+   piecewise-linear-constraints-tutorial
+   piecewise-inequality-bounds-tutorial
 
 See Also
 --------
 
-- :doc:`piecewise-linear-constraints-tutorial` -- Worked examples covering SOS2, incremental, LP, and disjunctive usage
-- :doc:`sos-constraints` -- Low-level SOS1/SOS2 constraint API
-- :doc:`creating-constraints` -- General constraint creation
-- :doc:`user-guide` -- Overall linopy usage patterns
+- :doc:`sos-constraints` — low-level SOS1/SOS2 constraint API

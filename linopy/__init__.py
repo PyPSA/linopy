@@ -14,14 +14,32 @@ __version__ = version("linopy")
 import linopy.monkey_patch_xarray  # noqa: F401
 from linopy.common import align
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
-from linopy.constraints import Constraint, Constraints
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    LESS_EQUAL,
+    EvolvingAPIWarning,
+    PerformanceWarning,
+)
+from linopy.constraints import (
+    Constraint,
+    ConstraintBase,
+    Constraints,
+    CSRConstraint,
+)
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
-from linopy.model import Model, Variable, Variables, available_solvers
+from linopy.model import Model, Variable, Variables
 from linopy.objective import Objective
-from linopy.piecewise import breakpoints, piecewise, segments, slopes_to_points
+from linopy.piecewise import (
+    PiecewiseFormulation,
+    Slopes,
+    breakpoints,
+    segments,
+    tangent_lines,
+)
 from linopy.remote import RemoteHandler
+from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
@@ -29,26 +47,33 @@ except ImportError:
     pass
 
 __all__ = (
-    "Constraint",
+    "CSRConstraint",
+    "ConstraintBase",
     "Constraints",
+    "Constraint",
     "EQUAL",
+    "PerformanceWarning",
+    "EvolvingAPIWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
     "LinearExpression",
     "Model",
     "Objective",
     "OetcHandler",
+    "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",
+    "Slopes",
+    "SolverFeature",
     "Variable",
     "Variables",
-    "available_solvers",
-    "breakpoints",
-    "piecewise",
-    "segments",
-    "slopes_to_points",
     "align",
+    "available_solvers",
+    "licensed_solvers",
+    "breakpoints",
     "merge",
     "options",
     "read_netcdf",
+    "segments",
+    "tangent_lines",
 )

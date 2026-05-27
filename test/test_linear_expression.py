@@ -14,6 +14,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
@@ -1855,6 +1856,61 @@ def test_constant_only_expression_mul_linexpr_with_vars_and_const(
     assert (result_rev.const == expected_const).all()
 
 
+def test_variable_names() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+
+    expr = a + b
+    assert expr.nterm == 2
+    assert expr.variable_names == {"a", "b"}
+
+    mask = xr.DataArray(False, coords=[time])
+    expr = a + (b * 1).where(mask)
+    assert expr.nterm == 2
+    assert expr.variable_names == {"a"}
+
+    expr = (b * 1).where(mask)
+    assert expr.nterm == 1
+    assert expr.variable_names == set()
+
+    expr = LinearExpression.from_constant(model=m, constant=5)
+    assert expr.nterm == 0
+    assert expr.variable_names == set()
+
+    # Single variable expression
+    expr = 1 * a
+    assert expr.variable_names == {"a"}
+
+    # Repeated variable across terms (a + a)
+    expr = a + a
+    assert expr.variable_names == {"a"}
+
+
+def test_nterm() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    all_false = xr.DataArray(False, coords=[time])
+    not_0 = xr.DataArray([False, True, True], coords=[time])
+    not_1 = xr.DataArray([True, False, True], coords=[time])
+    not_2 = xr.DataArray([True, True, False], coords=[time])
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+    c = m.add_variables(name="c", coords=[time])
+
+    expr = (a.where(not_0) + b.where(not_1) + c.where(not_2)).densify_terms()
+    assert expr.nterm == 3
+
+    expr = a + b.where(all_false)
+    assert expr.nterm == 2
+
+    expr = expr.simplify()
+    assert expr.nterm == 1
+
+
 class TestJoinParameter:
     @pytest.fixture
     def m2(self) -> Model:
@@ -1920,7 +1976,8 @@ class TestJoinParameter:
         def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
             expr_a = 1 * a + 5
             const = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})
-            for join in ["override", "outer", "inner"]:
+            joins: list[JoinOptions] = ["override", "outer", "inner"]
+            for join in joins:
                 result = expr_a.add(const, join=join)
                 assert list(result.coords["i"].values) == [0, 1, 2]
                 np.testing.assert_array_equal(result.const.values, [6, 7, 8])
@@ -2023,26 +2080,26 @@ class TestJoinParameter:
 
     class TestMerge:
         def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="inner"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="inner"
             )
             assert list(result.data.indexes["i"]) == [1, 2]
 
         def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="outer"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="outer"
             )
             assert set(result.coords["i"].values) == {0, 1, 2, 3}
 
         def test_merge_join_left(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="left"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="left"
             )
             assert list(result.data.indexes["i"]) == [0, 1, 2]
 
         def test_merge_join_right(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="right"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="right"
             )
             assert list(result.data.indexes["i"]) == [1, 2, 3]
 

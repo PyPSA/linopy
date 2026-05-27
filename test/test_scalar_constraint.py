@@ -6,7 +6,7 @@ import pytest
 
 import linopy
 from linopy import GREATER_EQUAL, Model, Variable
-from linopy.constraints import AnonymousScalarConstraint, Constraint
+from linopy.constraints import AnonymousScalarConstraint, ConstraintBase
 
 
 @pytest.fixture
@@ -32,20 +32,20 @@ def test_anonymous_scalar_constraint_type(x: Variable) -> None:
 
 
 def test_simple_constraint_type(m: Model, x: Variable) -> None:
-    c: Constraint = m.add_constraints(x.at[0] >= 0)
-    assert isinstance(c, linopy.constraints.Constraint)
+    c: ConstraintBase = m.add_constraints(x.at[0] >= 0)
+    assert isinstance(c, linopy.constraints.ConstraintBase)
 
 
 def test_compound_constraint_type(m: Model, x: Variable) -> None:
-    c: Constraint = m.add_constraints(x.at[0] + x.at[1] >= 0)
-    assert isinstance(c, linopy.constraints.Constraint)
+    c: ConstraintBase = m.add_constraints(x.at[0] + x.at[1] >= 0)
+    assert isinstance(c, linopy.constraints.ConstraintBase)
 
 
 def test_explicit_simple_constraint_type(m: Model, x: Variable) -> None:
-    c: Constraint = m.add_constraints(x.at[0], GREATER_EQUAL, 0)
-    assert isinstance(c, linopy.constraints.Constraint)
+    c: ConstraintBase = m.add_constraints(x.at[0], GREATER_EQUAL, 0)
+    assert isinstance(c, linopy.constraints.ConstraintBase)
 
 
 def test_explicit_compound_constraint_type(m: Model, x: Variable) -> None:
-    c: Constraint = m.add_constraints(x.at[0] + x.at[1], GREATER_EQUAL, 0)
-    assert isinstance(c, linopy.constraints.Constraint)
+    c: ConstraintBase = m.add_constraints(x.at[0] + x.at[1], GREATER_EQUAL, 0)
+    assert isinstance(c, linopy.constraints.ConstraintBase)

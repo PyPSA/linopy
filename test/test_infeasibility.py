@@ -94,8 +94,9 @@ class TestInfeasibility:
         assert isinstance(labels, list)
         assert len(labels) > 0  # Should find at least one infeasible constraint
 
-        # Test print_infeasibilities (just check it doesn't raise an error)
-        m.print_infeasibilities()
+        formatted = m.format_infeasibilities()
+        assert isinstance(formatted, str)
+        assert formatted
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
     def test_complex_infeasibility_detection(
@@ -165,9 +166,8 @@ class TestInfeasibility:
         # Solve the model first
         m.solve(solver_name=solver)
 
-        # Manually remove the solver_model to simulate cleanup
-        m.solver_model = None
-        m.solver_name = solver  # But keep the solver name
+        assert m.solver is not None
+        m.solver.solver_model = None
 
         # Should raise ValueError since we know it was solved with supported solver
         with pytest.raises(ValueError, match="No solver model available"):
@@ -210,6 +210,7 @@ class TestInfeasibility:
         x = m.add_variables(name="x")
         m.add_constraints(x >= 0)
         m.add_constraints(x <= -1)  # Make it infeasible
+        m.add_objective(1 * x)
 
         # Use a solver that doesn't support IIS
         if "cbc" in available_solvers:
@@ -294,7 +295,7 @@ class TestInfeasibility:
         assert grouped_coords["sum_lower"]
         assert grouped_coords["sum_lower"] == grouped_coords["x_upper"]
 
-        m.print_infeasibilities()
+        print(m.format_infeasibilities())
         output = capsys.readouterr().out
         for time_coord in grouped_coords["sum_lower"]:
             assert f"sum_lower[{time_coord}]" in output
