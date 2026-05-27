@@ -499,11 +499,10 @@ class TestAddVariablesBoundsWithCoords:
         with pytest.raises(ValueError, match=r"upper bound could not be aligned"):
             model.add_variables(upper=pd.Series([1, 2]), coords=coords, name="s_bad")
 
-    def test_unnamed_coords_short_circuit(self, model: "Model") -> None:
-        """Coords as a list of unnamed indexes leaves the bound unchanged."""
+    def test_unnamed_pd_index_is_size_only(self, model: "Model") -> None:
         bound = DataArray([1, 2, 3], dims=["dim_0"])
         var = model.add_variables(upper=bound, coords=[pd.Index([0, 1, 2])], name="x")
-        assert (var.data.upper == [1, 2, 3]).all()
+        assert (var.upper == [1, 2, 3]).all()
 
     # -- Broadcasting missing dims -----------------------------------------
 
