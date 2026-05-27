@@ -623,7 +623,14 @@ class TestCoordsToDictRules:
         result = self._parse([mi])
         assert set(result) == {"multi"}
 
-    def test_unnamed_multiindex_raises(self) -> None:
+    def test_unnamed_multiindex_with_dims_uses_dims(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        result = self._parse([mi], dims=["multi"])
+        assert set(result) == {"multi"}
+        assert result["multi"].name == "multi"
+        assert mi.name is None  # caller's MultiIndex not mutated
+
+    def test_unnamed_multiindex_without_dims_raises(self) -> None:
         mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
         with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
             self._parse([mi])

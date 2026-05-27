@@ -532,7 +532,11 @@ def _coords_to_dict(
     +---------------------------------+-----------------------+-----------+
     | ``pd.MultiIndex`` with ``.name``| ``.name``             | accepted  |
     +---------------------------------+-----------------------+-----------+
-    | ``pd.MultiIndex`` w/o ``.name`` | — (xarray needs name) | TypeError |
+    | ``pd.MultiIndex`` w/o ``.name`` | ``dims[i]``           | accepted  |
+    |                                 |                       | (named on |
+    |                                 |                       | a copy)   |
+    +---------------------------------+-----------------------+-----------+
+    | ``pd.MultiIndex`` w/o ``.name`` | — (no ``dims[i]``)    | TypeError |
     +---------------------------------+-----------------------+-----------+
     | anything else (e.g. DataArray)  | —                     | TypeError |
     +---------------------------------+-----------------------+-----------+
@@ -549,13 +553,20 @@ def _coords_to_dict(
     result: dict[Hashable, Any] = {}
     for i, c in enumerate(coords):
         if isinstance(c, pd.MultiIndex):
-            if not c.name:
+            name = c.name or (
+                dim_names[i] if dim_names and i < len(dim_names) else None
+            )
+            if name is None:
                 raise TypeError(
                     "MultiIndex coords entries must have .name set so "
                     "xarray can use it as the dimension name. Set it via "
-                    "`idx.name = 'my_dim'` before passing to coords."
+                    "`idx.name = 'my_dim'`, or pass `dims=[...]` to name "
+                    "entries by position."
                 )
-            result[c.name] = c
+            if c.name is None:
+                c = c.copy()
+                c.name = name
+            result[name] = c
         elif isinstance(c, pd.Index):
             name = (
                 c.name
