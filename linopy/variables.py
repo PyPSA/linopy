@@ -62,6 +62,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
@@ -967,16 +968,8 @@ class Variable:
         if lower is None and upper is None:
             return self
 
-        from linopy import expressions
-
-        non_constant = (
-            Variable,
-            ScalarVariable,
-            expressions.LinearExpression,
-            expressions.QuadraticExpression,
-        )
         for name, val in (("lower", lower), ("upper", upper)):
-            if val is not None and isinstance(val, non_constant):
+            if val is not None and not isinstance(val, CONSTANT_TYPES):
                 raise TypeError(
                     f"Variable.update({name}=...) must be a constant; "
                     f"got {type(val).__name__}."

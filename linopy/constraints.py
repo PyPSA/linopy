@@ -1190,7 +1190,7 @@ class Constraint(ConstraintBase):
         )
         self.update(lhs=value)
 
-    def _assign_lhs_expr(
+    def _assign_lhs(
         self, expr: expressions.LinearExpression, rhs: DataArray | None = None
     ) -> None:
         """
@@ -1204,6 +1204,10 @@ class Constraint(ConstraintBase):
             rhs=base_rhs - expr.const,
         )
         self._coef_dirty = True
+
+    def _assign_data(self, **fields: Any) -> None:
+        """Internal: write ``fields`` into ``self._data`` via ``assign_multiindex_safe``."""
+        self._data = assign_multiindex_safe(self.data, **fields)
 
     def update(
         self,
@@ -1319,7 +1323,7 @@ class Constraint(ConstraintBase):
 
         # 1. lhs replacement first so subsequent rhs= rearrangement sees the new lhs.
         if lhs is not None:
-            self._assign_lhs_expr(
+            self._assign_lhs(
                 expressions.as_expression(
                     lhs, self.model, coords=self.coords, dims=self.coord_dims
                 )
@@ -1332,16 +1336,16 @@ class Constraint(ConstraintBase):
             )
             residual = expr.reset_const()
             if residual.nterm != 0:
-                self._assign_lhs_expr(self.lhs - residual, rhs=expr.const)
+                self._assign_lhs(self.lhs - residual, rhs=expr.const)
             else:
-                self._data = assign_multiindex_safe(self.data, rhs=expr.const)
+                self._assign_data(rhs=expr.const)
 
         # 3. coeffs / variables partial updates (only valid without lhs=).
         if coeffs is not None:
             new_coeffs = DataArray(coeffs).broadcast_like(
                 self.vars, exclude=[self.term_dim]
             )
-            self._data = assign_multiindex_safe(self.data, coeffs=new_coeffs)
+            self._assign_data(coeffs=new_coeffs)
             self._coef_dirty = True
         if variables is not None:
             from linopy.variables import Variable as _Variable
@@ -1353,13 +1357,13 @@ class Constraint(ConstraintBase):
                     f"Variable; got {type(variables).__name__}."
                 )
             new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
-            self._data = assign_multiindex_safe(self.data, vars=new_vars)
+            self._assign_data(vars=new_vars)
             self._coef_dirty = True
 
         # 4. sign last so it composes cleanly with the rest.
         if sign is not None:
             new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
-            self._data = assign_multiindex_safe(self.data, sign=new_sign)
+            self._assign_data(sign=new_sign)
 
         return self
 
