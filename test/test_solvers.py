@@ -577,9 +577,9 @@ class TestMosekChooseSolution:
     @staticmethod
     def _make_task_mock(
         *,
-        bas_solsta: "mosek_installed.solsta | None" = None,
-        itr_solsta: "mosek_installed.solsta | None" = None,
-        itg_solsta: "mosek_installed.solsta | None" = None,
+        bas_solsta: object | None = None,
+        itr_solsta: object | None = None,
+        itg_solsta: object | None = None,
     ) -> MagicMock:
         defined = {
             mosek_installed.soltype.bas: bas_solsta,
@@ -665,7 +665,7 @@ class TestMosekChooseSolution:
             ),
         ],
     )
-    def test_choose_solution(self, kwargs, expected_soltype) -> None:
+    def test_choose_solution(self, kwargs: dict[str, object], expected_soltype: object) -> None:
         task = self._make_task_mock(**kwargs)
         assert solvers.Mosek._choose_solution(task) is expected_soltype
 
