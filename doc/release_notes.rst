@@ -69,7 +69,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 * ``linopy.common.as_dataarray`` is now the single broadcasting primitive;
   strict subset-dim / coord-value checks live in
-  ``assert_compatible_with_coords`` (via ``align_to_coords`` in
+  ``validate_alignment`` (via ``align_to_coords`` in
   ``add_variables`` / ``add_constraints``). Validation errors name the
   argument (``lower bound``, ``upper bound``, ``mask``) and explain whether
   dimensions or coordinate values disagree with ``coords``. When ``coords`` is

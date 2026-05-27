@@ -20,13 +20,13 @@ from linopy.common import (
     align,
     align_to_coords,
     as_dataarray,
-    assert_compatible_with_coords,
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
 from linopy.types import CoordsLike
@@ -509,44 +509,44 @@ def test_as_dataarray_keeps_disjoint_shared_dim_values() -> None:
     assert list(da.coords["a"].values) == [0, 1, 2, 3, 4]
 
 
-def test_assert_compatible_with_coords_rejects_extra_dims() -> None:
+def test_validate_alignment_rejects_extra_dims() -> None:
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
     )
     with pytest.raises(ValueError, match=r"not declared in coords"):
-        assert_compatible_with_coords(arr, {"a": [0, 1]})
+        validate_alignment(arr, {"a": [0, 1]})
 
 
-def test_assert_compatible_with_coords_rejects_value_mismatch() -> None:
+def test_validate_alignment_rejects_value_mismatch() -> None:
     arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
     with pytest.raises(ValueError, match="do not match coords"):
-        assert_compatible_with_coords(arr, {"a": [10, 20, 30]})
+        validate_alignment(arr, {"a": [10, 20, 30]})
 
 
-def test_assert_compatible_with_coords_allows_subset_dims() -> None:
+def test_validate_alignment_allows_subset_dims() -> None:
     """arr.dims ⊂ coords.dims is fine (broadcasting fills the missing dim)."""
     arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
-    assert_compatible_with_coords(arr, {"a": [0, 1, 2], "b": [10, 20]})  # no raise
+    validate_alignment(arr, {"a": [0, 1, 2], "b": [10, 20]})  # no raise
 
 
-def test_assert_compatible_with_coords_unnamed_coords_and_dims() -> None:
+def test_validate_alignment_unnamed_coords_and_dims() -> None:
     """coords=[[...]], dims=[...] enforces the same contract as a named mapping."""
     arr = DataArray([1, 2, 3], dims=["x"], coords={"x": [0, 1, 2]})
-    assert_compatible_with_coords(arr, [[0, 1, 2]], dims=["x"])  # no raise
+    validate_alignment(arr, [[0, 1, 2]], dims=["x"])  # no raise
 
     bad = DataArray(
         [[1, 2], [3, 4]], dims=["x", "y"], coords={"x": [0, 1], "y": [0, 1]}
     )
     with pytest.raises(ValueError, match=r"not declared in coords"):
-        assert_compatible_with_coords(bad, [[0, 1]], dims=["x"])
+        validate_alignment(bad, [[0, 1]], dims=["x"])
 
 
-def test_assert_compatible_with_coords_label_in_error() -> None:
+def test_validate_alignment_label_in_error() -> None:
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
     )
     with pytest.raises(ValueError, match=r"lower bound has dimension\(s\) \['b'\]"):
-        assert_compatible_with_coords(arr, {"a": [0, 1]}, label="lower bound")
+        validate_alignment(arr, {"a": [0, 1]}, label="lower bound")
 
 
 def test_align_to_coords_wraps_conversion_errors() -> None:

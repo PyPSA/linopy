@@ -291,7 +291,7 @@ def as_dataarray(
     on a shared dim (i.e. value sets that are not equal as sets) are
     passed through unchanged: downstream xarray alignment decides how to
     combine them. To enforce that ``arr.dims`` ⊆ ``coords.dims`` and that
-    shared coord values match, use ``assert_compatible_with_coords`` (called
+    shared coord values match, use ``validate_alignment`` (called
     automatically for ``lower``, ``upper``, and ``mask`` in
     :meth:`~linopy.model.Model.add_variables` and for ``mask`` in
     :meth:`~linopy.model.Model.add_constraints`).
@@ -366,7 +366,7 @@ def as_dataarray(
         # Different value sets are left alone: downstream xarray alignment
         # (e.g. xr.align in arithmetic) handles them. Callers needing strict
         # value matching (add_variables / add_constraints) should use
-        # ``assert_compatible_with_coords`` after this call.
+        # ``validate_alignment`` after this call.
         if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
             expected_idx
         ):
@@ -399,7 +399,7 @@ def as_dataarray(
     return arr
 
 
-def assert_compatible_with_coords(
+def validate_alignment(
     arr: DataArray,
     coords: CoordsLike | None,
     dims: DimsLike | None = None,
@@ -486,7 +486,7 @@ def align_to_coords(
         raise TypeError(f"{label} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:
         raise ValueError(f"{label} could not be aligned to coords: {err}") from err
-    assert_compatible_with_coords(da, coords, dims=kwargs.get("dims"), label=label)
+    validate_alignment(da, coords, dims=kwargs.get("dims"), label=label)
     return da
 
 
