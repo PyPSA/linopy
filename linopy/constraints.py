@@ -1205,9 +1205,16 @@ class Constraint(ConstraintBase):
         )
         self._coef_dirty = True
 
-    def _assign_data(self, **fields: Any) -> None:
-        """Internal: write ``fields`` into ``self._data`` via ``assign_multiindex_safe``."""
+    def _update_data(self, **fields: Any) -> None:
+        """
+        Internal: write ``fields`` into ``self._data`` and update dirty bookkeeping.
+
+        Writes that touch the lhs structure (``coeffs``, ``vars``) flip
+        ``_coef_dirty``. Other fields (``rhs``, ``sign``, …) leave it alone.
+        """
         self._data = assign_multiindex_safe(self.data, **fields)
+        if "coeffs" in fields or "vars" in fields:
+            self._coef_dirty = True
 
     def update(
         self,
@@ -1341,15 +1348,14 @@ class Constraint(ConstraintBase):
             if residual.nterm != 0:
                 self._assign_lhs(self.lhs - residual, rhs=expr.const)
             else:
-                self._assign_data(rhs=expr.const)
+                self._update_data(rhs=expr.const)
 
         # 3. coeffs / variables partial updates (only valid without lhs=).
         if coeffs is not None:
             new_coeffs = DataArray(coeffs).broadcast_like(
                 self.vars, exclude=[self.term_dim]
             )
-            self._assign_data(coeffs=new_coeffs)
-            self._coef_dirty = True
+            self._update_data(coeffs=new_coeffs)
         if variables is not None:
             from linopy.variables import Variable as _Variable
 
@@ -1370,13 +1376,12 @@ class Constraint(ConstraintBase):
                     f"got {type(variables).__name__}."
                 )
             new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
-            self._assign_data(vars=new_vars)
-            self._coef_dirty = True
+            self._update_data(vars=new_vars)
 
         # 4. sign last so it composes cleanly with the rest.
         if sign is not None:
             new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
-            self._assign_data(sign=new_sign)
+            self._update_data(sign=new_sign)
 
         return self
 
@@ -1482,11 +1487,10 @@ class Constraint(ConstraintBase):
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
-        self._assign_data(
+        self._update_data(
             vars=self.vars.where(not_zero, -1),
             coeffs=self.coeffs.where(not_zero),
         )
-        self._coef_dirty = True
         return self
 
     def sanitize_missings(self) -> Constraint:
