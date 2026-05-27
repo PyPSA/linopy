@@ -6,6 +6,7 @@ Created on Mon Jun 19 12:11:03 2023
 """
 
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -558,6 +559,117 @@ def test_align_to_coords_preserves_type_errors() -> None:
     """Unsupported input types stay TypeError (don't become ValueError)."""
     with pytest.raises(TypeError, match=r"lower bound could not be aligned"):
         align_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
+
+
+def test_align_to_coords_does_not_relabel_coords_errors() -> None:
+    """Coords-side TypeError carries its own message, not the value label."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+    with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
+        align_to_coords(np.array([1, 2, 3, 4]), [mi], label="lower bound")
+
+
+class TestCoordsToDictRules:
+    """
+    One test per row of the ``_coords_to_dict`` rules table.
+
+    Each test name states the rule it pins; the assertions show the
+    expected outcome. Together they form the executable spec of how
+    sequence-form ``coords`` entries are named.
+    """
+
+    @staticmethod
+    def _parse(coords: Any, dims: Any = None) -> dict:
+        from linopy.common import _coords_to_dict
+
+        return _coords_to_dict(coords, dims=dims)
+
+    # -- container forms ---------------------------------------------------
+
+    def test_mapping_is_returned_as_shallow_dict_copy(self) -> None:
+        src = {"x": [0, 1, 2], "y": [10, 20]}
+        result = self._parse(src)
+        assert result == src
+        assert result is not src
+
+    def test_xarray_coordinates_keeps_only_dim_entries(self) -> None:
+        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        coords = xr.Coordinates.from_pandas_multiindex(midx, "stacked")
+        result = self._parse(coords)
+        assert set(result) == {"stacked"}
+
+    # -- pd.Index entries --------------------------------------------------
+
+    def test_named_pd_index_uses_its_name(self) -> None:
+        result = self._parse([pd.Index([0, 1, 2], name="x")])
+        assert set(result) == {"x"}
+
+    def test_unnamed_pd_index_with_dims_uses_dims(self) -> None:
+        result = self._parse([pd.Index([0, 1, 2])], dims=["x"])
+        assert set(result) == {"x"}
+
+    def test_unnamed_pd_index_without_dims_is_size_only(self) -> None:
+        # Same as a bare sequence: contributes no dim name; xarray assigns
+        # ``dim_0`` downstream.
+        assert self._parse([pd.Index([0, 1, 2])]) == {}
+        m = Model()
+        v = m.add_variables(coords=[pd.Index([0, 1, 2])])
+        assert v.dims == ("dim_0",)
+
+    # -- pd.MultiIndex entries --------------------------------------------
+
+    def test_named_multiindex_uses_its_name(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        mi.name = "multi"
+        result = self._parse([mi])
+        assert set(result) == {"multi"}
+
+    def test_unnamed_multiindex_raises(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
+            self._parse([mi])
+
+    # -- bare sequence entries --------------------------------------------
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_with_dims_uses_dims(self, entry: Any) -> None:
+        result = self._parse([entry], dims=["x"])
+        assert set(result) == {"x"}
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_without_dims_is_silently_skipped(self, entry: Any) -> None:
+        assert self._parse([entry]) == {}
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_without_dims_falls_through_to_xarray_dim_0(
+        self, entry: Any
+    ) -> None:
+        m = Model()
+        v = m.add_variables(coords=[entry])
+        assert v.dims == ("dim_0",)
+
+    # -- unsupported entries ----------------------------------------------
+
+    def test_dataarray_entry_raises(self) -> None:
+        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
+            self._parse([DataArray([0, 1, 2], dims=["x"])])
+
+    def test_unknown_type_entry_raises(self) -> None:
+        class Foo: ...
+
+        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
+            self._parse([Foo()])
 
 
 def test_best_int() -> None:

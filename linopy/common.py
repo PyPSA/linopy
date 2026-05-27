@@ -318,6 +318,11 @@ def as_dataarray(
     if coords is None:
         return _as_dataarray_lax(arr, coords, dims, **kwargs)
 
+    if not isinstance(coords, Coordinates | Mapping):
+        # xarray reads bare `(a, b)` as `(dim_name, values)`; normalize here
+        # so a coords entry passed as a tuple behaves identically to a list.
+        coords = [list(c) if isinstance(c, tuple) else c for c in coords]
+
     expected = _coords_to_dict(coords, dims=dims)
     if not expected:
         return _as_dataarray_lax(arr, coords, dims, **kwargs)
@@ -478,8 +483,11 @@ def align_to_coords(
     Used by :meth:`~linopy.model.Model.add_variables` for ``lower``, ``upper``,
     and ``mask``, and by :meth:`~linopy.model.Model.add_constraints` for
     ``mask``. Raises :class:`ValueError` with a message that names ``label``
-    when conversion or validation fails.
+    when ``value`` cannot be aligned to ``coords``. Coords-parsing errors
+    propagate unchanged.
     """
+    if coords is not None:
+        _coords_to_dict(coords, dims=kwargs.get("dims"))
     try:
         da = as_dataarray(value, coords, **kwargs)
     except TypeError as err:
@@ -497,21 +505,37 @@ def _coords_to_dict(
     """
     Normalize coords to a dict mapping dim names to coordinate values.
 
-    For ``xarray.Coordinates`` (and ``DataArray.coords``), only entries
-    that are actual dimensions are kept; derived MultiIndex level coords
-    are dropped here and re-attached by xarray downstream. Plain mappings
-    are returned as-is. For sequence inputs, entries must be ``pd.Index``
-    (named or not) or unnamed sequences (``list`` / ``tuple`` / ``range``
-    / ``np.ndarray``). A ``pd.MultiIndex`` must have ``.name`` set —
-    xarray requires a single dimension name for the flattened index.
-    Other types — notably ``xarray.DataArray`` — raise ``TypeError``
-    rather than being silently dropped: callers should convert via
-    ``variable.indexes[<dim>]`` (or ``pd.Index(...)``) first.
+    Container forms:
 
-    Unnamed sequence entries (or unnamed ``pd.Index``) gain a dim name
-    from ``dims`` by position when ``dims`` is provided, so callers that
-    pass ``coords=[[1, 2, 3]], dims=["x"]`` get the same strict
-    enforcement as ``coords={"x": [1, 2, 3]}``.
+    - ``xarray.Coordinates``  → kept dim entries only (MultiIndex level
+      coords dropped).
+    - ``Mapping``             → returned as a shallow ``dict`` copy.
+    - sequence-of-entries     → each entry handled per the rules below.
+
+    Sequence-entry rules (``i`` is the position in ``coords``, ``dims[i]``
+    is the matching entry in ``dims`` when one exists). An entry is
+    *unlabeled* if it's an unnamed ``pd.Index`` or a bare ``list`` /
+    ``tuple`` / ``range`` / ``ndarray``.
+
+    +---------------------------------+-----------------------+-----------+
+    | Entry                           | Naming source         | Outcome   |
+    +=================================+=======================+===========+
+    | ``pd.Index`` with ``.name``     | ``.name``             | accepted  |
+    +---------------------------------+-----------------------+-----------+
+    | unlabeled entry                 | ``dims[i]``           | accepted  |
+    +---------------------------------+-----------------------+-----------+
+    | unlabeled entry                 | — (no ``dims[i]``)    | skipped   |
+    |                                 |                       | — xarray  |
+    |                                 |                       | assigns   |
+    |                                 |                       | ``dim_0`` |
+    |                                 |                       | etc.      |
+    +---------------------------------+-----------------------+-----------+
+    | ``pd.MultiIndex`` with ``.name``| ``.name``             | accepted  |
+    +---------------------------------+-----------------------+-----------+
+    | ``pd.MultiIndex`` w/o ``.name`` | — (xarray needs name) | TypeError |
+    +---------------------------------+-----------------------+-----------+
+    | anything else (e.g. DataArray)  | —                     | TypeError |
+    +---------------------------------+-----------------------+-----------+
     """
     if isinstance(coords, Coordinates):
         # Coordinates iterates over every coord variable, including
@@ -575,32 +599,6 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
         return DataArray(arr)
 
     return arr.to_xarray()
-
-
-def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
-    """
-    Broadcast a boolean mask to match the shape of labels.
-
-    Ensures that mask dimensions are a subset of labels dimensions, broadcasts
-    the mask accordingly, and fills any NaN values (from missing coordinates)
-    with False while emitting a FutureWarning.
-    """
-    assert set(mask.dims).issubset(labels.dims), (
-        "Dimensions of mask not a subset of resulting labels dimensions."
-    )
-    mask = mask.broadcast_like(labels)
-    if mask.isnull().any():
-        warn(
-            "Mask contains coordinates not covered by the data dimensions. "
-            "Missing values will be filled with False (masked out). "
-            "In a future version, this will raise an error. "
-            "Use mask.reindex() or `linopy.align()` to explicitly handle missing "
-            "coordinates.",
-            FutureWarning,
-            stacklevel=3,
-        )
-        mask = mask.fillna(False).astype(bool)
-    return mask
 
 
 # TODO: rename to to_pandas_dataframe
