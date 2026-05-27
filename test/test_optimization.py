@@ -21,11 +21,16 @@ from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
-    SolverFeature,
     get_available_solvers_with_feature,
     solver_supports,
 )
-from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
+from linopy.solvers import (
+    SolverFeature,
+    _new_highspy_mps_layout,
+    _solver_class_for,
+    licensed_solvers,
+    quadratic_solvers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +38,19 @@ io_apis: list[str] = ["lp", "lp-polars"]
 
 explicit_coordinate_names = [False, True]
 
-if "highs" in available_solvers:
+if "highs" in licensed_solvers:
     # mps io is only supported via highspy
     io_apis.append("mps")
 
 file_io_solvers = get_available_solvers_with_feature(
-    SolverFeature.READ_MODEL_FROM_FILE, available_solvers
+    SolverFeature.READ_MODEL_FROM_FILE, licensed_solvers
 )
 params: list[tuple[str, str, bool]] = list(
     itertools.product(file_io_solvers, io_apis, explicit_coordinate_names)
 )
 
 direct_solvers = get_available_solvers_with_feature(
-    SolverFeature.DIRECT_API, available_solvers
+    SolverFeature.DIRECT_API, licensed_solvers
 )
 for solver in direct_solvers:
     params.append((solver, "direct", False))
@@ -54,7 +59,7 @@ set_names_direct_solvers = [
     solver for solver in ("highs", "gurobi") if solver in direct_solvers
 ]
 
-if "mosek" in available_solvers:
+if "mosek" in licensed_solvers:
     params.append(("mosek", "lp", False))
     params.append(("mosek", "lp", True))
 
@@ -64,11 +69,11 @@ if "mosek" in available_solvers:
 feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
 feasible_mip_solvers: list[str] = get_available_solvers_with_feature(
-    SolverFeature.INTEGER_VARIABLES, available_solvers
+    SolverFeature.INTEGER_VARIABLES, licensed_solvers
 )
 
 gpu_solvers: list[str] = get_available_solvers_with_feature(
-    SolverFeature.GPU_ACCELERATION, available_solvers
+    SolverFeature.GPU_ONLY, licensed_solvers
 )
 
 # set tolerances for solution checking based on solver type (CPU vs. GPU)
@@ -79,7 +84,7 @@ GPU_SOL_TOL: float = 2.5e-4  # gpu solvers typically have lower numerical precis
 def test_print_solvers(capsys: Any) -> None:
     with capsys.disabled():
         print(
-            f"\ntesting solvers: {', '.join(available_solvers)}\n"
+            f"\ntesting solvers: {', '.join(licensed_solvers)}\n"
             f"testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
         )
 
@@ -468,7 +473,7 @@ def test_model_maximization(
     assert m.objective.sense == "max"
     assert m.objective.value is None
 
-    if solver in ["cbc", "glpk"] and io_api == "mps" and _new_highspy_mps_layout:
+    if solver in ["cbc", "glpk"] and io_api == "mps" and _new_highspy_mps_layout():
         with pytest.raises(ValueError):
             m.solve(
                 solver,
@@ -494,6 +499,22 @@ def test_mock_solve(model_maximization: Model) -> None:
     x_solution = m.variables["x"].solution
     assert x_solution.coords == m.variables["x"].coords
     assert (x_solution == 0).all()
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
+def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
+    status, condition = model.solve(solver_name="highs", io_api="direct")
+    assert status == "ok"
+    assert model.solver is not None
+    assert model.solver_model is not None
+    assert model.solver_name == "highs"
+
+    status, condition = model.solve(solver="some_non_existant_solver", mock_solve=True)
+
+    assert status == "ok"
+    assert model.solver is None
+    assert model.solver_model is None
+    assert model.solver_name is None
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -754,6 +775,15 @@ def test_milp_model(
     assert condition == "optimal"
     assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
 
+    solver_cls = _solver_class_for(solver)
+    if solver_cls is not None and solver_cls.supports(
+        SolverFeature.MIP_DUAL_BOUND_REPORT
+    ):
+        assert milp_model.solver is not None
+        report = milp_model.solver.report
+        assert report is not None
+        assert report.dual_bound is not None
+
 
 @pytest.mark.parametrize(
     "solver,io_api,explicit_coordinate_names",
@@ -992,7 +1022,7 @@ def test_solution_fn_parent_dir_doesnt_exist(
         assert status == "ok"
 
 
-@pytest.mark.parametrize("solver", available_solvers)
+@pytest.mark.parametrize("solver", licensed_solvers)
 def test_non_supported_solver_io(model: Model, solver: str) -> None:
     with pytest.raises(ValueError):
         model.solve(solver, io_api="non_supported")
@@ -1098,7 +1128,7 @@ def test_solver_classes_from_problem_file(
 ) -> None:
     # first test initialization of super class. Should not be possible to initialize
     with pytest.raises(TypeError):
-        solvers.Solver()  # type: ignore
+        solvers.Solver()
 
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")

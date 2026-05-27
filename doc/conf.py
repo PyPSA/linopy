@@ -18,8 +18,8 @@ import linopy
 # -- Project information -----------------------------------------------------
 
 project = "linopy"
-copyright = "2021, Fabian Hofmann"
-author = "Fabian Hofmann"
+copyright = "2021-2026, Fabian Hofmann, Felix Bumann"
+author = "Fabian Hofmann, Felix Bumann"
 
 # The full version, including alpha/beta/rc tags
 version = linopy.__version__
@@ -71,6 +71,16 @@ source_suffix = {
 
 autosummary_generate = True
 autodoc_typehints = "none"
+
+# Intersphinx — resolve :class:`xarray.DataArray`, :func:`numpy.ndarray`, etc.
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "pandas": ("https://pandas.pydata.org/docs", None),
+    "xarray": ("https://docs.xarray.dev/en/stable", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
+    "dask": ("https://docs.dask.org/en/stable", None),
+}
 
 # Napoleon configurations
 

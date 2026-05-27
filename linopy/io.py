@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 import logging
 import shutil
@@ -20,8 +21,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
-from numpy import ones_like, zeros_like
-from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
@@ -425,15 +424,22 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs[SOS_TYPE_ATTR]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
-            ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
+            # Per-set id = max member label: unique per set (labels are globally
+            # unique); a fully-masked set reduces to -1 and is dropped below.
+            ds["sos_labels"] = ds["labels"].max(sos_dim)
             ds["weights"] = ds.coords[sos_dim]
             df = to_polars(ds)
+
+            # Drop masked members
+            df = df.filter((pl.col("labels") != -1) & (pl.col("sos_labels") != -1))
+            if df.is_empty():
+                continue
 
             df = df.group_by("sos_labels").agg(
                 pl.concat_str(
@@ -625,7 +631,9 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = solvers.Highs._build_solver_model(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -641,125 +649,17 @@ def to_mosek(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Any:
-    """
-    Export model to MOSEK.
-
-    Export the model directly to MOSEK without writing files.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    task : empty MOSEK task
-    explicit_coordinate_names : bool, optional
-        Whether to use explicit coordinate names. Default is False.
-    set_names : bool, optional
-        Whether to set variable and constraint names. Default is True.
-        Setting to False can significantly speed up model export.
-
-    Returns
-    -------
-    task : MOSEK Task object
-    """
-    if m.variables.sos:
-        raise NotImplementedError("SOS constraints are not supported by MOSEK.")
-
-    if m.variables.semi_continuous:
-        raise NotImplementedError(
-            "Semi-continuous variables are not supported by MOSEK. "
-            "Use a solver that supports them (gurobi, cplex, highs)."
-        )
-
+    """Build the MOSEK task for `m`."""
     import mosek
 
     if task is None:
         task = mosek.Task()
-
-    task.appendvars(m.nvars)
-    task.appendcons(m.ncons)
-
-    M = m.matrices
-
-    if set_names:
-        print_variables, print_constraints = get_printers_scalar(
-            m, explicit_coordinate_names=explicit_coordinate_names
-        )
-        labels = print_variables(M.vlabels)
-        task.generatevarnames(
-            np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
-        )
-
-    ## Variables
-
-    # MOSEK uses bound keys (free, bounded below or above, ranged and fixed)
-    # plus bound values (lower and upper), and it is considered an error to
-    # input an infinite value for a finite bound.
-    # bkx and bkc define the boundkeys based on upper and lower bound, and blx,
-    # bux, blc and buc define the finite bounds. The numerical value of a bound
-    # indicated to be infinite by the bound key is ignored by MOSEK.
-    bkx = [
-        (
-            (
-                (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
-                if ub < np.inf
-                else mosek.boundkey.lo
-            )
-            if (lb > -np.inf)
-            else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
-        )
-        for (lb, ub) in zip(M.lb, M.ub)
-    ]
-    blx = [b if b > -np.inf else 0.0 for b in M.lb]
-    bux = [b if b < np.inf else 0.0 for b in M.ub]
-    task.putvarboundslice(0, m.nvars, bkx, blx, bux)
-
-    if len(m.binaries.labels) + len(m.integers.labels) > 0:
-        idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
-        task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-        if len(m.binaries.labels) > 0:
-            bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
-            task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
-
-    ## Constraints
-
-    if len(m.constraints) > 0:
-        if set_names:
-            names = print_constraints(M.clabels)
-            for i, n in enumerate(names):
-                task.putconname(i, n)
-        bkc = [
-            (
-                (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
-                if s == "<"
-                else (
-                    (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
-                    if s == ">"
-                    else mosek.boundkey.fx
-                )
-            )
-            for s, b in zip(M.sense, M.b)
-        ]
-        blc = [b if b > -np.inf else 0.0 for b in M.b]
-        buc = [b if b < np.inf else 0.0 for b in M.b]
-        # blc = M.b
-        # buc = M.b
-        if M.A is not None:
-            A = M.A.tocsr()
-            task.putarowslice(
-                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
-            )
-            task.putconboundslice(0, m.ncons, bkc, blc, buc)
-
-    ## Objective
-    if M.Q is not None:
-        Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
-        task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(list(np.arange(m.nvars)), M.c)
-
-    if m.objective.sense == "max":
-        task.putobjsense(mosek.objsense.maximize)
-    else:
-        task.putobjsense(mosek.objsense.minimize)
-    return task
+    return solvers.Mosek._build_solver_model(
+        m,
+        task,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
 
 
 def to_gurobipy(
@@ -768,84 +668,15 @@ def to_gurobipy(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Any:
-    """
-    Export the model to gurobipy.
-
-    This function does not write the model to intermediate files but directly
-    passes it to gurobipy. Note that for large models this is not
-    computationally efficient.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    env : gurobipy.Env
-    explicit_coordinate_names : bool, optional
-        Whether to use explicit coordinate names. Default is False.
-    set_names : bool, optional
-        Whether to set variable and constraint names. Default is True.
-        Setting to False can significantly speed up model export.
-
-    Returns
-    -------
-    model : gurobipy.Model
-    """
-    import gurobipy
-
-    m.constraints.sanitize_missings()
-    model = gurobipy.Model(env=env)
-
-    M = m.matrices
-
-    kwargs = {}
-    if set_names:
-        print_variables, print_constraints = get_printers_scalar(
-            m, explicit_coordinate_names=explicit_coordinate_names
-        )
-        kwargs["name"] = print_variables(M.vlabels)
-    if (
-        len(m.binaries.labels)
-        + len(m.integers.labels)
-        + len(list(m.variables.semi_continuous))
-    ):
-        kwargs["vtype"] = M.vtypes
-    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
-
-    if m.is_quadratic:
-        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
-    else:
-        model.setObjective(M.c @ x)
-
-    if m.objective.sense == "max":
-        model.ModelSense = -1
-
-    if len(m.constraints):
-        c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
-        if set_names:
-            names = print_constraints(M.clabels)
-            c.setAttr("ConstrName", names)
-
-    if m.variables.sos:
-        for var_name in m.variables.sos:
-            var = m.variables.sos[var_name]
-            sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-            sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-            def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                s = s.squeeze()
-                indices = s.values.flatten().tolist()
-                weights = s.coords[sos_dim].values.tolist()
-                model.addSOS(sos_type, x[indices].tolist(), weights)
-
-            others = [dim for dim in var.labels.dims if dim != sos_dim]
-            if not others:
-                add_sos(var.labels, sos_type, sos_dim)
-            else:
-                stacked = var.labels.stack(_sos_group=others)
-                for _, s in stacked.groupby("_sos_group"):
-                    add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
-
-    model.update()
-    return model
+    """Build the gurobipy.Model for `m`."""
+    solver = solvers.Gurobi.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+        env=env,
+    )
+    return solver.solver_model
 
 
 def to_highspy(
@@ -853,166 +684,33 @@ def to_highspy(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Highs:
-    """
-    Export the model to highspy.
-
-    This function does not write the model to intermediate files but directly
-    passes it to highspy.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    explicit_coordinate_names : bool, optional
-        Whether to use explicit coordinate names. Default is False.
-    set_names : bool, optional
-        Whether to set variable and constraint names. Default is True.
-        Setting to False can significantly speed up model export.
-
-    Returns
-    -------
-    model : highspy.Highs
-    """
-    if m.variables.sos:
-        raise NotImplementedError(
-            "SOS constraints are not supported by the HiGHS direct API. "
-            "Use io_api='lp' instead."
-        )
-
-    import highspy
-
-    M = m.matrices
-    h = highspy.Highs()
-    h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
-        vtypes = M.vtypes
-        # Map linopy vtypes to HiGHS integrality values:
-        # 0 = continuous, 1 = integer, 2 = semi-continuous
-        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
-        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
-        labels = np.arange(len(vtypes))[int_mask]
-        integrality = np.array(
-            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
-        )
-        h.changeColsIntegrality(len(labels), labels, integrality)
-        if len(m.binaries):
-            labels = np.arange(len(vtypes))[vtypes == "B"]
-            n = len(labels)
-            h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
-
-    # linear objective
-    c = M.c
-    h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
-
-    # linear constraints
-    A = M.A
-    if A is not None:
-        A = A.tocsr()
-        num_cons = A.shape[0]
-        lower = np.where(M.sense != "<", M.b, -np.inf)
-        upper = np.where(M.sense != ">", M.b, np.inf)
-        h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
-
-    if set_names:
-        print_variables, print_constraints = get_printers_scalar(
-            m, explicit_coordinate_names=explicit_coordinate_names
-        )
-        lp = h.getLp()
-        lp.col_names_ = print_variables(M.vlabels)
-        if len(M.clabels):
-            lp.row_names_ = print_constraints(M.clabels)
-        h.passModel(lp)
-
-    # quadrative objective
-    Q = M.Q
-    if Q is not None:
-        Q = triu(Q)
-        Q = Q.tocsr()
-        num_vars = Q.shape[0]
-        h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
-
-    # change objective sense
-    if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
-
-    return h
+    """Build the highspy.Highs instance for `m`."""
+    solver = solvers.Highs.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
+    return solver.solver_model
 
 
-def to_cupdlpx(
+def to_xpress(
     m: Model,
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
-) -> cupdlpxModel:
-    """
-    Export the model to cupdlpx.
-
-    This function does not write the model to intermediate files but directly
-    passes it to cupdlpx.
-
-    cuPDLPx does not support named variables and constraints, so the
-    `explicit_coordinate_names` and `set_names` parameters are ignored.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    explicit_coordinate_names : bool, optional
-        Ignored. cuPDLPx does not support named variables/constraints.
-    set_names : bool, optional
-        Ignored. cuPDLPx does not support named variables/constraints.
-
-    Returns
-    -------
-    model : cupdlpx.Model
-    """
-    if m.variables.semi_continuous:
-        raise NotImplementedError(
-            "Semi-continuous variables are not supported by cuPDLPx. "
-            "Use a solver that supports them (gurobi, cplex, highs)."
-        )
-
-    import cupdlpx
-
-    if explicit_coordinate_names:
-        warnings.warn(
-            "cuPDLPx does not support named variables/constraints. "
-            "The explicit_coordinate_names parameter is ignored.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    # build model using canonical form matrices and vectors
-    # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#modeling
-    M = m.matrices
-    if M.A is None:
-        msg = "Model has no constraints, cannot export to cuPDLPx."
-        raise ValueError(msg)
-    A = M.A.tocsr()  # cuPDLPx only supports CSR sparse matrix format
-    # linopy stores constraints as Ax ?= b and keeps track of inequality
-    # sense in M.sense. Convert to separate lower and upper bound vectors.
-    l = np.where(
-        np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
-        M.b,
-        -np.inf,
-    )
-    u = np.where(
-        np.logical_or(np.equal(M.sense, "<"), np.equal(M.sense, "=")),
-        M.b,
-        np.inf,
+) -> Any:
+    """Build the xpress.problem instance for `m`."""
+    return solvers.Xpress._build_solver_model(
+        m,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
     )
 
-    cu_model = cupdlpx.Model(
-        objective_vector=M.c,
-        constraint_matrix=A,
-        constraint_lower_bound=l,
-        constraint_upper_bound=u,
-        variable_lower_bound=M.lb,
-        variable_upper_bound=M.ub,
-    )
 
-    # change objective sense
-    if m.objective.sense == "max":
-        cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
-
-    return cu_model
+def to_cupdlpx(m: Model) -> cupdlpxModel:
+    """Build the cupdlpx.Model for `m`."""
+    solver = solvers.cuPDLPx.from_model(m, io_api="direct")
+    return solver.solver_model
 
 
 def to_block_files(m: Model, fn: Path) -> None:
@@ -1152,7 +850,29 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token lives only on the in-memory
+    Model and is not persisted. If the model has an active SOS
+    reformulation at serialization time, the netcdf contains the
+    reformulated MILP form (aux binaries and cardinality constraints)
+    and a :class:`UserWarning` is emitted to flag that the deserialized
+    copy will not be able to undo the reformulation.
+
+    ``Model.solve(remote=...)`` invokes ``to_netcdf`` internally on the
+    reformulated model and suppresses this warning.
     """
+    if m._sos_reformulation_state is not None:
+        warnings.warn(
+            "Serializing a model with an active SOS reformulation. The "
+            "netcdf will contain the reformulated MILP form; the "
+            "reformulation lifecycle token is not persisted, so a "
+            "reader cannot undo it. Call `model.undo_sos_reformulation()` "
+            "first if you want the original SOS form on disk.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1223,6 +943,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Returns
     -------
     m : linopy.Model
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token is not persisted by
+    :func:`to_netcdf`. If the saved model was in reformulated form,
+    the deserialized Model is too, but
+    :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
     from linopy.constraints import (
         Constraint,
@@ -1423,6 +1150,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+
+    if m._sos_reformulation_state is not None:
+        new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
 
     return new_model
 

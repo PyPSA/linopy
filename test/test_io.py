@@ -274,7 +274,8 @@ def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy(model: Model) -> None:
-    model.to_gurobipy()
+    gm = model.to_gurobipy()
+    assert gm.NumVars > 0
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
@@ -288,7 +289,8 @@ def test_to_gurobipy_no_names(model: Model) -> None:
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
-    model.to_highspy()
+    h = model.to_highspy()
+    assert h.getLp().num_col_ > 0
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
@@ -297,6 +299,34 @@ def test_to_highspy_no_names(model: Model) -> None:
     lp = h.getLp()
     assert len(lp.col_names_) == 0
     assert len(lp.row_names_) == 0
+
+
+@pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
+def test_to_mosek(model: Model) -> None:
+    task = model.to_mosek()
+    assert task.getnumvar() > 0
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress(model: Model) -> None:
+    p = model.to_xpress()
+    assert p.attributes.cols > 0
+    assert p.attributes.rows > 0
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_no_names(model: Model) -> None:
+    p_with = model.to_xpress(set_names=True)
+    p_without = model.to_xpress(set_names=False)
+    names_with = [v.name for v in p_with.getVariable()]
+    names_without = [v.name for v in p_without.getVariable()]
+    assert names_with != names_without
+
+
+@pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
+def test_to_cupdlpx(model: Model) -> None:
+    cu = model.to_cupdlpx()
+    assert cu is not None
 
 
 def test_model_set_names_in_solver_io_default() -> None:

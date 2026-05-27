@@ -29,7 +29,7 @@ from linopy.constraints import (
 )
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
-from linopy.model import Model, Variable, Variables, available_solvers
+from linopy.model import Model, Variable, Variables
 from linopy.objective import Objective
 from linopy.piecewise import (
     PiecewiseFormulation,
@@ -39,6 +39,7 @@ from linopy.piecewise import (
     tangent_lines,
 )
 from linopy.remote import RemoteHandler
+from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
@@ -63,10 +64,12 @@ __all__ = (
     "QuadraticExpression",
     "RemoteHandler",
     "Slopes",
+    "SolverFeature",
     "Variable",
     "Variables",
     "align",
     "available_solvers",
+    "licensed_solvers",
     "breakpoints",
     "merge",
     "options",

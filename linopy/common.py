@@ -35,6 +35,7 @@ from linopy.constants import (
     sign_replace_dict,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     CoordsLike,
     DimsLike,
     SideLike,
@@ -999,6 +1000,43 @@ class VariableLabelIndex:
         self.__dict__.pop("label_to_pos", None)
 
 
+class ConstraintLabelIndex:
+    """
+    Index for O(1) mapping between constraint labels and dense positions.
+
+    Mirrors VariableLabelIndex on the constraint side, but without building
+    the full constraint matrix — only labels and the row mask are computed.
+    """
+
+    def __init__(self, constraints: Any) -> None:
+        self._constraints = constraints
+
+    @cached_property
+    def clabels(self) -> np.ndarray:
+        """Active constraint labels in build order, shape (n_active_cons,)."""
+        label_lists = [c.active_labels() for c in self._constraints.data.values()]
+        return (
+            np.concatenate(label_lists) if label_lists else np.array([], dtype=np.intp)
+        )
+
+    @cached_property
+    def label_to_pos(self) -> np.ndarray:
+        """Mapping from constraint label to dense position, shape (_cCounter,)."""
+        clabels = self.clabels
+        n = self._constraints.model._cCounter
+        label_to_pos = np.full(n, -1, dtype=np.intp)
+        label_to_pos[clabels] = np.arange(len(clabels), dtype=np.intp)
+        return label_to_pos
+
+    @property
+    def n_active_cons(self) -> int:
+        return len(self.clabels)
+
+    def invalidate(self) -> None:
+        self.__dict__.pop("clabels", None)
+        self.__dict__.pop("label_to_pos", None)
+
+
 def get_label_position(
     obj: Any,
     values: int | np.ndarray,
@@ -1491,7 +1529,6 @@ def is_constant(x: SideLike) -> bool:
         True if the object is constant-like, False otherwise.
     """
     from linopy.expressions import (
-        SUPPORTED_CONSTANT_TYPES,
         LinearExpression,
         QuadraticExpression,
     )
@@ -1501,7 +1538,7 @@ def is_constant(x: SideLike) -> bool:
         return False
     if isinstance(x, LinearExpression | QuadraticExpression):
         return x.is_constant
-    if isinstance(x, SUPPORTED_CONSTANT_TYPES):
+    if isinstance(x, CONSTANT_TYPES):
         return True
     raise TypeError(
         "Expected a constant, variable, or expression on the constraint side, "
@@ -1509,49 +1546,34 @@ def is_constant(x: SideLike) -> bool:
     )
 
 
-def series_to_lookup_array(s: pd.Series) -> np.ndarray:
+def values_to_lookup_array(
+    values: np.ndarray, labels: np.ndarray, size: int | None = None
+) -> np.ndarray:
     """
-    Convert an integer-indexed Series to a dense numpy lookup array.
+    Build a dense NaN-padded lookup array from values and integer labels.
 
-    Non-negative indices are placed at their corresponding positions;
-    negative indices are ignored. Gaps are filled with NaN.
+    Non-negative labels are placed at their corresponding positions; negative
+    labels are skipped. Gaps are filled with NaN.
 
     Parameters
     ----------
-    s : pd.Series
-        Series with an integer index.
+    values : np.ndarray
+        Values to place into the lookup array.
+    labels : np.ndarray
+        Integer labels giving the target position for each value.
+    size : int, optional
+        Length of the returned array. Defaults to ``max(labels) + 1`` if any
+        non-negative label is present, otherwise 0.
 
     Returns
     -------
     np.ndarray
-        Dense array of length ``max(index) + 1``.
+        Dense float lookup array.
     """
-    max_idx = max(int(s.index.max()), 0)
-    arr = np.full(max_idx + 1, nan)
-    mask = s.index >= 0
-    arr[s.index[mask]] = s.values[mask]
+    labels = np.asarray(labels, dtype=int)
+    mask = labels >= 0
+    if size is None:
+        size = int(labels[mask].max()) + 1 if mask.any() else 0
+    arr = np.full(size, nan, dtype=float)
+    arr[labels[mask]] = values[mask]
     return arr
-
-
-def lookup_vals(arr: np.ndarray, idx: np.ndarray) -> np.ndarray:
-    """
-    Look up values from a dense array by integer labels.
-
-    Negative labels and labels beyond the array length map to NaN.
-
-    Parameters
-    ----------
-    arr : np.ndarray
-        Dense lookup array (e.g. from :func:`series_to_lookup_array`).
-    idx : np.ndarray
-        Integer label indices.
-
-    Returns
-    -------
-    np.ndarray
-        Array of looked-up values with the same shape as *idx*.
-    """
-    valid = (idx >= 0) & (idx < len(arr))
-    vals = np.full(idx.shape, nan)
-    vals[valid] = arr[idx[valid]]
-    return vals

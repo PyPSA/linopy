@@ -7,56 +7,161 @@ from __future__ import annotations
 
 import contextlib
 import enum
+import functools
 import io
 import logging
 import os
 import re
+import shutil
 import subprocess as sub
 import sys
 import threading
 import warnings
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator, Sequence
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
+from packaging.specifiers import SpecifierSet
 from packaging.version import parse as parse_version
+from scipy.sparse import tril, triu
 
 import linopy.io
+from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     Result,
     Solution,
+    SolverReport,
     SolverStatus,
     Status,
     TerminationCondition,
 )
-from linopy.solver_capabilities import (
-    SolverFeature,
-    get_solvers_with_feature,
-)
+
+
+def _parse_int_label(name: str) -> int:
+    """Strip leading non-digits and parse the integer label."""
+    s = str(name)
+    cutoff = count_initial_letters(s)
+    try:
+        return int(s[cutoff:])
+    except ValueError:
+        return int(re.sub(r".*#", "", s))
+
+
+def _names_to_labels(names: Any) -> np.ndarray:
+    """Vectorised conversion of solver-provided names to integer labels."""
+    if len(names) == 0:
+        return np.array([], dtype=np.int64)
+    index = pd.Index(names)
+    if pd.api.types.is_integer_dtype(index.dtype):
+        return index.to_numpy(dtype=np.int64)
+    string_index = index.astype(str)
+    cutoff = count_initial_letters(str(string_index[0]))
+    try:
+        return string_index.str[cutoff:].astype(np.int64).to_numpy(dtype=np.int64)
+    except (TypeError, ValueError):
+        try:
+            return (
+                string_index.str.replace(r".*#", "", regex=True)
+                .astype(np.int64)
+                .to_numpy(dtype=np.int64)
+            )
+        except (TypeError, ValueError):
+            return np.fromiter(
+                (_parse_int_label(n) for n in names), dtype=np.int64, count=len(names)
+            )
+
+
+def _solution_from_names(values: np.ndarray, names: Any, size: int) -> np.ndarray:
+    """
+    Build a label-indexed dense solution array of length ``size`` from
+    solver-side names. Used by paths where the solver may iterate in arbitrary
+    order or drop unused entities (file-based LP solvers, the ``from_file``
+    paths of Highs/Gurobi).
+    """
+    if not size:
+        return np.array([], dtype=float)
+    return values_to_lookup_array(
+        np.asarray(values, dtype=float), _names_to_labels(names), size=size
+    )
+
+
+def _solution_from_labels(
+    values: np.ndarray, labels: np.ndarray | None, size: int
+) -> np.ndarray:
+    """Scatter solver-side values into a label-indexed dense array of length ``size``."""
+    if not size:
+        return np.array([], dtype=float)
+    assert labels is not None
+    return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
+
+
+def _iter_sos_sets(model: Model) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """Yield ``(sos_type, positions, weights)`` per active SOS set in ``model``."""
+    label_to_pos = model.variables.label_index.label_to_pos
+    for var_name in model.variables.sos:
+        var = model.variables.sos[var_name]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
+
+        labels = var.labels.transpose(sos_dim, ...)
+        weights = labels.coords[sos_dim].values
+        arr = labels.values.reshape(labels.shape[0], -1)
+
+        for i in range(arr.shape[1]):
+            col = arr[:, i]
+            mask = col != -1
+            if mask.any():
+                yield sos_type, label_to_pos[col[mask]], weights[mask]
+
+
+class SolverFeature(Enum):
+    """Enumeration of all solver capabilities tracked by linopy."""
+
+    INTEGER_VARIABLES = auto()
+    QUADRATIC_OBJECTIVE = auto()
+    DIRECT_API = auto()
+    LP_FILE_NAMES = auto()
+    READ_MODEL_FROM_FILE = auto()
+    SOLUTION_FILE_NOT_NEEDED = auto()
+    GPU_ACCELERATION = auto()
+    GPU_ONLY = auto()
+    IIS_COMPUTATION = auto()
+    SOS_CONSTRAINTS = auto()
+    SEMI_CONTINUOUS_VARIABLES = auto()
+    SOLVER_ATTRIBUTE_ACCESS = auto()
+    MIP_DUAL_BOUND_REPORT = auto()
+
+
+def _installed_version_in(pkg: str, spec: str) -> bool:
+    """Check whether the installed version of `pkg` satisfies `spec`."""
+    try:
+        return package_version(pkg) in SpecifierSet(spec)
+    except PackageNotFoundError:
+        return False
+
 
 if TYPE_CHECKING:
+    import cupdlpx
     import gurobipy
+    import highspy
+    import mosek
 
     from linopy.model import Model
 
 EnvType = TypeVar("EnvType")
 
-# Generated from solver_capabilities registry for backward compatibility
-QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
-NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
-    SolverFeature.SOLUTION_FILE_NOT_NEEDED
-)
-
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
-
-available_solvers: list[str] = []
-
-which = "where" if os.name == "nt" else "which"
 
 
 def _run_highs_with_keyboard_interrupt(h: Any) -> None:
@@ -125,47 +230,12 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
             h.HandleUserInterrupt = old_handle_user_interrupt
 
 
-# the first available solver will be the default solver
-with contextlib.suppress(ModuleNotFoundError):
-    import gurobipy
-
-    available_solvers.append("gurobi")
-with contextlib.suppress(ModuleNotFoundError):
-    _new_highspy_mps_layout = None
-    import highspy
-
-    available_solvers.append("highs")
-    from importlib.metadata import version
-
-    if parse_version(version("highspy")) < parse_version("1.7.1"):
-        # Fallback if parse_version is not available or version string is invalid
-        _new_highspy_mps_layout = False
-    else:
-        _new_highspy_mps_layout = True
-
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("glpk")
-
-
-if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("cbc")
-
-with contextlib.suppress(ModuleNotFoundError):
-    import pyscipopt as scip
-
-    available_solvers.append("scip")
-
-with contextlib.suppress(ModuleNotFoundError):
-    import cplex
-
-    available_solvers.append("cplex")
-
+# xpress.Namespaces was added in xpress 9.6. Importing xpress is pure-Python
+# and does not acquire a license, so this shim stays eager so downstream code
+# can ``from linopy.solvers import xpress_Namespaces``.
 with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import xpress
+    import xpress  # noqa: F401
 
-    available_solvers.append("xpress")
-
-    # xpress.Namespaces was added in xpress 9.6
     try:
         from xpress import Namespaces as xpress_Namespaces
     except ImportError:
@@ -176,51 +246,63 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             SET = 3
 
 
-with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import knitro
+class _LazyModule:
+    """
+    Module proxy that imports the underlying package on first attribute access.
 
-    with contextlib.suppress(Exception):
-        kc = knitro.KN_new()
-        knitro.KN_free(kc)
-        available_solvers.append("knitro")
+    Lets us keep ``gurobipy.Env`` / ``mindoptpy.read`` references throughout the
+    file while deferring the actual ``import`` (and its license-server side
+    effects, for mindoptpy/coptpy) until a Solver subclass really needs them.
+    """
 
-with contextlib.suppress(ModuleNotFoundError):
-    import mosek
+    __slots__ = ("_name", "_module")
 
-    with contextlib.suppress(mosek.Error):
-        t = mosek.Task()
-        t.optimize()
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._module: Any = None
 
-        available_solvers.append("mosek")
+    def __getattr__(self, attr: str) -> Any:
+        if attr.startswith("__") and attr.endswith("__"):
+            raise AttributeError(attr)
+        if self._module is None:
+            import importlib
 
-with contextlib.suppress(ModuleNotFoundError):
-    import mindoptpy
+            self._module = importlib.import_module(self._name)
+        return getattr(self._module, attr)
 
-    with contextlib.suppress(mindoptpy.MindoptError):
-        mindoptpy.Env()
 
-        available_solvers.append("mindopt")
+gurobipy = _LazyModule("gurobipy")  # type: ignore[assignment]
+highspy = _LazyModule("highspy")
+scip = _LazyModule("pyscipopt")
+cplex = _LazyModule("cplex")
+knitro = _LazyModule("knitro")
+mosek = _LazyModule("mosek")
+mindoptpy = _LazyModule("mindoptpy")
+coptpy = _LazyModule("coptpy")
+cupdlpx = _LazyModule("cupdlpx")
 
-with contextlib.suppress(ModuleNotFoundError):
-    import coptpy
+
+def _has_module(name: str) -> bool:
+    """True if ``name`` is importable, without executing its ``__init__``."""
+    import importlib.util
 
     try:
-        coptpy.Envr()
-        available_solvers.append("copt")
-    except coptpy.CoptError:
-        pass
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
-with contextlib.suppress(ModuleNotFoundError):
-    import cupdlpx
 
+@functools.cache
+def _new_highspy_mps_layout() -> bool:
+    """True for highspy >= 1.7.1 (new MPS coefficient layout)."""
+    if not _has_module("highspy"):
+        return False
     try:
-        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
-        available_solvers.append("cupdlpx")
-    except ImportError:
-        pass
+        return parse_version(package_version("highspy")) >= parse_version("1.7.1")
+    except PackageNotFoundError:
+        return False
 
 
-quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
 
@@ -289,7 +371,7 @@ def maybe_adjust_objective_sign(
         return solution
     if np.isnan(solution.objective):
         return solution
-    if io_api == "mps" and not _new_highspy_mps_layout:
+    if io_api == "mps" and not _new_highspy_mps_layout():
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
         )
@@ -297,25 +379,453 @@ def maybe_adjust_objective_sign(
     return solution
 
 
+@dataclass(frozen=True)
+class LicenseStatus:
+    """Result of :meth:`Solver.license_status` — license/runtime probe outcome."""
+
+    solver: str
+    ok: bool
+    message: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+@dataclass
 class Solver(ABC, Generic[EnvType]):
     """
     Abstract base class for solving a given linear problem.
 
-    All relevant functions are passed on to the specific solver subclasses.
-    Subclasses must implement the `solve_problem_from_model()` and
-    `solve_problem_from_file()` methods.
+    Subclasses provide ``_build_direct`` / ``_run_direct`` (when supporting the
+    direct API) and ``_run_file`` (when supporting LP/MPS files). Construction
+    goes via :meth:`Solver.from_name` or :meth:`Solver.from_model`.
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        self.solver_options = solver_options
+    model: Model | None = None
+    io_api: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
 
-        # Check for the solver to be initialized whether the package is installed or not.
-        if self.solver_name.value not in available_solvers:
-            msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
+    # Runtime state — never set via constructor.
+    status: Status | None = field(init=False, default=None, repr=False)
+    solution: Solution | None = field(init=False, default=None, repr=False)
+    report: SolverReport | None = field(init=False, default=None, repr=False)
+    solver_model: Any = field(init=False, default=None, repr=False)
+    sense: str | None = field(init=False, default=None, repr=False)
+    env: Any = field(init=False, default=None, repr=False)
+    _env_stack: contextlib.ExitStack | None = field(
+        init=False, default=None, repr=False
+    )
+    _vlabels: np.ndarray | None = field(init=False, default=None, repr=False)
+    _clabels: np.ndarray | None = field(init=False, default=None, repr=False)
+    _n_vars: int = field(init=False, default=0, repr=False)
+    _n_cons: int = field(init=False, default=0, repr=False)
+    _problem_fn: Path | None = field(init=False, default=None, repr=False)
+
+    display_name: ClassVar[str] = ""
+    features: ClassVar[frozenset[SolverFeature]] = frozenset()
+    accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
+
+    def __post_init__(self) -> None:
+        if type(self) is Solver:
+            raise TypeError(
+                "Solver is abstract; instantiate a concrete subclass instead."
+            )
+        if not type(self).is_available():
+            msg = (
+                f"Solver package for '{self.solver_name.value}' is not installed. "
+                "Please install first to initialize solver instance."
+            )
             raise ImportError(msg)
+
+    @property
+    def solver_options(self) -> dict[str, Any]:
+        """Back-compat alias for ``self.options``."""
+        return self.options
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        """
+        Return True if this solver's package/binary is importable.
+
+        Must not acquire a license. Subclasses override with the cheapest
+        possible probe. Base returns False so a forgotten override fails
+        safe (the solver simply does not show up in ``available_solvers``).
+        """
+        return False
+
+    @classmethod
+    def license_status(cls) -> LicenseStatus:
+        """
+        Probe license/runtime availability. May acquire a license slot.
+
+        Not cached — license state is mutable (server reachability, expiry).
+        """
+        name = SolverName[cls.__name__].value
+        if not cls.is_available():
+            return LicenseStatus(name, ok=False, message="package not installed")
+        try:
+            cls._license_probe()
+        except Exception as e:
+            return LicenseStatus(name, ok=False, message=f"{type(e).__name__}: {e}")
+        return LicenseStatus(name, ok=True)
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        """Subclass hook. Default no-op. Raises on failure."""
+        return None
+
+    @classmethod
+    def runtime_features(cls) -> frozenset[SolverFeature]:
+        """
+        Features whose availability depends on the installed solver version
+        or runtime environment. Override in subclasses; the default is empty.
+        """
+        return frozenset()
+
+    @classmethod
+    def supported_features(cls) -> frozenset[SolverFeature]:
+        """All features supported by this solver, static plus runtime."""
+        return cls.features | cls.runtime_features()
+
+    @classmethod
+    def supports(cls, feature: SolverFeature) -> bool:
+        """Check if this solver supports a given feature."""
+        return feature in cls.features or feature in cls.runtime_features()
+
+    @staticmethod
+    def from_name(
+        name: str,
+        model: Model,
+        io_api: str | None = None,
+        options: dict[str, Any] | None = None,
+        **build_kwargs: Any,
+    ) -> Solver:
+        """Construct and build the solver subclass registered as ``name``."""
+        cls = _solver_class_for(name)
+        if cls is None:
+            raise ValueError(f"unknown solver: {name}")
+        return cls.from_model(
+            model, io_api=io_api, options=options or {}, **build_kwargs
+        )
+
+    @classmethod
+    def from_model(
+        cls,
+        model: Model,
+        io_api: str | None = None,
+        options: dict[str, Any] | None = None,
+        **build_kwargs: Any,
+    ) -> Solver:
+        """Instantiate and build the solver against ``model``."""
+        instance = cls(model=model, io_api=io_api, options=options or {})
+        instance._build(**build_kwargs)
+        return instance
+
+    def _build(self, **build_kwargs: Any) -> None:
+        """
+        Dispatch to direct or file build based on ``io_api``.
+
+        The Solver never mutates ``self.model``. Constraint sanitization
+        (``model.constraints.sanitize_zeros()`` /
+        ``.sanitize_infinities()``) and SOS reformulation
+        (``model.apply_sos_reformulation()``) are Model-level operations
+        the caller applies first; this builder consumes whatever shape it
+        is handed.
+        """
+        if self.model is None:
+            raise RuntimeError("Solver has no model attached; cannot build.")
+        self._validate_model()
+        if self.io_api == "direct":
+            self._build_direct(**build_kwargs)
+        else:
+            self._build_file(**build_kwargs)
+
+    def _validate_model(self) -> None:
+        """Pre-build checks on whether this solver can handle ``self.model``."""
+        model = self.model
+        assert model is not None
+        solver_name = self.solver_name.value
+        cls = type(self)
+
+        if model.is_quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic problems."
+            )
+
+        if model.variables.semi_continuous and not cls.supports(
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES
+        ):
+            raise ValueError(
+                f"Solver {solver_name} does not support semi-continuous variables. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
+            raise ValueError(
+                f"Solver {solver_name} does not support SOS constraints. "
+                "Reformulate first via `Model.solve(reformulate_sos=True)` or "
+                "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
+            )
+
+    def _build_direct(self, **build_kwargs: Any) -> None:
+        """Build the native solver model from ``self.model``. Override per-solver."""
+        raise NotImplementedError(
+            f"Solver {self.solver_name.value} does not support direct API model export."
+        )
+
+    def _build_file(self, **build_kwargs: Any) -> None:
+        """Write the LP/MPS file for ``self.model`` and cache its path."""
+        model = self.model
+        assert model is not None
+        io_api = self.io_api
+        if io_api is not None and io_api not in FILE_IO_APIS:
+            raise ValueError(
+                f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
+            )
+        explicit_coordinate_names = build_kwargs.pop("explicit_coordinate_names", False)
+        slice_size = build_kwargs.pop("slice_size", 2_000_000)
+        progress = build_kwargs.pop("progress", None)
+        problem_fn = build_kwargs.pop("problem_fn", None)
+        if problem_fn is None:
+            problem_fn = model.get_problem_file(io_api=io_api)
+        if not self.supports(SolverFeature.LP_FILE_NAMES) and explicit_coordinate_names:
+            logger.warning(
+                f"{self.solver_name.value} does not support writing names to "
+                "lp files, disabling it."
+            )
+            explicit_coordinate_names = False
+        problem_fn = model.to_file(
+            Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn,
+            io_api=io_api,
+            explicit_coordinate_names=explicit_coordinate_names,
+            slice_size=slice_size,
+            progress=progress,
+        )
+        self._problem_fn = problem_fn
+        if self.io_api is None:
+            self.io_api = read_io_api_from_problem_file(problem_fn)
+        self._cache_model_sizes(model)
+
+    def solve(self, **run_kwargs: Any) -> Result:
+        """
+        Run the prepared solver and return a :class:`Result`.
+
+        The canonical low-level pattern is::
+
+            solver = Solver.from_name("gurobi", model, io_api="direct")
+            result = solver.solve()
+            model.assign_result(result, solver=solver)
+
+        Passing ``solver=`` to :meth:`Model.assign_result` wires
+        ``model.solver`` so post-solve helpers like
+        :meth:`Model.compute_infeasibilities` keep working.
+
+        Raises
+        ------
+        ValueError
+            If the attached model has no objective set. Submit-time check
+            shared by both ``Model.solve()`` and direct-Solver callers.
+        """
+        if self.model is not None and self.model.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use `m.add_objective(...)` "
+                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+            )
+        if self.io_api == "direct" or self.solver_model is not None:
+            return self._run_direct(**run_kwargs)
+        if self._problem_fn is not None:
+            return self._run_file(**run_kwargs)
+        raise RuntimeError(
+            "Solver has not been built; call Solver.from_name(...) or _build() first."
+        )
+
+    def _run_direct(self, **run_kwargs: Any) -> Result:
+        """Run the pre-built native solver model. Override per-solver."""
+        raise NotImplementedError(
+            f"Direct API not implemented for {self.solver_name.value}"
+        )
+
+    def _run_file(self, **run_kwargs: Any) -> Result:
+        """Invoke the solver binary on ``self._problem_fn``. Override per-solver."""
+        raise NotImplementedError(
+            f"File-based API not implemented for {self.solver_name.value}"
+        )
+
+    def solve_problem(
+        self,
+        model: Model | None = None,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        """Deprecated. Use ``Solver.from_name(...).solve(...)`` or ``Model.solve(...)``."""
+        warnings.warn(
+            "Solver.solve_problem is deprecated and will be removed in a future "
+            "release. Use Solver.from_name(name, model, ...).solve(...) or "
+            "Model.solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if problem_fn is not None and model is not None:
+            raise ValueError(
+                "Both problem file and model are given. Please specify only one."
+            )
+        if model is not None:
+            return self.solve_problem_from_model(
+                model=model,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
+                explicit_coordinate_names=explicit_coordinate_names,
+            )
+        if problem_fn is not None:
+            return self.solve_problem_from_file(
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
+            )
+        raise ValueError("No problem file or model specified.")
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> Result:
+        """Deprecated shim that builds via ``_build_direct`` and runs via ``_run_direct``."""
+        warnings.warn(
+            "Solver.solve_problem_from_model is deprecated and will be removed in a "
+            "future release. Use Solver.from_name(name, model, io_api='direct', ...)"
+            ".solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not self.supports(SolverFeature.DIRECT_API):
+            raise NotImplementedError(
+                f"Direct API not implemented for {self.solver_name.value}"
+            )
+        self.model = model
+        build_kwargs: dict[str, Any] = {
+            "explicit_coordinate_names": explicit_coordinate_names,
+            "set_names": set_names,
+            "log_fn": log_fn,
+        }
+        if env is not None:
+            build_kwargs["env"] = env
+        self._build_direct(**build_kwargs)
+        return self._run_direct(
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
+        )
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+    ) -> Result:
+        """Deprecated shim that caches ``problem_fn`` and runs via ``_run_file``."""
+        warnings.warn(
+            "Solver.solve_problem_from_file is deprecated and will be removed in a "
+            "future release. Use Solver.from_name(name, model, problem_fn=..., ...)"
+            ".solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        problem_fn = (
+            Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn
+        )
+        self._problem_fn = problem_fn
+        self.io_api = read_io_api_from_problem_file(problem_fn)
+        return self._run_file(
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
+        )
+
+    def _cache_model_labels(self, model: Model) -> None:
+        """Cache vlabels/clabels and total label counts for label-indexed solutions."""
+        self._vlabels = model.variables.label_index.vlabels
+        self._clabels = model.constraints.label_index.clabels
+        self._n_vars = model._xCounter
+        self._n_cons = model._cCounter
+
+    def _cache_model_sizes(self, model: Model) -> None:
+        """Cache total label counts only (file-based solvers parse names)."""
+        self._n_vars = model._xCounter
+        self._n_cons = model._cCounter
+
+    def update_solver_model(self, model: Model, **kwargs: Any) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        if self._env_stack is not None:
+            self._env_stack.close()
+        self.env = None
+        self.solver_model = None
+        self._env_stack = None
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def __repr__(self) -> str:
+        status = self.status.status.value if self.status is not None else "unsolved"
+        parts = [f"name={self.solver_name.value!r}", f"status={status!r}"]
+        if self.io_api is not None:
+            parts.append(f"io_api={self.io_api!r}")
+        if self.solver_model is not None:
+            parts.append("solver_model=loaded")
+        if self.env is not None:
+            parts.append("env=active")
+        if self.solution is not None:
+            parts.append(f"objective={self.solution.objective:.4g}")
+        if self.report is not None and self.report.runtime is not None:
+            parts.append(f"runtime={self.report.runtime:.3g}s")
+        return f"{type(self).__name__}({', '.join(parts)})"
+
+    def _make_result(
+        self,
+        status: Status,
+        solution: Solution | None,
+        solver_model: Any = None,
+        report: SolverReport | None = None,
+    ) -> Result:
+        self.status = status
+        self.solution = solution
+        self.report = report
+        if solver_model is not None:
+            self.solver_model = solver_model
+        return Result(
+            status=status,
+            solution=solution,
+            solver_model=solver_model,
+            solver_name=self.solver_name.value,
+            report=report,
+        )
 
     def safe_get_solution(
         self, status: Status, func: Callable[[], Solution]
@@ -336,90 +846,6 @@ class Solver(ABC, Generic[EnvType]):
                 logger.error(f"Failed to parse solution: {e}")
         return Solution()
 
-    @abstractmethod
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        """
-        Abstract method to solve a linear problem from a model.
-
-        Needs to be implemented in the specific solver subclass. Even if the solver
-        does not support solving from a model, this method should be implemented and
-        raise a NotImplementedError.
-        """
-        pass
-
-    @abstractmethod
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-    ) -> Result:
-        """
-        Abstract method to solve a linear problem from a problem file.
-
-        Needs to be implemented in the specific solver subclass. Even if the solver
-        does not support solving from a file, this method should be implemented and
-        raise a NotImplementedError.
-        """
-        pass
-
-    def solve_problem(
-        self,
-        model: Model | None = None,
-        problem_fn: Path | None = None,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-    ) -> Result:
-        """
-        Solve a linear problem either from a model or a problem file.
-
-        Wraps around `self.solve_problem_from_model()` and
-        `self.solve_problem_from_file()` and calls the appropriate method
-        based on the input arguments (`model` or `problem_fn`).
-        """
-        if problem_fn is not None and model is not None:
-            msg = "Both problem file and model are given. Please specify only one."
-            raise ValueError(msg)
-        elif model is not None:
-            return self.solve_problem_from_model(
-                model=model,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                env=env,
-                explicit_coordinate_names=explicit_coordinate_names,
-            )
-        elif problem_fn is not None:
-            return self.solve_problem_from_file(
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                env=env,
-            )
-        else:
-            msg = "No problem file or model specified."
-            raise ValueError(msg)
-
     @property
     def solver_name(self) -> SolverName:
         return SolverName[self.__class__.__name__]
@@ -435,61 +861,30 @@ class CBC(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "CBC"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return shutil.which("cbc") is not None
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for CBC"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the CBC solver.
-
-        The function reads the linear problem file and passes it to the solver.
-        If the solution is successful it returns variable solutions
-        and constraint dual values.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with CBC.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
 
@@ -497,7 +892,7 @@ class CBC(Solver[None]):
             msg = "No solution file specified. For solving with CBC this is necessary."
             raise ValueError(msg)
 
-        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout():
             msg = (
                 "CBC does not support maximization in MPS format highspy versions "
                 " >=1.7.1"
@@ -588,9 +983,18 @@ class CBC(Solver[None]):
             )
             variables_b = df.index.isin(variables)
 
-            sol = df[variables_b][2]
-            dual = df[~variables_b][3]
-
+            sol_df = df[variables_b]
+            dual_df = df[~variables_b]
+            sol = _solution_from_names(
+                sol_df[2].to_numpy(dtype=float),
+                sol_df.index.tolist(),
+                self._n_vars,
+            )
+            dual = _solution_from_names(
+                dual_df[3].to_numpy(dtype=float),
+                dual_df.index.tolist(),
+                self._n_cons,
+            )
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -609,7 +1013,13 @@ class CBC(Solver[None]):
             runtime = float(m.group(1))
         CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
 
-        return Result(status, solution, CbcModel(mip_gap, runtime))
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=CbcModel(mip_gap, runtime),
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+        )
 
 
 class GLPK(Solver[None]):
@@ -622,65 +1032,30 @@ class GLPK(Solver[None]):
         options for the given solver
     """
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "GLPK"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return shutil.which("glpsol") is not None
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for GLPK"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the glpk solver.
-
-        This function reads the linear problem file and passes it to the
-        glpk solver. If the solution is successful it returns variable solutions
-        and constraint dual values.
-
-        For more information on the glpk solver options, see
-
-        https://kam.mff.cuni.cz/~elias/glpk.pdf
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with GLPK.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             "integer optimal": "optimal",
             "integer undefined": "infeasible_or_unbounded",
@@ -692,7 +1067,7 @@ class GLPK(Solver[None]):
             msg = "No solution file specified. For solving with GLPK this is necessary."
             raise ValueError(msg)
 
-        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout():
             msg = (
                 "GLPK does not support maximization in MPS format highspy versions "
                 " >=1.7.1"
@@ -740,7 +1115,8 @@ class GLPK(Solver[None]):
 
         if not os.path.exists(solution_fn):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-            return Result(status, Solution())
+            self.io_api = io_api
+            return self._make_result(status, Solution())
 
         f = open(solution_fn)
 
@@ -764,23 +1140,31 @@ class GLPK(Solver[None]):
             dual_io = io.StringIO("".join(read_until_break(f))[:-2])
             dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
             if "Marginal" in dual_:
-                dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0)
+                dual = _solution_from_names(
+                    pd.to_numeric(dual_["Marginal"], "coerce")
+                    .fillna(0)
+                    .to_numpy(dtype=float),
+                    dual_.index.tolist(),
+                    self._n_cons,
+                )
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             sol_io = io.StringIO("".join(read_until_break(f))[:-2])
-            sol = (
-                pd.read_fwf(sol_io)[1:]
-                .set_index("Column name")["Activity"]
-                .astype(float)
+            sol_df = pd.read_fwf(sol_io)[1:].set_index("Column name")
+            sol = _solution_from_names(
+                sol_df["Activity"].astype(float).to_numpy(),
+                sol_df.index.tolist(),
+                self._n_vars,
             )
             f.close()
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
-        return Result(status, solution)
+        self.io_api = io_api
+        return self._make_result(status, solution)
 
 
 class Highs(Solver[None]):
@@ -803,54 +1187,34 @@ class Highs(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "HiGHS"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("highspy")
+
+    def _build_direct(
         self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
-    ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the HiGHS solver.
-        Reads a linear problem file and passes it to the HiGHS solver.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-        # check for HiGHS solver compatibility
+        log_fn: Path | None = None,
+        **kwargs: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
@@ -864,70 +1228,130 @@ class Highs(Solver[None]):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy(
+        h = self._build_solver_model(
+            model,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
         self._set_solver_params(h, log_fn)
+        self.solver_model = h
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
 
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> highspy.Highs:
+        """Build a highspy.Highs instance that mirrors the linopy `model`."""
+        if model.variables.sos:
+            raise NotImplementedError(
+                "SOS constraints are not supported by the HiGHS direct API. "
+                "Use io_api='lp' instead."
+            )
+
+        M = model.matrices
+        h = highspy.Highs()
+        h.addVars(len(M.vlabels), M.lb, M.ub)
+        if (
+            len(model.binaries)
+            + len(model.integers)
+            + len(list(model.variables.semi_continuous))
+        ):
+            vtypes = M.vtypes
+            integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+            int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+            labels = np.arange(len(vtypes))[int_mask]
+            integrality = np.array(
+                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+            )
+            h.changeColsIntegrality(len(labels), labels, integrality)
+            if len(model.binaries):
+                labels = np.arange(len(vtypes))[vtypes == "B"]
+                n = len(labels)
+                h.changeColsBounds(
+                    n, labels, np.zeros_like(labels), np.ones_like(labels)
+                )
+
+        c = M.c
+        h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
+
+        A = M.A
+        if A is not None:
+            A = A.tocsr()
+            num_cons = A.shape[0]
+            lower = np.where(M.sense != "<", M.b, -np.inf)
+            upper = np.where(M.sense != ">", M.b, np.inf)
+            h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            lp = h.getLp()
+            lp.col_names_ = print_variables(M.vlabels)
+            if len(M.clabels):
+                lp.row_names_ = print_constraints(M.clabels)
+            h.passModel(lp)
+
+        Q = M.Q
+        if Q is not None:
+            Q = triu(Q).tocsr()
+            num_vars = Q.shape[0]
+            h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
+
+        if model.objective.sense == "max":
+            h.changeObjectiveSense(highspy.ObjSense.kMaximize)
+
+        return h
+
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
         return self._solve(
-            h,
-            solution_fn,
-            warmstart_fn,
-            basis_fn,
-            model=model,
-            io_api="direct",
-            sense=model.sense,
+            self.solver_model,
+            solution_fn=solution_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
         )
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the HiGHS solver.
-        Reads a linear problem file and passes it to the HiGHS solver.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
-
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         problem_fn_ = path_to_string(problem_fn)
         h = highspy.Highs()
         self._set_solver_params(h, log_fn)
 
         h.readModel(problem_fn_)
+        self.solver_model = h
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         return self._solve(
             h,
             solution_fn,
             warmstart_fn,
             basis_fn,
-            io_api=read_io_api_from_problem_file(problem_fn),
+            io_api=self.io_api,
             sense=read_sense_from_problem_file(problem_fn),
+            from_file=True,
         )
 
     def _set_solver_params(
@@ -948,9 +1372,9 @@ class Highs(Solver[None]):
         solution_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
         io_api: str | None = None,
         sense: str | None = None,
+        from_file: bool = False,
     ) -> Result:
         """
         Solve a linear problem from a HiGHS object.
@@ -968,12 +1392,13 @@ class Highs(Solver[None]):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        model : linopy.model, optional
-            Linopy model for the problem.
         io_api: str
             io_api of the problem. For direct API from linopy model this is "direct".
         sense: str
             "min" or "max"
+        from_file: bool
+            ``True`` when ``h`` was populated via ``readModel`` — HiGHS may have
+            reordered columns/rows, so values are re-permuted using parsed names.
 
         Returns
         -------
@@ -1025,20 +1450,39 @@ class Highs(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = h.getObjectiveValue()
             solution = h.getSolution()
-
-            if model is not None:
-                sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-                dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
+            sol = np.asarray(solution.col_value, dtype=float)
+            dual = np.asarray(solution.row_dual, dtype=float)
+            if from_file:
+                lp = h.getLp()
+                sol = _solution_from_names(sol, lp.col_names_, self._n_vars)
+                dual = _solution_from_names(dual, lp.row_names_, self._n_cons)
             else:
-                sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float)
-                dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float)
-
+                sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
+                dual = _solution_from_labels(dual, self._clabels, self._n_cons)
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, h)
+        runtime: float | None = None
+        mip_gap: float | None = None
+        dual_bound: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(h.getRunTime())
+        with contextlib.suppress(Exception):
+            mip_gap = float(h.getInfo().mip_gap)
+        with contextlib.suppress(Exception):
+            dual_bound = float(h.getInfo().mip_dual_bound)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=h,
+            report=SolverReport(
+                runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound
+            ),
+        )
 
 
 class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
@@ -1051,132 +1495,164 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "Gurobi"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.IIS_COMPUTATION,
+            SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+            SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("gurobipy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        with gurobipy.Env():
+            pass
+
+    def _resolve_env(self, env: gurobipy.Env | dict[str, Any] | None) -> gurobipy.Env:
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        if env is None:
+            resolved = self._env_stack.enter_context(gurobipy.Env())
+        elif isinstance(env, dict):
+            resolved = self._env_stack.enter_context(gurobipy.Env(params=env))
+        else:
+            resolved = env
+        self.env = resolved
+        return resolved
+
+    def _build_direct(
         self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
+        explicit_coordinate_names: bool = False,
         env: gurobipy.Env | dict[str, Any] | None = None,
+        set_names: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
+        env_ = self._resolve_env(env)
+        m = self._build_solver_model(
+            model,
+            env=env_,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self.solver_model = m
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
+
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        env: gurobipy.Env | None = None,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
-    ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the Gurobi solver.
-        Reads a problem file and passes it to the Gurobi solver.
-        This function communicates with gurobi using the gurobipy package.
+    ) -> gurobipy.Model:
+        """Build a gurobipy.Model that mirrors the linopy `model`."""
+        model.constraints.sanitize_missings()
+        gm = gurobipy.Model(env=env)
 
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : gurobipy.Env or dict, optional
-            Gurobi environment for the solver, pass env directly or kwargs for creation.
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
+        M = model.matrices
 
-        Returns
-        -------
-        Result
-        """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(gurobipy.Env())
-            elif isinstance(env, dict):
-                env_ = stack.enter_context(gurobipy.Env(params=env))
-            else:
-                env_ = env
-
-            m = model.to_gurobipy(
-                env=env_,
-                explicit_coordinate_names=explicit_coordinate_names,
-                set_names=set_names,
+        kwargs: dict[str, Any] = {}
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
             )
+            kwargs["name"] = print_variables(M.vlabels)
+        if (
+            len(model.binaries.labels)
+            + len(model.integers.labels)
+            + len(list(model.variables.semi_continuous))
+        ):
+            kwargs["vtype"] = M.vtypes
+        x = gm.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
 
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api="direct",
-                sense=model.sense,
-            )
+        if model.is_quadratic:
+            assert M.Q is not None
+            gm.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+        else:
+            gm.setObjective(M.c @ x)
 
-    def solve_problem_from_file(
+        if model.objective.sense == "max":
+            gm.ModelSense = -1
+
+        if len(model.constraints):
+            assert M.A is not None
+            c = gm.addMConstr(M.A, x, M.sense, M.b)
+            if set_names:
+                names = print_constraints(M.clabels)
+                c.setAttr("ConstrName", names)
+
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
+
+        gm.update()
+        return gm
+
+    def _run_direct(
         self,
-        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
+        )
+
+    def _run_file(
+        self,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: gurobipy.Env | dict[str, Any] | None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Gurobi solver.
-        Reads a problem file and passes it to the Gurobi solver.
-        This function communicates with gurobi using the gurobipy package.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : gurobipy.Env or dict, optional
-            Gurobi environment for the solver, pass env directly or kwargs for creation.
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)
 
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(gurobipy.Env())
-            elif isinstance(env, dict):
-                env_ = stack.enter_context(gurobipy.Env(params=env))
-            else:
-                env_ = env
+        env_ = self._resolve_env(env)
+        m = gurobipy.read(problem_fn_, env=env_)
+        self.solver_model = m
+        self.io_api = io_api
 
-            m = gurobipy.read(problem_fn_, env=env_)
-
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api=io_api,
-                sense=sense,
-            )
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+            from_file=True,
+        )
 
     def _solve(
         self,
@@ -1187,6 +1663,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         basis_fn: Path | None,
         io_api: str | None,
         sense: str | None,
+        from_file: bool = False,
     ) -> Result:
         """
         Solve a linear problem from a Gurobi object.
@@ -1264,22 +1741,54 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
-            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
+            vars_ = m.getVars()
+            sol = np.array([v.X for v in vars_], dtype=float)
+            if from_file:
+                sol = _solution_from_names(
+                    sol, [v.VarName for v in vars_], self._n_vars
+                )
+            else:
+                sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
 
             try:
-                dual = pd.Series(
-                    {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
-                )
+                constrs = m.getConstrs()
+                dual = np.array([c.Pi for c in constrs], dtype=float)
+                if from_file:
+                    dual = _solution_from_names(
+                        dual,
+                        [c.ConstrName for c in constrs],
+                        self._n_cons,
+                    )
+                else:
+                    dual = _solution_from_labels(dual, self._clabels, self._n_cons)
             except AttributeError:
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        runtime: float | None = None
+        mip_gap: float | None = None
+        dual_bound: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(m.Runtime)
+        with contextlib.suppress(Exception):
+            mip_gap = float(m.MIPGap)
+        with contextlib.suppress(Exception):
+            dual_bound = float(m.ObjBound)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=m,
+            report=SolverReport(
+                runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound
+            ),
+        )
 
 
 class Cplex(Solver[None]):
@@ -1296,61 +1805,34 @@ class Cplex(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "CPLEX"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("cplex")
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for Cplex"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the cplex solver.
-
-        This function reads the linear problem file and passes it to the cplex
-        solver. If the solution is successful it returns variable solutions and
-        constraint dual values. Cplex must be installed for using this function.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
@@ -1418,27 +1900,30 @@ class Cplex(Solver[None]):
 
             objective = m.solution.get_objective_value()
 
-            solution = pd.Series(
-                m.solution.get_values(), m.variables.get_names(), dtype=float
+            solution = _solution_from_names(
+                np.asarray(m.solution.get_values(), dtype=float),
+                m.variables.get_names(),
+                self._n_vars,
             )
 
             try:
-                dual = pd.Series(
-                    m.solution.get_dual_values(),
+                dual = _solution_from_names(
+                    np.asarray(m.solution.get_dual_values(), dtype=float),
                     m.linear_constraints.get_names(),
-                    dtype=float,
+                    self._n_cons,
                 )
             except Exception:
                 logger.warning(
                     "Dual values not available (e.g. barrier solution without crossover)"
                 )
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
             return Solution(solution, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class SCIP(Solver[None]):
@@ -1451,59 +1936,33 @@ class SCIP(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "SCIP"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("pyscipopt")
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for SCIP"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the scip solver.
-
-        This function communicates with scip using the pyscipopt package.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP: dict[str, TerminationCondition] = {
             # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
             "inforunbd": TerminationCondition.infeasible_or_unbounded,
@@ -1570,29 +2029,32 @@ class SCIP(Solver[None]):
             vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
-            sol = pd.Series(
-                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
+            kept_vars = [v for v in m.getVars() if v.name not in vars_to_ignore]
+            sol = _solution_from_names(
+                np.array([s[v] for v in kept_vars], dtype=float),
+                [v.name for v in kept_vars],
+                self._n_vars,
             )
 
             cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series(
-                    {
-                        c.name: m.getDualSolVal(c)
-                        for c in cons
-                        if c.name not in vars_to_ignore
-                    }
+                kept_cons = [c for c in cons if c.name not in vars_to_ignore]
+                dual = _solution_from_names(
+                    np.array([m.getDualSolVal(c) for c in kept_cons], dtype=float),
+                    [c.name for c in kept_cons],
+                    self._n_cons,
                 )
             else:
                 logger.warning("Dual values not available (is this an MILP?)")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class Xpress(Solver[None]):
@@ -1608,62 +2070,288 @@ class Xpress(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "FICO Xpress"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.IIS_COMPUTATION,
+            SolverFeature.SOS_CONSTRAINTS,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("xpress")
+
+    def _build_direct(
         self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
-    ) -> Result:
-        msg = "Direct API not implemented for Xpress"
-        raise NotImplementedError(msg)
+        **kwargs: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        problem = self._build_solver_model(
+            model,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self._env_stack.enter_context(problem)
+        self.solver_model = problem
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
 
-    def solve_problem_from_file(
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> xpress.problem:
+        """
+        Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``.
+
+        ``loadproblem`` is Xpress' universal native-array entry point loading LP/QP/MIQP
+        in a single call; see the parameter reference at
+        https://www.fico.com/fico-xpress-optimization/docs/latest/solver/optimizer/python/HTML/problem.loadproblem.html.
+        SOS arguments are left ``None`` and sets are added afterwards via ``addSOS`` so
+        multi-dim ``add_sos_constraints`` can be grouped natively.
+        """
+        model.constraints.sanitize_missings()
+        problem = xpress.problem()
+
+        M = model.matrices
+        A = M.A
+        Q = M.Q
+
+        if A is not None and A.nnz:
+            if A.format != "csc":
+                A = A.tocsc()
+            start = A.indptr.astype(np.int64, copy=False)
+            rowind = A.indices.astype(np.int64, copy=False)
+            rowcoef = A.data.astype(float, copy=False)
+        else:
+            start = np.zeros(len(M.vlabels) + 1, dtype=np.int64)
+            rowind = np.empty(0, dtype=np.int64)
+            rowcoef = np.empty(0, dtype=float)
+
+        lb = np.asarray(M.lb, dtype=float)
+        ub = np.asarray(M.ub, dtype=float)
+        np.place(lb, np.isneginf(lb), -xpress.infinity)
+        np.place(ub, np.isposinf(ub), xpress.infinity)
+
+        rowtype: np.ndarray
+        rhs: np.ndarray
+        if len(M.clabels):
+            sense = M.sense
+            rowtype = np.full(sense.shape, "E", dtype="U1")
+            rowtype[sense == "<"] = "L"
+            rowtype[sense == ">"] = "G"
+            rhs = np.asarray(M.b, dtype=float)
+        else:
+            rowtype = np.empty(0, dtype="U1")
+            rhs = np.empty(0, dtype=float)
+
+        objqcol1: np.ndarray | None
+        objqcol2: np.ndarray | None
+        objqcoef: np.ndarray | None
+        if Q is not None and Q.nnz:
+            Qt = Q if Q.format == "coo" else triu(Q, format="coo")  # codespell:ignore
+            mask = Qt.row <= Qt.col
+            objqcol1 = Qt.row[mask].astype(np.int64, copy=False)
+            objqcol2 = Qt.col[mask].astype(np.int64, copy=False)
+            objqcoef = Qt.data[mask].astype(float, copy=False)
+        else:
+            objqcol1 = None
+            objqcol2 = None
+            objqcoef = None
+
+        vtypes = M.vtypes
+        integer_mask = (vtypes == "B") | (vtypes == "I")
+        if integer_mask.any():
+            entind = np.flatnonzero(integer_mask).astype(np.int64, copy=False)
+            coltype = vtypes[entind]
+        else:
+            entind = None
+            coltype = None
+
+        objcoef = np.asarray(M.c, dtype=float)
+        has_q = objqcol1 is not None
+        has_int = coltype is not None
+        base_kwargs: dict[str, Any] = dict(
+            probname="linopy",
+            rowtype=rowtype,
+            rhs=rhs,
+            rng=None,
+            objcoef=objcoef,
+            start=start,
+            collen=None,
+            rowind=rowind,
+            rowcoef=rowcoef,
+            lb=lb,
+            ub=ub,
+        )
+        try:  # Try new API first (Xpress 9.8+)
+            if has_q and has_int:
+                problem.loadMIQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            elif has_q:
+                problem.loadQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                )
+            elif has_int:
+                problem.loadMIP(
+                    **base_kwargs,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            else:
+                problem.loadLP(**base_kwargs)
+        except AttributeError:  # Fallback to old API
+            problem.loadproblem(
+                probname="linopy",
+                rowtype=rowtype,
+                rhs=rhs,
+                rng=None,
+                objcoef=objcoef,
+                start=start,
+                collen=None,
+                rowind=rowind,
+                rowcoef=rowcoef,
+                lb=lb,
+                ub=ub,
+                objqcol1=objqcol1,
+                objqcol2=objqcol2,
+                objqcoef=objqcoef,
+                qrowind=None,
+                nrowqcoefs=None,
+                rowqcol1=None,
+                rowqcol2=None,
+                rowqcoef=None,
+                coltype=coltype,
+                entind=entind,
+                limit=None,
+                settype=None,
+                setstart=None,
+                setind=None,
+                refval=None,
+            )
+
+        if model.objective.sense == "max":
+            problem.chgobjsense(xpress.maximize)
+
+        if set_names:
+            print_variable, print_constraint = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            vnames = print_variable(M.vlabels)
+            if vnames:
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
+            cnames = print_constraint(M.clabels)
+            if cnames:
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            problem.addSOS(positions.tolist(), weights.tolist(), type=sos_type)
+
+        return problem
+
+    @classmethod
+    def runtime_features(cls) -> frozenset[SolverFeature]:
+        if _installed_version_in("xpress", ">=9.8.0"):
+            return frozenset({SolverFeature.GPU_ACCELERATION})
+        return frozenset()
+
+    def _run_direct(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Xpress solver.
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
+        )
 
-        This function reads the linear problem file and passes it to
-        the Xpress solver. If the solution is successful it returns
-        variable solutions and constraint dual values. The `xpress` module
-        must be installed for using this function.
+    def _run_file(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        **kw: Any,
+    ) -> Result:
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
+        io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        m = self._env_stack.enter_context(xpress.problem())
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
 
-        Returns
-        -------
-        Result
-        """
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+            from_file=True,
+        )
+
+    def _solve(
+        self,
+        m: xpress.problem,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
+        from_file: bool = False,
+    ) -> Result:
         CONDITION_MAP = {
             xpress.SolStatus.NOTFOUND: "unknown",
             xpress.SolStatus.OPTIMAL: "optimal",
@@ -1672,17 +2360,6 @@ class Xpress(Solver[None]):
             xpress.SolStatus.UNBOUNDED: "unbounded",
         }
 
-        io_api = read_io_api_from_problem_file(problem_fn)
-        sense = read_sense_from_problem_file(problem_fn)
-
-        m = xpress.problem()
-
-        try:  # Try new API first
-            m.readProb(path_to_string(problem_fn))
-        except AttributeError:  # Fallback to old API
-            m.read(path_to_string(problem_fn))
-
-        # Set solver options - new API uses setControl per option, old API accepts dict
         if self.solver_options is not None:
             m.setControl(self.solver_options)
 
@@ -1700,7 +2377,6 @@ class Xpress(Solver[None]):
 
         m.optimize()
 
-        # if the solver is stopped (timelimit for example), postsolve the problem
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
             try:  # Try new API first
                 m.postSolve()
@@ -1713,7 +2389,7 @@ class Xpress(Solver[None]):
                     m.writeBasis(path_to_string(basis_fn))
                 except AttributeError:  # Fallback to old API
                     m.writebasis(path_to_string(basis_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
@@ -1722,7 +2398,7 @@ class Xpress(Solver[None]):
                     m.writeBinSol(path_to_string(solution_fn))
                 except AttributeError:  # Fallback to old API
                     m.writebinsol(path_to_string(solution_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
         condition = m.attributes.solstatus
@@ -1733,40 +2409,49 @@ class Xpress(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.attributes.objval
 
-            try:  # Try new API first
-                var = m.getNameList(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
-            except AttributeError:  # Fallback to old API
-                var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
-            sol = pd.Series(m.getSolution(), index=var, dtype=float)
+            sol_values = np.asarray(m.getSolution(), dtype=float)
+            if from_file:
+                sol = _solution_from_names(
+                    sol_values,
+                    [v.name for v in m.getVariable()],
+                    self._n_vars,
+                )
+            else:
+                sol = _solution_from_labels(sol_values, self._vlabels, self._n_vars)
 
             try:
                 if m.attributes.rows == 0:
-                    dual = pd.Series(dtype=float)
+                    dual = np.array([], dtype=float)
                 else:
-                    try:  # Try new API first
-                        _dual = m.getDuals()
-                    except AttributeError:  # Fallback to old API
-                        _dual = m.getDual()
-
-                    try:  # Try new API first
-                        constraints = m.getNameList(
-                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    try:  # getDuals introduced in 9.5; fallback for 9.4
+                        dual_values = np.asarray(m.getDuals(), dtype=float)
+                    except AttributeError:
+                        dual_values = np.asarray(m.getDual(), dtype=float)
+                    if from_file:
+                        dual = _solution_from_names(
+                            dual_values,
+                            [c.name for c in m.getConstraint()],
+                            self._n_cons,
                         )
-                    except AttributeError:  # Fallback to old API
-                        constraints = m.getnamelist(
-                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    else:
+                        dual = _solution_from_labels(
+                            dual_values, self._clabels, self._n_cons
                         )
-                    dual = pd.Series(_dual, index=constraints, dtype=float)
-            except (xpress.SolverError, xpress.ModelError, SystemError):
+            except (
+                xpress.SolverError,
+                xpress.ModelError,
+                SystemError,
+            ):  # pragma: no cover
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 KnitroResult = namedtuple(
@@ -1788,25 +2473,27 @@ class Knitro(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "Artelys Knitro"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
+        }
+    )
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        msg = "Direct API not implemented for Knitro"
-        raise NotImplementedError(msg)
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("knitro")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        kc = knitro.KN_new()
+        knitro.KN_free(kc)
 
     @staticmethod
     def _set_option(kc: Any, name: str, value: Any) -> None:
@@ -1830,11 +2517,10 @@ class Knitro(Solver[None]):
         kc: Any,
         get_count_fn: Callable[..., Any],
         get_values_fn: Callable[..., Any],
-        get_names_fn: Callable[..., Any],
-    ) -> pd.Series:
+    ) -> np.ndarray:
         n = int(get_count_fn(kc))
         if n == 0:
-            return pd.Series(dtype=float)
+            return np.array([], dtype=float)
 
         try:
             # Compatible with KNITRO >= 15
@@ -1843,40 +2529,19 @@ class Knitro(Solver[None]):
             # Fallback for older wrappers requiring explicit indices
             values = get_values_fn(kc, list(range(n)))
 
-        names = list(get_names_fn(kc))
-        return pd.Series(values, index=names, dtype=float)
+        return np.asarray(values, dtype=float)
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Knitro solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver.
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP: dict[int, TerminationCondition] = {
             0: TerminationCondition.optimal,
             -100: TerminationCondition.suboptimal,
@@ -1971,19 +2636,23 @@ class Knitro(Solver[None]):
                     kc,
                     knitro.KN_get_number_vars,
                     knitro.KN_get_var_primal_values,
-                    knitro.KN_get_var_names,
                 )
+                n_vars = int(knitro.KN_get_number_vars(kc))
+                var_names = [knitro.KN_get_var_names(kc, i) for i in range(n_vars)]
+                sol = _solution_from_names(sol, var_names, self._n_vars)
 
                 try:
                     dual = self._extract_values(
                         kc,
                         knitro.KN_get_number_cons,
                         knitro.KN_get_con_dual_values,
-                        knitro.KN_get_con_names,
                     )
+                    n_cons = int(knitro.KN_get_number_cons(kc))
+                    con_names = [knitro.KN_get_con_names(kc, i) for i in range(n_cons)]
+                    dual = _solution_from_names(dual, con_names, self._n_cons)
                 except Exception:
                     logger.warning("Dual values couldn't be parsed")
-                    dual = pd.Series(dtype=float)
+                    dual = np.array([], dtype=float)
 
                 return Solution(sol, dual, objective)
 
@@ -1994,25 +2663,28 @@ class Knitro(Solver[None]):
                 solution_fn.parent.mkdir(exist_ok=True)
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
-            return Result(
+            knitro_model = KnitroResult(
+                reported_runtime=reported_runtime,
+                mip_relaxation_bnd=mip_relaxation_bnd,
+                mip_number_nodes=mip_number_nodes,
+                mip_number_solves=mip_number_solves,
+                mip_rel_gap=mip_rel_gap,
+                mip_abs_gap=mip_abs_gap,
+                abs_feas_error=abs_feas_error,
+                rel_feas_error=rel_feas_error,
+                abs_opt_error=abs_opt_error,
+                rel_opt_error=rel_opt_error,
+                n_vars=n_vars,
+                n_cons=n_cons,
+                n_integer_vars=n_integer_vars,
+                n_continuous_vars=n_continuous_vars,
+            )
+            self.io_api = io_api
+            return self._make_result(
                 status,
                 solution,
-                KnitroResult(
-                    reported_runtime=reported_runtime,
-                    mip_relaxation_bnd=mip_relaxation_bnd,
-                    mip_number_nodes=mip_number_nodes,
-                    mip_number_solves=mip_number_solves,
-                    mip_rel_gap=mip_rel_gap,
-                    mip_abs_gap=mip_abs_gap,
-                    abs_feas_error=abs_feas_error,
-                    rel_feas_error=rel_feas_error,
-                    abs_opt_error=abs_opt_error,
-                    rel_opt_error=rel_opt_error,
-                    n_vars=n_vars,
-                    n_cons=n_cons,
-                    n_integer_vars=n_integer_vars,
-                    n_continuous_vars=n_continuous_vars,
-                ),
+                solver_model=knitro_model,
+                report=SolverReport(runtime=reported_runtime, mip_gap=mip_rel_gap),
             )
         finally:
             with contextlib.suppress(Exception):
@@ -2042,135 +2714,192 @@ class Mosek(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "MOSEK"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("mosek")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        with mosek.Env() as env, env.Task(0, 0) as task:
+            task.optimize()
+
+    def _run_direct(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
+        )
+
+    def _build_direct(
+        self,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
-    ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the MOSEK solver.
+        **kwargs: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        env = self._env_stack.enter_context(mosek.Env())
+        task = self._env_stack.enter_context(env.Task(0, 0))
+        m = self._build_solver_model(
+            model,
+            task,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self.solver_model = m
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
 
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional, deprecated
-            Deprecated. This parameter is ignored. MOSEK now uses the global
-            environment automatically. Will be removed in a future version.
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-
-        if env is not None:
-            warnings.warn(
-                "The 'env' parameter in solve_problem_from_model is deprecated and will be "
-                "removed in a future version. MOSEK now uses the global environment "
-                "automatically, avoiding unnecessary license checkouts.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        with mosek.Task() as m:
-            m = model.to_mosek(
-                m,
-                explicit_coordinate_names=explicit_coordinate_names,
-                set_names=set_names,
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        task: mosek.Task,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> mosek.Task:
+        """Populate an empty MOSEK task with the contents of `model`."""
+        if model.variables.sos:
+            raise NotImplementedError("SOS constraints are not supported by MOSEK.")
+        if model.variables.semi_continuous:
+            raise NotImplementedError(
+                "Semi-continuous variables are not supported by MOSEK. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
             )
 
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api="direct",
-                sense=model.sense,
+        task.appendvars(model.nvars)
+        task.appendcons(model.ncons)
+
+        M = model.matrices
+
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            labels = print_variables(M.vlabels)
+            task.generatevarnames(
+                np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
             )
 
-    def solve_problem_from_file(
+        bkx = [
+            (
+                (
+                    (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
+                    if ub < np.inf
+                    else mosek.boundkey.lo
+                )
+                if (lb > -np.inf)
+                else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
+            )
+            for (lb, ub) in zip(M.lb, M.ub)
+        ]
+        blx = [b if b > -np.inf else 0.0 for b in M.lb]
+        bux = [b if b < np.inf else 0.0 for b in M.ub]
+        task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+
+        if len(model.binaries.labels) + len(model.integers.labels) > 0:
+            idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+            task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
+            if len(model.binaries.labels) > 0:
+                bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
+                task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
+
+        if len(model.constraints) > 0:
+            if set_names:
+                names = print_constraints(M.clabels)
+                for i, n in enumerate(names):
+                    task.putconname(i, n)
+            bkc = [
+                (
+                    (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
+                    if s == "<"
+                    else (
+                        (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
+                        if s == ">"
+                        else mosek.boundkey.fx
+                    )
+                )
+                for s, b in zip(M.sense, M.b)
+            ]
+            blc = [b if b > -np.inf else 0.0 for b in M.b]
+            buc = [b if b < np.inf else 0.0 for b in M.b]
+            if M.A is not None:
+                A = M.A.tocsr()
+                task.putarowslice(
+                    0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+                )
+                task.putconboundslice(0, model.ncons, bkc, blc, buc)
+
+        if M.Q is not None:
+            Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
+            task.putqobj(Q.row, Q.col, Q.data)
+        task.putclist(list(np.arange(model.nvars)), M.c)
+
+        if model.objective.sense == "max":
+            task.putobjsense(mosek.objsense.maximize)
+        else:
+            task.putobjsense(mosek.objsense.minimize)
+        return task
+
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the MOSEK solver. Both mps and
-        lp files are supported; MPS does not support quadratic terms.
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        mosek_env = self._env_stack.enter_context(mosek.Env())
+        m = self._env_stack.enter_context(mosek_env.Task(0, 0))
+        sense = read_sense_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
+        problem_fn_ = path_to_string(problem_fn)
+        m.readdata(problem_fn_)
+        self.solver_model = m
+        self.io_api = io_api
 
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional, deprecated
-            Deprecated. This parameter is ignored. MOSEK now uses the global
-            environment automatically. Will be removed in a future version.
-
-        Returns
-        -------
-        Result
-        """
-        if env is not None:
-            warnings.warn(
-                "The 'env' parameter in solve_problem_from_file is deprecated and will be "
-                "removed in a future version. MOSEK now uses the global environment "
-                "automatically, avoiding unnecessary license checkouts.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        with mosek.Task() as m:
-            # read sense and io_api from problem file
-            sense = read_sense_from_problem_file(problem_fn)
-            io_api = read_io_api_from_problem_file(problem_fn)
-            # for Mosek solver, the path needs to be a string
-            problem_fn_ = path_to_string(problem_fn)
-            m.readdata(problem_fn_)
-
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api=io_api,
-                sense=sense,
-            )
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+            from_file=True,
+        )
 
     def _solve(
         self,
@@ -2181,6 +2910,7 @@ class Mosek(Solver[None]):
         basis_fn: Path | None,
         io_api: str | None,
         sense: str | None,
+        from_file: bool = False,
     ) -> Result:
         """
         Solve a linear problem from a Mosek task object.
@@ -2349,24 +3079,41 @@ class Mosek(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getprimalobj(soltype)
 
-            sol = m.getxx(soltype)
-            sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
-            sol = pd.Series(sol, dtype=float)
+            sol_values = np.asarray(m.getxx(soltype), dtype=float)
+            if from_file:
+                sol = _solution_from_names(
+                    sol_values,
+                    [m.getvarname(i) for i in range(m.getnumvar())],
+                    self._n_vars,
+                )
+            else:
+                sol = _solution_from_labels(sol_values, self._vlabels, self._n_vars)
 
             try:
-                dual = m.gety(soltype)
-                dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
-                dual = pd.Series(dual, dtype=float)
+                dual_values = np.asarray(m.gety(soltype), dtype=float)
+                if from_file:
+                    dual = _solution_from_names(
+                        dual_values,
+                        [m.getconname(i) for i in range(m.getnumcon())],
+                        self._n_cons,
+                    )
+                else:
+                    dual = _solution_from_labels(
+                        dual_values,
+                        self._clabels,
+                        self._n_cons,
+                    )
             except (mosek.Error, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class COPT(Solver[None]):
@@ -2384,57 +3131,38 @@ class COPT(Solver[None]):
         options for the given solver
     """
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "COPT"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("coptpy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        env = coptpy.Envr()
+        env.close()
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for COPT"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the COPT solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            COPT environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
         CONDITION_MAP = {
             0: "unstarted",
@@ -2456,59 +3184,71 @@ class COPT(Solver[None]):
         if env is None:
             env_ = coptpy.Envr()
 
-        m = env_.createModel()
+        try:
+            m = env_.createModel()
 
-        m.read(path_to_string(problem_fn))
+            m.read(path_to_string(problem_fn))
 
-        if log_fn is not None:
-            m.setLogFile(path_to_string(log_fn))
+            if log_fn is not None:
+                m.setLogFile(path_to_string(log_fn))
 
-        for k, v in self.solver_options.items():
-            m.setParam(k, v)
+            for k, v in self.solver_options.items():
+                m.setParam(k, v)
 
-        if warmstart_fn is not None:
-            m.readBasis(path_to_string(warmstart_fn))
+            if warmstart_fn is not None:
+                m.readBasis(path_to_string(warmstart_fn))
 
-        m.solve()
+            m.solve()
 
-        if basis_fn and m.HasBasis:
-            try:
-                m.write(path_to_string(basis_fn))
-            except coptpy.CoptError as err:
-                logger.info("No model basis stored. Raised error: %s", err)
+            if basis_fn and m.HasBasis:
+                try:
+                    m.write(path_to_string(basis_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model basis stored. Raised error: %s", err)
 
-        if solution_fn:
-            try:
-                m.write(path_to_string(solution_fn))
-            except coptpy.CoptError as err:
-                logger.info("No model solution stored. Raised error: %s", err)
+            if solution_fn:
+                try:
+                    m.write(path_to_string(solution_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model solution stored. Raised error: %s", err)
 
-        # TODO: check if this suffices
-        condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, str(condition))
-        status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = str(condition)
-
-        def get_solver_solution() -> Solution:
             # TODO: check if this suffices
-            objective = m.BestObj if m.ismip else m.LpObjVal
+            condition = m.MipStatus if m.ismip else m.LpStatus
+            termination_condition = CONDITION_MAP.get(condition, str(condition))
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = str(condition)
 
-            sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
+            def get_solver_solution() -> Solution:
+                # TODO: check if this suffices
+                objective = m.BestObj if m.ismip else m.LpObjVal
 
-            try:
-                dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
-            except (coptpy.CoptError, AttributeError):
-                logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                vars_ = m.getVars()
+                sol = _solution_from_names(
+                    np.array([v.x for v in vars_], dtype=float),
+                    [v.name for v in vars_],
+                    self._n_vars,
+                )
 
-            return Solution(sol, dual, objective)
+                try:
+                    cons = m.getConstrs()
+                    dual = _solution_from_names(
+                        np.array([c.pi for c in cons], dtype=float),
+                        [c.name for c in cons],
+                        self._n_cons,
+                    )
+                except (coptpy.CoptError, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = np.array([], dtype=float)
 
-        solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+                return Solution(sol, dual, objective)
 
-        env_.close()
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+            self.io_api = io_api
+            return self._make_result(status, solution, solver_model=m)
+        finally:
+            env_.close()
 
 
 class MindOpt(Solver[None]):
@@ -2526,58 +3266,38 @@ class MindOpt(Solver[None]):
         options for the given solver
     """
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "MindOpt"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
-    def solve_problem_from_model(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("mindoptpy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        env = mindoptpy.Env()
+        env.dispose()
+
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for MindOpt"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the MindOpt solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            MindOpt environment for the solver
-
-        Returns
-        -------
-        Result
-
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             -1: "error",
             0: "unknown",
@@ -2602,58 +3322,73 @@ class MindOpt(Solver[None]):
         if env is None:
             env_ = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
 
-        env_.start()
+        m = None
+        try:
+            env_.start()
 
-        m = mindoptpy.read(path_to_string(problem_fn), env_)
+            m = mindoptpy.read(path_to_string(problem_fn), env_)
 
-        for k, v in self.solver_options.items():
-            m.setParam(k, v)
+            for k, v in self.solver_options.items():
+                m.setParam(k, v)
 
-        if warmstart_fn:
-            try:
-                m.read(path_to_string(warmstart_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("Model basis could not be read. Raised error: %s", err)
+            if warmstart_fn:
+                try:
+                    m.read(path_to_string(warmstart_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("Model basis could not be read. Raised error: %s", err)
 
-        m.optimize()
+            m.optimize()
 
-        if basis_fn:
-            try:
-                m.write(path_to_string(basis_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("No model basis stored. Raised error: %s", err)
+            if basis_fn:
+                try:
+                    m.write(path_to_string(basis_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("No model basis stored. Raised error: %s", err)
 
-        if solution_fn:
-            try:
-                m.write(path_to_string(solution_fn))
-            except mindoptpy.MindoptError as err:
-                logger.info("No model solution stored. Raised error: %s", err)
+            if solution_fn:
+                try:
+                    m.write(path_to_string(solution_fn))
+                except mindoptpy.MindoptError as err:
+                    logger.info("No model solution stored. Raised error: %s", err)
 
-        condition = m.status
-        termination_condition = CONDITION_MAP.get(condition, condition)
-        status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+            condition = m.status
+            termination_condition = CONDITION_MAP.get(condition, condition)
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = condition
 
-        def get_solver_solution() -> Solution:
-            objective = m.objval
+            def get_solver_solution() -> Solution:
+                assert m is not None
+                objective = m.objval
 
-            sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
+                vars_ = m.getVars()
+                sol = _solution_from_names(
+                    np.array([v.X for v in vars_], dtype=float),
+                    [v.VarName for v in vars_],
+                    self._n_vars,
+                )
 
-            try:
-                dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
-            except (mindoptpy.MindoptError, AttributeError):
-                logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                try:
+                    cons = m.getConstrs()
+                    dual = _solution_from_names(
+                        np.array([c.DualSoln for c in cons], dtype=float),
+                        [c.ConstrName for c in cons],
+                        self._n_cons,
+                    )
+                except (mindoptpy.MindoptError, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = np.array([], dtype=float)
 
-            return Solution(sol, dual, objective)
+                return Solution(sol, dual, objective)
 
-        solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        m.dispose()
-        env_.dispose()
-
-        return Result(status, solution, m)
+            self.io_api = io_api
+            return self._make_result(status, solution, solver_model=m)
+        finally:
+            if m is not None:
+                m.dispose()
+            env_.dispose()
 
 
 class PIPS(Solver[None]):
@@ -2661,11 +3396,7 @@ class PIPS(Solver[None]):
     Solver subclass for the PIPS solver.
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    def __post_init__(self) -> None:
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)
 
@@ -2690,48 +3421,36 @@ class cuPDLPx(Solver[None]):
         options for the given solver
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    display_name: ClassVar[str] = "cuPDLPx"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.DIRECT_API,
+            SolverFeature.GPU_ACCELERATION,
+            SolverFeature.GPU_ONLY,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
-    def solve_problem_from_file(
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("cupdlpx")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
+
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: EnvType | None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the solver cuPDLPx.
-        cuPDLPx does not currently support its own file IO, so this function
-        reads the problem file using linopy (only support netcf files) and
-        then passes the model to cuPDLPx for solving.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         logger.warning(
             "cuPDLPx doesn't currently support file IO. Building model from file using linopy."
         )
@@ -2743,8 +3462,9 @@ class cuPDLPx(Solver[None]):
             msg = "linopy currently only supports reading models from netcdf files. Try using io_api='direct' instead."
             raise NotImplementedError(msg)
 
-        return self.solve_problem_from_model(
-            model,
+        self.model = model
+        self._build_direct()
+        return self._run_direct(
             solution_fn=solution_fn,
             log_fn=log_fn,
             warmstart_fn=warmstart_fn,
@@ -2752,67 +3472,85 @@ class cuPDLPx(Solver[None]):
             env=env,
         )
 
-    def solve_problem_from_model(
+    def _build_direct(self, **kwargs: Any) -> None:
+        model = self.model
+        assert model is not None
+        if model.type in ["QP", "MILP"]:
+            msg = "cuPDLPx does not currently support QP or MILP problems."
+            raise NotImplementedError(msg)
+        if kwargs.get("explicit_coordinate_names"):
+            warnings.warn(
+                "cuPDLPx does not support named variables/constraints. "
+                "The explicit_coordinate_names parameter is ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+        cu_model = self._build_solver_model(model)
+        self.solver_model = cu_model
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
+
+    @staticmethod
+    def _build_solver_model(model: Model) -> cupdlpx.Model:
+        """Build a cupdlpx.Model that mirrors the linopy `model`."""
+        if model.variables.semi_continuous:
+            raise NotImplementedError(
+                "Semi-continuous variables are not supported by cuPDLPx. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        M = model.matrices
+        if M.A is None:
+            raise ValueError("Model has no constraints, cannot export to cuPDLPx.")
+        A = M.A.tocsr()
+        lower = np.where(
+            np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
+            M.b,
+            -np.inf,
+        )
+        upper = np.where(
+            np.logical_or(np.equal(M.sense, "<"), np.equal(M.sense, "=")),
+            M.b,
+            np.inf,
+        )
+
+        cu_model = cupdlpx.Model(
+            objective_vector=M.c,
+            constraint_matrix=A,
+            constraint_lower_bound=lower,
+            constraint_upper_bound=upper,
+            variable_lower_bound=M.lb,
+            variable_upper_bound=M.ub,
+        )
+
+        if model.objective.sense == "max":
+            cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
+
+        return cu_model
+
+    def _run_direct(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        env: Any = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the solver cuPDLPx.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Ignored. cuPDLPx does not support named variables/constraints.
-
-        Returns
-        -------
-        Result
-        """
-
-        if model.type in ["QP", "MILP"]:
-            msg = "cuPDLPx does not currently support QP or MILP problems."
-            raise NotImplementedError(msg)
-
-        cu_model = model.to_cupdlpx()
-
         return self._solve(
-            cu_model,
-            l_model=model,
+            self.solver_model,
             solution_fn=solution_fn,
             log_fn=log_fn,
             warmstart_fn=warmstart_fn,
             basis_fn=basis_fn,
-            io_api="direct",
-            sense=model.sense,
+            io_api=self.io_api,
+            sense=self.sense,
         )
 
     def _solve(
         self,
         cu_model: cupdlpx.Model,
-        l_model: Model | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -2889,23 +3627,31 @@ class cuPDLPx(Solver[None]):
 
         def get_solver_solution() -> Solution:
             objective = cu_model.ObjVal
-
-            vlabels = None if l_model is None else l_model.matrices.vlabels
-            clabels = None if l_model is None else l_model.matrices.clabels
-
-            sol = pd.Series(cu_model.X, vlabels, dtype=float)
-            dual = pd.Series(cu_model.Pi, clabels, dtype=float)
+            sol = np.asarray(cu_model.X, dtype=float)
+            dual = np.asarray(cu_model.Pi, dtype=float)
 
             if cu_model.ModelSense == cupdlpx.PDLP.MAXIMIZE:
-                dual *= -1  # flip sign of duals for max problems
+                dual = -dual
+
+            sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
+            dual = _solution_from_labels(dual, self._clabels, self._n_cons)
 
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
-        return Result(status, solution, cu_model)
+        runtime: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(cu_model.Runtime)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=cu_model,
+            report=SolverReport(runtime=runtime),
+        )
 
     def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
         """
@@ -2916,3 +3662,140 @@ class cuPDLPx(Solver[None]):
         """
         for k, v in self.solver_options.items():
             cu_model.setParam(k, v)
+
+
+def _solver_class_for(name: str) -> type[Solver] | None:
+    try:
+        return globals().get(SolverName(name).name)
+    except ValueError:
+        return None
+
+
+QUADRATIC_SOLVERS = [
+    n.value
+    for n in SolverName
+    if (cls := _solver_class_for(n.value)) is not None
+    and cls.supports(SolverFeature.QUADRATIC_OBJECTIVE)
+]
+NO_SOLUTION_FILE_SOLVERS = [
+    n.value
+    for n in SolverName
+    if (cls := _solver_class_for(n.value)) is not None
+    and cls.supports(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+]
+
+
+# Defines the iteration order of ``available_solvers`` — the first installed
+# entry is the default solver in :meth:`Model.solve`. Matches the historical
+# eager-probe order from before lazy availability landed.
+_SOLVER_PROBE_ORDER: tuple[str, ...] = (
+    "gurobi",
+    "highs",
+    "glpk",
+    "cbc",
+    "scip",
+    "cplex",
+    "xpress",
+    "knitro",
+    "mosek",
+    "mindopt",
+    "copt",
+    "cupdlpx",
+    "pips",
+)
+
+
+class _AvailableSolvers(Sequence[str]):
+    """
+    Lazy sequence of installed solver names.
+
+    Probes each solver's :meth:`Solver.is_available` on first access and caches
+    the result. Membership means the solver's Python package or binary is
+    importable — it does **not** mean a working license exists. Call
+    :func:`check_solver_licenses` for an opt-in eager license probe.
+
+    :meth:`refresh` clears the cache (and each per-class ``is_available``
+    cache) so the probe re-runs.
+    """
+
+    _filter: ClassVar[frozenset[str] | None] = None
+
+    @functools.cached_property
+    def _names(self) -> list[str]:
+        names: list[str] = []
+        for name in _SOLVER_PROBE_ORDER:
+            if self._filter is not None and name not in self._filter:
+                continue
+            cls = _solver_class_for(name)
+            if cls is not None and cls.is_available():
+                names.append(name)
+        return names
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._names
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __getitem__(self, idx: int | slice) -> Any:
+        return self._names[idx]
+
+    def __repr__(self) -> str:
+        return repr(self._names)
+
+    def __bool__(self) -> bool:
+        return bool(self._names)
+
+    def refresh(self) -> None:
+        self.__dict__.pop("_names", None)
+        seen: set[int] = set()
+        for name in _SOLVER_PROBE_ORDER:
+            cls = _solver_class_for(name)
+            if cls is None:
+                continue
+            fn = cls.__dict__.get("is_available")
+            if fn is None:
+                continue
+            cache_clear = getattr(fn, "cache_clear", None)
+            if cache_clear is not None and id(fn) not in seen:
+                cache_clear()
+                seen.add(id(fn))
+
+
+class _QuadraticSolvers(_AvailableSolvers):
+    _filter: ClassVar[frozenset[str] | None] = frozenset(QUADRATIC_SOLVERS)
+
+
+class _LicensedSolvers(_AvailableSolvers):
+    """Installed solvers whose ``license_status()`` probe currently succeeds."""
+
+    @functools.cached_property
+    def _names(self) -> list[str]:
+        names: list[str] = []
+        for name in _SOLVER_PROBE_ORDER:
+            cls = _solver_class_for(name)
+            if cls is None or not cls.is_available():
+                continue
+            if cls.license_status().ok:
+                names.append(name)
+        return names
+
+
+available_solvers = _AvailableSolvers()
+quadratic_solvers = _QuadraticSolvers()
+licensed_solvers = _LicensedSolvers()
+
+
+def check_solver_licenses(*names: str) -> dict[str, LicenseStatus]:
+    """Probe license status for the given solvers, or all installed ones."""
+    targets = names or tuple(available_solvers)
+    out: dict[str, LicenseStatus] = {}
+    for n in targets:
+        cls = _solver_class_for(n)
+        if cls is None:
+            raise ValueError(f"unknown solver: {n!r}")
+        out[n] = cls.license_status()
+    return out
