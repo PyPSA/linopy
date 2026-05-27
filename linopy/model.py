@@ -729,7 +729,7 @@ class Model:
         ...     coords=[pd.Index(["a", "b", "c"], name="x")],
         ...     name="r",
         ... )
-        >>> list(v.data.lower.values)
+        >>> v.lower.values.tolist()
         [1.0, 2.0, 3.0]
 
         Unnamed-coords sequence + ``dims=`` opts into the same strict

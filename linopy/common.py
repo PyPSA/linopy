@@ -434,8 +434,8 @@ def validate_alignment(
     extra = set(arr.dims) - expected_dims
     if extra:
         raise ValueError(
-            f"{subject} has dimension(s) {sorted(extra)} not declared in coords "
-            f"({sorted(expected_dims)}). Add them to coords or remove them from "
+            f"{subject} has dimension(s) {sorted(extra, key=str)} not declared in coords "
+            f"({sorted(expected_dims, key=str)}). Add them to coords or remove them from "
             f"{subject.lower()}."
         )
     for dim, coord_values in expected.items():
@@ -493,7 +493,7 @@ def align_to_coords(
 def _coords_to_dict(
     coords: Sequence[Sequence | pd.Index] | Mapping,
     dims: DimsLike | None = None,
-) -> dict[str, Any]:
+) -> dict[Hashable, Any]:
     """
     Normalize coords to a dict mapping dim names to coordinate values.
 
@@ -522,7 +522,7 @@ def _coords_to_dict(
     dim_names: list[Any] | None = None
     if dims is not None:
         dim_names = list(dims) if isinstance(dims, list | tuple) else [dims]
-    result: dict[str, Any] = {}
+    result: dict[Hashable, Any] = {}
     for i, c in enumerate(coords):
         if isinstance(c, pd.MultiIndex):
             if not c.name:
