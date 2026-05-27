@@ -54,8 +54,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Bug Fixes**
 
-* ``Model.add_variables``: 0.7.0 made ``coords`` (dims, order, and values) the source of truth for ``DataArray`` bounds; this release closes the two remaining gaps. Pandas ``Series`` / ``DataFrame`` bounds missing a dimension are broadcast to ``coords`` instead of being silently dropped (`#709 <https://github.com/PyPSA/linopy/issues/709>`__), and the variable's dimension order always follows ``coords`` regardless of bound type (`#706 <https://github.com/PyPSA/linopy/issues/706>`__). Bare-tuple coord entries (``coords=[(0, 1, 2)]``) now behave like lists.
-* ``add_variables`` / ``add_constraints``: the same rule now applies to ``mask`` — pandas ``Series`` / ``DataFrame`` masks missing a dimension are broadcast to the variable/constraint shape. As previously announced via ``FutureWarning``, masks whose coordinates are a sparse subset of the data's coordinates now raise ``ValueError`` rather than silently filling missing entries with ``False``; masks with dimensions not in the data raise ``ValueError`` instead of ``AssertionError``.
+* ``add_variables`` / ``add_constraints``: extends 0.7.0's coords-as-truth rule to ``lower``, ``upper`` and ``mask`` for every bound type and dim order. Pandas ``Series`` / ``DataFrame`` bounds or masks missing a dimension are broadcast to ``coords`` instead of being silently dropped (`#709 <https://github.com/PyPSA/linopy/issues/709>`__); the variable's dimension order always follows ``coords`` (`#706 <https://github.com/PyPSA/linopy/issues/706>`__); bare-tuple coord entries (``coords=[(0, 1, 2)]``) now behave like lists. Mismatched values or extra dims raise ``ValueError`` with a labelled message; sparse-coord masks (formerly a v0.6.3 ``FutureWarning``, #580) raise ``ValueError``, and masks with dims not in the data raise ``ValueError`` instead of ``AssertionError``.
 * ``add_piecewise_formulation`` now produces a reproducible dimension order in the broadcast breakpoint array. The previous set-based expansion gave a hash-randomized order that varied between processes.
 * SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
 * ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
@@ -63,7 +62,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Breaking Changes**
 
-* ``add_variables`` / ``add_constraints``: the previously deprecated ``mask`` behaviours are now hard errors (sparse-coord mask raises ``ValueError`` instead of the v0.6.3 ``FutureWarning``; mask with extra dims raises ``ValueError`` instead of ``AssertionError``). An unnamed ``pd.MultiIndex`` in sequence-form ``coords`` must have ``.name`` set or be paired with ``dims=[i]`` — raises ``TypeError`` otherwise. See Bug Fixes above for migration.
+* ``add_variables`` / ``add_constraints``: the v0.6.3 ``mask`` deprecations (#580) are now hard ``ValueError``\ s; an unnamed ``pd.MultiIndex`` in sequence-form ``coords`` raises ``TypeError`` unless paired with ``dims=[i]``. See Bug Fixes above.
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
 * ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
 * ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
@@ -71,14 +70,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Internal**
 
-* ``linopy.common.as_dataarray`` is now the single broadcasting primitive;
-  strict subset-dim / coord-value checks live in
-  ``validate_alignment`` (via ``align_to_coords`` in
-  ``add_variables`` / ``add_constraints``). Validation errors name the
-  argument (``lower bound``, ``upper bound``, ``mask``) and explain whether
-  dimensions or coordinate values disagree with ``coords``. When ``coords`` is
-  a mapping, extra keys beyond the positional ``dims`` are broadcast in rather
-  than dropped.
+* ``linopy.common.as_dataarray`` is the single broadcasting primitive; strict subset-dim / coord-value checks live in ``validate_alignment`` (via ``align_to_coords`` in ``add_variables`` / ``add_constraints``). When ``coords`` is a mapping, extra keys beyond the positional ``dims`` are broadcast in rather than dropped.
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
