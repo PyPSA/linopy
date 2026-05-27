@@ -665,7 +665,9 @@ class TestMosekChooseSolution:
             ),
         ],
     )
-    def test_choose_solution(self, kwargs: dict[str, object], expected_soltype: object) -> None:
+    def test_choose_solution(
+        self, kwargs: dict[str, object], expected_soltype: object
+    ) -> None:
         task = self._make_task_mock(**kwargs)
         assert solvers.Mosek._choose_solution(task) is expected_soltype
 
