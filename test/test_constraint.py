@@ -525,16 +525,16 @@ def test_constraint_update_lhs_and_coeffs_rejected(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
     """lhs= (full replacement) and coeffs= (partial) are mutually exclusive."""
-    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
+    with pytest.raises(TypeError, match="lhs.*coeffs.*vars"):
         mc.update(lhs=2 * x, coeffs=mc.coeffs * 2)
 
 
-def test_constraint_update_lhs_and_variables_rejected(
+def test_constraint_update_lhs_and_vars_rejected(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    """lhs= (full replacement) and variables= (partial) are mutually exclusive."""
-    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
-        mc.update(lhs=2 * x, variables=mc.vars)
+    """lhs= (full replacement) and vars= (partial) are mutually exclusive."""
+    with pytest.raises(TypeError, match="lhs.*coeffs.*vars"):
+        mc.update(lhs=2 * x, vars=mc.vars)
 
 
 def test_constraint_rhs_setter_with_variable(

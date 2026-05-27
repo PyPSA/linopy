@@ -1138,11 +1138,11 @@ class Constraint(ConstraintBase):
         """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
         warn(
             "Constraint.vars setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(variables=...) instead.",
+            "future release; use Constraint.update(vars=...) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
-        self.update(variables=value)
+        self.update(vars=value)
 
     @property
     def sign(self) -> DataArray:
@@ -1224,7 +1224,7 @@ class Constraint(ConstraintBase):
         rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         sign: SignLike | None = None,
         coeffs: ConstantLike | None = None,
-        variables: variables.Variable | DataArray | None = None,
+        vars: variables.Variable | DataArray | None = None,
     ) -> Constraint:
         """
         Update the constraint in place.
@@ -1234,7 +1234,7 @@ class Constraint(ConstraintBase):
         * ``c.update(x + 5 <= 3)`` — pass a complete constraint
           expression (mirroring ``add_constraints``). Replaces lhs,
           sign, and rhs at once.
-        * ``c.update(lhs=, rhs=, sign=, coeffs=, variables=)`` — pass
+        * ``c.update(lhs=, rhs=, sign=, coeffs=, vars=)`` — pass
           only what you want to change.
 
         Use the keyword form for targeted changes — it skips the
@@ -1261,7 +1261,7 @@ class Constraint(ConstraintBase):
         lhs : ExpressionLike / VariableLike / ConstantLike, optional
             Replace the LHS expression. Any constant part is moved to
             ``rhs`` so ``c.lhs`` stays pure-variable. Cannot be combined
-            with ``coeffs`` / ``variables``. Sets the internal
+            with ``coeffs`` / ``vars``. Sets the internal
             ``_coef_dirty`` flag.
         rhs : ExpressionLike / VariableLike / ConstantLike, optional
             New right-hand side.
@@ -1289,7 +1289,7 @@ class Constraint(ConstraintBase):
         coeffs : ConstantLike, optional
             Replace coefficient values (same sparsity / term structure).
             Lower-level than ``lhs=``; sets ``_coef_dirty``.
-        variables : Variable, optional
+        vars : Variable, optional
             Replace variable label array (same sparsity / term
             structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
 
@@ -1304,7 +1304,7 @@ class Constraint(ConstraintBase):
             ``self`` for chaining.
         """
         if constraint is not None:
-            if any(x is not None for x in (lhs, rhs, sign, coeffs, variables)):
+            if any(x is not None for x in (lhs, rhs, sign, coeffs, vars)):
                 raise TypeError(
                     "Constraint.update: positional `constraint` argument "
                     "cannot be combined with keyword arguments."
@@ -1321,13 +1321,13 @@ class Constraint(ConstraintBase):
                 )
             lhs, sign, rhs = con.lhs, con.sign, con.rhs
 
-        if all(v is None for v in (lhs, rhs, sign, coeffs, variables)):
+        if all(v is None for v in (lhs, rhs, sign, coeffs, vars)):
             return self
 
-        if lhs is not None and (coeffs is not None or variables is not None):
+        if lhs is not None and (coeffs is not None or vars is not None):
             raise TypeError(
                 "Constraint.update: pass either `lhs=` (replace the whole "
-                "expression) or `coeffs=` / `variables=` (partial array "
+                "expression) or `coeffs=` / `vars=` (partial array "
                 "replacement), not both."
             )
 
@@ -1350,30 +1350,28 @@ class Constraint(ConstraintBase):
             else:
                 self._update_data(rhs=expr.const)
 
-        # 3. coeffs / variables partial updates (only valid without lhs=).
+        # 3. coeffs / vars partial updates (only valid without lhs=).
         if coeffs is not None:
             new_coeffs = DataArray(coeffs).broadcast_like(
                 self.vars, exclude=[self.term_dim]
             )
             self._update_data(coeffs=new_coeffs)
-        if variables is not None:
-            from linopy.variables import Variable as _Variable
-
-            if isinstance(variables, _Variable):
-                v = variables.labels
-            elif isinstance(variables, DataArray):
+        if vars is not None:
+            if isinstance(vars, variables.Variable):
+                v = vars.labels
+            elif isinstance(vars, DataArray):
                 warnings.warn(
-                    "Passing a DataArray to Constraint.update(variables=...) "
+                    "Passing a DataArray to Constraint.update(vars=...) "
                     "is deprecated and will be removed in a future release; "
                     "pass a Variable instead.",
                     FutureWarning,
                     stacklevel=2,
                 )
-                v = variables
+                v = vars
             else:
                 raise TypeError(
-                    "Constraint.update(variables=...) expects a Variable; "
-                    f"got {type(variables).__name__}."
+                    "Constraint.update(vars=...) expects a Variable; "
+                    f"got {type(vars).__name__}."
                 )
             new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
             self._update_data(vars=new_vars)
