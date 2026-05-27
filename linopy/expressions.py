@@ -82,6 +82,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
@@ -337,13 +338,13 @@ class BaseExpression(ABC):
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
+        elif isinstance(data, CONSTANT_TYPES):
             const = as_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
             supported_types = ", ".join(
-                map(lambda s: s.__qualname__, (*SUPPORTED_CONSTANT_TYPES, Dataset))
+                map(lambda s: s.__qualname__, (*CONSTANT_TYPES, Dataset))
             )
             raise ValueError(
                 f"data must be an instance of {supported_types}, got {type(data)}"
@@ -691,7 +692,7 @@ class BaseExpression(ABC):
         """
         if join is None:
             return self.__add__(other)
-        if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+        if isinstance(other, CONSTANT_TYPES):
             return self._add_constant(other, join=join)
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
@@ -1101,7 +1102,7 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+        if isinstance(rhs, CONSTANT_TYPES):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
@@ -1329,6 +1330,26 @@ class BaseExpression(ABC):
         Get the number of terms in the linear expression.
         """
         return len(self.data._term)
+
+    @property
+    def variable_names(self) -> set[str]:
+        """
+        Get the names of the unique variables present in the expression.
+        """
+        if self.nterm == 0:
+            return set()
+
+        # Collect all unique labels from the expression (excluding -1)
+        all_labels = self.vars.values.ravel()
+        unique_labels = np.unique(all_labels[all_labels != -1])
+
+        if len(unique_labels) == 0:
+            return set()
+
+        # Batch lookup variable names for all labels
+        positions = self.model.variables.get_label_position(unique_labels)
+
+        return {p[0] for p in positions if p[0] is not None}
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -1564,7 +1585,7 @@ class LinearExpression(BaseExpression):
             return other.__add__(self)
 
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -1962,7 +1983,7 @@ class LinearExpression(BaseExpression):
         ) -> LinearExpression:
             nonlocal model
 
-            if isinstance(t, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(t, CONSTANT_TYPES):
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 expr = LinearExpression(t, model)
@@ -1981,7 +2002,7 @@ class LinearExpression(BaseExpression):
                         )
                     expr = v.to_linexpr(c)
                 elif isinstance(v, variables.Variable):
-                    if not isinstance(c, SUPPORTED_CONSTANT_TYPES):
+                    if not isinstance(c, CONSTANT_TYPES):
                         raise TypeError(
                             "Expected constant as coefficient of variable (first element of tuple)."
                         )
@@ -2098,7 +2119,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -2590,18 +2611,6 @@ class ScalarLinearExpression:
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
         return LinearExpression(ds, self.model)
 
-
-SUPPORTED_CONSTANT_TYPES = (
-    np.number,
-    np.bool_,
-    int,
-    float,
-    DataArray,
-    pd.Series,
-    pd.DataFrame,
-    np.ndarray,
-    pl.Series,
-)
 
 SUPPORTED_EXPRESSION_TYPES = (
     BaseExpression,
