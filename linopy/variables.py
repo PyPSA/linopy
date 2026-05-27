@@ -968,25 +968,39 @@ class Variable:
         if lower is None and upper is None:
             return self
 
-        for name, val in (("lower", lower), ("upper", upper)):
-            if val is not None and not isinstance(val, CONSTANT_TYPES):
+        updates = self._validate_update(lower=lower, upper=upper)
+        self._data = assign_multiindex_safe(self.data, **updates)
+        return self
+
+    def _validate_update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> dict[str, DataArray]:
+        """
+        Validate, broadcast, and cross-check update inputs.
+
+        Returns the broadcasted DataArrays ready for assignment. Raises
+        before any mutation if any input is wrong.
+        """
+        updates: dict[str, DataArray] = {}
+        own_dims = self.model.variables[self.name].dims
+        for name, val, ref in (
+            ("lower", lower, self.lower),
+            ("upper", upper, self.upper),
+        ):
+            if val is None:
+                continue
+            if not isinstance(val, CONSTANT_TYPES):
                 raise TypeError(
                     f"Variable.update({name}=...) must be a constant; "
                     f"got {type(val).__name__}."
                 )
-
-        updates: dict[str, DataArray] = {}
-        own_dims = self.model.variables[self.name].dims
-        if lower is not None:
-            new_lower = DataArray(lower).broadcast_like(self.lower)
-            if not set(new_lower.dims).issubset(own_dims):
+            new_val = DataArray(val).broadcast_like(ref)
+            if not set(new_val.dims).issubset(own_dims):
                 raise ValueError("Cannot assign new dimensions to existing variable.")
-            updates["lower"] = new_lower
-        if upper is not None:
-            new_upper = DataArray(upper).broadcast_like(self.upper)
-            if not set(new_upper.dims).issubset(own_dims):
-                raise ValueError("Cannot assign new dimensions to existing variable.")
-            updates["upper"] = new_upper
+            updates[name] = new_val
 
         final_lower = updates.get("lower", self.lower)
         final_upper = updates.get("upper", self.upper)
@@ -994,9 +1008,7 @@ class Variable:
             raise ValueError(
                 "Variable.update would leave lower > upper at one or more coordinates."
             )
-
-        self._data = assign_multiindex_safe(self.data, **updates)
-        return self
+        return updates
 
     @property
     @has_optimized_model

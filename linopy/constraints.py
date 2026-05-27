@@ -1282,11 +1282,14 @@ class Constraint(ConstraintBase):
         coeffs : ConstantLike, optional
             Replace coefficient values (same sparsity / term structure).
             Lower-level than ``lhs=``; sets ``_coef_dirty``.
-        variables : Variable / DataArray, optional
+        variables : Variable, optional
             Replace variable label array (same sparsity / term
             structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
-            Mirrors the ``c.vars`` attribute; spelled out here to avoid
-            shadowing Python's ``vars()`` builtin in the kwarg name.
+
+            A raw ``DataArray`` of integer labels is still accepted
+            for back-compat but emits a ``FutureWarning`` — pass a
+            ``Variable`` instead. The DataArray path will be removed
+            in a future release.
 
         Returns
         -------
@@ -1350,11 +1353,21 @@ class Constraint(ConstraintBase):
         if variables is not None:
             from linopy.variables import Variable as _Variable
 
-            v = variables.labels if isinstance(variables, _Variable) else variables
-            if not isinstance(v, DataArray):
+            if isinstance(variables, _Variable):
+                v = variables.labels
+            elif isinstance(variables, DataArray):
+                warnings.warn(
+                    "Passing a DataArray to Constraint.update(variables=...) "
+                    "is deprecated and will be removed in a future release; "
+                    "pass a Variable instead.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
+                v = variables
+            else:
                 raise TypeError(
-                    "Constraint.update(variables=...) expects a DataArray or "
-                    f"Variable; got {type(variables).__name__}."
+                    "Constraint.update(variables=...) expects a Variable; "
+                    f"got {type(variables).__name__}."
                 )
             new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
             self._assign_data(vars=new_vars)
@@ -1469,10 +1482,12 @@ class Constraint(ConstraintBase):
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
-        return self.update(
-            variables=self.vars.where(not_zero, -1),
+        self._assign_data(
+            vars=self.vars.where(not_zero, -1),
             coeffs=self.coeffs.where(not_zero),
         )
+        self._coef_dirty = True
+        return self
 
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""

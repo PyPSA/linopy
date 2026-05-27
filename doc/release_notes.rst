@@ -56,6 +56,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
 * Mutation via assignment to ``Variable.lower`` / ``Variable.upper`` / ``Constraint.coeffs`` / ``Constraint.vars`` / ``Constraint.lhs`` / ``Constraint.sign`` / ``Constraint.rhs`` is deprecated and emits a ``DeprecationWarning``. Use ``Variable.update(...)`` / ``Constraint.update(...)`` instead — the canonical mutation API with one validation path and one place that flips the persistent-solver dirty flag. Read access to these properties is unchanged. The setters will be removed in a future release.
+* Passing a raw ``DataArray`` of integer labels to ``Constraint.vars = ...`` setter is deprecated and emits a ``FutureWarning``. Pass a ``Variable`` to ``Constraint.update()`` instead — it is the supported input. The ``DataArray`` path will be removed in a future release.
 
 **Bug Fixes**
 

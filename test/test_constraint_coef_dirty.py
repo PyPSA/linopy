@@ -29,7 +29,8 @@ def test_update_coeffs_sets_dirty(m_with_c: tuple[Model, str]) -> None:
 def test_update_variables_sets_dirty(m_with_c: tuple[Model, str]) -> None:
     m, name = m_with_c
     c = m.constraints[name]
-    c.update(variables=c.vars)
+    x = m.variables["x"]
+    c.update(variables=x)
     assert c._coef_dirty is True
 
 

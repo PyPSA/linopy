@@ -357,7 +357,9 @@ def test_constraint_vars_setter(
 def test_constraint_vars_setter_with_array(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.vars = x.labels
+    """Passing a raw DataArray is deprecated but still works for back-compat."""
+    with pytest.warns(FutureWarning, match="DataArray"):
+        mc.vars = x.labels
     assert_equal(mc.vars, x.labels)
 
 
