@@ -44,4 +44,7 @@ jobs:
       # Catches doc rot — the notebook is the canonical "how to use the
       # registry" walkthrough and must stay runnable end-to-end.
       run: |
-        python benchmarks/notebooks/registry_usage.py
+        jupyter nbconvert --to notebook --execute \
+          --ExecutePreprocessor.timeout=300 \
+          --output executed.ipynb \
+          benchmarks/notebooks/registry_usage.ipynb

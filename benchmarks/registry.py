@@ -86,7 +86,7 @@ DEFAULT_PHASES = frozenset(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class ModelSpec:
     """
     Declarative description of one benchmark model.
@@ -114,6 +114,36 @@ class ModelSpec:
 
     def has_feature(self, feature: str) -> bool:
         return feature in self.features
+
+    def __repr__(self) -> str:
+        feats = ",".join(sorted(self.features))
+        size_range = (
+            f"{self.sizes[0]}..{self.sizes[-1]}"
+            if len(self.sizes) > 1
+            else str(self.sizes[0])
+        )
+        return f"ModelSpec({self.name!r}, features={{{feats}}}, sizes={size_range})"
+
+    def _repr_html_(self) -> str:
+        # Rich rendering for Jupyter — a compact two-column table.
+        rows = [
+            ("name", self.name),
+            ("features", ", ".join(sorted(self.features))),
+            ("sizes", ", ".join(str(s) for s in self.sizes)),
+            ("phases", ", ".join(sorted(self.phases))),
+            ("quick_threshold", self.quick_threshold),
+            ("long_threshold", self.long_threshold),
+            ("requires", ", ".join(self.requires) or "—"),
+        ]
+        body = "".join(
+            f"<tr><th style='text-align:left;padding-right:1em'>{k}</th>"
+            f"<td>{v}</td></tr>"
+            for k, v in rows
+        )
+        return (
+            f"<b>ModelSpec</b> <code>{self.name}</code>"
+            f"<table style='font-size:90%'>{body}</table>"
+        )
 
 
 REGISTRY: dict[str, ModelSpec] = {}

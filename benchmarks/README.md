@@ -77,16 +77,16 @@ To add a new model, drop a file under `benchmarks/models/`, expose a
 
 ### Worked walkthrough
 
-[`notebooks/registry_usage.py`](notebooks/registry_usage.py) is a jupytext
-percent-format notebook that runs through every pattern above end-to-end.
-Three ways to consume it:
+[`notebooks/registry_usage.ipynb`](notebooks/registry_usage.ipynb) is the
+canonical walkthrough — it runs through every pattern above end-to-end.
+GitHub renders it inline. CI executes it on every PR via `jupyter nbconvert
+--execute`, so the examples can't silently rot.
 
-- **Script:** `python benchmarks/notebooks/registry_usage.py` — every cell
-  executes top-to-bottom; CI runs it this way on every PR so the examples
-  can't silently rot.
-- **Notebook:** open the `.py` file in JupyterLab or VSCode with the jupytext
-  extension installed and it renders as a notebook.
-- **Read:** the `# %% [markdown]` blocks render fine on GitHub directly.
+Open it locally with JupyterLab launched from the repo root:
+
+```bash
+jupyter lab benchmarks/notebooks/registry_usage.ipynb
+```
 
 ## Setup
 
