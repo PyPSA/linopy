@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from benchmarks.registry import ModelSpec
 
 RESULTS_DIR = Path(".benchmarks/memory")
-DEFAULT_PHASES: tuple[str, ...] = (
+MEMORY_PHASES: tuple[str, ...] = (
     "build",
     "matrices",
     "lp_write",
@@ -268,7 +268,7 @@ def save(
     measurement; ``memray.Tracker`` only counts what's allocated inside its
     ``with`` block, but the subprocess boundary makes the isolation total.
     """
-    phases = list(phases) if phases else list(DEFAULT_PHASES)
+    phases = list(phases) if phases else list(MEMORY_PHASES)
 
     all_results: dict[str, float] = {}
     for phase in phases:

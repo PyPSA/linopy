@@ -40,9 +40,9 @@ jobs:
       run: |
         python -m benchmarks smoke
 
-    - name: Execute registry-usage notebook
-      # Catches doc rot — the notebook is the canonical "how to use the
-      # registry" walkthrough and must stay runnable end-to-end.
+    - name: Execute walkthrough notebook
+      # Catches doc rot — walkthrough.md is the canonical CLI walkthrough
+      # for the suite and must stay runnable end-to-end.
       run: |
         python -m benchmarks notebook
 

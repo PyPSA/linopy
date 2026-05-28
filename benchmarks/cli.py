@@ -939,13 +939,13 @@ def memory_save_cmd(
     pytest-style test IDs so ``compare`` diffs cleanly across runs that
     selected different subsets.
     """
-    from benchmarks.memory import DEFAULT_PHASES
+    from benchmarks.memory import MEMORY_PHASES
 
     if phase:
-        unknown = [p for p in phase if p not in DEFAULT_PHASES]
+        unknown = [p for p in phase if p not in MEMORY_PHASES]
         if unknown:
             typer.secho(
-                f"unknown phase(s): {unknown}; valid options: {list(DEFAULT_PHASES)}",
+                f"unknown phase(s): {unknown}; valid options: {list(MEMORY_PHASES)}",
                 fg=typer.colors.RED,
                 err=True,
             )
@@ -1001,13 +1001,13 @@ def memory_sweep_cmd(
     ``--repeats 1`` (default) is usually plenty. Use ``--repeats 3``
     if you need <5%% regression detection.
     """
-    from benchmarks.memory import DEFAULT_PHASES
+    from benchmarks.memory import MEMORY_PHASES
 
     if phase:
-        unknown = [p for p in phase if p not in DEFAULT_PHASES]
+        unknown = [p for p in phase if p not in MEMORY_PHASES]
         if unknown:
             typer.secho(
-                f"unknown phase(s): {unknown}; valid options: {list(DEFAULT_PHASES)}",
+                f"unknown phase(s): {unknown}; valid options: {list(MEMORY_PHASES)}",
                 fg=typer.colors.RED,
                 err=True,
             )

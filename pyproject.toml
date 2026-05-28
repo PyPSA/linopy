@@ -82,16 +82,16 @@ dev = [
     "highspy",
     "jupyter",
 ]
-# Test infrastructure pinned exactly so the measurement environment stays
-# stable over time on the same machine — deltas between two runs then
-# reflect linopy changes, not a pytest or pandas upgrade. Absolute numbers
-# are still machine-dependent (CPU / cache / memory bandwidth).
+# Every direct dep that affects measurement is pinned exactly so the
+# environment stays stable over time on the same machine — deltas
+# between two runs then reflect linopy changes, not a numpy/scipy/pytest
+# upgrade. Absolute numbers are still machine-dependent (CPU / cache /
+# memory bandwidth).
 #
-# Not pinned here: numpy / scipy / pandas / xarray. They also affect
-# measurements, but the full transitive set lives in
-# ``benchmarks/requirements.lock`` (regen via ``uv pip compile``). The
-# lockfile excludes linopy itself so ``sweep`` can install any linopy
-# version on top of a stable environment.
+# ``sweep`` installs these into each per-version venv, so the same pin
+# set drives every linopy version in a sweep call — only ``linopy``
+# varies. Transitive deps resolve fresh per venv; uv's deterministic
+# resolution gives identical results across versions within one sweep.
 #
 # ``highspy`` follows the project-wide ``!=1.14.0`` exclusion (see the
 # ``solvers`` extra).

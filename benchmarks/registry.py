@@ -23,7 +23,7 @@ Pattern for downstream use::
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import linopy
@@ -198,7 +198,3 @@ def iter_params(phase: str) -> list[tuple[ModelSpec, int]]:
 
 def param_ids(params: list[tuple[ModelSpec, int]]) -> list[str]:
     return [f"{spec.name}-n={size}" for spec, size in params]
-
-
-def __iter__() -> Iterator[ModelSpec]:  # pragma: no cover - convenience
-    return iter(REGISTRY.values())
