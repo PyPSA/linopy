@@ -562,13 +562,22 @@ def compare(
         _suggest_snapshots(f"missing snapshots: {[str(p) for p in missing]}")
         raise typer.Exit(code=2)
 
+    # Sensible defaults — pytest-benchmark's own default is 10 columns wide,
+    # which is unreadable. Only apply each default if the user hasn't already
+    # set it via a trailing arg.
+    extra = list(ctx.args)
+    if not any(a.startswith("--columns") for a in extra):
+        extra.insert(0, "--columns=median,iqr")
+    if not any(a.startswith("--sort") for a in extra):
+        extra.insert(0, "--sort=name")
+
     cmd = [
         sys.executable,
         "-m",
         "pytest_benchmark",
         "compare",
         *[str(p) for p in snapshots],
-        *ctx.args,
+        *extra,
     ]
     typer.secho(f"$ {' '.join(cmd)}", fg=typer.colors.BRIGHT_BLACK)
     result = subprocess.run(cmd, check=False)
