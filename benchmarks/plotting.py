@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 PlotView = Literal["compare", "scatter", "sweep", "scaling"]
 Metric = Literal["min", "median", "mean", "max"]
 SortMode = Literal["absolute", "relative"]
+FacetBy = Literal["phase", "model"]
 
 _SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
 
@@ -78,16 +79,29 @@ def plot_compare(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",
+    facets: FacetBy | None = None,
 ) -> tuple[Figure, int]:
     """
-    Bar chart of delta per test, sorted by magnitude.
+    Bar chart of delta per test, in alphabetical test-id order.
 
-    ``sort="absolute"`` (default): bar = (b - a) seconds, sort by the
-    largest actual time impact. Best for "what change actually affected
-    total runtime?" — avoids over-weighting cheap microsecond tests.
+    ``sort`` chooses the bar *dimension*: ``absolute`` (default) plots
+    ``b - a`` in the data's native unit; ``relative`` plots the percent
+    change. Bars are not reordered by magnitude — alphabetical ids keep
+    related tests visually grouped. Use the scatter view for hunting
+    outliers.
 
-    ``sort="relative"``: bar = (b/a - 1) * 100 %, sort by the largest
-    proportional change. Best for "what got proportionally worse?".
+    ``facets`` splits the chart into subplots:
+
+    - ``None`` (default): one flat bar chart.
+    - ``"phase"``: facet by the test file (``test_build``,
+      ``test_lp_write``, ...). Best for "everything in this phase moved
+      together?".
+    - ``"model"``: facet by the model name (``basic``, ``knapsack``, ...).
+      Best for "what happened across all the basic-sized variants?".
+
+    Tests whose IDs don't match the standard ``[<model>-n=<size>]``
+    parametrize shape (e.g. PyPSA carbon-management) land in an
+    ``other`` facet.
     """
     import pandas as pd
     import plotly.express as px
@@ -117,18 +131,34 @@ def plot_compare(
     # used the same name, the dict literal would silently overwrite it
     # and plotly would render the snapshot values on the y-axis instead
     # of the test names.
-    rows = [
-        {
-            "_test_id": name,
-            a_label: a_vals[name],
-            b_label: b_vals[name],
-            "delta_abs": b_vals[name] - a_vals[name],
-            "delta_pct": (b_vals[name] - a_vals[name]) / a_vals[name] * 100.0
-            if a_vals[name]
-            else float("inf"),
-        }
-        for name in common
-    ]
+    rows = []
+    for name in common:
+        m = _SIZE_RE.match(name)
+        if m:
+            phase_path, model, n = m.groups()
+            phase = phase_path.split("::")[-1]
+            short = f"{model}-n={n}"
+        else:
+            # Tests that don't match the parametrize pattern (PyPSA
+            # carbon-management scenarios, etc.) — keep them visible
+            # under an "other" bucket.
+            phase = "other"
+            model = "other"
+            short = name.split("::")[-1] if "::" in name else name
+        rows.append(
+            {
+                "_test_id": name,
+                "_phase": phase,
+                "_model": model,
+                "_short": short,
+                a_label: a_vals[name],
+                b_label: b_vals[name],
+                "delta_abs": b_vals[name] - a_vals[name],
+                "delta_pct": (b_vals[name] - a_vals[name]) / a_vals[name] * 100.0
+                if a_vals[name]
+                else float("inf"),
+            }
+        )
     df = pd.DataFrame(rows)
     x_col = "delta_abs" if sort == "absolute" else "delta_pct"
     # No reindex by magnitude — alphabetical test_id order (from
@@ -153,23 +183,38 @@ def plot_compare(
             f"{len(only_b)} only in {b_label}</sub>"
         )
 
+    # Faceted layout uses the short ``model-n=size`` y-label (the facet
+    # already conveys the phase or model); flat layout uses the full
+    # test-id so each bar is self-identifying.
+    facet_kwargs: dict = {}
+    if facets == "phase":
+        facet_kwargs = {"facet_col": "_phase", "facet_col_wrap": 2}
+        y_col = "_short"
+    elif facets == "model":
+        facet_kwargs = {"facet_col": "_model", "facet_col_wrap": 3}
+        y_col = "_short"
+    else:
+        y_col = "_test_id"
+
     fig = px.bar(
         df,
         x=x_col,
-        y="_test_id",
+        y=y_col,
         orientation="h",
         color=x_col,
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
         title=title,
-        labels={x_col: x_label, "_test_id": ""},
+        labels={x_col: x_label, y_col: ""},
         text_auto=text_fmt,
         hover_data={
+            "_test_id": True,
             a_label: ":.4g",
             b_label: ":.4g",
             "delta_abs": ":.4g",
             "delta_pct": ":.2f",
         },
+        **facet_kwargs,
     )
     if sort == "absolute":
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs) for
@@ -186,6 +231,7 @@ def plot_scatter(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+    facets: FacetBy | None = None,
 ) -> tuple[Figure, int]:
     """
     Two-axis scatter — baseline cost on log-x, ratio on y.
@@ -229,6 +275,13 @@ def plot_scatter(
             a, b = baseline_vals[name], vals[name]
             if a <= 0:
                 continue
+            m = _SIZE_RE.match(name)
+            if m:
+                phase_path, model, _ = m.groups()
+                phase = phase_path.split("::")[-1]
+            else:
+                phase = "other"
+                model = "other"
             rows.append(
                 {
                     "test": name,
@@ -238,6 +291,8 @@ def plot_scatter(
                     "ratio": b / a,
                     "delta_abs": b - a,
                     "delta_pct": (b - a) / a * 100.0,
+                    "_phase": phase,
+                    "_model": model,
                 }
             )
 
@@ -273,6 +328,12 @@ def plot_scatter(
     if animate:
         extra["animation_frame"] = "version"
         extra["category_orders"] = {"version": [label for label, _ in loaded]}
+    if facets == "phase":
+        extra["facet_col"] = "_phase"
+        extra["facet_col_wrap"] = 2
+    elif facets == "model":
+        extra["facet_col"] = "_model"
+        extra["facet_col_wrap"] = 3
 
     fig = px.scatter(
         df,
@@ -318,6 +379,7 @@ def plot_sweep(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+    facets: FacetBy | None = None,  # noqa: ARG001  (uniform signature, unused here)
 ) -> tuple[Figure, int]:
     """Heatmap of per-test ratio relative to the first snapshot."""
     import pandas as pd
@@ -378,6 +440,7 @@ def plot_scaling(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+    facets: FacetBy | None = None,  # noqa: ARG001  (uniform signature, unused here)
 ) -> tuple[Figure, int]:
     """Log-log time vs N for size-parametrized tests, faceted by phase."""
     import pandas as pd
@@ -450,7 +513,8 @@ def plot_scaling(
 
 
 RENDERERS: dict[
-    PlotView, Callable[[list[Path], Metric, SortMode], tuple[Figure, int]]
+    PlotView,
+    Callable[[list[Path], Metric, SortMode, FacetBy | None], tuple[Figure, int]],
 ] = {
     "compare": plot_compare,
     "scatter": plot_scatter,

@@ -29,7 +29,7 @@ from benchmarks import (
 )
 from benchmarks.memory import compare as memory_compare
 from benchmarks.memory import save as memory_save
-from benchmarks.plotting import Metric, PlotView, SortMode
+from benchmarks.plotting import FacetBy, Metric, PlotView, SortMode
 
 app = typer.Typer(
     help=(
@@ -639,6 +639,18 @@ def plot(
             )
         ),
     ] = "absolute",
+    facets: Annotated[
+        FacetBy | None,
+        typer.Option(
+            "--facets",
+            help=(
+                "Split compare / scatter into subplots by ``phase`` (test "
+                "file) or ``model`` (parametrize id). Default: no faceting. "
+                "Tests whose ids don't match ``[<model>-n=<size>]`` (e.g. "
+                "PyPSA carbon-management) land in an ``other`` facet."
+            ),
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option(
@@ -725,7 +737,7 @@ def plot(
         output = Path(".benchmarks") / "plots" / f"{chosen}.html"
 
     try:
-        fig, n_tests = RENDERERS[chosen](snapshots, metric, sort)
+        fig, n_tests = RENDERERS[chosen](snapshots, metric, sort, facets)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
