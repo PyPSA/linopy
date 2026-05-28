@@ -54,9 +54,11 @@ def _benchmarks_extra_pins() -> list[str]:
     """
     Return the pins from ``pyproject.toml``'s ``[benchmarks]`` extra.
 
-    Used by both sweeps as the ``--no-use-lock`` fallback so the
-    pin-bump path stays single-source: edit the extra in pyproject and
-    both ``sweep`` and ``memory sweep`` pick up the change.
+    Both ``sweep`` and ``memory sweep`` install these into each
+    per-version venv. Direct pins are kept in pyproject as the single
+    source of truth — bump them there and both sweeps pick up the
+    change. Transitive deps resolve fresh per venv; uv's deterministic
+    resolution gives identical results across versions within one sweep.
     """
     import tomllib
 
@@ -106,10 +108,16 @@ def list_(
     ]
     name_w = max(len(r[0]) for r in rows)
     feat_w = max(len(r[1]) for r in rows)
-    typer.echo(f"{'name':<{name_w}}  {'features':<{feat_w}}  sizes")
-    typer.echo("-" * (name_w + feat_w + 20))
+    # ``secho`` strips colour automatically when stdout isn't a TTY, so
+    # piping ``list --details | grep`` still gets plain text.
+    typer.secho(
+        f"{'name':<{name_w}}  {'features':<{feat_w}}  sizes",
+        dim=True,
+    )
+    typer.secho("-" * (name_w + feat_w + 20), dim=True)
     for name, feats, sizes in rows:
-        typer.echo(f"{name:<{name_w}}  {feats:<{feat_w}}  {sizes}")
+        typer.secho(f"{name:<{name_w}}", fg=typer.colors.CYAN, nl=False)
+        typer.echo(f"  {feats:<{feat_w}}  {sizes}")
 
 
 @app.command()
@@ -130,13 +138,20 @@ def show(
         typer.echo(f"available: {', '.join(sorted(REGISTRY))}", err=True)
         raise typer.Exit(code=2) from exc
     typer.echo(repr(spec))
-    typer.echo(f"  sizes:           {spec.sizes}")
-    typer.echo(f"  features:        {sorted(spec.features)}")
-    typer.echo(f"  phases:          {sorted(spec.phases)}")
-    typer.echo(f"  quick_threshold: {spec.quick_threshold}")
-    typer.echo(f"  long_threshold:  {spec.long_threshold}")
+
+    def _row(label: str, value: object) -> None:
+        # Dim the label so the eye lands on the value first; ``secho``
+        # auto-strips colour when stdout isn't a TTY.
+        typer.secho(f"  {label:<17}", dim=True, nl=False)
+        typer.echo(value)
+
+    _row("sizes:", spec.sizes)
+    _row("features:", sorted(spec.features))
+    _row("phases:", sorted(spec.phases))
+    _row("quick_threshold:", spec.quick_threshold)
+    _row("long_threshold:", spec.long_threshold)
     if spec.requires:
-        typer.echo(f"  requires:        {list(spec.requires)}")
+        _row("requires:", list(spec.requires))
 
 
 @app.command("filter")
@@ -276,37 +291,79 @@ def run(
 
 
 @app.command()
-def notebook() -> None:
+def notebook(
+    build: Annotated[
+        bool,
+        typer.Option(
+            "--build",
+            help=(
+                "Regenerate ``walkthrough.ipynb`` from the ``.md`` source. "
+                "One-way build — the ``.ipynb`` is a throwaway artifact for "
+                "opening in any editor (JupyterLab, PyCharm, VSCode), the "
+                "``.md`` stays canonical. Re-run after editing the ``.md``. "
+                "The ``.ipynb`` is gitignored."
+            ),
+        ),
+    ] = False,
+) -> None:
     """
-    Execute the registry-usage notebook end-to-end.
+    Execute the walkthrough notebook end-to-end (default) or rebuild the
+    ``.ipynb`` artifact for interactive viewing (``--build``).
 
-    Used by CI to catch doc rot — if any cell raises, the workflow fails.
-    The executed copy is written to a tempdir and discarded, so the
-    in-tree notebook stays output-free (nbstripout doesn't have to chase
-    a populated file).
+    The walkthrough is a Jupytext MyST markdown file
+    (``benchmarks/walkthrough.md``) — diffs cleanly in git, runs as a
+    notebook in Jupyter. The ``.md`` is the source of truth; the paired
+    ``.ipynb`` is generated output. Edit the ``.md``, re-run ``--build``,
+    open the ``.ipynb`` in your editor of choice.
+
+    CI calls this with no flags to catch doc rot; the executed copy goes
+    to a tempdir and is discarded so the source file stays output-free.
     """
-    nb = Path("benchmarks/notebooks/registry_usage.ipynb")
+    nb = Path("benchmarks/walkthrough.md")
     if not nb.exists():
-        typer.secho(f"notebook not found: {nb}", fg=typer.colors.RED, err=True)
+        typer.secho(f"walkthrough not found: {nb}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    with tempfile.TemporaryDirectory() as tmp:
+
+    if build:
+        # ``--to ipynb`` is a one-way conversion (no ``formats`` metadata
+        # written into the .md). The generated .ipynb is editor-agnostic;
+        # contributors regenerate it after editing the .md.
         cmd = [
             sys.executable,
             "-m",
-            "jupyter",
-            "nbconvert",
+            "jupytext",
             "--to",
-            "notebook",
-            "--execute",
-            "--ExecutePreprocessor.timeout=300",
-            "--output-dir",
-            tmp,
-            "--output",
-            "executed.ipynb",
+            "ipynb",
             str(nb),
         ]
         typer.secho(f"$ {' '.join(cmd)}", fg=typer.colors.BRIGHT_BLACK)
         result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            raise typer.Exit(code=result.returncode)
+        ipynb = nb.with_suffix(".ipynb")
+        typer.secho(f"built: {ipynb}  (regenerable from {nb})", fg=typer.colors.GREEN)
+        typer.echo(f"Open it:  jupyter lab {ipynb}    # or PyCharm / VSCode / …")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Jupytext sets the kernel cwd to the output directory (the
+        # tempdir here), so forward the repo root via
+        # ``LINOPY_REPO_ROOT`` for the walkthrough's first cell to find
+        # ``benchmarks/``.
+        env = {**os.environ, "LINOPY_REPO_ROOT": str(Path.cwd().resolve())}
+        cmd = [
+            sys.executable,
+            "-m",
+            "jupytext",
+            "--to",
+            "notebook",
+            "--execute",
+            "--output",
+            str(Path(tmp) / "executed.ipynb"),
+            str(nb),
+        ]
+        typer.secho(f"$ {' '.join(cmd)}", fg=typer.colors.BRIGHT_BLACK)
+        result = subprocess.run(cmd, env=env, check=False)
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
 
@@ -366,13 +423,6 @@ def sweep(
             help="Arbitrary pytest ``-k`` expression (AND-ed with ``--model``).",
         ),
     ] = None,
-    use_lock: Annotated[
-        bool,
-        typer.Option(
-            "--use-lock/--no-use-lock",
-            help="Install ``benchmarks/requirements.lock`` in each venv.",
-        ),
-    ] = True,
     rounds: Annotated[
         int | None,
         typer.Option(
@@ -431,16 +481,6 @@ def sweep(
         raise typer.Exit(code=2)
 
     repo_root = Path.cwd()
-    lockfile = repo_root / "benchmarks" / "requirements.lock"
-    if use_lock and not lockfile.exists():
-        typer.secho(
-            f"--use-lock set but {lockfile} is missing — "
-            "regenerate it via ``uv pip compile`` or pass ``--no-use-lock``.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
@@ -466,13 +506,19 @@ def sweep(
             vpy = _venv_python(venv)
             spec = _linopy_install_spec(version)
 
-            # 2. Single install pass: infra (lockfile or pinned subset) + linopy.
-            install_args = ["uv", "pip", "install", "--python", str(vpy)]
-            if use_lock:
-                install_args += ["-r", str(lockfile)]
-            else:
-                install_args += _benchmarks_extra_pins()
-            install_args.append(spec)
+            # 2. Single install pass: pinned infra (from pyproject) + linopy.
+            #    Direct pins in [benchmarks] are sufficient for sweep
+            #    reproducibility — uv resolves the same input
+            #    deterministically into each per-version venv.
+            install_args = [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(vpy),
+                *_benchmarks_extra_pins(),
+                spec,
+            ]
             r = subprocess.run(install_args, check=False)
             if r.returncode != 0:
                 typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
@@ -618,7 +664,7 @@ def compare(ctx: typer.Context) -> None:
     # grouped by parametrize group, which is unreadable for two-snapshot diffs.
     # ``--group-by=fullname`` puts each test's (baseline, candidate) rows in
     # their own mini-table; ``--columns=min,iqr`` shows the lowest observed
-    # time (closest to "true" cost for microbenchmarks) plus the spread.
+    # time (approximates the no-noise floor) plus the spread.
     # Each default is only applied if the user didn't override it.
     if not any(a.startswith("--columns") for a in extra):
         extra.insert(0, "--columns=min,iqr")
@@ -721,9 +767,9 @@ def plot(
     - **scatter** (2 snapshots) — exploratory two-axis plot: baseline
       cost on log-x, ratio on y, absolute Δ encoded in colour. Tests
       in the top-right are the real regressions (slow tests that got
-      slower); top-left = noisy microbenchmarks; bottom-right =
-      already-slow-but-unchanged. Resolves the absolute-vs-relative
-      tension visually.
+      slower); top-left = cheap tests with big ratio swings (noise,
+      not real change); bottom-right = already-slow-but-unchanged.
+      Resolves the absolute-vs-relative tension visually.
     - **sweep** (3+ snapshots) — heatmap of ratio relative to the first
       snapshot, rows = tests, columns = snapshot labels.
     - **scaling** (1 snapshot) — log-log time vs ``n`` for
@@ -893,13 +939,6 @@ def memory_sweep_cmd(
             help="min-of-N peak per measurement (default 1).",
         ),
     ] = 1,
-    use_lock: Annotated[
-        bool,
-        typer.Option(
-            "--use-lock/--no-use-lock",
-            help="Install ``benchmarks/requirements.lock`` in each venv.",
-        ),
-    ] = True,
 ) -> None:
     """
     Sweep peak-memory measurements across several linopy versions.
@@ -934,16 +973,6 @@ def memory_sweep_cmd(
         raise typer.Exit(code=2)
 
     repo_root = Path.cwd()
-    lockfile = repo_root / "benchmarks" / "requirements.lock"
-    if use_lock and not lockfile.exists():
-        typer.secho(
-            f"--use-lock set but {lockfile} is missing — "
-            "regenerate it via ``uv pip compile`` or pass ``--no-use-lock``.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
@@ -968,12 +997,15 @@ def memory_sweep_cmd(
             vpy = _venv_python(venv)
             spec = _linopy_install_spec(version)
 
-            install_args = ["uv", "pip", "install", "--python", str(vpy)]
-            if use_lock:
-                install_args += ["-r", str(lockfile)]
-            else:
-                install_args += _benchmarks_extra_pins()
-            install_args.append(spec)
+            install_args = [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(vpy),
+                *_benchmarks_extra_pins(),
+                spec,
+            ]
             r = subprocess.run(install_args, check=False)
             if r.returncode != 0:
                 typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)

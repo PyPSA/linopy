@@ -10,9 +10,9 @@ Three opinionated views, all returning the number of tests rendered:
   size-parametrized tests, faceted by phase.
 
 All three accept a ``metric`` argument selecting which pytest-benchmark
-stat drives the plot. Default is ``min`` — for microbenchmarks the
-lowest observed time is closest to the "true" cost (noise can only slow
-things down). ``median`` is more robust to a single weirdly-fast warmup
+stat drives the plot. Default is ``min`` — the fastest observed sample
+approximates the no-noise floor (GC, scheduling, cache thrash can only
+add time). ``median`` is more robust to a single weirdly-fast warmup
 round; ``mean`` and ``max`` are also accepted.
 
 plotly is imported lazily by the dispatcher so the rest of the benchmark
@@ -342,10 +342,11 @@ def plot_scatter(
     Designed as the single best exploratory plot for regression hunting
     across tests of wildly different magnitudes: a point lights up as
     "fix this" only if it sits in the top-right corner — slow tests
-    that got slower. Top-left (big ratio, tiny absolute) reads as
-    microbenchmark noise; bottom-right (big absolute, tiny ratio) is
-    already-slow-but-unchanged. The combined position resolves the
-    tension that pure relative or pure absolute sort each blind-spot.
+    that got slower. Top-left (big ratio, tiny absolute) is a cheap
+    test with noisy ratio swings — not a real change. Bottom-right (big
+    absolute, tiny ratio) is already-slow-but-unchanged. The combined
+    position resolves the tension that pure relative or pure absolute
+    sort each blind-spot.
 
     The first snapshot is the baseline. With 2 snapshots, a static
     scatter is drawn; with 3+, every subsequent snapshot becomes an
