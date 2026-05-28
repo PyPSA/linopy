@@ -75,6 +75,19 @@ To add a new model, drop a file under `benchmarks/models/`, expose a
 `build_<name>(size)`, and call `register(ModelSpec(...))`. Import it from
 `benchmarks/models/__init__.py` so the registration fires.
 
+### Worked walkthrough
+
+[`notebooks/registry_usage.py`](notebooks/registry_usage.py) is a jupytext
+percent-format notebook that runs through every pattern above end-to-end.
+Three ways to consume it:
+
+- **Script:** `python benchmarks/notebooks/registry_usage.py` — every cell
+  executes top-to-bottom; CI runs it this way on every PR so the examples
+  can't silently rot.
+- **Notebook:** open the `.py` file in JupyterLab or VSCode with the jupytext
+  extension installed and it renders as a notebook.
+- **Read:** the `# %% [markdown]` blocks render fine on GitHub directly.
+
 ## Setup
 
 ```bash

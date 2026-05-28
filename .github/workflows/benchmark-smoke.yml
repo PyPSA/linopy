@@ -39,3 +39,9 @@ jobs:
     - name: Run benchmark smoke
       run: |
         pytest benchmarks/ --quick --benchmark-disable -q
+
+    - name: Execute registry-usage notebook
+      # Catches doc rot — the notebook is the canonical "how to use the
+      # registry" walkthrough and must stay runnable end-to-end.
+      run: |
+        python benchmarks/notebooks/registry_usage.py
