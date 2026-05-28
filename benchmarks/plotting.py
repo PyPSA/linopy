@@ -68,6 +68,57 @@ def _check_same_unit(snapshots: list[tuple[str, dict[str, float], str]]) -> str:
     return next(iter(units))
 
 
+def _parse_test_id(test_id: str) -> tuple[str, str, int | None]:
+    """
+    Return ``(phase, model, size)`` for a pytest test id.
+
+    Falls back to ``("other", "other", None)`` for ids that don't match
+    the ``benchmarks/test_<phase>.py::test_<phase>[<model>-n=<size>]``
+    parametrize shape (e.g. ``test_pypsa_carbon_management``).
+    """
+    m = _SIZE_RE.match(test_id)
+    if m:
+        phase = m.group(1).split("::")[-1]
+        return phase, m.group(2), int(m.group(3))
+    return "other", "other", None
+
+
+def load_long_df(snapshots: list[Path], metric: Metric = "min"):
+    """
+    Return ``(df, unit)`` — one row per ``(snapshot, test_id)`` pair.
+
+    Columns: ``snapshot``, ``test_id``, ``phase``, ``model``, ``size``
+    (``Int64``-nullable for the "other" bucket), ``value``. ``unit`` is
+    the shared unit string (``"s"`` for timing, ``"MiB"`` for memory)
+    — every loaded snapshot must agree.
+
+    Every plot view downstream pivots or filters this single frame so
+    test-id parsing, unit checking, and the "x snapshots, y tests"
+    matrix logic all live in one place.
+    """
+    import pandas as pd
+
+    raw = [_load_snapshot(p, metric) for p in snapshots]
+    unit = _check_same_unit(raw)
+    rows = []
+    for label, vals, _ in raw:
+        for test_id, value in vals.items():
+            phase, model, size = _parse_test_id(test_id)
+            rows.append(
+                {
+                    "snapshot": label,
+                    "test_id": test_id,
+                    "phase": phase,
+                    "model": model,
+                    "size": size,
+                    "value": value,
+                }
+            )
+    df = pd.DataFrame(rows)
+    df["size"] = df["size"].astype("Int64")
+    return df, unit
+
+
 def _axis_kwargs(unit: str) -> dict:
     """Return ``update_xaxes`` kwargs for a given unit."""
     if unit == "s":
@@ -156,76 +207,44 @@ def plot_compare(
     parametrize shape (e.g. PyPSA carbon-management) land in an
     ``other`` facet.
     """
-    import pandas as pd
+    import sys
+
     import plotly.express as px
 
-    loaded = [_load_snapshot(p, metric) for p in snapshots[:2]]
-    unit = _check_same_unit(loaded)
+    df_long, unit = load_long_df(snapshots[:2], metric)
     metric_label = metric if unit == "s" else "peak"
-    (a_label, a_vals, _), (b_label, b_vals, _) = loaded
-    common = sorted(set(a_vals) & set(b_vals))
-    only_a = sorted(set(a_vals) - set(b_vals))
-    only_b = sorted(set(b_vals) - set(a_vals))
-    if not common:
-        raise ValueError("no tests in common between the two snapshots")
-    if only_a or only_b:
-        # Surface the mismatch so silent intersection isn't a footgun.
-        import sys
 
+    labels = df_long["snapshot"].drop_duplicates().tolist()
+    a_label, b_label = labels[0], labels[1]
+
+    # Pivot to wide: one row per test, baseline + candidate as columns,
+    # phase / model / size carried through. Then compute deltas
+    # vectorised — no per-row dict construction.
+    wide = (
+        df_long.pivot(
+            index=["test_id", "phase", "model", "size"],
+            columns="snapshot",
+            values="value",
+        )
+        .reset_index()
+        .rename_axis(columns=None)
+    )
+    only_a = wide[wide[a_label].notna() & wide[b_label].isna()]
+    only_b = wide[wide[a_label].isna() & wide[b_label].notna()]
+    df = wide.dropna(subset=[a_label, b_label]).copy()
+    if df.empty:
+        raise ValueError("no tests in common between the two snapshots")
+    if len(only_a) or len(only_b):
         print(
             f"compare: {len(only_a)} test(s) only in {a_label}, "
-            f"{len(only_b)} only in {b_label} (intersection: {len(common)}).",
+            f"{len(only_b)} only in {b_label} (intersection: {len(df)}).",
             file=sys.stderr,
         )
 
-    # Build the dataframe with a uniquely-named test-id column. Snapshot
-    # labels come from filenames (e.g. ``.benchmarks/memory/test.json`` →
-    # ``"test"``) and become column names below; if the test-id column
-    # used the same name, the dict literal would silently overwrite it
-    # and plotly would render the snapshot values on the y-axis instead
-    # of the test names.
-    rows = []
-    for name in common:
-        m = _SIZE_RE.match(name)
-        if m:
-            phase_path, model, n = m.groups()
-            phase = phase_path.split("::")[-1]
-            n_str = f"n={n}"
-            # The y-label inside a facet should be whichever attributes
-            # *vary* there — facet by phase → label is model+size; facet
-            # by model → label is phase+size; otherwise the full id.
-            short_by_phase_facet = f"{model}-{n_str}"
-            short_by_model_facet = f"{phase}-{n_str}"
-        else:
-            # Tests that don't match the parametrize pattern (PyPSA
-            # carbon-management scenarios, etc.) — keep them visible
-            # under an "other" bucket.
-            phase = "other"
-            model = "other"
-            tail = name.split("::")[-1] if "::" in name else name
-            short_by_phase_facet = tail
-            short_by_model_facet = tail
-        rows.append(
-            {
-                "_test_id": name,
-                "_phase": phase,
-                "_model": model,
-                "_short_phase": short_by_phase_facet,
-                "_short_model": short_by_model_facet,
-                a_label: a_vals[name],
-                b_label: b_vals[name],
-                "delta_abs": b_vals[name] - a_vals[name],
-                "delta_pct": (b_vals[name] - a_vals[name]) / a_vals[name] * 100.0
-                if a_vals[name]
-                else float("inf"),
-            }
-        )
-    df = pd.DataFrame(rows)
+    df["delta_abs"] = df[b_label] - df[a_label]
+    df["delta_pct"] = (df["delta_abs"] / df[a_label]) * 100.0
+    df = df.sort_values("test_id").reset_index(drop=True)
     x_col = "delta_abs" if sort == "absolute" else "delta_pct"
-    # No reindex by magnitude — alphabetical test_id order (from
-    # ``sorted(common)``) keeps related tests (``test_build[basic-*]``,
-    # ``test_lp_write[knapsack-*]``, ...) visually grouped. The scatter
-    # view is what you use for spotting the biggest outliers.
 
     if sort == "absolute":
         x_label = f"{metric_label} delta ({unit})"
@@ -238,24 +257,29 @@ def plot_compare(
     title = (
         f"{metric_label} delta ({sort}): {a_label} → {b_label} (positive = {direction})"
     )
-    if only_a or only_b:
+    if len(only_a) or len(only_b):
         title += (
             f"<br><sub>{len(only_a)} only in {a_label}, "
             f"{len(only_b)} only in {b_label}</sub>"
         )
 
-    # Faceted layout uses a phase-aware short y-label so the y-axis only
-    # shows the attributes that vary inside the facet; flat layout uses
-    # the full test-id so each bar is self-identifying.
+    # Inside a facet the y-axis labels whatever *varies* — drop the
+    # facetted dimension from the label, keep the rest. Flat ⇒ the full
+    # test_id so each bar is self-identifying.
     facet_kwargs: dict = {}
-    if facets == "phase":
-        facet_kwargs = {"facet_col": "_phase", "facet_col_wrap": 2}
-        y_col = "_short_phase"
-    elif facets == "model":
-        facet_kwargs = {"facet_col": "_model", "facet_col_wrap": 3}
-        y_col = "_short_model"
+    if facets is None:
+        y_col = "test_id"
     else:
-        y_col = "_test_id"
+        varying = "model" if facets == "phase" else "phase"
+        size_str = df["size"].astype("Int64").astype(str)
+        df["_short"] = df[varying] + "-n=" + size_str
+        other_mask = df["phase"] == "other"
+        df.loc[other_mask, "_short"] = (
+            df.loc[other_mask, "test_id"].str.split("::").str[-1]
+        )
+        y_col = "_short"
+        facet_kwargs = {"facet_col": facets}
+        facet_kwargs["facet_col_wrap"] = 2 if facets == "phase" else 3
 
     fig = px.bar(
         df,
@@ -269,7 +293,7 @@ def plot_compare(
         labels={x_col: x_label, y_col: ""},
         text_auto=text_fmt,
         hover_data={
-            "_test_id": True,
+            "test_id": True,
             a_label: ":.4g",
             b_label: ":.4g",
             "delta_abs": ":.4g",
@@ -287,16 +311,19 @@ def plot_compare(
     if facets is not None:
         # Each facet keeps its own y category list (no shared rows full
         # of empty bars), but we hide tick labels on non-leftmost facets
-        # within each row so the labels only appear once per row instead
-        # of being repeated at every subplot's left edge.
+        # within each row so labels appear once per row.
         fig.update_yaxes(matches=None)
-        _hide_non_leftmost_yticks(fig, wrap=facet_kwargs["facet_col_wrap"])
-        _share_axis_labels(fig, y_label="test", x_label=x_label)
-        facet_count = df[facet_kwargs["facet_col"]].nunique()
-        rows_per_facet = df.groupby(facet_kwargs["facet_col"])[y_col].nunique().max()
         wrap = facet_kwargs["facet_col_wrap"]
-        n_rows = (facet_count + wrap - 1) // wrap
-        height = max(500, int(n_rows * rows_per_facet * 24) + 100)
+        _hide_non_leftmost_yticks(fig, wrap=wrap)
+        _share_axis_labels(fig, y_label="test", x_label=x_label)
+        # Per-wrap-row equal-share layout is plotly's default. Facets
+        # with fewer categories than the row max will show empty space
+        # below their bars — visually loose but the facet header
+        # annotations stay correctly positioned, which a manual
+        # ``domain`` override would scramble.
+        rows_per_facet = df.groupby(facets)[y_col].nunique().max()
+        n_wrap_rows = (df[facets].nunique() + wrap - 1) // wrap
+        height = max(500, int(n_wrap_rows * rows_per_facet * 24) + 100)
     else:
         height = max(500, len(df) * 22)
     fig.update_layout(height=height, showlegend=False)
@@ -329,56 +356,38 @@ def plot_scatter(
     to see; the colour encodes absolute Δ as a third channel.
     """
     import numpy as np
-    import pandas as pd
     import plotly.express as px
 
     if len(snapshots) < 2:
         raise ValueError("scatter needs at least 2 snapshots (baseline + 1)")
 
-    raw = [_load_snapshot(p, metric) for p in snapshots]
-    unit = _check_same_unit(raw)
+    df_long, unit = load_long_df(snapshots, metric)
     metric_label = metric if unit == "s" else "peak"
-    loaded = [(label, vals) for label, vals, _ in raw]
-    baseline_label, baseline_vals = loaded[0]
 
-    # Include the baseline itself as the first animation frame (all points
-    # at ratio=1, Δ=0). Gives the animation a "before anything happened"
-    # anchor and makes the visual drift across frames easier to read.
-    rows = []
-    for label, vals in loaded:
-        common = sorted(set(baseline_vals) & set(vals))
-        for name in common:
-            a, b = baseline_vals[name], vals[name]
-            if a <= 0:
-                continue
-            m = _SIZE_RE.match(name)
-            if m:
-                phase_path, model, _ = m.groups()
-                phase = phase_path.split("::")[-1]
-            else:
-                phase = "other"
-                model = "other"
-            rows.append(
-                {
-                    "test": name,
-                    "version": label,
-                    "baseline_time": a,
-                    "candidate_time": b,
-                    "ratio": b / a,
-                    "delta_abs": b - a,
-                    "delta_pct": (b - a) / a * 100.0,
-                    "_phase": phase,
-                    "_model": model,
-                }
-            )
+    labels = df_long["snapshot"].drop_duplicates().tolist()
+    baseline_label = labels[0]
 
-    if not rows:
+    # Attach the baseline value to every row via a per-test groupby (each
+    # test's baseline = its value on the first snapshot). Tests with no
+    # baseline row (only in non-baseline snapshots) are dropped. Tests
+    # with non-positive baseline are dropped because the ratio is
+    # undefined for them.
+    baseline_vals = df_long.loc[
+        df_long["snapshot"] == baseline_label, ["test_id", "value"]
+    ].rename(columns={"value": "baseline_time"})
+    df = df_long.merge(baseline_vals, on="test_id", how="inner")
+    df = df[df["baseline_time"] > 0].copy()
+    if df.empty:
         raise ValueError(
             f"no tests in common between baseline ({baseline_label}) "
             "and any of the other snapshots"
         )
 
-    df = pd.DataFrame(rows)
+    df = df.rename(columns={"snapshot": "version", "value": "candidate_time"})
+    df["ratio"] = df["candidate_time"] / df["baseline_time"]
+    df["delta_abs"] = df["candidate_time"] - df["baseline_time"]
+    df["delta_pct"] = df["delta_abs"] / df["baseline_time"] * 100.0
+    df = df.rename(columns={"test_id": "test"})
     # Fix the axis ranges so the animation doesn't jitter; pad by a small
     # margin so points on the edges aren't clipped.
     x_lo, x_hi = df["baseline_time"].min(), df["baseline_time"].max()
@@ -403,13 +412,10 @@ def plot_scatter(
     extra: dict = {}
     if animate:
         extra["animation_frame"] = "version"
-        extra["category_orders"] = {"version": [label for label, _ in loaded]}
-    if facets == "phase":
-        extra["facet_col"] = "_phase"
-        extra["facet_col_wrap"] = 2
-    elif facets == "model":
-        extra["facet_col"] = "_model"
-        extra["facet_col_wrap"] = 3
+        extra["category_orders"] = {"version": labels}
+    if facets is not None:
+        extra["facet_col"] = facets
+        extra["facet_col_wrap"] = 2 if facets == "phase" else 3
 
     fig = px.scatter(
         df,
@@ -464,35 +470,25 @@ def plot_sweep(
     facets: FacetBy | None = None,  # noqa: ARG001  (uniform signature, unused here)
 ) -> tuple[Figure, int]:
     """Heatmap of per-test ratio relative to the first snapshot."""
-    import pandas as pd
     import plotly.express as px
 
-    raw = [_load_snapshot(p, metric) for p in snapshots]
-    unit = _check_same_unit(raw)
+    df_long, unit = load_long_df(snapshots, metric)
     metric_label = metric if unit == "s" else "peak"
-    loaded = [(label, vals) for label, vals, _ in raw]
-    versions = [label for label, _ in loaded]
-    baseline = loaded[0][1]
-    all_tests = sorted(set().union(*[set(vals) for _, vals in loaded]))
+    versions = df_long["snapshot"].drop_duplicates().tolist()
+    baseline_label = versions[0]
 
-    ratios: dict[str, list[float | None]] = {}
-    absolutes: dict[str, list[float | None]] = {}
-    for test in all_tests:
-        base = baseline.get(test)
-        if not base:
-            continue
-        ratios[test] = []
-        absolutes[test] = []
-        for _, vals in loaded:
-            t = vals.get(test)
-            ratios[test].append(t / base if t else None)
-            absolutes[test].append(t)
-
-    if not ratios:
-        raise ValueError(f"no overlap with baseline snapshot {versions[0]}")
-
-    df = pd.DataFrame(ratios, index=versions).T  # rows = tests, cols = versions
-    abs_df = pd.DataFrame(absolutes, index=versions).T
+    # Pivot absolutes (rows=tests, cols=versions), then drop tests with
+    # no baseline reading and divide every column by the baseline column
+    # to get ratios in one shot.
+    abs_df = df_long.pivot(index="test_id", columns="snapshot", values="value").reindex(
+        columns=versions
+    )
+    abs_df = abs_df.dropna(subset=[baseline_label])
+    if abs_df.empty:
+        raise ValueError(f"no overlap with baseline snapshot {baseline_label}")
+    df = abs_df.div(abs_df[baseline_label], axis=0)
+    abs_df.index.name = "test"
+    df.index.name = "test"
 
     fig = px.imshow(
         df,
@@ -525,57 +521,20 @@ def plot_scaling(
     facets: FacetBy | None = None,  # noqa: ARG001  (uniform signature, unused here)
 ) -> tuple[Figure, int]:
     """Log-log time vs N for size-parametrized tests, faceted by phase."""
-    import pandas as pd
     import plotly.express as px
 
-    # Read the raw JSON so we can pull ``params`` per benchmark. ``size``
-    # comes from there as a clean int — any future rename of the test id
-    # format won't silently produce 0 rows. ``model`` still needs the id
-    # regex because spec is stored as an unserializable repr in params.
-    data = json.loads(snapshots[0].read_text())
-
-    # Memory snapshots have a flat {test_id: peak_mib} structure and no
-    # benchmark params — fall back to id-regex extraction for size + model.
-    is_memory = "peak_mib" in data
-    unit = "MiB" if is_memory else "s"
-    metric_label = "peak" if is_memory else metric
-
-    if is_memory:
-        benchmarks_iter = [
-            {"fullname": tid, "stats": {metric: val}, "params": {}}
-            for tid, val in data["peak_mib"].items()
-        ]
-    else:
-        benchmarks_iter = data["benchmarks"]
-
-    rows = []
-    for bm in benchmarks_iter:
-        name = bm["fullname"]
-        t = bm["stats"][metric]
-        params = bm.get("params") or {}
-
-        size = params.get("size")
-        if not isinstance(size, int):
-            # Fall back to the id regex.
-            m = _SIZE_RE.match(name)
-            if not m:
-                continue
-            size = int(m.group(3))
-
-        m = _SIZE_RE.match(name)
-        if not m:
-            continue
-        phase = m.group(1).split("::")[-1]
-        model = m.group(2)
-        rows.append({"phase": phase, "model": model, "n": size, metric: t})
-
-    if not rows:
+    df_long, unit = load_long_df(snapshots[:1], metric)
+    metric_label = metric if unit == "s" else "peak"
+    df = (
+        df_long.dropna(subset=["size"])
+        .rename(columns={"size": "n", "value": metric})
+        .sort_values(["phase", "model", "n"])
+    )
+    if df.empty:
         raise ValueError(
-            "no size-parametrized tests found (expected ``...[<model>-n=<N>]`` "
-            "or a ``params.size`` int)"
+            "no size-parametrized tests found (expected ``...[<model>-n=<N>]`` ids)"
         )
 
-    df = pd.DataFrame(rows).sort_values(["phase", "model", "n"])
     fig = px.line(
         df,
         x="n",

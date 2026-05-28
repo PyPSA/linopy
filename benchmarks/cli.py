@@ -614,7 +614,8 @@ def plot(
         typer.Option(
             help=(
                 "Which plot to produce. Default: ``scaling`` for 1 input, "
-                "``compare`` for 2, ``sweep`` for 3+."
+                "``scatter`` for 2, ``sweep`` for 3+. ``compare`` (delta "
+                "bar chart) is still available via ``--view compare``."
             )
         ),
     ] = None,
@@ -698,7 +699,7 @@ def plot(
     chosen = view or (
         "scaling"
         if len(snapshots) == 1
-        else "compare"
+        else "scatter"
         if len(snapshots) == 2
         else "sweep"
     )
