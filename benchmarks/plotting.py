@@ -131,7 +131,10 @@ def plot_compare(
     ]
     df = pd.DataFrame(rows)
     x_col = "delta_abs" if sort == "absolute" else "delta_pct"
-    df = df.reindex(df[x_col].abs().sort_values(ascending=True).index)
+    # No reindex by magnitude — alphabetical test_id order (from
+    # ``sorted(common)``) keeps related tests (``test_build[basic-*]``,
+    # ``test_lp_write[knapsack-*]``, ...) visually grouped. The scatter
+    # view is what you use for spotting the biggest outliers.
 
     if sort == "absolute":
         x_label = f"{metric_label} delta ({unit})"
