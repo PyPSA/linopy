@@ -49,6 +49,22 @@ app.add_typer(memory_app, name="memory")
 
 PhaseName = Literal["build", "matrices", "lp_write", "netcdf", "solver_handoff"]
 
+
+def _benchmarks_extra_pins() -> list[str]:
+    """
+    Return the pins from ``pyproject.toml``'s ``[benchmarks]`` extra.
+
+    Used by both sweeps as the ``--no-use-lock`` fallback so the
+    pin-bump path stays single-source: edit the extra in pyproject and
+    both ``sweep`` and ``memory sweep`` pick up the change.
+    """
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+    return list(data["project"]["optional-dependencies"]["benchmarks"])
+
+
 _PHASE_TEST_FILE: dict[PhaseName, str] = {
     "build": "benchmarks/test_build.py",
     "matrices": "benchmarks/test_matrices.py",
@@ -211,6 +227,19 @@ def run(
         Path | None,
         typer.Option("--json", help="Save pytest-benchmark JSON to this path."),
     ] = None,
+    rounds: Annotated[
+        int | None,
+        typer.Option(
+            "--rounds",
+            help=(
+                "Force pytest-benchmark to run exactly N rounds per test "
+                "(passes ``--benchmark-min-rounds=N --benchmark-max-time=0``). "
+                "Default: pytest-benchmark auto-tunes per test (5–40+ rounds "
+                "depending on cost). Use a fixed N for uniform measurement "
+                "across versions in a sweep."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """
     Default timing run. Records timings with pytest-benchmark.
@@ -235,6 +264,8 @@ def run(
     args.append("--benchmark-only")
     if json_out is not None:
         args.extend(["--benchmark-json", str(json_out)])
+    if rounds is not None:
+        args.extend([f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"])
 
     k_parts = [p for p in (model, filter_expr) if p]
     if k_parts:
@@ -342,6 +373,17 @@ def sweep(
             help="Install ``benchmarks/requirements.lock`` in each venv.",
         ),
     ] = True,
+    rounds: Annotated[
+        int | None,
+        typer.Option(
+            "--rounds",
+            help=(
+                "Force pytest-benchmark to run exactly N rounds per test in "
+                "every version (uniform measurement across the sweep). "
+                "Default: pytest-benchmark auto-tunes per test."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """
     Run the benchmark suite against several linopy versions.
@@ -429,12 +471,7 @@ def sweep(
             if use_lock:
                 install_args += ["-r", str(lockfile)]
             else:
-                install_args += [
-                    "pytest==9.0.3",
-                    "pytest-benchmark==5.2.3",
-                    "highspy==1.13.1",
-                    "netcdf4==1.7.4",
-                ]
+                install_args += _benchmarks_extra_pins()
             install_args.append(spec)
             r = subprocess.run(install_args, check=False)
             if r.returncode != 0:
@@ -465,6 +502,10 @@ def sweep(
                 pytest_cmd.append("--quick")
             elif long:
                 pytest_cmd.append("--long")
+            if rounds is not None:
+                pytest_cmd.extend(
+                    [f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"]
+                )
 
             k_parts = [p for p in (model, filter_expr) if p]
             if k_parts:
@@ -778,6 +819,18 @@ def memory_save_cmd(
             ),
         ),
     ] = None,
+    repeats: Annotated[
+        int,
+        typer.Option(
+            "--repeats",
+            help=(
+                "Re-run each measurement N times and keep the min peak. Default "
+                "1 (single shot). Memory peaks have ~1–3 %% wobble from GC "
+                "timing, lazy-import priming, and netcdf page-cache effects — "
+                "min-of-3 tightens that signal."
+            ),
+        ),
+    ] = 1,
 ) -> None:
     """
     Measure peak memory across the registry × phase grid via ``memray.Tracker``.
@@ -802,7 +855,178 @@ def memory_save_cmd(
                 err=True,
             )
             raise typer.Exit(code=2)
-    memory_save(label, quick=quick, phases=phase)
+    memory_save(label, quick=quick, phases=phase, repeats=repeats)
+
+
+@memory_app.command("sweep")
+def memory_sweep_cmd(
+    versions: Annotated[
+        list[str],
+        typer.Argument(help="linopy versions, e.g. 0.4.0 0.5.0 (or any pip spec)."),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            "-o",
+            help="Where to save snapshot JSONs.",
+        ),
+    ] = Path(".benchmarks/memory"),
+    quick: Annotated[
+        bool,
+        typer.Option("--quick", help="Use only the smallest sizes (faster sweep)."),
+    ] = False,
+    phase: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--phase",
+            help=(
+                "Restrict each version's run to these phases. Pass multiple "
+                "``--phase`` to select more than one."
+            ),
+        ),
+    ] = None,
+    repeats: Annotated[
+        int,
+        typer.Option(
+            "--repeats",
+            help="min-of-N peak per measurement (default 1).",
+        ),
+    ] = 1,
+    use_lock: Annotated[
+        bool,
+        typer.Option(
+            "--use-lock/--no-use-lock",
+            help="Install ``benchmarks/requirements.lock`` in each venv.",
+        ),
+    ] = True,
+) -> None:
+    """
+    Sweep peak-memory measurements across several linopy versions.
+
+    Mirrors the timing :func:`sweep` but invokes ``memory save`` inside
+    each per-version uv venv. Each version's snapshot lands at
+    ``<output-dir>/linopy-<version>.json`` and is auto-detected by
+    ``plot`` (the ``peak_mib`` key distinguishes memory from timing).
+
+    Memory peaks are much more deterministic than wall time, so
+    ``--repeats 1`` (default) is usually plenty. Use ``--repeats 3``
+    if you need <5%% regression detection.
+    """
+    from benchmarks.memory import DEFAULT_PHASES
+
+    if phase:
+        unknown = [p for p in phase if p not in DEFAULT_PHASES]
+        if unknown:
+            typer.secho(
+                f"unknown phase(s): {unknown}; valid options: {list(DEFAULT_PHASES)}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
+    if shutil.which("uv") is None:
+        typer.secho(
+            "uv not found on PATH — install via https://docs.astral.sh/uv/",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    repo_root = Path.cwd()
+    lockfile = repo_root / "benchmarks" / "requirements.lock"
+    if use_lock and not lockfile.exists():
+        typer.secho(
+            f"--use-lock set but {lockfile} is missing — "
+            "regenerate it via ``uv pip compile`` or pass ``--no-use-lock``.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    failed: list[str] = []
+    for version in versions:
+        typer.secho(f"\n=== linopy {version} ===", fg=typer.colors.CYAN, bold=True)
+        with tempfile.TemporaryDirectory(prefix="linopy-mem-") as tmp:
+            venv = Path(tmp) / "venv"
+
+            r = subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(venv)],
+                check=False,
+            )
+            if r.returncode != 0:
+                typer.secho(
+                    f"venv creation failed: {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                failed.append(version)
+                continue
+
+            vpy = _venv_python(venv)
+            spec = _linopy_install_spec(version)
+
+            install_args = ["uv", "pip", "install", "--python", str(vpy)]
+            if use_lock:
+                install_args += ["-r", str(lockfile)]
+            else:
+                install_args += _benchmarks_extra_pins()
+            install_args.append(spec)
+            r = subprocess.run(install_args, check=False)
+            if r.returncode != 0:
+                typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
+                failed.append(version)
+                continue
+
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(repo_root)
+
+            # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
+            # under cwd, so we cd back into the repo root via env and let
+            # ``output_dir`` resolve naturally.
+            label = f"linopy-{version}"
+            mem_cmd = [
+                str(vpy),
+                "-m",
+                "benchmarks",
+                "memory",
+                "save",
+                label,
+            ]
+            if quick:
+                mem_cmd.append("--quick")
+            for ph in phase or []:
+                mem_cmd.extend(["--phase", ph])
+            if repeats > 1:
+                mem_cmd.extend(["--repeats", str(repeats)])
+
+            typer.secho(f"$ {' '.join(mem_cmd)}", fg=typer.colors.BRIGHT_BLACK)
+            subprocess.run(mem_cmd, env=env, cwd=str(repo_root), check=False)
+
+            # memory.save writes to .benchmarks/memory/<label>.json relative
+            # to its cwd. Move it under output_dir if the user asked for a
+            # custom location.
+            default_path = repo_root / ".benchmarks" / "memory" / f"{label}.json"
+            target = output_dir / f"{label}.json"
+            if default_path.exists() and default_path.resolve() != target.resolve():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                default_path.replace(target)
+
+            if target.exists():
+                typer.secho(f"saved {target}", fg=typer.colors.GREEN)
+            else:
+                typer.secho(
+                    f"no snapshot produced for {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                failed.append(version)
+
+    if failed:
+        typer.secho(f"\nFailed versions: {failed}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
 
 
 @memory_app.command("compare")

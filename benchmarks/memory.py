@@ -72,27 +72,40 @@ def _phase_tag(phase: str) -> str:
     }[phase]
 
 
-def _measure_peak(action: Callable[[], object]) -> float:
-    """Run ``action()`` under ``memray.Tracker`` and return peak MiB."""
+def _measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
+    """
+    Run ``action()`` under ``memray.Tracker`` and return peak MiB.
+
+    With ``repeats > 1`` the action runs that many times in fresh
+    trackers and the *minimum* peak is returned — peak memory is
+    noisier than naive expectations (GC timing, lazy-import priming,
+    file-system page cache for netcdf) so the min-of-N is the cleanest
+    estimate of "the floor this code can hit".
+    """
     import memray
 
-    fd, tmp = tempfile.mkstemp(suffix=".bin")
-    Path(tmp).unlink()  # memray needs to create the file itself
-    # Close the fd; the path is what matters.
-    try:
-        from os import close as _close
+    peaks: list[float] = []
+    for _ in range(max(1, repeats)):
+        fd, tmp = tempfile.mkstemp(suffix=".bin")
+        Path(tmp).unlink()  # memray needs to create the file itself
+        # Close the fd; the path is what matters.
+        try:
+            from os import close as _close
 
-        _close(fd)
-    except OSError:
-        pass
+            _close(fd)
+        except OSError:
+            pass
 
-    try:
-        with memray.Tracker(tmp):
-            action()
-        peak_bytes = memray.FileReader(tmp).metadata.peak_memory
-        return round(peak_bytes / (1024**2), 3)
-    finally:
-        Path(tmp).unlink(missing_ok=True)
+        try:
+            with memray.Tracker(tmp):
+                action()
+            peak_bytes = memray.FileReader(tmp).metadata.peak_memory
+            peaks.append(round(peak_bytes / (1024**2), 3))
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        gc.collect()
+
+    return min(peaks)
 
 
 def _measurements(
@@ -191,12 +204,13 @@ def _measurements(
         raise ValueError(f"unknown phase: {phase!r}")
 
 
-def run_phase(phase: str, quick: bool = False) -> dict[str, float]:
+def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, float]:
     """
     Measure peak memory for every applicable ``(spec, size)`` under one phase.
 
     Returns a ``{test_id: peak_mib}`` mapping. Invoked once per phase as a
-    subprocess by :func:`save` for isolation.
+    subprocess by :func:`save` for isolation. ``repeats`` is forwarded to
+    :func:`_measure_peak` so callers can dial up signal-to-noise.
     """
     from benchmarks import REGISTRY
 
@@ -220,7 +234,7 @@ def run_phase(phase: str, quick: bool = False) -> dict[str, float]:
                 try:
                     for test_id, action in _measurements(phase, spec, size):
                         try:
-                            results[test_id] = _measure_peak(action)
+                            results[test_id] = _measure_peak(action, repeats=repeats)
                             print(
                                 f"  {test_id} → {results[test_id]:.1f} MiB",
                                 file=sys.stderr,
@@ -245,6 +259,7 @@ def save(
     label: str,
     quick: bool = False,
     phases: list[str] | None = None,
+    repeats: int = 1,
 ) -> Path:
     """
     Run one subprocess per phase and merge the results into ``<label>.json``.
@@ -276,6 +291,8 @@ def save(
         ]
         if quick:
             cmd.append("--quick")
+        if repeats > 1:
+            cmd.extend(["--repeats", str(repeats)])
         try:
             result = subprocess.run(cmd, check=False, capture_output=True, text=True)
             if result.stderr:
@@ -347,11 +364,17 @@ if __name__ == "__main__":  # pragma: no cover
     parser.add_argument("phase")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Run each measurement N times and keep the min peak (default 1).",
+    )
+    parser.add_argument(
         "--out",
         required=True,
         help="Path to write the JSON result to (stdout is reserved for solver chatter).",
     )
     args = parser.parse_args()
     if args.cmd == "_worker":
-        out = run_phase(args.phase, quick=args.quick)
+        out = run_phase(args.phase, quick=args.quick, repeats=args.repeats)
         Path(args.out).write_text(json.dumps(out))
