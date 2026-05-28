@@ -4,13 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-QUICK_THRESHOLD = {
-    "basic": 100,
-    "knapsack": 10_000,
-    "pypsa_scigrid": 50,
-    "expression_arithmetic": 100,
-    "sparse_network": 100,
-}
+from benchmarks.registry import ModelSpec
 
 
 def pytest_addoption(parser):
@@ -22,9 +16,13 @@ def pytest_addoption(parser):
     )
 
 
-def skip_if_quick(request, model: str, size: int):
-    """Skip large sizes when --quick is passed."""
-    if request.config.getoption("--quick"):
-        threshold = QUICK_THRESHOLD.get(model, float("inf"))
-        if size > threshold:
-            pytest.skip(f"--quick: skipping {model} size {size}")
+def maybe_skip(request: pytest.FixtureRequest, spec: ModelSpec, size: int) -> None:
+    """
+    Apply ``--quick`` size cap and ``spec.requires`` importorskips.
+
+    Centralised so every phase test stays a one-liner.
+    """
+    for mod in spec.requires:
+        pytest.importorskip(mod)
+    if request.config.getoption("--quick") and size > spec.quick_threshold:
+        pytest.skip(f"--quick: skipping {spec.name} size {size}")

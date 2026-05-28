@@ -1,0 +1,61 @@
+"""
+Benchmarks for solver handoff (model -> native solver instance).
+
+Times each ``linopy.io.to_<solver>`` wrapper. These wrappers delegate to the
+same direct-API build path as the new stateful Solver API
+(``Solver.from_name(name, model, io_api="direct")``), so the numbers serve
+double duty: regression tracking for the wrappers, *and* for the underlying
+``Solver._build_direct`` paths. They've also been available for many releases
+— using them keeps the suite runnable on older linopy versions.
+
+The actual ``Solver.solve()`` runtime (i.e. solver-side algorithm time) is
+intentionally not benchmarked.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import linopy.io as lio
+from benchmarks.conftest import maybe_skip
+from benchmarks.registry import (
+    TO_GUROBIPY,
+    TO_HIGHSPY,
+    TO_MOSEK,
+    TO_XPRESS,
+    iter_params,
+)
+from linopy.solvers import available_solvers
+
+# (solver_name, phase tag, wrapper function)
+_SOLVER_PHASES = [
+    ("highs", TO_HIGHSPY, lio.to_highspy),
+    ("gurobi", TO_GUROBIPY, lio.to_gurobipy),
+    ("mosek", TO_MOSEK, lio.to_mosek),
+    ("xpress", TO_XPRESS, lio.to_xpress),
+]
+
+
+def _make_params():
+    out = []
+    for solver_name, phase, wrapper in _SOLVER_PHASES:
+        for spec, size in iter_params(phase):
+            out.append(
+                pytest.param(
+                    solver_name,
+                    wrapper,
+                    spec,
+                    size,
+                    id=f"{solver_name}-{spec.name}-n={size}",
+                )
+            )
+    return out
+
+
+@pytest.mark.parametrize("solver_name,wrapper,spec,size", _make_params())
+def test_solver_handoff(benchmark, solver_name, wrapper, spec, size, request):
+    if solver_name not in available_solvers:
+        pytest.skip(f"{solver_name} not installed")
+    maybe_skip(request, spec, size)
+    model = spec.build(size)
+    benchmark(wrapper, model)
