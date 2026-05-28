@@ -172,6 +172,9 @@ def plot_compare(
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs) for
         # timing snapshots; plain MiB for memory.
         fig.update_xaxes(**_axis_kwargs(unit))
+    # Render the value text outside the bar (default is inside) so the
+    # number stays readable even when a bar is very short.
+    fig.update_traces(textposition="outside", cliponaxis=False)
     fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
     return fig, len(df)
 
