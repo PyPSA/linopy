@@ -37,11 +37,41 @@ SortMode = Literal["absolute", "relative"]
 _SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
 
 
-def _load_snapshot(path: Path, metric: Metric = "min") -> tuple[str, dict[str, float]]:
-    """Return ``(label, {fullname: <metric>_seconds})`` for one snapshot."""
+def _load_snapshot(
+    path: Path, metric: Metric = "min"
+) -> tuple[str, dict[str, float], str]:
+    """
+    Return ``(label, {fullname: value}, unit)`` for one snapshot.
+
+    Auto-detects the JSON shape:
+
+    - pytest-benchmark timing (``{"benchmarks": [{"stats": {...}}]}``) →
+      ``value`` is ``stats[metric]`` in **seconds**.
+    - memory.py output (``{"peak_mib": {test_id: float}}``) → ``value`` is
+      the peak in **MiB**; ``metric`` is ignored.
+    """
     data = json.loads(path.read_text())
+    if "peak_mib" in data:
+        return path.stem, dict(data["peak_mib"]), "MiB"
     values = {bm["fullname"]: bm["stats"][metric] for bm in data["benchmarks"]}
-    return path.stem, values
+    return path.stem, values, "s"
+
+
+def _check_same_unit(snapshots: list[tuple[str, dict[str, float], str]]) -> str:
+    """Validate that every snapshot has the same unit, return it."""
+    units = {u for _, _, u in snapshots}
+    if len(units) > 1:
+        raise ValueError(
+            f"snapshots mix units {units}; can't compare timing and memory"
+        )
+    return next(iter(units))
+
+
+def _axis_kwargs(unit: str) -> dict:
+    """Return ``update_xaxes`` kwargs for a given unit."""
+    if unit == "s":
+        return {"tickformat": ".2s", "ticksuffix": "s"}
+    return {"ticksuffix": f" {unit}"}
 
 
 def plot_compare(
@@ -62,10 +92,10 @@ def plot_compare(
     import pandas as pd
     import plotly.express as px
 
-    (a_label, a_vals), (b_label, b_vals) = (
-        _load_snapshot(snapshots[0], metric),
-        _load_snapshot(snapshots[1], metric),
-    )
+    loaded = [_load_snapshot(p, metric) for p in snapshots[:2]]
+    unit = _check_same_unit(loaded)
+    metric_label = metric if unit == "s" else "peak"
+    (a_label, a_vals, _), (b_label, b_vals, _) = loaded
     common = sorted(set(a_vals) & set(b_vals))
     only_a = sorted(set(a_vals) - set(b_vals))
     only_b = sorted(set(b_vals) - set(a_vals))
@@ -96,13 +126,16 @@ def plot_compare(
     df = df.reindex(df[x_col].abs().sort_values(ascending=True).index)
 
     if sort == "absolute":
-        x_label = f"{metric} delta (s)"
-        text_fmt = ".2s"
+        x_label = f"{metric_label} delta ({unit})"
+        text_fmt = ".2s" if unit == "s" else ".2f"
     else:
-        x_label = f"{metric} delta %"
+        x_label = f"{metric_label} delta %"
         text_fmt = ".1f"
 
-    title = f"{metric} delta ({sort}): {a_label} → {b_label} (positive = slower)"
+    direction = "slower" if unit == "s" else "more memory"
+    title = (
+        f"{metric_label} delta ({sort}): {a_label} → {b_label} (positive = {direction})"
+    )
     if only_a or only_b:
         title += f"<br><sub>{len(only_a)} only in {a_label}, {len(only_b)} only in {b_label}</sub>"
 
@@ -125,8 +158,9 @@ def plot_compare(
         },
     )
     if sort == "absolute":
-        # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
-        fig.update_xaxes(tickformat=".2s", ticksuffix="s")
+        # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs) for
+        # timing snapshots; plain MiB for memory.
+        fig.update_xaxes(**_axis_kwargs(unit))
     fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
     return fig, len(df)
 
@@ -162,7 +196,10 @@ def plot_scatter(
     if len(snapshots) < 2:
         raise ValueError("scatter needs at least 2 snapshots (baseline + 1)")
 
-    loaded = [_load_snapshot(p, metric) for p in snapshots]
+    raw = [_load_snapshot(p, metric) for p in snapshots]
+    unit = _check_same_unit(raw)
+    metric_label = metric if unit == "s" else "peak"
+    loaded = [(label, vals) for label, vals, _ in raw]
     baseline_label, baseline_vals = loaded[0]
 
     # Include the baseline itself as the first animation frame (all points
@@ -241,14 +278,14 @@ def plot_scatter(
             "version": True,
         },
         title=(
-            f"{metric} scatter vs baseline ({baseline_label}) — "
-            "top-right = slow tests that got slower"
+            f"{metric_label} scatter vs baseline ({baseline_label}) — "
+            "top-right = the regressed corner"
         ),
         labels={
-            "baseline_time": f"baseline {metric} (s, log scale)",
-            "ratio": f"{metric} ratio  (candidate / baseline)",
+            "baseline_time": f"baseline {metric_label} ({unit}, log scale)",
+            "ratio": f"{metric_label} ratio  (candidate / baseline)",
             "candidate_time": "candidate",
-            "delta_abs": "Δ (s, p95-clipped)",
+            "delta_abs": f"Δ ({unit}, p95-clipped)",
         },
         **extra,
     )
@@ -269,7 +306,10 @@ def plot_sweep(
     import pandas as pd
     import plotly.express as px
 
-    loaded = [_load_snapshot(p, metric) for p in snapshots]
+    raw = [_load_snapshot(p, metric) for p in snapshots]
+    unit = _check_same_unit(raw)
+    metric_label = metric if unit == "s" else "peak"
+    loaded = [(label, vals) for label, vals, _ in raw]
     versions = [label for label, _ in loaded]
     baseline = loaded[0][1]
     all_tests = sorted(set().union(*[set(vals) for _, vals in loaded]))
@@ -298,7 +338,7 @@ def plot_sweep(
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=1.0,
         aspect="auto",
-        title=f"{metric} ratio relative to baseline ({versions[0]})",
+        title=f"{metric_label} ratio relative to baseline ({versions[0]})",
         labels={"x": "version", "y": "test", "color": "ratio"},
         text_auto=".2f",
     )
@@ -309,7 +349,7 @@ def plot_sweep(
             "test: %{y}<br>"
             "version: %{x}<br>"
             "ratio: %{z:.3f}<br>"
-            f"{metric}: %{{customdata:.4g}}s"
+            f"{metric_label}: %{{customdata:.4g}}{unit}"
             "<extra></extra>"
         ),
     )
@@ -331,8 +371,23 @@ def plot_scaling(
     # format won't silently produce 0 rows. ``model`` still needs the id
     # regex because spec is stored as an unserializable repr in params.
     data = json.loads(snapshots[0].read_text())
+
+    # Memory snapshots have a flat {test_id: peak_mib} structure and no
+    # benchmark params — fall back to id-regex extraction for size + model.
+    is_memory = "peak_mib" in data
+    unit = "MiB" if is_memory else "s"
+    metric_label = "peak" if is_memory else metric
+
+    if is_memory:
+        benchmarks_iter = [
+            {"fullname": tid, "stats": {metric: val}, "params": {}}
+            for tid, val in data["peak_mib"].items()
+        ]
+    else:
+        benchmarks_iter = data["benchmarks"]
+
     rows = []
-    for bm in data["benchmarks"]:
+    for bm in benchmarks_iter:
         name = bm["fullname"]
         t = bm["stats"][metric]
         params = bm.get("params") or {}
@@ -369,7 +424,9 @@ def plot_scaling(
         log_x=True,
         log_y=True,
         markers=True,
-        title=f"Scaling: {metric} time vs problem size ({snapshots[0].stem})",
+        title=(
+            f"Scaling: {metric_label} ({unit}) vs problem size ({snapshots[0].stem})"
+        ),
     )
     fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
     return fig, len(df)
