@@ -1,26 +1,17 @@
-#!/usr/bin/env python
 """
 Measure and compare peak memory using pytest-memray.
 
-Usage:
-    # Save a baseline (on master)
-    python benchmarks/memory.py save master
+This module exposes ``save(label, ...)`` and ``compare(label_a, label_b)`` as
+plain functions; user-facing invocation goes through the typer CLI::
 
-    # Save current branch
-    python benchmarks/memory.py save my-feature
+    python -m benchmarks memory save <label>
+    python -m benchmarks memory compare <a> <b>
 
-    # Compare two saved runs
-    python benchmarks/memory.py compare master my-feature
-
-    # Quick mode (smaller sizes)
-    python benchmarks/memory.py save master --quick
-
-Results are stored in .benchmarks/memory/.
+Results are stored in ``.benchmarks/memory/``.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import platform
 import re
@@ -162,38 +153,3 @@ def compare(label_a: str, label_b: str) -> None:
         print(f"{short:<60} {a_str:>10} {b_str:>10} {change:>10}")
 
     print()
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    p_save = sub.add_parser("save", help="Run benchmarks and save memory results")
-    p_save.add_argument(
-        "label", help="Label for this run (e.g. 'master', 'my-feature')"
-    )
-    p_save.add_argument(
-        "--quick", action="store_true", help="Use smaller problem sizes"
-    )
-    p_save.add_argument(
-        "--test-path",
-        nargs="+",
-        default=None,
-        help="Test file(s) to run (default: all phases)",
-    )
-
-    p_cmp = sub.add_parser("compare", help="Compare two saved runs")
-    p_cmp.add_argument("label_a", help="First run label (baseline)")
-    p_cmp.add_argument("label_b", help="Second run label")
-
-    args = parser.parse_args()
-    if args.cmd == "save":
-        save(args.label, quick=args.quick, test_paths=args.test_path)
-    elif args.cmd == "compare":
-        compare(args.label_a, args.label_b)
-
-
-if __name__ == "__main__":
-    main()

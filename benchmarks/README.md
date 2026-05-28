@@ -91,39 +91,44 @@ jupyter lab benchmarks/notebooks/registry_usage.ipynb
 ## Setup
 
 ```bash
-uv sync --extra dev --extra solvers
+uv sync --extra dev --extra benchmarks
 source .venv/bin/activate
 ```
 
 ## Run benchmarks
 
-The suite has three size tiers, each spec declaring its own `quick_threshold`
-and `long_threshold`:
-
-| Flag       | Sizes included                        | Typical use                              |
-| ---------- | ------------------------------------- | ---------------------------------------- |
-| `--quick`  | `size <= quick_threshold`             | CI smoke, fast local sanity check        |
-| _(none)_   | `size <= long_threshold`              | Default: medium-cost regression timing   |
-| `--long`   | all sizes                             | Full sweep (the slow stuff — many min)   |
+Everything is exposed through a single typer-based CLI. The CLI's
+`--help` is the source of truth — run it for the full menu:
 
 ```bash
-# Quick smoke run (small sizes only, no timing)
-pytest benchmarks/ --quick --benchmark-disable
+python -m benchmarks --help
+python -m benchmarks <command> --help
+```
 
-# Default timing run (skips the super-long sizes)
-pytest benchmarks/ --benchmark-only
+Pytest still works directly for power users (`pytest benchmarks/ ...`).
 
-# Full sweep — every size on every model
-pytest benchmarks/ --benchmark-only --long
+### Size tiers
 
-# A single phase
-pytest benchmarks/test_build.py
+Each spec declares its own `quick_threshold` and `long_threshold`:
 
-# A single model across all phases
-pytest benchmarks/ -k basic
+| Mode              | Sizes included            | Typical use                            |
+| ----------------- | ------------------------- | -------------------------------------- |
+| `smoke`           | `size <= quick_threshold` | CI smoke, fast local sanity check      |
+| `run`             | `size <= long_threshold`  | Default: medium-cost regression timing |
+| `run --long`      | all sizes                 | Full sweep (the slow stuff — many min) |
 
-# A single (phase, model) pair
-pytest benchmarks/test_lp_write.py -k "knapsack and n=1000"
+### Quick reference
+
+```bash
+# Fastest sanity check (~18s, what CI runs)
+python -m benchmarks smoke
+
+# Default timing run
+python -m benchmarks run
+
+# Save / compare memory snapshots
+python -m benchmarks memory save "$(git rev-parse --short HEAD)"
+python -m benchmarks memory compare master my-feature
 ```
 
 ## Metrics

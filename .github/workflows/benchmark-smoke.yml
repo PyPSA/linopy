@@ -38,13 +38,10 @@ jobs:
 
     - name: Run benchmark smoke
       run: |
-        pytest benchmarks/ --quick --benchmark-disable -q
+        python -m benchmarks smoke
 
     - name: Execute registry-usage notebook
       # Catches doc rot — the notebook is the canonical "how to use the
       # registry" walkthrough and must stay runnable end-to-end.
       run: |
-        jupyter nbconvert --to notebook --execute \
-          --ExecutePreprocessor.timeout=300 \
-          --output executed.ipynb \
-          benchmarks/notebooks/registry_usage.ipynb
+        python -m benchmarks notebook
