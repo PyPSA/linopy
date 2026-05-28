@@ -12,17 +12,41 @@ def pytest_addoption(parser):
         "--quick",
         action="store_true",
         default=False,
-        help="Use smaller problem sizes for quick benchmarking",
+        help="Use smaller problem sizes for quick benchmarking (CI smoke).",
+    )
+    parser.addoption(
+        "--long",
+        action="store_true",
+        default=False,
+        help=(
+            "Include the slowest sizes (above each spec's long_threshold). "
+            "Default runs skip them."
+        ),
     )
 
 
 def maybe_skip(request: pytest.FixtureRequest, spec: ModelSpec, size: int) -> None:
     """
-    Apply ``--quick`` size cap and ``spec.requires`` importorskips.
+    Apply size-tier skips and ``spec.requires`` importorskips.
 
-    Centralised so every phase test stays a one-liner.
+    Tiers (most restrictive first):
+
+    - ``--quick``                 → skip ``size > quick_threshold``
+    - default (no flag)           → skip ``size > long_threshold``
+    - ``--long``                  → no size cap
+
+    If both ``--quick`` and ``--long`` are passed, ``--quick`` wins (the more
+    restrictive mode is honoured).
     """
     for mod in spec.requires:
         pytest.importorskip(mod)
-    if request.config.getoption("--quick") and size > spec.quick_threshold:
-        pytest.skip(f"--quick: skipping {spec.name} size {size}")
+
+    quick = request.config.getoption("--quick")
+    long_ = request.config.getoption("--long")
+
+    if quick:
+        if size > spec.quick_threshold:
+            pytest.skip(f"--quick: skipping {spec.name} size {size}")
+    elif not long_:
+        if size > spec.long_threshold:
+            pytest.skip(f"long size needs --long: skipping {spec.name} size {size}")

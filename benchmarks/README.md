@@ -84,12 +84,24 @@ source .venv/bin/activate
 
 ## Run benchmarks
 
+The suite has three size tiers, each spec declaring its own `quick_threshold`
+and `long_threshold`:
+
+| Flag       | Sizes included                        | Typical use                              |
+| ---------- | ------------------------------------- | ---------------------------------------- |
+| `--quick`  | `size <= quick_threshold`             | CI smoke, fast local sanity check        |
+| _(none)_   | `size <= long_threshold`              | Default: medium-cost regression timing   |
+| `--long`   | all sizes                             | Full sweep (the slow stuff — many min)   |
+
 ```bash
 # Quick smoke run (small sizes only, no timing)
 pytest benchmarks/ --quick --benchmark-disable
 
-# Full timing run
+# Default timing run (skips the super-long sizes)
 pytest benchmarks/ --benchmark-only
+
+# Full sweep — every size on every model
+pytest benchmarks/ --benchmark-only --long
 
 # A single phase
 pytest benchmarks/test_build.py

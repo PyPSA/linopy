@@ -93,6 +93,7 @@ if _API_AVAILABLE:
                 }
             ),
             quick_threshold=100,
+            long_threshold=1_000,
         )
     )
 else:

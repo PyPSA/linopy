@@ -88,7 +88,17 @@ DEFAULT_PHASES = frozenset(
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """Declarative description of one benchmark model."""
+    """
+    Declarative description of one benchmark model.
+
+    Three size tiers gate the cost of a default ``pytest benchmarks/`` run:
+
+    - ``size <= quick_threshold``: included under ``--quick`` (smoke / CI).
+    - ``size <= long_threshold``: included by default (medium-cost regression).
+    - ``size >  long_threshold``: only included under ``--long`` (full sweep).
+
+    Without explicit values, both thresholds default to "no cap".
+    """
 
     name: str
     build: Callable[[int], linopy.Model]
@@ -96,6 +106,7 @@ class ModelSpec:
     features: frozenset[str] = frozenset({CONTINUOUS})
     phases: frozenset[str] = DEFAULT_PHASES
     quick_threshold: int = 10**9
+    long_threshold: int = 10**9
     requires: tuple[str, ...] = ()
 
     def applies_to(self, phase: str) -> bool:

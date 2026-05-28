@@ -32,5 +32,6 @@ SPEC = register(
         features=frozenset({BINARY}),
         phases=DEFAULT_PHASES,  # HiGHS handles binary; matrices handles MILP
         quick_threshold=10_000,
+        long_threshold=10_000,
     )
 )

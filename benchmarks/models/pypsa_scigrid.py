@@ -29,6 +29,7 @@ SPEC = register(
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
         quick_threshold=50,
+        long_threshold=50,
         requires=("pypsa",),
     )
 )

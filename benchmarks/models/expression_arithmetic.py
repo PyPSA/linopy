@@ -38,5 +38,6 @@ SPEC = register(
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
         quick_threshold=100,
+        long_threshold=500,
     )
 )
