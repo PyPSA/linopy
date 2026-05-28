@@ -48,7 +48,7 @@ def plot_compare(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",
-) -> Figure:
+) -> tuple[Figure, int]:
     """
     Bar chart of delta per test, sorted by magnitude.
 
@@ -128,14 +128,14 @@ def plot_compare(
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
         fig.update_xaxes(tickformat=".2s", ticksuffix="s")
     fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
-    return fig
+    return fig, len(df)
 
 
 def plot_scatter(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> Figure:
+) -> tuple[Figure, int]:
     """
     Two-axis scatter — baseline cost on log-x, ratio on y.
 
@@ -257,14 +257,14 @@ def plot_scatter(
     )
     fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
     fig.update_layout(height=600)
-    return fig
+    return fig, int(df["test"].nunique())
 
 
 def plot_sweep(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> Figure:
+) -> tuple[Figure, int]:
     """Heatmap of per-test ratio relative to the first snapshot."""
     import pandas as pd
     import plotly.express as px
@@ -314,14 +314,14 @@ def plot_sweep(
         ),
     )
     fig.update_layout(height=max(500, len(df) * 22))
-    return fig
+    return fig, len(df)
 
 
 def plot_scaling(
     snapshots: list[Path],
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> Figure:
+) -> tuple[Figure, int]:
     """Log-log time vs N for size-parametrized tests, faceted by phase."""
     import pandas as pd
     import plotly.express as px
@@ -372,27 +372,14 @@ def plot_scaling(
         title=f"Scaling: {metric} time vs problem size ({snapshots[0].stem})",
     )
     fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
-    return fig
+    return fig, len(df)
 
 
-RENDERERS: dict[PlotView, Callable[[list[Path], Metric, SortMode], Figure]] = {
+RENDERERS: dict[
+    PlotView, Callable[[list[Path], Metric, SortMode], tuple[Figure, int]]
+] = {
     "compare": plot_compare,
     "scatter": plot_scatter,
     "sweep": plot_sweep,
     "scaling": plot_scaling,
 }
-
-
-def n_points(fig: Figure) -> int:
-    """Count points across all traces — useful for the CLI status line."""
-    total = 0
-    for trace in fig.data:
-        x = getattr(trace, "x", None)
-        if x is not None:
-            total += len(x)
-            continue
-        z = getattr(trace, "z", None)
-        if z is not None:
-            # ``z`` is 2D for heatmaps.
-            total += sum(len(row) for row in z)
-    return total

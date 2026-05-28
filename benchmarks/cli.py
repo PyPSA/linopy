@@ -709,7 +709,7 @@ def plot(
         raise typer.Exit(code=2)
 
     try:
-        from benchmarks.plotting import RENDERERS, n_points
+        from benchmarks.plotting import RENDERERS
     except ImportError as exc:
         typer.secho(
             "plotly is required for ``plot`` — ``pip install plotly``",
@@ -725,7 +725,7 @@ def plot(
         output = Path(".benchmarks") / "plots" / f"{chosen}.html"
 
     try:
-        fig = RENDERERS[chosen](snapshots, metric, sort)
+        fig, n_tests = RENDERERS[chosen](snapshots, metric, sort)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
@@ -734,7 +734,7 @@ def plot(
     fig.write_html(output)
 
     typer.secho(
-        f"{chosen} view ({metric}): {n_points(fig)} points → {output}",
+        f"{chosen} view ({metric}): {n_tests} tests → {output}",
         fg=typer.colors.GREEN,
     )
     if open_browser:
