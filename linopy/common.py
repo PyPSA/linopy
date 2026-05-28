@@ -36,6 +36,7 @@ from linopy.constants import (
     sign_replace_dict,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     CoordsLike,
     DimsLike,
     SideLike,
@@ -1839,7 +1840,6 @@ def is_constant(x: SideLike) -> bool:
         True if the object is constant-like, False otherwise.
     """
     from linopy.expressions import (
-        SUPPORTED_CONSTANT_TYPES,
         LinearExpression,
         QuadraticExpression,
     )
@@ -1849,7 +1849,7 @@ def is_constant(x: SideLike) -> bool:
         return False
     if isinstance(x, LinearExpression | QuadraticExpression):
         return x.is_constant
-    if isinstance(x, SUPPORTED_CONSTANT_TYPES):
+    if isinstance(x, CONSTANT_TYPES):
         return True
     raise TypeError(
         "Expected a constant, variable, or expression on the constraint side, "
