@@ -489,6 +489,88 @@ def sweep(
         raise typer.Exit(code=1)
 
 
+# --- Compare timing snapshots ---------------------------------------------
+
+
+def _discover_snapshots() -> list[Path]:
+    """Return JSON snapshot files under the canonical .benchmarks/ tree."""
+    root = Path.cwd() / ".benchmarks"
+    if not root.exists():
+        return []
+    return sorted(root.rglob("*.json"))
+
+
+def _suggest_snapshots(reason: str) -> None:
+    """Print an error + a hint listing whatever snapshots we can find."""
+    typer.secho(reason, fg=typer.colors.RED, err=True)
+    found = _discover_snapshots()
+    if found:
+        typer.echo("\nAvailable snapshots under .benchmarks/:", err=True)
+        for p in found:
+            typer.echo(f"  {p}", err=True)
+    else:
+        typer.echo(
+            "\nNo snapshots found under .benchmarks/. Generate one with:\n"
+            "  python -m benchmarks run --json .benchmarks/<label>.json",
+            err=True,
+        )
+
+
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def compare(
+    ctx: typer.Context,
+    snapshots: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            help="Two or more pytest-benchmark JSON files saved via ``run --json``."
+        ),
+    ] = None,
+) -> None:
+    """
+    Compare timing snapshots side-by-side via ``pytest-benchmark compare``.
+
+    Thin wrapper around the upstream tool so the whole suite stays under
+    one entry point. Pass any number of JSONs — the first is treated as
+    the baseline. Trailing arguments after ``--`` are forwarded to
+    ``pytest-benchmark compare`` verbatim:
+
+        python -m benchmarks compare .benchmarks/master.json .benchmarks/branch.json
+        python -m benchmarks compare a.json b.json -- --columns=median,iqr --sort=name
+
+    With no arguments (or missing paths), prints what snapshots exist
+    under ``.benchmarks/`` so you can copy-paste the path you want.
+
+    For memory snapshots use ``memory compare`` instead — different format,
+    different tool.
+    """
+    snapshots = snapshots or []
+    if len(snapshots) < 2:
+        _suggest_snapshots(
+            f"compare needs at least two snapshot paths (got {len(snapshots)})."
+        )
+        raise typer.Exit(code=2)
+
+    missing = [p for p in snapshots if not p.exists()]
+    if missing:
+        _suggest_snapshots(f"missing snapshots: {[str(p) for p in missing]}")
+        raise typer.Exit(code=2)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest_benchmark",
+        "compare",
+        *[str(p) for p in snapshots],
+        *ctx.args,
+    ]
+    typer.secho(f"$ {' '.join(cmd)}", fg=typer.colors.BRIGHT_BLACK)
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
+
+
 # --- Memory subcommands ----------------------------------------------------
 
 
