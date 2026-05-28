@@ -182,8 +182,14 @@ def plot_scatter(
     # Fix the axis ranges so the animation doesn't jitter; pad by a small
     # margin so points on the edges aren't clipped.
     x_lo, x_hi = df["baseline_time"].min(), df["baseline_time"].max()
+    # y-range uses min/max but is centered symmetrically around 1.0 (the
+    # "no change" line), so regressions above and improvements below are
+    # equally readable. Asymmetric data still resolves — the larger side
+    # just dictates how wide the symmetric window is.
     y_lo, y_hi = df["ratio"].min(), df["ratio"].max()
-    pad_y = max(0.05, (y_hi - y_lo) * 0.05)
+    max_dist = max(abs(1.0 - y_lo), abs(y_hi - 1.0), 0.05)
+    pad_y = max(0.05, max_dist * 0.05)
+    y_range = [1.0 - max_dist - pad_y, 1.0 + max_dist + pad_y]
 
     # Clip the colour scale to the 95th-percentile absolute Δ so a single
     # huge regression doesn't wash everything else to white. Outliers
@@ -208,7 +214,7 @@ def plot_scatter(
         range_color=[-clip, clip],
         log_x=True,
         range_x=[x_lo * 0.5, x_hi * 2],
-        range_y=[y_lo - pad_y, y_hi + pad_y],
+        range_y=y_range,
         hover_name="test",
         hover_data={
             "baseline_time": ":.4g",
