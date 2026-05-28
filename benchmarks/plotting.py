@@ -75,6 +75,43 @@ def _axis_kwargs(unit: str) -> dict:
     return {"ticksuffix": f" {unit}"}
 
 
+def _share_axis_labels(fig, y_label: str, x_label: str) -> None:
+    """
+    Replace per-facet axis titles with one shared label per axis.
+
+    Plotly express renders the x/y titles on every facet by default,
+    which is noisy when faceting wraps a 5+ subplot grid. This clears
+    them and adds two ``paper``-coordinate annotations: one on the
+    left (rotated) for ``y_label``, one on the bottom for ``x_label``.
+    Leave either blank to skip that side.
+    """
+    fig.for_each_yaxis(lambda yaxis: yaxis.update(title_text=""))
+    fig.for_each_xaxis(lambda xaxis: xaxis.update(title_text=""))
+    if y_label:
+        fig.add_annotation(
+            text=y_label,
+            xref="paper",
+            yref="paper",
+            x=-0.05,
+            y=0.5,
+            textangle=-90,
+            showarrow=False,
+            font={"size": 13},
+        )
+    if x_label:
+        fig.add_annotation(
+            text=x_label,
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=-0.08,
+            showarrow=False,
+            font={"size": 13},
+        )
+    # Give the annotations room.
+    fig.update_layout(margin={"l": 90, "b": 70})
+
+
 def plot_compare(
     snapshots: list[Path],
     metric: Metric = "min",
@@ -223,6 +260,8 @@ def plot_compare(
     # Render the value text outside the bar (default is inside) so the
     # number stays readable even when a bar is very short.
     fig.update_traces(textposition="outside", cliponaxis=False)
+    if facets is not None:
+        _share_axis_labels(fig, y_label="test", x_label=x_label)
     fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
     return fig, len(df)
 
@@ -371,6 +410,12 @@ def plot_scatter(
         y=1.0, line_dash="dash", line_color="grey", annotation_text="no change"
     )
     fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
+    if facets is not None:
+        _share_axis_labels(
+            fig,
+            y_label=f"{metric_label} ratio (candidate / baseline)",
+            x_label=f"baseline {metric_label} ({unit}, log scale)",
+        )
     fig.update_layout(height=600)
     return fig, int(df["test"].nunique())
 
