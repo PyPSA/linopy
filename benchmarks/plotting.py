@@ -65,8 +65,19 @@ def plot_compare(
         _load_snapshot(snapshots[1], metric),
     )
     common = sorted(set(a_vals) & set(b_vals))
+    only_a = sorted(set(a_vals) - set(b_vals))
+    only_b = sorted(set(b_vals) - set(a_vals))
     if not common:
         raise ValueError("no tests in common between the two snapshots")
+    if only_a or only_b:
+        # Surface the mismatch so silent intersection isn't a footgun.
+        import sys
+
+        print(
+            f"compare: {len(only_a)} test(s) only in {a_label}, "
+            f"{len(only_b)} only in {b_label} (intersection: {len(common)}).",
+            file=sys.stderr,
+        )
 
     rows = [
         {
@@ -89,6 +100,10 @@ def plot_compare(
         x_label = f"{metric} delta %"
         text_fmt = ".1f"
 
+    title = f"{metric} delta ({sort}): {a_label} → {b_label} (positive = slower)"
+    if only_a or only_b:
+        title += f"<br><sub>{len(only_a)} only in {a_label}, {len(only_b)} only in {b_label}</sub>"
+
     fig = px.bar(
         df,
         x=x_col,
@@ -97,7 +112,7 @@ def plot_compare(
         color=x_col,
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
-        title=f"{metric} delta ({sort}): {a_label} → {b_label} (positive = slower)",
+        title=title,
         labels={x_col: x_label, "test": ""},
         text_auto=text_fmt,
         hover_data={
@@ -110,7 +125,7 @@ def plot_compare(
     if sort == "absolute":
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
         fig.update_xaxes(tickformat=".2s", ticksuffix="s")
-    fig.update_layout(height=max(400, len(df) * 14), showlegend=False)
+    fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
     fig.write_html(output)
     return len(df)
 
@@ -299,7 +314,7 @@ def plot_sweep(
             "<extra></extra>"
         ),
     )
-    fig.update_layout(height=max(400, len(df) * 14))
+    fig.update_layout(height=max(500, len(df) * 22))
     fig.write_html(output)
     return len(df)
 
@@ -314,19 +329,36 @@ def plot_scaling(
     import pandas as pd
     import plotly.express as px
 
-    _, vals = _load_snapshot(snapshots[0], metric)
+    # Read the raw JSON so we can pull ``params`` per benchmark. ``size``
+    # comes from there as a clean int — any future rename of the test id
+    # format won't silently produce 0 rows. ``model`` still needs the id
+    # regex because spec is stored as an unserializable repr in params.
+    data = json.loads(snapshots[0].read_text())
     rows = []
-    for name, t in vals.items():
+    for bm in data["benchmarks"]:
+        name = bm["fullname"]
+        t = bm["stats"][metric]
+        params = bm.get("params") or {}
+
+        size = params.get("size")
+        if not isinstance(size, int):
+            # Fall back to the id regex.
+            m = _SIZE_RE.match(name)
+            if not m:
+                continue
+            size = int(m.group(3))
+
         m = _SIZE_RE.match(name)
         if not m:
             continue
-        phase_path, model, n = m.groups()
-        phase = phase_path.split("::")[-1]
-        rows.append({"phase": phase, "model": model, "n": int(n), metric: t})
+        phase = m.group(1).split("::")[-1]
+        model = m.group(2)
+        rows.append({"phase": phase, "model": model, "n": size, metric: t})
 
     if not rows:
         raise ValueError(
-            "no size-parametrized tests found (expected ``...[<model>-n=<N>]``)"
+            "no size-parametrized tests found (expected ``...[<model>-n=<N>]`` "
+            "or a ``params.size`` int)"
         )
 
     df = pd.DataFrame(rows).sort_values(["phase", "model", "n"])
