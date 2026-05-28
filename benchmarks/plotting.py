@@ -27,7 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-PlotView = Literal["compare", "sweep", "scaling"]
+PlotView = Literal["compare", "scatter", "sweep", "scaling"]
 Metric = Literal["min", "median", "mean", "max"]
 SortMode = Literal["absolute", "relative"]
 
@@ -111,6 +111,92 @@ def plot_compare(
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
         fig.update_xaxes(tickformat=".2s", ticksuffix="s")
     fig.update_layout(height=max(400, len(df) * 14), showlegend=False)
+    fig.write_html(output)
+    return len(df)
+
+
+def plot_scatter(
+    snapshots: list[Path],
+    output: Path,
+    metric: Metric = "min",
+    sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+) -> int:
+    """
+    Two-axis scatter — baseline cost on log-x, ratio on y.
+
+    Designed as the single best exploratory plot for regression hunting
+    across tests of wildly different magnitudes: a point lights up as
+    "fix this" only if it sits in the top-right corner — slow tests
+    that got slower. Top-left (big ratio, tiny absolute) reads as
+    microbenchmark noise; bottom-right (big absolute, tiny ratio) is
+    already-slow-but-unchanged. The combined position resolves the
+    tension that pure relative or pure absolute sort each blind-spot.
+
+    A horizontal reference at ``ratio = 1`` makes "no change" trivial
+    to see; the colour encodes absolute Δ as a third channel.
+    """
+    import pandas as pd
+    import plotly.express as px
+
+    (a_label, a_vals), (b_label, b_vals) = (
+        _load_snapshot(snapshots[0], metric),
+        _load_snapshot(snapshots[1], metric),
+    )
+    common = sorted(set(a_vals) & set(b_vals))
+    if not common:
+        raise ValueError("no tests in common between the two snapshots")
+
+    rows = []
+    for name in common:
+        a, b = a_vals[name], b_vals[name]
+        if a <= 0:
+            continue
+        rows.append(
+            {
+                "test": name,
+                "baseline_time": a,
+                "ratio": b / a,
+                "delta_abs": b - a,
+                "delta_pct": (b - a) / a * 100.0,
+                a_label: a,
+                b_label: b,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    fig = px.scatter(
+        df,
+        x="baseline_time",
+        y="ratio",
+        color="delta_abs",
+        color_continuous_scale=["green", "white", "red"],
+        color_continuous_midpoint=0,
+        log_x=True,
+        hover_name="test",
+        hover_data={
+            a_label: ":.4g",
+            b_label: ":.4g",
+            "delta_abs": ":.4g",
+            "delta_pct": ":.2f",
+            "ratio": ":.3f",
+            "baseline_time": ":.4g",
+        },
+        title=(
+            f"{metric} scatter: {a_label} → {b_label} "
+            "(top-right = slow tests that got slower)"
+        ),
+        labels={
+            "baseline_time": f"baseline {metric} (s, log scale)",
+            "ratio": f"{metric} ratio  (candidate / baseline)",
+            "delta_abs": "Δ (s)",
+        },
+    )
+    # Reference line at ratio == 1 (no change).
+    fig.add_hline(
+        y=1.0, line_dash="dash", line_color="grey", annotation_text="no change"
+    )
+    fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
+    fig.update_layout(height=600)
     fig.write_html(output)
     return len(df)
 
@@ -219,6 +305,7 @@ def plot_scaling(
 
 RENDERERS: dict[PlotView, Callable[[list[Path], Path, Metric, SortMode], int]] = {
     "compare": plot_compare,
+    "scatter": plot_scatter,
     "sweep": plot_sweep,
     "scaling": plot_scaling,
 }

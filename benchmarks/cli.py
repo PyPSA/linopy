@@ -651,18 +651,21 @@ def plot(
     """
     Render an interactive HTML plot from one or more snapshots.
 
-    Three views, picked automatically from the snapshot count or set
-    explicitly via ``--view``:
+    Four views, picked automatically from the snapshot count (compare
+    for 2, sweep for 3+, scaling for 1) or set explicitly via ``--view``:
 
-    - **compare** (2 snapshots) — horizontal bar chart of per-test median
-      delta, sorted by magnitude, green→red colormap. The "did this PR
-      regress anything?" picture in one glance.
-    - **sweep** (3+ snapshots) — heatmap of median ratio relative to the
-      first snapshot, rows = tests, columns = snapshot labels. Useful
-      for cross-version sweeps from ``sweep``.
-    - **scaling** (1 snapshot) — log-log median vs ``n`` for
-      size-parametrized tests, faceted by phase. Shows whether linopy's
-      complexity scales as expected.
+    - **compare** (2 snapshots) — horizontal bar chart of per-test delta,
+      sorted by magnitude. The "did this PR regress anything?" picture.
+    - **scatter** (2 snapshots) — exploratory two-axis plot: baseline
+      cost on log-x, ratio on y, absolute Δ encoded in colour. Tests
+      in the top-right are the real regressions (slow tests that got
+      slower); top-left = noisy microbenchmarks; bottom-right =
+      already-slow-but-unchanged. Resolves the absolute-vs-relative
+      tension visually.
+    - **sweep** (3+ snapshots) — heatmap of ratio relative to the first
+      snapshot, rows = tests, columns = snapshot labels.
+    - **scaling** (1 snapshot) — log-log time vs ``n`` for
+      size-parametrized tests, faceted by phase.
 
     Output is an interactive Plotly HTML file. Open it in any browser
     (or pass ``--open``).
@@ -679,9 +682,11 @@ def plot(
         if len(snapshots) == 2
         else "sweep"
     )
-    if chosen == "compare" and len(snapshots) != 2:
+    if chosen in ("compare", "scatter") and len(snapshots) != 2:
         typer.secho(
-            "compare view needs exactly 2 snapshots", fg=typer.colors.RED, err=True
+            f"{chosen} view needs exactly 2 snapshots",
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(code=2)
     if chosen == "scaling" and len(snapshots) != 1:
