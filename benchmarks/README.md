@@ -23,6 +23,14 @@ uv pip install -e .            # current linopy
 uv pip install linopy==0.5.0   # cross-version sweep target
 ```
 
+`pypsa` is an **optional** benchmark dep — the `pypsa_scigrid` registry
+spec and `test_pypsa_carbon_management.py` skip gracefully without it.
+Install separately when you want them:
+
+```bash
+uv pip install pypsa
+```
+
 The lockfile excludes linopy itself so the same lockfile works for both
 current-tip regression runs and `sweep` against older releases. Absolute
 benchmark numbers are still machine-dependent (CPU, cache, memory

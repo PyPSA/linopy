@@ -99,7 +99,6 @@ benchmarks = [
     "pytest==9.0.3",
     "pytest-benchmark==5.2.3",
     "pytest-memray==1.8.0",
-    "pypsa==1.2.2",
     "highspy==1.13.1",
     "netcdf4==1.7.4",
     "nbconvert==7.17.1",

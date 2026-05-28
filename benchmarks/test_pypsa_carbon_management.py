@@ -1,7 +1,10 @@
-import pypsa
 import pytest
 
 import linopy as lp
+
+# pypsa is an optional benchmark dep. Skip the whole module if it's missing
+# so the rest of the suite stays collectable without it.
+pypsa = pytest.importorskip("pypsa")
 
 
 @pytest.fixture(scope="module")

@@ -405,7 +405,6 @@ def sweep(
                 install_args += [
                     "pytest==9.0.3",
                     "pytest-benchmark==5.2.3",
-                    "pypsa==1.2.2",
                     "highspy==1.13.1",
                     "netcdf4==1.7.4",
                 ]
