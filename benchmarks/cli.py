@@ -29,7 +29,7 @@ from benchmarks import (
 )
 from benchmarks.memory import compare as memory_compare
 from benchmarks.memory import save as memory_save
-from benchmarks.plotting import Metric, PlotView
+from benchmarks.plotting import Metric, PlotView, SortMode
 
 app = typer.Typer(
     help=(
@@ -628,6 +628,17 @@ def plot(
             )
         ),
     ] = "min",
+    sort: Annotated[
+        SortMode,
+        typer.Option(
+            help=(
+                "Compare-view sort and bar dimension. ``absolute`` (default) "
+                "uses ``b - a`` in seconds so the biggest actual-time impacts "
+                "float to the bottom — avoids over-weighting cheap "
+                "microsecond tests. ``relative`` uses percent change."
+            )
+        ),
+    ] = "absolute",
     output: Annotated[
         Path,
         typer.Option("--output", "-o", help="Where to write the HTML."),
@@ -691,7 +702,7 @@ def plot(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        rendered = RENDERERS[chosen](snapshots, output, metric)
+        rendered = RENDERERS[chosen](snapshots, output, metric, sort)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc

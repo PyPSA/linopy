@@ -29,6 +29,7 @@ from typing import Literal
 
 PlotView = Literal["compare", "sweep", "scaling"]
 Metric = Literal["min", "median", "mean", "max"]
+SortMode = Literal["absolute", "relative"]
 
 _SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
 
@@ -40,8 +41,22 @@ def _load_snapshot(path: Path, metric: Metric = "min") -> tuple[str, dict[str, f
     return path.stem, values
 
 
-def plot_compare(snapshots: list[Path], output: Path, metric: Metric = "min") -> int:
-    """Bar chart of relative delta per test, sorted by magnitude."""
+def plot_compare(
+    snapshots: list[Path],
+    output: Path,
+    metric: Metric = "min",
+    sort: SortMode = "absolute",
+) -> int:
+    """
+    Bar chart of delta per test, sorted by magnitude.
+
+    ``sort="absolute"`` (default): bar = (b - a) seconds, sort by the
+    largest actual time impact. Best for "what change actually affected
+    total runtime?" — avoids over-weighting cheap microsecond tests.
+
+    ``sort="relative"``: bar = (b/a - 1) * 100 %, sort by the largest
+    proportional change. Best for "what got proportionally worse?".
+    """
     import pandas as pd
     import plotly.express as px
 
@@ -58,36 +73,54 @@ def plot_compare(snapshots: list[Path], output: Path, metric: Metric = "min") ->
             "test": name,
             a_label: a_vals[name],
             b_label: b_vals[name],
+            "delta_abs": b_vals[name] - a_vals[name],
             "delta_pct": (b_vals[name] - a_vals[name]) / a_vals[name] * 100.0,
         }
         for name in common
     ]
     df = pd.DataFrame(rows)
-    df = df.reindex(df["delta_pct"].abs().sort_values(ascending=True).index)
+    x_col = "delta_abs" if sort == "absolute" else "delta_pct"
+    df = df.reindex(df[x_col].abs().sort_values(ascending=True).index)
+
+    if sort == "absolute":
+        x_label = f"{metric} delta (s)"
+        text_fmt = ".2s"
+    else:
+        x_label = f"{metric} delta %"
+        text_fmt = ".1f"
 
     fig = px.bar(
         df,
-        x="delta_pct",
+        x=x_col,
         y="test",
         orientation="h",
-        color="delta_pct",
+        color=x_col,
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
-        title=f"{metric} delta: {a_label} → {b_label} (positive = slower)",
-        labels={"delta_pct": f"{metric} delta %", "test": ""},
-        text_auto=".1f",
+        title=f"{metric} delta ({sort}): {a_label} → {b_label} (positive = slower)",
+        labels={x_col: x_label, "test": ""},
+        text_auto=text_fmt,
         hover_data={
             a_label: ":.4g",
             b_label: ":.4g",
+            "delta_abs": ":.4g",
             "delta_pct": ":.2f",
         },
     )
+    if sort == "absolute":
+        # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
+        fig.update_xaxes(tickformat=".2s", ticksuffix="s")
     fig.update_layout(height=max(400, len(df) * 14), showlegend=False)
     fig.write_html(output)
     return len(df)
 
 
-def plot_sweep(snapshots: list[Path], output: Path, metric: Metric = "min") -> int:
+def plot_sweep(
+    snapshots: list[Path],
+    output: Path,
+    metric: Metric = "min",
+    sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+) -> int:
     """Heatmap of per-test ratio relative to the first snapshot."""
     import pandas as pd
     import plotly.express as px
@@ -141,7 +174,12 @@ def plot_sweep(snapshots: list[Path], output: Path, metric: Metric = "min") -> i
     return len(df)
 
 
-def plot_scaling(snapshots: list[Path], output: Path, metric: Metric = "min") -> int:
+def plot_scaling(
+    snapshots: list[Path],
+    output: Path,
+    metric: Metric = "min",
+    sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
+) -> int:
     """Log-log time vs N for size-parametrized tests, faceted by phase."""
     import pandas as pd
     import plotly.express as px
@@ -179,7 +217,7 @@ def plot_scaling(snapshots: list[Path], output: Path, metric: Metric = "min") ->
     return len(df)
 
 
-RENDERERS: dict[PlotView, Callable[[list[Path], Path, Metric], int]] = {
+RENDERERS: dict[PlotView, Callable[[list[Path], Path, Metric, SortMode], int]] = {
     "compare": plot_compare,
     "sweep": plot_sweep,
     "scaling": plot_scaling,
