@@ -111,27 +111,24 @@ def plot_compare(
             file=sys.stderr,
         )
 
-    rows = []
-    unchanged = 0
-    for name in common:
-        a_v, b_v = a_vals[name], b_vals[name]
-        if a_v == b_v:
-            # No-change entries pad the chart with zero-length bars (a
-            # common situation for memory peaks rounded to MiB). Drop
-            # them so the visible chart only shows tests that moved.
-            unchanged += 1
-            continue
-        rows.append(
-            {
-                "test": name,
-                a_label: a_v,
-                b_label: b_v,
-                "delta_abs": b_v - a_v,
-                "delta_pct": (b_v - a_v) / a_v * 100.0 if a_v else float("inf"),
-            }
-        )
-    if not rows:
-        raise ValueError("no tests changed between the two snapshots")
+    # Build the dataframe with a uniquely-named test-id column. Snapshot
+    # labels come from filenames (e.g. ``.benchmarks/memory/test.json`` →
+    # ``"test"``) and become column names below; if the test-id column
+    # used the same name, the dict literal would silently overwrite it
+    # and plotly would render the snapshot values on the y-axis instead
+    # of the test names.
+    rows = [
+        {
+            "_test_id": name,
+            a_label: a_vals[name],
+            b_label: b_vals[name],
+            "delta_abs": b_vals[name] - a_vals[name],
+            "delta_pct": (b_vals[name] - a_vals[name]) / a_vals[name] * 100.0
+            if a_vals[name]
+            else float("inf"),
+        }
+        for name in common
+    ]
     df = pd.DataFrame(rows)
     x_col = "delta_abs" if sort == "absolute" else "delta_pct"
     df = df.reindex(df[x_col].abs().sort_values(ascending=True).index)
@@ -147,26 +144,22 @@ def plot_compare(
     title = (
         f"{metric_label} delta ({sort}): {a_label} → {b_label} (positive = {direction})"
     )
-    sub_parts = []
-    if unchanged:
-        sub_parts.append(f"{unchanged} unchanged (hidden)")
     if only_a or only_b:
-        sub_parts.append(
-            f"{len(only_a)} only in {a_label}, {len(only_b)} only in {b_label}"
+        title += (
+            f"<br><sub>{len(only_a)} only in {a_label}, "
+            f"{len(only_b)} only in {b_label}</sub>"
         )
-    if sub_parts:
-        title += "<br><sub>" + " · ".join(sub_parts) + "</sub>"
 
     fig = px.bar(
         df,
         x=x_col,
-        y="test",
+        y="_test_id",
         orientation="h",
         color=x_col,
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
         title=title,
-        labels={x_col: x_label, "test": ""},
+        labels={x_col: x_label, "_test_id": ""},
         text_auto=text_fmt,
         hover_data={
             a_label: ":.4g",
