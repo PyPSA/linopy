@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 CoordsLike: TypeAlias = (
-    Sequence[Sequence | Index | DataArray]
+    Sequence[Sequence | Index]
     | Mapping
     | DataArrayCoordinates
     | DatasetCoordinates

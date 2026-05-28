@@ -510,6 +510,30 @@ def test_as_dataarray_keeps_disjoint_shared_dim_values() -> None:
     assert list(da.coords["a"].values) == [0, 1, 2, 3, 4]
 
 
+def test_as_dataarray_expands_missing_multiindex_dim_keeps_levels() -> None:
+    """Broadcasting a missing MultiIndex dim must keep its level coords intact.
+
+    expand_dims drops MultiIndex level coords, leaving a degenerate flat
+    index that fails to align downstream (PyPSA multi-investment regression).
+    """
+    midx = pd.MultiIndex.from_tuples(
+        [(2020, 0), (2020, 1), (2030, 0), (2030, 1)],
+        names=["period", "timestep"],
+    )
+    midx.name = "snapshot"
+    sc = xr.Coordinates.from_pandas_multiindex(midx, "snapshot")
+    labels = DataArray(
+        [[1], [2], [3], [4]], coords={**sc, "name": ["1"]}, dims=["snapshot", "name"]
+    )
+    coeff = as_dataarray(
+        DataArray([1.0], coords={"name": ["1"]}, dims=["name"]),
+        coords=labels.coords,
+        dims=labels.dims,
+    )
+    assert set(coeff.xindexes) == {"snapshot", "period", "timestep", "name"}
+    coeff.reindex_like(labels, fill_value=0)
+
+
 def test_validate_alignment_rejects_extra_dims() -> None:
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}

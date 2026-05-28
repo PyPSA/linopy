@@ -267,6 +267,23 @@ def _as_dataarray_lax(
     return arr
 
 
+def _as_index(coord_values: Any) -> pd.Index:
+    return (
+        coord_values if isinstance(coord_values, pd.Index) else pd.Index(coord_values)
+    )
+
+
+def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
+    """Return the backing ``pd.MultiIndex`` of a coords entry, or ``None``."""
+    if isinstance(coord_values, pd.MultiIndex):
+        return coord_values
+    if isinstance(coord_values, DataArray):
+        idx = coord_values.to_index()
+        if isinstance(idx, pd.MultiIndex):
+            return idx
+    return None
+
+
 def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
@@ -360,11 +377,7 @@ def as_dataarray(
             continue
         if isinstance(arr.indexes.get(dim), pd.MultiIndex):
             continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
+        expected_idx = _as_index(coord_values)
         actual_idx = arr.coords[dim].to_index()
         if actual_idx.equals(expected_idx):
             continue
@@ -385,7 +398,26 @@ def as_dataarray(
     # up its dim order from coord insertion).
     expand = {k: v for k, v in expected.items() if k not in arr.dims}
     if expand:
-        arr = arr.expand_dims(expand)
+        # expand_dims drops the level coords of a MultiIndex-backed dim,
+        # leaving a degenerate flat index that fails to align downstream.
+        # Broadcast against a proper Coordinates template instead.
+        plain = {}
+        for dim, coord_values in expand.items():
+            mi = _as_multiindex(coord_values)
+            # Fall back to expand_dims when arr already carries one of the
+            # MultiIndex's level names as its own coord: broadcasting against
+            # the level coords would raise on the conflicting index.
+            if mi is None or set(mi.names) & (set(arr.coords) | set(arr.dims)):
+                plain[dim] = coord_values
+                continue
+            template = DataArray(
+                np.zeros(len(mi)),
+                coords=Coordinates.from_pandas_multiindex(mi, dim),
+                dims=[dim],
+            )
+            arr, _ = broadcast(arr, template)
+        if plain:
+            arr = arr.expand_dims(plain)
 
     target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
         d for d in arr.dims if d not in expected
@@ -457,11 +489,7 @@ def validate_alignment(
                         f"match coords."
                     )
             continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
+        expected_idx = _as_index(coord_values)
         actual_idx = arr.coords[dim].to_index()
         if not actual_idx.equals(expected_idx):
             raise ValueError(
@@ -476,6 +504,7 @@ def align_to_coords(
     coords: CoordsLike | None,
     *,
     label: str,
+    dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -488,14 +517,14 @@ def align_to_coords(
     propagate unchanged.
     """
     if coords is not None:
-        _coords_to_dict(coords, dims=kwargs.get("dims"))
+        _coords_to_dict(coords, dims=dims)
     try:
-        da = as_dataarray(value, coords, **kwargs)
+        da = as_dataarray(value, coords, dims=dims, **kwargs)
     except TypeError as err:
         raise TypeError(f"{label} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:
         raise ValueError(f"{label} could not be aligned to coords: {err}") from err
-    validate_alignment(da, coords, dims=kwargs.get("dims"), label=label)
+    validate_alignment(da, coords, dims=dims, label=label)
     return da
 
 
