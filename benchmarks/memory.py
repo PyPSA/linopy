@@ -1,128 +1,313 @@
 """
-Measure and compare peak memory using pytest-memray.
+Measure and compare peak memory across the registry × phase grid.
+
+Each measurement uses ``memray.Tracker`` directly so the model construction
+(setup) lives *outside* the tracked region and the peak reflects only the
+phase work itself::
+
+    m = spec.build(size)            # setup, not tracked
+    with memray.Tracker(bin_path):
+        wrapper(m)                  # tracked
+    peak = FileReader(bin_path).metadata.peak_memory
 
 This module exposes ``save(label, ...)`` and ``compare(label_a, label_b)`` as
 plain functions; user-facing invocation goes through the typer CLI::
 
-    python -m benchmarks memory save <label>
+    python -m benchmarks memory save <label> [--quick] [--phase build] ...
     python -m benchmarks memory compare <a> <b>
 
-Results are stored in ``.benchmarks/memory/``.
+Results land in ``.benchmarks/memory/`` as JSON keyed by full pytest-style
+test IDs (``benchmarks/test_<phase>.py::test_<phase>[<spec>-n=<size>]``)
+so cross-snapshot diffs work uniformly regardless of which phases were run.
 """
 
 from __future__ import annotations
 
+import argparse
+import gc
 import json
 import platform
-import re
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 if platform.system() == "Windows":
     raise RuntimeError(
-        "memory.py requires pytest-memray which is not available on Windows. "
-        "Run memory benchmarks on Linux or macOS."
+        "memory measurement requires ``memray`` which is not available on "
+        "Windows. Run memory benchmarks on Linux or macOS."
     )
 
+if TYPE_CHECKING:
+    from benchmarks.registry import ModelSpec
+
 RESULTS_DIR = Path(".benchmarks/memory")
-MEMORY_RE = re.compile(
-    r"Allocation results for (.+?) at the high watermark\s+"
-    r"📦 Total memory allocated: ([\d.]+)(MiB|KiB|GiB|B)",
+DEFAULT_PHASES: tuple[str, ...] = (
+    "build",
+    "matrices",
+    "lp_write",
+    "netcdf",
+    "solver_handoff",
 )
-# Only the build phase is measured by default. Unlike timing benchmarks (where
-# pytest-benchmark isolates the measured function), memray tracks all allocations
-# within a test — including model construction in setup. This means LP write and
-# matrix tests would report build + phase memory combined, making the phase-specific
-# contribution hard to isolate. Since model construction dominates memory usage,
-# measuring build alone gives the most accurate and actionable numbers.
-DEFAULT_TEST_PATHS = [
-    "benchmarks/test_build.py",
-]
 
 
-def _to_mib(value: float, unit: str) -> float:
-    factors = {"B": 1 / 1048576, "KiB": 1 / 1024, "MiB": 1, "GiB": 1024}
-    return value * factors[unit]
+def _phase_tag(phase: str) -> str:
+    """Map a phase name to the registry phase tag used by ``spec.applies_to``."""
+    from benchmarks.registry import (
+        BUILD,
+        LP_WRITE,
+        MATRICES,
+        NETCDF,
+        TO_HIGHSPY,
+    )
+
+    return {
+        "build": BUILD,
+        "matrices": MATRICES,
+        "lp_write": LP_WRITE,
+        "netcdf": NETCDF,
+        "solver_handoff": TO_HIGHSPY,  # we always measure the highs handoff
+    }[phase]
 
 
-def _collect_test_ids(test_paths: list[str], quick: bool) -> list[str]:
-    """Collect test IDs without running them."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        *test_paths,
-        "--collect-only",
-        "-q",
-    ]
-    if quick:
-        cmd.append("--quick")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return [
-        line.strip()
-        for line in result.stdout.splitlines()
-        if "::" in line and not line.startswith(("=", "-", " "))
-    ]
+def _measure_peak(action: Callable[[], object]) -> float:
+    """Run ``action()`` under ``memray.Tracker`` and return peak MiB."""
+    import memray
+
+    fd, tmp = tempfile.mkstemp(suffix=".bin")
+    Path(tmp).unlink()  # memray needs to create the file itself
+    # Close the fd; the path is what matters.
+    try:
+        from os import close as _close
+
+        _close(fd)
+    except OSError:
+        pass
+
+    try:
+        with memray.Tracker(tmp):
+            action()
+        peak_bytes = memray.FileReader(tmp).metadata.peak_memory
+        return round(peak_bytes / (1024**2), 3)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
-def save(label: str, quick: bool = False, test_paths: list[str] | None = None) -> Path:
-    """Run each benchmark in a separate process for accurate memory measurement."""
-    if test_paths is None:
-        test_paths = DEFAULT_TEST_PATHS
-    test_ids = _collect_test_ids(test_paths, quick)
-    if not test_ids:
-        print("No tests collected.", file=sys.stderr)
-        sys.exit(1)
+def _measurements(
+    phase: str, spec: ModelSpec, size: int
+) -> Iterator[tuple[str, Callable[[], object]]]:
+    """
+    Yield ``(test_id, action)`` pairs for one ``(phase, spec, size)``.
 
-    print(f"Running {len(test_ids)} tests (each in a separate process)...")
-    entries = {}
-    for i, test_id in enumerate(test_ids, 1):
-        short = test_id.split("::")[-1]
-        print(f"  [{i}/{len(test_ids)}] {short}...", end=" ", flush=True)
+    ``action`` is a zero-arg callable; the caller runs it inside a tracker.
+    For non-build phases, the model is built once up front (outside the
+    tracker) and the action closes over it so only the phase work is
+    counted.
+    """
+    name = spec.name
 
+    if phase == "build":
+        yield (
+            f"benchmarks/test_build.py::test_build[{name}-n={size}]",
+            lambda: spec.build(size),
+        )
+        return
+
+    m = spec.build(size)
+
+    if phase == "matrices":
+
+        def access() -> None:
+            mats = m.matrices
+            for attr in ("A", "b", "c", "lb", "ub", "sense", "vlabels", "clabels"):
+                getattr(mats, attr)
+            if m.is_quadratic:
+                mats.Q
+
+        yield (
+            f"benchmarks/test_matrices.py::test_matrices[{name}-n={size}]",
+            access,
+        )
+
+    elif phase == "lp_write":
+        # ``to_file`` writes to disk; use a tempdir so we don't leak.
+        tmpdir = tempfile.TemporaryDirectory()
+        lp_path = Path(tmpdir.name) / "m.lp"
+
+        def write_lp() -> None:
+            m.to_file(lp_path, progress=False)
+
+        try:
+            yield (
+                f"benchmarks/test_lp_write.py::test_lp_write[{name}-n={size}]",
+                write_lp,
+            )
+        finally:
+            tmpdir.cleanup()
+
+    elif phase == "netcdf":
+        from linopy import read_netcdf
+
+        tmpdir = tempfile.TemporaryDirectory()
+        nc_path = Path(tmpdir.name) / "m.nc"
+
+        def write_nc() -> None:
+            m.to_netcdf(nc_path)
+
+        def read_nc() -> None:
+            read_netcdf(nc_path)
+
+        try:
+            yield (
+                f"benchmarks/test_netcdf.py::test_netcdf_write[{name}-n={size}]",
+                write_nc,
+            )
+            # ``write_nc`` was called by the caller as part of the
+            # measurement, so ``nc_path`` now exists for the read.
+            yield (
+                f"benchmarks/test_netcdf.py::test_netcdf_read[{name}-n={size}]",
+                read_nc,
+            )
+        finally:
+            tmpdir.cleanup()
+
+    elif phase == "solver_handoff":
+        from linopy.io import to_highspy
+
+        def handoff() -> None:
+            to_highspy(m)
+
+        yield (
+            (
+                f"benchmarks/test_solver_handoff.py::test_solver_handoff"
+                f"[highs-{name}-n={size}]"
+            ),
+            handoff,
+        )
+
+    else:
+        raise ValueError(f"unknown phase: {phase!r}")
+
+
+def run_phase(phase: str, quick: bool = False) -> dict[str, float]:
+    """
+    Measure peak memory for every applicable ``(spec, size)`` under one phase.
+
+    Returns a ``{test_id: peak_mib}`` mapping. Invoked once per phase as a
+    subprocess by :func:`save` for isolation.
+    """
+    from benchmarks import REGISTRY
+
+    tag = _phase_tag(phase)
+    results: dict[str, float] = {}
+
+    for spec in REGISTRY.values():
+        if not spec.applies_to(tag):
+            continue
+
+        # Optional-dep gate (e.g. pypsa_scigrid needs pypsa).
+        for mod in spec.requires:
+            try:
+                __import__(mod)
+            except ImportError:
+                break
+        else:
+            for size in spec.sizes:
+                if quick and size > spec.quick_threshold:
+                    continue
+                try:
+                    for test_id, action in _measurements(phase, spec, size):
+                        try:
+                            results[test_id] = _measure_peak(action)
+                            print(
+                                f"  {test_id} → {results[test_id]:.1f} MiB",
+                                file=sys.stderr,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            print(
+                                f"  skip {test_id}: {type(exc).__name__}: {exc}",
+                                file=sys.stderr,
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"  setup failed {spec.name}/{size}: "
+                        f"{type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                gc.collect()
+
+    return results
+
+
+def save(
+    label: str,
+    quick: bool = False,
+    phases: list[str] | None = None,
+) -> Path:
+    """
+    Run one subprocess per phase and merge the results into ``<label>.json``.
+
+    Per-phase subprocesses keep allocations from one phase out of another's
+    measurement; ``memray.Tracker`` only counts what's allocated inside its
+    ``with`` block, but the subprocess boundary makes the isolation total.
+    """
+    phases = list(phases) if phases else list(DEFAULT_PHASES)
+
+    all_results: dict[str, float] = {}
+    for phase in phases:
+        print(f"\n=== {phase} ===", file=sys.stderr)
+        # Worker writes JSON to a sidecar file rather than stdout — HiGHS
+        # (and other solvers) print to stdout from C code inside the tracked
+        # region, which would pollute the data channel.
+        fd, out_tmp = tempfile.mkstemp(suffix=".json", prefix=f"mem-{phase}-")
+        from os import close as _close
+
+        _close(fd)
         cmd = [
             sys.executable,
             "-m",
-            "pytest",
-            test_id,
-            "--memray",
-            "--benchmark-disable",
-            "-v",
-            "--tb=short",
-            "-q",
+            "benchmarks.memory",
+            "_worker",
+            phase,
+            "--out",
+            out_tmp,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        output = result.stdout + result.stderr
+        if quick:
+            cmd.append("--quick")
+        try:
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.stderr:
+                sys.stderr.write(result.stderr)
+            if result.returncode != 0:
+                print(
+                    f"phase {phase} subprocess failed (exit {result.returncode})",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                phase_results = json.loads(Path(out_tmp).read_text())
+            except (json.JSONDecodeError, FileNotFoundError) as exc:
+                print(f"phase {phase} JSON parse error: {exc}", file=sys.stderr)
+                continue
+            all_results.update(phase_results)
+        finally:
+            Path(out_tmp).unlink(missing_ok=True)
 
-        match = MEMORY_RE.search(output)
-        if match:
-            value = float(match.group(2))
-            unit = match.group(3)
-            mib = round(_to_mib(value, unit), 3)
-            entries[test_id] = mib
-            print(f"{mib:.1f} MiB")
-        elif "SKIPPED" in output or "skipped" in output:
-            print("skipped")
-        else:
-            print(
-                "WARNING: no memray data (pytest-memray output format may have changed)",
-                file=sys.stderr,
-            )
-
-    if not entries:
-        print("No memray results found. Is pytest-memray installed?", file=sys.stderr)
+    if not all_results:
+        print("No measurements produced.", file=sys.stderr)
         sys.exit(1)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"{label}.json"
-    out_path.write_text(json.dumps({"label": label, "peak_mib": entries}, indent=2))
-    print(f"\nSaved {len(entries)} results to {out_path}")
+    out_path.write_text(json.dumps({"label": label, "peak_mib": all_results}, indent=2))
+    print(f"\nSaved {len(all_results)} measurements to {out_path}", file=sys.stderr)
     return out_path
 
 
 def compare(label_a: str, label_b: str) -> None:
-    """Compare two saved memory results."""
+    """Diff two saved memory snapshots side-by-side."""
     path_a = RESULTS_DIR / f"{label_a}.json"
     path_b = RESULTS_DIR / f"{label_b}.json"
     for p in (path_a, path_b):
@@ -135,8 +320,8 @@ def compare(label_a: str, label_b: str) -> None:
 
     all_tests = sorted(set(data_a) | set(data_b))
 
-    print(f"\n{'Test':<60} {label_a:>10} {label_b:>10} {'Change':>10}")
-    print("-" * 94)
+    print(f"\n{'Test':<70} {label_a:>10} {label_b:>10} {'Change':>10}")
+    print("-" * 104)
 
     for test in all_tests:
         a = data_a.get(test)
@@ -148,8 +333,25 @@ def compare(label_a: str, label_b: str) -> None:
             change = f"{pct:+.1f}%"
         else:
             change = "—"
-        # Shorten test name for readability
         short = test.split("::")[-1] if "::" in test else test
-        print(f"{short:<60} {a_str:>10} {b_str:>10} {change:>10}")
+        print(f"{short:<70} {a_str:>10} {b_str:>10} {change:>10}")
 
     print()
+
+
+# ---- subprocess worker ---------------------------------------------------
+
+if __name__ == "__main__":  # pragma: no cover
+    parser = argparse.ArgumentParser(description="memory.py worker")
+    parser.add_argument("cmd", choices=["_worker"])
+    parser.add_argument("phase")
+    parser.add_argument("--quick", action="store_true")
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="Path to write the JSON result to (stdout is reserved for solver chatter).",
+    )
+    args = parser.parse_args()
+    if args.cmd == "_worker":
+        out = run_phase(args.phase, quick=args.quick)
+        Path(args.out).write_text(json.dumps(out))

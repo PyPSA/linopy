@@ -754,18 +754,42 @@ def memory_save_cmd(
     quick: Annotated[
         bool, typer.Option("--quick", help="Use smaller problem sizes.")
     ] = False,
-    test_path: Annotated[
+    phase: Annotated[
         list[str] | None,
-        typer.Option("--test-path", help="Test file(s) to run; defaults to build."),
+        typer.Option(
+            "--phase",
+            help=(
+                "Restrict measurement to these phases. Pass multiple ``--phase`` "
+                "to select more than one. Default: all (build, matrices, lp_write,"
+                " netcdf, solver_handoff)."
+            ),
+        ),
     ] = None,
 ) -> None:
     """
-    Run the build phase under pytest-memray and save peak RSS to JSON.
+    Measure peak memory across the registry × phase grid via ``memray.Tracker``.
 
-    Results land in ``.benchmarks/memory/<label>.json``. Use ``compare``
-    afterwards to diff two snapshots.
+    Each ``(phase, spec, size)`` runs under its own tracker so setup
+    allocations (model construction) are excluded from the peak — only the
+    phase work itself is counted. Phases run in separate subprocesses for
+    isolation.
+
+    Results land in ``.benchmarks/memory/<label>.json``, keyed by full
+    pytest-style test IDs so ``compare`` diffs cleanly across runs that
+    selected different subsets.
     """
-    memory_save(label, quick=quick, test_paths=test_path)
+    from benchmarks.memory import DEFAULT_PHASES
+
+    if phase:
+        unknown = [p for p in phase if p not in DEFAULT_PHASES]
+        if unknown:
+            typer.secho(
+                f"unknown phase(s): {unknown}; valid options: {list(DEFAULT_PHASES)}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    memory_save(label, quick=quick, phases=phase)
 
 
 @memory_app.command("compare")

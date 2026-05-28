@@ -1,8 +1,28 @@
 # Internal Performance Benchmarks
 
-End-to-end timing and memory for the linopy half of an optimization run:
-build a model, hand it off to a solver, round-trip via netCDF. Solver
-algorithm runtime is intentionally out of scope.
+This suite benchmarks the **linopy part end-to-end** across four phases:
+
+1. **Build** — construct the linopy model.
+2. **Solver handoff** — convert a built model into solver-consumable form
+   (in-memory matrices, LP file, native solver instance).
+3. **netCDF serialization / deserialization** — `to_netcdf` / `read_netcdf`.
+4. **End-to-end** — a fixed real-world PyPSA model all the way to a solver
+   instance.
+
+Solver algorithm runtime is intentionally out of scope.
+
+| Phase                  | Test file                           | Measures                                                                  |
+| ---------------------- | ----------------------------------- | ------------------------------------------------------------------------- |
+| Build                  | `test_build.py`                     | constructing variables / expressions / constraints / objective            |
+| Solver handoff         | `test_matrices.py`                  | `A`, `b`, `c`, bounds, labels, `Q` for QP                                 |
+| Solver handoff         | `test_lp_write.py`                  | `model.to_file(...)` — LP / MPS serialization                             |
+| Solver handoff         | `test_solver_handoff.py`            | `lp.io.to_highspy` / `to_gurobipy` / `to_mosek` / `to_xpress`             |
+| netCDF (de)serialization | `test_netcdf.py`                  | `to_netcdf` and `read_netcdf` round-trip                                  |
+| End-to-end (PyPSA)     | `test_pypsa_carbon_management.py`   | Fixed real-world pypsa network through `network.optimize.create_model` and on to highspy; sweeps `freeze_constraints` and `set_names`. |
+
+The netCDF benchmarks reuse the same file path across pytest-benchmark
+iterations, so reads run hot-cache by design — what we want to track is
+the (de)serialization code in `linopy` / `xarray`, not disk hardware.
 
 > **Note:** `benchmark/` (singular) is for external framework comparisons.
 > `benchmarks/` (plural) is only for internal linopy performance tracking.
@@ -84,6 +104,8 @@ jupyter lab benchmarks/notebooks/registry_usage.ipynb
 - **Time** — pytest-benchmark median runtime (IQR for stability). Snapshots
   are JSON; pass `--json <path>` to `run` to save one, then diff against a
   baseline.
-- **Memory** — pytest-memray peak RSS (MiB), tracked for the build phase
-  only because later phases include build allocations and attribution
-  becomes unreliable. Use `memory save` / `memory compare`.
+- **Memory** — peak allocations (MiB) via `memray.Tracker`, measured per
+  `(phase, spec, size)` across all phases. The model is built *outside* the
+  tracked region so the peak reflects only the phase work, not model
+  construction. Use `memory save` (optionally `--phase` to scope) and
+  `memory compare`.
