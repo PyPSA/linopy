@@ -29,7 +29,7 @@ from benchmarks import (
 )
 from benchmarks.memory import compare as memory_compare
 from benchmarks.memory import save as memory_save
-from benchmarks.plotting import PlotView
+from benchmarks.plotting import Metric, PlotView
 
 app = typer.Typer(
     help=(
@@ -576,12 +576,13 @@ def compare(ctx: typer.Context) -> None:
     # Sensible defaults — pytest-benchmark's defaults emit 10 columns wide,
     # grouped by parametrize group, which is unreadable for two-snapshot diffs.
     # ``--group-by=fullname`` puts each test's (baseline, candidate) rows in
-    # their own mini-table; ``--columns=median,iqr`` keeps it narrow.
+    # their own mini-table; ``--columns=min,iqr`` shows the lowest observed
+    # time (closest to "true" cost for microbenchmarks) plus the spread.
     # Each default is only applied if the user didn't override it.
     if not any(a.startswith("--columns") for a in extra):
-        extra.insert(0, "--columns=median,iqr")
+        extra.insert(0, "--columns=min,iqr")
     if not any(a.startswith("--sort") for a in extra):
-        extra.insert(0, "--sort=name")
+        extra.insert(0, "--sort=min")
     if not any(a.startswith("--group-by") for a in extra):
         extra.insert(0, "--group-by=fullname")
 
@@ -617,6 +618,16 @@ def plot(
             )
         ),
     ] = None,
+    metric: Annotated[
+        Metric,
+        typer.Option(
+            help=(
+                "Stat to drive the plot. ``min`` (default) is closest to "
+                "the 'true' cost — noise can only slow things down. ``median``"
+                " is more robust to a single fast warmup round."
+            )
+        ),
+    ] = "min",
     output: Annotated[
         Path,
         typer.Option("--output", "-o", help="Where to write the HTML."),
@@ -680,12 +691,15 @@ def plot(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        rendered = RENDERERS[chosen](snapshots, output)
+        rendered = RENDERERS[chosen](snapshots, output, metric)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.secho(f"{chosen} view: {rendered} tests → {output}", fg=typer.colors.GREEN)
+    typer.secho(
+        f"{chosen} view ({metric}): {rendered} tests → {output}",
+        fg=typer.colors.GREEN,
+    )
     if open_browser:
         import webbrowser
 
