@@ -493,8 +493,13 @@ def sweep(
 
 
 def _discover_snapshots() -> list[Path]:
-    """Return JSON snapshot files under the canonical .benchmarks/ tree."""
-    root = Path.cwd() / ".benchmarks"
+    """
+    Return JSON snapshot files under the canonical .benchmarks/ tree.
+
+    Paths are relative to cwd so they're easier to copy-paste back into
+    the CLI than the absolute form would be.
+    """
+    root = Path(".benchmarks")
     if not root.exists():
         return []
     return sorted(root.rglob("*.json"))
