@@ -87,7 +87,7 @@ benchmarks = [
     "pypsa",
     "highspy>=1.7.1",
     "pytest-memray",
-    "typer>=0.12",
+    "typer==0.26.2",
 ]
 solvers = [
     "gurobipy",

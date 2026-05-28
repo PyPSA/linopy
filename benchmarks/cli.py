@@ -156,28 +156,30 @@ def _run_pytest(args: list[str]) -> None:
         raise typer.Exit(code=result.returncode)
 
 
-@app.command()
-def smoke(
-    extra: Annotated[
-        list[str] | None,
-        typer.Argument(help="Extra args forwarded to pytest verbatim."),
-    ] = None,
-) -> None:
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def smoke(ctx: typer.Context) -> None:
     """
     Quick smoke run — what CI uses on every PR.
 
     Equivalent to ``pytest benchmarks/ --quick --benchmark-disable -q``.
     Every model builds at one size and every phase fires once, no timings
     recorded. Typical wall-clock: ~20s.
+
+    Any trailing arguments are forwarded to pytest verbatim, e.g.::
+
+        python -m benchmarks smoke -k basic --tb=short
     """
-    args = ["benchmarks/", "--quick", "--benchmark-disable", "-q"]
-    if extra:
-        args.extend(extra)
+    args = ["benchmarks/", "--quick", "--benchmark-disable", "-q", *ctx.args]
     _run_pytest(args)
 
 
-@app.command()
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 def run(
+    ctx: typer.Context,
     long: Annotated[
         bool,
         typer.Option(
@@ -205,10 +207,6 @@ def run(
         Path | None,
         typer.Option("--json", help="Save pytest-benchmark JSON to this path."),
     ] = None,
-    extra: Annotated[
-        list[str] | None,
-        typer.Argument(help="Extra args forwarded to pytest verbatim."),
-    ] = None,
 ) -> None:
     """
     Default timing run. Records timings with pytest-benchmark.
@@ -218,9 +216,13 @@ def run(
     Add ``--long`` for the full sweep including the heaviest sizes
     (knapsack at 1M, basic at 1600, pypsa_scigrid at >50).
 
+    Any trailing arguments are forwarded to pytest verbatim, e.g.::
+
+        python -m benchmarks run --long -- --tb=short -x
+
     To skip timing entirely (e.g. just verifying everything runs at a
     bigger size), use ``smoke`` instead, or pass ``--benchmark-disable``
-    through ``extra``.
+    as a trailing arg.
     """
     args: list[str] = []
     args.append(_PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/")
@@ -234,8 +236,7 @@ def run(
     if k_parts:
         args.extend(["-k", " and ".join(k_parts)])
 
-    if extra:
-        args.extend(extra)
+    args.extend(ctx.args)
     _run_pytest(args)
 
 
