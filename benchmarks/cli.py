@@ -29,6 +29,7 @@ from benchmarks import (
 )
 from benchmarks.memory import compare as memory_compare
 from benchmarks.memory import save as memory_save
+from benchmarks.plotting import PlotView
 
 app = typer.Typer(
     help=(
@@ -601,149 +602,6 @@ def compare(ctx: typer.Context) -> None:
 # --- Plotting --------------------------------------------------------------
 
 
-PlotView = Literal["compare", "sweep", "scaling"]
-
-
-def _load_snapshot(path: Path) -> tuple[str, dict[str, float]]:
-    """Return (label, {fullname: median_seconds}) for a pytest-benchmark JSON."""
-    import json
-
-    data = json.loads(path.read_text())
-    medians = {bm["fullname"]: bm["stats"]["median"] for bm in data["benchmarks"]}
-    return path.stem, medians
-
-
-def _plot_compare(snapshots: list[Path], output: Path) -> int:
-    """Bar chart of relative median delta per test, sorted by magnitude."""
-    import pandas as pd
-    import plotly.express as px
-
-    (a_label, a_med), (b_label, b_med) = (
-        _load_snapshot(snapshots[0]),
-        _load_snapshot(snapshots[1]),
-    )
-    common = sorted(set(a_med) & set(b_med))
-    if not common:
-        typer.secho(
-            "no tests in common between the two snapshots",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    rows = [
-        {
-            "test": name,
-            "delta_pct": (b_med[name] - a_med[name]) / a_med[name] * 100.0,
-        }
-        for name in common
-    ]
-    df = pd.DataFrame(rows)
-    df = df.reindex(df["delta_pct"].abs().sort_values(ascending=True).index)
-
-    fig = px.bar(
-        df,
-        x="delta_pct",
-        y="test",
-        orientation="h",
-        color="delta_pct",
-        color_continuous_scale=["green", "white", "red"],
-        color_continuous_midpoint=0,
-        title=f"Median delta: {a_label} → {b_label} (positive = slower)",
-        labels={"delta_pct": "median delta %", "test": ""},
-    )
-    fig.update_layout(height=max(400, len(df) * 14), showlegend=False)
-    fig.write_html(output)
-    return len(df)
-
-
-def _plot_sweep(snapshots: list[Path], output: Path) -> int:
-    """Heatmap of per-test median ratio relative to the first snapshot."""
-    import pandas as pd
-    import plotly.express as px
-
-    loaded = [_load_snapshot(p) for p in snapshots]
-    versions = [label for label, _ in loaded]
-    baseline = loaded[0][1]
-    all_tests = sorted(set().union(*[set(med) for _, med in loaded]))
-
-    matrix: dict[str, list[float | None]] = {}
-    for test in all_tests:
-        base = baseline.get(test)
-        if not base:
-            continue
-        row = []
-        for _, med in loaded:
-            t = med.get(test)
-            row.append(t / base if t else None)
-        matrix[test] = row
-
-    if not matrix:
-        typer.secho(
-            f"no overlap with baseline snapshot {versions[0]}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    df = pd.DataFrame(matrix, index=versions).T  # rows = tests, cols = versions
-    fig = px.imshow(
-        df,
-        color_continuous_scale=["green", "white", "red"],
-        color_continuous_midpoint=1.0,
-        aspect="auto",
-        title=f"Median ratio relative to baseline ({versions[0]})",
-        labels={"x": "version", "y": "test", "color": "ratio"},
-    )
-    fig.update_layout(height=max(400, len(df) * 14))
-    fig.write_html(output)
-    return len(df)
-
-
-_SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
-
-
-def _plot_scaling(snapshots: list[Path], output: Path) -> int:
-    """Log-log median vs N for size-parametrized tests, faceted by phase."""
-    import pandas as pd
-    import plotly.express as px
-
-    _, med = _load_snapshot(snapshots[0])
-    rows = []
-    for name, t in med.items():
-        m = _SIZE_RE.match(name)
-        if not m:
-            continue
-        phase_path, model, n = m.groups()
-        phase = phase_path.split("::")[-1]
-        rows.append({"phase": phase, "model": model, "n": int(n), "median": t})
-
-    if not rows:
-        typer.secho(
-            "no size-parametrized tests found (expected ``...[<model>-n=<N>]``)",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    df = pd.DataFrame(rows).sort_values(["phase", "model", "n"])
-    fig = px.line(
-        df,
-        x="n",
-        y="median",
-        color="model",
-        facet_col="phase",
-        facet_col_wrap=3,
-        log_x=True,
-        log_y=True,
-        markers=True,
-        title=f"Scaling: median time vs problem size ({snapshots[0].stem})",
-    )
-    fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
-    fig.write_html(output)
-    return len(df)
-
-
 @app.command()
 def plot(
     snapshots: Annotated[
@@ -811,7 +669,7 @@ def plot(
         raise typer.Exit(code=2)
 
     try:
-        import plotly.express  # noqa: F401
+        from benchmarks.plotting import RENDERERS
     except ImportError as exc:
         typer.secho(
             "plotly is required for ``plot`` — ``pip install plotly``",
@@ -821,11 +679,11 @@ def plot(
         raise typer.Exit(code=2) from exc
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    rendered = {
-        "compare": _plot_compare,
-        "sweep": _plot_sweep,
-        "scaling": _plot_scaling,
-    }[chosen](snapshots, output)
+    try:
+        rendered = RENDERERS[chosen](snapshots, output)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
     typer.secho(f"{chosen} view: {rendered} tests → {output}", fg=typer.colors.GREEN)
     if open_browser:
