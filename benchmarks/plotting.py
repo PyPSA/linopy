@@ -140,6 +140,7 @@ def plot_scatter(
     A horizontal reference at ``ratio = 1`` makes "no change" trivial
     to see; the colour encodes absolute Δ as a third channel.
     """
+    import numpy as np
     import pandas as pd
     import plotly.express as px
 
@@ -148,10 +149,12 @@ def plot_scatter(
 
     loaded = [_load_snapshot(p, metric) for p in snapshots]
     baseline_label, baseline_vals = loaded[0]
-    others = loaded[1:]
 
+    # Include the baseline itself as the first animation frame (all points
+    # at ratio=1, Δ=0). Gives the animation a "before anything happened"
+    # anchor and makes the visual drift across frames easier to read.
     rows = []
-    for label, vals in others:
+    for label, vals in loaded:
         common = sorted(set(baseline_vals) & set(vals))
         for name in common:
             a, b = baseline_vals[name], vals[name]
@@ -182,11 +185,18 @@ def plot_scatter(
     y_lo, y_hi = df["ratio"].min(), df["ratio"].max()
     pad_y = max(0.05, (y_hi - y_lo) * 0.05)
 
-    animate = len(others) >= 2
+    # Clip the colour scale to the 95th-percentile absolute Δ so a single
+    # huge regression doesn't wash everything else to white. Outliers
+    # saturate at the bound, the rest stays readable.
+    clip = float(np.percentile(df["delta_abs"].abs(), 95)) if len(df) > 0 else 0.0
+    if clip == 0.0:
+        clip = float(df["delta_abs"].abs().max() or 1e-9)
+
+    animate = len(snapshots) >= 3
     extra: dict = {}
     if animate:
         extra["animation_frame"] = "version"
-        extra["category_orders"] = {"version": [label for label, _ in others]}
+        extra["category_orders"] = {"version": [label for label, _ in loaded]}
 
     fig = px.scatter(
         df,
@@ -195,6 +205,7 @@ def plot_scatter(
         color="delta_abs",
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
+        range_color=[-clip, clip],
         log_x=True,
         range_x=[x_lo * 0.5, x_hi * 2],
         range_y=[y_lo - pad_y, y_hi + pad_y],
@@ -215,7 +226,7 @@ def plot_scatter(
             "baseline_time": f"baseline {metric} (s, log scale)",
             "ratio": f"{metric} ratio  (candidate / baseline)",
             "candidate_time": "candidate",
-            "delta_abs": "Δ (s)",
+            "delta_abs": "Δ (s, p95-clipped)",
         },
         **extra,
     )
