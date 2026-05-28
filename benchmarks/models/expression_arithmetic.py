@@ -37,7 +37,7 @@ SPEC = register(
         build=build_expression_arithmetic,
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
-        quick_threshold=100,
+        quick_threshold=10,
         long_threshold=500,
     )
 )

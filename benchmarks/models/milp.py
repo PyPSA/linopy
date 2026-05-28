@@ -74,7 +74,7 @@ SPEC = register(
         sizes=SIZES,
         features=frozenset({INTEGER, CONTINUOUS}),
         phases=DEFAULT_PHASES,
-        quick_threshold=25,
+        quick_threshold=10,
         long_threshold=100,
     )
 )

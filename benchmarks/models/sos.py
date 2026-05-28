@@ -92,7 +92,7 @@ if _API_AVAILABLE:
                     TO_XPRESS,
                 }
             ),
-            quick_threshold=100,
+            quick_threshold=10,
             long_threshold=1_000,
         )
     )

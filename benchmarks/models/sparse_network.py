@@ -57,7 +57,7 @@ SPEC = register(
         build=build_sparse_network,
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
-        quick_threshold=100,
+        quick_threshold=10,
         long_threshold=500,
     )
 )
