@@ -48,7 +48,6 @@ BUILD = "build"
 MATRICES = "matrices"
 LP_WRITE = "lp_write"
 NETCDF = "netcdf"
-SOLVER_BUILD = "solver_build"  # generic Solver.from_name(..., io_api="direct")
 TO_HIGHSPY = "to_highspy"
 TO_GUROBIPY = "to_gurobipy"
 TO_MOSEK = "to_mosek"
@@ -60,7 +59,6 @@ ALL_PHASES = frozenset(
         MATRICES,
         LP_WRITE,
         NETCDF,
-        SOLVER_BUILD,
         TO_HIGHSPY,
         TO_GUROBIPY,
         TO_MOSEK,
@@ -77,7 +75,6 @@ DEFAULT_PHASES = frozenset(
         MATRICES,
         LP_WRITE,
         NETCDF,
-        SOLVER_BUILD,
         TO_HIGHSPY,
         TO_GUROBIPY,
         TO_MOSEK,

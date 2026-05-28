@@ -31,7 +31,6 @@ from benchmarks.registry import (
     LP_WRITE,
     MATRICES,
     NETCDF,
-    SOLVER_BUILD,
     SOS,
     TO_GUROBIPY,
     TO_XPRESS,
@@ -87,7 +86,6 @@ if _API_AVAILABLE:
                     MATRICES,
                     LP_WRITE,
                     NETCDF,
-                    SOLVER_BUILD,
                     TO_GUROBIPY,
                     TO_XPRESS,
                 }
