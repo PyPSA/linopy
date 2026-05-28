@@ -298,8 +298,11 @@ def _venv_python(venv: Path) -> Path:
     )
 
 
-@app.command()
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 def sweep(
+    ctx: typer.Context,
     versions: Annotated[
         list[str],
         typer.Argument(help="linopy versions, e.g. 0.4.0 0.5.0 (or any pip spec)."),
@@ -315,6 +318,22 @@ def sweep(
         bool,
         typer.Option("--quick", help="Use only the smallest sizes (faster sweep)."),
     ] = False,
+    phase: Annotated[
+        PhaseName | None,
+        typer.Option(help="Restrict each version's run to one phase's test file."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(help="Restrict to one model (passed as pytest ``-k``)."),
+    ] = None,
+    filter_expr: Annotated[
+        str | None,
+        typer.Option(
+            "--filter",
+            "-k",
+            help="Arbitrary pytest ``-k`` expression (AND-ed with ``--model``).",
+        ),
+    ] = None,
     use_lock: Annotated[
         bool,
         typer.Option(
@@ -341,6 +360,13 @@ def sweep(
     version, so the measurement layer is constant. ``_API_AVAILABLE``
     gates in the ``sos`` / ``piecewise`` specs let older linopy versions
     skip those phases gracefully.
+
+    Filter knobs (``--phase``, ``--model``, ``--filter``) mirror ``run``
+    and apply to every version's pytest invocation. Trailing arguments
+    after ``--`` are forwarded to pytest verbatim:
+
+        python -m benchmarks sweep 0.6.7 --phase build --model basic
+        python -m benchmarks sweep 0.6.7 -- --tb=short -x
 
     Wall-clock: roughly 1-2 minutes per version (venv + install +
     benchmarks). uv's wheel cache makes repeated runs much faster.
@@ -422,11 +448,14 @@ def sweep(
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root)
 
+            test_target = (
+                _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
+            )
             pytest_cmd = [
                 str(vpy),
                 "-m",
                 "pytest",
-                "benchmarks/",
+                test_target,
                 "--benchmark-only",
                 "--benchmark-json",
                 str(snapshot),
@@ -435,6 +464,12 @@ def sweep(
                 pytest_cmd.append("--quick")
             elif long:
                 pytest_cmd.append("--long")
+
+            k_parts = [p for p in (model, filter_expr) if p]
+            if k_parts:
+                pytest_cmd.extend(["-k", " and ".join(k_parts)])
+
+            pytest_cmd.extend(ctx.args)
 
             typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
             subprocess.run(pytest_cmd, env=env, check=False)
