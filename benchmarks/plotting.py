@@ -75,6 +75,22 @@ def _axis_kwargs(unit: str) -> dict:
     return {"ticksuffix": f" {unit}"}
 
 
+def _hide_non_leftmost_yticks(fig, wrap: int) -> None:
+    """
+    Hide y-axis tick labels on every facet except the leftmost column.
+
+    Plotly express lays facets out left-to-right, top-to-bottom: with
+    ``facet_col_wrap=N`` the leftmost facets are at indices 0, N, 2N…
+    Hiding tick labels on the rest keeps the row labels visible only
+    once per row instead of repeating at every subplot's left edge.
+    """
+    yaxes = []
+    fig.for_each_yaxis(lambda y: yaxes.append(y))
+    for idx, yaxis in enumerate(yaxes):
+        if idx % wrap != 0:
+            yaxis.update(showticklabels=False)
+
+
 def _share_axis_labels(fig, y_label: str, x_label: str) -> None:
     """
     Replace per-facet axis titles with one shared label per axis.
@@ -174,20 +190,28 @@ def plot_compare(
         if m:
             phase_path, model, n = m.groups()
             phase = phase_path.split("::")[-1]
-            short = f"{model}-n={n}"
+            n_str = f"n={n}"
+            # The y-label inside a facet should be whichever attributes
+            # *vary* there — facet by phase → label is model+size; facet
+            # by model → label is phase+size; otherwise the full id.
+            short_by_phase_facet = f"{model}-{n_str}"
+            short_by_model_facet = f"{phase}-{n_str}"
         else:
             # Tests that don't match the parametrize pattern (PyPSA
             # carbon-management scenarios, etc.) — keep them visible
             # under an "other" bucket.
             phase = "other"
             model = "other"
-            short = name.split("::")[-1] if "::" in name else name
+            tail = name.split("::")[-1] if "::" in name else name
+            short_by_phase_facet = tail
+            short_by_model_facet = tail
         rows.append(
             {
                 "_test_id": name,
                 "_phase": phase,
                 "_model": model,
-                "_short": short,
+                "_short_phase": short_by_phase_facet,
+                "_short_model": short_by_model_facet,
                 a_label: a_vals[name],
                 b_label: b_vals[name],
                 "delta_abs": b_vals[name] - a_vals[name],
@@ -220,16 +244,16 @@ def plot_compare(
             f"{len(only_b)} only in {b_label}</sub>"
         )
 
-    # Faceted layout uses the short ``model-n=size`` y-label (the facet
-    # already conveys the phase or model); flat layout uses the full
-    # test-id so each bar is self-identifying.
+    # Faceted layout uses a phase-aware short y-label so the y-axis only
+    # shows the attributes that vary inside the facet; flat layout uses
+    # the full test-id so each bar is self-identifying.
     facet_kwargs: dict = {}
     if facets == "phase":
         facet_kwargs = {"facet_col": "_phase", "facet_col_wrap": 2}
-        y_col = "_short"
+        y_col = "_short_phase"
     elif facets == "model":
         facet_kwargs = {"facet_col": "_model", "facet_col_wrap": 3}
-        y_col = "_short"
+        y_col = "_short_model"
     else:
         y_col = "_test_id"
 
@@ -261,8 +285,21 @@ def plot_compare(
     # number stays readable even when a bar is very short.
     fig.update_traces(textposition="outside", cliponaxis=False)
     if facets is not None:
+        # Each facet keeps its own y category list (no shared rows full
+        # of empty bars), but we hide tick labels on non-leftmost facets
+        # within each row so the labels only appear once per row instead
+        # of being repeated at every subplot's left edge.
+        fig.update_yaxes(matches=None)
+        _hide_non_leftmost_yticks(fig, wrap=facet_kwargs["facet_col_wrap"])
         _share_axis_labels(fig, y_label="test", x_label=x_label)
-    fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
+        facet_count = df[facet_kwargs["facet_col"]].nunique()
+        rows_per_facet = df.groupby(facet_kwargs["facet_col"])[y_col].nunique().max()
+        wrap = facet_kwargs["facet_col_wrap"]
+        n_rows = (facet_count + wrap - 1) // wrap
+        height = max(500, int(n_rows * rows_per_facet * 24) + 100)
+    else:
+        height = max(500, len(df) * 22)
+    fig.update_layout(height=height, showlegend=False)
     return fig, len(df)
 
 
