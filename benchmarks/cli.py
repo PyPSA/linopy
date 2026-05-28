@@ -682,9 +682,14 @@ def plot(
         if len(snapshots) == 2
         else "sweep"
     )
-    if chosen in ("compare", "scatter") and len(snapshots) != 2:
+    if chosen == "compare" and len(snapshots) != 2:
         typer.secho(
-            f"{chosen} view needs exactly 2 snapshots",
+            "compare view needs exactly 2 snapshots", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=2)
+    if chosen == "scatter" and len(snapshots) < 2:
+        typer.secho(
+            "scatter view needs at least 2 snapshots (baseline + 1)",
             fg=typer.colors.RED,
             err=True,
         )

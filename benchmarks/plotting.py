@@ -132,38 +132,62 @@ def plot_scatter(
     already-slow-but-unchanged. The combined position resolves the
     tension that pure relative or pure absolute sort each blind-spot.
 
+    The first snapshot is the baseline. With 2 snapshots, a static
+    scatter is drawn; with 3+, every subsequent snapshot becomes an
+    ``animation_frame`` — use the slider / play button to step through
+    versions and watch points drift across releases.
+
     A horizontal reference at ``ratio = 1`` makes "no change" trivial
     to see; the colour encodes absolute Δ as a third channel.
     """
     import pandas as pd
     import plotly.express as px
 
-    (a_label, a_vals), (b_label, b_vals) = (
-        _load_snapshot(snapshots[0], metric),
-        _load_snapshot(snapshots[1], metric),
-    )
-    common = sorted(set(a_vals) & set(b_vals))
-    if not common:
-        raise ValueError("no tests in common between the two snapshots")
+    if len(snapshots) < 2:
+        raise ValueError("scatter needs at least 2 snapshots (baseline + 1)")
+
+    loaded = [_load_snapshot(p, metric) for p in snapshots]
+    baseline_label, baseline_vals = loaded[0]
+    others = loaded[1:]
 
     rows = []
-    for name in common:
-        a, b = a_vals[name], b_vals[name]
-        if a <= 0:
-            continue
-        rows.append(
-            {
-                "test": name,
-                "baseline_time": a,
-                "ratio": b / a,
-                "delta_abs": b - a,
-                "delta_pct": (b - a) / a * 100.0,
-                a_label: a,
-                b_label: b,
-            }
+    for label, vals in others:
+        common = sorted(set(baseline_vals) & set(vals))
+        for name in common:
+            a, b = baseline_vals[name], vals[name]
+            if a <= 0:
+                continue
+            rows.append(
+                {
+                    "test": name,
+                    "version": label,
+                    "baseline_time": a,
+                    "candidate_time": b,
+                    "ratio": b / a,
+                    "delta_abs": b - a,
+                    "delta_pct": (b - a) / a * 100.0,
+                }
+            )
+
+    if not rows:
+        raise ValueError(
+            f"no tests in common between baseline ({baseline_label}) "
+            "and any of the other snapshots"
         )
 
     df = pd.DataFrame(rows)
+    # Fix the axis ranges so the animation doesn't jitter; pad by a small
+    # margin so points on the edges aren't clipped.
+    x_lo, x_hi = df["baseline_time"].min(), df["baseline_time"].max()
+    y_lo, y_hi = df["ratio"].min(), df["ratio"].max()
+    pad_y = max(0.05, (y_hi - y_lo) * 0.05)
+
+    animate = len(others) >= 2
+    extra: dict = {}
+    if animate:
+        extra["animation_frame"] = "version"
+        extra["category_orders"] = {"version": [label for label, _ in others]}
+
     fig = px.scatter(
         df,
         x="baseline_time",
@@ -172,26 +196,29 @@ def plot_scatter(
         color_continuous_scale=["green", "white", "red"],
         color_continuous_midpoint=0,
         log_x=True,
+        range_x=[x_lo * 0.5, x_hi * 2],
+        range_y=[y_lo - pad_y, y_hi + pad_y],
         hover_name="test",
         hover_data={
-            a_label: ":.4g",
-            b_label: ":.4g",
+            "baseline_time": ":.4g",
+            "candidate_time": ":.4g",
             "delta_abs": ":.4g",
             "delta_pct": ":.2f",
             "ratio": ":.3f",
-            "baseline_time": ":.4g",
+            "version": True,
         },
         title=(
-            f"{metric} scatter: {a_label} → {b_label} "
-            "(top-right = slow tests that got slower)"
+            f"{metric} scatter vs baseline ({baseline_label}) — "
+            "top-right = slow tests that got slower"
         ),
         labels={
             "baseline_time": f"baseline {metric} (s, log scale)",
             "ratio": f"{metric} ratio  (candidate / baseline)",
+            "candidate_time": "candidate",
             "delta_abs": "Δ (s)",
         },
+        **extra,
     )
-    # Reference line at ratio == 1 (no change).
     fig.add_hline(
         y=1.0, line_dash="dash", line_color="grey", annotation_text="no change"
     )
