@@ -103,6 +103,7 @@ benchmarks = [
     "netcdf4==1.7.4",
     "nbconvert==7.17.1",
     "typer==0.26.2",
+    "plotly==6.7.0",
 ]
 solvers = [
     "gurobipy",

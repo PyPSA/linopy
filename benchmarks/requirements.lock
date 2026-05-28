@@ -235,6 +235,8 @@ mypy==2.1.0
     # via linopy (pyproject.toml)
 mypy-extensions==1.1.0
     # via mypy
+narwhals==2.21.2
+    # via plotly
 nbclient==0.10.4
     # via nbconvert
 nbconvert==7.17.1
@@ -287,6 +289,7 @@ packaging==26.2
     #   jupyterlab
     #   jupyterlab-server
     #   nbconvert
+    #   plotly
     #   pytest
     #   xarray
 pandas==3.0.3
@@ -309,6 +312,8 @@ platformdirs==4.10.0
     #   python-discovery
     #   textual
     #   virtualenv
+plotly==6.7.0
+    # via linopy (pyproject.toml)
 pluggy==1.6.0
     # via
     #   pytest
