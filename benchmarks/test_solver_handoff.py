@@ -16,29 +16,15 @@ from __future__ import annotations
 
 import pytest
 
-import linopy.io as lio
 from benchmarks.conftest import maybe_skip
-from benchmarks.registry import (
-    TO_GUROBIPY,
-    TO_HIGHSPY,
-    TO_MOSEK,
-    TO_XPRESS,
-    iter_params,
-)
+from benchmarks.phases import SOLVER_HANDOFFS
+from benchmarks.registry import iter_params
 from linopy.solvers import available_solvers
-
-# (solver_name, phase tag, wrapper function)
-_SOLVER_PHASES = [
-    ("highs", TO_HIGHSPY, lio.to_highspy),
-    ("gurobi", TO_GUROBIPY, lio.to_gurobipy),
-    ("mosek", TO_MOSEK, lio.to_mosek),
-    ("xpress", TO_XPRESS, lio.to_xpress),
-]
 
 
 def _make_params():
     out = []
-    for solver_name, phase, wrapper in _SOLVER_PHASES:
+    for solver_name, phase, wrapper in SOLVER_HANDOFFS:
         for spec, size in iter_params(phase):
             out.append(
                 pytest.param(

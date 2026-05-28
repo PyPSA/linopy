@@ -131,73 +131,58 @@ def _measurements(
     m = spec.build(size)
 
     if phase == "matrices":
-
-        def access() -> None:
-            mats = m.matrices
-            for attr in ("A", "b", "c", "lb", "ub", "sense", "vlabels", "clabels"):
-                getattr(mats, attr)
-            if m.is_quadratic:
-                mats.Q
+        from benchmarks.phases import touch_matrices
 
         yield (
             f"benchmarks/test_matrices.py::test_matrices[{name}-n={size}]",
-            access,
+            lambda: touch_matrices(m),
         )
 
     elif phase == "lp_write":
-        # ``to_file`` writes to disk; use a tempdir so we don't leak.
+        from benchmarks.phases import write_lp
+
         tmpdir = tempfile.TemporaryDirectory()
         lp_path = Path(tmpdir.name) / "m.lp"
-
-        def write_lp() -> None:
-            m.to_file(lp_path, progress=False)
-
         try:
             yield (
                 f"benchmarks/test_lp_write.py::test_lp_write[{name}-n={size}]",
-                write_lp,
+                lambda: write_lp(m, lp_path),
             )
         finally:
             tmpdir.cleanup()
 
     elif phase == "netcdf":
-        from linopy import read_netcdf
+        from benchmarks.phases import read_netcdf, write_netcdf
 
         tmpdir = tempfile.TemporaryDirectory()
         nc_path = Path(tmpdir.name) / "m.nc"
-
-        def write_nc() -> None:
-            m.to_netcdf(nc_path)
-
-        def read_nc() -> None:
-            read_netcdf(nc_path)
-
         try:
             yield (
                 f"benchmarks/test_netcdf.py::test_netcdf_write[{name}-n={size}]",
-                write_nc,
+                lambda: write_netcdf(m, nc_path),
             )
-            # ``write_nc`` was called by the caller as part of the
+            # ``write_netcdf`` was called by the caller as part of the
             # measurement, so ``nc_path`` now exists for the read.
             yield (
                 f"benchmarks/test_netcdf.py::test_netcdf_read[{name}-n={size}]",
-                read_nc,
+                lambda: read_netcdf(nc_path),
             )
         finally:
             tmpdir.cleanup()
 
     elif phase == "solver_handoff":
-        from linopy.io import to_highspy
+        from benchmarks.phases import SOLVER_HANDOFFS
 
-        def handoff() -> None:
-            to_highspy(m)
+        # Memory currently tracks only HiGHS — look it up by name so a
+        # reordering of SOLVER_HANDOFFS doesn't silently swap solvers.
+        highs = next(w for n, _, w in SOLVER_HANDOFFS if n == "highs")
 
         yield (
             (
                 f"benchmarks/test_solver_handoff.py::test_solver_handoff"
                 f"[highs-{name}-n={size}]"
             ),
-            handoff,
+            lambda: highs(m),
         )
 
     else:
