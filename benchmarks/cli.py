@@ -640,9 +640,17 @@ def plot(
         ),
     ] = "absolute",
     output: Annotated[
-        Path,
-        typer.Option("--output", "-o", help="Where to write the HTML."),
-    ] = Path("benchmark-plot.html"),
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help=(
+                "Where to write the HTML. Defaults to "
+                "``.benchmarks/plots/<view>.html`` (gitignored) so "
+                "different views don't clobber each other."
+            ),
+        ),
+    ] = None,
     open_browser: Annotated[
         bool,
         typer.Option("--open/--no-open", help="Open the result in a browser."),
@@ -701,7 +709,7 @@ def plot(
         raise typer.Exit(code=2)
 
     try:
-        from benchmarks.plotting import RENDERERS
+        from benchmarks.plotting import RENDERERS, n_points
     except ImportError as exc:
         typer.secho(
             "plotly is required for ``plot`` — ``pip install plotly``",
@@ -710,15 +718,23 @@ def plot(
         )
         raise typer.Exit(code=2) from exc
 
-    output.parent.mkdir(parents=True, exist_ok=True)
+    # Default filename: ``.benchmarks/plots/<view>.html``. Matches where
+    # snapshots already live (and is gitignored), and the per-view name
+    # means consecutive ``plot`` calls don't clobber each other.
+    if output is None:
+        output = Path(".benchmarks") / "plots" / f"{chosen}.html"
+
     try:
-        rendered = RENDERERS[chosen](snapshots, output, metric, sort)
+        fig = RENDERERS[chosen](snapshots, metric, sort)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(output)
+
     typer.secho(
-        f"{chosen} view ({metric}): {rendered} tests → {output}",
+        f"{chosen} view ({metric}): {n_points(fig)} points → {output}",
         fg=typer.colors.GREEN,
     )
     if open_browser:

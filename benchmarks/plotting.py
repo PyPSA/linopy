@@ -25,7 +25,10 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from plotly.graph_objects import Figure
 
 PlotView = Literal["compare", "scatter", "sweep", "scaling"]
 Metric = Literal["min", "median", "mean", "max"]
@@ -43,10 +46,9 @@ def _load_snapshot(path: Path, metric: Metric = "min") -> tuple[str, dict[str, f
 
 def plot_compare(
     snapshots: list[Path],
-    output: Path,
     metric: Metric = "min",
     sort: SortMode = "absolute",
-) -> int:
+) -> Figure:
     """
     Bar chart of delta per test, sorted by magnitude.
 
@@ -126,16 +128,14 @@ def plot_compare(
         # SI-prefixed time on the x-axis (e.g. 24 ms, 2.4 ms, 240 µs).
         fig.update_xaxes(tickformat=".2s", ticksuffix="s")
     fig.update_layout(height=max(500, len(df) * 22), showlegend=False)
-    fig.write_html(output)
-    return len(df)
+    return fig
 
 
 def plot_scatter(
     snapshots: list[Path],
-    output: Path,
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> int:
+) -> Figure:
     """
     Two-axis scatter — baseline cost on log-x, ratio on y.
 
@@ -211,7 +211,8 @@ def plot_scatter(
     # saturate at the bound, the rest stays readable.
     clip = float(np.percentile(df["delta_abs"].abs(), 95)) if len(df) > 0 else 0.0
     if clip == 0.0:
-        clip = float(df["delta_abs"].abs().max() or 1e-9)
+        max_abs = float(df["delta_abs"].abs().max())
+        clip = max_abs if max_abs > 0 else 1e-9
 
     animate = len(snapshots) >= 3
     extra: dict = {}
@@ -256,16 +257,14 @@ def plot_scatter(
     )
     fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
     fig.update_layout(height=600)
-    fig.write_html(output)
-    return len(df)
+    return fig
 
 
 def plot_sweep(
     snapshots: list[Path],
-    output: Path,
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> int:
+) -> Figure:
     """Heatmap of per-test ratio relative to the first snapshot."""
     import pandas as pd
     import plotly.express as px
@@ -315,16 +314,14 @@ def plot_sweep(
         ),
     )
     fig.update_layout(height=max(500, len(df) * 22))
-    fig.write_html(output)
-    return len(df)
+    return fig
 
 
 def plot_scaling(
     snapshots: list[Path],
-    output: Path,
     metric: Metric = "min",
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
-) -> int:
+) -> Figure:
     """Log-log time vs N for size-parametrized tests, faceted by phase."""
     import pandas as pd
     import plotly.express as px
@@ -375,13 +372,27 @@ def plot_scaling(
         title=f"Scaling: {metric} time vs problem size ({snapshots[0].stem})",
     )
     fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
-    fig.write_html(output)
-    return len(df)
+    return fig
 
 
-RENDERERS: dict[PlotView, Callable[[list[Path], Path, Metric, SortMode], int]] = {
+RENDERERS: dict[PlotView, Callable[[list[Path], Metric, SortMode], Figure]] = {
     "compare": plot_compare,
     "scatter": plot_scatter,
     "sweep": plot_sweep,
     "scaling": plot_scaling,
 }
+
+
+def n_points(fig: Figure) -> int:
+    """Count points across all traces — useful for the CLI status line."""
+    total = 0
+    for trace in fig.data:
+        x = getattr(trace, "x", None)
+        if x is not None:
+            total += len(x)
+            continue
+        z = getattr(trace, "z", None)
+        if z is not None:
+            # ``z`` is 2D for heatmaps.
+            total += sum(len(row) for row in z)
+    return total
