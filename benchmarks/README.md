@@ -90,9 +90,33 @@ jupyter lab benchmarks/notebooks/registry_usage.ipynb
 
 ## Setup
 
+Two install paths, depending on what you're doing:
+
 ```bash
+# Development / casual benchmark runs — loose constraints from pyproject
 uv sync --extra dev --extra benchmarks
 source .venv/bin/activate
+
+# Stable measurement environment — fully resolved lockfile (linopy itself
+# is excluded, so you install whichever linopy version you want on top)
+uv pip install -r benchmarks/requirements.lock
+uv pip install -e .            # current linopy
+# — or —
+uv pip install linopy==0.5.0   # for a cross-version sweep
+```
+
+The lockfile pins every transitive (numpy / scipy / pandas / xarray / ...)
+so the *environment around linopy* stays stable. Absolute numbers are still
+machine-dependent (CPU, cache, memory bandwidth) — what the lockfile gives
+you is consistency over time on the same machine, so when you run the suite
+at two points the delta reflects linopy changes, not a numpy upgrade.
+
+Regenerate after bumping the ``[benchmarks]`` pins in ``pyproject.toml``:
+
+```bash
+uv pip compile pyproject.toml --extra benchmarks --extra dev --extra solvers \
+  --no-emit-package linopy \
+  -o benchmarks/requirements.lock
 ```
 
 ## Run benchmarks

@@ -82,11 +82,27 @@ dev = [
     "highspy",
     "jupyter",
 ]
+# Test infrastructure pinned exactly so the measurement environment stays
+# stable over time on the same machine — deltas between two runs then
+# reflect linopy changes, not a pytest or pandas upgrade. Absolute numbers
+# are still machine-dependent (CPU / cache / memory bandwidth).
+#
+# Not pinned here: numpy / scipy / pandas / xarray. They also affect
+# measurements, but the full transitive set lives in
+# ``benchmarks/requirements.lock`` (regen via ``uv pip compile``). The
+# lockfile excludes linopy itself so ``sweep`` can install any linopy
+# version on top of a stable environment.
+#
+# ``highspy`` follows the project-wide ``!=1.14.0`` exclusion (see the
+# ``solvers`` extra).
 benchmarks = [
-    "pytest-benchmark",
-    "pypsa",
-    "highspy>=1.7.1",
-    "pytest-memray",
+    "pytest==9.0.3",
+    "pytest-benchmark==5.2.3",
+    "pytest-memray==1.8.0",
+    "pypsa==1.2.2",
+    "highspy==1.13.1",
+    "netcdf4==1.7.4",
+    "nbconvert==7.17.1",
     "typer==0.26.2",
 ]
 solvers = [
