@@ -11,6 +11,9 @@ direct dispatch for registry introspection and memory snapshots.
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -274,6 +277,182 @@ def notebook() -> None:
         result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
+
+
+# --- Sweep across linopy versions ------------------------------------------
+
+
+_PLAIN_VERSION_RE = re.compile(r"^\d+(\.\d+)*([a-z]+\d*)?$")
+
+
+def _linopy_install_spec(version: str) -> str:
+    """Turn ``0.4.0`` → ``linopy==0.4.0``, leave anything URL-y untouched."""
+    if _PLAIN_VERSION_RE.match(version):
+        return f"linopy=={version}"
+    return version
+
+
+def _venv_python(venv: Path) -> Path:
+    return (
+        venv / "Scripts" / "python.exe" if os.name == "nt" else venv / "bin" / "python"
+    )
+
+
+@app.command()
+def sweep(
+    versions: Annotated[
+        list[str],
+        typer.Argument(help="linopy versions, e.g. 0.4.0 0.5.0 (or any pip spec)."),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", "-o", help="Where to save snapshot JSONs."),
+    ] = Path(".benchmarks/sweep"),
+    long: Annotated[
+        bool, typer.Option("--long", help="Include the slowest sizes.")
+    ] = False,
+    quick: Annotated[
+        bool,
+        typer.Option("--quick", help="Use only the smallest sizes (faster sweep)."),
+    ] = False,
+    use_lock: Annotated[
+        bool,
+        typer.Option(
+            "--use-lock/--no-use-lock",
+            help="Install ``benchmarks/requirements.lock`` in each venv.",
+        ),
+    ] = True,
+) -> None:
+    """
+    Run the benchmark suite against several linopy versions.
+
+    Uses ``uv`` to build a fresh venv per version (near-instant) and to
+    install the benchmark infra + target linopy in a single resolution
+    pass. The pytest-benchmark JSON snapshot lands in
+    ``<output-dir>/linopy-<version>.json``.
+
+    Versions are accepted in two forms:
+
+    - Plain releases: ``0.4.0``, ``0.5.0a1`` — expanded to ``linopy==X``.
+    - Pip specs verbatim: ``git+https://github.com/PyPSA/linopy.git@<sha>``
+      or ``linopy @ file:///path/to/checkout``.
+
+    The current (repo-tip) benchmark code runs against each linopy
+    version, so the measurement layer is constant. ``_API_AVAILABLE``
+    gates in the ``sos`` / ``piecewise`` specs let older linopy versions
+    skip those phases gracefully.
+
+    Wall-clock: roughly 1-2 minutes per version (venv + install +
+    benchmarks). uv's wheel cache makes repeated runs much faster.
+    """
+    if quick and long:
+        typer.secho(
+            "--quick and --long are mutually exclusive",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if shutil.which("uv") is None:
+        typer.secho(
+            "uv not found on PATH — install via https://docs.astral.sh/uv/",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    repo_root = Path.cwd()
+    lockfile = repo_root / "benchmarks" / "requirements.lock"
+    if use_lock and not lockfile.exists():
+        typer.secho(
+            f"--use-lock set but {lockfile} is missing — "
+            "regenerate it via ``uv pip compile`` or pass ``--no-use-lock``.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    failed: list[str] = []
+    for version in versions:
+        typer.secho(f"\n=== linopy {version} ===", fg=typer.colors.CYAN, bold=True)
+        with tempfile.TemporaryDirectory(prefix="linopy-bench-") as tmp:
+            venv = Path(tmp) / "venv"
+
+            # 1. uv venv — same interpreter that's driving the CLI.
+            r = subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(venv)],
+                check=False,
+            )
+            if r.returncode != 0:
+                typer.secho(
+                    f"venv creation failed: {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                failed.append(version)
+                continue
+
+            vpy = _venv_python(venv)
+            spec = _linopy_install_spec(version)
+
+            # 2. Single install pass: infra (lockfile or pinned subset) + linopy.
+            install_args = ["uv", "pip", "install", "--python", str(vpy)]
+            if use_lock:
+                install_args += ["-r", str(lockfile)]
+            else:
+                install_args += [
+                    "pytest==9.0.3",
+                    "pytest-benchmark==5.2.3",
+                    "pypsa==1.2.2",
+                    "highspy==1.13.1",
+                    "netcdf4==1.7.4",
+                ]
+            install_args.append(spec)
+            r = subprocess.run(install_args, check=False)
+            if r.returncode != 0:
+                typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
+                failed.append(version)
+                continue
+
+            # 3. Run the benchmarks. PYTHONPATH makes ``import benchmarks``
+            #    resolve against the local checkout — the venv only needs to
+            #    provide linopy + the test infra.
+            snapshot = (output_dir / f"linopy-{version}.json").resolve()
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(repo_root)
+
+            pytest_cmd = [
+                str(vpy),
+                "-m",
+                "pytest",
+                "benchmarks/",
+                "--benchmark-only",
+                "--benchmark-json",
+                str(snapshot),
+            ]
+            if quick:
+                pytest_cmd.append("--quick")
+            elif long:
+                pytest_cmd.append("--long")
+
+            typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
+            subprocess.run(pytest_cmd, env=env, check=False)
+
+            if snapshot.exists():
+                typer.secho(f"saved {snapshot}", fg=typer.colors.GREEN)
+            else:
+                typer.secho(
+                    f"no snapshot produced for {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                failed.append(version)
+
+    if failed:
+        typer.secho(f"\nFailed versions: {failed}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
 
 
 # --- Memory subcommands ----------------------------------------------------

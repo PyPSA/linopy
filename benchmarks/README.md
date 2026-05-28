@@ -153,6 +153,11 @@ python -m benchmarks run
 # Save / compare memory snapshots
 python -m benchmarks memory save "$(git rev-parse --short HEAD)"
 python -m benchmarks memory compare master my-feature
+
+# Sweep across several linopy versions (bootstraps perf history).
+# Builds a fresh uv venv per version, installs lockfile (or pinned
+# subset) + that linopy, runs the suite, saves JSON. Uv keeps it fast.
+python -m benchmarks sweep 0.5.0 0.6.0 0.7.0
 ```
 
 ## Metrics
