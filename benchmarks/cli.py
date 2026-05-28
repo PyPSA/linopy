@@ -529,28 +529,34 @@ def compare(ctx: typer.Context) -> None:
     Compare timing snapshots side-by-side via ``pytest-benchmark compare``.
 
     Thin wrapper around the upstream tool so the whole suite stays under
-    one entry point. Positional args that look like paths are treated as
-    snapshots (first = baseline); everything else is forwarded to
-    ``pytest-benchmark compare`` verbatim::
+    one entry point. Pass the snapshot paths first, then any pytest-benchmark
+    flags::
 
-        python -m benchmarks compare .benchmarks/a.json .benchmarks/b.json
-        python -m benchmarks compare a.json b.json --group-by=fullname
-        python -m benchmarks compare a.json b.json --columns=median,iqr,outliers
+        python -m benchmarks compare a.json b.json
+        python -m benchmarks compare a.json b.json --group-by=name
+        python -m benchmarks compare a.json b.json --histogram=plots/cmp
 
     With no arguments (or missing paths), prints what snapshots exist
     under ``.benchmarks/`` so you can copy-paste the path you want.
 
     For memory snapshots use ``memory compare`` instead — different format,
     different tool.
+
+    Implementation note: typer/click don't have a clean idiom for "list-typed
+    positional + pass-through", so this command parses ``ctx.args`` by hand
+    — anything before the first flag is a snapshot path, everything after
+    is forwarded.
     """
-    # Split args into snapshot paths and flag-like pass-through. We do this
-    # by hand because typer's positional list[Path] greedily captures
-    # everything (including ``--unknown-flag``) even with
-    # ``ignore_unknown_options=True``.
+    # Snapshots come first; once we see a flag (``-x`` / ``--foo``) every
+    # subsequent token is forwarded to pytest-benchmark. That way the value
+    # of a flag like ``-k "build and basic"`` doesn't get mistaken for a path.
     snapshots: list[Path] = []
     extra: list[str] = []
+    seen_flag = False
     for arg in ctx.args:
         if arg.startswith("-"):
+            seen_flag = True
+        if seen_flag:
             extra.append(arg)
         else:
             snapshots.append(Path(arg))
