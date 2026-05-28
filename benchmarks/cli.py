@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -391,6 +393,96 @@ def _venv_python(venv: Path) -> Path:
     )
 
 
+@dataclass(frozen=True)
+class _ProvisionedVenv:
+    """
+    One fresh per-version venv from :func:`_provision_venvs`.
+
+    On success, ``python`` and ``env`` are populated and ``failed_at``
+    is ``None``. On failure, ``failed_at`` names the step that failed
+    (``"venv"`` or ``"install"``); the caller skips its per-version
+    action and records the failure.
+    """
+
+    version: str
+    python: Path | None
+    env: dict[str, str] | None
+    failed_at: str | None
+
+
+def _provision_venvs(
+    versions: list[str], tmp_prefix: str
+) -> Iterator[_ProvisionedVenv]:
+    """
+    Yield one fresh per-version uv venv for each linopy version.
+
+    Used by both ``sweep`` and ``memory sweep`` so the venv plumbing
+    (uv venv → install ``[benchmarks]`` pins + the target linopy →
+    set ``PYTHONPATH``) lives in one place. The caller supplies the
+    tempdir prefix (so ``ps``/``lsof`` can distinguish concurrent
+    runs) and does whatever per-version action it needs.
+
+    Each version's tempdir is cleaned up when the generator advances
+    (or exits). The caller can break the loop early — Python's
+    generator close protocol fires the ``with`` teardown.
+    """
+    if shutil.which("uv") is None:
+        typer.secho(
+            "uv not found on PATH — install via https://docs.astral.sh/uv/",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    repo_root = Path.cwd()
+    for version in versions:
+        typer.secho(f"\n=== linopy {version} ===", fg=typer.colors.CYAN, bold=True)
+        with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
+            venv = Path(tmp) / "venv"
+
+            r = subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(venv)],
+                check=False,
+            )
+            if r.returncode != 0:
+                typer.secho(
+                    f"venv creation failed: {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                yield _ProvisionedVenv(version, None, None, "venv")
+                continue
+
+            vpy = _venv_python(venv)
+            spec = _linopy_install_spec(version)
+
+            # Single install pass: pinned infra from pyproject + linopy.
+            # Direct pins in [benchmarks] are sufficient for sweep
+            # reproducibility — uv resolves the same input deterministically
+            # into each per-version venv.
+            install_args = [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(vpy),
+                *_benchmarks_extra_pins(),
+                spec,
+            ]
+            r = subprocess.run(install_args, check=False)
+            if r.returncode != 0:
+                typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
+                yield _ProvisionedVenv(version, None, None, "install")
+                continue
+
+            # PYTHONPATH makes ``import benchmarks`` resolve against the
+            # local checkout — the venv only provides linopy + test infra.
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(repo_root)
+
+            yield _ProvisionedVenv(version, vpy, env, None)
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
@@ -499,127 +591,74 @@ def sweep(
         )
         raise typer.Exit(code=2)
 
-    if shutil.which("uv") is None:
-        typer.secho(
-            "uv not found on PATH — install via https://docs.astral.sh/uv/",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    repo_root = Path.cwd()
     if not smoke:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
-    for version in versions:
-        typer.secho(f"\n=== linopy {version} ===", fg=typer.colors.CYAN, bold=True)
-        with tempfile.TemporaryDirectory(prefix="linopy-bench-") as tmp:
-            venv = Path(tmp) / "venv"
+    for prov in _provision_venvs(versions, "linopy-bench-"):
+        if prov.failed_at:
+            failed.append(prov.version)
+            continue
 
-            # 1. uv venv — same interpreter that's driving the CLI.
-            r = subprocess.run(
-                ["uv", "venv", "--python", sys.executable, str(venv)],
-                check=False,
-            )
-            if r.returncode != 0:
-                typer.secho(
-                    f"venv creation failed: {version}",
-                    fg=typer.colors.RED,
-                    err=True,
-                )
-                failed.append(version)
-                continue
-
-            vpy = _venv_python(venv)
-            spec = _linopy_install_spec(version)
-
-            # 2. Single install pass: pinned infra (from pyproject) + linopy.
-            #    Direct pins in [benchmarks] are sufficient for sweep
-            #    reproducibility — uv resolves the same input
-            #    deterministically into each per-version venv.
-            install_args = [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                str(vpy),
-                *_benchmarks_extra_pins(),
-                spec,
-            ]
-            r = subprocess.run(install_args, check=False)
-            if r.returncode != 0:
-                typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
-                failed.append(version)
-                continue
-
-            # 3. Run the benchmarks. PYTHONPATH makes ``import benchmarks``
-            #    resolve against the local checkout — the venv only needs to
-            #    provide linopy + the test infra.
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(repo_root)
-
-            if smoke:
-                # Smoke mode: reuse the same pytest args as the top-level
-                # ``smoke`` command. No JSON snapshot, return code is the
-                # signal.
-                pytest_cmd = [str(vpy), "-m", "pytest", *_SMOKE_PYTEST_ARGS]
-                k_parts = [p for p in (model, filter_expr) if p]
-                if k_parts:
-                    pytest_cmd.extend(["-k", " and ".join(k_parts)])
-                pytest_cmd.extend(ctx.args)
-
-                typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-                r = subprocess.run(pytest_cmd, env=env, check=False)
-                if r.returncode != 0:
-                    typer.secho(
-                        f"smoke failed: {version}", fg=typer.colors.RED, err=True
-                    )
-                    failed.append(version)
-                else:
-                    typer.secho(f"smoke ok: {version}", fg=typer.colors.GREEN)
-                continue
-
-            snapshot = (output_dir / f"linopy-{version}.json").resolve()
-            test_target = (
-                _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
-            )
-            pytest_cmd = [
-                str(vpy),
-                "-m",
-                "pytest",
-                test_target,
-                "--benchmark-only",
-                "--benchmark-json",
-                str(snapshot),
-            ]
-            if quick:
-                pytest_cmd.append("--quick")
-            elif long:
-                pytest_cmd.append("--long")
-            if rounds is not None:
-                pytest_cmd.extend(
-                    [f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"]
-                )
-
+        if smoke:
+            # Smoke mode: reuse the same pytest args as the top-level
+            # ``smoke`` command. No JSON snapshot, return code is the
+            # signal.
+            pytest_cmd = [str(prov.python), "-m", "pytest", *_SMOKE_PYTEST_ARGS]
             k_parts = [p for p in (model, filter_expr) if p]
             if k_parts:
                 pytest_cmd.extend(["-k", " and ".join(k_parts)])
-
             pytest_cmd.extend(ctx.args)
 
             typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-            subprocess.run(pytest_cmd, env=env, check=False)
-
-            if snapshot.exists():
-                typer.secho(f"saved {snapshot}", fg=typer.colors.GREEN)
-            else:
+            r = subprocess.run(pytest_cmd, env=prov.env, check=False)
+            if r.returncode != 0:
                 typer.secho(
-                    f"no snapshot produced for {version}",
-                    fg=typer.colors.RED,
-                    err=True,
+                    f"smoke failed: {prov.version}", fg=typer.colors.RED, err=True
                 )
-                failed.append(version)
+                failed.append(prov.version)
+            else:
+                typer.secho(f"smoke ok: {prov.version}", fg=typer.colors.GREEN)
+            continue
+
+        snapshot = (output_dir / f"linopy-{prov.version}.json").resolve()
+        test_target = _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
+        pytest_cmd = [
+            str(prov.python),
+            "-m",
+            "pytest",
+            test_target,
+            "--benchmark-only",
+            "--benchmark-json",
+            str(snapshot),
+        ]
+        if quick:
+            pytest_cmd.append("--quick")
+        elif long:
+            pytest_cmd.append("--long")
+        if rounds is not None:
+            pytest_cmd.extend(
+                [f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"]
+            )
+
+        k_parts = [p for p in (model, filter_expr) if p]
+        if k_parts:
+            pytest_cmd.extend(["-k", " and ".join(k_parts)])
+
+        pytest_cmd.extend(ctx.args)
+
+        typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
+        subprocess.run(pytest_cmd, env=prov.env, check=False)
+
+        if snapshot.exists():
+            typer.secho(f"saved {snapshot}", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                f"no snapshot produced for {prov.version}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            failed.append(prov.version)
 
     if failed:
         typer.secho(f"\nFailed versions: {failed}", fg=typer.colors.RED, err=True)
@@ -1013,97 +1052,52 @@ def memory_sweep_cmd(
             )
             raise typer.Exit(code=2)
 
-    if shutil.which("uv") is None:
-        typer.secho(
-            "uv not found on PATH — install via https://docs.astral.sh/uv/",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    repo_root = Path.cwd()
     output_dir.mkdir(parents=True, exist_ok=True)
+    repo_root = Path.cwd()
 
     failed: list[str] = []
-    for version in versions:
-        typer.secho(f"\n=== linopy {version} ===", fg=typer.colors.CYAN, bold=True)
-        with tempfile.TemporaryDirectory(prefix="linopy-mem-") as tmp:
-            venv = Path(tmp) / "venv"
+    for prov in _provision_venvs(versions, "linopy-mem-"):
+        if prov.failed_at:
+            failed.append(prov.version)
+            continue
 
-            r = subprocess.run(
-                ["uv", "venv", "--python", sys.executable, str(venv)],
-                check=False,
+        # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
+        # under cwd; we run it with cwd pinned to repo root, then move
+        # the file if the user asked for a custom output dir.
+        label = f"linopy-{prov.version}"
+        mem_cmd = [
+            str(prov.python),
+            "-m",
+            "benchmarks",
+            "memory",
+            "save",
+            label,
+        ]
+        if quick:
+            mem_cmd.append("--quick")
+        for ph in phase or []:
+            mem_cmd.extend(["--phase", ph])
+        if repeats > 1:
+            mem_cmd.extend(["--repeats", str(repeats)])
+
+        typer.secho(f"$ {' '.join(mem_cmd)}", fg=typer.colors.BRIGHT_BLACK)
+        subprocess.run(mem_cmd, env=prov.env, cwd=str(repo_root), check=False)
+
+        default_path = repo_root / ".benchmarks" / "memory" / f"{label}.json"
+        target = output_dir / f"{label}.json"
+        if default_path.exists() and default_path.resolve() != target.resolve():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            default_path.replace(target)
+
+        if target.exists():
+            typer.secho(f"saved {target}", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                f"no snapshot produced for {prov.version}",
+                fg=typer.colors.RED,
+                err=True,
             )
-            if r.returncode != 0:
-                typer.secho(
-                    f"venv creation failed: {version}",
-                    fg=typer.colors.RED,
-                    err=True,
-                )
-                failed.append(version)
-                continue
-
-            vpy = _venv_python(venv)
-            spec = _linopy_install_spec(version)
-
-            install_args = [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                str(vpy),
-                *_benchmarks_extra_pins(),
-                spec,
-            ]
-            r = subprocess.run(install_args, check=False)
-            if r.returncode != 0:
-                typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
-                failed.append(version)
-                continue
-
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(repo_root)
-
-            # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
-            # under cwd, so we cd back into the repo root via env and let
-            # ``output_dir`` resolve naturally.
-            label = f"linopy-{version}"
-            mem_cmd = [
-                str(vpy),
-                "-m",
-                "benchmarks",
-                "memory",
-                "save",
-                label,
-            ]
-            if quick:
-                mem_cmd.append("--quick")
-            for ph in phase or []:
-                mem_cmd.extend(["--phase", ph])
-            if repeats > 1:
-                mem_cmd.extend(["--repeats", str(repeats)])
-
-            typer.secho(f"$ {' '.join(mem_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-            subprocess.run(mem_cmd, env=env, cwd=str(repo_root), check=False)
-
-            # memory.save writes to .benchmarks/memory/<label>.json relative
-            # to its cwd. Move it under output_dir if the user asked for a
-            # custom location.
-            default_path = repo_root / ".benchmarks" / "memory" / f"{label}.json"
-            target = output_dir / f"{label}.json"
-            if default_path.exists() and default_path.resolve() != target.resolve():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                default_path.replace(target)
-
-            if target.exists():
-                typer.secho(f"saved {target}", fg=typer.colors.GREEN)
-            else:
-                typer.secho(
-                    f"no snapshot produced for {version}",
-                    fg=typer.colors.RED,
-                    err=True,
-                )
-                failed.append(version)
+            failed.append(prov.version)
 
     if failed:
         typer.secho(f"\nFailed versions: {failed}", fg=typer.colors.RED, err=True)
