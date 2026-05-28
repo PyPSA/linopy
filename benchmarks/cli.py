@@ -524,25 +524,18 @@ def _suggest_snapshots(reason: str) -> None:
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
-def compare(
-    ctx: typer.Context,
-    snapshots: Annotated[
-        list[Path] | None,
-        typer.Argument(
-            help="Two or more pytest-benchmark JSON files saved via ``run --json``."
-        ),
-    ] = None,
-) -> None:
+def compare(ctx: typer.Context) -> None:
     """
     Compare timing snapshots side-by-side via ``pytest-benchmark compare``.
 
     Thin wrapper around the upstream tool so the whole suite stays under
-    one entry point. Pass any number of JSONs — the first is treated as
-    the baseline. Trailing arguments after ``--`` are forwarded to
-    ``pytest-benchmark compare`` verbatim:
+    one entry point. Positional args that look like paths are treated as
+    snapshots (first = baseline); everything else is forwarded to
+    ``pytest-benchmark compare`` verbatim::
 
-        python -m benchmarks compare .benchmarks/master.json .benchmarks/branch.json
-        python -m benchmarks compare a.json b.json -- --columns=median,iqr --sort=name
+        python -m benchmarks compare .benchmarks/a.json .benchmarks/b.json
+        python -m benchmarks compare a.json b.json --group-by=fullname
+        python -m benchmarks compare a.json b.json --columns=median,iqr,outliers
 
     With no arguments (or missing paths), prints what snapshots exist
     under ``.benchmarks/`` so you can copy-paste the path you want.
@@ -550,7 +543,18 @@ def compare(
     For memory snapshots use ``memory compare`` instead — different format,
     different tool.
     """
-    snapshots = snapshots or []
+    # Split args into snapshot paths and flag-like pass-through. We do this
+    # by hand because typer's positional list[Path] greedily captures
+    # everything (including ``--unknown-flag``) even with
+    # ``ignore_unknown_options=True``.
+    snapshots: list[Path] = []
+    extra: list[str] = []
+    for arg in ctx.args:
+        if arg.startswith("-"):
+            extra.append(arg)
+        else:
+            snapshots.append(Path(arg))
+
     if len(snapshots) < 2:
         _suggest_snapshots(
             f"compare needs at least two snapshot paths (got {len(snapshots)})."
@@ -562,14 +566,17 @@ def compare(
         _suggest_snapshots(f"missing snapshots: {[str(p) for p in missing]}")
         raise typer.Exit(code=2)
 
-    # Sensible defaults — pytest-benchmark's own default is 10 columns wide,
-    # which is unreadable. Only apply each default if the user hasn't already
-    # set it via a trailing arg.
-    extra = list(ctx.args)
+    # Sensible defaults — pytest-benchmark's defaults emit 10 columns wide,
+    # grouped by parametrize group, which is unreadable for two-snapshot diffs.
+    # ``--group-by=fullname`` puts each test's (baseline, candidate) rows in
+    # their own mini-table; ``--columns=median,iqr`` keeps it narrow.
+    # Each default is only applied if the user didn't override it.
     if not any(a.startswith("--columns") for a in extra):
         extra.insert(0, "--columns=median,iqr")
     if not any(a.startswith("--sort") for a in extra):
         extra.insert(0, "--sort=name")
+    if not any(a.startswith("--group-by") for a in extra):
+        extra.insert(0, "--group-by=fullname")
 
     cmd = [
         sys.executable,
