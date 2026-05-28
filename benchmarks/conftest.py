@@ -25,6 +25,22 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    """
+    Drop PyPSA end-to-end tests under ``--quick``.
+
+    The PyPSA carbon-management network is ~30s by itself; CodSpeed under
+    cachegrind would make it minutes. ``--quick`` is for sub-30s sweeps,
+    so the end-to-end module doesn't belong there.
+    """
+    if not config.getoption("--quick"):
+        return
+    skip = pytest.mark.skip(reason="--quick: pypsa end-to-end skipped")
+    for item in items:
+        if "test_pypsa_carbon_management" in item.nodeid:
+            item.add_marker(skip)
+
+
 def maybe_skip(request: pytest.FixtureRequest, spec: ModelSpec, size: int) -> None:
     """
     Apply size-tier skips and ``spec.requires`` importorskips.

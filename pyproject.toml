@@ -96,11 +96,26 @@ dev = [
 # ``highspy`` follows the project-wide ``!=1.14.0`` exclusion (see the
 # ``solvers`` extra).
 benchmarks = [
+    # Perf-relevant deps measured directly by the suite. Individual
+    # Dependabot PRs → CodSpeed attributes deltas to specific bumps.
+    "highspy==1.13.1",
+    "netcdf4==1.7.4",
+    # Perf-sensitive runtime deps. Pinned here (not in ``[project
+    # .dependencies]``) so downstream linopy consumers keep their loose
+    # resolve while the benchmark environment is fixed.
+    "numpy==1.26.4",
+    "scipy==1.16.3",
+    "xarray==2025.9.0",
+    "pandas==2.3.3",
+    "polars==1.35.2",
+    "dask==2025.11.0",
+    # Measurement scaffolding + CLI/notebook tooling. Pinned for
+    # reproducibility but grouped in dependabot.yml so bumps batch into
+    # one PR instead of cluttering review.
     "pytest==9.0.3",
     "pytest-benchmark==5.2.3",
     "pytest-memray==1.8.0",
-    "highspy==1.13.1",
-    "netcdf4==1.7.4",
+    "pytest-codspeed==5.0.3",
     "nbconvert==7.17.1",
     "typer==0.26.2",
     "plotly==6.7.0",

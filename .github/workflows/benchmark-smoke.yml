@@ -45,3 +45,37 @@ jobs:
       # registry" walkthrough and must stay runnable end-to-end.
       run: |
         python -m benchmarks notebook
+
+  codspeed:
+    name: CodSpeed (micro regression detection)
+    runs-on: ubuntu-latest
+    # Cachegrind is ~10–20× slower than native, so we restrict to ``--quick``
+    # (smallest size per spec) and skip PyPSA end-to-end. The signal we want
+    # here is "did this PR change the instruction count of the hot paths?";
+    # full wall-clock cross-version comparison stays in ``sweep``.
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0  # setuptools_scm
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install pinned benchmark environment
+      # Install from the pinned ``[benchmarks]`` extra (not the lockfile)
+      # so Dependabot can auto-detect pyproject.toml and propose bumps
+      # to top-level deps. Each bump → one attributed CodSpeed delta.
+      # The full transitive lockfile is reserved for cross-version
+      # ``sweep`` reproducibility, where machine variance matters more.
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+
+    - name: Run benchmarks under CodSpeed
+      uses: CodSpeedHQ/action@v3
+      with:
+        token: ${{ secrets.CODSPEED_TOKEN }}
+        run: |
+          pytest benchmarks/ --quick --codspeed
