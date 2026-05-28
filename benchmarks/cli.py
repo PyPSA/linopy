@@ -75,6 +75,11 @@ _PHASE_TEST_FILE: dict[PhaseName, str] = {
     "solver_handoff": "benchmarks/test_solver_handoff.py",
 }
 
+# pytest args that constitute a "smoke" run — quick sizes, no timings.
+# Shared between the top-level ``smoke`` command and ``sweep --smoke`` so
+# bumping the definition stays single-source.
+_SMOKE_PYTEST_ARGS = ["benchmarks/", "--quick", "--benchmark-disable", "-q"]
+
 
 # --- Introspection commands ------------------------------------------------
 
@@ -206,8 +211,7 @@ def smoke(ctx: typer.Context) -> None:
 
         python -m benchmarks smoke -k basic --tb=short
     """
-    args = ["benchmarks/", "--quick", "--benchmark-disable", "-q", *ctx.args]
-    _run_pytest(args)
+    _run_pytest([*_SMOKE_PYTEST_ARGS, *ctx.args])
 
 
 @app.command(
@@ -434,6 +438,20 @@ def sweep(
             ),
         ),
     ] = None,
+    smoke: Annotated[
+        bool,
+        typer.Option(
+            "--smoke",
+            help=(
+                "Run the smoke suite in each version's venv instead of the "
+                "full timing run. Same pytest invocation as the top-level "
+                "``smoke`` command — every model/phase fires once at the "
+                "quickest size, no timings, ~20 s per version. Useful before "
+                "bumping a perf-sensitive pin to check the combination is "
+                "viable across every linopy version you'd sweep against."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """
     Run the benchmark suite against several linopy versions.
@@ -472,6 +490,15 @@ def sweep(
         )
         raise typer.Exit(code=2)
 
+    if smoke and (long or rounds is not None):
+        typer.secho(
+            "--smoke can't be combined with --long or --rounds "
+            "(no timings are recorded in smoke mode).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     if shutil.which("uv") is None:
         typer.secho(
             "uv not found on PATH — install via https://docs.astral.sh/uv/",
@@ -481,7 +508,8 @@ def sweep(
         raise typer.Exit(code=2)
 
     repo_root = Path.cwd()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not smoke:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
     for version in versions:
@@ -528,10 +556,31 @@ def sweep(
             # 3. Run the benchmarks. PYTHONPATH makes ``import benchmarks``
             #    resolve against the local checkout — the venv only needs to
             #    provide linopy + the test infra.
-            snapshot = (output_dir / f"linopy-{version}.json").resolve()
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root)
 
+            if smoke:
+                # Smoke mode: reuse the same pytest args as the top-level
+                # ``smoke`` command. No JSON snapshot, return code is the
+                # signal.
+                pytest_cmd = [str(vpy), "-m", "pytest", *_SMOKE_PYTEST_ARGS]
+                k_parts = [p for p in (model, filter_expr) if p]
+                if k_parts:
+                    pytest_cmd.extend(["-k", " and ".join(k_parts)])
+                pytest_cmd.extend(ctx.args)
+
+                typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
+                r = subprocess.run(pytest_cmd, env=env, check=False)
+                if r.returncode != 0:
+                    typer.secho(
+                        f"smoke failed: {version}", fg=typer.colors.RED, err=True
+                    )
+                    failed.append(version)
+                else:
+                    typer.secho(f"smoke ok: {version}", fg=typer.colors.GREEN)
+                continue
+
+            snapshot = (output_dir / f"linopy-{version}.json").resolve()
             test_target = (
                 _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
             )
