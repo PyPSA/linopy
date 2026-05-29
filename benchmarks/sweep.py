@@ -51,6 +51,22 @@ def _linopy_install_spec(version: str) -> str:
     return version
 
 
+def _snapshot_label(version: str) -> str:
+    """
+    Filesystem-safe label for a snapshot filename, derived from a spec.
+
+    Plain releases pass through (``0.6.1`` → ``0.6.1``). For a pip spec
+    with a ref — ``git+https://…/linopy.git@<sha>`` or ``linopy @ <url>``
+    — take the part after the last ``@`` (the sha / tag / branch) so a
+    pinned commit writes a clean ``linopy-<sha>.json`` instead of a
+    slash-laden, unwritable name. Whatever's chosen is then sanitised to
+    ``[0-9A-Za-z._-]``.
+    """
+    label = version.rsplit("@", 1)[-1] if "@" in version else version
+    label = re.sub(r"[^0-9A-Za-z._-]+", "-", label).strip("-._")
+    return label or "spec"
+
+
 def _venv_python(venv: Path) -> Path:
     return (
         venv / "Scripts" / "python.exe" if os.name == "nt" else venv / "bin" / "python"
@@ -297,7 +313,9 @@ def run_sweep(
                 typer.secho(f"smoke ok: {prov.version}", fg=typer.colors.GREEN)
             continue
 
-        snapshot = (output_dir / f"linopy-{prov.version}.json").resolve()
+        snapshot = (
+            output_dir / f"linopy-{_snapshot_label(prov.version)}.json"
+        ).resolve()
         pytest_cmd = [
             str(prov.python),
             "-m",
@@ -381,7 +399,7 @@ def run_memory_sweep(
         # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
         # under cwd; we run it with cwd pinned to repo root, then move
         # the file if the user asked for a custom output dir.
-        label = f"linopy-{prov.version}"
+        label = f"linopy-{_snapshot_label(prov.version)}"
         mem_cmd = [
             str(prov.python),
             "-m",
