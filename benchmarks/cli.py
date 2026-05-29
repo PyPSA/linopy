@@ -414,7 +414,7 @@ class _ProvisionedVenv:
 
 
 def _provision_venvs(
-    versions: list[str], tmp_prefix: str
+    versions: list[str], tmp_prefix: str, as_of: str | None = None
 ) -> Iterator[_ProvisionedVenv]:
     """
     Yield one fresh per-version uv venv for each linopy version.
@@ -441,6 +441,14 @@ def _provision_venvs(
     Each version's tempdir is cleaned up when the generator advances
     (or exits). The caller can break the loop early — Python's
     generator close protocol fires the ``with`` teardown.
+
+    **Cross-time reproducibility:** if ``as_of`` is a date string
+    (``YYYY-MM-DD`` or any ISO 8601 timestamp), passes
+    ``--exclude-newer`` to uv so the entire transitive resolution is
+    frozen to releases on or before that date. Pinning direct deps
+    alone (current default) keeps results reproducible *within* one
+    sweep call, but unpinned transitives can drift between sweep calls
+    days apart; ``as_of`` closes that gap.
     """
     if shutil.which("uv") is None:
         typer.secho(
@@ -482,6 +490,7 @@ def _provision_venvs(
                 "install",
                 "--python",
                 str(vpy),
+                *(["--exclude-newer", as_of] if as_of else []),
                 *_benchmarks_extra_pins(),
                 spec,
             ]
@@ -566,6 +575,20 @@ def sweep(
             ),
         ),
     ] = False,
+    as_of: Annotated[
+        str | None,
+        typer.Option(
+            "--as-of",
+            help=(
+                "Freeze every dep's resolution to releases on or before this "
+                "date (``YYYY-MM-DD`` or ISO 8601). Passes ``--exclude-newer`` "
+                "to uv. Use a consistent value across invocations for "
+                "cross-time-reproducible sweeps — direct pins alone keep "
+                "results stable within one call but transitives can drift "
+                "between calls."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """
     Run the benchmark suite against several linopy versions.
@@ -617,7 +640,7 @@ def sweep(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
-    for prov in _provision_venvs(versions, "linopy-bench-"):
+    for prov in _provision_venvs(versions, "linopy-bench-", as_of=as_of):
         if prov.failed_at:
             failed.append(prov.version)
             continue
@@ -1051,6 +1074,17 @@ def memory_sweep_cmd(
             help="min-of-N peak per measurement (default 1).",
         ),
     ] = 1,
+    as_of: Annotated[
+        str | None,
+        typer.Option(
+            "--as-of",
+            help=(
+                "Freeze every dep's resolution to releases on or before this "
+                "date (``YYYY-MM-DD`` or ISO 8601). Same semantics as "
+                "``sweep --as-of`` — see that command's help."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """
     Sweep peak-memory measurements across several linopy versions.
@@ -1079,7 +1113,7 @@ def memory_sweep_cmd(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     failed: list[str] = []
-    for prov in _provision_venvs(versions, "linopy-mem-"):
+    for prov in _provision_venvs(versions, "linopy-mem-", as_of=as_of):
         if prov.failed_at:
             failed.append(prov.version)
             continue
