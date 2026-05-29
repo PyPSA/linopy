@@ -175,7 +175,11 @@ def _measurements(
 
         # Memory currently tracks only HiGHS — look it up by name so a
         # reordering of SOLVER_HANDOFFS doesn't silently swap solvers.
-        highs = next(w for n, _, w in SOLVER_HANDOFFS if n == "highs")
+        # Older linopy releases without ``to_highspy`` skip the phase
+        # silently rather than emitting an id with no possible match.
+        highs = next((w for n, _, w in SOLVER_HANDOFFS if n == "highs"), None)
+        if highs is None:
+            return
 
         yield (
             (

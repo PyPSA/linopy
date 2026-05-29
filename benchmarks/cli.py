@@ -398,8 +398,10 @@ class _ProvisionedVenv:
     """
     One fresh per-version venv from :func:`_provision_venvs`.
 
-    On success, ``python`` and ``env`` are populated and ``failed_at``
-    is ``None``. On failure, ``failed_at`` names the step that failed
+    On success, ``python``, ``env``, and ``import_dir`` are populated
+    and ``failed_at`` is ``None``. The caller MUST use ``import_dir``
+    as cwd for per-version subprocesses — see :func:`_provision_venvs`
+    for why. On failure, ``failed_at`` names the step that failed
     (``"venv"`` or ``"install"``); the caller skips its per-version
     action and records the failure.
     """
@@ -407,6 +409,7 @@ class _ProvisionedVenv:
     version: str
     python: Path | None
     env: dict[str, str] | None
+    import_dir: Path | None
     failed_at: str | None
 
 
@@ -418,9 +421,22 @@ def _provision_venvs(
 
     Used by both ``sweep`` and ``memory sweep`` so the venv plumbing
     (uv venv → install ``[benchmarks]`` pins + the target linopy →
-    set ``PYTHONPATH``) lives in one place. The caller supplies the
-    tempdir prefix (so ``ps``/``lsof`` can distinguish concurrent
-    runs) and does whatever per-version action it needs.
+    set up an isolated import root) lives in one place. The caller
+    supplies the tempdir prefix (so ``ps``/``lsof`` can distinguish
+    concurrent runs) and does whatever per-version action it needs.
+
+    **Isolation:** the repo root contains a ``linopy/`` package (the
+    one we're developing). Running the per-version pytest with the
+    repo root on ``sys.path`` — either via ``PYTHONPATH=repo`` or via
+    ``cwd=repo`` (Python prepends cwd as ``''``) — shadows the venv's
+    installed linopy with the dev tree. The whole sweep then measures
+    the dev linopy against itself instead of the requested version.
+    To avoid this, ``import_dir`` is a fresh tempdir per version that
+    contains a single symlink ``benchmarks → repo_root/benchmarks``.
+    Running subprocesses with ``cwd=import_dir`` and no ``PYTHONPATH``
+    makes ``import benchmarks`` resolve via the symlink while
+    ``import linopy`` falls through to the venv's site-packages — i.e.
+    the requested version.
 
     Each version's tempdir is cleaned up when the generator advances
     (or exits). The caller can break the loop early — Python's
@@ -450,7 +466,7 @@ def _provision_venvs(
                     fg=typer.colors.RED,
                     err=True,
                 )
-                yield _ProvisionedVenv(version, None, None, "venv")
+                yield _ProvisionedVenv(version, None, None, None, "venv")
                 continue
 
             vpy = _venv_python(venv)
@@ -472,15 +488,21 @@ def _provision_venvs(
             r = subprocess.run(install_args, check=False)
             if r.returncode != 0:
                 typer.secho(f"install failed: {version}", fg=typer.colors.RED, err=True)
-                yield _ProvisionedVenv(version, None, None, "install")
+                yield _ProvisionedVenv(version, None, None, None, "install")
                 continue
 
-            # PYTHONPATH makes ``import benchmarks`` resolve against the
-            # local checkout — the venv only provides linopy + test infra.
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(repo_root)
+            # Build the isolated import root described in the docstring.
+            import_dir = Path(tmp) / "iso"
+            import_dir.mkdir()
+            (import_dir / "benchmarks").symlink_to(repo_root / "benchmarks")
 
-            yield _ProvisionedVenv(version, vpy, env, None)
+            # No PYTHONPATH manipulation: the symlink + cwd=import_dir
+            # carries ``benchmarks`` without pulling the repo's
+            # ``linopy/`` into the import path.
+            env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+
+            yield _ProvisionedVenv(version, vpy, env, import_dir, None)
 
 
 @app.command(
@@ -611,7 +633,9 @@ def sweep(
             pytest_cmd.extend(ctx.args)
 
             typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-            r = subprocess.run(pytest_cmd, env=prov.env, check=False)
+            r = subprocess.run(
+                pytest_cmd, env=prov.env, cwd=str(prov.import_dir), check=False
+            )
             if r.returncode != 0:
                 typer.secho(
                     f"smoke failed: {prov.version}", fg=typer.colors.RED, err=True
@@ -648,7 +672,7 @@ def sweep(
         pytest_cmd.extend(ctx.args)
 
         typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-        subprocess.run(pytest_cmd, env=prov.env, check=False)
+        subprocess.run(pytest_cmd, env=prov.env, cwd=str(prov.import_dir), check=False)
 
         if snapshot.exists():
             typer.secho(f"saved {snapshot}", fg=typer.colors.GREEN)
@@ -1053,7 +1077,6 @@ def memory_sweep_cmd(
             raise typer.Exit(code=2)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    repo_root = Path.cwd()
 
     failed: list[str] = []
     for prov in _provision_venvs(versions, "linopy-mem-"):
@@ -1081,9 +1104,13 @@ def memory_sweep_cmd(
             mem_cmd.extend(["--repeats", str(repeats)])
 
         typer.secho(f"$ {' '.join(mem_cmd)}", fg=typer.colors.BRIGHT_BLACK)
-        subprocess.run(mem_cmd, env=prov.env, cwd=str(repo_root), check=False)
+        subprocess.run(mem_cmd, env=prov.env, cwd=str(prov.import_dir), check=False)
 
-        default_path = repo_root / ".benchmarks" / "memory" / f"{label}.json"
+        # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
+        # relative to its cwd — here, the isolated import_dir. Move it
+        # under the user's chosen output_dir (resolves under repo_root
+        # by default).
+        default_path = prov.import_dir / ".benchmarks" / "memory" / f"{label}.json"
         target = output_dir / f"{label}.json"
         if default_path.exists() and default_path.resolve() != target.resolve():
             target.parent.mkdir(parents=True, exist_ok=True)

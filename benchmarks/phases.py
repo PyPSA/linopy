@@ -60,9 +60,18 @@ def write_netcdf(m: linopy.Model, path: Path) -> None:
 # parametrization in ``test_solver_handoff.py`` and by ``memory.py``,
 # which looks up the "highs" entry. Adding a solver here automatically
 # extends both drivers.
-SOLVER_HANDOFFS: tuple[tuple[str, str, Callable[[linopy.Model], object]], ...] = (
-    ("highs", TO_HIGHSPY, lio.to_highspy),
-    ("gurobi", TO_GUROBIPY, lio.to_gurobipy),
-    ("mosek", TO_MOSEK, lio.to_mosek),
-    ("xpress", TO_XPRESS, lio.to_xpress),
+#
+# Each wrapper is fetched via ``getattr`` so the tuple silently drops
+# any solver wrapper missing from the installed ``linopy`` — necessary
+# for cross-version ``sweep`` runs against older releases (e.g.
+# ``to_xpress`` doesn't exist before linopy 0.7.1).
+SOLVER_HANDOFFS: tuple[tuple[str, str, Callable[[linopy.Model], object]], ...] = tuple(
+    (name, tag, wrapper)
+    for name, tag, wrapper in (
+        ("highs", TO_HIGHSPY, getattr(lio, "to_highspy", None)),
+        ("gurobi", TO_GUROBIPY, getattr(lio, "to_gurobipy", None)),
+        ("mosek", TO_MOSEK, getattr(lio, "to_mosek", None)),
+        ("xpress", TO_XPRESS, getattr(lio, "to_xpress", None)),
+    )
+    if wrapper is not None
 )
