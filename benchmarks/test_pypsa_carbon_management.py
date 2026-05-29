@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 import linopy as lp
@@ -8,39 +13,45 @@ pypsa = pytest.importorskip("pypsa")
 
 
 @pytest.fixture(scope="module")
-def network():
+def network() -> Any:
     return pypsa.examples.carbon_management()
 
 
-def test_create_model_frozen(benchmark, network):
+def test_create_model_frozen(benchmark: Callable[..., object], network: Any) -> None:
     benchmark(network.optimize.create_model, freeze_constraints=True)
 
 
-def test_create_model_mutable(benchmark, network):
+def test_create_model_mutable(benchmark: Callable[..., object], network: Any) -> None:
     benchmark(network.optimize.create_model, freeze_constraints=False)
 
 
 @pytest.fixture(scope="module")
-def model_frozen(network):
+def model_frozen(network: Any) -> Any:
     return network.optimize.create_model(freeze_constraints=True)
 
 
 @pytest.fixture(scope="module")
-def model_mutable(network):
+def model_mutable(network: Any) -> Any:
     return network.optimize.create_model(freeze_constraints=False)
 
 
-def test_to_highspy_frozen(benchmark, model_frozen):
+def test_to_highspy_frozen(benchmark: Callable[..., object], model_frozen: Any) -> None:
     benchmark(lp.io.to_highspy, model_frozen)
 
 
-def test_to_highspy_mutable(benchmark, model_mutable):
+def test_to_highspy_mutable(
+    benchmark: Callable[..., object], model_mutable: Any
+) -> None:
     benchmark(lp.io.to_highspy, model_mutable)
 
 
-def test_to_highspy_mutable_no_names(benchmark, model_mutable):
+def test_to_highspy_mutable_no_names(
+    benchmark: Callable[..., object], model_mutable: Any
+) -> None:
     benchmark(lp.io.to_highspy, model_mutable, set_names=False)
 
 
-def test_to_highspy_frozen_no_names(benchmark, model_frozen):
+def test_to_highspy_frozen_no_names(
+    benchmark: Callable[..., object], model_frozen: Any
+) -> None:
     benchmark(lp.io.to_highspy, model_frozen, set_names=False)

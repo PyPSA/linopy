@@ -74,6 +74,7 @@ def build_piecewise(n_gens: int) -> linopy.Model:
 
 # ``add_piecewise_formulation`` is a recent (still-evolving) API. Skip
 # registration silently on older linopy so the rest of the suite stays usable.
+SPEC: ModelSpec | None
 if _API_AVAILABLE:
     SPEC = register(
         ModelSpec(

@@ -70,6 +70,7 @@ def build_sos(n_gens: int) -> linopy.Model:
 
 # ``add_sos_constraints`` is a recent API. On older linopy we silently skip
 # registering this model — the rest of the suite stays usable.
+SPEC: ModelSpec | None
 if _API_AVAILABLE:
     SPEC = register(
         ModelSpec(

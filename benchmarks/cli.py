@@ -1161,6 +1161,9 @@ def memory_sweep_cmd(
         if prov.failed_at:
             failed.append(prov.version)
             continue
+        # ``failed_at is None`` guarantees these are populated (see
+        # ``_ProvisionedVenv``); narrow for the type checker.
+        assert prov.python is not None and prov.import_dir is not None
 
         # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
         # under cwd; we run it with cwd pinned to repo root, then move

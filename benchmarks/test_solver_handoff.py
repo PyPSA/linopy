@@ -14,16 +14,18 @@ intentionally not benchmarked.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from benchmarks.conftest import maybe_skip
 from benchmarks.phases import SOLVER_HANDOFFS
-from benchmarks.registry import iter_params
+from benchmarks.registry import ModelSpec, iter_params
 from linopy.solvers import available_solvers
 
 
-def _make_params():
-    out = []
+def _make_params() -> list[object]:
+    out: list[object] = []
     for solver_name, phase, wrapper in SOLVER_HANDOFFS:
         for spec, size in iter_params(phase):
             out.append(
@@ -39,7 +41,14 @@ def _make_params():
 
 
 @pytest.mark.parametrize("solver_name,wrapper,spec,size", _make_params())
-def test_solver_handoff(benchmark, solver_name, wrapper, spec, size, request):
+def test_solver_handoff(
+    benchmark: Callable[..., object],
+    solver_name: str,
+    wrapper: Callable[..., object],
+    spec: ModelSpec,
+    size: int,
+    request: pytest.FixtureRequest,
+) -> None:
     if solver_name not in available_solvers:
         pytest.skip(f"{solver_name} not installed")
     maybe_skip(request, spec, size)

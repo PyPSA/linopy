@@ -8,17 +8,26 @@ written artifact.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 import pytest
 
 from benchmarks.conftest import maybe_skip
 from benchmarks.phases import read_netcdf, write_netcdf
-from benchmarks.registry import NETCDF, iter_params, param_ids
+from benchmarks.registry import NETCDF, ModelSpec, iter_params, param_ids
 
 _PARAMS = iter_params(NETCDF)
 
 
 @pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
-def test_netcdf_write(benchmark, spec, size, request, tmp_path):
+def test_netcdf_write(
+    benchmark: Callable[..., object],
+    spec: ModelSpec,
+    size: int,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> None:
     maybe_skip(request, spec, size)
     m = spec.build(size)
     out = tmp_path / "model.nc"
@@ -26,7 +35,13 @@ def test_netcdf_write(benchmark, spec, size, request, tmp_path):
 
 
 @pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
-def test_netcdf_read(benchmark, spec, size, request, tmp_path):
+def test_netcdf_read(
+    benchmark: Callable[..., object],
+    spec: ModelSpec,
+    size: int,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> None:
     maybe_skip(request, spec, size)
     m = spec.build(size)
     out = tmp_path / "model.nc"

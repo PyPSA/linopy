@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    import pandas as pd
     from plotly.graph_objects import Figure
 
 PlotView = Literal["compare", "scatter", "sweep", "scaling"]
@@ -83,7 +84,9 @@ def _parse_test_id(test_id: str) -> tuple[str, str, int | None]:
     return "other", "other", None
 
 
-def load_long_df(snapshots: list[Path], metric: Metric = "min"):
+def load_long_df(
+    snapshots: list[Path], metric: Metric = "min"
+) -> tuple[pd.DataFrame, str]:
     """
     Return ``(df, unit)`` — one row per ``(snapshot, test_id)`` pair.
 
@@ -126,7 +129,7 @@ def _axis_kwargs(unit: str) -> dict:
     return {"ticksuffix": f" {unit}"}
 
 
-def _hide_non_leftmost_yticks(fig, wrap: int) -> None:
+def _hide_non_leftmost_yticks(fig: Figure, wrap: int) -> None:
     """
     Hide y-axis tick labels on every facet except the leftmost column.
 
@@ -142,7 +145,7 @@ def _hide_non_leftmost_yticks(fig, wrap: int) -> None:
             yaxis.update(showticklabels=False)
 
 
-def _share_axis_labels(fig, y_label: str, x_label: str) -> None:
+def _share_axis_labels(fig: Figure, y_label: str, x_label: str) -> None:
     """
     Replace per-facet axis titles with one shared label per axis.
 
