@@ -507,9 +507,43 @@ def _provision_venvs(
 
             # No PYTHONPATH manipulation: the symlink + cwd=import_dir
             # carries ``benchmarks`` without pulling the repo's
-            # ``linopy/`` into the import path.
+            # ``linopy/`` into the import path. PYTHONDONTWRITEBYTECODE
+            # keeps the symlinked ``benchmarks/`` source tree clean of
+            # ``__pycache__`` writes from each per-version subprocess.
             env = os.environ.copy()
             env.pop("PYTHONPATH", None)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+            # Preflight: confirm the venv's linopy is what gets imported
+            # under cwd=import_dir. If a future change reintroduces the
+            # dev-linopy shadow bug, this fails loudly here rather than
+            # silently corrupting every snapshot in the sweep.
+            preflight = subprocess.run(
+                [
+                    str(vpy),
+                    "-c",
+                    (
+                        "import linopy; "
+                        f"assert {str(venv)!r} in linopy.__file__, "
+                        "f'isolation leak: linopy resolved to "
+                        "{linopy.__file__}, not the venv'"
+                    ),
+                ],
+                cwd=str(import_dir),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if preflight.returncode != 0:
+                typer.secho(
+                    f"isolation preflight failed: {version}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                typer.echo(preflight.stderr.strip(), err=True)
+                yield _ProvisionedVenv(version, None, None, None, "isolation")
+                continue
 
             yield _ProvisionedVenv(version, vpy, env, import_dir, None)
 
