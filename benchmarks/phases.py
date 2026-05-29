@@ -13,6 +13,7 @@ lives here.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +21,10 @@ import linopy
 import linopy.io as lio
 from benchmarks.registry import TO_GUROBIPY, TO_HIGHSPY, TO_MOSEK, TO_XPRESS
 from linopy import read_netcdf
+
+# linopy <0.4.1's ``to_file`` doesn't accept ``progress``. Check once
+# at import so the benchmark loop stays branchless on the hot path.
+_TO_FILE_HAS_PROGRESS = "progress" in inspect.signature(linopy.Model.to_file).parameters
 
 # Re-export so callers can ``from benchmarks.phases import read_netcdf``
 # alongside the wrappers.
@@ -45,13 +50,15 @@ def write_lp(m: linopy.Model, path: Path) -> None:
     """
     Write the model as an LP file.
 
-    ``progress=False`` is pinned here so the benchmark stays uniform
-    across drivers — the progress bar's overhead would otherwise leak
-    into the measurement. The sweep coverage floor is linopy 0.4.1,
-    when this kwarg was added; older versions raise ``TypeError`` and
-    are out of scope.
+    Where supported, ``progress=False`` is pinned here so the
+    benchmark stays uniform across drivers — the progress bar's
+    overhead would otherwise leak into the measurement. linopy <0.4.1
+    doesn't accept the kwarg; falls back to the native call.
     """
-    m.to_file(path, progress=False)
+    if _TO_FILE_HAS_PROGRESS:
+        m.to_file(path, progress=False)
+    else:
+        m.to_file(path)
 
 
 def write_netcdf(m: linopy.Model, path: Path) -> None:
