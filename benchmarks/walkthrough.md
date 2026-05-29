@@ -200,6 +200,76 @@ For cross-version memory tracking (analogous to `sweep` for timing),
 use `memory sweep <v1> <v2> ...` — same per-version venv shape, peak
 RSS metric.
 
+## Benchmarking custom things — the `bench` API
+
+The CLI measures the fixed registry grid. When you want to time or
+memory-profile *something the registry doesn't have* — a builder called
+with odd arguments, a phase verb on a model you built by hand, a one-off
+lambda — reach for `benchmarks.bench`. It measures in-process on the
+**current** tree and hands back a result you can inspect or drop into a
+snapshot the `plot` / `compare` machinery already reads. (It can't feed
+`sweep`, which runs pytest in per-version subprocesses — promote a model
+to `benchmarks/models/` to sweep it.)
+
+`bench.time` times any callable with the suite's min-of-N convention. It
+is *not* pytest-benchmark's calibrated timer, so compare `bench` numbers
+only to other `bench` numbers:
+
+```{code-cell} ipython3
+from benchmarks import REGISTRY, bench
+
+bench.time(REGISTRY["basic"].build, 100, rounds=5)
+```
+
+Any callable works — including a phase verb applied to a model the
+registry has never heard of. `bench.memory` profiles peak RSS through
+the same `memray` path the `memory` command uses:
+
+```{code-cell} ipython3
+import linopy
+from benchmarks.phases import touch_matrices
+
+m = linopy.Model()
+x = m.add_variables(coords=[range(2000)], dims=["i"], name="x")
+m.add_constraints(x >= 1)
+m.add_objective(x.sum())
+
+bench.memory(touch_matrices, m)
+```
+
+`bench.compare` runs several callables and collects a `ResultSet`.
+`to_snapshot` writes it in the on-disk shape `load_long_df` reads — the
+seam every plot view sits on — so in-process results round-trip through
+the existing tooling without a detour:
+
+```{code-cell} ipython3
+from benchmarks import load_long_df
+
+rs = bench.compare(
+    {
+        "listcomp": lambda: [i * i for i in range(10_000)],
+        "map": lambda: list(map(lambda i: i * i, range(10_000))),
+    },
+    rounds=20,
+)
+
+bench_snap = _tmp / "bench.json"
+rs.to_snapshot(bench_snap)
+
+df, unit = load_long_df([bench_snap])
+print(f"unit: {unit}")
+df
+```
+
+Those label-keyed ids land in the `other` bucket. For a size-`scaling`
+plot, write each result with `model=` / `size=` / `phase=` so the id
+parses into those columns — `plot` then treats it like any suite
+snapshot:
+
+    bench.time(REGISTRY["basic"].build, 100).to_snapshot(
+        snap, model="basic", size=100, phase="build"
+    )
+
 ## Other CLI surfaces
 
 | Command                            | Purpose                                                              |

@@ -22,11 +22,24 @@ metadata::
     qp_specs = filter_by(has_feature=QUADRATIC)
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pandas as pd
+
+    from benchmarks.plotting import Metric
+
 # Importing the models package triggers each module's ``register(...)`` call.
-from benchmarks import models  # noqa: F401, E402
+from benchmarks import bench, models  # noqa: F401, E402
 
 
-def load_long_df(snapshots, metric="min"):
+def load_long_df(
+    snapshots: list[Path], metric: Metric = "min"
+) -> tuple[pd.DataFrame, str]:
     """
     Load one or more pytest-benchmark JSON snapshots into a tidy DataFrame.
 
@@ -91,6 +104,7 @@ __all__ = [
     "TO_HIGHSPY",
     "TO_MOSEK",
     "TO_XPRESS",
+    "bench",
     "filter_by",
     "get",
     "iter_params",

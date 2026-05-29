@@ -34,14 +34,26 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if platform.system() == "Windows":
-    raise RuntimeError(
-        "memory measurement requires ``memray`` which is not available on "
-        "Windows. Run memory benchmarks on Linux or macOS."
-    )
-
 if TYPE_CHECKING:
     from benchmarks.registry import ModelSpec
+
+
+def _require_memray() -> None:
+    """
+    Raise if memory measurement isn't supported on this platform.
+
+    Called at the top of every entry point that actually measures
+    (:func:`measure_peak`, :func:`run_phase`, :func:`save`) rather than
+    at import time, so the module imports cleanly everywhere — notably
+    ``benchmarks.bench`` reuses :func:`measure_peak` and must import on
+    Windows. Only *measuring* fails there, with the original message.
+    """
+    if platform.system() == "Windows":
+        raise RuntimeError(
+            "memory measurement requires ``memray`` which is not available on "
+            "Windows. Run memory benchmarks on Linux or macOS."
+        )
+
 
 RESULTS_DIR = Path(".benchmarks/memory")
 MEMORY_PHASES: tuple[str, ...] = (
@@ -72,7 +84,7 @@ def _phase_tag(phase: str) -> str:
     }[phase]
 
 
-def _measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
+def measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
     """
     Run ``action()`` under ``memray.Tracker`` and return peak MiB.
 
@@ -82,6 +94,8 @@ def _measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
     file-system page cache for netcdf) so the min-of-N is the cleanest
     estimate of "the floor this code can hit".
     """
+    _require_memray()
+
     import memray
 
     peaks: list[float] = []
@@ -106,6 +120,11 @@ def _measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
         gc.collect()
 
     return min(peaks)
+
+
+# Back-compat alias: ``_measure_peak`` was the private name before
+# ``benchmarks.bench`` needed to reuse it.
+_measure_peak = measure_peak
 
 
 def _measurements(
@@ -199,8 +218,10 @@ def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, fl
 
     Returns a ``{test_id: peak_mib}`` mapping. Invoked once per phase as a
     subprocess by :func:`save` for isolation. ``repeats`` is forwarded to
-    :func:`_measure_peak` so callers can dial up signal-to-noise.
+    :func:`measure_peak` so callers can dial up signal-to-noise.
     """
+    _require_memray()
+
     from benchmarks import REGISTRY
 
     tag = _phase_tag(phase)
@@ -257,6 +278,8 @@ def save(
     measurement; ``memray.Tracker`` only counts what's allocated inside its
     ``with`` block, but the subprocess boundary makes the isolation total.
     """
+    _require_memray()
+
     phases = list(phases) if phases else list(MEMORY_PHASES)
 
     all_results: dict[str, float] = {}
