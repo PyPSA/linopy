@@ -124,6 +124,20 @@ def load_snapshot(
     return path.stem, values, "s"
 
 
+def discover_snapshots() -> list[Path]:
+    """
+    Return JSON snapshot files under the canonical ``.benchmarks/`` tree.
+
+    Paths are relative to cwd so they're easier to copy-paste back into
+    the CLI than the absolute form would be. Used by ``compare`` / ``plot``
+    to suggest available snapshots when the user passes none.
+    """
+    root = Path(".benchmarks")
+    if not root.exists():
+        return []
+    return sorted(root.rglob("*.json"))
+
+
 def _check_same_unit(snapshots: list[tuple[str, dict[str, float], str]]) -> str:
     """Validate that every snapshot has the same unit, return it."""
     units = {u for _, _, u in snapshots}
