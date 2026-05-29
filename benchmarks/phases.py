@@ -47,7 +47,9 @@ def write_lp(m: linopy.Model, path: Path) -> None:
 
     ``progress=False`` is pinned here so the benchmark stays uniform
     across drivers — the progress bar's overhead would otherwise leak
-    into the measurement.
+    into the measurement. The sweep coverage floor is linopy 0.4.1,
+    when this kwarg was added; older versions raise ``TypeError`` and
+    are out of scope.
     """
     m.to_file(path, progress=False)
 
