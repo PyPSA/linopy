@@ -270,20 +270,6 @@ snapshot:
         snap, model="basic", size=100, phase="build"
     )
 
-## Other CLI surfaces
-
-| Command                            | Purpose                                                              |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| `smoke`                            | CI smoke run — every model/phase at quickest size, no timings (~20s) |
-| `run --long`                       | Full sweep including heaviest sizes (knapsack 1M, basic 1600); slow  |
-| `sweep <v1> <v2> ...`              | Build fresh venv per linopy version and run the suite in each        |
-| `memory sweep <v1> <v2> ...`       | Same shape as `sweep`, but tracks peak RSS per version               |
-| `plot --view sweep <s1> <s2> ...`  | Heatmap of ratios across 3+ snapshots                                |
-| `plot --view scaling <snap>`       | Log-log time vs `n` for size-parametrized tests, faceted by phase    |
-| `notebook`                         | Re-execute this walkthrough end-to-end (what CI runs)                |
-
-Each has its own `--help` with all flags.
-
 ## Extending the suite
 
 Add a new model:
