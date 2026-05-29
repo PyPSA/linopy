@@ -103,7 +103,13 @@ benchmarks = [
     # Perf-sensitive runtime deps. Pinned here (not in ``[project
     # .dependencies]``) so downstream linopy consumers keep their loose
     # resolve while the benchmark environment is fixed.
-    "numpy==2.4.6",
+    #
+    # ``numpy`` is the one ``<X`` rather than ``==X`` pin: linopy <0.5.1
+    # declares ``numpy<2.0``, and we want ``sweep`` to cover the older
+    # versions too. uv resolves this to 1.26.4 (last numpy 1.x) on every
+    # current platform. Bump to a 2.x ``==`` pin once we drop pre-0.5.1
+    # from sweep coverage.
+    "numpy<2.0",
     "scipy==1.16.3",
     "xarray==2025.9.0",
     "pandas==2.3.3",
