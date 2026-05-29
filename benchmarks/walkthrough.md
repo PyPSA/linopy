@@ -171,6 +171,38 @@ to percent). Diverging colour around zero.
 HTML(compare_html.read_text())
 ```
 
+### In Python — load straight from file
+
+The CLI views above all sit on one function, `load_long_df`, which reads
+snapshot json files (timing *or* memory) into a tidy frame —  `snapshot`,
+`test_id`, `phase`, `model`, `size`, `value` — plus the unit. Re-exported
+from the package so you can do your own analysis without pulling in
+plotly:
+
+```{code-cell} ipython3
+from benchmarks import load_long_df
+
+df, unit = load_long_df([baseline, candidate])
+print(f"unit: {unit}")
+df.head()
+```
+
+Pivot to one column per snapshot and the comparison is a couple of pandas
+lines — the same baseline-vs-candidate diff the `compare` view draws,
+here as a DataFrame you can sort, filter, or feed onward:
+
+```{code-cell} ipython3
+wide = df.pivot_table(
+    index=["phase", "model", "size"], columns="snapshot", values="value"
+)
+wide["ratio"] = wide["candidate"] / wide["baseline"]
+wide.sort_values("ratio", ascending=False)
+```
+
+(Two `--quick` runs of the same code, so the ratios are ~1 ± noise; on a
+real PR they'd move. The same frame feeds the plot views — pass the files
+to `python -m benchmarks plot` for the rendered version.)
+
 ## Memory snapshots
 
 `memory save <label>` runs benchmarks under `memray.Tracker` and
