@@ -402,8 +402,8 @@ class _ProvisionedVenv:
     and ``failed_at`` is ``None``. The caller MUST use ``import_dir``
     as cwd for per-version subprocesses — see :func:`_provision_venvs`
     for why. On failure, ``failed_at`` names the step that failed
-    (``"venv"`` or ``"install"``); the caller skips its per-version
-    action and records the failure.
+    (``"venv"``, ``"install"``, or ``"isolation"``); the caller skips
+    its per-version action and records the failure.
     """
 
     version: str
@@ -432,11 +432,14 @@ def _provision_venvs(
     installed linopy with the dev tree. The whole sweep then measures
     the dev linopy against itself instead of the requested version.
     To avoid this, ``import_dir`` is a fresh tempdir per version that
-    contains a single symlink ``benchmarks → repo_root/benchmarks``.
-    Running subprocesses with ``cwd=import_dir`` and no ``PYTHONPATH``
-    makes ``import benchmarks`` resolve via the symlink while
-    ``import linopy`` falls through to the venv's site-packages — i.e.
-    the requested version.
+    holds a filtered *copy* of ``benchmarks/`` and nothing else — a
+    copy rather than a symlink so the sweep runs on Windows without
+    symlink privileges and so no per-version subprocess (nor its
+    ``__pycache__`` writes) ever touches the working tree. Running
+    subprocesses with ``cwd=import_dir`` and no ``PYTHONPATH`` makes
+    ``import benchmarks`` resolve to that copy while ``import linopy``
+    falls through to the venv's site-packages — i.e. the requested
+    version. The preflight below asserts that resolution actually held.
 
     Each version's tempdir is cleaned up when the generator advances
     (or exits). The caller can break the loop early — Python's
@@ -500,19 +503,26 @@ def _provision_venvs(
                 yield _ProvisionedVenv(version, None, None, None, "install")
                 continue
 
-            # Build the isolated import root described in the docstring.
+            # Build the isolated import root described in the docstring:
+            # a filtered copy of ``benchmarks/`` and nothing else. The
+            # heavy, sweep-irrelevant artifacts (the executed notebook,
+            # bytecode caches, macOS cruft) are skipped to keep the
+            # per-version copy cheap.
             import_dir = Path(tmp) / "iso"
             import_dir.mkdir()
-            (import_dir / "benchmarks").symlink_to(repo_root / "benchmarks")
+            shutil.copytree(
+                repo_root / "benchmarks",
+                import_dir / "benchmarks",
+                ignore=shutil.ignore_patterns("__pycache__", "*.ipynb", ".DS_Store"),
+            )
 
-            # No PYTHONPATH manipulation: the symlink + cwd=import_dir
-            # carries ``benchmarks`` without pulling the repo's
-            # ``linopy/`` into the import path. PYTHONDONTWRITEBYTECODE
-            # keeps the symlinked ``benchmarks/`` source tree clean of
-            # ``__pycache__`` writes from each per-version subprocess.
+            # No PYTHONPATH manipulation: the copied ``benchmarks`` under
+            # cwd=import_dir carries the harness without pulling the
+            # repo's ``linopy/`` into the import path. Bytecode the
+            # subprocess writes lands in this throwaway copy, never the
+            # working tree, so no PYTHONDONTWRITEBYTECODE is needed.
             env = os.environ.copy()
             env.pop("PYTHONPATH", None)
-            env["PYTHONDONTWRITEBYTECODE"] = "1"
 
             # Preflight: confirm the venv's linopy is what gets imported
             # under cwd=import_dir. If a future change reintroduces the
