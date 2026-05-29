@@ -34,6 +34,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from benchmarks.snapshot import write_memory_snapshot
+
 if TYPE_CHECKING:
     from benchmarks.registry import ModelSpec
 
@@ -329,8 +331,7 @@ def save(
         sys.exit(1)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS_DIR / f"{label}.json"
-    out_path.write_text(json.dumps({"label": label, "peak_mib": all_results}, indent=2))
+    out_path = write_memory_snapshot(RESULTS_DIR / f"{label}.json", label, all_results)
     print(f"\nSaved {len(all_results)} measurements to {out_path}", file=sys.stderr)
     return out_path
 

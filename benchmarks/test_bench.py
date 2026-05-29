@@ -2,7 +2,7 @@
 Tests for the ad-hoc ``bench`` helper.
 
 The contract under test is the *seam*: a ``bench`` result must round-trip
-into ``plotting.load_long_df`` exactly like a real snapshot, and its
+into ``snapshot.load_long_df`` exactly like a real snapshot, and its
 in-process ``to_df`` must line up column-for-column with the loaded frame.
 These are the only non-obvious behaviours — the timing math itself is not
 asserted beyond "finite and positive", since wall-clock values aren't
@@ -18,7 +18,7 @@ import pytest
 import linopy
 from benchmarks import REGISTRY, bench
 from benchmarks.phases import touch_matrices
-from benchmarks.plotting import load_long_df
+from benchmarks.snapshot import load_long_df
 
 
 def _tiny() -> int:

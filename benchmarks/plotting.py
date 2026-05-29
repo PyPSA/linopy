@@ -21,105 +21,18 @@ suite still works without it.
 
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from benchmarks.snapshot import Metric, load_long_df
+
 if TYPE_CHECKING:
-    import pandas as pd
     from plotly.graph_objects import Figure
 
 PlotView = Literal["compare", "scatter", "sweep", "scaling"]
-Metric = Literal["min", "median", "mean", "max"]
 SortMode = Literal["absolute", "relative"]
 FacetBy = Literal["phase", "model"]
-
-_SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
-
-
-def _load_snapshot(
-    path: Path, metric: Metric = "min"
-) -> tuple[str, dict[str, float], str]:
-    """
-    Return ``(label, {fullname: value}, unit)`` for one snapshot.
-
-    Auto-detects the JSON shape:
-
-    - pytest-benchmark timing (``{"benchmarks": [{"stats": {...}}]}``) →
-      ``value`` is ``stats[metric]`` in **seconds**.
-    - memory.py output (``{"peak_mib": {test_id: float}}``) → ``value`` is
-      the peak in **MiB**; ``metric`` is ignored.
-    """
-    data = json.loads(path.read_text())
-    if "peak_mib" in data:
-        return path.stem, dict(data["peak_mib"]), "MiB"
-    values = {bm["fullname"]: bm["stats"][metric] for bm in data["benchmarks"]}
-    return path.stem, values, "s"
-
-
-def _check_same_unit(snapshots: list[tuple[str, dict[str, float], str]]) -> str:
-    """Validate that every snapshot has the same unit, return it."""
-    units = {u for _, _, u in snapshots}
-    if len(units) > 1:
-        raise ValueError(
-            f"snapshots mix units {units}; can't compare timing and memory"
-        )
-    return next(iter(units))
-
-
-def _parse_test_id(test_id: str) -> tuple[str, str, int | None]:
-    """
-    Return ``(phase, model, size)`` for a pytest test id.
-
-    Falls back to ``("other", "other", None)`` for ids that don't match
-    the ``benchmarks/test_<phase>.py::test_<phase>[<model>-n=<size>]``
-    parametrize shape (e.g. ``test_pypsa_carbon_management``).
-    """
-    m = _SIZE_RE.match(test_id)
-    if m:
-        phase = m.group(1).split("::")[-1]
-        return phase, m.group(2), int(m.group(3))
-    return "other", "other", None
-
-
-def load_long_df(
-    snapshots: list[Path], metric: Metric = "min"
-) -> tuple[pd.DataFrame, str]:
-    """
-    Return ``(df, unit)`` — one row per ``(snapshot, test_id)`` pair.
-
-    Columns: ``snapshot``, ``test_id``, ``phase``, ``model``, ``size``
-    (``Int64``-nullable for the "other" bucket), ``value``. ``unit`` is
-    the shared unit string (``"s"`` for timing, ``"MiB"`` for memory)
-    — every loaded snapshot must agree.
-
-    Every plot view downstream pivots or filters this single frame so
-    test-id parsing, unit checking, and the "x snapshots, y tests"
-    matrix logic all live in one place.
-    """
-    import pandas as pd
-
-    raw = [_load_snapshot(p, metric) for p in snapshots]
-    unit = _check_same_unit(raw)
-    rows = []
-    for label, vals, _ in raw:
-        for test_id, value in vals.items():
-            phase, model, size = _parse_test_id(test_id)
-            rows.append(
-                {
-                    "snapshot": label,
-                    "test_id": test_id,
-                    "phase": phase,
-                    "model": model,
-                    "size": size,
-                    "value": value,
-                }
-            )
-    df = pd.DataFrame(rows)
-    df["size"] = df["size"].astype("Int64")
-    return df, unit
 
 
 def _axis_kwargs(unit: str) -> dict:

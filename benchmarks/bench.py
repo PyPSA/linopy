@@ -18,27 +18,36 @@ already understands::
     bench.compare({"v1": f1, "v2": f2}).to_snapshot("cmp.json")
 
 This plugs into the *output* side of the pipeline (snapshot JSON read by
-``plotting.load_long_df``), not into ``sweep``: a sweep runs pytest inside
+``snapshot.load_long_df``), not into ``sweep``: a sweep runs pytest inside
 per-version venvs as subprocesses, so it can only measure importable
 registry models — an in-process callable can't cross that boundary. To
 sweep a custom model across versions, promote it to ``benchmarks/models/``.
 
-**Methodology.** Timing uses ``time.perf_counter`` with the same
-min-of-N convention as the rest of the suite (the fastest sample
-approximates the no-noise floor). It is *not* pytest-benchmark's
-calibrated timer, so absolute numbers are not interchangeable with suite
-snapshots — compare ``bench`` to ``bench`` and suite to suite.
+**Methodology.** Timing is built on :class:`timeit.Timer`: an
+``autorange`` calibration picks the inner iteration count (so timer
+resolution doesn't dominate fast callables), then the per-iteration time
+is sampled across rounds with the suite's min-of-N convention (the
+fastest sample approximates the no-noise floor). It is *not*
+pytest-benchmark's calibrated timer, so absolute numbers are not
+interchangeable with suite snapshots — compare ``bench`` to ``bench`` and
+suite to suite.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, median, stdev
-from time import perf_counter
+from timeit import Timer
 from typing import TYPE_CHECKING, Any, Literal
+
+from benchmarks.snapshot import (
+    parse_test_id,
+    synth_test_id,
+    write_memory_snapshot,
+    write_timing_snapshot,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -65,34 +74,9 @@ def _fn_name(fn: Callable[..., object]) -> str:
     return getattr(fn, "__name__", None) or repr(fn)
 
 
-def _synth_id(
-    label: str, *, model: str | None, size: int | None, phase: str | None
-) -> str:
-    """
-    Build the snapshot test id for a result.
-
-    With all of ``model``/``size``/``phase`` supplied, synthesize
-    ``bench::{phase}[{model}-n={size}]`` — this parses cleanly into the
-    ``(phase, model, size)`` columns (so ``plot --view scaling`` works
-    across several sizes). With none supplied, fall back to ``label``
-    verbatim (lands in the ``"other"`` bucket — still fine for
-    ``compare``). A partial spec is ambiguous and rejected.
-    """
-    given = (model is not None, size is not None, phase is not None)
-    if all(given):
-        return f"bench::{phase}[{model}-n={size}]"
-    if any(given):
-        raise ValueError(
-            "model, size, and phase must be given together (or all omitted)"
-        )
-    return label
-
-
 def _row(test_id: str, value: float) -> dict[str, object]:
     """One ``load_long_df``-shaped row for an in-process result."""
-    from benchmarks.plotting import _parse_test_id
-
-    phase, model, size = _parse_test_id(test_id)
+    phase, model, size = parse_test_id(test_id)
     return {
         "snapshot": test_id,
         "test_id": test_id,
@@ -134,11 +118,8 @@ class TimingResult:
         phase: str | None = None,
     ) -> Path:
         """Write a pytest-benchmark-shaped timing snapshot (seconds)."""
-        test_id = _synth_id(self.label, model=model, size=size, phase=phase)
-        data = {"benchmarks": [{"fullname": test_id, "stats": dict(self.stats)}]}
-        out = Path(path)
-        out.write_text(json.dumps(data, indent=2))
-        return out
+        test_id = synth_test_id(self.label, model=model, size=size, phase=phase)
+        return write_timing_snapshot(path, [(test_id, dict(self.stats))])
 
     def to_df(self) -> pd.DataFrame:
         """``load_long_df``-shaped frame (one row, ``value`` = min seconds)."""
@@ -147,7 +128,7 @@ class TimingResult:
     def __repr__(self) -> str:
         return (
             f"TimingResult({self.label!r}, min={self.stats['min']:.4g}s, "
-            f"rounds={int(self.stats['rounds'])})"
+            f"rounds={int(self.stats['rounds'])}x{int(self.stats.get('iterations', 1))})"
         )
 
     def _repr_html_(self) -> str:
@@ -158,6 +139,7 @@ class TimingResult:
             ("max", f"{self.stats['max']:.4g} s"),
             ("stddev", f"{self.stats['stddev']:.4g} s"),
             ("rounds", int(self.stats["rounds"])),
+            ("iterations", int(self.stats.get("iterations", 1))),
         ]
         return _html_table("TimingResult", self.label, rows)
 
@@ -179,11 +161,8 @@ class MemoryResult:
         phase: str | None = None,
     ) -> Path:
         """Write a memory.py-shaped snapshot (peak MiB)."""
-        test_id = _synth_id(self.label, model=model, size=size, phase=phase)
-        data = {"label": self.label, "peak_mib": {test_id: self.peak_mib}}
-        out = Path(path)
-        out.write_text(json.dumps(data, indent=2))
-        return out
+        test_id = synth_test_id(self.label, model=model, size=size, phase=phase)
+        return write_memory_snapshot(path, self.label, {test_id: self.peak_mib})
 
     def to_df(self) -> pd.DataFrame:
         """``load_long_df``-shaped frame (one row, ``value`` = peak MiB)."""
@@ -214,22 +193,19 @@ class ResultSet:
 
     def to_snapshot(self, path: str | Path) -> Path:
         """Write all results into one snapshot, each keyed by its label."""
-        out = Path(path)
         if self.unit == "s":
-            entries = [
-                {"fullname": r.label, "stats": dict(r.stats)}
-                for r in self.results
-                if isinstance(r, TimingResult)
-            ]
-            out.write_text(json.dumps({"benchmarks": entries}, indent=2))
-        else:
-            peaks = {
-                r.label: r.peak_mib for r in self.results if isinstance(r, MemoryResult)
-            }
-            out.write_text(
-                json.dumps({"label": "compare", "peak_mib": peaks}, indent=2)
+            return write_timing_snapshot(
+                path,
+                [
+                    (r.label, dict(r.stats))
+                    for r in self.results
+                    if isinstance(r, TimingResult)
+                ],
             )
-        return out
+        peaks = {
+            r.label: r.peak_mib for r in self.results if isinstance(r, MemoryResult)
+        }
+        return write_memory_snapshot(path, "compare", peaks)
 
     def to_df(self) -> pd.DataFrame:
         """Concatenate the per-result frames (shares ``load_long_df`` columns)."""
@@ -282,31 +258,43 @@ def time(
     """
     Time ``fn(*args, **kwargs)`` and return a :class:`TimingResult`.
 
-    After ``warmup`` untimed calls, run timed calls with
-    ``time.perf_counter``. With ``rounds`` set, run exactly that many;
-    otherwise auto-tune — keep going until cumulative timed wall-clock
-    reaches ``min_time`` (with a floor of 5 rounds and a hard cap). The
-    headline number is ``stats["min"]``.
+    Built on :class:`timeit.Timer`: an ``autorange`` calibration first
+    picks the inner iteration count so timer resolution doesn't dominate
+    for fast callables (the bespoke "one call per round" loop this
+    replaced was unstable in exactly that regime). Each round then runs
+    that many calibrated iterations; the per-iteration time is the
+    sample. ``warmup`` rounds are discarded to prime caches.
+
+    With ``rounds`` set, run exactly that many rounds; otherwise
+    auto-tune — keep going until cumulative timed wall-clock reaches
+    ``min_time`` (floor of 5 rounds, hard cap). The headline number is
+    ``stats["min"]``; ``stats["iterations"]`` records the calibrated
+    inner count.
+
+    This is *not* pytest-benchmark's calibrated timer — ``bench`` numbers
+    are only comparable to other ``bench`` numbers, not to suite
+    snapshots.
     """
-    call = lambda: fn(*args, **kwargs)  # noqa: E731
+    timer = Timer(lambda: fn(*args, **kwargs))
+
+    # Calibrate inner iterations so a single round is long enough that
+    # ``perf_counter`` granularity is negligible (timeit targets ~0.2 s).
+    number, _ = timer.autorange()
 
     for _ in range(max(0, warmup)):
-        call()
+        timer.timeit(number)
 
-    samples: list[float] = []
+    samples: list[float] = []  # per-iteration seconds
     if rounds is not None:
-        for _ in range(max(1, rounds)):
-            t0 = perf_counter()
-            call()
-            samples.append(perf_counter() - t0)
+        samples = [
+            t / number for t in timer.repeat(repeat=max(1, rounds), number=number)
+        ]
     else:
         total = 0.0
         while True:
-            t0 = perf_counter()
-            call()
-            dt = perf_counter() - t0
-            samples.append(dt)
-            total += dt
+            t = timer.timeit(number)
+            samples.append(t / number)
+            total += t
             if len(samples) >= _ROUND_FLOOR and total >= min_time:
                 break
             if len(samples) >= _ROUND_CAP:
@@ -319,6 +307,7 @@ def time(
         "median": median(samples),
         "stddev": stdev(samples) if len(samples) > 1 else 0.0,
         "rounds": float(len(samples)),
+        "iterations": float(number),
     }
     return TimingResult(label=label or _fn_name(fn), stats=stats)
 

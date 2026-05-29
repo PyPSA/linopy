@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
-    from benchmarks.plotting import Metric
+    from benchmarks.snapshot import Metric
 
 # Importing the models package triggers each module's ``register(...)`` call.
 from benchmarks import bench, models  # noqa: F401, E402
@@ -41,16 +41,16 @@ def load_long_df(
     snapshots: list[Path], metric: Metric = "min"
 ) -> tuple[pd.DataFrame, str]:
     """
-    Load one or more pytest-benchmark JSON snapshots into a tidy DataFrame.
+    Load one or more benchmark JSON snapshots into a tidy DataFrame.
 
-    Thin re-export of :func:`benchmarks.plotting.load_long_df` so callers
+    Thin re-export of :func:`benchmarks.snapshot.load_long_df` so callers
     can do their own analysis without importing the plotting module
     (which pulls in plotly). Returns ``(df, unit)`` where ``df`` has one
     row per ``(snapshot, test_id)`` with columns ``snapshot, test_id,
     phase, model, size, value``, and ``unit`` is ``"s"`` (timing) or
     ``"MiB"`` (memory).
     """
-    from benchmarks.plotting import load_long_df as _impl
+    from benchmarks.snapshot import load_long_df as _impl
 
     return _impl(snapshots, metric)
 
