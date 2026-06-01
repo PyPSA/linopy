@@ -546,6 +546,47 @@ def test_matmul_expr_and_const(x: Variable, y: Variable) -> None:
     assert_linequal(expr.dot(const), target)
 
 
+def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
+    """
+    A @ b contracts the genuinely shared dims and keeps the rest.
+
+    ``z`` has dims (dim_0, dim_1); ``b`` has (dim_1, location). Only dim_1
+    is shared, so the result must keep dim_0 and location. A conversion that
+    broadcast ``b`` to ``z``'s coords would expand dim_0 into ``b`` and
+    contract it away too — collapsing the result to (location,) only.
+    """
+    expr = 1 * z
+    b = xr.DataArray(
+        np.ones((3, 2)),
+        coords={"dim_1": expr.data.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"dim_0", "location"}
+    assert_linequal(res, (expr * b).sum("dim_1"))
+
+
+def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
+    """B covering all of a's dims (and more) contracts a's dims, keeping b's extras."""
+    expr = 1 * z  # dims (dim_0, dim_1)
+    b = xr.DataArray(
+        np.ones((2, 3, 2)),
+        coords={
+            "dim_0": expr.data.indexes["dim_0"],
+            "dim_1": expr.data.indexes["dim_1"],
+            "location": ["L1", "L2"],
+        },
+        dims=["dim_0", "dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"location"}
+    assert_linequal(res, (expr * b).sum(["dim_0", "dim_1"]))
+
+
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     with pytest.raises(TypeError):
