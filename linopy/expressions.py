@@ -47,6 +47,7 @@ from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
+    _as_dataarray_lax,
     as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
@@ -1686,7 +1687,7 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = _as_dataarray_lax(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2172,7 +2173,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = _as_dataarray_lax(other, coords=self.coords, dims=self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
