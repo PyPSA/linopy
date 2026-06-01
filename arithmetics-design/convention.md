@@ -122,9 +122,9 @@ it does when no dimension matches. The same goes for a 4×4 array against
 `(a: 4, b: 4)`: sizes cannot tell `(a, b)` from `(b, a)`. To name the
 dimensions, wrap the array in a DataArray.
 
-> **TODO — not yet implemented.** Today an unlabeled array pairs with the
-> *leading* dimensions positionally, which silently guesses in the ambiguous
-> cases above. The pairing rule builds on the `as_dataarray` /
+> **TODO — not yet implemented ([#736]).** Today an unlabeled array pairs
+> with the *leading* dimensions positionally, which silently guesses in the
+> ambiguous cases above. The pairing rule builds on the `as_dataarray` /
 > coords-as-truth seam refactored in [#732] and lands after it.
 
 ### §8. Shared dimensions must match exactly
@@ -218,6 +218,7 @@ terms the way `sum` does.
 <!-- references -->
 [pyoframe]: https://github.com/Bravos-Power/pyoframe
 [#732]: https://github.com/PyPSA/linopy/pull/732
+[#736]: https://github.com/PyPSA/linopy/issues/736
 [#714]: https://github.com/PyPSA/linopy/issues/714
 [#713]: https://github.com/PyPSA/linopy/issues/713
 [#712]: https://github.com/PyPSA/linopy/issues/712
