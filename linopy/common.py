@@ -287,7 +287,7 @@ def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
 
 
 class _LevelProjection(NamedTuple):
-    """Record of one MultiIndex-level projection performed by ``_broadcast_core``."""
+    """Record of one MultiIndex-level projection performed by ``_broadcast_to_coords``."""
 
     dim: Hashable
     levels: list[Hashable]
@@ -365,7 +365,7 @@ def _project_onto_multiindex_levels(
     return arr, projections
 
 
-def _broadcast_core(
+def _broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
@@ -506,7 +506,7 @@ def broadcast_to_coords(
     leaves entries uncovered) emit an :class:`~linopy.EvolvingAPIWarning`;
     the v1 arithmetic convention will require them to be explicit.
     """
-    da, projections = _broadcast_core(arr, coords, dims, **kwargs)
+    da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
     for p in projections:
         if not p.is_partial and not p.has_gap:
             continue
@@ -608,7 +608,7 @@ def align_to_coords(
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
     try:
-        da, projections = _broadcast_core(value, coords, dims=dims, **kwargs)
+        da, projections = _broadcast_to_coords(value, coords, dims=dims, **kwargs)
     except TypeError as err:
         raise TypeError(f"{label} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:
