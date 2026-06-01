@@ -671,9 +671,7 @@ def test_as_dataarray_does_not_expand_missing_coord_dims() -> None:
     assert broadcast.dims == ("a", "b")
 
 
-def test_broadcast_to_coords_passes_extra_dims_strict_broadcast_to_coords_rejects() -> (
-    None
-):
+def test_extra_dims_pass_broadcast_rung_fail_strict_rung() -> None:
     """Extra dims pass through the broadcast rung but fail the strict rung."""
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "t"], coords={"a": [0, 1], "t": [10, 20]}

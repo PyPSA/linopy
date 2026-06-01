@@ -508,21 +508,20 @@ def broadcast_to_coords(
     """
     da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
     for p in projections:
-        if not p.is_partial and not p.has_gap:
-            continue
-        kind = (
-            f"broadcasting level subset {p.levels}"
-            if p.is_partial
-            else f"filling uncovered entries with NaN (from level(s) {p.levels})"
-        )
-        warn(
-            f"multiindex-projection: implicitly {kind} onto MultiIndex "
-            f"dimension {p.dim!r}. The v1 arithmetic convention will require "
-            f"this to be explicit; reindex onto the dimension or use a "
-            f"named method with `join=` to keep current behavior.",
-            EvolvingAPIWarning,
-            stacklevel=2,
-        )
+        if p.is_partial or p.has_gap:
+            kind = (
+                f"broadcasting level subset {p.levels}"
+                if p.is_partial
+                else f"filling uncovered entries with NaN (from level(s) {p.levels})"
+            )
+            warn(
+                f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                f"dimension {p.dim!r}. The v1 arithmetic convention will require "
+                f"this to be explicit; reindex onto the dimension or use a "
+                f"named method with `join=` to keep current behavior.",
+                EvolvingAPIWarning,
+                stacklevel=2,
+            )
     return da
 
 
@@ -589,7 +588,7 @@ def validate_alignment(
 
 
 def strict_broadcast_to_coords(
-    value: Any,
+    arr: Any,
     coords: CoordsLike | None,
     *,
     label: str,
@@ -604,11 +603,16 @@ def strict_broadcast_to_coords(
     and MultiIndex coverage gaps. Errors are raised as :class:`ValueError` /
     :class:`TypeError` naming ``label``; coords-parsing errors propagate
     unchanged.
+
+    Partial-level broadcasts (input indexed by a subset of a MultiIndex's
+    levels) are silent here — they are the documented bounds-broadcast
+    feature, not the arithmetic-convention concern that makes
+    :func:`broadcast_to_coords` warn.
     """
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
     try:
-        da, projections = _broadcast_to_coords(value, coords, dims=dims, **kwargs)
+        da, projections = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
     except TypeError as err:
         raise TypeError(f"{label} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:
