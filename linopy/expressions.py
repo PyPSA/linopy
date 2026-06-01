@@ -2291,7 +2291,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.as_dataarray`.
+        Keyword arguments passed to `linopy.common.broadcast_to_coords`.
 
     Returns
     -------
@@ -2308,7 +2308,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = broadcast_to_coords(obj, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
