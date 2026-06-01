@@ -511,7 +511,8 @@ def test_as_dataarray_keeps_disjoint_shared_dim_values() -> None:
 
 
 def test_as_dataarray_expands_missing_multiindex_dim_keeps_levels() -> None:
-    """Broadcasting a missing MultiIndex dim must keep its level coords intact.
+    """
+    Broadcasting a missing MultiIndex dim must keep its level coords intact.
 
     expand_dims drops MultiIndex level coords, leaving a degenerate flat
     index that fails to align downstream (PyPSA multi-investment regression).
@@ -532,6 +533,89 @@ def test_as_dataarray_expands_missing_multiindex_dim_keeps_levels() -> None:
     )
     assert set(coeff.xindexes) == {"snapshot", "period", "timestep", "name"}
     coeff.reindex_like(labels, fill_value=0)
+
+
+def test_as_dataarray_broadcasts_single_multiindex_level() -> None:
+    """
+    A constant indexed by one MultiIndex level broadcasts across the MI dim.
+
+    PyPSA multi-investment multiplies an expression over a (period, timestep)
+    'snapshot' MultiIndex by a weighting indexed only by 'period'. Each entry
+    of the MultiIndex must pick up its level's value.
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    da = as_dataarray(by_level1, coords=coords, dims=["dim_3"])
+
+    assert da.dims == ("dim_3",)
+    assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
+    assert da.sel(dim_3=(1, "a")).item() == 10.0
+    assert da.sel(dim_3=(1, "b")).item() == 10.0
+    assert da.sel(dim_3=(2, "a")).item() == 20.0
+    assert da.sel(dim_3=(2, "b")).item() == 20.0
+
+
+def test_as_dataarray_stacks_full_multiindex_levels() -> None:
+    """
+    A constant indexed by all MI level names stacks element-wise into the MI dim.
+
+    PyPSA's storage_weightings is a pandas Series over a (period, timestep)
+    MultiIndex subset (the last snapshot of each period); it must align onto
+    the matching entries of the 'snapshot' MultiIndex. Entries the subset does
+    not cover are left as NaN (broadcast path).
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
+    weights = pd.Series([10.0, 20.0], index=subset)
+
+    da = as_dataarray(weights, coords=coords, dims=["dim_3"])
+
+    assert da.dims == ("dim_3",)
+    assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
+    assert da.sel(dim_3=(1, "a")).item() == 10.0
+    assert da.sel(dim_3=(2, "b")).item() == 20.0
+    assert np.isnan(da.sel(dim_3=(1, "b")).item())
+    assert np.isnan(da.sel(dim_3=(2, "a")).item())
+
+
+def test_as_dataarray_level_projection_ambiguous_raises() -> None:
+    """A level name shared by two MI dims cannot be resolved."""
+    a = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("shared", "x"))
+    b = pd.MultiIndex.from_product([[1, 2], ["c", "d"]], names=("shared", "y"))
+    coords = {
+        **xr.Coordinates.from_pandas_multiindex(a, "dimA"),
+        **xr.Coordinates.from_pandas_multiindex(b, "dimB"),
+    }
+    arr = DataArray([1.0, 2.0], coords={"shared": [1, 2]}, dims=["shared"])
+
+    with pytest.raises(ValueError, match=r"shared.*shared by MultiIndex"):
+        as_dataarray(arr, coords=coords)
+
+
+def test_as_dataarray_level_projection_missing_value_raises() -> None:
+    """A level value absent from the input cannot be broadcast."""
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 9]}, dims=["level1"])
+
+    with pytest.raises(ValueError, match=r"Cannot align level.*is missing"):
+        as_dataarray(by_level1, coords=coords, dims=["dim_3"])
+
+
+def test_as_dataarray_unrelated_multiindex_series_still_unstacks() -> None:
+    """A MI Series whose levels match no coords MI dim keeps unstacking."""
+    sub = pd.MultiIndex.from_product([["p", "q"], [1, 2]], names=["foo", "bar"])
+    series = pd.Series([1.0, 2.0, 3.0, 4.0], index=sub)
+
+    da = as_dataarray(series, coords={"time": [0, 1, 2]})
+
+    assert set(da.dims) == {"time", "foo", "bar"}
 
 
 def test_validate_alignment_rejects_extra_dims() -> None:

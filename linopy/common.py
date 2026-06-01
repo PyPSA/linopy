@@ -284,10 +284,82 @@ def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
     return None
 
 
+def _project_onto_multiindex_levels(
+    arr: DataArray,
+    expected: dict[Hashable, Any],
+    *,
+    enforce_coverage: bool,
+) -> DataArray:
+    """
+    Map ``arr`` dims that are levels of a stacked-MultiIndex coords dim onto it.
+
+    A dim of ``arr`` that is not itself a coords dim but names a level of a
+    stacked-MultiIndex coords dim ``D`` is projected onto ``D`` by selecting,
+    for every entry of ``D``, the ``arr`` value at that entry's level values.
+    A subset of ``D``'s levels broadcasts across the remaining ones; the full
+    set aligns element-wise. ``arr`` is returned unchanged when it carries no
+    such level dims.
+
+    Raises ``ValueError`` if a level name belongs to more than one MI dim
+    (ambiguous) or if a referenced level value is missing from ``arr``. When
+    ``enforce_coverage`` is set, also raises if the projection leaves entries
+    of ``D`` uncovered (the input did not span the full MultiIndex).
+    """
+    level_owner: dict[Hashable, Hashable] = {}
+    owner_mi: dict[Hashable, pd.MultiIndex] = {}
+    for dim, coord_values in expected.items():
+        mi = _as_multiindex(coord_values)
+        if mi is None:
+            continue
+        owner_mi[dim] = mi
+        for level in mi.names:
+            if level is None:
+                continue
+            if level in level_owner:
+                raise ValueError(
+                    f"Level {level!r} is shared by MultiIndex dimensions "
+                    f"{level_owner[level]!r} and {dim!r}; cannot resolve which "
+                    f"to align to."
+                )
+            level_owner[level] = dim
+
+    groups: dict[Hashable, list[Hashable]] = {}
+    for d in arr.dims:
+        if d in expected:
+            continue
+        owner = level_owner.get(d)
+        if owner is not None:
+            groups.setdefault(owner, []).append(d)
+
+    for dim, levels in groups.items():
+        mi = owner_mi[dim]
+        selectors = {
+            level: DataArray(np.asarray(mi.get_level_values(level)), dims=[dim])
+            for level in levels
+        }
+        try:
+            arr = arr.sel(selectors)
+        except KeyError as err:
+            raise ValueError(
+                f"Cannot align level(s) {levels} onto MultiIndex dimension "
+                f"{dim!r}: value {err} is missing."
+            ) from err
+        arr = arr.assign_coords(Coordinates.from_pandas_multiindex(mi, dim))
+        if enforce_coverage and bool(arr.isnull().any()):
+            raise ValueError(
+                f"Input does not cover every entry of MultiIndex dimension "
+                f"{dim!r} (aligned from level(s) {levels})."
+            )
+
+    return arr
+
+
 def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    *,
+    enforce_level_coverage: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -302,6 +374,9 @@ def as_dataarray(
       different-order coordinates are reindexed to ``coords`` order;
     - dims present in ``coords`` but not in ``arr`` are expanded to the
       ``coords`` shape;
+    - dims of ``arr`` that name levels of a stacked-MultiIndex ``coords``
+      dim are projected onto that dim (a subset of levels broadcasts, the
+      full set aligns element-wise);
     - the result is transposed to ``coords`` order.
 
     Dimensions present in ``arr`` but not in ``coords`` are preserved so
@@ -325,6 +400,10 @@ def as_dataarray(
     dims
         Optional dim-names hint, used for positional inputs and to bias
         pandas-axis interpretation.
+    enforce_level_coverage
+        When projecting onto a stacked-MultiIndex dim, raise if the input
+        leaves entries of that dim uncovered. Set by the strict callers
+        (``add_variables`` / ``add_constraints`` via ``align_to_coords``).
     **kwargs
         Forwarded to the underlying DataArray construction.
 
@@ -371,6 +450,10 @@ def as_dataarray(
                 if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
             }
         )
+
+    arr = _project_onto_multiindex_levels(
+        arr, expected, enforce_coverage=enforce_level_coverage
+    )
 
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
@@ -519,7 +602,9 @@ def align_to_coords(
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
     try:
-        da = as_dataarray(value, coords, dims=dims, **kwargs)
+        da = as_dataarray(
+            value, coords, dims=dims, enforce_level_coverage=True, **kwargs
+        )
     except TypeError as err:
         raise TypeError(f"{label} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:

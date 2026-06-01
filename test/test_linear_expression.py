@@ -288,6 +288,26 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
+    """
+    Expression over a MultiIndex dim times a single-level constant.
+
+    Mirrors PyPSA's ``soc_delta * storage_weightings``: ``u`` is indexed by
+    the (level1, level2) MultiIndex ``dim_3``; the weighting is indexed only
+    by ``level1``. The product must not raise, and each ``dim_3`` entry must
+    take the weight of its ``level1``.
+    """
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    expr = (1 * u) * by_level1
+
+    coeffs = expr.coeffs.squeeze("_term")
+    assert coeffs.sel(dim_3=(1, "a")).item() == 10.0
+    assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
+    assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
+    assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
     with pytest.raises(TypeError):
         x / x

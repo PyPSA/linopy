@@ -861,3 +861,19 @@ class TestAddVariablesMultiIndexCoords:
         bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": other})
         with pytest.raises(ValueError, match="MultiIndex.*does not match"):
             model.add_variables(upper=bound, coords=[midx], name="x")
+
+    def test_single_level_bound_broadcasts(
+        self, model: "Model", midx: pd.MultiIndex
+    ) -> None:
+        bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
+        var = model.add_variables(upper=bound, coords=[midx], name="x")
+        assert var.dims == ("multi",)
+        assert (var.data.upper == [5, 5, 6, 6]).all()
+
+    def test_incomplete_level_bound_raises(
+        self, model: "Model", midx: pd.MultiIndex
+    ) -> None:
+        subset = pd.MultiIndex.from_tuples([(0, "a"), (1, "b")], names=("l1", "l2"))
+        bound = pd.Series([1, 2], index=subset)
+        with pytest.raises(ValueError, match="does not cover every entry"):
+            model.add_variables(upper=bound, coords=[midx], name="x")
