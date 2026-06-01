@@ -229,7 +229,7 @@ def as_dataarray(
     polars, numpy, scalar, DataArray) and labels positional axes with
     ``dims`` / ``coords``. The result is not reshaped against ``coords``:
     dims are neither expanded, reordered, nor projected onto MultiIndex
-    dims. Use :func:`broadcast_to_coords` or :func:`align_to_coords` when
+    dims. Use :func:`broadcast_to_coords` or :func:`strict_broadcast_to_coords` when
     ``coords`` should govern the result's shape.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
@@ -499,7 +499,7 @@ def broadcast_to_coords(
 
     Dims of ``arr`` not present in ``coords``, and shared dims with
     disagreeing value sets, pass through unchanged so downstream xarray
-    alignment can handle them. Use :func:`align_to_coords` to enforce that
+    alignment can handle them. Use :func:`strict_broadcast_to_coords` to enforce that
     ``arr`` stays within ``coords``.
 
     Implicit MultiIndex-level projections (a level subset, or one that
@@ -588,7 +588,7 @@ def validate_alignment(
             )
 
 
-def align_to_coords(
+def strict_broadcast_to_coords(
     value: Any,
     coords: CoordsLike | None,
     *,
@@ -597,11 +597,11 @@ def align_to_coords(
     **kwargs: Any,
 ) -> DataArray:
     """
-    Convert and broadcast ``value`` against ``coords``, enforcing the coords contract.
+    :func:`broadcast_to_coords` with a strict failure mode.
 
-    On top of :func:`broadcast_to_coords` this requires that ``value`` stays
-    within ``coords``: no extra dims, no disagreeing coord values, and no
-    MultiIndex coverage gaps. Errors are raised as :class:`ValueError` /
+    The same broadcast, but anything it cannot resolve by broadcasting alone
+    raises instead of passing through: extra dims, disagreeing coord values,
+    and MultiIndex coverage gaps. Errors are raised as :class:`ValueError` /
     :class:`TypeError` naming ``label``; coords-parsing errors propagate
     unchanged.
     """

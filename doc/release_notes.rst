@@ -71,7 +71,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Internal**
 
-* ``linopy.common`` provides three DataArray conversion helpers of increasing strictness: ``as_dataarray`` (convert only), ``broadcast_to_coords`` (convert and broadcast against ``coords``), and ``align_to_coords`` (convert, broadcast, and enforce the coords contract).
+* ``linopy.common`` provides three DataArray conversion helpers of increasing strictness: ``as_dataarray`` (convert only), ``broadcast_to_coords`` (convert and broadcast against ``coords``), and ``strict_broadcast_to_coords`` (the same broadcast, but any mismatch raises).
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.

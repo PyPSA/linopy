@@ -20,7 +20,6 @@ from xarray.testing.assertions import assert_equal
 from linopy import EvolvingAPIWarning, LinearExpression, Model, Variable
 from linopy.common import (
     align,
-    align_to_coords,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
@@ -29,6 +28,7 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    strict_broadcast_to_coords,
     validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
@@ -655,7 +655,7 @@ def test_broadcast_to_coords_unrelated_multiindex_series_still_unstacks() -> Non
 
 
 # ---------------------------------------------------------------------------
-# Strictness ladder: as_dataarray ⊂ broadcast_to_coords ⊂ align_to_coords
+# Strictness ladder: as_dataarray ⊂ broadcast_to_coords ⊂ strict_broadcast_to_coords
 # ---------------------------------------------------------------------------
 
 
@@ -671,7 +671,9 @@ def test_as_dataarray_does_not_expand_missing_coord_dims() -> None:
     assert broadcast.dims == ("a", "b")
 
 
-def test_broadcast_to_coords_passes_extra_dims_align_to_coords_rejects() -> None:
+def test_broadcast_to_coords_passes_extra_dims_strict_broadcast_to_coords_rejects() -> (
+    None
+):
     """Extra dims pass through the broadcast rung but fail the strict rung."""
     arr = DataArray(
         [[1, 2], [3, 4]], dims=["a", "t"], coords={"a": [0, 1], "t": [10, 20]}
@@ -682,10 +684,10 @@ def test_broadcast_to_coords_passes_extra_dims_align_to_coords_rejects() -> None
     assert set(da.dims) == {"a", "t"}
 
     with pytest.raises(ValueError, match=r"not declared in coords"):
-        align_to_coords(arr, coords, label="lower bound")
+        strict_broadcast_to_coords(arr, coords, label="lower bound")
 
 
-def test_align_to_coords_rejects_multiindex_coverage_gap() -> None:
+def test_strict_broadcast_to_coords_rejects_multiindex_coverage_gap() -> None:
     """A coverage gap warns on the broadcast rung but raises on the strict rung."""
     idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
     idx.name = "dim_3"
@@ -697,10 +699,10 @@ def test_align_to_coords_rejects_multiindex_coverage_gap() -> None:
         broadcast_to_coords(weights, coords=coords, dims=["dim_3"])
 
     with pytest.raises(ValueError, match=r"does not cover every entry"):
-        align_to_coords(weights, coords, dims=["dim_3"], label="lower bound")
+        strict_broadcast_to_coords(weights, coords, dims=["dim_3"], label="lower bound")
 
 
-def test_align_to_coords_allows_partial_level_broadcast_silently() -> None:
+def test_strict_broadcast_to_coords_allows_partial_level_broadcast_silently() -> None:
     """Per-level bounds broadcast across the MI dim without the arithmetic warning."""
     idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
     idx.name = "dim_3"
@@ -709,7 +711,9 @@ def test_align_to_coords_allows_partial_level_broadcast_silently() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", EvolvingAPIWarning)
-        da = align_to_coords(by_level1, coords, dims=["dim_3"], label="lower bound")
+        da = strict_broadcast_to_coords(
+            by_level1, coords, dims=["dim_3"], label="lower bound"
+        )
 
     assert da.sel(dim_3=(1, "b")).item() == 10.0
     assert da.sel(dim_3=(2, "a")).item() == 20.0
@@ -755,22 +759,24 @@ def test_validate_alignment_label_in_error() -> None:
         validate_alignment(arr, {"a": [0, 1]}, label="lower bound")
 
 
-def test_align_to_coords_wraps_conversion_errors() -> None:
+def test_strict_broadcast_to_coords_wraps_conversion_errors() -> None:
     with pytest.raises(ValueError, match=r"lower bound could not be aligned"):
-        align_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")
+        strict_broadcast_to_coords(
+            np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound"
+        )
 
 
-def test_align_to_coords_preserves_type_errors() -> None:
+def test_strict_broadcast_to_coords_preserves_type_errors() -> None:
     """Unsupported input types stay TypeError (don't become ValueError)."""
     with pytest.raises(TypeError, match=r"lower bound could not be aligned"):
-        align_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
+        strict_broadcast_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
 
 
-def test_align_to_coords_does_not_relabel_coords_errors() -> None:
+def test_strict_broadcast_to_coords_does_not_relabel_coords_errors() -> None:
     """Coords-side TypeError carries its own message, not the value label."""
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
     with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
-        align_to_coords(np.array([1, 2, 3, 4]), [mi], label="lower bound")
+        strict_broadcast_to_coords(np.array([1, 2, 3, 4]), [mi], label="lower bound")
 
 
 class TestCoordsToDictRules:
