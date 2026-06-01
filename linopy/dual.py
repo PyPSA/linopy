@@ -23,23 +23,7 @@ logger = logging.getLogger(__name__)
 def _skip(
     da: xr.DataArray, component_type: Literal["variable", "constraint"], name: str
 ) -> bool:
-    """
-    Determine whether to skip processing a variable or constraint based on its labels.
-
-    Parameters
-    ----------
-    da : xr.DataArray
-        The labels DataArray of the variable or constraint.
-    component_type : Literal["variable", "constraint"]
-        The type of component being checked, used for logging.
-    name : str
-        The name of the variable or constraint, used for logging.
-
-    Returns
-    -------
-    bool
-        True if the component should be skipped (empty or fully masked), False otherwise.
-    """
+    """Return True if the label array is empty or entirely masked (all -1)."""
     if da.size == 0:
         logger.debug(f"Skipping empty {component_type} '{name}'.")
         return True
@@ -50,124 +34,19 @@ def _skip(
     return False
 
 
-def _lookup(
-    labels: xr.DataArray, name: str, component_type: Literal["variable", "constraint"]
-) -> dict[int, tuple[str, dict]]:
-    """
-    Create a lookup dictionary mapping labels to their corresponding names and coordinates.
-
-    Parameters
-    ----------
-    labels : xr.DataArray
-        Array of labels.
-    name : str
-        Name of the component.
-    component_type : Literal["variable", "constraint"]
-        Type of the component.
-
-    Returns
-    -------
-    dict[int, tuple[str, dict]]
-        Mapping from flat integer label to (name, coord_dict) tuple.
-    """
-    lookup: dict[int, tuple[str, dict]] = {}
-
-    vals = labels.values
-    if _skip(labels, component_type, name):
-        return lookup
-
-    logger.debug(
-        f"Creating label lookup for {component_type} '{name}' with shape {labels.shape} and dims {labels.dims}."
-    )
-
-    if labels.ndim == 0:
-        lookup[int(vals.item())] = (name, {})
-        return lookup
-
-    coord_values = [labels.coords[d].values for d in labels.dims]
-
-    # Choosing np.ndindex over np.argwhere or da.to_series for memory efficiency on large n-dimensional arrays
-    for idx in np.ndindex(vals.shape):
-        label = int(vals[idx])
-        if label == -1:
-            continue
-        lookup[label] = (
-            name,
-            {dim: coord_values[i][idx[i]] for i, dim in enumerate(labels.dims)},
-        )
-
-    return lookup
-
-
-def _var_lookup(m: Model) -> dict[int, tuple[str, dict]]:
-    """
-    Build a flat label -> (var_name, coord_dict) lookup for all variables in m.
-
-    Used to map entries in m.matrices.vlabels back to their variable name
-    and xarray coordinates for use in dual feasibility constraint construction.
-
-    Skips masked entries (label == -1) and empty variables.
-
-    Parameters
-    ----------
-    m : Model
-        Primal linopy model.
-
-    Returns
-    -------
-    dict
-        Mapping from flat integer label to (var_name, coord_dict) tuple.
-    """
-    var_lookup = {}
-    logger.debug("Building variable label lookup.")
-    for var_name, var in m.variables.items():
-        lookup = _lookup(var.labels, var_name, "variable")
-        var_lookup.update(lookup)
-    return var_lookup
-
-
-def _con_lookup(m: Model) -> dict[int, tuple[str, dict]]:
-    """
-    Build a flat label -> (con_name, coord_dict) lookup for all constraints in m.
-
-    Used to map entries in m.matrices.clabels back to their constraint name
-    and xarray coordinates for use in dual feasibility constraint construction.
-
-    Skips masked entries (label == -1) and empty or fully-masked constraints.
-
-    Parameters
-    ----------
-    m : Model
-        Primal linopy model.
-
-    Returns
-    -------
-    dict
-        Mapping from flat integer label to (con_name, coord_dict) tuple.
-    """
-    con_lookup = {}
-    logger.debug("Building constraint label lookup.")
-    for con_name, con in m.constraints.items():
-        lookup = _lookup(con.labels, con_name, "constraint")
-        con_lookup.update(lookup)
-    return con_lookup
-
-
 def bounds_to_constraints(m: Model) -> None:
     """
-    Add explicit bound constraints for variables with bounds set directly
-    in the variable rather than via explicit constraints.
+    Convert finite variable bounds to explicit ``>=`` / ``<=`` constraints.
 
-    Adds constraints named '{var_name}-bound-lower' and '{var_name}-bound-upper'
-    to distinguish from PyPSA's automatic '-fix-*' constraints.
-
-    Also resets variable bounds to [-inf, inf] after adding constraints,
-    to avoid double-counting in the dual.
+    Each finite lower bound becomes a ``'{var_name}-bound-lower'`` constraint and
+    each finite upper bound becomes a ``'{var_name}-bound-upper'`` constraint.
+    The variable bounds are then relaxed to ``[-inf, inf]`` to avoid
+    double-counting when the dual is formed.
 
     Parameters
     ----------
     m : Model
-        Linopy model to convert variable bounds to constraints. Mutates the model in-place.
+        Model to mutate in-place.
     """
     logger.debug("Converting variable bounds to explicit constraints.")
     logger.debug("Relaxing variable bounds to [-inf, inf].")
@@ -215,36 +94,34 @@ def bounds_to_constraints(m: Model) -> None:
 
 def _add_dual_variables(m: Model, m2: Model) -> dict:
     """
-    Add dual variables to m2 corresponding to constraints in m..
+    Add one dual variable to m2 for each active constraint in m.
 
-    For each active constraint in m, adds a dual variable to m2 following
-    standard LP duality sign conventions. The sign of the dual variable bounds
-    depends on both the constraint type and the primal objective sense:
+    Dual variable bounds encode the sign convention for each constraint type
+    and primal objective sense:
 
-    For a minimization primal:
-    - Equality constraints (=)  -> free dual variable (lower=-inf, upper=inf)
-    - <= constraints            -> non-positive dual variable (lower=-inf, upper=0)
-    - >= constraints            -> non-negative dual variable (lower=0, upper=inf)
+    ============  ===========  ================  ================
+    Constraint    Primal sense  lower             upper
+    ============  ===========  ================  ================
+    =             min / max     -inf              +inf  (free)
+    <=            min           -inf              0
+    <=            max           0                 +inf
+    >=            min           0                 +inf
+    >=            max           -inf              0
+    ============  ===========  ================  ================
 
-    For a maximization primal:
-    - Equality constraints (=)  -> free dual variable (lower=-inf, upper=inf)
-    - <= constraints            -> non-negative dual variable (lower=0, upper=inf)
-    - >= constraints            -> non-positive dual variable (lower=-inf, upper=0)
-
-    Skips constraints with no active rows (empty or fully masked).
+    Fully masked or empty constraints are skipped.
 
     Parameters
     ----------
     m : Model
-        Primal linopy model containing the constraints to dualize.
+        Primal model.
     m2 : Model
-        Dual linopy model to which dual variables are added.
+        Dual model to populate.
 
     Returns
     -------
     dict
-        Mapping from constraint name (str) to the corresponding dual
-        variable (linopy.Variable) in m2.
+        ``{constraint_name: dual_variable}`` for every dualized constraint.
     """
     primal_is_min = m.objective.sense == "min"
 
@@ -290,165 +167,282 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
     return dual_vars
 
 
-def _build_dual_feas_terms(
-    m: Model,
-    dual_vars: dict,
-    var_lookup: dict,
-    con_lookup: dict,
-) -> dict:
+def _build_con_to_dual_label(m: Model, dual_vars: dict) -> np.ndarray:
     """
-    Build dual feasibility terms for each primal variable in m.
+    Build a flat constraint-label → flat dual-variable-label lookup array.
 
-    For each active primal variable x_j, collects the constraint matrix
-    entries A_ji and their corresponding constraint names and coordinates,
-    forming the terms of the stationarity condition:
-        sum_i (A_ji * lambda_i) = c_j
-
-    Raw constraint matrix coefficients are used directly without sign
-    factors, as the sign convention is encoded in the dual variable bounds:
-    - <= constraints: lambda_i <= 0
-    - >= constraints: lambda_i >= 0
-    - =  constraints: lambda_i free
+    ``result[flat_con_label]`` gives the flat dual variable label in m2,
+    or -1 for constraints not in *dual_vars* or with masked labels.
 
     Parameters
     ----------
     m : Model
-        Primal linopy model.
+        Primal model.
     dual_vars : dict
-        Mapping from constraint name to dual variable in m2,
-        as returned by _add_dual_variables(). Used to skip constraints
-        that were not dualized (e.g. empty or fully masked).
-    var_lookup : dict
-        Mapping from flat variable label to (var_name, coord_dict),
-        as returned by _var_lookup().
-    con_lookup : dict
-        Mapping from flat constraint label to (con_name, coord_dict),
-        as returned by _con_lookup().
+        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
 
     Returns
     -------
-    dict
-        Nested dict: {var_name: {flat_label: (var_coords, terms, obj_coeff)}}
-        where terms is a list of (con_name, con_coords, coeff) tuples.
+    np.ndarray of int64
+        Lookup array of length ``max_flat_con_label + 1``; empty if no valid
+        constraint labels exist.
     """
-    A = m.matrices.A
-    if A is None:
-        raise ValueError("Constraint matrix is None, model has no constraints.")
-    A_csc = A.tocsc()
-    c = m.matrices.c
-    indptr = A_csc.indptr
-    indices = A_csc.indices
-    data = A_csc.data
-    vlabels = m.matrices.vlabels
-    clabels = m.matrices.clabels
+    max_flat_con = -1
+    for con_name in dual_vars:
+        flat = m.constraints[con_name].labels.values.ravel()
+        valid = flat[flat != -1]
+        if len(valid):
+            max_flat_con = max(max_flat_con, int(valid.max()))
 
-    dual_feas_terms: dict[str, dict[int, tuple]] = {
-        var_name: {} for var_name in m.variables
-    }
+    if max_flat_con < 0:
+        return np.array([], dtype=np.int64)
 
-    logger.debug("Building dual feasibility terms for each primal variable.")
+    lookup = np.full(max_flat_con + 1, -1, dtype=np.int64)
+    for con_name, dv in dual_vars.items():
+        con_flat = m.constraints[con_name].labels.values.ravel().astype(np.int64)
+        dv_flat = dv.labels.values.ravel().astype(np.int64)
+        valid = (con_flat != -1) & (dv_flat != -1)
+        if valid.any():
+            lookup[con_flat[valid]] = dv_flat[valid]
 
-    for i in range(A_csc.shape[1]):
-        flat_var = vlabels[i]
-        if flat_var == -1:
-            continue
-        if flat_var not in var_lookup:
-            continue
-        var_name, var_coords = var_lookup[flat_var]
-        terms = []
-        for k in range(indptr[i], indptr[i + 1]):
-            j = indices[k]
-            flat_con = clabels[j]
-            if flat_con == -1:
-                continue
-            if flat_con not in con_lookup:
-                continue
-            con_name, con_coords = con_lookup[flat_con]
-            if con_name not in dual_vars:
-                continue
-            coeff = data[k]
-            terms.append((con_name, con_coords, coeff))
-        dual_feas_terms[var_name][flat_var] = (var_coords, terms, c[i])
+    return lookup
 
-    return dual_feas_terms
+
+def _extract_dual_feas_entries(
+    A: Any,
+    vlabels: np.ndarray,
+    clabels: np.ndarray,
+    flat_con_to_dual: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return ``(flat_var_label, flat_dual_label, coeff)`` for each active NNZ entry of A.
+
+    Converts A to COO, maps rows/columns to flat labels via *clabels* / *vlabels*,
+    and drops entries that are masked or belong to a constraint without a dual variable.
+
+    Parameters
+    ----------
+    A : scipy sparse matrix
+        Primal constraint matrix (any scipy sparse format).
+    vlabels : np.ndarray of int64
+        Flat variable label per column of A; -1 for masked columns.
+    clabels : np.ndarray of int64
+        Flat constraint label per row of A; -1 for masked rows.
+    flat_con_to_dual : np.ndarray of int64
+        Lookup array as returned by _build_con_to_dual_label().
+
+    Returns
+    -------
+    flat_v : np.ndarray of int64
+        Flat primal variable label for each retained entry.
+    flat_d : np.ndarray of int64
+        Corresponding flat dual variable label.
+    coeffs : np.ndarray of float64
+        Corresponding A matrix coefficient.
+    """
+    A_coo = A.tocoo()
+    flat_v = vlabels[A_coo.col].astype(np.int64)
+    flat_c = clabels[A_coo.row].astype(np.int64)
+    coeffs = A_coo.data
+
+    # Drop entries where either label is masked.
+    active = (flat_v != -1) & (flat_c != -1)
+    flat_v, flat_c, coeffs = flat_v[active], flat_c[active], coeffs[active]
+
+    # Map primal constraint labels to flat dual variable labels.
+    n = len(flat_con_to_dual)
+    in_range = flat_c < n
+    flat_d = np.full(len(flat_c), -1, dtype=np.int64)
+    flat_d[in_range] = flat_con_to_dual[flat_c[in_range]]
+
+    # Drop entries with no corresponding dual variable.
+    has_dual = flat_d != -1
+    return flat_v[has_dual], flat_d[has_dual], coeffs[has_dual]
+
+
+def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarray:
+    """
+    Build a flat variable-label → objective-coefficient lookup array.
+
+    ``result[flat_var_label]`` gives the objective coefficient; unlabelled
+    positions are 0.0.
+
+    Parameters
+    ----------
+    vlabels : np.ndarray of int64
+        Flat variable label per column of A; -1 for masked entries.
+    c_vec : np.ndarray of float64
+        Objective coefficient in the same column ordering.
+
+    Returns
+    -------
+    np.ndarray of float64
+        Lookup array of length ``max_flat_var_label + 1``; empty if no valid
+        variable labels exist.
+    """
+    valid_mask = vlabels != -1
+    valid_vlabels = vlabels[valid_mask]
+    if not len(valid_vlabels):
+        return np.array([], dtype=np.float64)
+
+    lookup = np.zeros(int(valid_vlabels.max()) + 1, dtype=np.float64)
+    lookup[valid_vlabels.astype(np.int64)] = c_vec[valid_mask]
+    return lookup
+
+
+def _make_feas_lhs(
+    var: Any,
+    flat_v: np.ndarray,
+    flat_d: np.ndarray,
+    nnz_data: np.ndarray,
+    m2: Model,
+) -> LinearExpression:
+    """
+    Build ``sum_i(A_ji * lambda_i)`` as a LinearExpression over *var*'s coordinates.
+
+    Parameters
+    ----------
+    var : linopy.Variable
+        Primal variable whose stationarity LHS is being constructed.
+    flat_v : np.ndarray of int64
+        Flat primal variable labels for all active NNZ entries, as returned
+        by _extract_dual_feas_entries().
+    flat_d : np.ndarray of int64
+        Corresponding flat dual variable labels.
+    nnz_data : np.ndarray of float64
+        Corresponding A matrix coefficients.
+    m2 : Model
+        Dual model owning the dual variables.
+
+    Returns
+    -------
+    LinearExpression
+        Stationarity LHS over *var*'s coordinate space.  Returns an empty
+        expression (constant zero) when the variable has no constraint connections.
+    """
+    var_flat = var.labels.values.ravel().astype(np.int64)
+    n_elements = len(var_flat)
+    valid_mask = var_flat != -1
+
+    if not valid_mask.any():
+        return LinearExpression(None, m2)
+
+    # Map flat variable labels to ravelled positions (unique per variable type).
+    max_fv = int(var_flat[valid_mask].max())
+    var_to_idx = np.full(max_fv + 1, -1, dtype=np.int64)
+    var_to_idx[var_flat[valid_mask]] = np.where(valid_mask)[0].astype(np.int64)
+
+    # Locate NNZ entries that belong to this variable via bounded lookup.
+    lin_idx = np.full(len(flat_v), -1, dtype=np.int64)
+    in_range = flat_v <= max_fv
+    if in_range.any():
+        lin_idx[in_range] = var_to_idx[flat_v[in_range]]
+
+    keep = lin_idx != -1
+    lin_idx_f, flat_d_f, nnz_f = lin_idx[keep], flat_d[keep], nnz_data[keep]
+
+    if not len(lin_idx_f):
+        return LinearExpression(None, m2)
+
+    # Sort by ravelled position so entries for the same element are contiguous.
+    order = np.argsort(lin_idx_f, kind="stable")
+    lin_idx_s = lin_idx_f[order]
+    flat_d_s = flat_d_f[order]
+    nnz_s = nnz_f[order]
+
+    # Compute within-group term-slot positions (fully vectorised, no Python loop).
+    # group_start[i] is True at the first entry of each new element group.
+    group_start = np.empty(len(lin_idx_s), dtype=bool)
+    group_start[0] = True
+    group_start[1:] = lin_idx_s[1:] != lin_idx_s[:-1]
+    group_ids = np.cumsum(group_start) - 1
+    group_start_pos = np.where(group_start)[0]
+    col_idx = np.arange(len(lin_idx_s), dtype=np.int64) - group_start_pos[group_ids]
+
+    max_terms = int(col_idx.max()) + 1
+
+    # Populate (n_elements, max_terms) arrays via advanced indexing (C-level).
+    dual_labels_2d = np.full((n_elements, max_terms), -1, dtype=np.int64)
+    dual_coeffs_2d = np.zeros((n_elements, max_terms), dtype=np.float64)
+    dual_labels_2d[lin_idx_s, col_idx] = flat_d_s
+    dual_coeffs_2d[lin_idx_s, col_idx] = nnz_s
+
+    # Wrap in a LinearExpression, reshaping to (*var_dims, _term).
+    target_shape = var.labels.shape + (max_terms,)
+    dims = list(var.labels.dims) + ["_term"]
+    ds = xr.Dataset(
+        {
+            "vars": xr.DataArray(dual_labels_2d.reshape(target_shape), dims=dims),
+            "coeffs": xr.DataArray(dual_coeffs_2d.reshape(target_shape), dims=dims),
+        },
+        coords={dim: var.labels.coords[dim] for dim in var.labels.dims},
+    )
+    return LinearExpression(ds, m2)
 
 
 def _add_dual_feasibility_constraints(
     m: Model,
     m2: Model,
     dual_vars: dict,
-    var_lookup: dict,
-    con_lookup: dict,
 ) -> None:
     """
-    Add dual feasibility constraints to m2.
+    Add the stationarity constraint ``sum_i(A_ji * lambda_i) = c_j`` for each primal variable.
 
-    For each primal variable x_j in m, adds the stationarity constraint:
-        sum_i (A_ji * lambda_i) = c_j
-    where:
-    - A is the primal constraint matrix
-    - lambda_i are the dual variables in m2
-    - c_j is the objective coefficient of x_j
-
-    Raw constraint matrix coefficients are used directly without sign factors,
-    because the sign convention is encoded in the dual variable bounds:
-    - <= constraints: lambda_i <= 0
-    - >= constraints: lambda_i >= 0
-    - =  constraints: lambda_i free
-
-    Skips masked variable entries (label == -1) and variables not present
-    in var_lookup (e.g. from empty constraints).
+    Sign conventions are already encoded in the dual variable bounds produced by
+    _add_dual_variables(), so raw A coefficients are used without adjustment.
+    Variables with no constraint connections (e.g. unconstrained free variables)
+    are skipped; the dual is infeasible for such problems if ``c_j != 0``.
 
     Parameters
     ----------
     m : Model
-        Primal linopy model.
+        Primal model.
     m2 : Model
-        Dual linopy model.
+        Dual model to populate.
     dual_vars : dict
-        Mapping from constraint name to dual variable in m2,
-        as returned by _add_dual_variables().
-    var_lookup : dict
-        Mapping from flat variable label to (var_name, coord_dict),
-        as returned by _var_lookup().
-    con_lookup : dict
-        Mapping from flat constraint label to (con_name, coord_dict),
-        as returned by _con_lookup().
+        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
     """
-    dual_feas_terms = _build_dual_feas_terms(m, dual_vars, var_lookup, con_lookup)
+    A = m.matrices.A
+    if A is None:
+        raise ValueError("Constraint matrix is None, model has no constraints.")
 
-    c = m.matrices.c
-    vlabels = m.matrices.vlabels
+    vlabels = np.asarray(m.matrices.vlabels, dtype=np.int64)
+    clabels = np.asarray(m.matrices.clabels, dtype=np.int64)
 
-    # build objective coefficient lookup by flat variable label
-    c_by_label = {vlabels[i]: c[i] for i in range(len(vlabels))}
+    flat_con_to_dual = _build_con_to_dual_label(m, dual_vars)
+    if not len(flat_con_to_dual):
+        logger.warning("No valid constraint labels found, skipping dual feasibility constraints.")
+        return
 
-    # add dual feasibility constraints to m2
-    logger.debug("Adding dual feasibility constraints to model.")
+    flat_v, flat_d, nnz_data = _extract_dual_feas_entries(A, vlabels, clabels, flat_con_to_dual)
+    c_lookup = _build_obj_coeff_lookup(vlabels, m.matrices.c)
+
+    logger.debug("Building dual feasibility constraints for each primal variable.")
     for var_name, var in m.variables.items():
-        mask = var.labels != -1
+        if _skip(var.labels, "variable", var_name):
+            continue
 
+        mask = var.labels != -1
+        var_flat = var.labels.values.ravel().astype(np.int64)
+
+        # RHS: objective coefficient for each element of this variable.
+        in_c_range = (var_flat != -1) & (var_flat < len(c_lookup))
+        safe_flat = np.where(in_c_range, var_flat, 0)
         c_vals = xr.DataArray(
-            np.vectorize(lambda flat: c_by_label.get(flat, 0.0))(var.labels.values),
+            np.where(in_c_range, c_lookup[safe_flat], 0.0).reshape(var.labels.shape),
             coords=var.labels.coords,
         )
 
-        def __rule(m: Model, *coord_vals: Any) -> LinearExpression | None:
-            coord_dict = {
-                str(dim): val for dim, val in zip(var.labels.dims, coord_vals)
-            }
-            flat = var.labels.sel(**coord_dict).item()
-            if flat == -1 or flat not in (term_dict := dual_feas_terms[var_name]):
-                return None
-            _, terms, _ = term_dict[flat]
-            if not terms:
-                return None
-            return sum(
-                coeff * dual_vars[con_name].at[tuple(con_coords.values())]
-                for con_name, con_coords, coeff in terms
+        lhs = _make_feas_lhs(var, flat_v, flat_d, nnz_data, m2)
+        if lhs.is_constant:
+            # Variable has no constraint connections (free, unconstrained variable).
+            # The stationarity condition 0 = c_j cannot be expressed as a linopy
+            # constraint; the dual is infeasible if c_j != 0, trivial if c_j == 0.
+            logger.debug(
+                f"Variable '{var_name}' has no constraint connections; "
+                "skipping dual feasibility constraint."
             )
-
-        lhs = LinearExpression.from_rule(m2, __rule, var.labels.coords)
+            continue
         m2.add_constraints(lhs == c_vals, name=var_name, mask=mask)
 
 
@@ -459,35 +453,28 @@ def _add_dual_objective(
     add_objective_constant: float = 0.0,
 ) -> None:
     """
-    Construct and add the dual objective to m2.
+    Construct and add ``sum(rhs_i * lambda_i)`` as the dual objective of m2.
 
-    The dual objective is sum(rhs * dual) over all constraints, added uniformly
-    with a + sign. The sign convention is encoded in the dual variable bounds:
-    - <= constraints: dual <= 0, so rhs * dual contributes negatively
-    - >= constraints: dual >= 0, so rhs * dual contributes positively
-    - =  constraints: dual free
+    The uniform ``+`` sign is correct because sign conventions are already
+    encoded in the dual variable bounds: a ``<=`` constraint has ``lambda <= 0``,
+    so ``rhs * lambda`` contributes negatively without an explicit sign flip.
+    This aligns with linopy's native dual convention, so
+    ``m2.variables[con_name].solution`` can be compared directly with
+    ``m.constraints[con_name].dual`` after solving.
 
-    This matches linopy's and Gurobi's native dual sign convention, allowing
-    direct comparison between m2.variables[con_name].solution and
-    m.constraints[con_name].dual without sign adjustments.
-
-    The dual objective sense is flipped relative to the primal:
-    - min primal -> max dual
-    - max primal -> min dual
+    The objective sense is flipped: ``min`` primal → ``max`` dual, and vice versa.
 
     Parameters
     ----------
     m : Model
-        Primal linopy model.
+        Primal model.
     m2 : Model
-        Dual linopy model.
+        Dual model to populate.
     dual_vars : dict
-        Mapping from constraint name to dual variable in m2,
-        as returned by _add_dual_variables().
+        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
     add_objective_constant : float, optional
-        Constant term to add to the dual objective. Use this to pass through
-        a primal objective constant excluded via include_objective_constant=False
-        during model creation. Default is 0.0.
+        Constant added to the dual objective, e.g. to pass through a primal
+        objective constant that was excluded from the model.
     """
     dual_obj: LinearExpression = LinearExpression(None, m2)
     sense = "max" if m.objective.sense == "min" else "min"
@@ -551,14 +538,13 @@ def dualize(
         Primal linopy model to dualize. Must have a linear objective and linear constraints.
 
     add_objective_constant : float, optional
-        Constant term to add to the dual objective. Use this to pass through
-        a primal objective constant. Default is 0.0.
+        Constant added to the dual objective, e.g. to pass through a primal
+        objective constant that was excluded from the model.
 
     Returns
     -------
     Model
-        The dual linopy model. Dual variables are named after their
-        corresponding primal constraints.
+        Dual model whose variables are named after the primal constraints.
 
     Examples
     --------
@@ -580,10 +566,8 @@ def dualize(
         return m2
 
     bounds_to_constraints(m1)
-    var_lup = _var_lookup(m1)
-    con_lup = _con_lookup(m1)
     dual_vars = _add_dual_variables(m1, m2)
-    _add_dual_feasibility_constraints(m1, m2, dual_vars, var_lup, con_lup)
+    _add_dual_feasibility_constraints(m1, m2, dual_vars)
     _add_dual_objective(
         m1, m2, dual_vars, add_objective_constant=add_objective_constant
     )
