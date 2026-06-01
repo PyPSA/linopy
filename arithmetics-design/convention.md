@@ -3,8 +3,24 @@
 The strict ("v1") convention for linopy. Goals and rollout plan:
 [`goals.md`](goals.md). The bugs it fixes are catalogued in [#714].
 
-Thirteen sections in three groups: absence (§1–§7), coordinate alignment
-(§8–§11), then constraints and reductions (§12–§13).
+An object-scope statement, then thirteen sections in three groups: absence
+(§1–§7), coordinate alignment (§8–§11), then constraints and reductions
+(§12–§13).
+
+## Object scope
+
+The convention governs every operation a linopy object takes part in,
+whatever the other operand is — a DataArray, a pandas Series or DataFrame, a
+numpy array, a list, or a scalar. A non-linopy operand is converted to a
+labelled array (`as_dataarray` in `linopy.common`) and from there behaves
+exactly like the constant-only expression holding the same values and
+coordinates: `x + arr` builds what `x + arr_expr` builds, for every operator
+and in either operand position. No rule below depends on what type an
+operand arrived as. How an operand *gets* its labels — its own coordinates,
+or pairing by size when it has none — is the alignment group's first rule.
+
+(The lone exception is type-decided: an expression is never a valid divisor,
+so `x / arr` works where `x / arr_expr` raises `TypeError`.)
 
 ## Absence
 
@@ -94,8 +110,22 @@ alignment model (goal 4): coordinates align by *label*, never by position;
 non-shared dimensions broadcast; a mismatch on a shared dimension is resolved
 by an explicit *join*.
 
-**Open question:** how should v1 align *unlabeled* data — a raw numpy array
-carries no labels to match on. Still open.
+Operands that carry coordinates — a DataArray, a pandas Series or DataFrame —
+align by them, under the rules below. *Unlabeled* operands — numpy arrays,
+lists, polars Series — carry no labels to align by, so they pair with the
+linopy operand's dimensions by size: each axis adopts the dimension (and the
+coordinates) whose length matches, and the rules below apply from there. The
+pairing must be determined by the sizes alone. A length-4 array meeting a
+variable with dims `(a: 4, time: 5)` pairs with `a`; meeting a variable with
+dims `(a: 4, b: 4)` it could pair with either, so the operation raises — as
+it does when no dimension matches. The same goes for a 4×4 array against
+`(a: 4, b: 4)`: sizes cannot tell `(a, b)` from `(b, a)`. To name the
+dimensions, wrap the array in a DataArray.
+
+> **TODO — not yet implemented.** Today an unlabeled array pairs with the
+> *leading* dimensions positionally, which silently guesses in the ambiguous
+> cases above. The pairing rule builds on the `as_dataarray` /
+> coords-as-truth seam refactored in [#732] and lands after it.
 
 ### §8. Shared dimensions must match exactly
 
@@ -187,6 +217,7 @@ terms the way `sum` does.
 
 <!-- references -->
 [pyoframe]: https://github.com/Bravos-Power/pyoframe
+[#732]: https://github.com/PyPSA/linopy/pull/732
 [#714]: https://github.com/PyPSA/linopy/issues/714
 [#713]: https://github.com/PyPSA/linopy/issues/713
 [#712]: https://github.com/PyPSA/linopy/issues/712

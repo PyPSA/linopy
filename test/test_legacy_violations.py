@@ -33,6 +33,9 @@ Slice G — reductions skip absent slots (§13):
 Slice F — auxiliary-coordinate conflicts (§11):
     §11 Non-dim coord conflict raises (v1)             → #295
     §11 Non-conflicting aux coords propagate through arithmetic
+
+Slice H — object scope (convention preamble):
+    Non-linopy operands behave exactly like constant-only expressions
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from __future__ import annotations
 import operator
 import warnings
 from collections.abc import Generator
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -48,6 +52,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.config import LinopySemanticsWarning
+from linopy.testing import assert_linequal
 from linopy.variables import Variable
 
 
@@ -1698,3 +1703,118 @@ class TestUserNaNEdgeCases:
         )
         with pytest.raises(ValueError, match="NaN"):
             (x + nan_da) <= 5
+
+
+# =====================================================================
+# Object scope — non-linopy operands behave like constant expressions
+# =====================================================================
+
+
+class TestObjectScope:
+    """
+    Per the convention's object-scope statement, behaviour is
+    object-agnostic: ``x OP arr`` builds exactly what ``x OP arr_expr``
+    builds, where ``arr_expr`` is the constant-only LinearExpression
+    holding ``arr``'s values and coordinates — whatever type ``arr``
+    enters as, in either operand position.
+    """
+
+    _VALUES = [1.0, 2.0, 3.0, 4.0, 5.0]
+
+    @pytest.fixture
+    def da(self, time: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(self._VALUES, dims=["time"], coords={"time": time})
+
+    def raw_and_wrapped(
+        self, kind: str, m: Model, time: pd.RangeIndex, da: xr.DataArray
+    ) -> tuple[Any, Any]:
+        """Return a raw constant of the given kind and its constant-expression twin."""
+        from linopy import LinearExpression
+
+        if kind == "dataarray":
+            return da, LinearExpression(da, m)
+        if kind == "series":
+            return pd.Series(self._VALUES, index=time), LinearExpression(da, m)
+        if kind == "scalar":
+            return 7.5, LinearExpression(7.5, m)
+        raise AssertionError(kind)
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "radd", "rsub", "rmul"])
+    @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
+    def test_op_matches_const_expr_op(
+        self,
+        m: Model,
+        x: Variable,
+        time: pd.RangeIndex,
+        da: xr.DataArray,
+        kind: str,
+        op: str,
+    ) -> None:
+        raw, wrapped = self.raw_and_wrapped(kind, m, time, da)
+        forward = op in ("add", "sub", "mul")
+        opfunc = _OPS[op.removeprefix("r")]
+        if forward:
+            assert_linequal(opfunc(x, raw), opfunc(x, wrapped))
+        else:
+            assert_linequal(opfunc(raw, x), opfunc(wrapped, x))
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
+    def test_distributive_law_mixed_types(
+        self,
+        m: Model,
+        x: Variable,
+        time: pd.RangeIndex,
+        da: xr.DataArray,
+        kind: str,
+    ) -> None:
+        """``(x + y) * arr`` distributes the same whether ``arr`` is raw or wrapped."""
+        raw, wrapped = self.raw_and_wrapped(kind, m, time, da)
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        assert_linequal((x + y) * raw, x * raw + y * raw)
+        assert_linequal((x + y) * raw, (x + y) * wrapped)
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
+    def test_associative_law_mixed_types(
+        self,
+        m: Model,
+        x: Variable,
+        time: pd.RangeIndex,
+        da: xr.DataArray,
+        kind: str,
+    ) -> None:
+        """``(x + arr) + y`` and ``x + (arr + y)`` agree for raw constants."""
+        raw, _ = self.raw_and_wrapped(kind, m, time, da)
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        assert_linequal((x + raw) + y, x + (raw + y))
+
+    @pytest.mark.v1
+    def test_coord_mismatch_raises_on_either_route(self, m: Model, x: Variable) -> None:
+        """§8 fires identically whether the mismatched constant is raw or wrapped."""
+        from linopy import LinearExpression
+
+        mismatched = xr.DataArray(
+            self._VALUES,
+            dims=["time"],
+            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        )
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+            x + mismatched
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+            x + LinearExpression(mismatched, m)
+
+    @pytest.mark.v1
+    def test_division_by_const_expr_is_type_error(
+        self, m: Model, x: Variable, da: xr.DataArray
+    ) -> None:
+        """
+        The one type-decided footnote: a constant can be a divisor, an
+        expression cannot — even one holding only constants.
+        """
+        from linopy import LinearExpression
+
+        x / da  # works: dividing by a constant
+        with pytest.raises(TypeError):
+            x / LinearExpression(da, m)
