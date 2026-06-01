@@ -17,7 +17,14 @@ import xarray as xr
 from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
+from linopy import (
+    EvolvingAPIWarning,
+    LinearExpression,
+    Model,
+    QuadraticExpression,
+    Variable,
+    merge,
+)
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -299,7 +306,8 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    expr = (1 * u) * by_level1
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        expr = (1 * u) * by_level1
 
     coeffs = expr.coeffs.squeeze("_term")
     assert coeffs.sel(dim_3=(1, "a")).item() == 10.0

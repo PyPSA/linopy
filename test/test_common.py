@@ -5,6 +5,7 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -16,7 +17,7 @@ import xarray as xr
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import LinearExpression, Model, Variable
+from linopy import EvolvingAPIWarning, LinearExpression, Model, Variable
 from linopy.common import (
     align,
     align_to_coords,
@@ -548,7 +549,8 @@ def test_as_dataarray_broadcasts_single_multiindex_level() -> None:
     coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
     by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    da = as_dataarray(by_level1, coords=coords, dims=["dim_3"])
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        da = as_dataarray(by_level1, coords=coords, dims=["dim_3"])
 
     assert da.dims == ("dim_3",)
     assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
@@ -573,7 +575,8 @@ def test_as_dataarray_stacks_full_multiindex_levels() -> None:
     subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
     weights = pd.Series([10.0, 20.0], index=subset)
 
-    da = as_dataarray(weights, coords=coords, dims=["dim_3"])
+    with pytest.warns(EvolvingAPIWarning, match=r"filling uncovered entries with NaN"):
+        da = as_dataarray(weights, coords=coords, dims=["dim_3"])
 
     assert da.dims == ("dim_3",)
     assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
@@ -581,6 +584,27 @@ def test_as_dataarray_stacks_full_multiindex_levels() -> None:
     assert da.sel(dim_3=(2, "b")).item() == 20.0
     assert np.isnan(da.sel(dim_3=(1, "b")).item())
     assert np.isnan(da.sel(dim_3=(2, "a")).item())
+
+
+def test_as_dataarray_full_multiindex_full_coverage_is_silent() -> None:
+    """
+    Full-level, fully-covering alignment is convention-clean → no warning.
+
+    Aligning an input that reconstructs the whole MultiIndex onto its dim is
+    equivalent to the input already carrying that dim (future §11), so it must
+    not emit the EvolvingAPIWarning the partial/gap projections do.
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    full = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", EvolvingAPIWarning)
+        da = as_dataarray(full, coords=coords, dims=["dim_3"])
+
+    assert da.dims == ("dim_3",)
+    assert da.values.tolist() == [1.0, 2.0, 3.0, 4.0]
 
 
 def test_as_dataarray_level_projection_ambiguous_raises() -> None:

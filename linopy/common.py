@@ -31,6 +31,7 @@ from linopy.config import options
 from linopy.constants import (
     HELPER_DIMS,
     SIGNS,
+    EvolvingAPIWarning,
     SIGNS_alternative,
     SIGNS_pretty,
     sign_replace_dict,
@@ -304,6 +305,14 @@ def _project_onto_multiindex_levels(
     (ambiguous) or if a referenced level value is missing from ``arr``. When
     ``enforce_coverage`` is set, also raises if the projection leaves entries
     of ``D`` uncovered (the input did not span the full MultiIndex).
+
+    On the non-enforcing (arithmetic) path, projections that the v1
+    arithmetic convention will require the caller to make explicit emit an
+    :class:`~linopy.EvolvingAPIWarning`: aligning a *subset* of ``D``'s
+    levels (an implicit broadcast — future §9/§10) and aligning the full
+    level set when it leaves gaps (an implicit NaN-fill — future §5/§8).
+    Aligning the full level set with full coverage is convention-clean and
+    stays silent.
     """
     level_owner: dict[Hashable, Hashable] = {}
     owner_mi: dict[Hashable, pd.MultiIndex] = {}
@@ -345,10 +354,27 @@ def _project_onto_multiindex_levels(
                 f"{dim!r}: value {err} is missing."
             ) from err
         arr = arr.assign_coords(Coordinates.from_pandas_multiindex(mi, dim))
-        if enforce_coverage and bool(arr.isnull().any()):
-            raise ValueError(
-                f"Input does not cover every entry of MultiIndex dimension "
-                f"{dim!r} (aligned from level(s) {levels})."
+        is_partial = len(levels) < sum(name is not None for name in mi.names)
+        has_gap = bool(arr.isnull().any())
+        if enforce_coverage:
+            if has_gap:
+                raise ValueError(
+                    f"Input does not cover every entry of MultiIndex dimension "
+                    f"{dim!r} (aligned from level(s) {levels})."
+                )
+        elif is_partial or has_gap:
+            kind = (
+                f"broadcasting level subset {levels}"
+                if is_partial
+                else f"filling uncovered entries with NaN (from level(s) {levels})"
+            )
+            warn(
+                f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                f"dimension {dim!r}. The v1 arithmetic convention will require "
+                f"this to be explicit; reindex onto the dimension or use a "
+                f"named method with `join=` to keep current behavior.",
+                EvolvingAPIWarning,
+                stacklevel=2,
             )
 
     return arr
