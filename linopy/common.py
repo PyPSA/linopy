@@ -231,6 +231,22 @@ def as_dataarray(
     dims are neither expanded, reordered, nor projected onto MultiIndex
     dims. Use :func:`broadcast_to_coords` or :func:`strict_broadcast_to_coords` when
     ``coords`` should govern the result's shape.
+
+    Parameters
+    ----------
+    arr
+        The input to convert.
+    coords
+        Coordinate values used to label positional axes.
+    dims
+        Dimension names used to label positional axes.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        The converted input, dims and entries as ``arr`` provides them.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -505,6 +521,24 @@ def broadcast_to_coords(
     Implicit MultiIndex-level projections (a level subset, or one that
     leaves entries uncovered) emit an :class:`~linopy.EvolvingAPIWarning`;
     the v1 arithmetic convention will require them to be explicit.
+
+    Parameters
+    ----------
+    arr
+        The input to convert and broadcast.
+    coords
+        Coordinate values the result is broadcast against. ``None`` falls
+        back to plain conversion.
+    dims
+        Dimension names used to label positional axes.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        Broadcast against ``coords``; extra dims and disagreeing entries
+        pass through.
     """
     da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
     for p in projections:
@@ -608,6 +642,24 @@ def strict_broadcast_to_coords(
     levels) are silent here — they are the documented bounds-broadcast
     feature, not the arithmetic-convention concern that makes
     :func:`broadcast_to_coords` warn.
+
+    Parameters
+    ----------
+    arr
+        The input to convert and broadcast.
+    coords
+        Coordinate values the result must stay within.
+    label
+        Name of the argument in error messages (e.g. ``"lower bound"``).
+    dims
+        Dimension names used to label positional axes.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        Broadcast against ``coords`` and verified to stay within it.
     """
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
