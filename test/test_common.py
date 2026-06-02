@@ -755,6 +755,12 @@ def test_validate_alignment_label_in_error() -> None:
         validate_alignment(arr, {"a": [0, 1]}, label="lower bound")
 
 
+def test_broadcast_to_coords_strict_requires_label() -> None:
+    """strict=True without label raises: errors must name their subject."""
+    with pytest.raises(TypeError, match=r"requires `label`"):
+        broadcast_to_coords(np.array([1, 2]), {"x": [0, 1]})  # type: ignore[call-overload]
+
+
 def test_broadcast_to_coords_wraps_conversion_errors() -> None:
     with pytest.raises(ValueError, match=r"lower bound could not be aligned"):
         broadcast_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")

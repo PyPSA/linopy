@@ -12,7 +12,7 @@ import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -498,6 +498,30 @@ def _broadcast_to_coords(
     return arr, projections
 
 
+@overload
+def broadcast_to_coords(
+    arr: Any,
+    coords: CoordsLike | None = ...,
+    dims: DimsLike | None = ...,
+    *,
+    strict: Literal[True] = ...,
+    label: str,
+    **kwargs: Any,
+) -> DataArray: ...
+
+
+@overload
+def broadcast_to_coords(
+    arr: Any,
+    coords: CoordsLike | None = ...,
+    dims: DimsLike | None = ...,
+    *,
+    strict: Literal[False],
+    label: None = ...,
+    **kwargs: Any,
+) -> DataArray: ...
+
+
 def broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
@@ -542,8 +566,8 @@ def broadcast_to_coords(
         Check that the result stays within ``coords`` (raise on violation)
         instead of passing violations through.
     label
-        Name of the argument in error messages (e.g. ``"lower bound"``);
-        only used when ``strict=True``.
+        Name of the input in error messages (e.g. ``"lower bound"``).
+        Required when ``strict=True``, not accepted otherwise.
     **kwargs
         Forwarded to the underlying DataArray construction.
 
@@ -571,7 +595,12 @@ def broadcast_to_coords(
                 )
         return da
 
-    subject = label or "Value"
+    if label is None:
+        raise TypeError(
+            "broadcast_to_coords(strict=True) requires `label` to name the "
+            "input in error messages, e.g. label='lower bound'."
+        )
+    subject = label
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
     try:
