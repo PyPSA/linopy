@@ -34,7 +34,7 @@ def _skip(
     return False
 
 
-def bounds_to_constraints(m: Model) -> None:
+def _lift_bounds_to_constraints(m: Model) -> None:
     """
     Convert finite variable bounds to explicit ``>=`` / ``<=`` constraints.
 
@@ -217,7 +217,7 @@ def _extract_dual_feas_entries(
     """
     Return ``(flat_var_label, flat_dual_label, coeff)`` for each active NNZ entry of A.
 
-    Converts A to COO, maps rows/columns to flat labels via *clabels* / *vlabels*,
+    Converts sparse matrix A to coordinate format, maps rows/columns to flat labels via *clabels* / *vlabels*,
     and drops entries that are masked or belong to a constraint without a dual variable.
 
     Parameters
@@ -411,10 +411,14 @@ def _add_dual_feasibility_constraints(
 
     flat_con_to_dual = _build_con_to_dual_label(m, dual_vars)
     if not len(flat_con_to_dual):
-        logger.warning("No valid constraint labels found, skipping dual feasibility constraints.")
+        logger.warning(
+            "No valid constraint labels found, skipping dual feasibility constraints."
+        )
         return
 
-    flat_v, flat_d, nnz_data = _extract_dual_feas_entries(A, vlabels, clabels, flat_con_to_dual)
+    flat_v, flat_d, nnz_data = _extract_dual_feas_entries(
+        A, vlabels, clabels, flat_con_to_dual
+    )
     c_lookup = _build_obj_coeff_lookup(vlabels, m.matrices.c)
 
     logger.debug("Building dual feasibility constraints for each primal variable.")
@@ -520,7 +524,7 @@ def dualize(
     μ >= 0 for <= constraints, ν <= 0 for >= constraints.
 
     Variable bounds are converted to explicit constraints before dualization
-    via bounds_to_constraints(), so that they appear in the constraint matrix
+    via _lift_bounds_to_constraints(), so that they appear in the constraint matrix
     A and are correctly reflected in the dual.
 
     The dual variables in m2 are named identically to their corresponding
@@ -565,7 +569,7 @@ def dualize(
         )
         return m2
 
-    bounds_to_constraints(m1)
+    _lift_bounds_to_constraints(m1)
     dual_vars = _add_dual_variables(m1, m2)
     _add_dual_feasibility_constraints(m1, m2, dual_vars)
     _add_dual_objective(

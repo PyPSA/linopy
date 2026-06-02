@@ -8,7 +8,7 @@ import pytest
 import xarray as xr
 
 from linopy import Model
-from linopy.dual import bounds_to_constraints, dualize
+from linopy.dual import dualize
 from linopy.solvers import licensed_solvers
 
 _lp_solver = next((s for s in ("highs", "glpk", "scip") if s in licensed_solvers), None)
@@ -96,7 +96,9 @@ def test_dual_sign_conventions_max():
 def test_dual_feasibility_rhs_equals_objective_coefficients():
     """The dual feasibility constraint RHS must equal the primal objective coefficient."""
     m = Model()
-    x = m.add_variables(lower=-np.inf, upper=np.inf, coords=[pd.RangeIndex(4)], name="x")
+    x = m.add_variables(
+        lower=-np.inf, upper=np.inf, coords=[pd.RangeIndex(4)], name="x"
+    )
     m.add_constraints(x == np.array([1.0, 2.0, 3.0, 4.0]), name="eq")
     c = np.array([10.0, 20.0, 30.0, 40.0])
     m.add_objective(c * x)
@@ -109,7 +111,9 @@ def test_dual_multi_constraint_per_variable():
     """Each primal variable appearing in k constraints produces k terms in its dual feas constraint."""
     m = Model()
     n = 3
-    x = m.add_variables(lower=-np.inf, upper=np.inf, coords=[pd.RangeIndex(n)], name="x")
+    x = m.add_variables(
+        lower=-np.inf, upper=np.inf, coords=[pd.RangeIndex(n)], name="x"
+    )
     # Two equality constraints, both using x
     m.add_constraints(x == 1.0, name="c1")
     m.add_constraints(2.0 * x == 2.0, name="c2")
@@ -121,19 +125,6 @@ def test_dual_multi_constraint_per_variable():
     # Should have 2 terms (one from c1, one from c2)
     n_terms = (con_x.vars != -1).sum(dim="_term").max().item()
     assert n_terms == 2
-
-
-def test_bounds_to_constraints_removes_bounds():
-    """bounds_to_constraints should add constraints and relax variable bounds."""
-    m = Model()
-    m.add_variables(lower=1.0, upper=5.0, coords=[pd.RangeIndex(3)], name="x")
-
-    bounds_to_constraints(m)
-
-    assert "x-bound-lower" in m.constraints
-    assert "x-bound-upper" in m.constraints
-    assert np.all(np.isinf(m.variables["x"].lower.values))
-    assert np.all(np.isinf(m.variables["x"].upper.values))
 
 
 def test_dual_with_masked_variable():
@@ -152,7 +143,9 @@ def test_dual_with_masked_variable():
 def test_dual_free_unconstrained_variable_no_error():
     """A free variable with no constraint connections is silently skipped."""
     m = Model()
-    m.add_variables(lower=-np.inf, upper=np.inf, name="x")  # no bounds → no bound constraints
+    m.add_variables(
+        lower=-np.inf, upper=np.inf, name="x"
+    )  # no bounds → no bound constraints
     y = m.add_variables(lower=-np.inf, upper=np.inf, name="y")
     m.add_constraints(y == 5, name="eq")
     m.add_objective(y)  # x has no connections at all
@@ -236,5 +229,3 @@ def test_strong_duality_maximization():
     primal_obj = _solve(m)
     dual_obj = _solve(m.dualize())
     assert abs(primal_obj - dual_obj) < 1e-5
-
-
