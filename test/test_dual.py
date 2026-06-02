@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from _pytest.logging import LogCaptureFixture
 
 from linopy import Model
 from linopy.dual import (
@@ -21,7 +24,7 @@ needs_solver = pytest.mark.skipif(_lp_solver is None, reason="No LP solver avail
 
 
 # Structural tests for important internal functions
-def test_build_label_to_flat_index_lookup():
+def test_build_label_to_flat_index_lookup() -> None:
     """Flat labels are mapped to their positions in the flattened label array."""
     labels = np.array([10, -1, 12, 99], dtype=np.int64)
 
@@ -33,7 +36,7 @@ def test_build_label_to_flat_index_lookup():
     assert lookup[11] == -1
 
 
-def test_build_label_to_flat_index_lookup_all_masked():
+def test_build_label_to_flat_index_lookup_all_masked() -> None:
     """An all-masked label array produces an empty lookup."""
     labels = np.array([-1, -1], dtype=np.int64)
 
@@ -43,7 +46,7 @@ def test_build_label_to_flat_index_lookup_all_masked():
     assert len(lookup) == 0
 
 
-def test_lookup_flat_indices_bounds_safe():
+def test_lookup_flat_indices_bounds_safe() -> None:
     """Out-of-range and masked labels safely map to -1."""
     lookup = np.array([-1, -1, 5, -1, 7], dtype=np.int64)
     labels = np.array([-1, 0, 2, 4, 99], dtype=np.int64)
@@ -56,7 +59,7 @@ def test_lookup_flat_indices_bounds_safe():
     )
 
 
-def test_term_slots_for_sorted_flat_indices():
+def test_term_slots_for_sorted_flat_indices() -> None:
     """Repeated sorted flat indices are assigned increasing term slots."""
     sorted_flat_indices = np.array([2, 2, 2, 5, 5, 9], dtype=np.int64)
 
@@ -69,7 +72,7 @@ def test_term_slots_for_sorted_flat_indices():
 
 
 # Structural tests (no solver required)
-def test_dualize_empty_model():
+def test_dualize_empty_model() -> None:
     """Dualizing an empty model returns an empty dual model."""
     m = Model()
     m_dual = dualize(m)
@@ -77,7 +80,7 @@ def test_dualize_empty_model():
     assert len(m_dual.constraints) == 0
 
 
-def test_variable_bounds_lifted_to_dual_variables():
+def test_variable_bounds_lifted_to_dual_variables() -> None:
     """Finite variable bounds are converted into dual variables."""
     m = Model()
     x = m.add_variables(lower=1, upper=3, name="x")
@@ -89,7 +92,7 @@ def test_variable_bounds_lifted_to_dual_variables():
     assert "x-bound-upper" in m_dual.variables
 
 
-def test_dual_variables_named_after_primal_constraints():
+def test_dual_variables_named_after_primal_constraints() -> None:
     """Dual variables use the names of their corresponding primal constraints."""
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(3)], name="x")
@@ -101,7 +104,7 @@ def test_dual_variables_named_after_primal_constraints():
     assert "x-bound-lower" in m_dual.variables
 
 
-def test_dual_feasibility_constraints_named_after_primal_variables():
+def test_dual_feasibility_constraints_named_after_primal_variables() -> None:
     """Dual-feasibility constraints use the names of the primal variables."""
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(3)], name="x")
@@ -112,7 +115,7 @@ def test_dual_feasibility_constraints_named_after_primal_variables():
     assert "x" in m_dual.constraints
 
 
-def test_dual_objective_sense_flipped_min():
+def test_dual_objective_sense_flipped_min() -> None:
     """A minimization primal produces a maximization dual."""
     m = Model()
     x = m.add_variables(lower=0, name="x")
@@ -123,7 +126,7 @@ def test_dual_objective_sense_flipped_min():
     assert m_dual.objective.sense == "max"
 
 
-def test_dual_objective_sense_flipped_max():
+def test_dual_objective_sense_flipped_max() -> None:
     """A maximization primal produces a minimization dual."""
     m = Model()
     x = m.add_variables(upper=10, name="x")
@@ -134,7 +137,7 @@ def test_dual_objective_sense_flipped_max():
     assert m_dual.objective.sense == "min"
 
 
-def test_dual_sign_conventions_min():
+def test_dual_sign_conventions_min() -> None:
     """For a min primal: <= -> dual <= 0, >= -> dual >= 0, = -> dual free."""
     m = Model()
     x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
@@ -150,7 +153,7 @@ def test_dual_sign_conventions_min():
     assert m_dual.variables["geq"].lower.item() == 0
 
 
-def test_dual_sign_conventions_max():
+def test_dual_sign_conventions_max() -> None:
     """For a max primal: <= -> dual >= 0, >= -> dual <= 0."""
     m = Model()
     x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
@@ -163,7 +166,7 @@ def test_dual_sign_conventions_max():
     assert m_dual.variables["geq"].upper.item() == 0
 
 
-def test_dual_feasibility_rhs_equals_objective_coefficients():
+def test_dual_feasibility_rhs_equals_objective_coefficients() -> None:
     """The dual feasibility RHS equals the primal objective coefficient."""
     m = Model()
     x = m.add_variables(
@@ -177,7 +180,7 @@ def test_dual_feasibility_rhs_equals_objective_coefficients():
     np.testing.assert_allclose(m_dual.constraints["x"].rhs.values, c)
 
 
-def test_dual_multi_constraint_per_variable():
+def test_dual_multi_constraint_per_variable() -> None:
     """A variable appearing in k constraints gets k dual-feasibility terms."""
     m = Model()
     n = 3
@@ -197,7 +200,7 @@ def test_dual_multi_constraint_per_variable():
     assert n_terms == 2
 
 
-def test_dual_with_masked_variable():
+def test_dual_with_masked_variable() -> None:
     """Partially masked variables only produce constraints for unmasked elements."""
     m = Model()
     mask = xr.DataArray([True, False, True], dims=["dim_0"])
@@ -212,7 +215,7 @@ def test_dual_with_masked_variable():
     ).sum().item() == 2  # only 2 unmasked elements
 
 
-def test_dual_free_unconstrained_zero_cost_variable_no_error():
+def test_dual_free_unconstrained_zero_cost_variable_no_error() -> None:
     """A disconnected zero-cost free variable is skipped."""
     m = Model()
     m.add_variables(
@@ -227,7 +230,9 @@ def test_dual_free_unconstrained_zero_cost_variable_no_error():
     assert "x" not in m_dual.constraints  # no constraint connections
 
 
-def test_dual_free_unconstrained_variable_with_objective_warns(caplog):
+def test_dual_free_unconstrained_variable_with_objective_warns(
+    caplog: LogCaptureFixture,
+) -> None:
     """A disconnected variable with nonzero objective coefficient is reported."""
     m = Model()
     x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
@@ -247,7 +252,7 @@ def test_dual_free_unconstrained_variable_with_objective_warns(caplog):
     )
 
 
-def test_dual_multi_constraint_per_variable_coefficients():
+def test_dual_multi_constraint_per_variable_coefficients() -> None:
     """Dual-feasibility terms keep the correct A-matrix coefficients."""
     m = Model()
     x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
@@ -264,15 +269,15 @@ def test_dual_multi_constraint_per_variable_coefficients():
 
 
 # Numerical tests (require solver)
-def _solve(model, **kwargs):
+def _solve(model: Model, **kwargs: Any) -> float:
     """Solve a model with the available LP solver and return its objective value."""
     assert _lp_solver is not None
     model.solve(solver_name=_lp_solver, io_api="lp", **kwargs)
-    return model.objective.value
+    return float(model.objective.value)
 
 
 @needs_solver
-def test_strong_duality_simple():
+def test_strong_duality_simple() -> None:
     """Strong duality: primal obj == dual obj at optimality."""
     m = Model()
     x = m.add_variables(lower=0, name="x")
@@ -287,7 +292,7 @@ def test_strong_duality_simple():
 
 
 @needs_solver
-def test_strong_duality_array_variable():
+def test_strong_duality_array_variable() -> None:
     """Strong duality with array variables."""
     rng = np.random.default_rng(0)
     n = 6
@@ -314,7 +319,7 @@ def test_strong_duality_array_variable():
 
 
 @needs_solver
-def test_strong_duality_mixed_constraint_types():
+def test_strong_duality_mixed_constraint_types() -> None:
     """Strong duality with =, <=, >= constraints."""
     m = Model()
     x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
@@ -330,7 +335,7 @@ def test_strong_duality_mixed_constraint_types():
 
 
 @needs_solver
-def test_strong_duality_maximization():
+def test_strong_duality_maximization() -> None:
     """Strong duality for a maximization primal."""
     m = Model()
     x = m.add_variables(lower=0, name="x")
