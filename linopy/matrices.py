@@ -71,29 +71,55 @@ class MatrixAccessor:
 
     def _build_cons(self) -> None:
         m = self._parent
-
-        if not len(m.constraints):
-            self.clabels: ndarray = np.array([], dtype=np.intp)
-            self.b: ndarray = np.array([])
-            self.sense: ndarray = np.array([], dtype=object)
-            self.A: scipy.sparse.csr_array | None = None
-            return
-
         label_index = m.variables.label_index
-        csrs = []
-        b_list = []
-        sense_list = []
-        for c in m.constraints.data.values():
-            csr, _, b, sense = c.to_matrix_with_rhs(label_index)
-            csrs.append(csr)
-            b_list.append(b)
-            sense_list.append(sense)
+        label_to_pos = label_index.label_to_pos
 
-        self.A = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
-        self.clabels = m.constraints.label_index.clabels
-        self.b = np.concatenate(b_list) if b_list else np.array([])
-        self.sense = (
-            np.concatenate(sense_list) if sense_list else np.array([], dtype=object)
+        reg_csrs, reg_b, reg_sense = [], [], []
+        ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
+        for c in m.constraints.data.values():
+            if c.is_indicator:
+                cc = c if isinstance(c, CSRConstraint) else c.freeze()
+                csr, _, b, sense = cc.to_matrix_with_rhs(label_index)
+                ind_csrs.append(csr)
+                ind_b.append(b)
+                ind_sense.append(sense)
+                ind_binvar.append(label_to_pos[cc._binvar_labels])
+                binval = cc._binval
+                n = len(b)
+                if np.ndim(binval) == 0:
+                    ind_binval.append(np.full(n, int(binval), dtype=np.intp))
+                else:
+                    ind_binval.append(np.asarray(binval, dtype=np.intp).ravel())
+            else:
+                csr, _, b, sense = c.to_matrix_with_rhs(label_index)
+                reg_csrs.append(csr)
+                reg_b.append(b)
+                reg_sense.append(sense)
+
+        self.clabels: ndarray = m.constraints.label_index.clabels
+        self.A: scipy.sparse.csr_array | None = (
+            cast(scipy.sparse.csr_array, scipy.sparse.vstack(reg_csrs, format="csr"))
+            if reg_csrs
+            else None
+        )
+        self.b: ndarray = np.concatenate(reg_b) if reg_b else np.array([])
+        self.sense: ndarray = (
+            np.concatenate(reg_sense) if reg_sense else np.array([], dtype=object)
+        )
+        self.indicator_A: scipy.sparse.csr_array | None = (
+            cast(scipy.sparse.csr_array, scipy.sparse.vstack(ind_csrs, format="csr"))
+            if ind_csrs
+            else None
+        )
+        self.indicator_b: ndarray = np.concatenate(ind_b) if ind_b else np.array([])
+        self.indicator_sense: ndarray = (
+            np.concatenate(ind_sense) if ind_sense else np.array([], dtype=object)
+        )
+        self.indicator_binvar: ndarray = (
+            np.concatenate(ind_binvar) if ind_binvar else np.array([], dtype=np.intp)
+        )
+        self.indicator_binval: ndarray = (
+            np.concatenate(ind_binval) if ind_binval else np.array([], dtype=np.intp)
         )
 
     @property
@@ -156,6 +182,8 @@ class MatrixAccessor:
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
+            if c.is_indicator:
+                continue
             if isinstance(c, CSRConstraint):
                 # _dual is active-only
                 if c._dual is not None:

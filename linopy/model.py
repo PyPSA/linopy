@@ -219,7 +219,6 @@ class Model:
         # containers
         "_variables",
         "_constraints",
-        "_indicator_constraints",
         "_objective",
         "_parameters",
         "_solution",
@@ -230,10 +229,8 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
-        "_icCounter",
         "_varnameCounter",
         "_connameCounter",
-        "_icnameCounter",
         "_pwlCounter",
         "_blocks",
         # TODO: check if these should not be mutable
@@ -294,7 +291,6 @@ class Model:
         """
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
-        self._indicator_constraints: dict[str, Dataset] = {}
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
 
@@ -302,10 +298,8 @@ class Model:
         self._termination_condition: str = ""
         self._xCounter: int = 0
         self._cCounter: int = 0
-        self._icCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
-        self._icnameCounter: int = 0
         self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
@@ -372,14 +366,14 @@ class Model:
         return self._constraints
 
     @property
-    def indicator_constraints(self) -> dict[str, Dataset]:
+    def indicator_constraints(self) -> Constraints:
         """
         Indicator constraints assigned to the model.
 
-        Each entry is a Dataset with fields: coeffs, vars, sign, rhs,
-        labels, binary_var, binary_val.
+        Returns the subset of ``model.constraints`` for which
+        ``is_indicator`` is True.
         """
-        return self._indicator_constraints
+        return self.constraints.indicator
 
     @property
     def objective(self) -> Objective:
@@ -1114,7 +1108,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | None = None,
         name: str | None = None,
-    ) -> Dataset:
+    ) -> Constraint:
         """
         Add indicator constraints to the model.
 
@@ -1144,8 +1138,8 @@ class Model:
 
         Returns
         -------
-        xarray.Dataset
-            The stored indicator constraint data.
+        linopy.Constraint
+            The added indicator constraint.
         """
         if not binary_var.attrs.get("binary", False):
             raise ValueError(
@@ -1156,13 +1150,11 @@ class Model:
         if binary_val not in (0, 1):
             raise ValueError(f"binary_val must be 0 or 1, got {binary_val}.")
 
-        if name in self._indicator_constraints:
-            raise ValueError(
-                f"Indicator constraint '{name}' already assigned to model."
-            )
-        if name is None:
-            name = f"indcon{self._icnameCounter}"
-            self._icnameCounter += 1
+        if name in list(self.constraints):
+            raise ValueError(f"Constraint '{name}' already assigned to model.")
+        elif name is None:
+            name = f"indcon{self._connameCounter}"
+            self._connameCounter += 1
 
         # Build constraint data from lhs
         if isinstance(lhs, Constraint):
@@ -1191,36 +1183,28 @@ class Model:
                 f"got {type(lhs)}."
             )
 
-        # Add binary variable labels and value
-        binary_var_labels = binary_var.labels
-        data["binary_var"] = binary_var_labels
+        data["binary_var"] = binary_var.labels
         data["binary_val"] = binary_val
 
-        # Broadcast all fields together
+        data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
-        # Assign unique labels with the same shape as rhs (non-term dims)
-        labels = DataArray(
-            np.full(data.rhs.shape, -1, dtype=int),
-            coords=data.rhs.coords,
-            dims=data.rhs.dims,
-        )
-        data["labels"] = labels
-        start = self._icCounter
+        start = self._cCounter
         end = start + data.labels.size
         data.labels.values = np.arange(start, end).reshape(data.labels.shape)
-        self._icCounter += data.labels.size
+        self._cCounter += data.labels.size
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
-        self._indicator_constraints[name] = data
-        return data
+        con = Constraint(data, name=name, model=self, skip_broadcast=True)
+        freeze = self.freeze_constraints
+        return self.constraints.add(con, freeze=freeze and not self.chunk)
 
     def remove_indicator_constraints(self, name: str) -> None:
         """
         Remove indicator constraint by name.
         """
-        del self._indicator_constraints[name]
+        self.constraints.remove(name)
 
     def add_objective(
         self,
@@ -2013,6 +1997,8 @@ class Model:
         if len(result.solution.dual):
             dual = result.solution.dual
             for _, con in self.constraints.items():
+                if con.is_indicator:
+                    continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 con.dual = xr.DataArray(
