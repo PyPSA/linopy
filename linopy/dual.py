@@ -43,53 +43,118 @@ def _lift_bounds_to_constraints(m: Model) -> None:
     The variable bounds are then relaxed to ``[-inf, inf]`` to avoid
     double-counting when the dual is formed.
 
+    Bounds may vary elementwise within one variable block. Infinite bounds are
+    not converted into constraints.
+
     Parameters
     ----------
     m : Model
         Model to mutate in-place.
     """
-    logger.debug("Converting variable bounds to explicit constraints.")
-    logger.debug("Relaxing variable bounds to [-inf, inf].")
+    logger.debug("Converting finite variable bounds to explicit constraints.")
+    logger.debug("Relaxing converted variable bounds to [-inf, inf].")
+
     for var_name, var in m.variables.items():
-        mask = var.labels != -1
+        label_mask = var.labels != -1
         lb = var.lower
         ub = var.upper
 
-        # lower bound
+        finite_lb = xr.DataArray(
+            np.isfinite(lb.values),
+            coords=lb.coords,
+            dims=lb.dims,
+        )
+        finite_ub = xr.DataArray(
+            np.isfinite(ub.values),
+            coords=ub.coords,
+            dims=ub.dims,
+        )
+
+        lower_mask = label_mask & finite_lb
+        upper_mask = label_mask & finite_ub
+
+        # Lower bound.
         if f"{var_name}-bound-lower" not in m.constraints:
-            has_finite_lb = np.isfinite(lb.values[mask.values]).any()
-            if has_finite_lb:
+            if bool(lower_mask.any()):
                 m.add_constraints(
                     var >= lb,
                     name=f"{var_name}-bound-lower",
-                    mask=mask,
+                    mask=lower_mask,
                 )
                 logger.debug(f"Added lower bound constraint for '{var_name}'.")
-                # Remove bounds to avoid double-counting in the dual.
+
+                # Remove converted bounds to avoid double-counting in the dual.
                 # Rely on the new constraints instead.
-                var.lower.values[mask.values] = -np.inf
+                var.lower.values[lower_mask.values] = -np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite lower bound, skipping."
                 )
 
-        # upper bound
+        # Upper bound.
         if f"{var_name}-bound-upper" not in m.constraints:
-            has_finite_ub = np.isfinite(ub.values[mask.values]).any()
-            if has_finite_ub:
+            if bool(upper_mask.any()):
                 m.add_constraints(
                     var <= ub,
                     name=f"{var_name}-bound-upper",
-                    mask=mask,
+                    mask=upper_mask,
                 )
                 logger.debug(f"Added upper bound constraint for '{var_name}'.")
-                # Remove bounds to avoid double-counting in the dual.
+
+                # Remove converted bounds to avoid double-counting in the dual.
                 # Rely on the new constraints instead.
-                var.upper.values[mask.values] = np.inf
+                var.upper.values[upper_mask.values] = np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite upper bound, skipping."
                 )
+
+
+def _dual_bounds_from_constraint_signs(
+    signs: xr.DataArray,
+    labels: xr.DataArray,
+    primal_is_min: bool,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    """
+    Return elementwise dual-variable bounds for constraint signs.
+
+    ``signs`` is broadcast to ``labels``. Valid signs are ``=``, ``<=``, and
+    ``>=``. ``valid_sign`` is True where the broadcast sign is valid.
+    """
+    signs = signs.broadcast_like(labels)
+
+    is_eq = signs == "="
+    is_le = signs == "<="
+    is_ge = signs == ">="
+    valid_sign = is_eq | is_le | is_ge
+
+    # Bounds for invalid signs are irrelevant because invalid entries are
+    # masked out by the caller. Use finite placeholders to avoid NaNs.
+    lower = xr.zeros_like(labels, dtype=float)
+    upper = xr.zeros_like(labels, dtype=float)
+
+    # Equality constraints: dual variable is free.
+    lower = lower.where(~is_eq, -np.inf)
+    upper = upper.where(~is_eq, np.inf)
+
+    if primal_is_min:
+        # <= constraints in a min primal: dual <= 0.
+        lower = lower.where(~is_le, -np.inf)
+        upper = upper.where(~is_le, 0.0)
+
+        # >= constraints in a min primal: dual >= 0.
+        lower = lower.where(~is_ge, 0.0)
+        upper = upper.where(~is_ge, np.inf)
+    else:
+        # <= constraints in a max primal: dual >= 0.
+        lower = lower.where(~is_le, 0.0)
+        upper = upper.where(~is_le, np.inf)
+
+        # >= constraints in a max primal: dual <= 0.
+        lower = lower.where(~is_ge, -np.inf)
+        upper = upper.where(~is_ge, 0.0)
+
+    return lower, upper, valid_sign
 
 
 def _add_dual_variables(m: Model, m_dual: Model) -> dict:
@@ -109,7 +174,8 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
     >=            max           -inf              0
     ============  ===========  ================  ================
 
-    Fully masked or empty constraints are skipped.
+    Fully masked or empty constraints are skipped. Constraint arrays may contain
+    mixed signs; dual variable bounds are assigned elementwise.
 
     Parameters
     ----------
@@ -130,27 +196,29 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
         if _skip(con.labels, "constraint", name):
             continue
 
-        mask = con.labels != -1
-        sign = con.sign.isel({d: 0 for d in con.sign.dims}).item()
+        lower, upper, valid_sign = _dual_bounds_from_constraint_signs(
+            con.sign,
+            con.labels,
+            primal_is_min,
+        )
 
-        match sign:
-            case "=":
-                lower, upper = -np.inf, np.inf
-                var_type = "free"
-            case "<=":
-                lower, upper = (-np.inf, 0) if primal_is_min else (0, np.inf)
-                var_type = "non-positive" if primal_is_min else "non-negative"
-            case ">=":
-                lower, upper = (0, np.inf) if primal_is_min else (-np.inf, 0)
-                var_type = "non-negative" if primal_is_min else "non-positive"
-            case _:
-                logger.warning(
-                    f"Constraint '{name}' has unrecognized sign '{sign}', skipping."
-                )
-                continue
+        unmasked = con.labels != -1
+        invalid_unmasked = unmasked & ~valid_sign
+        if bool(invalid_unmasked.any()):
+            logger.warning(
+                f"Constraint '{name}' has unrecognized signs; invalid entries "
+                "will be skipped."
+            )
+
+        mask = unmasked & valid_sign
+        if not bool(mask.any()):
+            logger.warning(
+                f"Constraint '{name}' has no entries with valid signs, skipping."
+            )
+            continue
 
         logger.debug(
-            f"Adding {var_type} dual variable for constraint '{name}' "
+            f"Adding dual variable for constraint '{name}' "
             f"with shape {con.shape} and dims {con.labels.dims}."
         )
         coords = (
@@ -165,6 +233,7 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
             name=name,
             mask=mask,
         )
+
     return dual_vars
 
 
@@ -604,7 +673,7 @@ def dualize(
     Note: This constructs a standalone dual model. Pathological or unsupported
     primal formulations may lead to infeasible or unbounded dual models or may
     cause this function to raise an error. Only linear primal models with linear
-    objectives and constraints are supported.
+    objectives and either linear constraints or finite variable bounds are supported.
 
     Parameters
     ----------

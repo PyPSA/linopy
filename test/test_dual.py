@@ -14,6 +14,7 @@ from linopy import Model
 from linopy.dual import (
     _build_label_to_flat_index_lookup,
     _build_obj_coeff_lookup,
+    _dual_bounds_from_constraint_signs,
     _lookup_flat_indices,
     _skip,
     _term_slots_for_sorted_flat_indices,
@@ -98,6 +99,40 @@ def test_build_obj_coeff_lookup_all_masked() -> None:
     assert len(lookup) == 0
 
 
+def test_dual_bounds_from_mixed_constraint_signs_min() -> None:
+    """Mixed signs produce elementwise dual bounds for a minimization primal."""
+    idx = pd.RangeIndex(3, name="i")
+    labels = xr.DataArray([0, 1, 2], dims=["i"], coords={"i": idx})
+    signs = xr.DataArray(["<=", ">=", "="], dims=["i"], coords={"i": idx})
+
+    lower, upper, valid_sign = _dual_bounds_from_constraint_signs(
+        signs,
+        labels,
+        primal_is_min=True,
+    )
+
+    np.testing.assert_allclose(lower.values, np.array([-np.inf, 0.0, -np.inf]))
+    np.testing.assert_allclose(upper.values, np.array([0.0, np.inf, np.inf]))
+    np.testing.assert_array_equal(valid_sign.values, np.array([True, True, True]))
+
+
+def test_dual_bounds_from_mixed_constraint_signs_max() -> None:
+    """Mixed signs produce elementwise dual bounds for a maximization primal."""
+    idx = pd.RangeIndex(3, name="i")
+    labels = xr.DataArray([0, 1, 2], dims=["i"], coords={"i": idx})
+    signs = xr.DataArray(["<=", ">=", "="], dims=["i"], coords={"i": idx})
+
+    lower, upper, valid_sign = _dual_bounds_from_constraint_signs(
+        signs,
+        labels,
+        primal_is_min=False,
+    )
+
+    np.testing.assert_allclose(lower.values, np.array([0.0, -np.inf, -np.inf]))
+    np.testing.assert_allclose(upper.values, np.array([np.inf, 0.0, np.inf]))
+    np.testing.assert_array_equal(valid_sign.values, np.array([True, True, True]))
+
+
 # Structural tests (no solver required)
 def test_dualize_empty_model() -> None:
     """Dualizing an empty model returns an empty dual model."""
@@ -157,7 +192,7 @@ def test_dualize_model_with_variables_but_no_constraints_or_finite_bounds() -> N
 
 
 def test_variable_bounds_lifted_to_dual_variables() -> None:
-    """Finite variable bounds are converted into dual variables."""
+    """Finite variable bounds are lifted and dualized."""
     m = Model()
     x = m.add_variables(lower=1, upper=3, name="x")
     m.add_objective(x)
@@ -344,6 +379,79 @@ def test_dual_multi_constraint_per_variable_coefficients() -> None:
     np.testing.assert_allclose(np.sort(coeffs), np.array([1.0, 2.0]))
 
 
+def test_dual_mixed_sign_constraint_array_min() -> None:
+    """Mixed elementwise constraint signs produce elementwise dual bounds."""
+    m = Model()
+    idx = pd.RangeIndex(3, name="i")
+    x = m.add_variables(lower=-np.inf, upper=np.inf, coords=[idx], name="x")
+
+    signs = xr.DataArray(["<=", ">=", "="], dims=["i"], coords={"i": idx})
+    rhs = xr.DataArray([1.0, 2.0, 3.0], dims=["i"], coords={"i": idx})
+
+    m.add_constraints(x, signs, rhs, name="mixed")
+    m.add_objective(x.sum())
+
+    m_dual = dualize(m)
+    dv = m_dual.variables["mixed"]
+
+    np.testing.assert_allclose(
+        dv.lower.values,
+        np.array([-np.inf, 0.0, -np.inf]),
+    )
+    np.testing.assert_allclose(
+        dv.upper.values,
+        np.array([0.0, np.inf, np.inf]),
+    )
+
+
+def test_dual_mixed_sign_constraint_array_max() -> None:
+    """Mixed elementwise constraint signs follow maximization dual bounds."""
+    m = Model()
+    idx = pd.RangeIndex(3, name="i")
+    x = m.add_variables(lower=-np.inf, upper=np.inf, coords=[idx], name="x")
+
+    signs = xr.DataArray(["<=", ">=", "="], dims=["i"], coords={"i": idx})
+    rhs = xr.DataArray([1.0, 2.0, 3.0], dims=["i"], coords={"i": idx})
+
+    m.add_constraints(x, signs, rhs, name="mixed")
+    m.add_objective(x.sum(), sense="max")
+
+    m_dual = dualize(m)
+    dv = m_dual.variables["mixed"]
+
+    np.testing.assert_allclose(
+        dv.lower.values,
+        np.array([0.0, -np.inf, -np.inf]),
+    )
+    np.testing.assert_allclose(
+        dv.upper.values,
+        np.array([np.inf, 0.0, np.inf]),
+    )
+
+
+def test_mixed_variable_bounds_lift_only_finite_entries() -> None:
+    """Mixed finite/infinite bounds are lifted only for finite entries."""
+    m = Model()
+    idx = pd.RangeIndex(3, name="i")
+
+    lower = xr.DataArray([0.0, -np.inf, -np.inf], dims=["i"], coords={"i": idx})
+    upper = xr.DataArray([np.inf, 5.0, np.inf], dims=["i"], coords={"i": idx})
+
+    x = m.add_variables(lower=lower, upper=upper, coords=[idx], name="x")
+    m.add_objective(x.sum())
+
+    m_dual = dualize(m)
+
+    lower_labels = m_dual.variables["x-bound-lower"].labels
+    upper_labels = m_dual.variables["x-bound-upper"].labels
+
+    assert (lower_labels != -1).sum().item() == 1
+    assert (upper_labels != -1).sum().item() == 1
+
+    assert lower_labels.sel(i=0).item() != -1
+    assert upper_labels.sel(i=1).item() != -1
+
+
 # Numerical tests (require solver)
 def _solve(model: Model, **kwargs: Any) -> float:
     """Solve a model with the available LP solver and return its objective value."""
@@ -426,3 +534,75 @@ def test_strong_duality_maximization() -> None:
     primal_obj = _solve(m)
     dual_obj = _solve(m.dualize())
     assert abs(primal_obj - dual_obj) < 1e-5
+
+
+@needs_solver
+def test_dualize_mixed_signs_and_mixed_variable_bounds() -> None:
+    """Dualization handles mixed constraint signs and mixed variable bounds."""
+    m = Model()
+    idx = pd.RangeIndex(3, name="i")
+
+    lower = xr.DataArray([0.0, -np.inf, -np.inf], dims=["i"], coords={"i": idx})
+    upper = xr.DataArray([np.inf, 5.0, np.inf], dims=["i"], coords={"i": idx})
+
+    x = m.add_variables(
+        lower=lower,
+        upper=upper,
+        coords=[idx],
+        name="x",
+    )
+
+    signs = xr.DataArray(["<=", ">=", "="], dims=["i"], coords={"i": idx})
+    rhs = xr.DataArray([4.0, 2.0, 3.0], dims=["i"], coords={"i": idx})
+
+    m.add_constraints(x, signs, rhs, name="mixed")
+    m.add_objective(x.sum())
+
+    primal_obj = _solve(m)
+
+    m_dual = dualize(m)
+    dual_obj = _solve(m_dual)
+
+    assert abs(primal_obj - dual_obj) < 1e-5
+
+    mixed_dual = m_dual.variables["mixed"]
+
+    np.testing.assert_allclose(
+        mixed_dual.lower.values,
+        np.array([-np.inf, 0.0, -np.inf]),
+    )
+    np.testing.assert_allclose(
+        mixed_dual.upper.values,
+        np.array([0.0, np.inf, np.inf]),
+    )
+
+    assert "x-bound-lower" in m_dual.variables
+    assert "x-bound-upper" in m_dual.variables
+
+    lower_bound_labels = m_dual.variables["x-bound-lower"].labels
+    upper_bound_labels = m_dual.variables["x-bound-upper"].labels
+
+    assert (lower_bound_labels != -1).sum().item() == 1
+    assert (upper_bound_labels != -1).sum().item() == 1
+
+    assert lower_bound_labels.sel(i=0).item() != -1
+    assert upper_bound_labels.sel(i=1).item() != -1
+
+    con_x = m_dual.constraints["x"]
+
+    # x[0]: mixed[0] + x-bound-lower[0] = 1
+    # x[1]: mixed[1] + x-bound-upper[1] = 1
+    # x[2]: mixed[2]                    = 1
+    n_terms = (con_x.vars != -1).sum(dim="_term")
+    np.testing.assert_array_equal(
+        n_terms.values,
+        np.array([2, 2, 1]),
+    )
+
+    # The dual values from the standalone dual model should match Linopy's
+    # primal constraint duals for the original mixed constraint block.
+    np.testing.assert_allclose(
+        m.constraints["mixed"].dual.values,
+        m_dual.variables["mixed"].solution.values,
+        atol=1e-6,
+    )
