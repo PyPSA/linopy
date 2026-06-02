@@ -179,6 +179,21 @@ class ConstraintBase(ABC):
     def dual(self, value: DataArray) -> None:
         """Set the dual values DataArray."""
 
+    @property
+    @abstractmethod
+    def is_indicator(self) -> bool:
+        """Whether the constraint is an indicator constraint."""
+
+    @property
+    @abstractmethod
+    def binary_var(self) -> DataArray | None:
+        """Get the indicator binary variable labels, or None."""
+
+    @property
+    @abstractmethod
+    def binary_val(self) -> int | np.ndarray | None:
+        """Get the indicator triggering value(s), or None."""
+
     @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
         """Check if the constraint references any of the given variable labels."""
@@ -509,6 +524,8 @@ class CSRConstraint(ConstraintBase):
         "_name",
         "_cindex",
         "_dual",
+        "_binvar_labels",
+        "_binval",
     )
 
     def __init__(
@@ -522,6 +539,8 @@ class CSRConstraint(ConstraintBase):
         name: str = "",
         cindex: int | None = None,
         dual: np.ndarray | None = None,
+        binvar_labels: np.ndarray | None = None,
+        binval: int | np.ndarray | None = None,
     ) -> None:
         self._csr = csr
         self._con_labels = con_labels
@@ -532,6 +551,8 @@ class CSRConstraint(ConstraintBase):
         self._name = name
         self._cindex = cindex
         self._dual = dual
+        self._binvar_labels = binvar_labels
+        self._binval = binval
 
     @property
     def model(self) -> Model:
@@ -686,6 +707,20 @@ class CSRConstraint(ConstraintBase):
         vals = np.asarray(value).ravel()
         self._dual = vals[self.active_positions]
 
+    @property
+    def is_indicator(self) -> bool:
+        return self._binvar_labels is not None
+
+    @property
+    def binary_var(self) -> DataArray | None:
+        if self._binvar_labels is None:
+            return None
+        return self._active_to_dataarray(self._binvar_labels, fill=-1)
+
+    @property
+    def binary_val(self) -> int | np.ndarray | None:
+        return self._binval
+
     def _to_dataset(self, nterm: int) -> Dataset:
         """
         Reconstruct labels/coeffs/vars Dataset from the CSR matrix.
@@ -743,9 +778,18 @@ class CSRConstraint(ConstraintBase):
     def data(self) -> Dataset:
         """Reconstruct the xarray Dataset from the CSR representation."""
         ds = self._to_dataset(self.nterm)
-        extra = {"sign": self.sign, "rhs": self.rhs}
+        extra: dict[str, Any] = {"sign": self.sign, "rhs": self.rhs}
         if self._dual is not None:
             extra["dual"] = self._active_to_dataarray(self._dual, fill=np.nan)
+        if self._binvar_labels is not None:
+            extra["binary_var"] = self._active_to_dataarray(
+                self._binvar_labels, fill=-1
+            )
+            binval = self._binval
+            if isinstance(binval, np.ndarray) and binval.ndim > 0:
+                extra["binary_val"] = self._active_to_dataarray(binval, fill=-1)
+            else:
+                extra["binary_val"] = binval
         return assign_multiindex_safe(ds, **extra).assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
@@ -833,6 +877,14 @@ class CSRConstraint(ConstraintBase):
         }
         if isinstance(self._sign, str):
             attrs["sign"] = self._sign
+        if self._binvar_labels is not None:
+            attrs["is_indicator"] = True
+            data_vars["_binvar_labels"] = DataArray(self._binvar_labels, dims=["_flat"])
+            binval = self._binval
+            if isinstance(binval, np.ndarray) and binval.ndim > 0:
+                data_vars["_binval"] = DataArray(binval, dims=["_flat"])
+            else:
+                attrs["binval"] = int(binval)  # type: ignore[arg-type]
         return Dataset(data_vars, attrs=attrs)
 
     @classmethod
@@ -859,8 +911,23 @@ class CSRConstraint(ConstraintBase):
             con_labels = np.arange(cindex, cindex + len(rhs), dtype=np.intp)
         else:
             con_labels = np.arange(len(rhs), dtype=np.intp)
+        binvar_labels: np.ndarray | None = None
+        binval: int | np.ndarray | None = None
+        if "_binvar_labels" in ds:
+            binvar_labels = ds["_binvar_labels"].values
+            binval = ds["_binval"].values if "_binval" in ds else attrs["binval"]
         return cls(
-            csr, con_labels, rhs, sign, coords, model, name, cindex=cindex, dual=dual
+            csr,
+            con_labels,
+            rhs,
+            sign,
+            coords,
+            model,
+            name,
+            cindex=cindex,
+            dual=dual,
+            binvar_labels=binvar_labels,
+            binval=binval,
         )
 
     def has_variable(self, variable: variables.Variable) -> bool:
@@ -1023,6 +1090,16 @@ class CSRConstraint(ConstraintBase):
         dual = (
             con.data["dual"].values.ravel()[active_mask] if "dual" in con.data else None
         )
+        binvar_labels: np.ndarray | None = None
+        binval: int | np.ndarray | None = None
+        binary_var = con.binary_var
+        if binary_var is not None:
+            binvar_labels = binary_var.values.ravel()[active_mask]
+            bv = con.binary_val
+            if isinstance(bv, np.ndarray) and bv.ndim > 0:
+                binval = bv.ravel()[active_mask]
+            else:
+                binval = bv
         return cls(
             csr,
             con_labels,
@@ -1033,6 +1110,8 @@ class CSRConstraint(ConstraintBase):
             con.name,
             cindex=cindex,
             dual=dual,
+            binvar_labels=binvar_labels,
+            binval=binval,
         )
 
 
@@ -1156,6 +1235,20 @@ class Constraint(ConstraintBase):
         )
         self.lhs = self.lhs - value.reset_const()
         self._data = assign_multiindex_safe(self.data, rhs=value.const)
+
+    @property
+    def is_indicator(self) -> bool:
+        return "binary_var" in self._data
+
+    @property
+    def binary_var(self) -> DataArray | None:
+        return self._data.get("binary_var")
+
+    @property
+    def binary_val(self) -> int | np.ndarray | None:
+        if "binary_val" in self._data:
+            return self._data["binary_val"].values
+        return None
 
     @property
     def lhs(self) -> expressions.LinearExpression:
@@ -1676,6 +1769,20 @@ class Constraints:
         Get the subset of constraints which are purely equalities.
         """
         return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
+
+    @property
+    def indicator(self) -> Constraints:
+        """
+        Get the subset of constraints which are indicator constraints.
+        """
+        return self[[n for n, c in self.items() if c.is_indicator]]
+
+    @property
+    def regular(self) -> Constraints:
+        """
+        Get the subset of constraints which are not indicator constraints.
+        """
+        return self[[n for n, c in self.items() if not c.is_indicator]]
 
     def sanitize_zeros(self) -> None:
         """
