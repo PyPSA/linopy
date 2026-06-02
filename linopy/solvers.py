@@ -1612,8 +1612,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         if M.indicator_A is not None:
             sense_map = {
-                "<=": gurobipy.GRB.LESS_EQUAL,
-                ">=": gurobipy.GRB.GREATER_EQUAL,
+                "<": gurobipy.GRB.LESS_EQUAL,
+                ">": gurobipy.GRB.GREATER_EQUAL,
                 "=": gurobipy.GRB.EQUAL,
             }
             x_list = x.tolist()
