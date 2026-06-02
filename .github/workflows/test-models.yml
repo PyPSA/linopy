@@ -77,12 +77,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.CONDA }}/envs
-          key: conda-pypsa-eur-${{ env.week }}-${{ hashFiles('envs/environment.yaml') }}
+          key: conda-pypsa-eur-${{ env.week }}-${{ hashFiles('envs/linux-64.lock.yaml') }}
         id: cache-env
 
       - name: Update environment
         if: env.pinned == 'false' && steps.cache-env.outputs.cache-hit != 'true'
-        run: conda env update -n pypsa-eur -f envs/environment.yaml
+        run: conda env update -n pypsa-eur -f envs/linux-64.lock.yaml
 
       - name: Install package from ref
         if: env.pinned == 'false'
