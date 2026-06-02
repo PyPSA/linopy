@@ -51,6 +51,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 **Deprecations**
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
+* **Implicit MultiIndex-level projection is deprecated.** Passing an input indexed by a *level* of a stacked-``MultiIndex`` dimension (e.g. per-``period`` bounds onto a ``(period, timestep)`` ``snapshot`` index) emits an ``EvolvingAPIWarning`` — in arithmetic and in ``add_variables`` / ``add_constraints`` — and will raise under the upcoming v1 convention. Project the input onto the dimension explicitly (select with the dimension's level values) to keep current behavior. Affects PyPSA multi-investment models. See Bug Fixes below for details.
 
 **Bug Fixes**
 
@@ -64,6 +65,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 **Breaking Changes**
 
 * ``add_variables`` / ``add_constraints``: the v0.6.3 ``mask`` deprecations (#580) are now hard ``ValueError``\ s; an unnamed ``pd.MultiIndex`` in sequence-form ``coords`` raises ``TypeError`` unless paired with ``dims=[i]``. See Bug Fixes above.
+* Sequence-form ``coords`` entries can no longer be ``xarray.DataArray`` objects — they raise ``TypeError``. Pass the underlying index instead: ``variable.indexes[dim]`` (a ``pd.Index``).
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
 * ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
 * ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
