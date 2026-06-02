@@ -6,7 +6,7 @@ Linopy module for defining constant values used within the package.
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, TypeAlias, get_args
+from typing import Any, Literal, Self, TypeAlias, get_args
 
 import numpy as np
 
@@ -147,7 +147,7 @@ class SolverStatus(StrEnum):
     unknown = "unknown"
 
     @classmethod
-    def process(cls, status: str) -> "SolverStatus":
+    def process(cls, status: str) -> Self:
         try:
             return cls(status)
         except ValueError:
@@ -156,7 +156,7 @@ class SolverStatus(StrEnum):
     @classmethod
     def from_termination_condition(
         cls, termination_condition: "TerminationCondition"
-    ) -> "SolverStatus":
+    ) -> Self:
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
@@ -195,9 +195,7 @@ class TerminationCondition(StrEnum):
     licensing_problems = "licensing_problems"
 
     @classmethod
-    def process(
-        cls, termination_condition: "TerminationCondition" | str
-    ) -> "TerminationCondition":
+    def process(cls, termination_condition: Self | str) -> Self:
         if isinstance(termination_condition, TerminationCondition):
             termination_condition = termination_condition.value
         try:
@@ -245,7 +243,7 @@ class Status:
     legacy_status: tuple[str, str] | str = ""
 
     @classmethod
-    def process(cls, status: str, termination_condition: str) -> "Status":
+    def process(cls, status: str, termination_condition: str) -> Self:
         return cls(
             status=SolverStatus.process(status),
             termination_condition=TerminationCondition.process(termination_condition),
@@ -254,8 +252,8 @@ class Status:
 
     @classmethod
     def from_termination_condition(
-        cls, termination_condition: "TerminationCondition" | str | None
-    ) -> "Status":
+        cls, termination_condition: TerminationCondition | str | None
+    ) -> Self:
         termination_condition = TerminationCondition.process(
             termination_condition if termination_condition is not None else "unknown"
         )
