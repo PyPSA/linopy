@@ -28,10 +28,10 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.common import (
-    align_to_coords,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    broadcast_to_coords,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -774,8 +774,8 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        lower_da = align_to_coords(lower, coords, label="lower bound", **kwargs)
-        upper_da = align_to_coords(upper, coords, label="upper bound", **kwargs)
+        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
+        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         data = Dataset(
             {
                 "lower": lower_da,
@@ -788,7 +788,7 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = align_to_coords(
+            mask = broadcast_to_coords(
                 mask,
                 coords if coords is not None else data.coords,
                 label="mask",
@@ -1057,7 +1057,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = align_to_coords(mask, data.coords, label="mask").astype(bool)
+            mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:

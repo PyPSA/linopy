@@ -866,7 +866,12 @@ class TestAddVariablesMultiIndexCoords:
         self, model: "Model", midx: pd.MultiIndex
     ) -> None:
         bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        var = model.add_variables(upper=bound, coords=[midx], name="x")
+        # Implicit level projection is deprecated (scenario B) — warns until
+        # the v1 convention makes it an error.
+        with pytest.warns(
+            linopy.EvolvingAPIWarning, match=r"broadcasting level subset"
+        ):
+            var = model.add_variables(upper=bound, coords=[midx], name="x")
         assert var.dims == ("multi",)
         assert (var.data.upper == [5, 5, 6, 6]).all()
 
@@ -875,5 +880,5 @@ class TestAddVariablesMultiIndexCoords:
     ) -> None:
         subset = pd.MultiIndex.from_tuples([(0, "a"), (1, "b")], names=("l1", "l2"))
         bound = pd.Series([1, 2], index=subset)
-        with pytest.raises(ValueError, match="does not cover every entry"):
+        with pytest.raises(ValueError, match="no value for .* level combination"):
             model.add_variables(upper=bound, coords=[midx], name="x")

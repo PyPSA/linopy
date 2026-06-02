@@ -12,7 +12,7 @@ import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -216,20 +216,37 @@ def numpy_to_dataarray(
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
-def _as_dataarray_lax(
+def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
-    Type-dispatched DataArray conversion without any coords validation.
+    Convert ``arr`` to a DataArray.
 
-    This is the conversion primitive used by ``as_dataarray``: it picks the
-    right constructor for each supported input type but does not check the
-    result against ``coords``. Callers that need ``coords`` to govern the
-    output (dim order, shared-dim values, missing-dim expansion) should use
-    ``as_dataarray`` instead.
+    Picks the right constructor for each supported input type (pandas,
+    polars, numpy, scalar, DataArray) and labels positional axes with
+    ``dims`` / ``coords``. The result is not reshaped against ``coords``:
+    dims are neither expanded, reordered, nor projected onto MultiIndex
+    dims. Use :func:`broadcast_to_coords` when
+    ``coords`` should govern the result's shape.
+
+    Parameters
+    ----------
+    arr
+        The input to convert.
+    coords
+        Coordinate values used to label positional axes.
+    dims
+        Dimension names used to label positional axes.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        The converted input, dims and entries as ``arr`` provides them.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -285,34 +302,38 @@ def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
     return None
 
 
+class _LevelProjection(NamedTuple):
+    """
+    Record of one MultiIndex-level projection performed by ``_broadcast_to_coords``.
+
+    Terminology: a stacked MultiIndex dim has *levels* (its component index
+    names, e.g. ``period`` / ``timestep``) and *level combinations* (its
+    elements — one tuple per position, e.g. ``(2030, 't1')``).
+    """
+
+    dim: Hashable
+    levels: list[Hashable]
+    is_partial: bool  # input carried only a subset of the MI's levels
+    has_gap: bool  # some level combinations of the MI dim got no value (NaN)
+    missing: list[Any]  # the level combinations that got no value
+
+
 def _project_onto_multiindex_levels(
     arr: DataArray,
     expected: dict[Hashable, Any],
-    *,
-    enforce_coverage: bool,
-) -> DataArray:
+) -> tuple[DataArray, list[_LevelProjection]]:
     """
-    Map ``arr`` dims that are levels of a stacked-MultiIndex coords dim onto it.
+    Map ``arr`` dims that name levels of a stacked-MultiIndex coords dim onto it.
 
-    A dim of ``arr`` that is not itself a coords dim but names a level of a
-    stacked-MultiIndex coords dim ``D`` is projected onto ``D`` by selecting,
-    for every entry of ``D``, the ``arr`` value at that entry's level values.
-    A subset of ``D``'s levels broadcasts across the remaining ones; the full
-    set aligns element-wise. ``arr`` is returned unchanged when it carries no
-    such level dims.
+    For every level combination of the MultiIndex dim, select the ``arr``
+    value at that combination's level values. A subset of levels broadcasts
+    across the remaining ones; the full set aligns element-wise. ``arr`` is
+    returned unchanged when it carries no level dims.
 
-    Raises ``ValueError`` if a level name belongs to more than one MI dim
-    (ambiguous) or if a referenced level value is missing from ``arr``. When
-    ``enforce_coverage`` is set, also raises if the projection leaves entries
-    of ``D`` uncovered (the input did not span the full MultiIndex).
-
-    On the non-enforcing (arithmetic) path, projections that the v1
-    arithmetic convention will require the caller to make explicit emit an
-    :class:`~linopy.EvolvingAPIWarning`: aligning a *subset* of ``D``'s
-    levels (an implicit broadcast — future §9/§10) and aligning the full
-    level set when it leaves gaps (an implicit NaN-fill — future §5/§8).
-    Aligning the full level set with full coverage is convention-clean and
-    stays silent.
+    Raises ``ValueError`` only on structural errors: a level name owned by
+    two MI dims, or a level value missing from ``arr``. Partial projections
+    and coverage gaps are recorded in the returned ``_LevelProjection`` list;
+    the caller decides how to treat them.
     """
     level_owner: dict[Hashable, Hashable] = {}
     owner_mi: dict[Hashable, pd.MultiIndex] = {}
@@ -340,6 +361,7 @@ def _project_onto_multiindex_levels(
         if owner is not None:
             groups.setdefault(owner, []).append(d)
 
+    projections: list[_LevelProjection] = []
     for dim, levels in groups.items():
         mi = owner_mi[dim]
         selectors = {
@@ -354,92 +376,43 @@ def _project_onto_multiindex_levels(
                 f"{dim!r}: value {err} is missing."
             ) from err
         arr = arr.assign_coords(Coordinates.from_pandas_multiindex(mi, dim))
-        is_partial = len(levels) < sum(name is not None for name in mi.names)
-        has_gap = bool(arr.isnull().any())
-        if enforce_coverage:
-            if has_gap:
-                raise ValueError(
-                    f"Input does not cover every entry of MultiIndex dimension "
-                    f"{dim!r} (aligned from level(s) {levels})."
-                )
-        elif is_partial or has_gap:
-            kind = (
-                f"broadcasting level subset {levels}"
-                if is_partial
-                else f"filling uncovered entries with NaN (from level(s) {levels})"
+        # A level combination is "missing" when the projection gave it no
+        # value at any position of the other dims.
+        null_mask = arr.isnull()
+        other_dims = [d for d in arr.dims if d != dim]
+        if other_dims:
+            null_mask = null_mask.any(other_dims)
+        has_gap = bool(null_mask.any())
+        missing = list(arr.indexes[dim][null_mask.values]) if has_gap else []
+        projections.append(
+            _LevelProjection(
+                dim=dim,
+                levels=levels,
+                is_partial=len(levels) < sum(name is not None for name in mi.names),
+                has_gap=has_gap,
+                missing=missing,
             )
-            warn(
-                f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                f"dimension {dim!r}. The v1 arithmetic convention will require "
-                f"this to be explicit; reindex onto the dimension or use a "
-                f"named method with `join=` to keep current behavior.",
-                EvolvingAPIWarning,
-                stacklevel=2,
-            )
+        )
 
-    return arr
+    return arr, projections
 
 
-def as_dataarray(
+def _broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
-    *,
-    enforce_level_coverage: bool = False,
     **kwargs: Any,
-) -> DataArray:
+) -> tuple[DataArray, list[_LevelProjection]]:
     """
-    Convert ``arr`` to a DataArray and broadcast it against ``coords``.
+    Convert ``arr`` and broadcast it against ``coords`` (shared mechanics).
 
-    When ``coords`` carries named dimensions, the result is aligned with
-    those coords:
-
-    - positional inputs (numpy, polars, unnamed pandas, scalar) are labeled
-      with the coord dim names by position;
-    - for every dim shared between ``arr`` and ``coords``, same-values-
-      different-order coordinates are reindexed to ``coords`` order;
-    - dims present in ``coords`` but not in ``arr`` are expanded to the
-      ``coords`` shape;
-    - dims of ``arr`` that name levels of a stacked-MultiIndex ``coords``
-      dim are projected onto that dim (a subset of levels broadcasts, the
-      full set aligns element-wise);
-    - the result is transposed to ``coords`` order.
-
-    Dimensions present in ``arr`` but not in ``coords`` are preserved so
-    standard xarray broadcasting keeps working. Disagreeing coord values
-    on a shared dim (i.e. value sets that are not equal as sets) are
-    passed through unchanged: downstream xarray alignment decides how to
-    combine them. To enforce that ``arr.dims`` ⊆ ``coords.dims`` and that
-    shared coord values match, use ``validate_alignment`` (called
-    automatically for ``lower``, ``upper``, and ``mask`` in
-    :meth:`~linopy.model.Model.add_variables` and for ``mask`` in
-    :meth:`~linopy.model.Model.add_constraints`).
-
-    Parameters
-    ----------
-    arr
-        Input scalar / list / numpy / polars / pandas / DataArray.
-    coords
-        Mapping of dim name → coord values, or a sequence of ``pd.Index``
-        / unnamed sequences. ``None`` falls back to xarray's default
-        labeling (no broadcasting).
-    dims
-        Optional dim-names hint, used for positional inputs and to bias
-        pandas-axis interpretation.
-    enforce_level_coverage
-        When projecting onto a stacked-MultiIndex dim, raise if the input
-        leaves entries of that dim uncovered. Set by the strict callers
-        (``add_variables`` / ``add_constraints`` via ``align_to_coords``).
-    **kwargs
-        Forwarded to the underlying DataArray construction.
-
-    Returns
-    -------
-    DataArray
-        Broadcast against ``coords`` (extra dims preserved).
+    Returns the broadcast DataArray together with the MultiIndex-level
+    projections performed along the way, so the public entry points can
+    apply their own policy (warn or raise) to partial projections and
+    coverage gaps.
     """
     if coords is None:
-        return _as_dataarray_lax(arr, coords, dims, **kwargs)
+        return as_dataarray(arr, coords, dims, **kwargs), []
 
     if isinstance(coords, list | tuple) and any(isinstance(c, tuple) for c in coords):
         # xarray reads bare `(a, b)` as `(dim_name, values)`; normalize so a
@@ -448,7 +421,7 @@ def as_dataarray(
 
     expected = _coords_to_dict(coords, dims=dims)
     if not expected:
-        return _as_dataarray_lax(arr, coords, dims, **kwargs)
+        return as_dataarray(arr, coords, dims, **kwargs), []
 
     if isinstance(arr, pd.Series | pd.DataFrame):
         converted = _named_pandas_to_dataarray(arr)
@@ -458,7 +431,7 @@ def as_dataarray(
     if not isinstance(arr, DataArray):
         # numpy/polars/unnamed-pandas inputs are positional — their only
         # meaningful information is the values; any axis labels are
-        # auto-generated. Default dims to coords' keys so the lax conversion
+        # auto-generated. Default dims to coords' keys so the conversion
         # labels axes correctly (instead of dim_0/dim_1), then re-assign
         # coords from expected so positional inputs align to coords by
         # position. A shape mismatch surfaces here as a clear xarray
@@ -466,9 +439,9 @@ def as_dataarray(
         # "coordinates do not match" further down.
         if dims is None:
             dims = list(expected)
-        arr = _as_dataarray_lax(arr, coords, dims=dims, **kwargs)
+        arr = as_dataarray(arr, coords, dims=dims, **kwargs)
         # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
-        # a FutureWarning and isn't needed (the lax pass already used it).
+        # a FutureWarning and isn't needed (the conversion already used it).
         arr = arr.assign_coords(
             {
                 d: expected[d]
@@ -477,9 +450,7 @@ def as_dataarray(
             }
         )
 
-    arr = _project_onto_multiindex_levels(
-        arr, expected, enforce_coverage=enforce_level_coverage
-    )
+    arr, projections = _project_onto_multiindex_levels(arr, expected)
 
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
@@ -491,10 +462,7 @@ def as_dataarray(
         if actual_idx.equals(expected_idx):
             continue
         # Same values, different order → reindex to match expected order.
-        # Different value sets are left alone: downstream xarray alignment
-        # (e.g. xr.align in arithmetic) handles them. Callers needing strict
-        # value matching (add_variables / add_constraints) should use
-        # ``validate_alignment`` after this call.
+        # Different value sets are left alone for downstream xarray alignment.
         if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
             expected_idx
         ):
@@ -543,7 +511,159 @@ def as_dataarray(
             name=arr.name,
         )
 
-    return arr
+    return arr, projections
+
+
+@overload
+def broadcast_to_coords(
+    arr: Any,
+    coords: CoordsLike | None = ...,
+    dims: DimsLike | None = ...,
+    *,
+    strict: Literal[True] = ...,
+    label: str,
+    **kwargs: Any,
+) -> DataArray: ...
+
+
+@overload
+def broadcast_to_coords(
+    arr: Any,
+    coords: CoordsLike | None = ...,
+    dims: DimsLike | None = ...,
+    *,
+    strict: Literal[False],
+    label: None = ...,
+    **kwargs: Any,
+) -> DataArray: ...
+
+
+def broadcast_to_coords(
+    arr: Any,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    *,
+    strict: bool = True,
+    label: str | None = None,
+    **kwargs: Any,
+) -> DataArray:
+    """
+    Convert ``arr`` to a DataArray and broadcast it against ``coords``.
+
+    When ``coords`` carries named dimensions, the result is aligned with
+    them: positional inputs are labeled by position, shared dims with equal
+    values in a different order are reindexed, dims missing from ``arr``
+    are expanded, dims naming levels of a stacked-MultiIndex coords dim are
+    projected onto it, and the result is transposed to ``coords`` order.
+
+    ``strict`` decides what happens to anything broadcasting alone cannot
+    resolve — extra dims, disagreeing coord values, and MultiIndex coverage
+    gaps:
+
+    - ``strict=True`` (default): raise, naming ``label`` in the error.
+    - ``strict=False``: pass through unchanged so downstream xarray
+      alignment can handle them.
+
+    A stacked-MultiIndex dim of ``coords`` has *levels* (its component
+    index names, e.g. ``period`` / ``timestep``) and *level combinations*
+    (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
+    indexed by levels instead of the dim itself are implicitly projected
+    onto the dim's level combinations. These projections are deprecated in
+    both modes and emit an :class:`~linopy.EvolvingAPIWarning`; the v1
+    convention will require them to be explicit. Two cases:
+
+    - input misses a whole level → broadcasts across it; warns in both modes.
+    - input gives some level combinations no value (a *coverage gap*) →
+      warns under ``strict=False``, raises under ``strict=True`` (the error
+      lists the missing combinations).
+
+    Parameters
+    ----------
+    arr
+        The input to convert and broadcast.
+    coords
+        Coordinate values the result is broadcast against. ``None`` falls
+        back to plain conversion.
+    dims
+        Dimension names used to label positional axes.
+    strict
+        Check that the result stays within ``coords`` (raise on violation)
+        instead of passing violations through.
+    label
+        Name of the input in error messages (e.g. ``"lower bound"``).
+        Required when ``strict=True``, not accepted otherwise.
+    **kwargs
+        Forwarded to the underlying DataArray construction.
+
+    Returns
+    -------
+    DataArray
+        Broadcast against ``coords``.
+    """
+    if not strict:
+        da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
+        _warn_implicit_projections(projections)
+        return da
+
+    if label is None:
+        raise TypeError(
+            "broadcast_to_coords(strict=True) requires `label` to name the "
+            "input in error messages, e.g. label='lower bound'."
+        )
+    subject = label
+    if coords is not None:
+        _coords_to_dict(coords, dims=dims)
+    try:
+        da, projections = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
+    except TypeError as err:
+        raise TypeError(f"{subject} could not be aligned to coords: {err}") from err
+    except (ValueError, CoordinateValidationError) as err:
+        raise ValueError(f"{subject} could not be aligned to coords: {err}") from err
+    for p in projections:
+        if p.has_gap:
+            preview = ", ".join(str(c) for c in p.missing[:5])
+            if len(p.missing) > 5:
+                preview += f", … ({len(p.missing)} in total)"
+            raise ValueError(
+                f"{subject} could not be aligned to coords: no value for "
+                f"{len(p.missing)} level combination(s) of MultiIndex dimension "
+                f"{p.dim!r}: {preview}. The input is indexed by level(s) "
+                f"{p.levels} and must cover every combination."
+            )
+    _warn_implicit_projections(projections)
+    validate_alignment(da, coords, dims=dims, label=label)
+    return da
+
+
+def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
+    """
+    Deprecation warnings for implicit MultiIndex-level projections.
+
+    The same check in every mode (scenario B of the #732 / #737 discussion):
+    implicit projection is deprecated and raises under the v1 convention. The
+    strict path raises on coverage gaps before reaching here, so only partial
+    levels warn there; the non-strict path warns for both.
+
+    TODO(#738): migrate to ``warn_legacy()`` / ``LinopySemanticsWarning``
+    once the v1 semantics infrastructure (#717) lands.
+    """
+    for p in projections:
+        if p.is_partial or p.has_gap:
+            kind = (
+                f"broadcasting level subset {p.levels}"
+                if p.is_partial
+                else f"filling uncovered level combinations with NaN "
+                f"(from level(s) {p.levels})"
+            )
+            warn(
+                f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                f"dimension {p.dim!r}. This is deprecated and will raise under "
+                f"the v1 convention; project the input onto the dimension "
+                f"explicitly (select with the dimension's level values) to "
+                f"keep current behavior.",
+                EvolvingAPIWarning,
+                stacklevel=3,
+            )
 
 
 def validate_alignment(
@@ -606,37 +726,6 @@ def validate_alignment(
                 f"coords — expected {expected_idx.tolist()}, got "
                 f"{actual_idx.tolist()}."
             )
-
-
-def align_to_coords(
-    value: Any,
-    coords: CoordsLike | None,
-    *,
-    label: str,
-    dims: DimsLike | None = None,
-    **kwargs: Any,
-) -> DataArray:
-    """
-    Convert ``value`` with :func:`as_dataarray` and enforce the coords contract.
-
-    Used by :meth:`~linopy.model.Model.add_variables` for ``lower``, ``upper``,
-    and ``mask``, and by :meth:`~linopy.model.Model.add_constraints` for
-    ``mask``. Raises :class:`ValueError` with a message that names ``label``
-    when ``value`` cannot be aligned to ``coords``. Coords-parsing errors
-    propagate unchanged.
-    """
-    if coords is not None:
-        _coords_to_dict(coords, dims=dims)
-    try:
-        da = as_dataarray(
-            value, coords, dims=dims, enforce_level_coverage=True, **kwargs
-        )
-    except TypeError as err:
-        raise TypeError(f"{label} could not be aligned to coords: {err}") from err
-    except (ValueError, CoordinateValidationError) as err:
-        raise ValueError(f"{label} could not be aligned to coords: {err}") from err
-    validate_alignment(da, coords, dims=dims, label=label)
-    return da
 
 
 def _coords_to_dict(
