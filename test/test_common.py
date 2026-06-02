@@ -578,7 +578,7 @@ def test_broadcast_to_coords_stacks_full_multiindex_levels() -> None:
 
     PyPSA's storage_weightings is a pandas Series over a (period, timestep)
     MultiIndex subset (the last snapshot of each period); it must align onto
-    the matching entries of the 'snapshot' MultiIndex. Entries the subset does
+    the matching level combinations of the 'snapshot' MultiIndex. Combinations the subset does
     not cover are left as NaN (broadcast path).
     """
     idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
@@ -587,7 +587,9 @@ def test_broadcast_to_coords_stacks_full_multiindex_levels() -> None:
     subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
     weights = pd.Series([10.0, 20.0], index=subset)
 
-    with pytest.warns(EvolvingAPIWarning, match=r"filling uncovered entries with NaN"):
+    with pytest.warns(
+        EvolvingAPIWarning, match=r"filling uncovered level combinations"
+    ):
         da = broadcast_to_coords(weights, coords=coords, dims=["dim_3"], strict=False)
 
     assert da.dims == ("dim_3",)
@@ -693,22 +695,29 @@ def test_broadcast_to_coords_rejects_multiindex_coverage_gap() -> None:
     subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
     weights = pd.Series([10.0, 20.0], index=subset)
 
-    with pytest.warns(EvolvingAPIWarning, match=r"filling uncovered entries"):
+    with pytest.warns(
+        EvolvingAPIWarning, match=r"filling uncovered level combinations"
+    ):
         broadcast_to_coords(weights, coords=coords, dims=["dim_3"], strict=False)
 
-    with pytest.raises(ValueError, match=r"does not cover every entry"):
+    with pytest.raises(ValueError, match=r"no value for .* level combination"):
         broadcast_to_coords(weights, coords, dims=["dim_3"], label="lower bound")
 
 
-def test_broadcast_to_coords_allows_partial_level_broadcast_silently() -> None:
-    """Per-level bounds broadcast across the MI dim without the arithmetic warning."""
+def test_broadcast_to_coords_strict_partial_level_warns() -> None:
+    """
+    Per-level bounds broadcast across the MI dim, with the deprecation warning.
+
+    Scenario B (#732 / #737 discussion): implicit MI-level projection is
+    deprecated everywhere, including the strict (bounds/mask) path, and will
+    raise under the v1 convention.
+    """
     idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
     idx.name = "dim_3"
     coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
     by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", EvolvingAPIWarning)
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
         da = broadcast_to_coords(by_level1, coords, dims=["dim_3"], label="lower bound")
 
     assert da.sel(dim_3=(1, "b")).item() == 10.0

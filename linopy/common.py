@@ -303,12 +303,19 @@ def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
 
 
 class _LevelProjection(NamedTuple):
-    """Record of one MultiIndex-level projection performed by ``_broadcast_to_coords``."""
+    """
+    Record of one MultiIndex-level projection performed by ``_broadcast_to_coords``.
+
+    Terminology: a stacked MultiIndex dim has *levels* (its component index
+    names, e.g. ``period`` / ``timestep``) and *level combinations* (its
+    elements — one tuple per position, e.g. ``(2030, 't1')``).
+    """
 
     dim: Hashable
     levels: list[Hashable]
     is_partial: bool  # input carried only a subset of the MI's levels
-    has_gap: bool  # projection left entries of the MI dim uncovered (NaN)
+    has_gap: bool  # some level combinations of the MI dim got no value (NaN)
+    missing: list[Any]  # the level combinations that got no value
 
 
 def _project_onto_multiindex_levels(
@@ -318,10 +325,10 @@ def _project_onto_multiindex_levels(
     """
     Map ``arr`` dims that name levels of a stacked-MultiIndex coords dim onto it.
 
-    For every entry of the MultiIndex dim, select the ``arr`` value at that
-    entry's level values. A subset of levels broadcasts across the remaining
-    ones; the full set aligns element-wise. ``arr`` is returned unchanged
-    when it carries no level dims.
+    For every level combination of the MultiIndex dim, select the ``arr``
+    value at that combination's level values. A subset of levels broadcasts
+    across the remaining ones; the full set aligns element-wise. ``arr`` is
+    returned unchanged when it carries no level dims.
 
     Raises ``ValueError`` only on structural errors: a level name owned by
     two MI dims, or a level value missing from ``arr``. Partial projections
@@ -369,12 +376,21 @@ def _project_onto_multiindex_levels(
                 f"{dim!r}: value {err} is missing."
             ) from err
         arr = arr.assign_coords(Coordinates.from_pandas_multiindex(mi, dim))
+        # A level combination is "missing" when the projection gave it no
+        # value at any position of the other dims.
+        null_mask = arr.isnull()
+        other_dims = [d for d in arr.dims if d != dim]
+        if other_dims:
+            null_mask = null_mask.any(other_dims)
+        has_gap = bool(null_mask.any())
+        missing = list(arr.indexes[dim][null_mask.values]) if has_gap else []
         projections.append(
             _LevelProjection(
                 dim=dim,
                 levels=levels,
                 is_partial=len(levels) < sum(name is not None for name in mi.names),
-                has_gap=bool(arr.isnull().any()),
+                has_gap=has_gap,
+                missing=missing,
             )
         )
 
@@ -545,13 +561,21 @@ def broadcast_to_coords(
     gaps:
 
     - ``strict=True`` (default): raise, naming ``label`` in the error.
-      Partial-level broadcasts stay silent (the documented bounds-broadcast
-      feature).
     - ``strict=False``: pass through unchanged so downstream xarray
-      alignment can handle them. Implicit MultiIndex-level projections
-      (a level subset, or one that leaves entries uncovered) emit an
-      :class:`~linopy.EvolvingAPIWarning`; the v1 arithmetic convention
-      will require them to be explicit.
+      alignment can handle them.
+
+    A stacked-MultiIndex dim of ``coords`` has *levels* (its component
+    index names, e.g. ``period`` / ``timestep``) and *level combinations*
+    (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
+    indexed by levels instead of the dim itself are implicitly projected
+    onto the dim's level combinations. These projections are deprecated in
+    both modes and emit an :class:`~linopy.EvolvingAPIWarning`; the v1
+    convention will require them to be explicit. Two cases:
+
+    - input misses a whole level → broadcasts across it; warns in both modes.
+    - input gives some level combinations no value (a *coverage gap*) →
+      warns under ``strict=False``, raises under ``strict=True`` (the error
+      lists the missing combinations).
 
     Parameters
     ----------
@@ -578,21 +602,7 @@ def broadcast_to_coords(
     """
     if not strict:
         da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
-        for p in projections:
-            if p.is_partial or p.has_gap:
-                kind = (
-                    f"broadcasting level subset {p.levels}"
-                    if p.is_partial
-                    else f"filling uncovered entries with NaN (from level(s) {p.levels})"
-                )
-                warn(
-                    f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                    f"dimension {p.dim!r}. The v1 arithmetic convention will require "
-                    f"this to be explicit; reindex onto the dimension or use a "
-                    f"named method with `join=` to keep current behavior.",
-                    EvolvingAPIWarning,
-                    stacklevel=2,
-                )
+        _warn_implicit_projections(projections)
         return da
 
     if label is None:
@@ -611,13 +621,49 @@ def broadcast_to_coords(
         raise ValueError(f"{subject} could not be aligned to coords: {err}") from err
     for p in projections:
         if p.has_gap:
+            preview = ", ".join(str(c) for c in p.missing[:5])
+            if len(p.missing) > 5:
+                preview += f", … ({len(p.missing)} in total)"
             raise ValueError(
-                f"{subject} could not be aligned to coords: input does not cover "
-                f"every entry of MultiIndex dimension {p.dim!r} (aligned from "
-                f"level(s) {p.levels})."
+                f"{subject} could not be aligned to coords: no value for "
+                f"{len(p.missing)} level combination(s) of MultiIndex dimension "
+                f"{p.dim!r}: {preview}. The input is indexed by level(s) "
+                f"{p.levels} and must cover every combination."
             )
+    _warn_implicit_projections(projections)
     validate_alignment(da, coords, dims=dims, label=label)
     return da
+
+
+def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
+    """
+    Deprecation warnings for implicit MultiIndex-level projections.
+
+    The same check in every mode (scenario B of the #732 / #737 discussion):
+    implicit projection is deprecated and raises under the v1 convention. The
+    strict path raises on coverage gaps before reaching here, so only partial
+    levels warn there; the non-strict path warns for both.
+
+    TODO(#738): migrate to ``warn_legacy()`` / ``LinopySemanticsWarning``
+    once the v1 semantics infrastructure (#717) lands.
+    """
+    for p in projections:
+        if p.is_partial or p.has_gap:
+            kind = (
+                f"broadcasting level subset {p.levels}"
+                if p.is_partial
+                else f"filling uncovered level combinations with NaN "
+                f"(from level(s) {p.levels})"
+            )
+            warn(
+                f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                f"dimension {p.dim!r}. This is deprecated and will raise under "
+                f"the v1 convention; project the input onto the dimension "
+                f"explicitly (select with the dimension's level values) to "
+                f"keep current behavior.",
+                EvolvingAPIWarning,
+                stacklevel=3,
+            )
 
 
 def validate_alignment(
