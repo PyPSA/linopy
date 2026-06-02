@@ -13,7 +13,9 @@ from _pytest.logging import LogCaptureFixture
 from linopy import Model
 from linopy.dual import (
     _build_label_to_flat_index_lookup,
+    _build_obj_coeff_lookup,
     _lookup_flat_indices,
+    _skip,
     _term_slots_for_sorted_flat_indices,
     dualize,
 )
@@ -24,6 +26,20 @@ needs_solver = pytest.mark.skipif(_lp_solver is None, reason="No LP solver avail
 
 
 # Structural tests for important internal functions
+def test_skip_empty_label_array() -> None:
+    """Empty label arrays are skipped."""
+    labels = xr.DataArray(np.array([], dtype=np.int64), dims=["dim_0"])
+
+    assert _skip(labels, "variable", "x")
+
+
+def test_skip_fully_masked_label_array() -> None:
+    """Fully masked label arrays are skipped."""
+    labels = xr.DataArray(np.array([-1, -1], dtype=np.int64), dims=["dim_0"])
+
+    assert _skip(labels, "constraint", "c")
+
+
 def test_build_label_to_flat_index_lookup() -> None:
     """Flat labels are mapped to their positions in the flattened label array."""
     labels = np.array([10, -1, 12, 99], dtype=np.int64)
@@ -71,11 +87,71 @@ def test_term_slots_for_sorted_flat_indices() -> None:
     )
 
 
+def test_build_obj_coeff_lookup_all_masked() -> None:
+    """All-masked variable labels produce an empty objective-coefficient lookup."""
+    lookup = _build_obj_coeff_lookup(
+        np.array([-1, -1], dtype=np.int64),
+        np.array([1.0, 2.0], dtype=np.float64),
+    )
+
+    assert lookup.dtype == np.float64
+    assert len(lookup) == 0
+
+
 # Structural tests (no solver required)
 def test_dualize_empty_model() -> None:
     """Dualizing an empty model returns an empty dual model."""
     m = Model()
     m_dual = dualize(m)
+    assert len(m_dual.variables) == 0
+    assert len(m_dual.constraints) == 0
+
+
+def test_only_lower_bound_lifted_to_dual_variable() -> None:
+    """A finite lower bound is lifted even when the upper bound is infinite."""
+    m = Model()
+    x = m.add_variables(lower=1, upper=np.inf, name="x")
+    m.add_objective(x)
+
+    m_dual = dualize(m)
+
+    assert "x-bound-lower" in m_dual.variables
+    assert "x-bound-upper" not in m_dual.variables
+
+
+def test_only_upper_bound_lifted_to_dual_variable() -> None:
+    """A finite upper bound is lifted even when the lower bound is infinite."""
+    m = Model()
+    x = m.add_variables(lower=-np.inf, upper=3, name="x")
+    m.add_objective(x)
+
+    m_dual = dualize(m)
+
+    assert "x-bound-lower" not in m_dual.variables
+    assert "x-bound-upper" in m_dual.variables
+
+
+def test_unbounded_variable_bounds_do_not_create_dual_variables() -> None:
+    """Infinite variable bounds are not lifted into dual variables."""
+    m = Model()
+    x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
+    m.add_constraints(x == 1, name="c")
+    m.add_objective(x)
+
+    m_dual = dualize(m)
+
+    assert "x-bound-lower" not in m_dual.variables
+    assert "x-bound-upper" not in m_dual.variables
+
+
+def test_dualize_model_with_variables_but_no_constraints_or_finite_bounds() -> None:
+    """A model with variables but no constraints or finite bounds returns an empty dual."""
+    m = Model()
+    x = m.add_variables(lower=-np.inf, upper=np.inf, name="x")
+    m.add_objective(x)
+
+    m_dual = dualize(m)
+
     assert len(m_dual.variables) == 0
     assert len(m_dual.constraints) == 0
 

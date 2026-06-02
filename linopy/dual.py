@@ -531,7 +531,6 @@ def _add_dual_objective(
     m: Model,
     m_dual: Model,
     dual_vars: dict,
-    add_objective_constant: float = 0.0,
 ) -> None:
     """
     Construct and add ``sum(rhs_i * lambda_i)`` as the dual objective of m_dual.
@@ -553,9 +552,6 @@ def _add_dual_objective(
         Dual model to populate.
     dual_vars : dict
         ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
-    add_objective_constant : float, optional
-        Constant added to the dual objective, e.g. to pass through a primal
-        objective constant that was excluded from the model.
     """
     dual_obj: LinearExpression = LinearExpression(None, m_dual)
     sense = "max" if m.objective.sense == "min" else "min"
@@ -568,10 +564,6 @@ def _add_dual_objective(
         rhs_masked = con.rhs.where(mask, 0)
         dual_obj += (rhs_masked * dual_vars[name]).sum()
 
-    if add_objective_constant != 0.0:
-        dual_obj += add_objective_constant
-        logger.debug(f"Added constant {add_objective_constant} to dual objective.")
-
     logger.debug(f"Constructed dual objective with {len(dual_obj.coeffs)} terms.")
     logger.debug("Adding dual objective to model.")
     m_dual.add_objective(dual_obj, sense=sense, overwrite=True)
@@ -579,7 +571,6 @@ def _add_dual_objective(
 
 def dualize(
     m: Model,
-    add_objective_constant: float = 0.0,
 ) -> Model:
     """
     Construct the dual of a linopy LP model.
@@ -621,17 +612,13 @@ def dualize(
         Primal linopy model to dualize. Must have a linear objective and either
         linear constraints or finite variable bounds.
 
-    add_objective_constant : float, optional
-        Constant added to the dual objective, e.g. to pass through a primal
-        objective constant that was excluded from the model.
-
     Returns
     -------
     Model
         Dual model whose variables are named after the primal constraints.
 
-    Examples
-    --------
+    Example
+    -------
     .. code-block:: python
 
         m_dual = m.dualize()
@@ -658,7 +645,5 @@ def dualize(
 
     dual_vars = _add_dual_variables(m1, m_dual)
     _add_dual_feasibility_constraints(m1, m_dual, dual_vars)
-    _add_dual_objective(
-        m1, m_dual, dual_vars, add_objective_constant=add_objective_constant
-    )
+    _add_dual_objective(m1, m_dual, dual_vars)
     return m_dual
