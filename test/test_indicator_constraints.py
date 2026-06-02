@@ -74,7 +74,10 @@ def test_indicator_constraints_not_in_regular_constraints() -> None:
     m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
 
     assert "regular" in m.constraints
-    assert "ic0" not in m.constraints
+    assert "regular" in m.constraints.regular
+    assert "ic0" in m.constraints
+    assert "ic0" in m.constraints.indicator
+    assert "ic0" not in m.constraints.regular
     assert "ic0" in m.indicator_constraints
 
 
@@ -102,7 +105,8 @@ def test_indicator_constraints_lp_file(tmp_path: Path) -> None:
     m.to_file(fn)
     content = fn.read_text()
     assert "= 1 ->" in content
-    assert "ic0:" in content
+    label = int(m.indicator_constraints["ic0"].labels.item())
+    assert f"ic{label}:" in content
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
