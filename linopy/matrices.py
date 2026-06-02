@@ -84,7 +84,7 @@ class MatrixAccessor:
                 ind_b.append(b)
                 ind_sense.append(sense)
                 ind_binvar.append(label_to_pos[cc._binvar_labels])
-                binval = cc._binval
+                binval = cast("int | np.ndarray", cc._binval)
                 n = len(b)
                 if np.ndim(binval) == 0:
                     ind_binval.append(np.full(n, int(binval), dtype=np.intp))

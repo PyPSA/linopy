@@ -1108,7 +1108,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | None = None,
         name: str | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Add indicator constraints to the model.
 
@@ -1138,7 +1138,7 @@ class Model:
 
         Returns
         -------
-        linopy.Constraint
+        linopy.constraints.ConstraintBase
             The added indicator constraint.
         """
         if not binary_var.attrs.get("binary", False):
