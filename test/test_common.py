@@ -704,6 +704,24 @@ def test_broadcast_to_coords_rejects_multiindex_coverage_gap() -> None:
         broadcast_to_coords(weights, coords, dims=["dim_3"], label="lower bound")
 
 
+def test_broadcast_to_coords_rejects_unnamed_multiindex_mismatch() -> None:
+    """
+    A MultiIndex input with unnamed levels cannot be projected by level name,
+    so it keeps its own index under the coords dim. The strict rung must still
+    reject it when its level combinations don't cover coords, just as the
+    named-level coverage-gap case does.
+    """
+    idx = pd.MultiIndex.from_product([[2020, 2030], ["t1", "t2"]], names=("p", "t"))
+    idx.name = "snapshot"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "snapshot")
+    sparse_unnamed = pd.Series({(2020, "t1"): 1.0, (2030, "t2"): 2.0})
+
+    with pytest.raises(ValueError, match=r"MultiIndex for dimension 'snapshot'"):
+        broadcast_to_coords(
+            sparse_unnamed, coords, dims=["snapshot"], label="lower bound"
+        )
+
+
 def test_broadcast_to_coords_strict_partial_level_warns() -> None:
     """
     Per-level bounds broadcast across the MI dim, with the deprecation warning.

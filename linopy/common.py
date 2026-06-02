@@ -708,15 +708,18 @@ def validate_alignment(
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
             continue
-        expected_is_mi = isinstance(coord_values, pd.MultiIndex)
-        actual_is_mi = isinstance(arr.indexes.get(dim), pd.MultiIndex)
-        if expected_is_mi or actual_is_mi:
-            if expected_is_mi and actual_is_mi:
-                if not arr.indexes[dim].equals(coord_values):
-                    raise ValueError(
-                        f"{subject}: MultiIndex for dimension {dim!r} does not "
-                        f"match coords."
-                    )
+        expected_mi = _as_multiindex(coord_values)
+        actual_mi = _as_multiindex(arr.indexes.get(dim))
+        if expected_mi is not None or actual_mi is not None:
+            if (
+                expected_mi is None
+                or actual_mi is None
+                or not actual_mi.equals(expected_mi)
+            ):
+                raise ValueError(
+                    f"{subject}: MultiIndex for dimension {dim!r} does not "
+                    f"match coords."
+                )
             continue
         expected_idx = _as_index(coord_values)
         actual_idx = arr.coords[dim].to_index()
