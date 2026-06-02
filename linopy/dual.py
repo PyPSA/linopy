@@ -94,7 +94,7 @@ def _lift_bounds_to_constraints(m: Model) -> None:
 
 def _add_dual_variables(m: Model, m2: Model) -> dict:
     """
-    Add one dual variable to m2 for each active constraint in m.
+    Add one dual variable to m2 for each included constraint in m.
 
     Dual variable bounds encode the sign convention for each constraint type
     and primal objective sense:
@@ -167,12 +167,13 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
     return dual_vars
 
 
-def _build_con_to_dual_label(m: Model, dual_vars: dict) -> np.ndarray:
+def _build_flat_con_to_dual_label_lookup(m: Model, dual_vars: dict) -> np.ndarray:
     """
-    Build a flat constraint-label → flat dual-variable-label lookup array.
+    Build a lookup from flat primal constraint labels to flat dual variable labels.
 
-    ``result[flat_con_label]`` gives the flat dual variable label in m2,
-    or -1 for constraints not in *dual_vars* or with masked labels.
+    The returned array maps each flat constraint label to the corresponding
+    flat dual variable label in ``m2``. Entries are -1 for constraints not in
+    ``dual_vars`` or with masked labels.
 
     Parameters
     ----------
@@ -215,30 +216,31 @@ def _extract_dual_feas_entries(
     flat_con_to_dual: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Return ``(flat_var_label, flat_dual_label, coeff)`` for each active NNZ entry of A.
+    Return ``(flat_var_label, flat_dual_label, coeff)`` for each included nonzero entry of ``A``.
 
-    Converts sparse matrix A to coordinate format, maps rows/columns to flat labels via *clabels* / *vlabels*,
-    and drops entries that are masked or belong to a constraint without a dual variable.
+    Converts sparse matrix ``A`` to coordinate format, maps rows/columns to
+    flat labels via ``clabels`` / ``vlabels``, and drops entries that are masked
+    or belong to a constraint without a dual variable.
 
     Parameters
     ----------
     A : scipy sparse matrix
-        Primal constraint matrix (any scipy sparse format).
+        Primal constraint matrix in any scipy sparse format.
     vlabels : np.ndarray of int64
-        Flat variable label per column of A; -1 for masked columns.
+        Flat variable label per column of ``A``; -1 for masked columns.
     clabels : np.ndarray of int64
-        Flat constraint label per row of A; -1 for masked rows.
+        Flat constraint label per row of ``A``; -1 for masked rows.
     flat_con_to_dual : np.ndarray of int64
-        Lookup array as returned by _build_con_to_dual_label().
+        Lookup array as returned by ``_build_flat_con_to_dual_label_lookup()``.
 
     Returns
     -------
     flat_v : np.ndarray of int64
-        Flat primal variable label for each retained entry.
+        Flat primal variable label for each retained nonzero entry.
     flat_d : np.ndarray of int64
         Corresponding flat dual variable label.
     coeffs : np.ndarray of float64
-        Corresponding A matrix coefficient.
+        Corresponding coefficient from ``A``.
     """
     A_coo = A.tocoo()
     flat_v = vlabels[A_coo.col].astype(np.int64)
@@ -246,8 +248,8 @@ def _extract_dual_feas_entries(
     coeffs = A_coo.data
 
     # Drop entries where either label is masked.
-    active = (flat_v != -1) & (flat_c != -1)
-    flat_v, flat_c, coeffs = flat_v[active], flat_c[active], coeffs[active]
+    has_labels = (flat_v != -1) & (flat_c != -1)
+    flat_v, flat_c, coeffs = flat_v[has_labels], flat_c[has_labels], coeffs[has_labels]
 
     # Map primal constraint labels to flat dual variable labels.
     n = len(flat_con_to_dual)
@@ -262,17 +264,18 @@ def _extract_dual_feas_entries(
 
 def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarray:
     """
-    Build a flat variable-label → objective-coefficient lookup array.
+    Build a lookup from flat variable labels to objective coefficients.
 
-    ``result[flat_var_label]`` gives the objective coefficient; unlabelled
-    positions are 0.0.
+    The returned array maps each valid flat variable label to its objective
+    coefficient. Labels that do not occur in ``vlabels`` but fall within the
+    lookup range have value 0.0.
 
     Parameters
     ----------
     vlabels : np.ndarray of int64
-        Flat variable label per column of A; -1 for masked entries.
+        Flat variable label per column of ``A``; -1 for masked columns.
     c_vec : np.ndarray of float64
-        Objective coefficient in the same column ordering.
+        Objective coefficient per column, in the same ordering as ``vlabels``.
 
     Returns
     -------
@@ -290,67 +293,71 @@ def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarra
     return lookup
 
 
-def _make_feas_lhs(
+def _build_dual_feas_lhs(
     var: Any,
     flat_v: np.ndarray,
     flat_d: np.ndarray,
     nnz_data: np.ndarray,
-    m2: Model,
+    m_dual: Model,
 ) -> LinearExpression:
     """
-    Build ``sum_i(A_ji * lambda_i)`` as a LinearExpression over *var*'s coordinates.
+    Build the dual-feasibility LHS for one primal variable.
+
+    For each coordinate of ``var``, constructs the linear expression
+    ``sum_j A[j, var] * lambda[j]`` over the corresponding dual variables.
 
     Parameters
     ----------
     var : linopy.Variable
-        Primal variable whose stationarity LHS is being constructed.
+        Primal variable whose dual-feasibility LHS is being constructed.
     flat_v : np.ndarray of int64
-        Flat primal variable labels for all active NNZ entries, as returned
-        by _extract_dual_feas_entries().
+        Flat primal variable labels for all included nonzero entries, as returned
+        by ``_extract_dual_feas_entries()``.
     flat_d : np.ndarray of int64
         Corresponding flat dual variable labels.
     nnz_data : np.ndarray of float64
-        Corresponding A matrix coefficients.
-    m2 : Model
+        Corresponding nonzero coefficients from the primal constraint matrix.
+    m_dual : Model
         Dual model owning the dual variables.
 
     Returns
     -------
     LinearExpression
-        Stationarity LHS over *var*'s coordinate space.  Returns an empty
-        expression (constant zero) when the variable has no constraint connections.
+        Dual-feasibility LHS over ``var``'s coordinate space. Returns an empty
+        expression (constant zero) when ``var`` has no included constraint-matrix
+        entries.
     """
     var_flat = var.labels.values.ravel().astype(np.int64)
     n_elements = len(var_flat)
     valid_mask = var_flat != -1
 
     if not valid_mask.any():
-        return LinearExpression(None, m2)
+        return LinearExpression(None, m_dual)
 
-    # Map flat variable labels to ravelled positions (unique per variable type).
+    # Map flat variable labels to ravelled positions in this variable.
     max_fv = int(var_flat[valid_mask].max())
     var_to_idx = np.full(max_fv + 1, -1, dtype=np.int64)
     var_to_idx[var_flat[valid_mask]] = np.where(valid_mask)[0].astype(np.int64)
 
-    # Locate NNZ entries that belong to this variable via bounded lookup.
+    # Locate entries that belong to this variable via bounded lookup.
     lin_idx = np.full(len(flat_v), -1, dtype=np.int64)
-    in_range = flat_v <= max_fv
+    in_range = (flat_v >= 0) & (flat_v <= max_fv)
     if in_range.any():
         lin_idx[in_range] = var_to_idx[flat_v[in_range]]
 
     keep = lin_idx != -1
-    lin_idx_f, flat_d_f, nnz_f = lin_idx[keep], flat_d[keep], nnz_data[keep]
+    lin_idx_f, flat_d_f, coeffs_f = lin_idx[keep], flat_d[keep], nnz_data[keep]
 
     if not len(lin_idx_f):
-        return LinearExpression(None, m2)
+        return LinearExpression(None, m_dual)
 
     # Sort by ravelled position so entries for the same element are contiguous.
     order = np.argsort(lin_idx_f, kind="stable")
     lin_idx_s = lin_idx_f[order]
     flat_d_s = flat_d_f[order]
-    nnz_s = nnz_f[order]
+    coeffs_s = coeffs_f[order]
 
-    # Compute within-group term-slot positions (fully vectorised, no Python loop).
+    # Compute within-group term-slot positions.
     # group_start[i] is True at the first entry of each new element group.
     group_start = np.empty(len(lin_idx_s), dtype=bool)
     group_start[0] = True
@@ -361,11 +368,11 @@ def _make_feas_lhs(
 
     max_terms = int(col_idx.max()) + 1
 
-    # Populate (n_elements, max_terms) arrays via advanced indexing (C-level).
+    # Populate (n_elements, max_terms) arrays via advanced indexing.
     dual_labels_2d = np.full((n_elements, max_terms), -1, dtype=np.int64)
     dual_coeffs_2d = np.zeros((n_elements, max_terms), dtype=np.float64)
     dual_labels_2d[lin_idx_s, col_idx] = flat_d_s
-    dual_coeffs_2d[lin_idx_s, col_idx] = nnz_s
+    dual_coeffs_2d[lin_idx_s, col_idx] = coeffs_s
 
     # Wrap in a LinearExpression, reshaping to (*var_dims, _term).
     target_shape = var.labels.shape + (max_terms,)
@@ -377,7 +384,7 @@ def _make_feas_lhs(
         },
         coords={dim: var.labels.coords[dim] for dim in var.labels.dims},
     )
-    return LinearExpression(ds, m2)
+    return LinearExpression(ds, m_dual)
 
 
 def _add_dual_feasibility_constraints(
@@ -409,7 +416,7 @@ def _add_dual_feasibility_constraints(
     vlabels = np.asarray(m.matrices.vlabels, dtype=np.int64)
     clabels = np.asarray(m.matrices.clabels, dtype=np.int64)
 
-    flat_con_to_dual = _build_con_to_dual_label(m, dual_vars)
+    flat_con_to_dual = _build_flat_con_to_dual_label_lookup(m, dual_vars)
     if not len(flat_con_to_dual):
         logger.warning(
             "No valid constraint labels found, skipping dual feasibility constraints."
@@ -437,7 +444,7 @@ def _add_dual_feasibility_constraints(
             coords=var.labels.coords,
         )
 
-        lhs = _make_feas_lhs(var, flat_v, flat_d, nnz_data, m2)
+        lhs = _build_dual_feas_lhs(var, flat_v, flat_d, nnz_data, m2)
         if lhs.is_constant:
             # Variable has no constraint connections (free, unconstrained variable).
             # The stationarity condition 0 = c_j cannot be expressed as a linopy

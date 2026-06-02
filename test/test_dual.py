@@ -18,9 +18,9 @@ needs_solver = pytest.mark.skipif(_lp_solver is None, reason="No LP solver avail
 # Structural tests (no solver required)
 def test_dualize_empty_model():
     m = Model()
-    m2 = dualize(m)
-    assert len(m2.variables) == 0
-    assert len(m2.constraints) == 0
+    m_dual = dualize(m)
+    assert len(m_dual.variables) == 0
+    assert len(m_dual.constraints) == 0
 
 
 def test_dual_variables_named_after_primal_constraints():
@@ -29,9 +29,9 @@ def test_dual_variables_named_after_primal_constraints():
     m.add_constraints(x >= 1.0, name="lb_con")
     m.add_objective(2.0 * x)
 
-    m2 = dualize(m)
-    assert "lb_con" in m2.variables
-    assert "x-bound-lower" in m2.variables
+    m_dual = dualize(m)
+    assert "lb_con" in m_dual.variables
+    assert "x-bound-lower" in m_dual.variables
 
 
 def test_dual_feasibility_constraints_named_after_primal_variables():
@@ -40,8 +40,8 @@ def test_dual_feasibility_constraints_named_after_primal_variables():
     m.add_constraints(x >= 1.0, name="lb_con")
     m.add_objective(2.0 * x)
 
-    m2 = dualize(m)
-    assert "x" in m2.constraints
+    m_dual = dualize(m)
+    assert "x" in m_dual.constraints
 
 
 def test_dual_objective_sense_flipped_min():
@@ -50,8 +50,8 @@ def test_dual_objective_sense_flipped_min():
     m.add_constraints(x >= 1, name="c")
     m.add_objective(x)  # min
 
-    m2 = dualize(m)
-    assert m2.objective.sense == "max"
+    m_dual = dualize(m)
+    assert m_dual.objective.sense == "max"
 
 
 def test_dual_objective_sense_flipped_max():
@@ -60,8 +60,8 @@ def test_dual_objective_sense_flipped_max():
     m.add_constraints(x <= 5, name="c")
     m.add_objective(x, sense="max")
 
-    m2 = dualize(m)
-    assert m2.objective.sense == "min"
+    m_dual = dualize(m)
+    assert m_dual.objective.sense == "min"
 
 
 def test_dual_sign_conventions_min():
@@ -73,11 +73,11 @@ def test_dual_sign_conventions_min():
     m.add_constraints(x >= -10, name="geq")
     m.add_objective(x)
 
-    m2 = dualize(m)
-    assert m2.variables["eq"].lower.item() == -np.inf
-    assert m2.variables["eq"].upper.item() == np.inf
-    assert m2.variables["leq"].upper.item() == 0
-    assert m2.variables["geq"].lower.item() == 0
+    m_dual = dualize(m)
+    assert m_dual.variables["eq"].lower.item() == -np.inf
+    assert m_dual.variables["eq"].upper.item() == np.inf
+    assert m_dual.variables["leq"].upper.item() == 0
+    assert m_dual.variables["geq"].lower.item() == 0
 
 
 def test_dual_sign_conventions_max():
@@ -88,9 +88,9 @@ def test_dual_sign_conventions_max():
     m.add_constraints(x >= -10, name="geq")
     m.add_objective(x, sense="max")
 
-    m2 = dualize(m)
-    assert m2.variables["leq"].lower.item() == 0
-    assert m2.variables["geq"].upper.item() == 0
+    m_dual = dualize(m)
+    assert m_dual.variables["leq"].lower.item() == 0
+    assert m_dual.variables["geq"].upper.item() == 0
 
 
 def test_dual_feasibility_rhs_equals_objective_coefficients():
@@ -103,8 +103,8 @@ def test_dual_feasibility_rhs_equals_objective_coefficients():
     c = np.array([10.0, 20.0, 30.0, 40.0])
     m.add_objective(c * x)
 
-    m2 = dualize(m)
-    np.testing.assert_allclose(m2.constraints["x"].rhs.values, c)
+    m_dual = dualize(m)
+    np.testing.assert_allclose(m_dual.constraints["x"].rhs.values, c)
 
 
 def test_dual_multi_constraint_per_variable():
@@ -119,9 +119,9 @@ def test_dual_multi_constraint_per_variable():
     m.add_constraints(2.0 * x == 2.0, name="c2")
     m.add_objective(5.0 * x)
 
-    m2 = dualize(m)
+    m_dual = dualize(m)
     # dual feas constraint for x: lambda_c1 + 2*lambda_c2 = 5
-    con_x = m2.constraints["x"]
+    con_x = m_dual.constraints["x"]
     # Should have 2 terms (one from c1, one from c2)
     n_terms = (con_x.vars != -1).sum(dim="_term").max().item()
     assert n_terms == 2
@@ -135,9 +135,11 @@ def test_dual_with_masked_variable():
     m.add_constraints(x >= 1.0, name="c", mask=mask)
     m.add_objective(x)
 
-    m2 = dualize(m)
-    assert "x" in m2.constraints
-    assert (m2.constraints["x"].labels != -1).sum().item() == 2  # only 2 active rows
+    m_dual = dualize(m)
+    assert "x" in m_dual.constraints
+    assert (
+        m_dual.constraints["x"].labels != -1
+    ).sum().item() == 2  # only 2 active rows
 
 
 def test_dual_free_unconstrained_variable_no_error():
@@ -150,9 +152,9 @@ def test_dual_free_unconstrained_variable_no_error():
     m.add_constraints(y == 5, name="eq")
     m.add_objective(y)  # x has no connections at all
 
-    m2 = dualize(m)  # must not raise
-    assert "y" in m2.constraints
-    assert "x" not in m2.constraints  # no constraint connections → silently skipped
+    m_dual = dualize(m)  # must not raise
+    assert "y" in m_dual.constraints
+    assert "x" not in m_dual.constraints  # no constraint connections → silently skipped
 
 
 # Numerical tests (require solver)
