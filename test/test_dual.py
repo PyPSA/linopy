@@ -273,7 +273,10 @@ def _solve(model: Model, **kwargs: Any) -> float:
     """Solve a model with the available LP solver and return its objective value."""
     assert _lp_solver is not None
     model.solve(solver_name=_lp_solver, io_api="lp", **kwargs)
-    return float(model.objective.value)
+
+    value = model.objective.value
+    assert value is not None
+    return float(value)
 
 
 @needs_solver
@@ -305,13 +308,12 @@ def test_strong_duality_array_variable() -> None:
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(n)], name="x")
 
     for i in range(4):
-        m.add_constraints(
-            sum(float(A[i, j]) * x[j] for j in range(n)) <= float(b[i]),
-            name=f"c{i}",
-        )
+        lhs: Any = sum(float(A[i, j]) * x[j] for j in range(n))
+        m.add_constraints(lhs <= float(b[i]), name=f"c{i}")
 
     # Bounded because x >= 0 and A x <= b with A > 0.
-    m.add_objective(sum(float(c_obj[j]) * x[j] for j in range(n)), sense="max")
+    obj: Any = sum(float(c_obj[j]) * x[j] for j in range(n))
+    m.add_objective(obj, sense="max")
 
     primal_obj = _solve(m)
     dual_obj = _solve(m.dualize())
