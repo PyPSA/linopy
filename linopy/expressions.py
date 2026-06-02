@@ -49,6 +49,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    broadcast_to_coords,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -582,7 +583,9 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -611,7 +614,9 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1103,7 +1108,9 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, dims=self.coord_dims, strict=False
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1865,7 +1872,7 @@ class LinearExpression(BaseExpression):
         cls,
         model: Model,
         rule: Callable,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -2290,7 +2297,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.as_dataarray`.
+        Keyword arguments passed to `linopy.common.broadcast_to_coords`.
 
     Returns
     -------
@@ -2307,7 +2314,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
