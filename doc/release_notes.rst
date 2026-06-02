@@ -5,7 +5,7 @@ Upcoming Version
 ----------------
 
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
-* Add indicator constraints for solvers that support them.
+* Add indicator constraints for solvers that support them. They are part of the unified constraints container: ``model.add_indicator_constraints`` returns a ``Constraint`` and the constraint is stored in ``model.constraints`` (filterable via ``model.constraints.indicator`` / ``model.constraints.regular``), so it round-trips through netCDF and ``model.copy()``.
 
 **Features**
 

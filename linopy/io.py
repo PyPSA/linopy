@@ -470,17 +470,18 @@ def indicator_constraints_to_file(
     Indicator constraints appear in the Subject To section with the format:
     ``ic0: x0 = 1 -> +1.0 x1 <= 5.0``
     """
-    if not m.indicator_constraints:
+    if not len(m.constraints.indicator):
         return
 
-    if not len(m.constraints):
+    if not len(m.constraints.regular):
         f.write(b"\n\ns.t.\n\n")
 
     print_variable_scalar, _ = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
-    for ic_data in m.indicator_constraints.values():
+    for con in m.constraints.indicator.data.values():
+        ic_data = con.data
         labels_flat = ic_data.labels.values.flatten()
         binary_var_flat = ic_data.binary_var.values.flatten()
         binary_val_flat = np.broadcast_to(
@@ -521,7 +522,8 @@ def constraints_to_file(
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:
-    if not len(m.constraints):
+    regular = m.constraints.regular
+    if not len(regular):
         return
 
     print_variable, print_constraint = get_printers(
@@ -529,10 +531,10 @@ def constraints_to_file(
     )
 
     f.write(b"\n\ns.t.\n\n")
-    names = m.constraints
+    names = list(regular)
     if progress:
         names = tqdm(
-            list(names),
+            names,
             desc="Writing constraints.",
             colour=TQDM_COLOR,
         )
@@ -540,7 +542,7 @@ def constraints_to_file(
     # to make this even faster, we can use polars expression
     # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
-        con = m.constraints[name]
+        con = regular[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
 
@@ -1151,7 +1153,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, Constraints
+    from linopy.constraints import Constraint, ConstraintBase, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1181,15 +1183,18 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
+    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
+        d = con.mutable().data
+        if include_solution:
+            return d.copy(deep=deep)
+        cols = m.constraints.dataset_attrs + (
+            ["binary_var", "binary_val"] if con.is_indicator else []
+        )
+        return d[cols].copy(deep=deep)
+
     new_model._constraints = Constraints(
         {
-            name: Constraint(
-                con.mutable().data.copy(deep=deep)
-                if include_solution
-                else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),
-                new_model,
-                name,
-            )
+            name: Constraint(_copy_con_data(con), new_model, name)
             for name, con in m.constraints.items()
         },
         new_model,

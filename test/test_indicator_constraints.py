@@ -6,7 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import linopy
 from linopy import Model, available_solvers
+from linopy.constraints import Constraint, CSRConstraint
 
 
 def test_add_indicator_constraints_basic() -> None:
@@ -74,7 +76,10 @@ def test_indicator_constraints_not_in_regular_constraints() -> None:
     m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
 
     assert "regular" in m.constraints
-    assert "ic0" not in m.constraints
+    assert "regular" in m.constraints.regular
+    assert "ic0" in m.constraints
+    assert "ic0" in m.constraints.indicator
+    assert "ic0" not in m.constraints.regular
     assert "ic0" in m.indicator_constraints
 
 
@@ -102,7 +107,8 @@ def test_indicator_constraints_lp_file(tmp_path: Path) -> None:
     m.to_file(fn)
     content = fn.read_text()
     assert "= 1 ->" in content
-    assert "ic0:" in content
+    label = int(m.indicator_constraints["ic0"].labels.item())
+    assert f"ic{label}:" in content
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
@@ -203,3 +209,119 @@ def test_indicator_constraints_with_coords() -> None:
     ic = m.indicator_constraints["ic0"]
     # Should have 3 indicator constraints (one per index)
     assert ic.labels.size == 3
+
+
+def test_indicator_constraint_is_in_unified_container() -> None:
+    """Indicator constraint lives in the unified container, not in regular."""
+    m = Model()
+    b = m.add_variables(name="b", binary=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(x >= 0, name="regular")
+    ic = m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+
+    assert isinstance(ic, Constraint)
+    assert ic.is_indicator
+    assert "ic0" in m.constraints
+    assert "ic0" in m.constraints.indicator
+    assert "ic0" not in m.constraints.regular
+    assert "ic0" in m.indicator_constraints
+    assert "regular" in m.constraints.regular
+    assert "regular" not in m.constraints.indicator
+
+
+def test_indicator_constraint_freeze_roundtrip() -> None:
+    """is_indicator and binary fields survive freeze and freeze->mutable."""
+    m = Model()
+    b = m.add_variables(name="b", binary=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+
+    frozen = m.constraints["ic0"].freeze()
+    assert isinstance(frozen, CSRConstraint)
+    assert frozen.is_indicator
+    assert frozen.binary_var is not None
+    assert frozen.binary_val == 1
+
+    mutable = frozen.mutable()
+    assert isinstance(mutable, Constraint)
+    assert mutable.is_indicator
+    assert mutable.binary_var is not None
+    assert np.all(mutable.binary_val == 1)
+
+
+@pytest.mark.parametrize("freeze_constraints", [False, True])
+def test_indicator_constraint_netcdf_roundtrip(
+    tmp_path: Path, freeze_constraints: bool
+) -> None:
+    """is_indicator and binary fields survive a netCDF round-trip."""
+    m = Model(freeze_constraints=freeze_constraints)
+    b = m.add_variables(name="b", binary=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(x >= 0, name="regular")
+    m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+
+    fn = tmp_path / "model.nc"
+    m.to_netcdf(fn)
+    m2 = linopy.read_netcdf(fn)
+
+    ic = m2.constraints["ic0"]
+    assert ic.is_indicator
+    assert ic.binary_var is not None
+    assert np.all(ic.binary_val == 1)
+    assert "regular" not in m2.constraints.indicator
+
+
+def test_indicator_constraint_matrix_split() -> None:
+    """Regular A excludes indicator rows; indicator arrays carry them."""
+    m = Model()
+    idx = pd.RangeIndex(3, name="i")
+    b = m.add_variables(coords=[idx], name="b", binary=True)
+    x = m.add_variables(coords=[idx], lower=0, upper=10, name="x")
+    m.add_constraints(x >= 0, name="regular")
+    m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+
+    n = idx.size
+    assert m.matrices.A.shape[0] == n
+    assert m.matrices.indicator_A.shape[0] == n
+    assert len(m.matrices.clabels) == n
+    assert m.ncons == n
+
+    np.testing.assert_array_equal(m.matrices.indicator_binval, np.full(n, 1))
+    np.testing.assert_array_equal(m.matrices.indicator_b, np.full(n, 5.0))
+    np.testing.assert_array_equal(m.matrices.indicator_sense, np.full(n, "<"))
+    assert m.matrices.indicator_binvar.shape == (n,)
+
+
+def test_indicator_constraint_copy_preserves() -> None:
+    """Model.copy preserves is_indicator and the binary fields."""
+    m = Model()
+    b = m.add_variables(name="b", binary=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+
+    mc = m.copy()
+    ic = mc.constraints["ic0"]
+    assert ic.is_indicator
+    assert ic.binary_var is not None
+    assert np.all(ic.binary_val == 1)
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.parametrize(
+    ("trigger", "expected"),
+    [(1, 5), (0, 10)],
+    ids=["active", "inactive"],
+)
+def test_indicator_constraints_solve_gurobi_direct(
+    trigger: int, expected: float
+) -> None:
+    """Direct-API Gurobi solve enforces the indicator only at the trigger."""
+    m = Model()
+    b = m.add_variables(name="b", binary=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(b >= 1, name="fix_b")
+    m.add_indicator_constraints(b, trigger, x, "<=", 5, name="ic0")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="gurobi", io_api="direct")
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, expected, atol=1e-6)
