@@ -13,6 +13,10 @@ Upcoming Version
 * After ``model.solve()``, the solver object stays available on ``model.solver``. You can inspect it, reuse it, or release the underlying solver (and its license) by calling ``model.solver.close()`` or assigning ``model.solver = None``. It is also released automatically when the model is garbage-collected.
 * New ``SolverReport`` on the result (``result.report``) reports runtime, MIP gap, dual (best) bound, and iteration counts. It is shown in ``repr(result)`` and currently populated by CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
 
+*Dualize LP models*
+
+* New ``Model.dualize()`` constructs the LP dual as a standalone model, lifting finite variable bounds into explicit constraints so they are reflected in the dual. Dual variables are named after the primal constraints. Works for linear problems with linear objective and constraints. (https://github.com/PyPSA/linopy/pull/626)
+
 *A new way to call a solver (advanced)*
 
 Most users should keep calling ``model.solve(...)``. If you want more control, you can now build the solver yourself and run it in two steps:

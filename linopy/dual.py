@@ -651,14 +651,31 @@ def dualize(
 
     For a minimization primal:
 
-        Primal (min):                       Dual (max):
-        min  c^T x                          max  b_eq^T λ + b_leq^T μ + b_geq^T ν
-        s.t.    A_eq x  =  b_eq   : λ free  s.t.    A_eq^T λ + A_leq^T μ + A_geq^T ν = c
-                A_leq x <= b_leq  : μ <= 0          λ free, μ <= 0, ν >= 0
+        Primal (min):
+        min  c^T x
+        s.t.    A_eq x  =  b_eq   : λ free
+                A_leq x <= b_leq  : μ <= 0
                 A_geq x >= b_geq  : ν >= 0
+
+        Dual (max):
+        max  b_eq^T λ + b_leq^T μ + b_geq^T ν
+        s.t.    A_eq^T λ + A_leq^T μ + A_geq^T ν = c
+                λ free, μ <= 0, ν >= 0
 
     For a maximization primal the dual variable bounds are flipped:
     μ >= 0 for <= constraints, ν <= 0 for >= constraints.
+
+    The corresponding bound conventions are:
+
+    ============  ===========  ================  ================
+    Constraint    Primal sense  lower             upper
+    ============  ===========  ================  ================
+    =             min / max     -inf              +inf  (free)
+    <=            min           -inf              0
+    <=            max           0                 +inf
+    >=            min           0                 +inf
+    >=            max           -inf              0
+    ============  ===========  ================  ================
 
     Variable bounds are converted to explicit constraints before dualization
     via _lift_bounds_to_constraints(), so that they appear in the constraint matrix
@@ -673,7 +690,8 @@ def dualize(
     Note: This constructs a standalone dual model. Pathological or unsupported
     primal formulations may lead to infeasible or unbounded dual models or may
     cause this function to raise an error. Only linear primal models with linear
-    objectives and either linear constraints or finite variable bounds are supported.
+    objectives and linear constraints are supported; finite variable bounds are
+    lifted into explicit constraints before dualization.
 
     Parameters
     ----------
