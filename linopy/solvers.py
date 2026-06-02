@@ -1601,8 +1601,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         if model.objective.sense == "max":
             gm.ModelSense = -1
 
-        if len(model.constraints):
-            assert M.A is not None
+        if M.A is not None:
             c = gm.addMConstr(M.A, x, M.sense, M.b)
             if set_names:
                 names = print_constraints(M.clabels)
@@ -1611,41 +1610,26 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         for sos_type, positions, weights in _iter_sos_sets(model):
             gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
 
-        if model.indicator_constraints:
+        if M.indicator_A is not None:
             sense_map = {
                 "<=": gurobipy.GRB.LESS_EQUAL,
                 ">=": gurobipy.GRB.GREATER_EQUAL,
                 "=": gurobipy.GRB.EQUAL,
             }
             x_list = x.tolist()
-            for ic_data in model.indicator_constraints.values():
-                labels_flat = ic_data.labels.values.flatten()
-                binary_var_flat = ic_data.binary_var.values.flatten()
-                binary_val_flat = np.broadcast_to(
-                    ic_data.binary_val.values, labels_flat.shape
-                ).flatten()
-                coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
-                vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
-                sign_flat = np.broadcast_to(
-                    ic_data.sign.values, labels_flat.shape
-                ).flatten()
-                rhs_flat = np.broadcast_to(
-                    ic_data.rhs.values, labels_flat.shape
-                ).flatten()
-                for i in range(len(labels_flat)):
-                    if labels_flat[i] == -1:
-                        continue
-                    lhs = gurobipy.LinExpr()
-                    for c, v in zip(coeffs_flat[i], vars_flat[i]):
-                        if v != -1:
-                            lhs.add(x_list[v], float(c))
-                    gm.addGenConstrIndicator(
-                        x_list[int(binary_var_flat[i])],
-                        bool(binary_val_flat[i]),
-                        lhs,
-                        sense_map[str(sign_flat[i])],
-                        float(rhs_flat[i]),
-                    )
+            A = M.indicator_A
+            for i in range(A.shape[0]):
+                lhs = gurobipy.LinExpr()
+                start, end = A.indptr[i], A.indptr[i + 1]
+                for col, coeff in zip(A.indices[start:end], A.data[start:end]):
+                    lhs.add(x_list[int(col)], float(coeff))
+                gm.addGenConstrIndicator(
+                    x_list[int(M.indicator_binvar[i])],
+                    bool(M.indicator_binval[i]),
+                    lhs,
+                    sense_map[str(M.indicator_sense[i])],
+                    float(M.indicator_b[i]),
+                )
 
         gm.update()
         return gm
