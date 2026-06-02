@@ -8,9 +8,12 @@ dynamic = ["version"]
 description = "Linear optimization with N-D labeled arrays in Python"
 readme = "README.md"
 authors = [{ name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" }]
+maintainers = [
+    { name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" },
+    { name = "Felix Bumann", email = "dev@fxbumann.de" },
+]
 license = { file = "LICENSE" }
 classifiers = [
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -23,10 +26,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "numpy; python_version > '3.10'",
-    "numpy<2; python_version <= '3.10'",
+    "numpy",
     "scipy",
     "bottleneck",
     "toolz",
@@ -47,6 +49,9 @@ Source = "https://github.com/PyPSA/linopy"
 oetc = [
     "google-cloud-storage",
     "requests",
+]
+remote = [
+    "paramiko",
 ]
 docs = [
     "ipython==8.26.0",
@@ -75,16 +80,23 @@ dev = [
     "types-requests",
     "gurobipy",
     "highspy",
+    "jupyter",
+]
+benchmarks = [
+    "pytest-benchmark",
+    "pypsa",
+    "highspy>=1.7.1",
+    "pytest-memray",
 ]
 solvers = [
     "gurobipy",
-    "highspy>=1.5.0; python_version < '3.12'",
-    "highspy>=1.7.1; python_version >= '3.12'",
-    "cplex; platform_system != 'Darwin' and python_version < '3.12'",
+    "highspy>=1.5.0,!=1.14.0; python_version < '3.12'",
+    "highspy>=1.7.1,!=1.14.0; python_version >= '3.12'",
+    "cplex; platform_system != 'Darwin'",
     "mosek",
-    "mindoptpy; python_version < '3.12'",
+    "mindoptpy",
     "coptpy!=7.2.1",
-    "xpress; platform_system != 'Darwin' and python_version < '3.11'",
+    "xpress; platform_system != 'Darwin'",
     "pyscipopt; platform_system != 'Darwin'",
     "knitro>=15.1.0",
     # "cupdlpx>=0.1.2", pip package currently unstable
@@ -102,9 +114,21 @@ version_scheme = "no-guess-dev"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-norecursedirs = ["dev-scripts", "doc", "examples", "benchmark"]
+norecursedirs = ["dev-scripts", "doc", "examples", "benchmark", "benchmarks"]
 markers = [
     "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
+]
+filterwarnings = [
+    # Silence our own EvolvingAPIWarning inside the test suite so the
+    # piecewise tests don't emit 500+ warnings.  Users still see them.
+    # Match by message prefix on the builtin FutureWarning base class
+    # rather than on ``linopy.EvolvingAPIWarning`` directly — using the
+    # class reference here would force pytest to import linopy at
+    # config-parse time, which loads ``linopy.variables`` from
+    # site-packages and then conflicts with ``--doctest-modules``
+    # collection of ``linopy/variables.py`` in the source tree on
+    # Windows CI.
+    "ignore:piecewise:FutureWarning",
 ]
 
 [tool.coverage.run]
@@ -115,7 +139,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
+exclude = ['dev/*', 'examples/*', 'benchmark/*', 'benchmarks/*', 'doc/*']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true

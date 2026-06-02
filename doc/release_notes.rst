@@ -4,31 +4,132 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
-* Harmonize coordinate alignment for operations with subset/superset objects:
-  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
-  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
-  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
-  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
-  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
-* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
-* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
-* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
-* Add the `sphinx-copybutton` to the documentation
-* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Add indicator constraints for solvers that support them.
-* Add semi-continous variables for solvers that support them
-* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
-* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
-* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
-* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
-* Enable quadratic problems with SCIP on windows.
-* Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
-* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
-* Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
 
+**Features**
+
+*Inspect the solver after solving*
+
+* After ``model.solve()``, the solver object stays available on ``model.solver``. You can inspect it, reuse it, or release the underlying solver (and its license) by calling ``model.solver.close()`` or assigning ``model.solver = None``. It is also released automatically when the model is garbage-collected.
+* New ``SolverReport`` on the result (``result.report``) reports runtime, MIP gap, dual (best) bound, and iteration counts. It is shown in ``repr(result)`` and currently populated by CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
+
+*A new way to call a solver (advanced)*
+
+Most users should keep calling ``model.solve(...)``. If you want more control, you can now build the solver yourself and run it in two steps:
+
+.. code-block:: python
+
+    solver = Solver.from_name("gurobi", model, io_api="direct", options=...)
+    result = solver.solve()
+    model.assign_result(result)  # write the solution back
+
+``Solver`` is now a dataclass, so writing a new solver backend is simpler — subclasses just override the hooks they need (``_build_direct``, ``_run_direct``, ``_run_file``).
+
+*Querying solver capabilities*
+
+* Ask a solver class what it can do via ``Gurobi.supports(SolverFeature.MIP)`` (or any other ``SolverFeature``). ``SolverFeature`` is importable from ``linopy``.
+* ``linopy.solver_capabilities`` still works (re-exports ``SolverFeature`` and ``solver_supports``), but the new ``SolverClass.supports(...)`` API is preferred.
+
+*Knowing which solvers you can actually use*
+
+* ``linopy.available_solvers`` no longer tries to acquire licenses at import time, so importing linopy is faster and doesn't grab a license from solvers like Gurobi or Mosek. **Note:** membership now means "the package is installed", not "I have a working license" (see Breaking Changes). Call ``available_solvers.refresh()`` to re-scan. Same for ``quadratic_solvers``.
+* New ``linopy.licensed_solvers``: the subset of installed solvers that currently pass a license check. Handy in tests and for picking a solver at runtime.
+* New helpers for explicit license checks: ``linopy.solvers.check_solver_licenses("gurobi", "mosek")``, ``Gurobi.license_status()``, ``Gurobi.is_available()``. They return a ``LicenseStatus`` dataclass (``name``, ``ok``, ``message``).
+
+*Constraints — CSR-backed storage*
+
+* Add ``CSRConstraint``: a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Up to 90% memory savings for constraints with many terms and 30–120× faster matrix generation for direct solver APIs.
+* Opt in globally via ``Model(freeze_constraints=True)`` or per-call via ``model.add_constraints(..., freeze=True)``.
+* Lossless conversion both ways with ``Constraint.freeze()`` / ``CSRConstraint.mutable()``.
+
+**Performance**
+
+* ~10× faster direct solver communication (``io_api="direct"``), thanks to the new CSR-based matrix construction. Conversion helpers like ``to_highspy`` benefit too.
+* Xpress now supports ``io_api="direct"``: the linopy model is loaded via the native ``loadproblem`` array API instead of being serialised through an LP/MPS file, with SOS constraints attached in-place. Adds ``model.to_xpress()`` matching the existing ``to_gurobipy`` / ``to_highspy`` / ``to_mosek`` helpers.
+* Writing the solution back to the model after solving is faster: it no longer rebuilds the constraint matrix, and now uses positional (rather than label-based) indexing — roughly 2× faster overall.
+
+**Deprecations**
+
+* ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
+
+**Bug Fixes**
+
+* SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
+* ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
+* Fix Mosek interface to inspect both the basic and IPM solutions and pick the one with the better status, so that an optimal crossover solution is not discarded when IPM terminates with a (near-)Farkas certificate.
+
+**Breaking Changes**
+
+* ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
+* ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
+* ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
+* Drop Python 3.10 support. Minimum supported version is now Python 3.11.
+
+**Internal**
+
+* Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
+* New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
+* ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
+``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
+
+Version 0.7.0
+-------------
+
+**Features**
+
+*Piecewise linear constraints (new)*
+
+* ``Model.add_piecewise_formulation((power, x_pts), (fuel, y_pts))`` adds piecewise constraints with SOS2, incremental, disjunctive, or pure-LP formulations and automatic method dispatch. Supports N-variable linking (e.g. CHP) and per-entity breakpoints; emits :class:`linopy.EvolvingAPIWarning` while the API stabilises.
+* One-sided bounds: append ``"<="`` / ``">="`` to a tuple, e.g. ``(fuel, y_pts, "<=")``. On matching convex/concave curves this dispatches to a pure-LP chord formulation.
+* Unit-commitment gating via ``active``: when zero, deactivates the piecewise relation.
+* ``PiecewiseFormulation`` exposes ``.method`` / ``.convexity`` (persisted across netCDF round-trip).
+* Construction helpers: ``linopy.breakpoints()``, ``linopy.segments()``, ``linopy.Slopes`` for per-piece slopes, and ``tangent_lines()``.
+
+*Variables*
+
+* ``fix()`` / ``unfix()`` / ``fixed`` for fixing variables to values via equality constraints (rounds integers/binaries).
+* ``relax()`` / ``unrelax()`` / ``relaxed`` for LP relaxation; supports partial relaxation (e.g. ``m.variables.integers.relax()``).
+* Semi-continuous variables on solvers that support them.
+
+*Model*
+
+* ``Model.copy()`` for a deep copy of a model, optionally including the solution; supports the ``copy`` protocol.
+* SOS1 / SOS2 reformulations for solvers without native SOS, applied automatically by ``Model.solve()`` when needed.
+* ``format_labels()`` / ``format_infeasibilities()`` return strings instead of printing; deprecates the ``print_*`` siblings.
+
+*Expressions*
+
+* Coordinate alignment between subset/superset operands: missing coords fill with 0 in arithmetic and NaN in comparisons. Fixes ``subset + var`` reverse-addition and result coords expanding past the variable's space.
+
+*Solvers*
+
+* OETC: ``Model.solve()`` forwards solver options to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
+* SCIP supports quadratic problems on Windows.
+
+**Performance**
+
+* Faster solution unpacking in ``Model.solve()``.
+
+**Bug Fixes**
+
+* ``Model.solve()`` raises a clear ``ValueError`` when no objective is set.
+* ``add_variables`` no longer ignores ``coords`` when ``lower`` / ``upper`` are DataArrays, and handles MultiIndex coords correctly with scalar bounds.
+* ``Model.to_netcdf`` no longer fails on the scipy netCDF backend when variables or constraints have MultiIndex coords; level names are now serialised as a JSON string (the legacy list form remains readable).
+* CPLEX no longer errors on quality attributes that aren't always available.
+
+**Breaking Changes**
+
+* ``google-cloud-storage`` and ``requests`` are now optional. Install ``linopy[oetc]`` to keep the previous behaviour.
+
+
+Version 0.6.7
+-------------
+
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Fix ``Model.compute_infeasibilities`` returning a flattened, deduplicated union of all IIS when Xpress found more than one. The Xpress path now computes a single IIS (via ``firstIIS``), matching the Gurobi path.
+* Use ``xarray.Dataset.copy`` instead of constructor for compatibility with the latest xarray version.
+* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 
 Version 0.6.6
 -------------

@@ -27,12 +27,14 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
+    VariableLabelIndex,
     as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
@@ -60,7 +62,6 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
 )
-from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -79,7 +80,6 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -537,31 +537,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    @overload
-    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, other: SideLike) -> Constraint: ...
-
-    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    @overload
-    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, other: SideLike) -> Constraint: ...
-
-    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, other: SideLike) -> Constraint: ...
-
-    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -578,7 +560,7 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -595,7 +577,7 @@ class Variable:
         return self.to_linexpr().add(other, join=join)
 
     def sub(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -612,7 +594,7 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -629,7 +611,7 @@ class Variable:
         return self.to_linexpr().mul(other, join=join)
 
     def div(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -645,7 +627,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
-    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -660,7 +642,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -675,7 +657,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 
@@ -994,9 +976,11 @@ class Variable:
         -------
         xr.DataArray
         """
+        from linopy.solver_capabilities import SolverFeature, solver_supports
+
         solver_model = self.model.solver_model
         if not solver_supports(
-            self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+            self.model.solver_name or "", SolverFeature.SOLVER_ATTRIBUTE_ACCESS
         ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."
@@ -1457,6 +1441,7 @@ class Variables:
     data: dict[str, Variable]
     model: Model
     _label_position_index: LabelPositionIndex | None = None
+    _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1504,15 +1489,14 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Variables"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format variable items, optionally excluding names in a group."""
+        r = ""
+        count = 0
         for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
             coords = (
                 " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
                 if ds.coords
@@ -1525,8 +1509,18 @@ class Variables:
             if ds.attrs.get("semi_continuous", False):
                 coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
-        if not len(list(self)):
+        if count == 0:
             r += "<empty>\n"
+        return r
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the variables container.
+        """
+        r = "linopy.model.Variables"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
         return r
 
     def __len__(self) -> int:
@@ -1566,6 +1560,15 @@ class Variables:
         """Invalidate the label position index cache."""
         if self._label_position_index is not None:
             self._label_position_index.invalidate()
+        if self._variable_label_index is not None:
+            self._variable_label_index.invalidate()
+
+    @property
+    def label_index(self) -> VariableLabelIndex:
+        """Index for O(1) label->position mapping and compact vlabels array."""
+        if self._variable_label_index is None:
+            self._variable_label_index = VariableLabelIndex(self)
+        return self._variable_label_index
 
     @property
     def attrs(self) -> dict[Any, Any]:

@@ -5,12 +5,13 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,8 +21,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
-from numpy import ones_like, zeros_like
-from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
@@ -100,29 +99,40 @@ def format_coord(coord: str) -> str:
 def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
-    """Get printer functions for scalar values (non-polars)."""
+    """
+    Get batch printer functions for numpy label arrays (non-polars).
+
+    Returns two callables that take an int64 numpy array of labels and return
+    a list of name strings.
+    """
     if explicit_coordinate_names:
 
-        def print_variable(var: Any) -> str:
+        def _fmt_var(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{format_coord(coord)}#{var}"
 
-        def print_constraint(cons: Any) -> str:
+        def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
             return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
-        return print_variable, print_constraint
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_var)(labels).tolist()
+
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_con)(labels).tolist()
+
+        return print_variables, print_constraints
     else:
 
-        def print_variable(var: Any) -> str:
-            return f"x{var}"
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return ("x" + pl.Series(labels).cast(pl.String)).to_list()
 
-        def print_constraint(cons: Any) -> str:
-            return f"c{cons}"
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return ("c" + pl.Series(labels).cast(pl.String)).to_list()
 
-        return print_variable, print_constraint
+        return print_variables, print_constraints
 
 
 def get_printers(
@@ -414,15 +424,22 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs[SOS_TYPE_ATTR]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
-            ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
+            # Per-set id = max member label: unique per set (labels are globally
+            # unique); a fully-masked set reduces to -1 and is dropped below.
+            ds["sos_labels"] = ds["labels"].max(sos_dim)
             ds["weights"] = ds.coords[sos_dim]
             df = to_polars(ds)
+
+            # Drop masked members
+            df = df.filter((pl.col("labels") != -1) & (pl.col("sos_labels") != -1))
+            if df.is_empty():
+                continue
 
             df = df.group_by("sos_labels").agg(
                 pl.concat_str(
@@ -451,12 +468,11 @@ def indicator_constraints_to_file(
     Write indicator constraints to the s.t. section of an LP file.
 
     Indicator constraints appear in the Subject To section with the format:
-    ``ic0: b = 1 -> +1.0 x <= 5.0``
+    ``ic0: x0 = 1 -> +1.0 x1 <= 5.0``
     """
     if not m.indicator_constraints:
         return
 
-    # If no regular constraints were written, we need the s.t. header
     if not len(m.constraints):
         f.write(b"\n\ns.t.\n\n")
 
@@ -464,7 +480,7 @@ def indicator_constraints_to_file(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
-    for ic_name, ic_data in m.indicator_constraints.items():
+    for ic_data in m.indicator_constraints.values():
         labels_flat = ic_data.labels.values.flatten()
         binary_var_flat = ic_data.binary_var.values.flatten()
         binary_val_flat = np.broadcast_to(
@@ -479,26 +495,21 @@ def indicator_constraints_to_file(
             if labels_flat[i] == -1:
                 continue
 
-            bvar_name = print_variable_scalar(int(binary_var_flat[i]))
-            bval = int(binary_val_flat[i])
+            bvar_name = print_variable_scalar(binary_var_flat[i : i + 1])[0]
+            valid = vars_flat[i] != -1
+            var_names = print_variable_scalar(vars_flat[i][valid])
 
-            # Build LHS string from coeffs and vars
             terms = []
-            for c, v in zip(coeffs_flat[i], vars_flat[i]):
-                if v == -1:
-                    continue
-                var_name = print_variable_scalar(int(v))
-                coeff = float(c)
-                if coeff >= 0:
-                    terms.append(f"+{coeff} {var_name}")
-                else:
-                    terms.append(f"{coeff} {var_name}")
+            for coeff, var_name in zip(coeffs_flat[i][valid], var_names):
+                coeff = float(coeff)
+                prefix = "+" if coeff >= 0 else ""
+                terms.append(f"{prefix}{coeff} {var_name}")
 
             lhs_str = " ".join(terms)
-            sign_str = str(sign_flat[i])
-            rhs_val = float(rhs_flat[i])
-
-            line = f"ic{labels_flat[i]}: {bvar_name} = {bval} -> {lhs_str} {sign_str} {rhs_val}\n"
+            line = (
+                f"ic{labels_flat[i]}: {bvar_name} = {int(binary_val_flat[i])} -> "
+                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i])}\n"
+            )
             f.write(line.encode())
 
 
@@ -679,7 +690,9 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = solvers.Highs._build_solver_model(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -690,399 +703,73 @@ def to_file(
 
 
 def to_mosek(
-    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    task: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
-    """
-    Export model to MOSEK.
-
-    Export the model directly to MOSEK without writing files.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    task : empty MOSEK task
-
-    Returns
-    -------
-    task : MOSEK Task object
-    """
-    if m.variables.sos:
-        raise NotImplementedError("SOS constraints are not supported by MOSEK.")
-
-    if m.variables.semi_continuous:
-        raise NotImplementedError(
-            "Semi-continuous variables are not supported by MOSEK. "
-            "Use a solver that supports them (gurobi, cplex, highs)."
-        )
-
+    """Build the MOSEK task for `m`."""
     import mosek
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
 
     if task is None:
         task = mosek.Task()
-
-    task.appendvars(m.nvars)
-    task.appendcons(m.ncons)
-
-    M = m.matrices
-    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
-    #    task.putvarname(j, n)
-
-    labels = np.vectorize(print_variable)(M.vlabels).astype(object)
-    task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+    return solvers.Mosek._build_solver_model(
+        m,
+        task,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
     )
-
-    ## Variables
-
-    # MOSEK uses bound keys (free, bounded below or above, ranged and fixed)
-    # plus bound values (lower and upper), and it is considered an error to
-    # input an infinite value for a finite bound.
-    # bkx and bkc define the boundkeys based on upper and lower bound, and blx,
-    # bux, blc and buc define the finite bounds. The numerical value of a bound
-    # indicated to be infinite by the bound key is ignored by MOSEK.
-    bkx = [
-        (
-            (
-                (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
-                if ub < np.inf
-                else mosek.boundkey.lo
-            )
-            if (lb > -np.inf)
-            else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
-        )
-        for (lb, ub) in zip(M.lb, M.ub)
-    ]
-    blx = [b if b > -np.inf else 0.0 for b in M.lb]
-    bux = [b if b < np.inf else 0.0 for b in M.ub]
-    task.putvarboundslice(0, m.nvars, bkx, blx, bux)
-
-    if len(m.binaries.labels) + len(m.integers.labels) > 0:
-        idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
-        task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-        if len(m.binaries.labels) > 0:
-            bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
-            task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
-
-    ## Constraints
-
-    if len(m.constraints) > 0:
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        for i, n in enumerate(names):
-            task.putconname(i, n)
-        bkc = [
-            (
-                (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
-                if s == "<"
-                else (
-                    (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
-                    if s == ">"
-                    else mosek.boundkey.fx
-                )
-            )
-            for s, b in zip(M.sense, M.b)
-        ]
-        blc = [b if b > -np.inf else 0.0 for b in M.b]
-        buc = [b if b < np.inf else 0.0 for b in M.b]
-        # blc = M.b
-        # buc = M.b
-        if M.A is not None:
-            A = M.A.tocsr()
-            task.putarowslice(
-                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
-            )
-            task.putconboundslice(0, m.ncons, bkc, blc, buc)
-
-    ## Objective
-    if M.Q is not None:
-        Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
-        task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(list(np.arange(m.nvars)), M.c)
-
-    if m.objective.sense == "max":
-        task.putobjsense(mosek.objsense.maximize)
-    else:
-        task.putobjsense(mosek.objsense.minimize)
-    return task
 
 
 def to_gurobipy(
-    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    env: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
-    """
-    Export the model to gurobipy.
+    """Build the gurobipy.Model for `m`."""
+    solver = solvers.Gurobi.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+        env=env,
+    )
+    return solver.solver_model
 
-    This function does not write the model to intermediate files but directly
-    passes it to gurobipy. Note that for large models this is not
-    computationally efficient.
 
-    Parameters
-    ----------
-    m : linopy.Model
-    env : gurobipy.Env
+def to_highspy(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Highs:
+    """Build the highspy.Highs instance for `m`."""
+    solver = solvers.Highs.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
+    return solver.solver_model
 
-    Returns
-    -------
-    model : gurobipy.Model
-    """
-    import gurobipy
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
+def to_xpress(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Any:
+    """Build the xpress.problem instance for `m`."""
+    return solvers.Xpress._build_solver_model(
+        m,
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
     )
 
-    m.constraints.sanitize_missings()
-    model = gurobipy.Model(env=env)
 
-    M = m.matrices
-
-    names = np.vectorize(print_variable)(M.vlabels).astype(object)
-    kwargs = {}
-    if (
-        len(m.binaries.labels)
-        + len(m.integers.labels)
-        + len(list(m.variables.semi_continuous))
-    ):
-        kwargs["vtype"] = M.vtypes
-    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
-
-    if m.is_quadratic:
-        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
-    else:
-        model.setObjective(M.c @ x)
-
-    if m.objective.sense == "max":
-        model.ModelSense = -1
-
-    if len(m.constraints):
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
-        c.setAttr("ConstrName", list(names))  # type: ignore
-
-    if m.variables.sos:
-        for var_name in m.variables.sos:
-            var = m.variables.sos[var_name]
-            sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-            sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-            def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                s = s.squeeze()
-                indices = s.values.flatten().tolist()
-                weights = s.coords[sos_dim].values.tolist()
-                model.addSOS(sos_type, x[indices].tolist(), weights)
-
-            others = [dim for dim in var.labels.dims if dim != sos_dim]
-            if not others:
-                add_sos(var.labels, sos_type, sos_dim)
-            else:
-                stacked = var.labels.stack(_sos_group=others)
-                for _, s in stacked.groupby("_sos_group"):
-                    add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
-
-    if m.indicator_constraints:
-        import gurobipy
-
-        sense_map = {
-            "<=": gurobipy.GRB.LESS_EQUAL,
-            ">=": gurobipy.GRB.GREATER_EQUAL,
-            "=": gurobipy.GRB.EQUAL,
-        }
-
-        for ic_name, ic_data in m.indicator_constraints.items():
-            labels_flat = ic_data.labels.values.flatten()
-            binary_var_flat = ic_data.binary_var.values.flatten()
-            binary_val_flat = np.broadcast_to(
-                ic_data.binary_val.values, labels_flat.shape
-            ).flatten()
-            coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
-            vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
-            sign_flat = np.broadcast_to(
-                ic_data.sign.values, labels_flat.shape
-            ).flatten()
-            rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
-
-            x_list = x.tolist()
-            for i in range(len(labels_flat)):
-                if labels_flat[i] == -1:
-                    continue
-
-                lhs = gurobipy.LinExpr()
-                for c, v in zip(coeffs_flat[i], vars_flat[i]):
-                    if v != -1:
-                        lhs.add(x_list[v], float(c))
-
-                model.addGenConstrIndicator(
-                    x_list[int(binary_var_flat[i])],
-                    bool(binary_val_flat[i]),
-                    lhs,
-                    sense_map[str(sign_flat[i])],
-                    float(rhs_flat[i]),
-                )
-
-    model.update()
-    return model
-
-
-def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
-    """
-    Export the model to highspy.
-
-    This function does not write the model to intermediate files but directly
-    passes it to highspy.
-
-    Note, this function does not track variable and constraint labels.
-
-    Parameters
-    ----------
-    m : linopy.Model
-
-    Returns
-    -------
-    model : highspy.Highs
-    """
-    if m.variables.sos:
-        raise NotImplementedError(
-            "SOS constraints are not supported by the HiGHS direct API. "
-            "Use io_api='lp' instead."
-        )
-
-    if m.indicator_constraints:
-        raise NotImplementedError(
-            "Indicator constraints are not supported by the HiGHS direct API. "
-            "Use a solver that supports them (gurobi, cplex)."
-        )
-
-    import highspy
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    M = m.matrices
-    h = highspy.Highs()
-    h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
-        vtypes = M.vtypes
-        # Map linopy vtypes to HiGHS integrality values:
-        # 0 = continuous, 1 = integer, 2 = semi-continuous
-        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
-        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
-        labels = np.arange(len(vtypes))[int_mask]
-        integrality = np.array(
-            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
-        )
-        h.changeColsIntegrality(len(labels), labels, integrality)
-        if len(m.binaries):
-            labels = np.arange(len(vtypes))[vtypes == "B"]
-            n = len(labels)
-            h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
-
-    # linear objective
-    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
-
-    # linear constraints
-    A = M.A
-    if A is not None:
-        A = A.tocsr()
-        num_cons = A.shape[0]
-        lower = np.where(M.sense != "<", M.b, -np.inf)
-        upper = np.where(M.sense != ">", M.b, np.inf)
-        h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
-
-    lp = h.getLp()
-    lp.col_names_ = np.vectorize(print_variable)(M.vlabels).astype(object)
-    if len(M.clabels):
-        lp.row_names_ = np.vectorize(print_constraint)(M.clabels).astype(object)
-    h.passModel(lp)
-
-    # quadrative objective
-    Q = M.Q
-    if Q is not None:
-        Q = triu(Q)
-        Q = Q.tocsr()
-        num_vars = Q.shape[0]
-        h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
-
-    # change objective sense
-    if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
-
-    return h
-
-
-def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxModel:
-    """
-    Export the model to cupdlpx.
-
-    This function does not write the model to intermediate files but directly
-    passes it to cupdlpx.
-
-    cuPDLPx does not support named variables and constraints, so the
-    `explicit_coordinate_names` parameter is ignored.
-
-    Parameters
-    ----------
-    m : linopy.Model
-    explicit_coordinate_names : bool, optional
-        Ignored. cuPDLPx does not support named variables/constraints.
-
-    Returns
-    -------
-    model : cupdlpx.Model
-    """
-    if m.variables.semi_continuous:
-        raise NotImplementedError(
-            "Semi-continuous variables are not supported by cuPDLPx. "
-            "Use a solver that supports them (gurobi, cplex, highs)."
-        )
-
-    import cupdlpx
-
-    if explicit_coordinate_names:
-        warnings.warn(
-            "cuPDLPx does not support named variables/constraints. "
-            "The explicit_coordinate_names parameter is ignored.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    # build model using canonical form matrices and vectors
-    # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#modeling
-    M = m.matrices
-    if M.A is None:
-        msg = "Model has no constraints, cannot export to cuPDLPx."
-        raise ValueError(msg)
-    A = M.A.tocsr()  # cuPDLPx only supports CSR sparse matrix format
-    # linopy stores constraints as Ax ?= b and keeps track of inequality
-    # sense in M.sense. Convert to separate lower and upper bound vectors.
-    l = np.where(
-        np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
-        M.b,
-        -np.inf,
-    )
-    u = np.where(
-        np.logical_or(np.equal(M.sense, "<"), np.equal(M.sense, "=")),
-        M.b,
-        np.inf,
-    )
-
-    cu_model = cupdlpx.Model(
-        objective_vector=M.c,
-        constraint_matrix=A,
-        constraint_lower_bound=l,
-        constraint_upper_bound=u,
-        variable_lower_bound=M.lb,
-        variable_upper_bound=M.ub,
-    )
-
-    # change objective sense
-    if m.objective.sense == "max":
-        cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
-
-    return cu_model
+def to_cupdlpx(m: Model) -> cupdlpxModel:
+    """Build the cupdlpx.Model for `m`."""
+    solver = solvers.cuPDLPx.from_model(m, io_api="direct")
+    return solver.solver_model
 
 
 def to_block_files(m: Model, fn: Path) -> None:
@@ -1222,7 +909,29 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token lives only on the in-memory
+    Model and is not persisted. If the model has an active SOS
+    reformulation at serialization time, the netcdf contains the
+    reformulated MILP form (aux binaries and cardinality constraints)
+    and a :class:`UserWarning` is emitted to flag that the deserialized
+    copy will not be able to undo the reformulation.
+
+    ``Model.solve(remote=...)`` invokes ``to_netcdf`` internally on the
+    reformulated model and suppresses this warning.
     """
+    if m._sos_reformulation_state is not None:
+        warnings.warn(
+            "Serializing a model with an active SOS reformulation. The "
+            "netcdf will contain the reformulated MILP form; the "
+            "reformulation lifecycle token is not persisted, so a "
+            "reader cannot undo it. Call `model.undo_sos_reformulation()` "
+            "first if you want the original SOS form on disk.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1235,7 +944,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
                 prefix_len = len(prefix) + 1  # leave original index level name
                 names = [n[prefix_len:] for n in ds[dim].to_index().names]
                 ds = ds.reset_index(dim)
-                ds.attrs[f"{dim}_multiindex"] = list(names)
+                # scipy netCDF3 backend cannot write unicode-array attrs.
+                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
 
         return ds
 
@@ -1243,7 +953,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
     cons = [
-        with_prefix(con.data, f"constraints-{name}")
+        with_prefix(con.to_netcdf_ds(), f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
     objective = m.objective.data
@@ -1258,6 +968,18 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ds = ds.assign_attrs(scalars)
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
+    if m._piecewise_formulations:
+        ds.attrs["_piecewise_formulations"] = json.dumps(
+            {
+                name: {
+                    "method": pwl.method,
+                    "variable_names": pwl.variable_names,
+                    "constraint_names": pwl.constraint_names,
+                    "convexity": pwl.convexity,
+                }
+                for name, pwl in m._piecewise_formulations.items()
+            }
+        )
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1280,15 +1002,23 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Returns
     -------
     m : linopy.Model
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token is not persisted by
+    :func:`to_netcdf`. If the saved model was in reformulated form,
+    the deserialized Model is too, but
+    :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.model import (
+    from linopy.constraints import (
         Constraint,
+        ConstraintBase,
         Constraints,
-        LinearExpression,
-        Model,
-        Variable,
-        Variables,
+        CSRConstraint,
     )
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model
+    from linopy.variables import Variable, Variables
 
     if isinstance(path, str):
         path = Path(path)
@@ -1302,11 +1032,20 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
+    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+        # str = JSON (new); iterable = legacy list from older linopy.
+        if isinstance(value, str):
+            return [str(n) for n in json.loads(value)]
+        return [str(n) for n in value]
+
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
         multiindexes = []
         for dim in ds.dims:
-            for name in ds.attrs.get(f"{dim}_multiindex", []):
+            attr = ds.attrs.get(f"{dim}_multiindex")
+            if attr is None:
+                continue
+            for name in parse_multiindex_attr(attr):
                 multiindexes.append(prefix + "-" + name)
         ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1319,8 +1058,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
         for dim in ds.dims:
             if f"{dim}_multiindex" in ds.attrs:
-                names = ds.attrs.pop(f"{dim}_multiindex")
-                ds = ds.set_index({dim: names})
+                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
+                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
 
         return ds
 
@@ -1335,10 +1074,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     cons = [str(k) for k in ds if str(k).startswith("constraints")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
-    constraints = {}
+    constraints: dict[str, ConstraintBase] = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
-        constraints[name] = Constraint(get_prefix(ds, k), m, name)
+        con_ds = get_prefix(ds, k)
+        if con_ds.attrs.get("_linopy_format") == "csr":
+            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
+        else:
+            constraints[name] = Constraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1350,10 +1093,24 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = get_prefix(ds, "parameters")
 
     for k in m.scalar_attrs:
-        setattr(m, k, ds.attrs.get(k))
+        if k in ds.attrs:
+            setattr(m, k, ds.attrs[k])
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
+
+    if "_piecewise_formulations" in ds.attrs:
+        from linopy.piecewise import PiecewiseFormulation
+
+        for name, d in json.loads(ds.attrs["_piecewise_formulations"]).items():
+            m._piecewise_formulations[name] = PiecewiseFormulation(
+                name=name,
+                method=d["method"],
+                variable_names=d["variable_names"],
+                constraint_names=d["constraint_names"],
+                model=m,
+                convexity=d["convexity"],
+            )
 
     return m
 
@@ -1394,15 +1151,10 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.model import (
-        Constraint,
-        Constraints,
-        LinearExpression,
-        Model,
-        Objective,
-        Variable,
-        Variables,
-    )
+    from linopy.constraints import Constraint, Constraints
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model, Objective
+    from linopy.variables import Variable, Variables
 
     SOLVE_STATE_ATTRS = {"status", "termination_condition"}
 
@@ -1410,6 +1162,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
         auto_mask=m._auto_mask,
+        freeze_constraints=m.freeze_constraints,
+        set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
     )
 
@@ -1430,9 +1184,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model._constraints = Constraints(
         {
             name: Constraint(
-                con.data.copy(deep=deep)
+                con.mutable().data.copy(deep=deep)
                 if include_solution
-                else con.data[m.constraints.dataset_attrs].copy(deep=deep),
+                else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),
                 new_model,
                 name,
             )
@@ -1443,7 +1197,11 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
 
     obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
     new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
-    new_model._objective._value = m.objective.value if include_solution else None
+    new_model._objective._value = (
+        float(m.objective.value)
+        if (include_solution and m.objective.value is not None)
+        else None
+    )
 
     new_model._parameters = m._parameters.copy(deep=deep)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
@@ -1451,6 +1209,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+
+    if m._sos_reformulation_state is not None:
+        new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
 
     return new_model
 

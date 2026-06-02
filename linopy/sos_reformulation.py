@@ -8,8 +8,11 @@ that don't support them natively.
 from __future__ import annotations
 
 import logging
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -233,8 +236,10 @@ def reformulate_sos_constraints(
     1. If custom big_m was specified in add_sos_constraints(), use that
     2. Otherwise, use the variable bounds (tightest valid Big-M)
 
-    Note: This permanently mutates the model. To solve with automatic
-    undo, use ``model.solve(reformulate_sos=True)`` instead.
+    Note: This permanently mutates the model and returns a token the caller
+    owns. For a stateful, reversible API use ``model.apply_sos_reformulation()``
+    / ``model.undo_sos_reformulation()``; for automatic undo around a single
+    solve use ``model.solve(reformulate_sos=True)``.
 
     Parameters
     ----------
@@ -326,3 +331,41 @@ def undo_sos_reformulation(model: Model, result: SOSReformulationResult) -> None
             model.variables[var_name].attrs.update(attrs)
 
     model.objective._value = objective_value
+
+
+@contextmanager
+def sos_reformulation_context(
+    model: Model,
+    solver_name: str | None,
+    reformulate_sos: bool | Literal["auto"],
+) -> Iterator[bool]:
+    """
+    Apply SOS reformulation for the duration of the block, then undo.
+
+    Yields whether the reformulation was actually applied, so callers can
+    branch on it (e.g. to scope a warning suppression).
+    """
+    applied = model._resolve_sos_reformulation(solver_name, reformulate_sos)
+    if applied:
+        logger.info(f"Reformulating SOS constraints for solver {solver_name}")
+        model.apply_sos_reformulation()
+    try:
+        yield applied
+    finally:
+        if applied:
+            model.undo_sos_reformulation()
+
+
+@contextmanager
+def suppress_serialization_warning(active: bool) -> Iterator[None]:
+    """Silence the SOS-active-on-serialize UserWarning when ``active`` is True."""
+    if not active:
+        yield
+        return
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Serializing a model with an active SOS reformulation",
+            category=UserWarning,
+        )
+        yield

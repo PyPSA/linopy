@@ -6,6 +6,7 @@ Test function defined in the Model class.
 from __future__ import annotations
 
 import copy as pycopy
+import weakref
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -39,6 +40,38 @@ def test_model_solver_dir() -> None:
     d: str = gettempdir()
     m: Model = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
+
+
+def test_model_config_defaults() -> None:
+    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
+    assert m.freeze_constraints is True
+    assert m.set_names_in_solver_io is False
+
+
+def test_model_copy_preserves_config() -> None:
+    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
+    copied = m.copy()
+    assert copied.freeze_constraints is True
+    assert copied.set_names_in_solver_io is False
+
+
+def test_model_is_weakrefable() -> None:
+    m: Model = Model()
+    ref = weakref.ref(m)
+    assert ref() is m
+
+
+def test_model_weakkeydict_use_case() -> None:
+    # third-party extensions rely on WeakKeyDictionary for per-instance storage
+    registry: weakref.WeakKeyDictionary[Model, str] = weakref.WeakKeyDictionary()
+    m: Model = Model()
+    registry[m] = "extension-state"
+    assert registry[m] == "extension-state"
+    del m
+    import gc
+
+    gc.collect()
+    assert len(registry) == 0
 
 
 def test_model_variable_getitem() -> None:
@@ -93,6 +126,14 @@ def test_objective() -> None:
         m.objective = m.objective + 3
 
 
+def test_solve_without_objective_raises() -> None:
+    # https://github.com/PyPSA/linopy/issues/668
+    m: Model = Model()
+    m.add_variables(lower=0, upper=10, name="myvar")
+    with pytest.raises(ValueError, match="No objective has been set"):
+        m.solve()
+
+
 def test_remove_variable() -> None:
     m: Model = Model()
 
@@ -110,10 +151,11 @@ def test_remove_variable() -> None:
 
     assert "x" in m.variables
 
-    m.remove_variables("x")
+    with pytest.warns(UserWarning, match="con0"):
+        m.remove_variables("x")
     assert "x" not in m.variables
 
-    assert not m.constraints.con0.vars.isin(x.labels).any()
+    assert "con0" not in m.constraints
 
     assert not m.objective.vars.isin(x.labels).any()
 
