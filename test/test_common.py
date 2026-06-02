@@ -5,7 +5,9 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+import warnings
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -15,16 +17,18 @@ import xarray as xr
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import LinearExpression, Model, Variable
+from linopy import EvolvingAPIWarning, LinearExpression, Model, Variable
 from linopy.common import (
     align,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    broadcast_to_coords,
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
 from linopy.types import CoordsLike
@@ -345,6 +349,7 @@ def test_as_dataarray_with_ndarray_coords_dict_dims_aligned() -> None:
 
 
 def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
+    """as_dataarray converts only: dims label the axes, extra coord entries are dropped."""
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
@@ -352,6 +357,18 @@ def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
     assert da.dims == target_dims
     assert list(da.coords["dim_0"].values) == ["a", "b"]
     assert "dim_2" not in da.coords
+
+
+def test_broadcast_to_coords_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
+    """Coords is source of truth: extra coord entries broadcast into the result."""
+    target_dims = ("dim_0", "dim_1")
+    target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
+    arr = np.array([[1, 2], [3, 4]])
+    da = broadcast_to_coords(arr, coords=target_coords, dims=target_dims, strict=False)
+    # dims labels the positional axes; coords adds dim_2 by broadcast.
+    assert set(da.dims) == {"dim_0", "dim_1", "dim_2"}
+    assert list(da.coords["dim_0"].values) == ["a", "b"]
+    assert list(da.coords["dim_2"].values) == ["A", "B"]
 
 
 def test_as_dataarray_with_number() -> None:
@@ -481,6 +498,423 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
+
+
+def test_broadcast_to_coords_preserves_extra_dims() -> None:
+    """Extra dims in the input are not rejected — they broadcast downstream."""
+    arr = DataArray(
+        [[1, 2], [3, 4], [5, 6]],
+        dims=["a", "t"],
+        coords={"a": [0, 1, 2], "t": [10, 20]},
+    )
+    coords = {"a": [0, 1, 2]}
+    da = broadcast_to_coords(arr, coords=coords, strict=False)
+    assert set(da.dims) == {"a", "t"}
+    assert list(da.coords["t"].values) == [10, 20]
+
+
+def test_broadcast_to_coords_keeps_disjoint_shared_dim_values() -> None:
+    """Different value sets on a shared dim are passed through (xr.align handles)."""
+    arr = DataArray([1, 2, 3, 4, 5], dims=["a"], coords={"a": [0, 1, 2, 3, 4]})
+    coords = {"a": [2, 3]}
+    da = broadcast_to_coords(arr, coords=coords, strict=False)
+    # No exception, no reindex; downstream alignment intersects.
+    assert list(da.coords["a"].values) == [0, 1, 2, 3, 4]
+
+
+def test_broadcast_to_coords_expands_missing_multiindex_dim_keeps_levels() -> None:
+    """
+    Broadcasting a missing MultiIndex dim must keep its level coords intact.
+
+    expand_dims drops MultiIndex level coords, leaving a degenerate flat
+    index that fails to align downstream (PyPSA multi-investment regression).
+    """
+    midx = pd.MultiIndex.from_tuples(
+        [(2020, 0), (2020, 1), (2030, 0), (2030, 1)],
+        names=["period", "timestep"],
+    )
+    midx.name = "snapshot"
+    sc = xr.Coordinates.from_pandas_multiindex(midx, "snapshot")
+    labels = DataArray(
+        [[1], [2], [3], [4]], coords={**sc, "name": ["1"]}, dims=["snapshot", "name"]
+    )
+    coeff = broadcast_to_coords(
+        DataArray([1.0], coords={"name": ["1"]}, dims=["name"]),
+        coords=labels.coords,
+        dims=labels.dims,
+        strict=False,
+    )
+    assert set(coeff.xindexes) == {"snapshot", "period", "timestep", "name"}
+    coeff.reindex_like(labels, fill_value=0)
+
+
+def test_broadcast_to_coords_broadcasts_single_multiindex_level() -> None:
+    """
+    A constant indexed by one MultiIndex level broadcasts across the MI dim.
+
+    PyPSA multi-investment multiplies an expression over a (period, timestep)
+    'snapshot' MultiIndex by a weighting indexed only by 'period'. Each entry
+    of the MultiIndex must pick up its level's value.
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        da = broadcast_to_coords(by_level1, coords=coords, dims=["dim_3"], strict=False)
+
+    assert da.dims == ("dim_3",)
+    assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
+    assert da.sel(dim_3=(1, "a")).item() == 10.0
+    assert da.sel(dim_3=(1, "b")).item() == 10.0
+    assert da.sel(dim_3=(2, "a")).item() == 20.0
+    assert da.sel(dim_3=(2, "b")).item() == 20.0
+
+
+def test_broadcast_to_coords_stacks_full_multiindex_levels() -> None:
+    """
+    A constant indexed by all MI level names stacks element-wise into the MI dim.
+
+    PyPSA's storage_weightings is a pandas Series over a (period, timestep)
+    MultiIndex subset (the last snapshot of each period); it must align onto
+    the matching level combinations of the 'snapshot' MultiIndex. Combinations the subset does
+    not cover are left as NaN (broadcast path).
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
+    weights = pd.Series([10.0, 20.0], index=subset)
+
+    with pytest.warns(
+        EvolvingAPIWarning, match=r"filling uncovered level combinations"
+    ):
+        da = broadcast_to_coords(weights, coords=coords, dims=["dim_3"], strict=False)
+
+    assert da.dims == ("dim_3",)
+    assert isinstance(da.indexes["dim_3"], pd.MultiIndex)
+    assert da.sel(dim_3=(1, "a")).item() == 10.0
+    assert da.sel(dim_3=(2, "b")).item() == 20.0
+    assert np.isnan(da.sel(dim_3=(1, "b")).item())
+    assert np.isnan(da.sel(dim_3=(2, "a")).item())
+
+
+def test_broadcast_to_coords_full_multiindex_full_coverage_is_silent() -> None:
+    """
+    Full-level, fully-covering alignment is convention-clean → no warning.
+
+    Aligning an input that reconstructs the whole MultiIndex onto its dim is
+    equivalent to the input already carrying that dim (future §11), so it must
+    not emit the EvolvingAPIWarning the partial/gap projections do.
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    full = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", EvolvingAPIWarning)
+        da = broadcast_to_coords(full, coords=coords, dims=["dim_3"], strict=False)
+
+    assert da.dims == ("dim_3",)
+    assert da.values.tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_broadcast_to_coords_level_projection_ambiguous_raises() -> None:
+    """A level name shared by two MI dims cannot be resolved."""
+    a = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("shared", "x"))
+    b = pd.MultiIndex.from_product([[1, 2], ["c", "d"]], names=("shared", "y"))
+    coords = {
+        **xr.Coordinates.from_pandas_multiindex(a, "dimA"),
+        **xr.Coordinates.from_pandas_multiindex(b, "dimB"),
+    }
+    arr = DataArray([1.0, 2.0], coords={"shared": [1, 2]}, dims=["shared"])
+
+    with pytest.raises(ValueError, match=r"shared.*shared by MultiIndex"):
+        broadcast_to_coords(arr, coords=coords, strict=False)
+
+
+def test_broadcast_to_coords_level_projection_missing_value_raises() -> None:
+    """A level value absent from the input cannot be broadcast."""
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 9]}, dims=["level1"])
+
+    with pytest.raises(ValueError, match=r"Cannot align level.*is missing"):
+        broadcast_to_coords(by_level1, coords=coords, dims=["dim_3"], strict=False)
+
+
+def test_broadcast_to_coords_unrelated_multiindex_series_still_unstacks() -> None:
+    """A MI Series whose levels match no coords MI dim keeps unstacking."""
+    sub = pd.MultiIndex.from_product([["p", "q"], [1, 2]], names=["foo", "bar"])
+    series = pd.Series([1.0, 2.0, 3.0, 4.0], index=sub)
+
+    da = broadcast_to_coords(series, coords={"time": [0, 1, 2]}, strict=False)
+
+    assert set(da.dims) == {"time", "foo", "bar"}
+
+
+# ---------------------------------------------------------------------------
+# Strictness: as_dataarray (convert) ⊂ broadcast_to_coords(strict=False) ⊂ broadcast_to_coords(strict=True)
+# ---------------------------------------------------------------------------
+
+
+def test_as_dataarray_does_not_expand_missing_coord_dims() -> None:
+    """as_dataarray converts; only broadcast_to_coords expands missing dims."""
+    coords = {"a": [0, 1], "b": [10, 20]}
+    arr = np.array([1, 2])
+
+    converted = as_dataarray(arr, coords=coords, dims=["a"])
+    assert converted.dims == ("a",)
+
+    broadcast = broadcast_to_coords(arr, coords=coords, dims=["a"], strict=False)
+    assert broadcast.dims == ("a", "b")
+
+
+def test_extra_dims_pass_broadcast_rung_fail_strict_rung() -> None:
+    """Extra dims pass through the broadcast rung but fail the strict rung."""
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "t"], coords={"a": [0, 1], "t": [10, 20]}
+    )
+    coords = {"a": [0, 1]}
+
+    da = broadcast_to_coords(arr, coords=coords, strict=False)
+    assert set(da.dims) == {"a", "t"}
+
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        broadcast_to_coords(arr, coords, label="lower bound")
+
+
+def test_broadcast_to_coords_rejects_multiindex_coverage_gap() -> None:
+    """A coverage gap warns on the broadcast rung but raises on the strict rung."""
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    subset = pd.MultiIndex.from_tuples([(1, "a"), (2, "b")], names=["level1", "level2"])
+    weights = pd.Series([10.0, 20.0], index=subset)
+
+    with pytest.warns(
+        EvolvingAPIWarning, match=r"filling uncovered level combinations"
+    ):
+        broadcast_to_coords(weights, coords=coords, dims=["dim_3"], strict=False)
+
+    with pytest.raises(ValueError, match=r"no value for .* level combination"):
+        broadcast_to_coords(weights, coords, dims=["dim_3"], label="lower bound")
+
+
+def test_broadcast_to_coords_rejects_unnamed_multiindex_mismatch() -> None:
+    """
+    A MultiIndex input with unnamed levels cannot be projected by level name,
+    so it keeps its own index under the coords dim. The strict rung must still
+    reject it when its level combinations don't cover coords, just as the
+    named-level coverage-gap case does.
+    """
+    idx = pd.MultiIndex.from_product([[2020, 2030], ["t1", "t2"]], names=("p", "t"))
+    idx.name = "snapshot"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "snapshot")
+    sparse_unnamed = pd.Series({(2020, "t1"): 1.0, (2030, "t2"): 2.0})
+
+    with pytest.raises(ValueError, match=r"MultiIndex for dimension 'snapshot'"):
+        broadcast_to_coords(
+            sparse_unnamed, coords, dims=["snapshot"], label="lower bound"
+        )
+
+
+def test_broadcast_to_coords_strict_partial_level_warns() -> None:
+    """
+    Per-level bounds broadcast across the MI dim, with the deprecation warning.
+
+    Scenario B (#732 / #737 discussion): implicit MI-level projection is
+    deprecated everywhere, including the strict (bounds/mask) path, and will
+    raise under the v1 convention.
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        da = broadcast_to_coords(by_level1, coords, dims=["dim_3"], label="lower bound")
+
+    assert da.sel(dim_3=(1, "b")).item() == 10.0
+    assert da.sel(dim_3=(2, "a")).item() == 20.0
+
+
+def test_validate_alignment_rejects_extra_dims() -> None:
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        validate_alignment(arr, {"a": [0, 1]})
+
+
+def test_validate_alignment_rejects_value_mismatch() -> None:
+    arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match coords"):
+        validate_alignment(arr, {"a": [10, 20, 30]})
+
+
+def test_validate_alignment_allows_subset_dims() -> None:
+    """arr.dims ⊂ coords.dims is fine (broadcasting fills the missing dim)."""
+    arr = DataArray([1, 2, 3], dims=["a"], coords={"a": [0, 1, 2]})
+    validate_alignment(arr, {"a": [0, 1, 2], "b": [10, 20]})  # no raise
+
+
+def test_validate_alignment_unnamed_coords_and_dims() -> None:
+    """coords=[[...]], dims=[...] enforces the same contract as a named mapping."""
+    arr = DataArray([1, 2, 3], dims=["x"], coords={"x": [0, 1, 2]})
+    validate_alignment(arr, [[0, 1, 2]], dims=["x"])  # no raise
+
+    bad = DataArray(
+        [[1, 2], [3, 4]], dims=["x", "y"], coords={"x": [0, 1], "y": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"not declared in coords"):
+        validate_alignment(bad, [[0, 1]], dims=["x"])
+
+
+def test_validate_alignment_label_in_error() -> None:
+    arr = DataArray(
+        [[1, 2], [3, 4]], dims=["a", "b"], coords={"a": [0, 1], "b": [0, 1]}
+    )
+    with pytest.raises(ValueError, match=r"lower bound has dimension\(s\) \['b'\]"):
+        validate_alignment(arr, {"a": [0, 1]}, label="lower bound")
+
+
+def test_broadcast_to_coords_strict_requires_label() -> None:
+    """strict=True without label raises: errors must name their subject."""
+    with pytest.raises(TypeError, match=r"requires `label`"):
+        broadcast_to_coords(np.array([1, 2]), {"x": [0, 1]})  # type: ignore[call-overload]
+
+
+def test_broadcast_to_coords_wraps_conversion_errors() -> None:
+    with pytest.raises(ValueError, match=r"lower bound could not be aligned"):
+        broadcast_to_coords(np.array([1, 2]), {"x": [0, 1, 2]}, label="lower bound")
+
+
+def test_broadcast_to_coords_preserves_type_errors() -> None:
+    """Unsupported input types stay TypeError (don't become ValueError)."""
+    with pytest.raises(TypeError, match=r"lower bound could not be aligned"):
+        broadcast_to_coords(lambda x: x, {"x": [0, 1, 2]}, label="lower bound")
+
+
+def test_broadcast_to_coords_does_not_relabel_coords_errors() -> None:
+    """Coords-side TypeError carries its own message, not the value label."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+    with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
+        broadcast_to_coords(np.array([1, 2, 3, 4]), [mi], label="lower bound")
+
+
+class TestCoordsToDictRules:
+    """
+    One test per row of the ``_coords_to_dict`` rules table.
+
+    Each test name states the rule it pins; the assertions show the
+    expected outcome. Together they form the executable spec of how
+    sequence-form ``coords`` entries are named.
+    """
+
+    @staticmethod
+    def _parse(coords: Any, dims: Any = None) -> dict:
+        from linopy.common import _coords_to_dict
+
+        return _coords_to_dict(coords, dims=dims)
+
+    # -- container forms ---------------------------------------------------
+
+    def test_mapping_is_returned_as_shallow_dict_copy(self) -> None:
+        src = {"x": [0, 1, 2], "y": [10, 20]}
+        result = self._parse(src)
+        assert result == src
+        assert result is not src
+
+    def test_xarray_coordinates_keeps_only_dim_entries(self) -> None:
+        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        coords = xr.Coordinates.from_pandas_multiindex(midx, "stacked")
+        result = self._parse(coords)
+        assert set(result) == {"stacked"}
+
+    # -- pd.Index entries --------------------------------------------------
+
+    def test_named_pd_index_uses_its_name(self) -> None:
+        result = self._parse([pd.Index([0, 1, 2], name="x")])
+        assert set(result) == {"x"}
+
+    def test_unnamed_pd_index_with_dims_uses_dims(self) -> None:
+        result = self._parse([pd.Index([0, 1, 2])], dims=["x"])
+        assert set(result) == {"x"}
+
+    def test_unnamed_pd_index_without_dims_is_size_only(self) -> None:
+        # Same as a bare sequence: contributes no dim name; xarray assigns
+        # ``dim_0`` downstream.
+        assert self._parse([pd.Index([0, 1, 2])]) == {}
+        m = Model()
+        v = m.add_variables(coords=[pd.Index([0, 1, 2])])
+        assert v.dims == ("dim_0",)
+
+    # -- pd.MultiIndex entries --------------------------------------------
+
+    def test_named_multiindex_uses_its_name(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        mi.name = "multi"
+        result = self._parse([mi])
+        assert set(result) == {"multi"}
+
+    def test_unnamed_multiindex_with_dims_uses_dims(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        result = self._parse([mi], dims=["multi"])
+        assert set(result) == {"multi"}
+        assert result["multi"].name == "multi"
+        assert mi.name is None  # caller's MultiIndex not mutated
+
+    def test_unnamed_multiindex_without_dims_raises(self) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+        with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
+            self._parse([mi])
+
+    # -- bare sequence entries --------------------------------------------
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_with_dims_uses_dims(self, entry: Any) -> None:
+        result = self._parse([entry], dims=["x"])
+        assert set(result) == {"x"}
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_without_dims_is_silently_skipped(self, entry: Any) -> None:
+        assert self._parse([entry]) == {}
+
+    @pytest.mark.parametrize(
+        "entry",
+        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
+        ids=["list", "tuple", "range", "ndarray"],
+    )
+    def test_bare_sequence_without_dims_falls_through_to_xarray_dim_0(
+        self, entry: Any
+    ) -> None:
+        m = Model()
+        v = m.add_variables(coords=[entry])
+        assert v.dims == ("dim_0",)
+
+    # -- unsupported entries ----------------------------------------------
+
+    def test_dataarray_entry_raises(self) -> None:
+        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
+            self._parse([DataArray([0, 1, 2], dims=["x"])])
+
+    def test_unknown_type_entry_raises(self) -> None:
+        class Foo: ...
+
+        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
+            self._parse([Foo()])
 
 
 def test_best_int() -> None:

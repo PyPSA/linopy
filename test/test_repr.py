@@ -40,6 +40,7 @@ f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 multiindex = pd.MultiIndex.from_product(
     [list("asdfhjkg"), list("asdfghj")], names=["level_0", "level_1"]
 )
+multiindex.name = "multi"
 g = m.add_variables(coords=[multiindex], name="g")
 
 # create linear expression for each variable
