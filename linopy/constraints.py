@@ -1754,7 +1754,7 @@ class Constraints:
         This excludes constraints with missing labels or where all variables
         are masked (vars == -1).
         """
-        return sum(con.ncons for con in self.data.values())
+        return sum(con.ncons for con in self.data.values() if not con.is_indicator)
 
     @property
     def inequalities(self) -> Constraints:
@@ -1972,9 +1972,13 @@ class Constraints:
         csrs = []
         con_labels_list = []
         for c in self.data.values():
+            if c.is_indicator:
+                continue
             csr, con_labels = c.to_matrix(label_index)
             csrs.append(csr)
             con_labels_list.append(con_labels)
+        if not csrs:
+            raise ValueError("No constraints available to convert to matrix.")
         return scipy.sparse.vstack(csrs, format="csr"), np.concatenate(con_labels_list)
 
     def reset_dual(self) -> None:

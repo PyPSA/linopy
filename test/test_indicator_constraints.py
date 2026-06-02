@@ -284,6 +284,7 @@ def test_indicator_constraint_matrix_split() -> None:
     assert m.matrices.A.shape[0] == n
     assert m.matrices.indicator_A.shape[0] == n
     assert len(m.matrices.clabels) == n
+    assert m.ncons == n
 
     np.testing.assert_array_equal(m.matrices.indicator_binval, np.full(n, 1))
     np.testing.assert_array_equal(m.matrices.indicator_b, np.full(n, 5.0))
