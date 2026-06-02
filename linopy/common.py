@@ -229,7 +229,7 @@ def as_dataarray(
     polars, numpy, scalar, DataArray) and labels positional axes with
     ``dims`` / ``coords``. The result is not reshaped against ``coords``:
     dims are neither expanded, reordered, nor projected onto MultiIndex
-    dims. Use :func:`broadcast_to_coords` or :func:`strict_broadcast_to_coords` when
+    dims. Use :func:`broadcast_to_coords` when
     ``coords`` should govern the result's shape.
 
     Parameters
@@ -502,6 +502,9 @@ def broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    *,
+    strict: bool = True,
+    label: str | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -513,14 +516,18 @@ def broadcast_to_coords(
     are expanded, dims naming levels of a stacked-MultiIndex coords dim are
     projected onto it, and the result is transposed to ``coords`` order.
 
-    Dims of ``arr`` not present in ``coords``, and shared dims with
-    disagreeing value sets, pass through unchanged so downstream xarray
-    alignment can handle them. Use :func:`strict_broadcast_to_coords` to enforce that
-    ``arr`` stays within ``coords``.
+    ``strict`` decides what happens to anything broadcasting alone cannot
+    resolve — extra dims, disagreeing coord values, and MultiIndex coverage
+    gaps:
 
-    Implicit MultiIndex-level projections (a level subset, or one that
-    leaves entries uncovered) emit an :class:`~linopy.EvolvingAPIWarning`;
-    the v1 arithmetic convention will require them to be explicit.
+    - ``strict=True`` (default): raise, naming ``label`` in the error.
+      Partial-level broadcasts stay silent (the documented bounds-broadcast
+      feature).
+    - ``strict=False``: pass through unchanged so downstream xarray
+      alignment can handle them. Implicit MultiIndex-level projections
+      (a level subset, or one that leaves entries uncovered) emit an
+      :class:`~linopy.EvolvingAPIWarning`; the v1 arithmetic convention
+      will require them to be explicit.
 
     Parameters
     ----------
@@ -531,31 +538,56 @@ def broadcast_to_coords(
         back to plain conversion.
     dims
         Dimension names used to label positional axes.
+    strict
+        Check that the result stays within ``coords`` (raise on violation)
+        instead of passing violations through.
+    label
+        Name of the argument in error messages (e.g. ``"lower bound"``);
+        only used when ``strict=True``.
     **kwargs
         Forwarded to the underlying DataArray construction.
 
     Returns
     -------
     DataArray
-        Broadcast against ``coords``; extra dims and disagreeing entries
-        pass through.
+        Broadcast against ``coords``.
     """
-    da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
+    if not strict:
+        da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
+        for p in projections:
+            if p.is_partial or p.has_gap:
+                kind = (
+                    f"broadcasting level subset {p.levels}"
+                    if p.is_partial
+                    else f"filling uncovered entries with NaN (from level(s) {p.levels})"
+                )
+                warn(
+                    f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                    f"dimension {p.dim!r}. The v1 arithmetic convention will require "
+                    f"this to be explicit; reindex onto the dimension or use a "
+                    f"named method with `join=` to keep current behavior.",
+                    EvolvingAPIWarning,
+                    stacklevel=2,
+                )
+        return da
+
+    subject = label or "Value"
+    if coords is not None:
+        _coords_to_dict(coords, dims=dims)
+    try:
+        da, projections = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
+    except TypeError as err:
+        raise TypeError(f"{subject} could not be aligned to coords: {err}") from err
+    except (ValueError, CoordinateValidationError) as err:
+        raise ValueError(f"{subject} could not be aligned to coords: {err}") from err
     for p in projections:
-        if p.is_partial or p.has_gap:
-            kind = (
-                f"broadcasting level subset {p.levels}"
-                if p.is_partial
-                else f"filling uncovered entries with NaN (from level(s) {p.levels})"
+        if p.has_gap:
+            raise ValueError(
+                f"{subject} could not be aligned to coords: input does not cover "
+                f"every entry of MultiIndex dimension {p.dim!r} (aligned from "
+                f"level(s) {p.levels})."
             )
-            warn(
-                f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                f"dimension {p.dim!r}. The v1 arithmetic convention will require "
-                f"this to be explicit; reindex onto the dimension or use a "
-                f"named method with `join=` to keep current behavior.",
-                EvolvingAPIWarning,
-                stacklevel=2,
-            )
+    validate_alignment(da, coords, dims=dims, label=label)
     return da
 
 
@@ -619,65 +651,6 @@ def validate_alignment(
                 f"coords — expected {expected_idx.tolist()}, got "
                 f"{actual_idx.tolist()}."
             )
-
-
-def strict_broadcast_to_coords(
-    arr: Any,
-    coords: CoordsLike | None,
-    *,
-    label: str,
-    dims: DimsLike | None = None,
-    **kwargs: Any,
-) -> DataArray:
-    """
-    :func:`broadcast_to_coords` with a strict failure mode.
-
-    The same broadcast, but anything it cannot resolve by broadcasting alone
-    raises instead of passing through: extra dims, disagreeing coord values,
-    and MultiIndex coverage gaps. Errors are raised as :class:`ValueError` /
-    :class:`TypeError` naming ``label``; coords-parsing errors propagate
-    unchanged.
-
-    Partial-level broadcasts (input indexed by a subset of a MultiIndex's
-    levels) are silent here — they are the documented bounds-broadcast
-    feature, not the arithmetic-convention concern that makes
-    :func:`broadcast_to_coords` warn.
-
-    Parameters
-    ----------
-    arr
-        The input to convert and broadcast.
-    coords
-        Coordinate values the result must stay within.
-    label
-        Name of the argument in error messages (e.g. ``"lower bound"``).
-    dims
-        Dimension names used to label positional axes.
-    **kwargs
-        Forwarded to the underlying DataArray construction.
-
-    Returns
-    -------
-    DataArray
-        Broadcast against ``coords`` and verified to stay within it.
-    """
-    if coords is not None:
-        _coords_to_dict(coords, dims=dims)
-    try:
-        da, projections = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
-    except TypeError as err:
-        raise TypeError(f"{label} could not be aligned to coords: {err}") from err
-    except (ValueError, CoordinateValidationError) as err:
-        raise ValueError(f"{label} could not be aligned to coords: {err}") from err
-    for p in projections:
-        if p.has_gap:
-            raise ValueError(
-                f"{label} could not be aligned to coords: input does not cover "
-                f"every entry of MultiIndex dimension {p.dim!r} (aligned from "
-                f"level(s) {p.levels})."
-            )
-    validate_alignment(da, coords, dims=dims, label=label)
-    return da
 
 
 def _coords_to_dict(

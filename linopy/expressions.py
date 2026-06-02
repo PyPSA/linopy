@@ -583,7 +583,9 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = broadcast_to_coords(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -612,7 +614,9 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = broadcast_to_coords(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1104,7 +1108,9 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, CONSTANT_TYPES):
-            rhs = broadcast_to_coords(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, dims=self.coord_dims, strict=False
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -2308,7 +2314,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = broadcast_to_coords(obj, **kwargs)
+            obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)

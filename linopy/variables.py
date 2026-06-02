@@ -329,7 +329,7 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = broadcast_to_coords(
-            coefficient, coords=self.coords, dims=self.dims
+            coefficient, coords=self.coords, dims=self.dims, strict=False
         )
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
