@@ -65,9 +65,9 @@ def _lift_bounds_to_constraints(m: Model) -> None:
                     mask=mask,
                 )
                 logger.debug(f"Added lower bound constraint for '{var_name}'.")
+                # Remove bounds to avoid double-counting in the dual.
+                # Rely on the new constraints instead.
                 var.lower.values[mask.values] = -np.inf
-                # Remove bounds to avoid double-counting in the dual. Rely on the new constraints instead.
-                m.variables[var_name].lower.values[mask.values] = -np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite lower bound, skipping."
@@ -83,18 +83,18 @@ def _lift_bounds_to_constraints(m: Model) -> None:
                     mask=mask,
                 )
                 logger.debug(f"Added upper bound constraint for '{var_name}'.")
+                # Remove bounds to avoid double-counting in the dual.
+                # Rely on the new constraints instead.
                 var.upper.values[mask.values] = np.inf
-                # Remove bounds to avoid double-counting in the dual. Rely on the new constraints instead.
-                m.variables[var_name].upper.values[mask.values] = np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite upper bound, skipping."
                 )
 
 
-def _add_dual_variables(m: Model, m2: Model) -> dict:
+def _add_dual_variables(m: Model, m_dual: Model) -> dict:
     """
-    Add one dual variable to m2 for each included constraint in m.
+    Add one dual variable to m_dual for each included constraint in m.
 
     Dual variable bounds encode the sign convention for each constraint type
     and primal objective sense:
@@ -115,7 +115,7 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
     ----------
     m : Model
         Primal model.
-    m2 : Model
+    m_dual : Model
         Dual model to populate.
 
     Returns
@@ -150,14 +150,15 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
                 continue
 
         logger.debug(
-            f"Adding {var_type} dual variable for constraint '{name}' with shape {con.shape} and dims {con.labels.dims}."
+            f"Adding {var_type} dual variable for constraint '{name}' "
+            f"with shape {con.shape} and dims {con.labels.dims}."
         )
         coords = (
             [con.labels.coords[dim] for dim in con.labels.dims]
             if con.labels.dims
             else None
         )
-        dual_vars[name] = m2.add_variables(
+        dual_vars[name] = m_dual.add_variables(
             lower=lower,
             upper=upper,
             coords=coords,
@@ -172,15 +173,15 @@ def _build_flat_con_to_dual_label_lookup(m: Model, dual_vars: dict) -> np.ndarra
     Build a lookup from flat primal constraint labels to flat dual variable labels.
 
     The returned array maps each flat constraint label to the corresponding
-    flat dual variable label in ``m2``. Entries are -1 for constraints not in
-    ``dual_vars`` or with masked labels.
+    flat dual variable label from ``dual_vars``. Entries are -1 for constraints
+    not in ``dual_vars`` or with masked labels.
 
     Parameters
     ----------
     m : Model
         Primal model.
     dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
+        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
 
     Returns
     -------
@@ -216,7 +217,8 @@ def _extract_dual_feas_entries(
     flat_con_to_dual: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Return ``(flat_var_label, flat_dual_label, coeff)`` for each included nonzero entry of ``A``.
+    Return ``(flat_var_label, flat_dual_label, coeff)`` for each included
+    nonzero entry of ``A``.
 
     Converts sparse matrix ``A`` to coordinate format, maps rows/columns to
     flat labels via ``clabels`` / ``vlabels``, and drops entries that are masked
@@ -253,7 +255,7 @@ def _extract_dual_feas_entries(
 
     # Map primal constraint labels to flat dual variable labels.
     n = len(flat_con_to_dual)
-    in_range = flat_c < n
+    in_range = (flat_c >= 0) & (flat_c < n)
     flat_d = np.full(len(flat_c), -1, dtype=np.int64)
     flat_d[in_range] = flat_con_to_dual[flat_c[in_range]]
 
@@ -293,6 +295,68 @@ def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarra
     return lookup
 
 
+def _build_label_to_flat_index_lookup(labels: np.ndarray) -> np.ndarray:
+    """
+    Build a lookup from flat labels to flat indices.
+
+    ``labels`` is expected to contain nonnegative integer labels, with -1 used
+    as the masked-label sentinel.
+
+    ``lookup[label]`` gives the flat index of ``label`` in ``labels``.
+    Labels that do not occur in ``labels`` map to -1. If no valid labels exist,
+    returns an empty int64 array.
+    """
+    valid = labels != -1
+    if not valid.any():
+        return np.array([], dtype=np.int64)
+
+    lookup = np.full(int(labels[valid].max()) + 1, -1, dtype=np.int64)
+    lookup[labels[valid].astype(np.int64)] = np.where(valid)[0].astype(np.int64)
+    return lookup
+
+
+def _lookup_flat_indices(labels: np.ndarray, lookup: np.ndarray) -> np.ndarray:
+    """
+    Look up flat indices for flat labels.
+
+    ``labels`` is expected to contain nonnegative integer labels, with -1 used
+    as the masked-label sentinel. ``lookup`` is expected to be an array as
+    returned by ``_build_label_to_flat_index_lookup()``.
+
+    Labels outside the lookup range, including masked labels, map to -1.
+    """
+    flat_indices = np.full(len(labels), -1, dtype=np.int64)
+
+    in_range = (labels >= 0) & (labels < len(lookup))
+    if in_range.any():
+        flat_indices[in_range] = lookup[labels[in_range].astype(np.int64)]
+
+    return flat_indices
+
+
+def _term_slots_for_sorted_flat_indices(sorted_flat_indices: np.ndarray) -> np.ndarray:
+    """
+    Return the term slot within each run of equal sorted flat indices.
+
+    ``sorted_flat_indices`` must be non-empty and sorted in nondecreasing order.
+    Each run of equal values is treated as one group.
+
+    Example:
+    -------
+    ``[2, 2, 2, 5, 5, 9]`` becomes ``[0, 1, 2, 0, 1, 0]``.
+    """
+    group_start = np.empty(len(sorted_flat_indices), dtype=bool)
+    group_start[0] = True
+    group_start[1:] = sorted_flat_indices[1:] != sorted_flat_indices[:-1]
+
+    group_ids = np.cumsum(group_start) - 1
+    group_start_pos = np.where(group_start)[0]
+
+    return (
+        np.arange(len(sorted_flat_indices), dtype=np.int64) - group_start_pos[group_ids]
+    )
+
+
 def _build_dual_feas_lhs(
     var: Any,
     flat_v: np.ndarray,
@@ -324,55 +388,45 @@ def _build_dual_feas_lhs(
     -------
     LinearExpression
         Dual-feasibility LHS over ``var``'s coordinate space. Returns an empty
-        expression (constant zero) when ``var`` has no included constraint-matrix
-        entries.
+        expression, equivalent to constant zero, when ``var`` has no included
+        constraint-matrix entries.
     """
     var_flat = var.labels.values.ravel().astype(np.int64)
     n_elements = len(var_flat)
-    valid_mask = var_flat != -1
 
-    if not valid_mask.any():
+    # Map flat variable labels to flat indices in this variable.
+    var_to_idx = _build_label_to_flat_index_lookup(var_flat)
+    if not len(var_to_idx):
         return LinearExpression(None, m_dual)
-
-    # Map flat variable labels to ravelled positions in this variable.
-    max_fv = int(var_flat[valid_mask].max())
-    var_to_idx = np.full(max_fv + 1, -1, dtype=np.int64)
-    var_to_idx[var_flat[valid_mask]] = np.where(valid_mask)[0].astype(np.int64)
 
     # Locate entries that belong to this variable via bounded lookup.
-    lin_idx = np.full(len(flat_v), -1, dtype=np.int64)
-    in_range = (flat_v >= 0) & (flat_v <= max_fv)
-    if in_range.any():
-        lin_idx[in_range] = var_to_idx[flat_v[in_range]]
+    lin_idx = _lookup_flat_indices(flat_v, var_to_idx)
 
+    # Keep only entries that belong to this variable.
     keep = lin_idx != -1
-    lin_idx_f, flat_d_f, coeffs_f = lin_idx[keep], flat_d[keep], nnz_data[keep]
-
-    if not len(lin_idx_f):
+    if not keep.any():
         return LinearExpression(None, m_dual)
 
-    # Sort by ravelled position so entries for the same element are contiguous.
-    order = np.argsort(lin_idx_f, kind="stable")
-    lin_idx_s = lin_idx_f[order]
-    flat_d_s = flat_d_f[order]
-    coeffs_s = coeffs_f[order]
+    lin_idx = lin_idx[keep]
+    dual_labels = flat_d[keep]
+    coeffs = nnz_data[keep]
 
-    # Compute within-group term-slot positions.
-    # group_start[i] is True at the first entry of each new element group.
-    group_start = np.empty(len(lin_idx_s), dtype=bool)
-    group_start[0] = True
-    group_start[1:] = lin_idx_s[1:] != lin_idx_s[:-1]
-    group_ids = np.cumsum(group_start) - 1
-    group_start_pos = np.where(group_start)[0]
-    col_idx = np.arange(len(lin_idx_s), dtype=np.int64) - group_start_pos[group_ids]
+    # Sort by flat index so entries for the same element are contiguous.
+    order = np.argsort(lin_idx, kind="stable")
+    lin_idx = lin_idx[order]
+    dual_labels = dual_labels[order]
+    coeffs = coeffs[order]
 
+    # Assign each term to a column slot within its variable-element group.
+    # Each run of equal ``lin_idx`` values corresponds to one variable element.
+    col_idx = _term_slots_for_sorted_flat_indices(lin_idx)
     max_terms = int(col_idx.max()) + 1
 
     # Populate (n_elements, max_terms) arrays via advanced indexing.
     dual_labels_2d = np.full((n_elements, max_terms), -1, dtype=np.int64)
     dual_coeffs_2d = np.zeros((n_elements, max_terms), dtype=np.float64)
-    dual_labels_2d[lin_idx_s, col_idx] = flat_d_s
-    dual_coeffs_2d[lin_idx_s, col_idx] = coeffs_s
+    dual_labels_2d[lin_idx, col_idx] = dual_labels
+    dual_coeffs_2d[lin_idx, col_idx] = coeffs
 
     # Wrap in a LinearExpression, reshaping to (*var_dims, _term).
     target_shape = var.labels.shape + (max_terms,)
@@ -389,14 +443,15 @@ def _build_dual_feas_lhs(
 
 def _add_dual_feasibility_constraints(
     m: Model,
-    m2: Model,
+    m_dual: Model,
     dual_vars: dict,
 ) -> None:
     """
-    Add the stationarity constraint ``sum_i(A_ji * lambda_i) = c_j`` for each primal variable.
+    Add the stationarity constraint ``sum_i(A_ji * lambda_i) = c_j`` for each
+    primal variable.
 
     Sign conventions are already encoded in the dual variable bounds produced by
-    _add_dual_variables(), so raw A coefficients are used without adjustment.
+    ``_add_dual_variables()``, so raw A coefficients are used without adjustment.
     Variables with no constraint connections (e.g. unconstrained free variables)
     are skipped; the dual is infeasible for such problems if ``c_j != 0``.
 
@@ -404,10 +459,10 @@ def _add_dual_feasibility_constraints(
     ----------
     m : Model
         Primal model.
-    m2 : Model
+    m_dual : Model
         Dual model to populate.
     dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
+        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
     """
     A = m.matrices.A
     if A is None:
@@ -437,40 +492,55 @@ def _add_dual_feasibility_constraints(
         var_flat = var.labels.values.ravel().astype(np.int64)
 
         # RHS: objective coefficient for each element of this variable.
-        in_c_range = (var_flat != -1) & (var_flat < len(c_lookup))
-        safe_flat = np.where(in_c_range, var_flat, 0)
+        c_arr = np.zeros(len(var_flat), dtype=np.float64)
+        in_c_range = (var_flat >= 0) & (var_flat < len(c_lookup))
+
+        if in_c_range.any():
+            c_arr[in_c_range] = c_lookup[var_flat[in_c_range]]
+
         c_vals = xr.DataArray(
-            np.where(in_c_range, c_lookup[safe_flat], 0.0).reshape(var.labels.shape),
+            c_arr.reshape(var.labels.shape),
             coords=var.labels.coords,
+            dims=var.labels.dims,
         )
 
-        lhs = _build_dual_feas_lhs(var, flat_v, flat_d, nnz_data, m2)
+        lhs = _build_dual_feas_lhs(var, flat_v, flat_d, nnz_data, m_dual)
+
         if lhs.is_constant:
-            # Variable has no constraint connections (free, unconstrained variable).
-            # The stationarity condition 0 = c_j cannot be expressed as a linopy
-            # constraint; the dual is infeasible if c_j != 0, trivial if c_j == 0.
-            logger.debug(
-                f"Variable '{var_name}' has no constraint connections; "
-                "skipping dual feasibility constraint."
-            )
+            # If c_j is zero, the condition is redundant. If c_j is nonzero, the
+            # condition is impossible because it reduces to 0 == c_j. Since this
+            # constant-only condition has no variables to add to the dual model, we
+            # report it and skip adding the constraint.
+            if np.any(c_arr[mask.values.ravel()] != 0):
+                logger.warning(
+                    f"Variable '{var_name}' has no constraint connections but has "
+                    "nonzero objective coefficients; the corresponding dual-feasibility "
+                    "condition is infeasible."
+                )
+            else:
+                logger.debug(
+                    f"Variable '{var_name}' has no constraint connections and zero "
+                    "objective coefficients; skipping redundant dual feasibility constraint."
+                )
             continue
-        m2.add_constraints(lhs == c_vals, name=var_name, mask=mask)
+
+        m_dual.add_constraints(lhs == c_vals, name=var_name, mask=mask)
 
 
 def _add_dual_objective(
     m: Model,
-    m2: Model,
+    m_dual: Model,
     dual_vars: dict,
     add_objective_constant: float = 0.0,
 ) -> None:
     """
-    Construct and add ``sum(rhs_i * lambda_i)`` as the dual objective of m2.
+    Construct and add ``sum(rhs_i * lambda_i)`` as the dual objective of m_dual.
 
     The uniform ``+`` sign is correct because sign conventions are already
     encoded in the dual variable bounds: a ``<=`` constraint has ``lambda <= 0``,
     so ``rhs * lambda`` contributes negatively without an explicit sign flip.
     This aligns with linopy's native dual convention, so
-    ``m2.variables[con_name].solution`` can be compared directly with
+    ``m_dual.variables[con_name].solution`` can be compared directly with
     ``m.constraints[con_name].dual`` after solving.
 
     The objective sense is flipped: ``min`` primal → ``max`` dual, and vice versa.
@@ -479,15 +549,15 @@ def _add_dual_objective(
     ----------
     m : Model
         Primal model.
-    m2 : Model
+    m_dual : Model
         Dual model to populate.
     dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by _add_dual_variables().
+        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
     add_objective_constant : float, optional
         Constant added to the dual objective, e.g. to pass through a primal
         objective constant that was excluded from the model.
     """
-    dual_obj: LinearExpression = LinearExpression(None, m2)
+    dual_obj: LinearExpression = LinearExpression(None, m_dual)
     sense = "max" if m.objective.sense == "min" else "min"
 
     for name, con in m.constraints.items():
@@ -504,7 +574,7 @@ def _add_dual_objective(
 
     logger.debug(f"Constructed dual objective with {len(dual_obj.coeffs)} terms.")
     logger.debug("Adding dual objective to model.")
-    m2.add_objective(dual_obj, sense=sense, overwrite=True)
+    m_dual.add_objective(dual_obj, sense=sense, overwrite=True)
 
 
 def dualize(
@@ -514,7 +584,7 @@ def dualize(
     """
     Construct the dual of a linopy LP model.
 
-    Transforms the primal model into its dual equivalent m2 following
+    Transforms the primal model into its dual equivalent m_dual following
     standard LP duality theory. The dual sense is flipped relative to the
     primal (min -> max, max -> min), and dual variable bounds depend on
     both constraint type and primal objective sense.
@@ -534,19 +604,22 @@ def dualize(
     via _lift_bounds_to_constraints(), so that they appear in the constraint matrix
     A and are correctly reflected in the dual.
 
-    The dual variables in m2 are named identically to their corresponding
-    primal constraints and are accessible via m2.variables[con_name].
+    The dual variables in m_dual are named identically to their corresponding
+    primal constraints and are accessible via m_dual.variables[con_name].
 
     Strong duality guarantees that at optimality:
         primal objective = dual objective
 
-    Note: The standalone dual m2 may be unbounded if the primal is degenerate.
-    Only linear programs (LP) are supported.
+    Note: This constructs a standalone dual model. Pathological or unsupported
+    primal formulations may lead to infeasible or unbounded dual models or may
+    cause this function to raise an error. Only linear primal models with linear
+    objectives and constraints are supported.
 
     Parameters
     ----------
     m : Model
-        Primal linopy model to dualize. Must have a linear objective and linear constraints.
+        Primal linopy model to dualize. Must have a linear objective and either
+        linear constraints or finite variable bounds.
 
     add_objective_constant : float, optional
         Constant added to the dual objective, e.g. to pass through a primal
@@ -561,25 +634,31 @@ def dualize(
     --------
     .. code-block:: python
 
-        m2 = m.dualize()
-        m2.solve(solver_name="gurobi", Method=2, Crossover=1)
-        gap = abs(m.objective.value - m2.objective.value)
+        m_dual = m.dualize()
+        m_dual.solve(solver_name="gurobi", Method=2, Crossover=1)
+        gap = abs(m.objective.value - m_dual.objective.value)
     """
     from linopy.model import Model
 
     m1 = m.copy()
-    m2 = Model()
+    m_dual = Model()
 
-    if not m.variables or not m.constraints:
-        logger.warning(
-            "Primal model has no variables or constraints. Returning empty dual model."
-        )
-        return m2
+    if not m1.variables:
+        logger.warning("Primal model has no variables. Returning empty dual model.")
+        return m_dual
 
     _lift_bounds_to_constraints(m1)
-    dual_vars = _add_dual_variables(m1, m2)
-    _add_dual_feasibility_constraints(m1, m2, dual_vars)
+
+    if not m1.constraints:
+        logger.warning(
+            "Primal model has no constraints after lifting variable bounds. "
+            "Returning empty dual model."
+        )
+        return m_dual
+
+    dual_vars = _add_dual_variables(m1, m_dual)
+    _add_dual_feasibility_constraints(m1, m_dual, dual_vars)
     _add_dual_objective(
-        m1, m2, dual_vars, add_objective_constant=add_objective_constant
+        m1, m_dual, dual_vars, add_objective_constant=add_objective_constant
     )
-    return m2
+    return m_dual
