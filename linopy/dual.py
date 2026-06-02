@@ -702,7 +702,8 @@ def dualize(
     Returns
     -------
     Model
-        Dual model whose variables are named after the primal constraints.
+        Dual model whose variables are named after the primal constraints and
+        constraints are named after the primal variables.
 
     Example
     -------
