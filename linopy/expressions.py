@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Self, TypeAlias, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -462,40 +462,30 @@ class BaseExpression(ABC):
             print(self)
 
     @abstractmethod
-    def __add__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __add__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __radd__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __radd__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __sub__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __sub__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rsub__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __rsub__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __mul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __mul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __rmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __matmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __matmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
     def __pow__(self, other: int) -> QuadraticExpression: ...
 
-    def __neg__(self: GenericExpression) -> GenericExpression:
+    def __neg__(self) -> Self:
         """
         Get the negative of the expression.
         """
@@ -529,7 +519,7 @@ class BaseExpression(ABC):
         return cast(QuadraticExpression, res)
 
     def _align_constant(
-        self: GenericExpression,
+        self,
         other: DataArray,
         fill_value: float = 0,
         join: JoinOptions | None = None,
@@ -575,8 +565,8 @@ class BaseExpression(ABC):
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         # NaN values in self.const or other are filled with 0 (additive identity)
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
@@ -599,12 +589,12 @@ class BaseExpression(ABC):
         return self.assign(const=self_const + da)
 
     def _apply_constant_op(
-        self: GenericExpression,
+        self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
         join: JoinOptions | None = None,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
 
@@ -633,16 +623,16 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
-    def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __div__(self, other: SideLike) -> Self:
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
@@ -654,7 +644,7 @@ class BaseExpression(ABC):
         except TypeError:
             return NotImplemented
 
-    def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
 
     def __le__(self, rhs: SideLike) -> Constraint:
@@ -677,10 +667,10 @@ class BaseExpression(ABC):
         )
 
     def add(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Add an expression to others.
 
@@ -705,10 +695,10 @@ class BaseExpression(ABC):
         return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Subtract others from expression.
 
@@ -724,10 +714,10 @@ class BaseExpression(ABC):
         return self.add(-other, join=join)
 
     def mul(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Multiply the expr by a factor.
 
@@ -749,10 +739,10 @@ class BaseExpression(ABC):
         return self._multiply_by_constant(other, join=join)
 
     def div(
-        self: GenericExpression,
+        self,
         other: VariableLike | ConstantLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Divide the expr by a factor.
 
@@ -776,7 +766,7 @@ class BaseExpression(ABC):
         return self._divide_by_constant(other, join=join)
 
     def le(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
         join: JoinOptions | None = None,
     ) -> Constraint:
@@ -838,17 +828,13 @@ class BaseExpression(ABC):
         """
         return self.__pow__(other)
 
-    def dot(
-        self: GenericExpression, other: ndarray
-    ) -> GenericExpression | QuadraticExpression:
+    def dot(self, other: ndarray) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
 
-    def __getitem__(
-        self: GenericExpression, selector: int | tuple[slice, list[int]] | slice
-    ) -> GenericExpression:
+    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
         """
         Get selection from the expression.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -987,11 +973,11 @@ class BaseExpression(ABC):
         return sol.rename("solution")
 
     def sum(
-        self: GenericExpression,
+        self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -1141,7 +1127,7 @@ class BaseExpression(ABC):
         )
         return constraints.Constraint(data, model=self.model)
 
-    def reset_const(self: GenericExpression) -> GenericExpression:
+    def reset_const(self) -> Self:
         """
         Reset the constant of the linear expression to zero.
         """
@@ -1159,7 +1145,7 @@ class BaseExpression(ABC):
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
     def where(
-        self: GenericExpression,
+        self,
         cond: DataArray,
         other: LinearExpression
         | int
@@ -1167,7 +1153,7 @@ class BaseExpression(ABC):
         | dict[str, float | int | DataArray]
         | None = None,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Filter variables based on a condition.
 
@@ -1211,14 +1197,14 @@ class BaseExpression(ABC):
         return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
 
     def fillna(
-        self: GenericExpression,
+        self,
         value: int
         | float
         | DataArray
         | Dataset
         | LinearExpression
         | dict[str, float | int | DataArray],
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Fill missing values with a given value.
 
@@ -1242,7 +1228,7 @@ class BaseExpression(ABC):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
 
-    def diff(self: GenericExpression, dim: str, n: int = 1) -> GenericExpression:
+    def diff(self, dim: str, n: int = 1) -> Self:
         """
         Calculate the n-th order discrete difference along given axis.
 
@@ -1414,7 +1400,7 @@ class BaseExpression(ABC):
         """
         return EmptyDeprecationWrapper(not self.size)
 
-    def densify_terms(self: GenericExpression) -> GenericExpression:
+    def densify_terms(self) -> Self:
         """
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
@@ -1445,7 +1431,7 @@ class BaseExpression(ABC):
 
         return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
 
-    def sanitize(self: GenericExpression) -> GenericExpression:
+    def sanitize(self) -> Self:
         """
         Sanitize LinearExpression by ensuring int dtype for variables.
 
