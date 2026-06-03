@@ -340,20 +340,13 @@ class LinearExpressionGroupby:
 
             # At this point, group is always a pandas Series
             assert isinstance(group, pd.Series)
-            group_dim = group.index.name
 
-            arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
-            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            # collapsing group_dim invalidates every coordinate aligned to it
-            names_to_drop = [
-                name
-                for name, coord in self.data.coords.items()
-                if group_dim in coord.dims
-            ]
-            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
-            ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
-            ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
+            if self._can_sum_by_scatter(group):
+                ds = self._sum_by_scatter(group)
+            else:
+                # chunked (e.g. dask-backed) data or exotic coordinates on the
+                # grouped dimension: use xarray's unstack machinery
+                ds = self._sum_by_unstack(group)
 
             if int_map is not None:
                 index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
@@ -373,6 +366,125 @@ class LinearExpressionGroupby:
             return ds
 
         return self.map(func, **kwargs, shortcut=True)
+
+    def _can_sum_by_scatter(self, group: pd.Series) -> bool:
+        """
+        Whether :meth:`_sum_by_scatter` covers the structure of the data.
+
+        The scatter kernel requires numpy-backed arrays (chunked data cannot be
+        scattered into preallocated numpy arrays) and no coordinates tied to
+        the grouped dimension besides its own index. Everything else falls
+        back to :meth:`_sum_by_unstack`.
+        """
+        data = self.data
+        group_dim = group.index.name
+
+        numpy_backed = all(
+            isinstance(data[k].data, np.ndarray) for k in ("coeffs", "vars", "const")
+        )
+        if not numpy_backed:
+            return False
+
+        index = data.indexes.get(group_dim)
+        index_names = {group_dim, *(index.names if index is not None else ())}
+        return all(
+            coord.dims == (group_dim,) and name in index_names
+            for name, coord in data.coords.items()
+            if group_dim in coord.dims
+        )
+
+    def _sum_by_scatter(self, group: pd.Series) -> Dataset:
+        """
+        Sum groups by scattering all terms directly into the final padded arrays.
+
+        Every group member keeps its block of ``nterm`` terms, so the resulting
+        term dimension has size ``max_group_size * nterm`` and smaller groups are
+        padded with fill values. In contrast to :meth:`_sum_by_unstack` only the
+        result arrays are allocated, without intermediate copies of that size.
+
+        Only the term and constant values are computed with numpy; the result
+        structure (dimensions, coordinates and their order) is assembled by
+        xarray. :meth:`_can_sum_by_scatter` decides whether the data is simple
+        enough for this kernel.
+        """
+        data = self.data
+        group_dim = group.index.name
+        fill_value = LinearExpression._fill_value
+
+        codes, unique_groups = pd.factorize(group, sort=True)
+        if (codes == -1).any():
+            raise ValueError(
+                "Cannot group by a pandas object containing NaN values. "
+                "Drop or fill the corresponding entries before grouping."
+            )
+
+        n_groups = len(unique_groups)
+        sizes = np.bincount(codes, minlength=n_groups)
+        max_size = int(sizes.max()) if n_groups else 0
+
+        # position of each element within its group (order of appearance)
+        positions = pd.Series(codes).groupby(codes).cumcount().to_numpy()
+
+        def scatter(
+            da: DataArray, fill: Any
+        ) -> tuple[tuple[Hashable, ...], np.ndarray]:
+            """Scatter one term-array into its padded (group x term) layout."""
+            rest_dims = [d for d in da.dims if d not in (group_dim, TERM_DIM)]
+            values = da.transpose(group_dim, *rest_dims, TERM_DIM).values
+            rest_shape = values.shape[1:-1]
+            nterm = values.shape[-1]
+
+            out = np.full(
+                (n_groups, *rest_shape, nterm, max_size), fill, dtype=values.dtype
+            )
+            locs = (codes, *(slice(None),) * (len(rest_shape) + 1), positions)
+            out[locs] = values
+            # collapsing (nterm, max_size) into one axis keeps all terms of one
+            # group member together, with padding at the end of each block
+            out = out.reshape((n_groups, *rest_shape, nterm * max_size))
+            return (GROUP_DIM, *rest_dims, TERM_DIM), out
+
+        coeffs_dims, coeffs = scatter(data.coeffs, fill_value["coeffs"])
+        vars_dims, vars = scatter(data.vars, fill_value["vars"])
+
+        # constants are summed up within each group, skipping NaN values
+        const_dims = [d for d in data.const.dims if d != group_dim]
+        const_values = data.const.transpose(group_dim, *const_dims).values
+        const = np.zeros((n_groups, *const_values.shape[1:]), dtype=const_values.dtype)
+        np.add.at(const, codes, np.where(np.isnan(const_values), 0, const_values))
+
+        # only the values above are computed with numpy, the result structure
+        # (dimensions, coordinates and their order) is assembled by xarray
+        # itself and thereby matches a result of unstacking the group dimension
+        structure = data.drop_vars(["coeffs", "vars", "const"])
+        structure = structure.drop_dims(group_dim)
+        structure = structure.expand_dims({GROUP_DIM: unique_groups})
+
+        return structure.assign(
+            coeffs=(coeffs_dims, coeffs),
+            vars=(vars_dims, vars),
+            const=((GROUP_DIM, *const_dims), const),
+        )
+
+    def _sum_by_unstack(self, group: pd.Series) -> Dataset:
+        """
+        Sum groups by unstacking the group dimension into a padded helper
+        dimension and summing over it.
+
+        Equivalent to :meth:`_sum_by_scatter` but goes through xarray's
+        unstack/stack machinery, which also supports chunked (dask) data.
+        """
+        group_dim = group.index.name
+        arrays = [group, group.groupby(group).cumcount()]
+        idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
+        new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
+        # collapsing group_dim invalidates every coordinate aligned to it
+        names_to_drop = [
+            name for name, coord in self.data.coords.items() if group_dim in coord.dims
+        ]
+        ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
+        ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
+        return LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
 
     def roll(self, **kwargs: Any) -> LinearExpression:
         """

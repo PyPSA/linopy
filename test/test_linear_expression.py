@@ -1908,6 +1908,130 @@ def test_linear_expression_groupby_from_variable(v: Variable) -> None:
     assert grouped.nterm == 10
 
 
+def test_linear_expression_groupby_skewed_unsorted_groups(v: Variable) -> None:
+    """
+    The scatter-based fast path must match the xarray fallback for groups that
+    are unsorted, non-contiguous and of very different sizes.
+    """
+    expr = 2 * v + 5
+    # 'b' appears 14 times, 'c' 5 times, 'a' once, scattered over the dimension
+    labels = ["b"] * 4 + ["c", "a"] + ["b"] * 5 + ["c"] * 4 + ["b"] * 5
+    groups = pd.Series(labels, index=v.indexes["dim_2"], name="letter")
+
+    grouped = expr.groupby(groups).sum()
+    fallback = expr.groupby(groups.to_xarray()).sum(use_fallback=True)
+
+    assert list(grouped.data.letter) == ["a", "b", "c"]
+    # padded to the largest group times the number of terms of the input
+    assert grouped.nterm == 14 * expr.nterm
+    assert_linequal(grouped, fallback)
+
+    # every group must carry exactly the variables of its members, the rest is fill
+    for letter in ["a", "b", "c"]:
+        members = np.where(np.array(labels) == letter)[0]
+        vars_of_group = grouped.data.vars.sel(letter=letter).values
+        assert set(vars_of_group[vars_of_group >= 0]) == set(v.labels.values[members])
+        assert (vars_of_group >= 0).sum() == len(members) * expr.nterm
+        assert grouped.const.sel(letter=letter).item() == 5 * len(members)
+
+
+def test_linear_expression_groupby_chunked(v: Variable) -> None:
+    """Chunked (dask-backed) expressions group via xarray's unstack machinery."""
+    pytest.importorskip("dask")
+    expr = 2 * v + 5
+    groups = pd.Series([1] * 12 + [2] * 8, index=v.indexes["dim_2"], name="group")
+
+    chunked = LinearExpression(expr.data.chunk({"dim_2": 5}), expr.model)
+    grouped_chunked = chunked.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum()
+
+    assert grouped_chunked.nterm == grouped.nterm
+    assert_linequal(
+        LinearExpression(grouped_chunked.data.compute(), expr.model), grouped
+    )
+
+
+def test_linear_expression_groupby_with_nan_groups(v: Variable) -> None:
+    expr = 1 * v
+    groups = pd.Series([1.0, np.nan] * 10, index=v.indexes["dim_2"], name="with_nans")
+    with pytest.raises(ValueError, match="NaN"):
+        expr.groupby(groups).sum()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "skewed_int_groups",
+        "multidim_with_const",
+        "nan_const",
+        "masked_vars",
+        "quadratic",
+        "single_group",
+        "identity_groups",
+    ],
+)
+def test_linear_expression_groupby_scatter_equals_unstack(case: str) -> None:
+    """
+    Lock the two groupby-sum kernels together.
+
+    The fast path of groupby(...).sum() scatters terms into numpy arrays
+    (_sum_by_scatter); the xarray unstack implementation (_sum_by_unstack) is
+    kept for chunked data and exotic coordinates. Both must stay
+    interchangeable — if an xarray/pandas update changes the unstack output or
+    an edge case diverges, this fails.
+    """
+    m = Model()
+    rng = np.random.default_rng(0)
+    idx = pd.RangeIndex(60, name="elem")
+    skewed = pd.Series(rng.choice(8, 60, p=[0.5] + [0.5 / 7] * 7), index=idx, name="g")
+    groups = skewed
+
+    if case == "skewed_int_groups":
+        x = m.add_variables(coords=[idx], name="x")
+        expr: LinearExpression | QuadraticExpression = 3 * x - 2 * x + 7
+    elif case == "multidim_with_const":
+        other = pd.Index(list("abc"), name="other")
+        y = m.add_variables(coords=[other, idx], name="y")
+        const = xr.DataArray(rng.normal(size=(3, 60)), coords=[other, idx])
+        expr = 2 * y + 1 * y + const
+    elif case == "nan_const":
+        x = m.add_variables(coords=[idx], name="x")
+        expr = 1 * x + np.where(np.arange(60) % 3, np.nan, 5.0)
+    elif case == "masked_vars":
+        mask = xr.DataArray(np.arange(60) % 4 != 0, coords=[idx])
+        x = m.add_variables(coords=[idx], name="x", mask=mask)
+        expr = 1 * x
+    elif case == "quadratic":
+        x = m.add_variables(coords=[idx], name="x")
+        expr = x * x + 2 * x
+    elif case == "single_group":
+        x = m.add_variables(coords=[idx], name="x")
+        expr = 1 * x
+        groups = pd.Series(1, index=idx, name="g")
+    else:  # identity_groups
+        x = m.add_variables(coords=[idx], name="x")
+        expr = 1 * x
+        groups = pd.Series(np.arange(60), index=idx, name="g")
+
+    gb = expr.groupby(groups)
+    assert gb._can_sum_by_scatter(groups)
+    scatter = LinearExpression(gb._sum_by_scatter(groups).rename(_group="g"), m)
+    unstack = LinearExpression(gb._sum_by_unstack(groups).rename(_group="g"), m)
+
+    # identical structure: dims, dim order, coordinates
+    assert scatter.data.coeffs.dims == unstack.data.coeffs.dims
+    assert scatter.data.const.dims == unstack.data.const.dims
+    assert list(scatter.data.coords) == list(unstack.data.coords)
+    for name in scatter.data.coords:
+        assert_equal(scatter.data[name], unstack.data[name])
+
+    # identical values: vars and coeffs bit-exact, including padding positions
+    np.testing.assert_array_equal(scatter.vars.values, unstack.vars.values)
+    np.testing.assert_array_equal(scatter.coeffs.values, unstack.coeffs.values)
+    # constants may differ by floating-point summation order
+    np.testing.assert_allclose(scatter.const.values, unstack.const.values, rtol=1e-12)
+
+
 def test_linear_expression_rolling(v: Variable) -> None:
     expr = 1 * v
     rolled = expr.rolling(dim_2=2).sum()
