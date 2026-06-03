@@ -44,16 +44,14 @@ except ImportError:
 from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
+from linopy.alignment import as_dataarray, broadcast_to_coords, fill_missing_coords
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    as_dataarray,
     assign_multiindex_safe,
-    broadcast_to_coords,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
-    fill_missing_coords,
     filter_nulls_polars,
     format_coord,
     format_single_expression,
@@ -2297,7 +2295,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.common.broadcast_to_coords`.
+        Keyword arguments passed to `linopy.alignment.broadcast_to_coords`.
 
     Returns
     -------

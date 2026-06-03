@@ -18,17 +18,19 @@ from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
 from linopy import EvolvingAPIWarning, LinearExpression, Model, Variable
-from linopy.common import (
+from linopy.alignment import (
     align,
     as_dataarray,
+    broadcast_to_coords,
+    validate_alignment,
+)
+from linopy.common import (
     assign_multiindex_safe,
     best_int,
-    broadcast_to_coords,
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
-    validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
 from linopy.types import CoordsLike
@@ -817,7 +819,7 @@ class TestCoordsToDictRules:
 
     @staticmethod
     def _parse(coords: Any, dims: Any = None) -> dict:
-        from linopy.common import _coords_to_dict
+        from linopy.alignment import _coords_to_dict
 
         return _coords_to_dict(coords, dims=dims)
 
