@@ -64,6 +64,15 @@ source tree.
   `const = NaN`/`0` assign also becomes unconditional.
 - Drop the `from linopy.semantics import is_v1` import.
 
+### `linopy/alignment.py`
+
+- `_enforce_implicit_projections`: drop the legacy `warn_legacy(...)`
+  branch — the v1 raise for partial-level / coverage-gap projections
+  becomes unconditional. The projection machinery itself
+  (`_project_onto_multiindex_levels`, `_LevelProjection`) stays:
+  full-coverage full-level projections remain legal under v1 (they are
+  the same coordinate spelled differently, §8).
+
 ### `linopy/piecewise.py` / `linopy/sos_reformulation.py`
 
 Nothing to remove; these are v1-clean (the `drop=True` / `assign_coords`

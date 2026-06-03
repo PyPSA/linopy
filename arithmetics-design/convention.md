@@ -125,7 +125,7 @@ dimensions, wrap the array in a DataArray.
 > **TODO — not yet implemented ([#736]).** Today an unlabeled array pairs
 > with the *leading* dimensions positionally, which silently guesses in the
 > ambiguous cases above. The pairing rule builds on the `as_dataarray` /
-> coords-as-truth seam refactored in [#732] and lands after it.
+> coords-as-truth seam ([#732], merged — now `linopy.alignment`).
 
 ### §8. Shared dimensions must match exactly
 
@@ -187,6 +187,26 @@ conflict, which is the [#295] bug. The caller resolves it explicitly with
 `.drop_vars(name)` (remove the coord) or `.assign_coords(name=...)`
 (relabel one side).
 
+**Stacked MultiIndex dimensions.** A stacked MultiIndex dim (e.g. PyPSA's
+`(period, timestep)` `snapshot`) stores its *levels* as auxiliary
+coordinates — `period` and `timestep` are non-dimension coords on
+`snapshot` — and its elements are *level combinations* (one tuple per
+position). An operand whose *dimension* names one of those levels — a
+per-`period` weighting meeting a `snapshot`-indexed expression — is a
+same-name conflict between a dimension and an auxiliary coordinate, and it
+raises like any other conflict of this section. There is no implicit
+projection; write it explicitly by selecting with the dimension's level
+values:
+
+    weights.sel(period=expr.indexes["snapshot"].get_level_values("period"))
+
+An input that reconstructs the *entire* MultiIndex (all levels, every
+combination) is not a conflict — it is the same coordinate spelled
+differently, and aligns element-wise under §8.
+
+(Legacy projects implicitly and warns — scenario B of the [#732]/[#737]
+discussion; the implicit projection is removed at 1.0.)
+
 ## Constraints and reductions
 
 Two kinds of operation build on the rules above without being binary operators:
@@ -218,6 +238,7 @@ terms the way `sum` does.
 <!-- references -->
 [pyoframe]: https://github.com/Bravos-Power/pyoframe
 [#732]: https://github.com/PyPSA/linopy/pull/732
+[#737]: https://github.com/PyPSA/linopy/pull/737
 [#736]: https://github.com/PyPSA/linopy/issues/736
 [#714]: https://github.com/PyPSA/linopy/issues/714
 [#713]: https://github.com/PyPSA/linopy/issues/713
