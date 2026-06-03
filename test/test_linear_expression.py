@@ -1156,55 +1156,54 @@ def test_linear_expression_isnull(v: Variable) -> None:
     assert expr.isnull().sum() == 10
 
 
-def test_linear_expression_has_terms(v: Variable) -> None:
-    expr = np.arange(20) * v
-    assert expr.has_terms.all()
+class TestHasTerms:
+    """has_terms: true at slots with at least one live term, regardless of the constant."""
 
-    filter = (expr.coeffs >= 10).any(TERM_DIM)
-    masked = expr.where(filter)
-    assert_equal(masked.has_terms, filter.rename("has_terms"))
+    def test_basic_and_masking(self, v: Variable) -> None:
+        expr = np.arange(20) * v
+        assert expr.has_terms.all()
 
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
 
-def test_linear_expression_has_terms_ignores_const(v: Variable) -> None:
-    # has_terms differs from isnull() at slots whose constant was revived by
-    # fillna: no longer null, but still without terms
-    expr = np.arange(20) * v
-    filter = (expr.coeffs >= 10).any(TERM_DIM)
-    masked = expr.where(filter)
-    assert_equal(masked.isnull(), ~masked.has_terms)
+    def test_ignores_const(self, v: Variable) -> None:
+        # has_terms differs from isnull() at slots whose constant was revived by
+        # fillna: no longer null, but still without terms
+        expr = np.arange(20) * v
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.isnull(), ~masked.has_terms)
 
-    filled = masked.fillna(0)
-    assert not filled.isnull().any()
-    assert_equal(filled.has_terms, filter.rename("has_terms"))
+        filled = masked.fillna(0)
+        assert not filled.isnull().any()
+        assert_equal(filled.has_terms, filter.rename("has_terms"))
 
+    def test_merge_reindex(self, x: Variable, y: Variable) -> None:
+        # the nodal-balance pattern: outer merge, then reindex to a superset of
+        # coordinates; slots beyond the original coordinates carry no terms
+        lhs = merge([1 * x, 1 * y], join="outer").reindex(
+            dim_0=pd.RangeIndex(4, name="dim_0")
+        )
+        assert lhs.has_terms.values.tolist() == [True, True, False, False]
 
-def test_linear_expression_has_terms_merge_reindex(x: Variable, y: Variable) -> None:
-    # the nodal-balance pattern: outer merge, then reindex to a superset of
-    # coordinates; slots beyond the original coordinates carry no terms
-    lhs = merge([1 * x, 1 * y], join="outer").reindex(
-        dim_0=pd.RangeIndex(4, name="dim_0")
-    )
-    assert lhs.has_terms.values.tolist() == [True, True, False, False]
+    def test_constant_only(self, m: Model) -> None:
+        expr = LinearExpression(xr.DataArray([1, 2], dims=["dim_0"]), m)
+        assert expr.nterm == 0
+        assert not expr.has_terms.any()
 
+    def test_quadratic(self, v: Variable) -> None:
+        # linear terms inside a quadratic expression carry one factor == -1;
+        # they must still count as live terms
+        quad = v * v + 2 * v
+        assert quad.has_terms.all()
+        assert TERM_DIM not in quad.has_terms.dims
 
-def test_linear_expression_has_terms_constant_only(m: Model) -> None:
-    expr = LinearExpression(xr.DataArray([1, 2], dims=["dim_0"]), m)
-    assert expr.nterm == 0
-    assert not expr.has_terms.any()
-
-
-def test_quadratic_expression_has_terms(v: Variable) -> None:
-    # linear terms inside a quadratic expression carry one factor == -1;
-    # they must still count as live terms
-    quad = v * v + 2 * v
-    assert quad.has_terms.all()
-    assert TERM_DIM not in quad.has_terms.dims
-
-    filter = xr.DataArray(
-        np.arange(20) >= 10, dims="dim_2", coords={"dim_2": range(20)}
-    )
-    masked = quad.where(filter)
-    assert_equal(masked.has_terms, filter.rename("has_terms"))
+        filter = xr.DataArray(
+            np.arange(20) >= 10, dims="dim_2", coords={"dim_2": range(20)}
+        )
+        masked = quad.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
 
 
 def test_linear_expression_flat(v: Variable) -> None:
