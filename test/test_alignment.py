@@ -850,7 +850,7 @@ class TestBroadcastToCoordsMultiIndexProjection:
 # ---------------------------------------------------------------------------
 
 
-class TestStrictMode:
+class TestBroadcastToCoordsStrictMode:
     """strict=True: anything broadcasting can't resolve raises, naming label."""
 
     def test_extra_dims_pass_loose_fail_strict(self) -> None:
