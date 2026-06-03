@@ -156,7 +156,7 @@ class SolverStatus(StrEnum):
     @classmethod
     def from_termination_condition(
         cls, termination_condition: "TerminationCondition"
-    ) -> "SolverStatus":
+    ) -> Self:
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
