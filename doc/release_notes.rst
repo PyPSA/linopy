@@ -5,7 +5,7 @@ Upcoming Version
 ----------------
 
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
-* Add indicator constraints for solvers that support them. They are part of the unified constraints container: ``model.add_indicator_constraints`` returns a ``Constraint`` and the constraint is stored in ``model.constraints`` (filterable via ``model.constraints.indicator`` / ``model.constraints.regular``), so it round-trips through netCDF and ``model.copy()``.
+* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
 
 **Features**
 
@@ -36,6 +36,11 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``linopy.available_solvers`` no longer tries to acquire licenses at import time, so importing linopy is faster and doesn't grab a license from solvers like Gurobi or Mosek. **Note:** membership now means "the package is installed", not "I have a working license" (see Breaking Changes). Call ``available_solvers.refresh()`` to re-scan. Same for ``quadratic_solvers``.
 * New ``linopy.licensed_solvers``: the subset of installed solvers that currently pass a license check. Handy in tests and for picking a solver at runtime.
 * New helpers for explicit license checks: ``linopy.solvers.check_solver_licenses("gurobi", "mosek")``, ``Gurobi.license_status()``, ``Gurobi.is_available()``. They return a ``LicenseStatus`` dataclass (``name``, ``ok``, ``message``).
+
+*Constraints — indicator constraints*
+
+* Add indicator constraints for solvers that support them. They are part of the unified constraints container: ``model.add_indicator_constraints`` returns a ``Constraint`` and the constraint is stored in ``model.constraints`` (filterable via ``model.constraints.indicator`` / ``model.constraints.regular``), so it round-trips through netCDF and ``model.copy()``.
+
 
 *Constraints — CSR-backed storage*
 
@@ -74,7 +79,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Internal**
 
-* ``linopy.common`` provides two DataArray conversion helpers: ``as_dataarray`` (convert only) and ``broadcast_to_coords`` (convert and broadcast against ``coords``). The latter takes ``strict`` (default ``True``): any mismatch with ``coords`` raises, naming ``label`` in the error; ``strict=False`` passes mismatches through for downstream xarray alignment.
+* New module ``linopy.alignment`` owns conversion, broadcasting, and alignment of user input against coordinates (moved out of ``linopy.common``): ``as_dataarray`` (convert only), ``broadcast_to_coords`` (convert and broadcast against ``coords``; ``strict=True`` by default raises on any mismatch, naming ``label`` in the error), ``validate_alignment``, and ``align``.
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.

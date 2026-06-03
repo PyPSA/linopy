@@ -27,11 +27,10 @@ from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
-    as_dataarray,
     assign_multiindex_safe,
     best_int,
-    broadcast_to_coords,
     maybe_replace_signs,
     replace_by_map,
     to_path,
