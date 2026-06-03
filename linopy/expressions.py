@@ -969,7 +969,8 @@ class BaseExpression(ABC):
         Replace variable labels by solution values.
         """
         m = self.model
-        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        M = m.matrices
+        sol = pd.Series(M.sol, M.vlabels)
         sol[-1] = np.nan
         idx = np.ravel(self.vars)
         values = np.asarray(sol[idx]).reshape(self.vars.shape)
