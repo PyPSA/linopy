@@ -281,6 +281,8 @@ def test_indicator_constraint_matrix_split() -> None:
     m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
 
     n = idx.size
+    assert m.matrices.A is not None
+    assert m.matrices.indicator_A is not None
     assert m.matrices.A.shape[0] == n
     assert m.matrices.indicator_A.shape[0] == n
     assert len(m.matrices.clabels) == n
