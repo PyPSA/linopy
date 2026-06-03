@@ -31,13 +31,12 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    as_dataarray,
     assign_multiindex_safe,
-    broadcast_to_coords,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,

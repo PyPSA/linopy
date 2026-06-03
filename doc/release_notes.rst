@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
+* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
 
 **Features**
 
@@ -73,7 +74,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Internal**
 
-* ``linopy.common`` provides two DataArray conversion helpers: ``as_dataarray`` (convert only) and ``broadcast_to_coords`` (convert and broadcast against ``coords``). The latter takes ``strict`` (default ``True``): any mismatch with ``coords`` raises, naming ``label`` in the error; ``strict=False`` passes mismatches through for downstream xarray alignment.
+* New module ``linopy.alignment`` owns conversion, broadcasting, and alignment of user input against coordinates (moved out of ``linopy.common``): ``as_dataarray`` (convert only), ``broadcast_to_coords`` (convert and broadcast against ``coords``; ``strict=True`` by default raises on any mismatch, naming ``label`` in the error), ``validate_alignment``, and ``align``.
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
