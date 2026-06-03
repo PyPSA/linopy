@@ -680,7 +680,9 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
