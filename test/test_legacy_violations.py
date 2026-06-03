@@ -922,6 +922,8 @@ class TestVariableReindex:
             [("DE", 2030), ("DE", 2040), ("FR", 2030)],
             names=("region", "year"),
         )
+        # Since #732, sequence-form MultiIndex coords entries must be named.
+        idx.name = "dim_0"
         v = m.add_variables(coords=[idx], name="v")
         unstacked = v.unstack("dim_0")
         assert unstacked.sizes == {"region": 2, "year": 2}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias, Union
+from typing import TYPE_CHECKING, TypeAlias, Union, get_args
 
 import numpy
 import polars as pl
@@ -23,10 +23,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 CoordsLike: TypeAlias = (
-    Sequence[Sequence | Index | DataArray]
-    | Mapping
-    | DataArrayCoordinates
-    | DatasetCoordinates
+    Sequence[Sequence | Index] | Mapping | DataArrayCoordinates | DatasetCoordinates
 )
 DimsLike: TypeAlias = str | Iterable[Hashable]
 
@@ -41,6 +38,7 @@ ConstantLike: TypeAlias = (
     | DataFrame
     | pl.Series
 )
+CONSTANT_TYPES: tuple[type, ...] = get_args(ConstantLike)
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
 MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
 PathLike: TypeAlias = str | Path

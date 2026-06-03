@@ -44,15 +44,14 @@ except ImportError:
 from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
+from linopy.alignment import as_dataarray, broadcast_to_coords, fill_missing_coords
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
-    fill_missing_coords,
     filter_nulls_polars,
     format_coord,
     format_single_expression,
@@ -96,6 +95,7 @@ from linopy.semantics import (
     warn_legacy,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
@@ -351,13 +351,13 @@ class BaseExpression(ABC):
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
+        elif isinstance(data, CONSTANT_TYPES):
             const = as_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
             supported_types = ", ".join(
-                map(lambda s: s.__qualname__, (*SUPPORTED_CONSTANT_TYPES, Dataset))
+                map(lambda s: s.__qualname__, (*CONSTANT_TYPES, Dataset))
             )
             raise ValueError(
                 f"data must be an instance of {supported_types}, got {type(data)}"
@@ -706,7 +706,9 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
@@ -748,7 +750,9 @@ class BaseExpression(ABC):
         # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -779,7 +783,9 @@ class BaseExpression(ABC):
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -866,7 +872,7 @@ class BaseExpression(ABC):
         """
         if join is None:
             return self.__add__(other)
-        if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+        if isinstance(other, CONSTANT_TYPES):
             return self._add_constant(other, join=join)
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
@@ -1138,7 +1144,8 @@ class BaseExpression(ABC):
         Replace variable labels by solution values.
         """
         m = self.model
-        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        M = m.matrices
+        sol = pd.Series(M.sol, M.vlabels)
         sol[-1] = np.nan
         idx = np.ravel(self.vars)
         values = np.asarray(sol[idx]).reshape(self.vars.shape)
@@ -1284,8 +1291,10 @@ class BaseExpression(ABC):
             # An absent slot in ``self.const`` (propagated from §6) flows
             # through ``sub`` into the RHS and reaches downstream
             # auto-mask handling as "no constraint at this row" (§12).
-            if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            if isinstance(rhs, CONSTANT_TYPES):
+                rhs = broadcast_to_coords(
+                    rhs, coords=self.coords, dims=self.coord_dims, strict=False
+                )
                 extra_dims = set(rhs.dims) - set(self.coord_dims)
                 if extra_dims:
                     logger.warning(
@@ -1308,8 +1317,10 @@ class BaseExpression(ABC):
         # subset coords with NaN, then `sub` would fill them with 0 as
         # part of normal arithmetic, so we restore the original NaN mask
         # afterward).
-        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+        if isinstance(rhs, CONSTANT_TYPES):
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, dims=self.coord_dims, strict=False
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1551,6 +1562,57 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
+    def has_terms(self) -> DataArray:
+        """
+        Get a boolean array which is true at slots with at least one live term.
+
+        A term is live when it references a variable (``vars != -1``). Slots
+        without any live term arise from outer joins in
+        :func:`merge <linopy.expressions.merge>`, from reindexing past the
+        original coordinates, or from masking. In contrast to
+        :meth:`isnull`, the constant is ignored: a slot carrying only a
+        constant has no terms.
+
+        Returns
+        -------
+        xr.DataArray
+
+        Examples
+        --------
+        Mask out constraint rows whose left-hand side has no terms:
+
+        >>> import linopy
+        >>> import pandas as pd
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+        >>> lhs = (1 * x).reindex(i=pd.RangeIndex(5, name="i"))
+        >>> lhs.has_terms.values
+        array([ True,  True,  True, False, False])
+        """
+        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
+        return (self.vars != -1).any(helper_dims).rename("has_terms")
+
+    @property
+    def variable_names(self) -> set[str]:
+        """
+        Get the names of the unique variables present in the expression.
+        """
+        if self.nterm == 0:
+            return set()
+
+        # Collect all unique labels from the expression (excluding -1)
+        all_labels = self.vars.values.ravel()
+        unique_labels = np.unique(all_labels[all_labels != -1])
+
+        if len(unique_labels) == 0:
+            return set()
+
+        # Batch lookup variable names for all labels
+        positions = self.model.variables.get_label_position(unique_labels)
+
+        return {p[0] for p in positions if p[0] is not None}
+
+    @property
     def shape(self) -> tuple[int, ...]:
         """
         Get the total shape of the linear expression.
@@ -1784,7 +1846,7 @@ class LinearExpression(BaseExpression):
             return other.__add__(self)
 
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -2064,7 +2126,7 @@ class LinearExpression(BaseExpression):
         cls,
         model: Model,
         rule: Callable,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -2182,7 +2244,7 @@ class LinearExpression(BaseExpression):
         ) -> LinearExpression:
             nonlocal model
 
-            if isinstance(t, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(t, CONSTANT_TYPES):
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 expr = LinearExpression(t, model)
@@ -2201,7 +2263,7 @@ class LinearExpression(BaseExpression):
                         )
                     expr = v.to_linexpr(c)
                 elif isinstance(v, variables.Variable):
-                    if not isinstance(c, SUPPORTED_CONSTANT_TYPES):
+                    if not isinstance(c, CONSTANT_TYPES):
                         raise TypeError(
                             "Expected constant as coefficient of variable (first element of tuple)."
                         )
@@ -2318,7 +2380,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -2489,7 +2551,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.as_dataarray`.
+        Keyword arguments passed to `linopy.alignment.broadcast_to_coords`.
 
     Returns
     -------
@@ -2506,7 +2568,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
@@ -2848,18 +2910,6 @@ class ScalarLinearExpression:
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
         return LinearExpression(ds, self.model)
 
-
-SUPPORTED_CONSTANT_TYPES = (
-    np.number,
-    np.bool_,
-    int,
-    float,
-    DataArray,
-    pd.Series,
-    pd.DataFrame,
-    np.ndarray,
-    pl.Series,
-)
 
 SUPPORTED_EXPRESSION_TYPES = (
     BaseExpression,

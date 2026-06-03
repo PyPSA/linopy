@@ -9,7 +9,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ from linopy.sos_reformulation import (
 logger = logging.getLogger(__name__)
 
 
-class ComputeProvider(str, Enum):
+class ComputeProvider(StrEnum):
     GCP = "GCP"
 
 

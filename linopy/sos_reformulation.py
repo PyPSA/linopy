@@ -119,7 +119,7 @@ def reformulate_sos1(
     upper_name = f"{prefix}{name}_upper"
     card_name = f"{prefix}{name}_card"
 
-    coords = [var.coords[d] for d in var.dims]
+    coords = [var.indexes[d] for d in var.dims]
     y = model.add_variables(coords=coords, name=y_name, binary=True)
 
     model.add_constraints(var <= M * y, name=upper_name)
@@ -173,9 +173,9 @@ def reformulate_sos2(
     card_name = f"{prefix}{name}_card"
 
     z_coords = [
-        pd.Index(var.coords[sos_dim].values[:-1], name=sos_dim)
+        pd.Index(var.indexes[sos_dim][:-1], name=sos_dim)
         if d == sos_dim
-        else var.coords[d]
+        else var.indexes[d]
         for d in var.dims
     ]
     z = model.add_variables(coords=z_coords, name=z_name, binary=True)
