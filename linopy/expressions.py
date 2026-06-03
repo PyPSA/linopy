@@ -1339,6 +1339,37 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
+    def has_terms(self) -> DataArray:
+        """
+        Get a boolean array which is true at slots with at least one live term.
+
+        A term is live when it references a variable (``vars != -1``). Slots
+        without any live term arise from outer joins in
+        :func:`merge <linopy.expressions.merge>`, from reindexing past the
+        original coordinates, or from masking. In contrast to
+        :meth:`isnull`, the constant is ignored: a slot carrying only a
+        constant has no terms.
+
+        Returns
+        -------
+        xr.DataArray
+
+        Examples
+        --------
+        Mask out constraint rows whose left-hand side has no terms:
+
+        >>> import linopy
+        >>> import pandas as pd
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+        >>> lhs = (1 * x).reindex(i=pd.RangeIndex(5, name="i"))
+        >>> lhs.has_terms.values
+        array([ True,  True,  True, False, False])
+        """
+        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
+        return (self.vars != -1).any(helper_dims).rename("has_terms")
+
+    @property
     def variable_names(self) -> set[str]:
         """
         Get the names of the unique variables present in the expression.
