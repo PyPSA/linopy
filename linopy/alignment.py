@@ -24,7 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
-from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -37,10 +36,7 @@ from xarray.core.coordinates import CoordinateValidationError
 from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
 
-from linopy.constants import (
-    HELPER_DIMS,
-    EvolvingAPIWarning,
-)
+from linopy.constants import HELPER_DIMS
 from linopy.types import CoordsLike, DimsLike
 
 if TYPE_CHECKING:
@@ -479,18 +475,24 @@ def _project_onto_multiindex_levels(
     return arr, projections
 
 
-def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
+def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
     """
-    Deprecation warnings for implicit MultiIndex-level projections.
+    Semantics policy for implicit MultiIndex-level projections.
 
-    The same check in every mode (scenario B of the #732 / #737 discussion):
-    implicit projection is deprecated and raises under the v1 convention. The
-    strict path raises on coverage gaps before reaching here, so only partial
-    levels warn there; the non-strict path warns for both.
+    Implicit projection is legacy-only behavior (scenario B of the #732 /
+    #737 discussion): under legacy semantics it emits a deprecation warning
+    (#738: via ``warn_legacy``); under the v1 convention it raises — a dim
+    naming a level of a stacked MultiIndex dim is a shared-dim / aux-coord
+    concern (sections 8 and 11), and the projection must be written
+    explicitly by the caller.
 
-    TODO(#738): migrate to ``warn_legacy()`` / ``LinopySemanticsWarning``
-    once the v1 semantics infrastructure (#717) lands.
+    The strict path raises on coverage gaps before reaching here, so only
+    partial levels arrive there; the non-strict path sees both.
     """
+    # Deferred import: linopy.semantics imports xarray/pandas machinery that
+    # in turn may import this module's consumers; keep the seam lazy.
+    from linopy.semantics import is_v1, warn_legacy
+
     for p in projections:
         if p.is_partial or p.has_gap:
             kind = (
@@ -499,14 +501,20 @@ def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
                 else f"filling uncovered level combinations with NaN "
                 f"(from level(s) {p.levels})"
             )
-            warn(
+            if is_v1():
+                raise ValueError(
+                    f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                    f"dimension {p.dim!r} is not supported under the v1 "
+                    f"convention (sections 8 and 11). Project the input onto "
+                    f"the dimension explicitly, e.g. select with the "
+                    f"dimension's level values."
+                )
+            warn_legacy(
                 f"multiindex-projection: implicitly {kind} onto MultiIndex "
                 f"dimension {p.dim!r}. This is deprecated and will raise under "
                 f"the v1 convention; project the input onto the dimension "
                 f"explicitly (select with the dimension's level values) to "
-                f"keep current behavior.",
-                EvolvingAPIWarning,
-                stacklevel=3,
+                f"keep current behavior."
             )
 
 
@@ -681,9 +689,9 @@ def broadcast_to_coords(
     index names, e.g. ``period`` / ``timestep``) and *level combinations*
     (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
     indexed by levels instead of the dim itself are implicitly projected
-    onto the dim's level combinations. These projections are deprecated in
-    both modes and emit an :class:`~linopy.EvolvingAPIWarning`; the v1
-    convention will require them to be explicit. Two cases:
+    onto the dim's level combinations. These projections are legacy-only:
+    under legacy semantics they emit a :class:`~linopy.LinopySemanticsWarning`
+    deprecation; under the v1 convention they raise. Two cases:
 
     - input misses a whole level → broadcasts across it; warns in both modes.
     - input gives some level combinations no value (a *coverage gap*) →
@@ -715,7 +723,7 @@ def broadcast_to_coords(
     """
     if not strict:
         da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
-        _warn_implicit_projections(projections)
+        _enforce_implicit_projections(projections)
         return da
 
     if label is None:
@@ -743,7 +751,7 @@ def broadcast_to_coords(
                 f"{p.dim!r}: {preview}. The input is indexed by level(s) "
                 f"{p.levels} and must cover every combination."
             )
-    _warn_implicit_projections(projections)
+    _enforce_implicit_projections(projections)
     validate_alignment(da, coords, dims=dims, label=label)
     return da
 

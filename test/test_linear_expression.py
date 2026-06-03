@@ -18,8 +18,8 @@ from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import (
-    EvolvingAPIWarning,
     LinearExpression,
+    LinopySemanticsWarning,
     Model,
     QuadraticExpression,
     Variable,
@@ -295,6 +295,7 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+@pytest.mark.legacy
 def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     Expression over a MultiIndex dim times a single-level constant.
@@ -306,7 +307,7 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+    with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
         expr = (1 * u) * by_level1
 
     coeffs = expr.coeffs.squeeze("_term")
@@ -314,6 +315,15 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
     assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
     assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
+@pytest.mark.v1
+def test_multiply_expression_by_mi_level_constant_raises_v1(u: Variable) -> None:
+    """v1: the implicit level projection in arithmetic must be explicit."""
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        (1 * u) * by_level1
 
 
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:

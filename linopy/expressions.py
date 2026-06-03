@@ -2570,7 +2570,7 @@ def as_expression(
         try:
             obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
-            raise ValueError("Cannot convert to LinearExpression") from e
+            raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
 
 
