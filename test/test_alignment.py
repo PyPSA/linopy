@@ -606,7 +606,7 @@ class TestBroadcastToCoords:
 # ---------------------------------------------------------------------------
 
 
-class TestMultiIndexProjection:
+class TestBroadcastToCoordsMultiIndexProjection:
     """
     Inputs indexed by levels of a stacked MultiIndex dim are projected onto it.
 
