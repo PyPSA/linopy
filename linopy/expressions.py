@@ -768,7 +768,7 @@ class BaseExpression(ABC):
         return self._divide_by_constant(other, join=join)
 
     def le(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
         join: JoinOptions | None = None,
     ) -> Constraint:
