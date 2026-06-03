@@ -33,6 +33,7 @@ from linopy.alignment import (
     align,
     as_dataarray,
     broadcast_to_coords,
+    fill_missing_coords,
     validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
@@ -194,6 +195,11 @@ class TestAsDataarrayFromPandas:
         assert da.dims == (target_dim,)
         assert list(da.coords[target_dim].values) == target_index
 
+    def test_series_dims_as_bare_string(self) -> None:
+        """Dims may be a single dim name instead of a list."""
+        da = as_dataarray(pd.Series([1, 2, 3]), dims="x")
+        assert da.dims == ("x",)
+
 
 class TestAsDataarrayFromNumpy:
     """ndarray conversion: positional labeling from coords / dims."""
@@ -276,6 +282,19 @@ class TestAsDataarrayFromNumpy:
         assert list(da.coords["dim_0"].values) == ["a", "b"]
         assert "dim_2" not in da.coords
 
+    def test_dims_as_bare_string(self) -> None:
+        """Dims may be a single dim name; dict coords are filtered to those dims."""
+        da = as_dataarray(np.array([1, 2]), coords={"x": [0, 1], "drop": [9]}, dims="x")
+        assert da.dims == ("x",)
+        assert list(da.coords["x"].values) == [0, 1]
+        assert "drop" not in da.coords
+
+    def test_zero_dim_array_expands_over_dict_coords(self) -> None:
+        """A 0-d array converts like a scalar, expanding over dict coords."""
+        da = as_dataarray(np.array(5.0), coords={"a": [0, 1]})
+        assert da.dims == ("a",)
+        assert da.values.tolist() == [5.0, 5.0]
+
 
 class TestAsDataarrayFromScalar:
     """Scalar conversion: numbers expand over coords when given."""
@@ -335,6 +354,12 @@ class TestAsDataarrayFromDataArray:
     def test_unsupported_type_raises(self) -> None:
         with pytest.raises(TypeError):
             as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
+
+    def test_fill_missing_coords_rejects_non_xarray(self) -> None:
+        with pytest.raises(
+            TypeError, match="Expected xarray.DataArray or xarray.Dataset"
+        ):
+            fill_missing_coords([1, 2, 3])  # type: ignore[call-overload]
 
     def test_does_not_expand_missing_coord_dims(self) -> None:
         """as_dataarray converts; only broadcast_to_coords expands missing dims."""
@@ -719,6 +744,53 @@ class TestMultiIndexProjection:
         da = broadcast_to_coords(series, coords={"time": [0, 1, 2]}, strict=False)
 
         assert set(da.dims) == {"time", "foo", "bar"}
+
+    def test_partially_named_mi_levels(self) -> None:
+        """A None level name in the MultiIndex is skipped during projection."""
+        mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", None))
+        mi.name = "dim_3"
+        by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+        with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+            da = broadcast_to_coords(by_level1, coords={"dim_3": mi}, strict=False)
+
+        assert da.dims == ("dim_3",)
+        assert da.values.tolist() == [10.0, 10.0, 20.0, 20.0]
+
+    def test_gap_detection_with_extra_dims(self, mi_coords: xr.Coordinates) -> None:
+        """Gaps are detected per level combination even when the input has extra dims."""
+        arr = DataArray(
+            [[[1.0, np.nan], [2.0, 2.0]], [[3.0, 3.0], [4.0, 4.0]]],
+            dims=["level1", "level2", "extra"],
+            coords={"level1": [1, 2], "level2": ["a", "b"], "extra": [0, 1]},
+        )
+
+        with pytest.warns(
+            EvolvingAPIWarning, match=r"filling uncovered level combinations"
+        ):
+            da = broadcast_to_coords(
+                arr, coords=mi_coords, dims=["dim_3"], strict=False
+            )
+
+        assert set(da.dims) == {"dim_3", "extra"}
+
+    def test_strict_gap_error_truncates_long_missing_list(self) -> None:
+        """More than 5 missing combinations are truncated in the error message."""
+        idx = pd.MultiIndex.from_product(
+            [[1, 2, 3], ["a", "b", "c"]], names=("l1", "l2")
+        )
+        idx.name = "dim_m"
+        coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_m")
+        # Diagonal subset: every level value present, 6 of 9 combinations missing.
+        diagonal = pd.MultiIndex.from_tuples(
+            [(1, "a"), (2, "b"), (3, "c")], names=["l1", "l2"]
+        )
+        weights = pd.Series([1.0, 2.0, 3.0], index=diagonal)
+
+        with pytest.raises(
+            ValueError, match=r"no value for 6 level combination.*in total"
+        ):
+            broadcast_to_coords(weights, coords, dims=["dim_m"], label="lower bound")
 
     # --- strict-mode policy on MI projections (deprecation / gaps) ---
 

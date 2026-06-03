@@ -15,6 +15,8 @@ from linopy import Model
 from linopy.common import (
     assign_multiindex_safe,
     best_int,
+    coords_from_dataset,
+    coords_to_dataset_vars,
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
@@ -70,6 +72,25 @@ def test_assign_multiindex_safe() -> None:
     assert "value" in result
     assert result["humidity"].equals(data)
     assert result["pressure"].equals(data)
+
+
+def test_coords_dataset_vars_roundtrip_multiindex() -> None:
+    """MultiIndex and plain coords survive serialization to Dataset vars and back."""
+    mi = pd.MultiIndex.from_product(
+        [[2020, 2030], ["t1", "t2"]], names=("period", "timestep")
+    )
+    mi.name = "snapshot"
+    plain = pd.Index([1, 2, 3], name="simple")
+
+    ds = xr.Dataset(coords_to_dataset_vars([mi, plain]))
+    restored = coords_from_dataset(ds, ["snapshot", "simple"])
+
+    assert isinstance(restored[0], pd.MultiIndex)
+    assert restored[0].equals(mi)
+    assert list(restored[0].names) == ["period", "timestep"]
+    assert restored[0].name == "snapshot"
+    assert restored[1].equals(plain)
+    assert restored[1].name == "simple"
 
 
 def test_iterate_slices_basic() -> None:
