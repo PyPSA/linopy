@@ -7,6 +7,7 @@ Created on Mon Oct 10 13:33:55 2022.
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -122,7 +123,7 @@ class MatrixAccessor:
             np.concatenate(ind_binval) if ind_binval else np.array([], dtype=np.intp)
         )
 
-    @property
+    @cached_property
     def c(self) -> ndarray:
         """Objective coefficients aligned with vlabels."""
         m = self._parent
@@ -147,7 +148,7 @@ class MatrixAccessor:
         np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
         return result
 
-    @property
+    @cached_property
     def Q(self) -> scipy.sparse.csc_matrix | None:
         """Quadratic objective matrix, shape (n_active_vars, n_active_vars)."""
         m = self._parent
@@ -156,7 +157,7 @@ class MatrixAccessor:
             return None
         return expr.to_matrix()[self.vlabels][:, self.vlabels]
 
-    @property
+    @cached_property
     def sol(self) -> ndarray:
         """Solution values aligned with vlabels."""
         if not self._parent.status == "ok":
@@ -172,7 +173,7 @@ class MatrixAccessor:
             result[positions] = var.solution.values.ravel()[mask]
         return result
 
-    @property
+    @cached_property
     def dual(self) -> ndarray:
         """Dual values aligned with clabels."""
         if not self._parent.status == "ok":
