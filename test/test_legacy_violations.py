@@ -247,6 +247,30 @@ class TestUnlabeledPairing:
         result = (1 * xy) @ np.arange(4.0)
         assert set(result.coord_dims) == {"a"}
 
+    @pytest.mark.v1
+    def test_v1_add_variables_bound_pairs_by_size(self) -> None:
+        # The rule is the same for construction inputs: a bare-numpy bound
+        # pairs with the matching dim by size, not positionally (where the
+        # length-5 array would hit the leading dim "a" and conflict).
+        m = Model()
+        x = m.add_variables(
+            coords=[pd.RangeIndex(4, name="a"), pd.RangeIndex(5, name="time")],
+            lower=np.arange(5.0),
+            name="x",
+        )
+        assert dict(x.lower.sizes) == {"a": 4, "time": 5}
+        assert (x.lower.isel(a=0).values == np.arange(5.0)).all()
+
+    @pytest.mark.v1
+    def test_v1_add_variables_ambiguous_bound_raises(self) -> None:
+        m = Model()
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            m.add_variables(
+                coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")],
+                lower=np.arange(4.0),
+                name="x",
+            )
+
     @pytest.mark.legacy
     def test_legacy_positional_with_warning(
         self, xy: Variable, unsilenced: None

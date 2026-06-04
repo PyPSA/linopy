@@ -590,13 +590,17 @@ def _dims_for_unlabeled_operand(
     shape: tuple[int, ...], expected: dict[Hashable, Any]
 ) -> list[Hashable]:
     """
-    Choose dim names for an unlabeled (numpy / list / polars) arithmetic operand.
+    Choose dim names for an unlabeled (numpy / list / polars) input.
 
-    v1 (convention, coordinate-alignment intro / #736): axes pair with the
-    operand's dims by size; ambiguity or a missing match raises, with
-    wrap-in-a-DataArray as the documented resolution. Legacy: axes pair with
-    the leading dims positionally; a deprecation warning fires whenever the
-    v1 pairing would differ from or reject the positional one.
+    Used everywhere an unlabeled array meets a known set of dims — bounds
+    and masks in ``add_variables`` / ``add_constraints``, and arithmetic
+    operands (#736).
+
+    v1 (convention, coordinate-alignment intro): axes pair with the dims by
+    size; ambiguity or a missing match raises, with wrap-in-a-DataArray as
+    the documented resolution. Legacy: axes pair with the leading dims
+    positionally; a deprecation warning fires whenever the v1 pairing would
+    differ from or reject the positional one.
     """
     from linopy.semantics import is_v1, warn_legacy
 
@@ -645,7 +649,6 @@ def _broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
-    unlabeled_pairing: Literal["positional", "semantic"] = "positional",
     **kwargs: Any,
 ) -> tuple[DataArray, list[_LevelProjection]]:
     """
@@ -656,12 +659,12 @@ def _broadcast_to_coords(
     apply their own policy (warn or raise) to partial projections and
     coverage gaps.
 
-    ``unlabeled_pairing`` decides how unlabeled inputs (numpy / list /
-    polars) adopt dim names: ``"positional"`` pairs axes with the leading
-    coords dims (the documented behavior for explicit-coords callers such
-    as ``add_variables``); ``"semantic"`` defers to the arithmetic
-    semantics — by size under v1, positional with a deprecation warning
-    under legacy (#736).
+    Unlabeled inputs (numpy / list / polars) carry no dim names, so their
+    axes pair with the coords dims *by size* — everywhere, the same rule
+    for bounds, masks, and arithmetic operands (#736). Under v1 an
+    ambiguous or unmatched pairing raises; under legacy it falls back to
+    positional with a deprecation warning. An explicit ``dims`` skips
+    pairing (the caller named the axes).
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
@@ -689,11 +692,7 @@ def _broadcast_to_coords(
         # position. A shape mismatch surfaces here as a clear xarray
         # "conflicting sizes" error rather than a confusing
         # "coordinates do not match" further down.
-        if (
-            unlabeled_pairing == "semantic"
-            and dims is None
-            and isinstance(arr, UNLABELED_TYPES)
-        ):
+        if dims is None and isinstance(arr, UNLABELED_TYPES) and np.ndim(arr) >= 1:
             # A truly unlabeled operand (no ``dims`` hint): the pairing
             # decides which coords dims its axes adopt (#736) — by size
             # under v1, positionally with a warning under legacy. An
@@ -705,7 +704,11 @@ def _broadcast_to_coords(
             # positional axes of a user operand — exclude them (this is what
             # passing ``coord_dims`` used to do).
             dims = [d for d in expected if d not in HELPER_DIMS]
-        arr = as_dataarray(arr, coords, dims=dims, **kwargs)
+        # Pass the normalized ``expected`` dict (not the raw ``coords``) so the
+        # conversion filters coords by *name*. With a sequence-form ``coords``,
+        # the numpy converter would otherwise zip dims to coords by position —
+        # wrong once size-pairing has chosen dims in a non-leading order.
+        arr = as_dataarray(arr, expected, dims=dims, **kwargs)
         # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
         # a FutureWarning and isn't needed (the conversion already used it).
         arr = arr.assign_coords(
@@ -867,9 +870,7 @@ def broadcast_to_coords(
         Broadcast against ``coords``.
     """
     if not strict:
-        da, projections = _broadcast_to_coords(
-            arr, coords, dims, unlabeled_pairing="semantic", **kwargs
-        )
+        da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
         _enforce_implicit_projections(projections)
         return da
 
