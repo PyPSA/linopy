@@ -127,16 +127,21 @@ array is treated as a scalar; a Python `list` is read as a numpy array
 (it carries values, not labels). Implemented in `linopy.alignment`
 ([#736]).
 
-### §8. Shared dimensions must match exactly
+### §8. Shared dimensions must carry the same labels
 
-If two operands share a dimension, their coordinate labels must be identical,
-or the operator raises `ValueError`.
+If two operands share a dimension, their coordinate labels must be the same
+*set*, or the operator raises `ValueError`. Order is immaterial: the same
+labels in a different order are the same coordinate and align by label (a
+reindex), following "by label, never by position" above — only a difference in
+the label set raises.
 
-This is xarray's model with `arithmetic_join="exact"` — deliberately stricter
-than xarray's own default (`inner`). An inner join silently drops the
+This is close to xarray's `arithmetic_join="exact"` — deliberately stricter
+than xarray's own default (`inner`) — but order-independent, where xarray's
+`exact` would reject a pure reorder. An inner join silently drops the
 non-overlapping labels, and in an optimization model a dropped coordinate is a
-dropped term or constraint: a silent wrong answer. An exact match surfaces the
-mismatch where it happens. (The [pyoframe] library uses the same model.)
+dropped term or constraint: a silent wrong answer. Matching on the label set
+surfaces a real mismatch where it happens. (The [pyoframe] library uses the
+same model.)
 
 Because the rule is identical for every operator, the operator-alignment split
 ([#708]) — `*` aligning by label while `+`, `-`, `/` go by position —
@@ -202,7 +207,9 @@ values:
 
 An input that reconstructs the *entire* MultiIndex (all levels, every
 combination) is not a conflict — it is the same coordinate spelled
-differently, and aligns element-wise under §8.
+differently, and aligns by tuple under §8, in any order. Order is
+immaterial here exactly as for a plain dimension: the same tuples in a
+different order are reordered to match, not rejected.
 
 (Legacy projects implicitly and warns — scenario B of the [#732]/[#737]
 discussion; the implicit projection is removed at 1.0.)

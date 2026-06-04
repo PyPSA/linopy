@@ -58,6 +58,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.config import LinopySemanticsWarning
+from linopy.expressions import merge
 from linopy.testing import assert_linequal
 from linopy.variables import Variable
 
@@ -804,6 +805,119 @@ class TestExactAlignmentMerge:
         result = a + b
         assert set(result.coord_dims) == {"time", "scenario"}
 
+    @pytest.mark.v1
+    def test_var_plus_var_reordered_labels_align(self, m: Model) -> None:
+        a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
+        b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
+        result = (1 * a) + (1 * b)
+        assert list(result.indexes["e"]) == ["costs", "penalty"]
+
+    @pytest.mark.v1
+    def test_reordered_constants_pair_by_label_not_position(self, m: Model) -> None:
+        ea = pd.Index(["costs", "penalty"], name="e")
+        eb = pd.Index(["penalty", "costs"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
+        b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
+        result = a + b
+        assert float(result.const.sel(e="costs")) == 102.0
+        assert float(result.const.sel(e="penalty")) == 201.0
+
+    @pytest.mark.v1
+    def test_multi_operand_merge_reordered_pairs_by_label(self, m: Model) -> None:
+        ea = pd.Index(["x", "y", "z"], name="e")
+        er = pd.Index(["z", "y", "x"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series(
+            [1.0, 2.0, 3.0], index=ea
+        )
+        b = m.add_variables(coords=[er], name="b") + pd.Series(
+            [10.0, 20.0, 30.0], index=er
+        )
+        c = m.add_variables(coords=[ea], name="c") + pd.Series(
+            [100, 200, 300.0], index=ea
+        )
+        result = merge([a, b, c], cls=type(a))
+        assert float(result.const.sel(e="x")) == 131.0
+        assert float(result.const.sel(e="z")) == 313.0
+
+    @pytest.mark.v1
+    def test_quadratic_merge_reordered_aligns(self, m: Model) -> None:
+        ea = pd.Index(["x", "y", "z"], name="e")
+        er = pd.Index(["z", "y", "x"], name="e")
+        x = m.add_variables(coords=[ea], name="x")
+        y = m.add_variables(coords=[er], name="y")
+        result = (x * x) + (y * y)
+        assert list(result.indexes["e"]) == ["x", "y", "z"]
+
+    @pytest.mark.v1
+    def test_reordered_multiindex_aligns_by_tuple(self, m: Model) -> None:
+        mi1 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (2, "a")], names=["p", "s"]
+        )
+        mi2 = pd.MultiIndex.from_tuples(
+            [(2, "a"), (1, "b"), (1, "a")], names=["p", "s"]
+        )
+        mi1.name = "snap"
+        mi2.name = "snap"
+        x = m.add_variables(coords=[mi1], name="x") + pd.Series(
+            [1.0, 2.0, 3.0], index=mi1
+        )
+        y = m.add_variables(coords=[mi2], name="y") + pd.Series(
+            [10.0, 20.0, 30.0], index=mi2
+        )
+        result = x + y
+        got = dict(zip(map(tuple, result.indexes["snap"]), result.const.values))
+        assert got == {(1, "a"): 31.0, (1, "b"): 22.0, (2, "a"): 13.0}
+
+    @pytest.mark.legacy
+    def test_reordered_merge_positional_legacy(self, m: Model) -> None:
+        ea = pd.Index(["costs", "penalty"], name="e")
+        eb = pd.Index(["penalty", "costs"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
+        b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
+        result = a + b
+        assert float(result.const.sel(e="costs")) == 101.0
+        assert float(result.const.sel(e="penalty")) == 202.0
+
+    @pytest.mark.legacy
+    def test_reordered_merge_warns_legacy(self, m: Model, unsilenced: None) -> None:
+        ea = pd.Index(["costs", "penalty"], name="e")
+        eb = pd.Index(["penalty", "costs"], name="e")
+        a = m.add_variables(coords=[ea], name="a")
+        b = m.add_variables(coords=[eb], name="b")
+        with pytest.warns(LinopySemanticsWarning) as record:
+            (1 * a) + (1 * b)
+        msg = next(
+            str(w.message) for w in record if w.category is LinopySemanticsWarning
+        )
+        assert msg == (
+            "Coordinate order mismatch in merge along dim '_term' aligned "
+            "positionally by legacy. Under v1 the same labels in a different "
+            "order align by label (a reindex), giving a different result."
+            "\n  Dim:       'e': left=['costs', 'penalty'], "
+            "right=['penalty', 'costs']"
+            "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+            "\n             `.assign_coords(...)` to relabel one side"
+            "\n             or pass an explicit `join=` argument."
+            "\n  Opt in:    linopy.options['semantics'] = 'v1'"
+            "\n  Silence:   warnings.filterwarnings('ignore', "
+            "category=LinopySemanticsWarning)"
+        )
+
+    @pytest.mark.v1
+    def test_different_multiindex_raises_dim_mismatch(self, m: Model) -> None:
+        mi1 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (2, "a")], names=["p", "s"]
+        )
+        mi2 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (3, "c")], names=["p", "s"]
+        )
+        mi1.name = "snap"
+        mi2.name = "snap"
+        x = m.add_variables(coords=[mi1], name="x")
+        y = m.add_variables(coords=[mi2], name="y")
+        with pytest.raises(ValueError, match="shared dimension 'snap'"):
+            (1 * x) + (1 * y)
+
     @pytest.mark.legacy
     def test_var_plus_var_different_labels_silent(
         self, x: Variable, x_other: Variable
@@ -1531,6 +1645,17 @@ class TestAuxCoordConflict:
         w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
             B=("A", [400, 400, 500])
         )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v + w
+
+    @pytest.mark.v1
+    def test_aux_conflict_survives_reordered_dim(self, m: Model) -> None:
+        v = m.add_variables(
+            lower=0, coords=[pd.Index(["x", "y", "z"], name="A")], name="v"
+        ).assign_coords(B=("A", [1, 2, 3]))
+        w = m.add_variables(
+            lower=0, coords=[pd.Index(["z", "y", "x"], name="A")], name="w"
+        ).assign_coords(B=("A", [1, 2, 3]))
         with pytest.raises(ValueError, match="Auxiliary coordinate"):
             v + w
 
