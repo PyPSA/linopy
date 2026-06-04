@@ -645,21 +645,20 @@ def _dims_for_unlabeled_operand(
     return positional
 
 
-def matmul_operand_to_dataarray(
+def _matmul_operand_to_dataarray(
     other: Any, coords: Coordinates, coord_dims: tuple[Hashable, ...]
 ) -> DataArray:
     """
     Convert a non-expression ``@`` operand, pairing unlabeled axes by size.
 
     Shared by ``LinearExpression.__matmul__`` and
-    ``QuadraticExpression.__matmul__``: the pairing decides which dims the
-    contraction collapses (#736) — by size under v1, positionally with a
-    warning under legacy.
+    ``QuadraticExpression.__matmul__``: :func:`_dims_for_positional_input`
+    decides which dims the contraction collapses (#736) — by size under v1,
+    positionally with a warning under legacy. Unlike the broadcast pipeline
+    this only converts (no reindex / expand / transpose).
     """
-    dims: DimsLike = list(coord_dims)
-    if isinstance(other, UNLABELED_TYPES):
-        expected = {d: coords[d] for d in coord_dims}
-        dims = _dims_for_unlabeled_operand(np.shape(other), expected)
+    expected = {d: coords[d] for d in coord_dims}
+    dims = _dims_for_positional_input(other, expected, None)
     return as_dataarray(other, coords=coords, dims=dims)
 
 

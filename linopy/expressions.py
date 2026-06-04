@@ -45,11 +45,11 @@ from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
 from linopy.alignment import (
+    _matmul_operand_to_dataarray,
     as_constant,
     as_dataarray,
     broadcast_to_coords,
     fill_missing_coords,
-    matmul_operand_to_dataarray,
 )
 from linopy.common import (
     EmptyDeprecationWrapper,
@@ -1949,7 +1949,7 @@ class LinearExpression(BaseExpression):
         """
         other = as_constant(other)
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+            other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2439,7 +2439,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+        other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
