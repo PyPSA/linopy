@@ -271,14 +271,17 @@ class TestUnlabeledPairing:
             )
 
     @pytest.mark.legacy
-    def test_legacy_positional_with_warning(
+    def test_legacy_no_divergence_is_silent(
         self, xy: Variable, unsilenced: None
     ) -> None:
-        # legacy pairs the length-3 array with the leading dim "a" positionally;
-        # since v1 would pair it with "a" too (only "a" has size 3) there is no
-        # divergence — but a length that matches a *non-leading* dim diverges.
-        result = (1 * xy) + np.arange(3.0)
+        # length-3 array: legacy pairs positionally with the leading dim "a";
+        # v1 would pair it with "a" too (only "a" is size 3), so there is no
+        # divergence and no warning. Pins the silent case.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            result = (1 * xy) + np.arange(3.0)
         assert result.const.sizes == {"a": 3, "b": 4}
+        assert (result.const.isel(b=0).values == np.arange(3.0)).all()
 
     @pytest.mark.legacy
     def test_legacy_warns_when_v1_would_differ(
@@ -286,9 +289,38 @@ class TestUnlabeledPairing:
     ) -> None:
         # length-4 array: legacy pairs positionally with "a" (size 3) → error,
         # but the warning fires first explaining the v1 divergence.
-        with pytest.warns(LinopySemanticsWarning, match=r"pairs by size"):
+        with pytest.warns(LinopySemanticsWarning, match=r"pairs by size instead"):
             with contextlib.suppress(Exception):
                 (1 * xy) + np.arange(4.0)
+
+    @pytest.mark.legacy
+    def test_legacy_ambiguous_pairs_positionally_with_warning(
+        self, square: Variable, unsilenced: None
+    ) -> None:
+        # The square (p:4, q:4) case where v1 *raises* — legacy must instead
+        # pair positionally with the leading dim and warn, never raise. This is
+        # the biggest legacy/v1 divergence and the strongest no-regression guard.
+        with pytest.warns(LinopySemanticsWarning, match=r"this raises"):
+            result = (1 * square) + np.arange(4.0)
+        assert result.const.sizes == {"p": 4, "q": 4}
+        # paired with the leading dim "p": the array varies along p, broadcast over q
+        assert (result.const.isel(q=0).values == np.arange(4.0)).all()
+
+    @pytest.mark.legacy
+    def test_legacy_add_variables_bound_positional(self, unsilenced: None) -> None:
+        # Regression guard for the unification: legacy add_variables still
+        # assigns an unlabeled bound positionally (here unambiguous — only "a"
+        # is size 5 — so it is also silent), producing the pre-#736 result.
+        m = Model()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            x = m.add_variables(
+                coords=[pd.RangeIndex(5, name="a"), pd.RangeIndex(3, name="b")],
+                lower=np.arange(5.0),
+                name="x",
+            )
+        assert dict(x.lower.sizes) == {"a": 5, "b": 3}
+        assert (x.lower.isel(b=0).values == np.arange(5.0)).all()
 
 
 # =====================================================================
