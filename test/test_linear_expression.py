@@ -1524,6 +1524,30 @@ class TestGroupbyByAttachedCoordinate:
         with pytest.raises(TypeError, match="unhashable"):
             expr.groupby([period, season]).sum()
 
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    @pytest.mark.parametrize(
+        "level, values, vars_",
+        [
+            ("period", [2020, 2030], [[0, 1, 2], [3, 4, 5]]),
+            ("timestep", ["t1", "t2", "t3"], [[0, 3], [1, 4], [2, 5]]),
+        ],
+    )
+    def test_multiindex_level(
+        self, level: str, values: list, vars_: list, use_fallback: bool
+    ) -> None:
+        # Grouping by a level of a real ``MultiIndex`` dimension (the
+        # pydata/xarray#6836 case, fixed upstream) works through linopy.
+        m = Model()
+        mi = pd.MultiIndex.from_product(
+            [[2020, 2030], ["t1", "t2", "t3"]], names=["period", "timestep"]
+        )
+        x = m.add_variables(coords={"snapshot": mi}, name="x")  # labels 0..5
+
+        grouped = (1 * x).groupby(level).sum(use_fallback=use_fallback)
+
+        assert grouped.data[level].values.tolist() == values
+        assert grouped.vars.transpose(level, TERM_DIM).values.tolist() == vars_
+
 
 @pytest.mark.parametrize("use_fallback", [True])
 def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None:

@@ -172,12 +172,16 @@ class LinearExpressionGroupby:
 
         # Detach a non-dimension coordinate used as the group so xarray does
         # not try to re-expand it while recombining the groups (GH #750); the
-        # group values are still supplied through ``group`` itself.
+        # group values are still supplied through ``group`` itself. Only free
+        # (non-indexed) coords are detached -- never a MultiIndex level, whose
+        # removal would leave its dimension without an index.
         data = self.data
         if isinstance(group, str) and group in data.coords and group not in data.dims:
             group = data[group]
-        if isinstance(group, DataArray) and group.name in set(data.coords) - set(
-            data.dims
+        if (
+            isinstance(group, DataArray)
+            and group.name in set(data.coords) - set(data.dims)
+            and group.name not in data.xindexes
         ):
             data = data.drop_vars([group.name])
 
