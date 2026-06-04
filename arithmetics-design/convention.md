@@ -207,7 +207,9 @@ values:
 
 An input that reconstructs the *entire* MultiIndex (all levels, every
 combination) is not a conflict — it is the same coordinate spelled
-differently, and aligns element-wise under §8.
+differently, and aligns by tuple under §8, in any order. Order is
+immaterial here exactly as for a plain dimension: the same tuples in a
+different order are reordered to match, not rejected.
 
 (Legacy projects implicitly and warns — scenario B of the [#732]/[#737]
 discussion; the implicit projection is removed at 1.0.)

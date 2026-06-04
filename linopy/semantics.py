@@ -305,13 +305,16 @@ def conform_merge_dims(
     """
     Align shared user dims for a merge, in a single pass over the operands.
 
-    §8 aligns by label, not position: a shared user dim whose labels match the
-    first operand's as a *set* but in a different order is reindexed to that
-    order (returned in the conformed list). A dim whose label set differs is a
-    real mismatch, returned as ``(dim, first_labels, other_labels)`` for the
-    caller to raise (v1) / warn (legacy). Helper dims (``_term``, ``_factor``)
-    and the concat dim are excluded; bare dimension indexes are compared so
-    auxiliary coords are §11's job, and MultiIndex dims are left to §11.
+    §8 aligns by label, not position: a shared user dim whose labels are the
+    first operand's reordered (same set) is permuted to that order. The permute
+    uses positional ``isel`` rather than ``reindex`` so it works uniformly for a
+    plain index and a stacked MultiIndex's tuples (``reindex`` cannot reorder a
+    MultiIndex by tuple); ``get_indexer`` also doubles as the same-set test. A
+    dim whose label set differs is a real mismatch, returned as
+    ``(dim, first_labels, other_labels)`` for the caller to raise (v1) / warn
+    (legacy). Helper dims (``_term``, ``_factor``) and the concat dim are
+    excluded; bare dimension indexes are compared, so auxiliary coords (which
+    ride along the permute) stay §11's job.
     """
     datasets = list(datasets)
     if len(datasets) < 2:
@@ -328,20 +331,17 @@ def conform_merge_dims(
     out = [datasets[0]]
     mismatch: tuple[str, Any, Any] | None = None
     for i in range(1, len(datasets)):
-        reindexer = {}
+        permute: dict[Any, Any] = {}
         for d in shared:
             ref, idx = indexed[0][d], indexed[i][d]
             if ref.equals(idx):
                 continue
-            if (
-                not isinstance(idx, pd.MultiIndex)
-                and len(idx) == len(ref)
-                and set(idx) == set(ref)
-            ):
-                reindexer[d] = ref
+            positions = idx.get_indexer(ref) if len(idx) == len(ref) else None
+            if positions is not None and (positions >= 0).all():
+                permute[d] = positions
             elif mismatch is None:
                 mismatch = (str(d), ref.values, idx.values)
-        out.append(datasets[i].reindex(reindexer) if reindexer else datasets[i])
+        out.append(datasets[i].isel(permute) if permute else datasets[i])
     return out, mismatch
 
 

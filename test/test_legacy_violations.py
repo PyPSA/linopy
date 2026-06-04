@@ -844,8 +844,7 @@ class TestExactAlignmentMerge:
         result = (x * x) + (y * y)
         assert list(result.coeffs.coords["e"].values) == ["x", "y", "z"]
 
-    @pytest.mark.v1
-    def test_reordered_multiindex_raises(self, m: Model) -> None:
+    def test_reordered_multiindex_aligns_by_tuple(self, m: Model) -> None:
         mi1 = pd.MultiIndex.from_tuples(
             [(1, "a"), (1, "b"), (2, "a")], names=["p", "s"]
         )
@@ -854,10 +853,15 @@ class TestExactAlignmentMerge:
         )
         mi1.name = "snap"
         mi2.name = "snap"
-        x = m.add_variables(coords=[mi1], name="x")
-        y = m.add_variables(coords=[mi2], name="y")
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
-            (1 * x) + (1 * y)
+        x = m.add_variables(coords=[mi1], name="x") + pd.Series(
+            [1.0, 2.0, 3.0], index=mi1
+        )
+        y = m.add_variables(coords=[mi2], name="y") + pd.Series(
+            [10.0, 20.0, 30.0], index=mi2
+        )
+        result = x + y
+        got = dict(zip(map(tuple, result.const.indexes["snap"]), result.const.values))
+        assert got == {(1, "a"): 31.0, (1, "b"): 22.0, (2, "a"): 13.0}
 
     @pytest.mark.legacy
     def test_var_plus_var_different_labels_silent(
