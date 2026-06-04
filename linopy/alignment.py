@@ -37,12 +37,7 @@ from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
 
 from linopy.constants import HELPER_DIMS
-from linopy.types import CoordsLike, DimsLike
-
-# Array-like operands that carry no dimension labels of their own: their
-# axes pair with the linopy operand's dims (#736). Single source of truth
-# for the operator dispatch and the broadcasting seam.
-UNLABELED_TYPES = (np.ndarray, list, pl.Series)
+from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
 
 
 def as_constant(other: Any) -> Any:
