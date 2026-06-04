@@ -212,14 +212,6 @@ class TestUnlabeledPairing:
             coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")], name="sq"
         )
 
-    @pytest.mark.v1
-    @pytest.mark.parametrize("make", UNLABELED_1D)
-    def test_v1_pairs_by_size(self, xy: Variable, make: Any) -> None:
-        # length-4 array pairs with dim "b" (size 4), not the leading "a" (3)
-        result = (1 * xy) + make(range(4))
-        assert set(result.const.dims) == {"a", "b"}
-        assert result.const.sizes == {"a": 3, "b": 4}
-
     @pytest.fixture
     def wide(self) -> Variable:
         # four dims of distinct sizes — a lower-rank operand pairs a subset
@@ -234,10 +226,39 @@ class TestUnlabeledPairing:
             name="wide",
         )
 
+    # -- 1-d operands -----------------------------------------------------
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_pairs_by_size(self, xy: Variable, make: Any) -> None:
+        # length-4 array pairs with dim "b" (size 4), not the leading "a" (3)
+        result = (1 * xy) + make(range(4))
+        assert set(result.const.dims) == {"a", "b"}
+        assert result.const.sizes == {"a": 3, "b": 4}
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_ambiguous_square_raises(self, square: Variable, make: Any) -> None:
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            (1 * square) + make(range(4))
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_no_size_match_raises(self, xy: Variable, make: Any) -> None:
+        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
+            (1 * xy) + make(range(7))
+
+    @pytest.mark.v1
+    def test_v1_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
+        # the documented escape hatch: name the axis with a DataArray
+        result = (1 * square) + xr.DataArray(np.arange(4.0), dims=["p"])
+        assert set(result.const.dims) == {"p", "q"}
+
+    # -- multi-dim operands (numpy only — list / polars are 1-d) ----------
+
     @pytest.mark.v1
     def test_v1_size_order_independent(self, xy: Variable) -> None:
         # a 2-d (4, 3) operand pairs (b, a) by size regardless of axis order.
-        # numpy-only: polars Series and a flat list are 1-d.
         result = (1 * xy) + np.ones((4, 3))
         assert result.const.sizes == {"a": 3, "b": 4}
 
@@ -282,23 +303,7 @@ class TestUnlabeledPairing:
         with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
             (1 * y) + np.ones((4, 5))
 
-    @pytest.mark.v1
-    @pytest.mark.parametrize("make", UNLABELED_1D)
-    def test_v1_ambiguous_square_raises(self, square: Variable, make: Any) -> None:
-        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
-            (1 * square) + make(range(4))
-
-    @pytest.mark.v1
-    @pytest.mark.parametrize("make", UNLABELED_1D)
-    def test_v1_no_size_match_raises(self, xy: Variable, make: Any) -> None:
-        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
-            (1 * xy) + make(range(7))
-
-    @pytest.mark.v1
-    def test_v1_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
-        # the documented escape hatch: name the axis with a DataArray
-        result = (1 * square) + xr.DataArray(np.arange(4.0), dims=["p"])
-        assert set(result.const.dims) == {"p", "q"}
+    # -- matmul -----------------------------------------------------------
 
     @pytest.mark.v1
     @pytest.mark.parametrize("make", UNLABELED_1D)
@@ -306,6 +311,8 @@ class TestUnlabeledPairing:
         # matmul contracts the paired dim: length-4 array pairs with "b"
         result = (1 * xy) @ make(range(4))
         assert set(result.coord_dims) == {"a"}
+
+    # -- construction (add_variables bounds) ------------------------------
 
     @pytest.mark.v1
     def test_v1_add_variables_bound_pairs_by_size(self) -> None:
