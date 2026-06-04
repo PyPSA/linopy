@@ -1014,18 +1014,18 @@ def test_masked_variable_model_v1_drops_constraint(
     assert (np.isclose(x.solution[:-2], 0, atol=tol)).all()
 
 
-@pytest.mark.v1
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_masked_variable_model_v1_fillna_binds(
+def test_masked_variable_model_fillna_binds(
     solver: str,
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
     """
-    §7 escape hatch under v1: ``x + y.fillna(0) >= 10`` revives the
-    masked slots as a present zero, so the constraint binds and the
-    legacy outcome (``x[-2:] == 10``) is recovered. The placement of
-    ``fillna`` is the caller's explicit statement of intent.
+    ``x + y.fillna(0) >= 10`` binds the masked slots under both
+    semantics: ``fillna(0)`` makes the absent ``y`` a present zero, so
+    ``x[-2:] == 10`` regardless of mode. Under v1 it's the §7 escape
+    hatch that recovers the legacy outcome; under legacy it's redundant
+    (already filled) but harmless.
     """
     m = Model()
     lower = pd.Series(0, range(10))

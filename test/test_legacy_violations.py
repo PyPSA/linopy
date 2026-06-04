@@ -249,8 +249,7 @@ class TestUnlabeledPairing:
         with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
             (1 * xy) + make(range(7))
 
-    @pytest.mark.v1
-    def test_v1_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
+    def test_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
         # the documented escape hatch: name the axis with a DataArray
         result = (1 * square) + xr.DataArray(np.arange(4.0), dims=["p"])
         assert set(result.const.dims) == {"p", "q"}
@@ -783,7 +782,6 @@ class TestExactAlignmentMerge:
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             x - x_other
 
-    @pytest.mark.v1
     def test_var_plus_var_same_coords_works(
         self, m: Model, time: pd.RangeIndex
     ) -> None:
@@ -793,7 +791,6 @@ class TestExactAlignmentMerge:
         result = a + b
         assert result.sizes["time"] == 5
 
-    @pytest.mark.v1
     def test_var_plus_var_broadcast_non_shared_dim_works(
         self, m: Model, time: pd.RangeIndex
     ) -> None:
@@ -805,7 +802,6 @@ class TestExactAlignmentMerge:
         result = a + b
         assert set(result.coord_dims) == {"time", "scenario"}
 
-    @pytest.mark.v1
     def test_var_plus_var_reordered_labels_align(self, m: Model) -> None:
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
@@ -839,7 +835,6 @@ class TestExactAlignmentMerge:
         assert float(result.const.sel(e="x")) == 131.0
         assert float(result.const.sel(e="z")) == 313.0
 
-    @pytest.mark.v1
     def test_quadratic_merge_reordered_aligns(self, m: Model) -> None:
         ea = pd.Index(["x", "y", "z"], name="e")
         er = pd.Index(["z", "y", "x"], name="e")
@@ -1206,7 +1201,6 @@ class TestFillnaResolves:
         assert isinstance(result, LinearExpression)
         assert result.const.values[0] == 42.0
 
-    @pytest.mark.v1
     def test_variable_fillna_zero_revives_slot_as_present_zero(
         self, xs: Variable
     ) -> None:
@@ -1245,12 +1239,12 @@ class TestFillnaResolves:
         # outer ``+ x`` is genuinely additive where y.shift was present.
         assert int((~np.isnan(expr.coeffs.values[1])).sum()) == 3
 
-    @pytest.mark.v1
     def test_masked_variable_constraint_via_fillna(self) -> None:
         """
-        v1 counterpart of ``test_masked_variable_model`` — under §6 the
-        constraint ``x + y >= 10`` drops at the masked y slots, so the
-        caller must say ``y.fillna(0)`` to keep ``x >= 10`` there.
+        ``y.fillna(0)`` yields a NaN-free RHS so ``x + y.fillna(0) >= 10``
+        binds at every slot — under both semantics (required under v1,
+        where absence would otherwise drop the constraint; redundant but
+        harmless under legacy, which already fills 0).
         """
         m = Model()
         lower = pd.Series(0, range(10))
@@ -1446,19 +1440,16 @@ class TestNamedMethodJoin:
             [10.0, 30.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
 
-    @pytest.mark.v1
     def test_add_join_inner_intersects(self, x: Variable, subset: xr.DataArray) -> None:
         """`.add(other, join="inner")` picks the intersection of coords."""
         result = x.add(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
 
-    @pytest.mark.v1
     def test_add_join_outer_fills(self, x: Variable, subset: xr.DataArray) -> None:
         """`.add(other, join="outer")` unions coords (gaps are filled)."""
         result = x.add(subset, join="outer")
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
-    @pytest.mark.v1
     def test_mul_join_inner(self, x: Variable, subset: xr.DataArray) -> None:
         result = x.mul(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
@@ -1494,7 +1485,6 @@ class TestNamedMethodJoin:
         with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             x + subset
 
-    @pytest.mark.v1
     def test_add_join_override_aligns_positionally(self, x: Variable) -> None:
         """
         ``join="override"`` is the explicit-positional mode — the right
@@ -1513,7 +1503,6 @@ class TestNamedMethodJoin:
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
         assert result.const.values.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
 
-    @pytest.mark.v1
     def test_add_join_override_size_mismatch_raises(self, x: Variable) -> None:
         """
         §10 / ``override`` documentation says "positional alignment, made
@@ -1531,7 +1520,6 @@ class TestNamedMethodJoin:
         with pytest.raises(ValueError, match="join='override' requires matching"):
             x.add(shorter, join="override")
 
-    @pytest.mark.v1
     def test_reindex_like_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
         """
         §10 names ``.reindex(...)`` / ``.reindex_like(...)`` as
@@ -1547,7 +1535,6 @@ class TestNamedMethodJoin:
         result = x + aligned  # bare + succeeds because coords now match
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
-    @pytest.mark.v1
     def test_assign_coords_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
         """
         ``.assign_coords(...)`` is the explicit-positional escape —
@@ -1896,7 +1883,6 @@ class TestAuxCoordConflict:
         with pytest.raises(ValueError, match="Auxiliary coordinate"):
             a0 + a1
 
-    @pytest.mark.v1
     def test_isel_with_drop_true_avoids_conflict(self, m: Model, A: pd.Index) -> None:
         """
         The §11 escape hatch the convention recommends: drop the
@@ -1908,7 +1894,6 @@ class TestAuxCoordConflict:
         result = a0 + a1  # no aux coord → no conflict
         assert "A" not in result.coords
 
-    @pytest.mark.v1
     def test_assign_coords_resolves_conflict(self, m: Model, A: pd.Index) -> None:
         """
         §11's third escape hatch: relabel one side with
@@ -2289,7 +2274,6 @@ class TestObjectScope:
             return 7.5, LinearExpression(7.5, m)
         raise AssertionError(kind)
 
-    @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "radd", "rsub", "rmul"])
     @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
     def test_op_matches_const_expr_op(
@@ -2309,7 +2293,6 @@ class TestObjectScope:
         else:
             assert_linequal(opfunc(raw, x), opfunc(wrapped, x))
 
-    @pytest.mark.v1
     @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
     def test_distributive_law_mixed_types(
         self,
@@ -2325,7 +2308,6 @@ class TestObjectScope:
         assert_linequal((x + y) * raw, x * raw + y * raw)
         assert_linequal((x + y) * raw, (x + y) * wrapped)
 
-    @pytest.mark.v1
     @pytest.mark.parametrize("kind", ["dataarray", "series", "scalar"])
     def test_associative_law_mixed_types(
         self,
@@ -2355,7 +2337,6 @@ class TestObjectScope:
         with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
             x + LinearExpression(mismatched, m)
 
-    @pytest.mark.v1
     def test_division_by_const_expr_is_type_error(
         self, m: Model, x: Variable, da: xr.DataArray
     ) -> None:
