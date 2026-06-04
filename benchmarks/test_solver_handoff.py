@@ -21,6 +21,7 @@ import pytest
 from benchmarks.conftest import maybe_skip
 from benchmarks.phases import SOLVER_HANDOFFS
 from benchmarks.registry import ModelSpec, iter_params
+from benchmarks.snapshot import spec_param_id
 from linopy.solvers import available_solvers
 
 
@@ -34,7 +35,7 @@ def _make_params() -> list[object]:
                     wrapper,
                     spec,
                     size,
-                    id=f"{solver_name}-{spec.name}-{spec.axis}={size}",
+                    id=f"{solver_name}-{spec_param_id(spec.name, spec.axis, size)}",
                 )
             )
     return out

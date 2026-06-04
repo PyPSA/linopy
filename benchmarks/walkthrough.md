@@ -131,10 +131,15 @@ Patterns are tagged by the `severity` axis in their test id, so the usual tools
 target them by filtering on it:
 
 ```bash
-pytest benchmarks/ -k severity            # all patterns, every phase
-pytest benchmarks/ -k nodal_balance       # one pattern
-python -m benchmarks memory save mylabel  # memory grid includes patterns
+pytest benchmarks/ -k severity                        # all patterns, every phase
+pytest benchmarks/ -k nodal_balance                   # one pattern
+python -m benchmarks run --filter severity --quick    # patterns, timing
+python -m benchmarks memory save mylabel --filter severity   # patterns, memory
 ```
+
+(`--filter`/`-k` selects specs by name or id substring on both `run` and
+`memory save` — `nodal_balance` for one spec, `severity` for all patterns,
+`n=` for models. `list --kind {models,patterns}` browses them.)
 
 ## Run a timing snapshot
 

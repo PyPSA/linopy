@@ -216,7 +216,9 @@ def iter_params(
 
 
 def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
-    return [f"{spec.name}-{spec.axis}={value}" for spec, value in params]
+    from benchmarks.snapshot import spec_param_id
+
+    return [spec_param_id(spec.name, spec.axis, value) for spec, value in params]
 
 
 # --- Patterns ---------------------------------------------------------------

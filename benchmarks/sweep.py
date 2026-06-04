@@ -247,7 +247,6 @@ def run_sweep(
     long: bool = False,
     quick: bool = False,
     rounds: int | None = None,
-    model: str | None = None,
     filter_expr: str | None = None,
     smoke: bool = False,
     as_of: str | None = None,
@@ -295,9 +294,8 @@ def run_sweep(
             # ``smoke`` command. No JSON snapshot, return code is the
             # signal.
             pytest_cmd = [str(prov.python), "-m", "pytest", *smoke_args]
-            k_parts = [p for p in (model, filter_expr) if p]
-            if k_parts:
-                pytest_cmd.extend(["-k", " and ".join(k_parts)])
+            if filter_expr:
+                pytest_cmd.extend(["-k", filter_expr])
             pytest_cmd.extend(extra_args)
 
             typer.secho(f"$ {' '.join(pytest_cmd)}", fg=typer.colors.BRIGHT_BLACK)
@@ -334,9 +332,8 @@ def run_sweep(
                 [f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"]
             )
 
-        k_parts = [p for p in (model, filter_expr) if p]
-        if k_parts:
-            pytest_cmd.extend(["-k", " and ".join(k_parts)])
+        if filter_expr:
+            pytest_cmd.extend(["-k", filter_expr])
 
         pytest_cmd.extend(extra_args)
 

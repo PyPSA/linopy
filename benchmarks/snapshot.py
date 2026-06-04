@@ -56,6 +56,18 @@ def parse_test_id(test_id: str) -> tuple[str, str, int | None, str]:
     return "other", "other", None, "other"
 
 
+def spec_param_id(name: str, axis: str, value: object) -> str:
+    """
+    The ``<name>-<axis>=<value>`` fragment that fills a test id's ``[...]``.
+
+    The single source of truth for the parametrize-id shape — pytest param ids
+    (:func:`benchmarks.registry.param_ids`), the memory grid's test ids, and
+    the solver-handoff ids all build on it, and :func:`parse_test_id` reads it
+    back. Keep it in lock-step with ``_SIZE_RE``.
+    """
+    return f"{name}-{axis}={value}"
+
+
 def synth_test_id(
     label: str,
     *,
@@ -77,7 +89,7 @@ def synth_test_id(
     """
     given = (model is not None, size is not None, phase is not None)
     if all(given):
-        return f"bench::{phase}[{model}-{axis}={size}]"
+        return f"bench::{phase}[{spec_param_id(model, axis, size)}]"
     if any(given):
         raise ValueError(
             "model, size, and phase must be given together (or all omitted)"

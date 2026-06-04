@@ -47,7 +47,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarks.snapshot import write_memory_snapshot
+from benchmarks.snapshot import spec_param_id, write_memory_snapshot
 
 if TYPE_CHECKING:
     from benchmarks.registry import BenchSpec
@@ -167,7 +167,7 @@ def _measurements(
 
     if phase == "build":
         yield (
-            f"benchmarks/test_build.py::test_build[{name}-{axis}={size}]",
+            f"benchmarks/test_build.py::test_build[{spec_param_id(name, axis, size)}]",
             lambda: spec.build(size),
         )
         return
@@ -185,7 +185,7 @@ def _measurements(
             write_lp(built, lp_path)
 
         try:
-            yield (f"pipeline[{name}-{axis}={size}]", run_pipeline)
+            yield (f"pipeline[{spec_param_id(name, axis, size)}]", run_pipeline)
         finally:
             tmpdir.cleanup()
         return
@@ -196,7 +196,7 @@ def _measurements(
         from benchmarks.phases import touch_matrices
 
         yield (
-            f"benchmarks/test_matrices.py::test_matrices[{name}-{axis}={size}]",
+            f"benchmarks/test_matrices.py::test_matrices[{spec_param_id(name, axis, size)}]",
             lambda: touch_matrices(m),
         )
 
@@ -207,7 +207,7 @@ def _measurements(
         lp_path = Path(tmpdir.name) / "m.lp"
         try:
             yield (
-                f"benchmarks/test_lp_write.py::test_lp_write[{name}-{axis}={size}]",
+                f"benchmarks/test_lp_write.py::test_lp_write[{spec_param_id(name, axis, size)}]",
                 lambda: write_lp(m, lp_path),
             )
         finally:
@@ -220,13 +220,13 @@ def _measurements(
         nc_path = Path(tmpdir.name) / "m.nc"
         try:
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_write[{name}-{axis}={size}]",
+                f"benchmarks/test_netcdf.py::test_netcdf_write[{spec_param_id(name, axis, size)}]",
                 lambda: write_netcdf(m, nc_path),
             )
             # ``write_netcdf`` was called by the caller as part of the
             # measurement, so ``nc_path`` now exists for the read.
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_read[{name}-{axis}={size}]",
+                f"benchmarks/test_netcdf.py::test_netcdf_read[{spec_param_id(name, axis, size)}]",
                 lambda: read_netcdf(nc_path),
             )
         finally:
@@ -246,7 +246,7 @@ def _measurements(
         yield (
             (
                 f"benchmarks/test_solver_handoff.py::test_solver_handoff"
-                f"[highs-{name}-{axis}={size}]"
+                f"[highs-{spec_param_id(name, axis, size)}]"
             ),
             lambda: highs(m),
         )
@@ -255,13 +255,17 @@ def _measurements(
         raise ValueError(f"unknown phase: {phase!r}")
 
 
-def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, float]:
+def run_phase(
+    phase: str, quick: bool = False, repeats: int = 1, filter_expr: str | None = None
+) -> dict[str, float]:
     """
     Measure peak memory for every applicable ``(spec, size)`` under one phase.
 
     Returns a ``{test_id: peak_mib}`` mapping. Invoked once per phase as a
     subprocess by :func:`save` for isolation. ``repeats`` is forwarded to
-    :func:`measure_peak` so callers can dial up signal-to-noise.
+    :func:`measure_peak` so callers can dial up signal-to-noise. ``filter_expr``
+    keeps only specs whose ``<name>-<axis>=<value>`` key contains it — e.g.
+    ``"nodal_balance"`` (one spec), ``"severity"`` (patterns), ``"n="`` (models).
     """
     _require_memray()
 
@@ -283,6 +287,9 @@ def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, fl
         else:
             for value in spec.sweep:
                 if quick and value > spec.quick_threshold:
+                    continue
+                key = spec_param_id(spec.name, spec.axis, value)
+                if filter_expr and filter_expr not in key:
                     continue
                 try:
                     for test_id, action in _measurements(phase, spec, value):
@@ -313,6 +320,7 @@ def save(
     quick: bool = False,
     phases: list[str] | None = None,
     repeats: int = 1,
+    filter_expr: str | None = None,
 ) -> Path:
     """
     Run one subprocess per phase and merge the results into ``<label>.json``.
@@ -320,6 +328,8 @@ def save(
     Per-phase subprocesses keep allocations from one phase out of another's
     measurement; ``memray.Tracker`` only counts what's allocated inside its
     ``with`` block, but the subprocess boundary makes the isolation total.
+    ``filter_expr`` restricts which specs are measured (substring of the
+    ``<name>-<axis>=<value>`` key).
     """
     _require_memray()
 
@@ -348,6 +358,8 @@ def save(
             cmd.append("--quick")
         if repeats > 1:
             cmd.extend(["--repeats", str(repeats)])
+        if filter_expr:
+            cmd.extend(["--filter", filter_expr])
         try:
             result = subprocess.run(cmd, check=False, capture_output=True, text=True)
             if result.stderr:
@@ -424,11 +436,22 @@ if __name__ == "__main__":  # pragma: no cover
         help="Run each measurement N times and keep the min peak (default 1).",
     )
     parser.add_argument(
+        "--filter",
+        dest="filter_expr",
+        default=None,
+        help="Keep only specs whose <name>-<axis>=<value> key contains this.",
+    )
+    parser.add_argument(
         "--out",
         required=True,
         help="Path to write the JSON result to (stdout is reserved for solver chatter).",
     )
     args = parser.parse_args()
     if args.cmd == "_worker":
-        out = run_phase(args.phase, quick=args.quick, repeats=args.repeats)
+        out = run_phase(
+            args.phase,
+            quick=args.quick,
+            repeats=args.repeats,
+            filter_expr=args.filter_expr,
+        )
         Path(args.out).write_text(json.dumps(out))

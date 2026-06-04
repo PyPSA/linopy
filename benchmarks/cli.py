@@ -252,16 +252,16 @@ def run(
         PhaseName | None,
         typer.Option(help="Restrict to one phase's test file."),
     ] = None,
-    model: Annotated[
-        str | None,
-        typer.Option(help="Restrict to one model (passed as pytest ``-k``)."),
-    ] = None,
     filter_expr: Annotated[
         str | None,
         typer.Option(
             "--filter",
             "-k",
-            help="Arbitrary pytest ``-k`` expression (AND-ed with ``--model``).",
+            help=(
+                "pytest ``-k`` expression selecting specs by name/id — e.g. "
+                "``basic`` (one spec), ``severity`` (patterns), "
+                "``'build and basic'``."
+            ),
         ),
     ] = None,
     json_out: Annotated[
@@ -308,9 +308,8 @@ def run(
     if rounds is not None:
         args.extend([f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"])
 
-    k_parts = [p for p in (model, filter_expr) if p]
-    if k_parts:
-        args.extend(["-k", " and ".join(k_parts)])
+    if filter_expr:
+        args.extend(["-k", filter_expr])
 
     args.extend(ctx.args)
     _run_pytest(args)
@@ -421,16 +420,15 @@ def sweep(
         PhaseName | None,
         typer.Option(help="Restrict each version's run to one phase's test file."),
     ] = None,
-    model: Annotated[
-        str | None,
-        typer.Option(help="Restrict to one model (passed as pytest ``-k``)."),
-    ] = None,
     filter_expr: Annotated[
         str | None,
         typer.Option(
             "--filter",
             "-k",
-            help="Arbitrary pytest ``-k`` expression (AND-ed with ``--model``).",
+            help=(
+                "pytest ``-k`` expression selecting specs by name/id — e.g. "
+                "``basic`` (one spec), ``severity`` (patterns)."
+            ),
         ),
     ] = None,
     rounds: Annotated[
@@ -511,7 +509,6 @@ def sweep(
         long=long,
         quick=quick,
         rounds=rounds,
-        model=model,
         filter_expr=filter_expr,
         smoke=smoke,
         as_of=as_of,
@@ -806,6 +803,18 @@ def memory_save_cmd(
             ),
         ),
     ] = 1,
+    filter_expr: Annotated[
+        str | None,
+        typer.Option(
+            "--filter",
+            "-k",
+            help=(
+                "Keep only specs whose name/id contains this — e.g. "
+                "``nodal_balance`` (one spec), ``severity`` (patterns), ``n=`` "
+                "(models)."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """
     Measure peak memory across the registry × phase grid via ``memray.Tracker``.
@@ -830,7 +839,9 @@ def memory_save_cmd(
                 err=True,
             )
             raise typer.Exit(code=2)
-    memory_save(label, quick=quick, phases=phase, repeats=repeats)
+    memory_save(
+        label, quick=quick, phases=phase, repeats=repeats, filter_expr=filter_expr
+    )
 
 
 @memory_app.command("sweep")
