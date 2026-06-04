@@ -90,6 +90,7 @@ from linopy.constants import (
 )
 from linopy.semantics import (
     _legacy_coord_mismatch_message,
+    _legacy_coord_reorder_message,
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
@@ -2659,15 +2660,21 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
-    # §8: a dim mismatch is the root cause, so raise it before the §11 aux
-    # check (else a MultiIndex mismatch reads as a level-coord conflict).
+    # §8: v1 aligns a reorder by label and raises a dim mismatch (before the
+    # §11 aux check, else a MultiIndex mismatch reads as a level-coord
+    # conflict). Legacy keeps positional alignment and only warns.
     if join is None:
-        data, mismatch = conform_merge_dims(data, concat_dim=dim)
-        if is_v1() and mismatch is not None:
-            raise ValueError(_shared_dim_mismatch_message(*mismatch))
-        if mismatch is not None:  # LEGACY: remove at 1.0
+        data, mismatch, reorder = conform_merge_dims(data, concat_dim=dim)
+        if is_v1():
+            if mismatch is not None:
+                raise ValueError(_shared_dim_mismatch_message(*mismatch))
+        elif mismatch is not None:  # LEGACY: remove at 1.0
             warn_legacy(
                 _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)
+            )
+        elif reorder is not None:  # LEGACY: remove at 1.0
+            warn_legacy(
+                _legacy_coord_reorder_message(f"merge along dim {dim!r}", *reorder)
             )
 
     enforce_aux_conflict(data)  # §11

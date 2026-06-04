@@ -152,6 +152,19 @@ def _legacy_coord_mismatch_message(
     )
 
 
+def _legacy_coord_reorder_message(context: str, dim: str, left: Any, right: Any) -> str:
+    """Same labels, different order — aligned positionally by legacy; v1 reindexes."""
+    return (
+        f"Coordinate order mismatch in {context} aligned positionally by legacy."
+        " Under v1 the same labels in a different order align by label (a"
+        " reindex), giving a different result."
+        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
+        "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+        "\n             `.assign_coords(...)` to relabel one side"
+        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+    )
+
+
 def _legacy_aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
     """
     Conflicting aux coord silently dropped by xarray under legacy.
@@ -301,24 +314,25 @@ def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | N
 
 def conform_merge_dims(
     datasets: Sequence[Dataset], concat_dim: str
-) -> tuple[list[Dataset], tuple[str, Any, Any] | None]:
+) -> tuple[list[Dataset], tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:
     """
-    Align shared user dims for a merge, in a single pass over the operands.
+    Inspect shared user dims for a merge, in a single pass over the operands.
 
-    §8 aligns by label, not position: a shared user dim whose labels are the
-    first operand's reordered (same set) is permuted to that order. The permute
-    uses positional ``isel`` rather than ``reindex`` so it works uniformly for a
-    plain index and a stacked MultiIndex's tuples (``reindex`` cannot reorder a
-    MultiIndex by tuple); ``get_indexer`` also doubles as the same-set test. A
-    dim whose label set differs is a real mismatch, returned as
-    ``(dim, first_labels, other_labels)`` for the caller to raise (v1) / warn
-    (legacy). Helper dims (``_term``, ``_factor``) and the concat dim are
-    excluded; bare dimension indexes are compared, so auxiliary coords (which
-    ride along the permute) stay §11's job.
+    Returns ``(data, mismatch, reorder)``. A shared user dim whose labels are
+    the first operand's in a different order (same set, including a stacked
+    MultiIndex's tuples) is a *reorder*; one whose label set differs is a
+    *mismatch* — each reported as ``(dim, first_labels, other_labels)`` (first
+    found). Under v1, reorders are aligned to the first operand's order in the
+    returned data (via positional ``isel`` — ``reindex`` cannot reorder a
+    MultiIndex by tuple) and ``reorder`` is ``None``; the caller raises on
+    ``mismatch``. Under legacy, nothing is aligned and the caller warns:
+    ``reorder`` (v1 would align by label) or ``mismatch`` (v1 would raise).
+    Helper dims (``_term``, ``_factor``) and the concat dim are excluded; bare
+    dimension indexes are compared, so auxiliary coords stay §11's job.
     """
     datasets = list(datasets)
     if len(datasets) < 2:
-        return datasets, None
+        return datasets, None, None
     skip = set(HELPER_DIMS) | {concat_dim}
     indexed = [
         {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
@@ -326,23 +340,28 @@ def conform_merge_dims(
     ]
     shared = set.intersection(*(set(p) for p in indexed))
     if not shared:
-        return datasets, None
+        return datasets, None, None
 
+    permute = is_v1()
     out = [datasets[0]]
     mismatch: tuple[str, Any, Any] | None = None
+    reorder: tuple[str, Any, Any] | None = None
     for i in range(1, len(datasets)):
-        permute: dict[Any, Any] = {}
+        plan: dict[Any, Any] = {}
         for d in shared:
             ref, idx = indexed[0][d], indexed[i][d]
             if ref.equals(idx):
                 continue
             positions = idx.get_indexer(ref) if len(idx) == len(ref) else None
             if positions is not None and (positions >= 0).all():
-                permute[d] = positions
+                if permute:
+                    plan[d] = positions
+                elif reorder is None:
+                    reorder = (str(d), ref.values, idx.values)
             elif mismatch is None:
                 mismatch = (str(d), ref.values, idx.values)
-        out.append(datasets[i].isel(permute) if permute else datasets[i])
-    return out, mismatch
+        out.append(datasets[i].isel(plan) if plan else datasets[i])
+    return out, mismatch, reorder
 
 
 def conflicting_aux_coord(
