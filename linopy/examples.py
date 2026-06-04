@@ -74,8 +74,6 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
         naxis, maxis = [arange(n, dtype=float), arange(n).astype(str)]
     x = m.add_variables(coords=[naxis, maxis])
     y = m.add_variables(coords=[naxis, maxis])
-    # Name the rhs axis so the constraint is unambiguous under the v1
-    # arithmetic convention (both dims share size n).
     m.add_constraints(x - y >= xr.DataArray(naxis, dims=["dim_0"]))
     m.add_constraints(x + y >= 0)
     m.add_objective((2 * x).sum() + y.sum())
