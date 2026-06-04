@@ -522,7 +522,7 @@ def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     # Use Constraint so sign data can be patched
     con = m.add_constraints(x >= 0, name="mixed", freeze=False)
     # Replace sign data with mixed signs across the first dimension
-    n = con.data.sizes["first"]
+    n = con.sizes["first"]
     signs = np.array(["<=" if i % 2 == 0 else ">=" for i in range(n)])
     con.data["sign"] = xr.DataArray(signs, dims=con.data["sign"].dims)
     df = con.to_polars()
@@ -667,7 +667,7 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
     con = Constraint(data, m, "c")
 
     expr = m.add_constraints(con)
-    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
+    assert not set(HELPER_DIMS).intersection(set(expr.coords))
 
 
 def test_constraint_matrix(m: Model) -> None:
