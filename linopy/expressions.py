@@ -168,7 +168,18 @@ class LinearExpressionGroupby:
         else:
             group = self.group  # type: ignore
 
-        return self.data.groupby(group=group, **self.kwargs)
+        # Detach a non-dimension coordinate used as the group so xarray does
+        # not try to re-expand it while recombining the groups (GH #750); the
+        # group values are still supplied through ``group`` itself.
+        data = self.data
+        if isinstance(group, str) and group in data.coords and group not in data.dims:
+            group = data[group]
+        if isinstance(group, DataArray) and group.name in set(data.coords) - set(
+            data.dims
+        ):
+            data = data.drop_vars([group.name])
+
+        return data.groupby(group=group, **self.kwargs)
 
     def map(
         self,
@@ -226,9 +237,15 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
+        group = self.group
+        # A string selects an existing coordinate, mirroring xarray's
+        # ``Dataset.groupby("name")``. Resolve it to that coordinate so it
+        # takes the fast path below instead of the slower xarray fallback.
+        if isinstance(group, str) and group in self.data.coords:
+            group = self.data[group]
+
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
-        if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
+        if isinstance(group, non_fallback_types) and not use_fallback:
             if isinstance(group, pd.DataFrame):
                 # dataframes do not have a name, so we need to set it
                 final_group_name = "group"
@@ -254,10 +271,17 @@ class LinearExpressionGroupby:
             arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
             new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            coords = self.data.indexes[group_dim]
-            names_to_drop = [coords.name]
-            if isinstance(coords, pd.MultiIndex):
-                names_to_drop += list(coords.names)
+            # Collapsing ``group_dim`` into groups invalidates every coordinate
+            # aligned to it: the dimension index, any MultiIndex levels, and
+            # auxiliary (non-dimension) coords such as the one being grouped by.
+            # Drop them all before reshaping, otherwise they clash with the
+            # regrouped dimension or with the final rename onto
+            # ``final_group_name`` (GH #750).
+            names_to_drop = [
+                name
+                for name, coord in self.data.coords.items()
+                if group_dim in coord.dims
+            ]
             ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)

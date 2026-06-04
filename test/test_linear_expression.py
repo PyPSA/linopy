@@ -1384,6 +1384,80 @@ def test_linear_expression_groupby_on_same_name_as_target_dim(
     assert grouped.nterm == 10
 
 
+class TestGroupbyByAttachedCoordinate:
+    """GH #750: group by an attached non-dimension coordinate (name or array)."""
+
+    # Such a coordinate, referenced by its name (like xarray's
+    # ``Dataset.groupby("name")``) or as the coordinate ``DataArray`` itself,
+    # previously raised ``ValueError: ... already exists`` / ``KeyError``.
+
+    @pytest.fixture
+    def period(self, v: Variable) -> xr.DataArray:
+        return xr.DataArray([2020] * 10 + [2030] * 10, coords=v.coords, name="period")
+
+    @pytest.fixture
+    def expr(self, v: Variable, period: xr.DataArray) -> LinearExpression:
+        return (1 * v).assign_coords(period=period)
+
+    @pytest.fixture(params=["name", "dataarray"])
+    def group(self, request: Any, period: xr.DataArray) -> str | xr.DataArray:
+        # the same coordinate referenced either by name or as the DataArray
+        return "period" if request.param == "name" else period
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_groups_like_detached(
+        self,
+        expr: LinearExpression,
+        period: xr.DataArray,
+        group: str | xr.DataArray,
+        use_fallback: bool,
+    ) -> None:
+        grouped = expr.groupby(group).sum(use_fallback=use_fallback)
+
+        assert "period" in grouped.dims
+        assert (grouped.data.period == [2020, 2030]).all()
+        assert grouped.nterm == 10
+        # same as detaching the coord and grouping by the array explicitly
+        expected = (
+            expr.drop_vars("period").groupby(period).sum(use_fallback=use_fallback)
+        )
+        assert_linequal(grouped, expected)
+
+    def test_drops_other_aux_coords(
+        self, v: Variable, expr: LinearExpression, group: str | xr.DataArray
+    ) -> None:
+        # A second auxiliary coord on the grouped dimension must not break the
+        # reshape (it raised ``KeyError: 'timestep'`` before the fix); the fast
+        # path drops coords invalidated by collapsing the dimension.
+        other = xr.DataArray(list("ab" * 10), coords=v.coords, name="timestep")
+        grouped = expr.assign_coords(timestep=other).groupby(group).sum()
+
+        assert "period" in grouped.dims
+        assert "timestep" not in grouped.coords
+        assert_linequal(grouped, expr.groupby(group).sum())
+
+    @pytest.mark.parametrize("by", ["name", "dataarray"])
+    def test_keeps_other_dim(self, by: str) -> None:
+        # On a 2-D expression, grouping one dimension by an aux coord must keep
+        # the other dimension intact and sum the right terms.
+        m = Model()
+        snapshot = pd.RangeIndex(4, name="snapshot")
+        gen = pd.Index(["g1", "g2"], name="gen")
+        period = xr.DataArray(
+            [2020, 2020, 2030, 2030], coords=[snapshot], name="period"
+        )
+        y = m.add_variables(coords=[snapshot, gen], name="y")
+        expr = (1 * y).assign_coords(period=period)
+        group = "period" if by == "name" else period
+
+        grouped = expr.groupby(group).sum()
+
+        assert {"period", "gen"} <= set(grouped.dims)
+        assert grouped.sizes["gen"] == 2
+        assert (grouped.data.period == [2020, 2030]).all()
+        assert_linequal(grouped, expr.drop_vars("period").groupby(period).sum())
+
+
 @pytest.mark.parametrize("use_fallback", [True])
 def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None:
     # TODO: implement fallback for n-dim groupby, see https://github.com/PyPSA/linopy/issues/299
