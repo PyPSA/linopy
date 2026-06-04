@@ -45,12 +45,11 @@ from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
 from linopy.alignment import (
-    UNLABELED_TYPES,
-    _dims_for_unlabeled_operand,
     as_constant,
     as_dataarray,
     broadcast_to_coords,
     fill_missing_coords,
+    matmul_operand_to_dataarray,
 )
 from linopy.common import (
     EmptyDeprecationWrapper,
@@ -1257,7 +1256,6 @@ class BaseExpression(ABC):
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
-        rhs = as_constant(rhs)
         """
         Convert a linear expression to a constraint.
 
@@ -1281,6 +1279,7 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
+        rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
             raise ValueError(
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
@@ -1950,13 +1949,7 @@ class LinearExpression(BaseExpression):
         """
         other = as_constant(other)
         if not isinstance(other, LinearExpression | variables.Variable):
-            dims: Any = self.coord_dims
-            if isinstance(other, UNLABELED_TYPES):
-                # The pairing decides which dims get contracted (#736):
-                # by size under v1, positionally (with a warning) under legacy.
-                expected = {d: self.coords[d] for d in self.coord_dims}
-                dims = _dims_for_unlabeled_operand(np.shape(other), expected)
-            other = as_dataarray(other, coords=self.coords, dims=dims)
+            other = matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2446,12 +2439,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        dims: Any = self.coord_dims
-        if isinstance(other, UNLABELED_TYPES):
-            # The pairing decides which dims get contracted (#736).
-            expected = {d: self.coords[d] for d in self.coord_dims}
-            dims = _dims_for_unlabeled_operand(np.shape(other), expected)
-        other = as_dataarray(other, coords=self.coords, dims=dims)
+        other = matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

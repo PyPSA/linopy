@@ -203,6 +203,7 @@ class TestUnlabeledPairing:
             coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")], name="sq"
         )
 
+    @pytest.mark.v1
     @pytest.mark.parametrize(
         "make",
         [
@@ -216,8 +217,6 @@ class TestUnlabeledPairing:
         result = (1 * xy) + make()
         assert set(result.const.dims) == {"a", "b"}
         assert result.const.sizes == {"a": 3, "b": 4}
-
-    test_v1_pairs_by_size = pytest.mark.v1(test_v1_pairs_by_size)
 
     @pytest.mark.v1
     def test_v1_size_order_independent(self, xy: Variable) -> None:
