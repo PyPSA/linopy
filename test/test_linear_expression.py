@@ -1385,17 +1385,11 @@ def test_linear_expression_groupby_on_same_name_as_target_dim(
 
 
 class TestGroupbyByAttachedCoordinate:
-    """GH #750: group by an attached non-dimension coordinate."""
+    """
+    GH #750: group by an attached non-dimension coordinate.
 
-    # Such a coordinate, referenced by its name (like xarray's
-    # ``Dataset.groupby("name")``) or as the coordinate ``DataArray`` itself,
-    # previously raised ``ValueError: ... already exists`` / ``KeyError``.
-    #
-    # Results are asserted against hard-coded ``vars``/``coeffs`` so a
-    # regression in the grouping is caught directly -- not relative to another
-    # (possibly equally wrong) computation. The base expression is four
-    # variables labelled ``0..3`` on dim ``t`` with coefficient ``2.0`` and two
-    # attached level coords; the 2-D case uses an eight-variable grid (0..7).
+    Asserts grouping against hard-coded ``vars``/``coeffs`` to catch regressions.
+    """
 
     @pytest.fixture
     def t(self) -> pd.RangeIndex:
@@ -1507,6 +1501,28 @@ class TestGroupbyByAttachedCoordinate:
             [[4, 6], [5, 7]],
         ]
         assert (grouped.coeffs == 1.0).all()
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_single_element_list_groups_like_scalar(
+        self, expr: LinearExpression, use_fallback: bool
+    ) -> None:
+        # ``groupby(["period"])`` groups like the scalar key, mirroring xarray.
+        grouped = expr.groupby(["period"]).sum(use_fallback=use_fallback)
+
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert (grouped.coeffs == 2.0).all()
+
+    def test_multi_key_dataarrays_unsupported(
+        self, expr: LinearExpression, period: xr.DataArray, season: xr.DataArray
+    ) -> None:
+        # Multi-key grouping must be spelled with names; a list of DataArrays
+        # is unhashable and raises in xarray itself, so linopy mirrors that.
+        with pytest.raises(TypeError, match="unhashable"):
+            expr.groupby([period, season]).sum()
 
 
 @pytest.mark.parametrize("use_fallback", [True])

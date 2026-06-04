@@ -158,15 +158,17 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        if isinstance(self.group, pd.DataFrame):
+        group = self.group
+        if isinstance(group, (list, tuple)) and len(group) == 1:
+            # a single-element key groups like the scalar key (xarray parity)
+            group = group[0]
+
+        if isinstance(group, pd.DataFrame):
             raise ValueError(
                 "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
             )
-        if isinstance(self.group, pd.Series):
-            group_name = self.group.name or "group"
-            group = DataArray(self.group, name=group_name)
-        else:
-            group = self.group  # type: ignore
+        if isinstance(group, pd.Series):
+            group = DataArray(group, name=group.name or "group")
 
         # Detach a non-dimension coordinate used as the group so xarray does
         # not try to re-expand it while recombining the groups (GH #750); the
@@ -179,7 +181,7 @@ class LinearExpressionGroupby:
         ):
             data = data.drop_vars([group.name])
 
-        return data.groupby(group=group, **self.kwargs)
+        return data.groupby(group=group, **self.kwargs)  # type: ignore[arg-type]
 
     def map(
         self,
@@ -238,6 +240,9 @@ class LinearExpressionGroupby:
             The sum of the groupby object.
         """
         group = self.group
+        if isinstance(group, (list, tuple)) and len(group) == 1:
+            # a single-element key groups like the scalar key (xarray parity)
+            group = group[0]
         # A string selects an existing coordinate, mirroring xarray's
         # ``Dataset.groupby("name")``. Resolve it to that coordinate so it
         # takes the fast path below instead of the slower xarray fallback.
