@@ -1385,77 +1385,128 @@ def test_linear_expression_groupby_on_same_name_as_target_dim(
 
 
 class TestGroupbyByAttachedCoordinate:
-    """GH #750: group by an attached non-dimension coordinate (name or array)."""
+    """GH #750: group by an attached non-dimension coordinate."""
 
     # Such a coordinate, referenced by its name (like xarray's
     # ``Dataset.groupby("name")``) or as the coordinate ``DataArray`` itself,
     # previously raised ``ValueError: ... already exists`` / ``KeyError``.
+    #
+    # Results are asserted against hard-coded ``vars``/``coeffs`` so a
+    # regression in the grouping is caught directly -- not relative to another
+    # (possibly equally wrong) computation. The base expression is four
+    # variables labelled ``0..3`` on dim ``t`` with coefficient ``2.0`` and two
+    # attached level coords; the 2-D case uses an eight-variable grid (0..7).
 
     @pytest.fixture
-    def period(self, v: Variable) -> xr.DataArray:
-        return xr.DataArray([2020] * 10 + [2030] * 10, coords=v.coords, name="period")
+    def t(self) -> pd.RangeIndex:
+        return pd.RangeIndex(4, name="t")
 
     @pytest.fixture
-    def expr(self, v: Variable, period: xr.DataArray) -> LinearExpression:
-        return (1 * v).assign_coords(period=period)
+    def period(self, t: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(
+            [2020, 2020, 2030, 2030], dims="t", coords={"t": t}, name="period"
+        )
 
-    @pytest.fixture(params=["name", "dataarray"])
-    def group(self, request: Any, period: xr.DataArray) -> str | xr.DataArray:
-        # the same coordinate referenced either by name or as the DataArray
-        return "period" if request.param == "name" else period
+    @pytest.fixture
+    def season(self, t: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(list("wsws"), dims="t", coords={"t": t}, name="season")
+
+    @pytest.fixture
+    def expr(
+        self, t: pd.RangeIndex, period: xr.DataArray, season: xr.DataArray
+    ) -> LinearExpression:
+        m = Model()
+        x = m.add_variables(coords=[t], name="x")
+        return (2.0 * x).assign_coords(period=period, season=season)
 
     @pytest.mark.parametrize("use_fallback", [True, False])
-    def test_groups_like_detached(
+    @pytest.mark.parametrize("by", ["name", "dataarray"])
+    def test_single_key(
         self,
         expr: LinearExpression,
         period: xr.DataArray,
-        group: str | xr.DataArray,
+        by: str,
         use_fallback: bool,
     ) -> None:
+        group = "period" if by == "name" else period
+
         grouped = expr.groupby(group).sum(use_fallback=use_fallback)
 
-        assert "period" in grouped.dims
-        assert (grouped.data.period == [2020, 2030]).all()
-        assert grouped.nterm == 10
-        # same as detaching the coord and grouping by the array explicitly
-        expected = (
-            expr.drop_vars("period").groupby(period).sum(use_fallback=use_fallback)
-        )
-        assert_linequal(grouped, expected)
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert grouped.coeffs.transpose("period", TERM_DIM).values.tolist() == [
+            [2.0, 2.0],
+            [2.0, 2.0],
+        ]
 
-    def test_drops_other_aux_coords(
-        self, v: Variable, expr: LinearExpression, group: str | xr.DataArray
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
+    def test_multi_key(
+        self, expr: LinearExpression, spelling: type, use_fallback: bool
     ) -> None:
-        # A second auxiliary coord on the grouped dimension must not break the
-        # reshape (it raised ``KeyError: 'timestep'`` before the fix); the fast
-        # path drops coords invalidated by collapsing the dimension.
-        other = xr.DataArray(list("ab" * 10), coords=v.coords, name="timestep")
-        grouped = expr.assign_coords(timestep=other).groupby(group).sum()
+        group = spelling(["period", "season"])
 
-        assert "period" in grouped.dims
+        grouped = expr.groupby(group).sum(use_fallback=use_fallback)
+
+        assert dict(grouped.sizes) == {"period": 2, "season": 2, TERM_DIM: 1}
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.data.season.values.tolist() == ["s", "w"]
+        assert grouped.vars.transpose("period", "season", TERM_DIM).values.tolist() == [
+            [[1], [0]],
+            [[3], [2]],
+        ]
+        assert (grouped.coeffs == 2.0).all()
+
+    def test_extra_aux_coord_does_not_change_result(
+        self, t: pd.RangeIndex, period: xr.DataArray
+    ) -> None:
+        # A second auxiliary coord on the grouped dimension must neither break
+        # the reshape (it raised ``KeyError`` before the fix) nor change the sum.
+        m = Model()
+        x = m.add_variables(coords=[t], name="x")
+        timestep = xr.DataArray(
+            list("abab"), dims="t", coords={"t": t}, name="timestep"
+        )
+        expr = (2.0 * x).assign_coords(period=period, timestep=timestep)
+
+        grouped = expr.groupby("period").sum()
+
         assert "timestep" not in grouped.coords
-        assert_linequal(grouped, expr.groupby(group).sum())
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert (grouped.coeffs == 2.0).all()
 
     @pytest.mark.parametrize("by", ["name", "dataarray"])
-    def test_keeps_other_dim(self, by: str) -> None:
-        # On a 2-D expression, grouping one dimension by an aux coord must keep
-        # the other dimension intact and sum the right terms.
+    def test_two_dimensional(self, by: str) -> None:
+        # Grouping one dimension of a 2-D variable by an aux coord must keep the
+        # other dimension intact and pair up the right variable labels.
         m = Model()
         snapshot = pd.RangeIndex(4, name="snapshot")
         gen = pd.Index(["g1", "g2"], name="gen")
+        y = m.add_variables(coords=[snapshot, gen], name="y")  # labels 0..7
         period = xr.DataArray(
-            [2020, 2020, 2030, 2030], coords=[snapshot], name="period"
+            [2020, 2020, 2030, 2030],
+            dims="snapshot",
+            coords={"snapshot": snapshot},
+            name="period",
         )
-        y = m.add_variables(coords=[snapshot, gen], name="y")
-        expr = (1 * y).assign_coords(period=period)
+        expr = (1.0 * y).assign_coords(period=period)
         group = "period" if by == "name" else period
 
         grouped = expr.groupby(group).sum()
 
-        assert {"period", "gen"} <= set(grouped.dims)
-        assert grouped.sizes["gen"] == 2
-        assert (grouped.data.period == [2020, 2030]).all()
-        assert_linequal(grouped, expr.drop_vars("period").groupby(period).sum())
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.data.gen.values.tolist() == ["g1", "g2"]
+        assert grouped.vars.transpose("period", "gen", TERM_DIM).values.tolist() == [
+            [[0, 2], [1, 3]],
+            [[4, 6], [5, 7]],
+        ]
+        assert (grouped.coeffs == 1.0).all()
 
 
 @pytest.mark.parametrize("use_fallback", [True])
