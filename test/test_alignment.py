@@ -600,6 +600,25 @@ class TestBroadcastToCoords:
         assert list(da.coords["dim_0"].values) == ["a", "b"]
         assert list(da.coords["dim_2"].values) == ["A", "B"]
 
+    @pytest.mark.v1
+    def test_explicit_dims_bypass_size_pairing(self) -> None:
+        """
+        An explicit ``dims`` is honored positionally, like xarray — even when
+        size-pairing would otherwise be ambiguous (both coords dims size 4).
+        Pins the "infer order only when the user didn't name it" rule.
+        """
+        coords = {"a": [0, 1, 2, 3], "b": [4, 5, 6, 7]}  # both size 4
+
+        # No dims → size-pairing can't decide → raises.
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            broadcast_to_coords(np.arange(4), coords=coords, strict=False)
+
+        # Explicit dims=['a'] → the axis is labeled 'a' positionally, no
+        # pairing, no raise (matches xarray's positional dims assignment).
+        da = broadcast_to_coords(np.arange(4), coords=coords, dims=["a"], strict=False)
+        assert set(da.dims) == {"a", "b"}
+        assert (da.sel(b=4).values == np.arange(4)).all()
+
 
 # ---------------------------------------------------------------------------
 # Implicit MultiIndex-level projection — the legacy/v1 fork point
