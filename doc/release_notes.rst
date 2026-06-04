@@ -7,10 +7,10 @@ Upcoming Version
 Version 0.8.0
 -------------
 
-* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
-* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
-
 **Features**
+
+* Add ``BaseExpression.variable_names`` property, and documentation for ``LinearExpression.where`` with ``drop=True``.
+* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
 
 *Inspect the solver after solving*
 
@@ -55,12 +55,12 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 **Deprecations**
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
-* **Implicit MultiIndex-level projection is deprecated.** Passing an input indexed by a *level* of a stacked-``MultiIndex`` dimension (e.g. per-``period`` bounds onto a ``(period, timestep)`` ``snapshot`` index) emits an ``EvolvingAPIWarning`` — in arithmetic and in ``add_variables`` / ``add_constraints`` — and will raise under the upcoming v1 convention. Project the input onto the dimension explicitly (select with the dimension's level values) to keep current behavior. Affects PyPSA multi-investment models. See Bug Fixes below for details.
+* **Implicit MultiIndex-level projection is deprecated.** Passing an input indexed by a *level* of a stacked-``MultiIndex`` dimension (e.g. per-``period`` bounds onto a ``(period, timestep)`` ``snapshot`` index) emits an ``EvolvingAPIWarning`` — in arithmetic and in ``add_variables`` / ``add_constraints`` — and will raise under the upcoming v1 convention. Project the input onto the dimension explicitly (select with the dimension's level values) to keep current behavior. Affects PyPSA multi-investment models. See the level-projection entry under Bug Fixes for the new alignment behavior.
 
 **Bug Fixes**
 
 * ``add_variables`` / ``add_constraints``: extends 0.7.0's coords-as-truth rule to ``lower``, ``upper`` and ``mask`` for every bound type and dim order. Pandas ``Series`` / ``DataFrame`` bounds or masks missing a dimension are broadcast to ``coords`` instead of being silently dropped (`#709 <https://github.com/PyPSA/linopy/issues/709>`__); the variable's dimension order always follows ``coords`` (`#706 <https://github.com/PyPSA/linopy/issues/706>`__); bare-tuple coord entries (``coords=[(0, 1, 2)]``) now behave like lists. Mismatched values or extra dims raise ``ValueError`` with a labelled message; sparse-coord masks (formerly a v0.6.3 ``FutureWarning``, #580) raise ``ValueError``, and masks with dims not in the data raise ``ValueError`` instead of ``AssertionError``.
-* Pandas inputs whose index names *levels* of a stacked-``MultiIndex`` ``coords`` dimension are now projected onto that dimension: a level subset broadcasts across the others, the full set aligns element-wise. This fixes PyPSA multi-investment arithmetic (e.g. an expression over a ``(period, timestep)`` ``snapshot`` MultiIndex times a ``period``-indexed weighting). In ``add_variables`` / ``add_constraints`` the input must provide a value for every level combination of the MultiIndex or a ``ValueError`` is raised (the error lists the missing combinations). **Implicit level projections are deprecated**: they emit an ``EvolvingAPIWarning`` everywhere — in arithmetic *and* in ``add_variables`` / ``add_constraints`` — and will raise under the upcoming v1 convention. Project the input onto the dimension explicitly (select with the dimension's level values) to keep current behavior. Aligning the full level set with full coverage stays silent. Strict validation also rejects a ``MultiIndex`` input with *unnamed* levels whose combinations don't match ``coords`` (previously a silent bypass, as such inputs can't be projected by level name).
+* Pandas inputs whose index names *levels* of a stacked-``MultiIndex`` ``coords`` dimension are now projected onto that dimension: a level subset broadcasts across the others, the full set aligns element-wise. This fixes PyPSA multi-investment arithmetic (e.g. an expression over a ``(period, timestep)`` ``snapshot`` MultiIndex times a ``period``-indexed weighting). In ``add_variables`` / ``add_constraints`` the input must provide a value for every level combination of the MultiIndex or a ``ValueError`` is raised (the error lists the missing combinations); aligning the full level set with full coverage stays silent. Strict validation also rejects a ``MultiIndex`` input with *unnamed* levels whose combinations don't match ``coords`` (previously a silent bypass, as such inputs can't be projected by level name). Implicit level projections are deprecated (see Deprecations).
 * ``add_piecewise_formulation`` now produces a reproducible dimension order in the broadcast breakpoint array. The previous set-based expansion gave a hash-randomized order that varied between processes.
 * SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
 * ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
@@ -81,7 +81,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Knitro, COPT, MindOpt) only override ``_run_file``.
 * New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
-``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
+* ``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
 * Adopt Python 3.11 type-syntax: the status enums (``ModelStatus``, ``SolverStatus``, ``TerminationCondition``) are now ``StrEnum``, and classmethods plus the expression base class use ``Self`` instead of string forward-references and a self-typed ``TypeVar``. No user-visible change — ``Model.solve()`` still returns ``(status, termination_condition)`` as plain strings.
 
 Version 0.7.0
