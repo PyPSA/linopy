@@ -58,6 +58,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.config import LinopySemanticsWarning
+from linopy.expressions import merge
 from linopy.testing import assert_linequal
 from linopy.variables import Variable
 
@@ -818,6 +819,45 @@ class TestExactAlignmentMerge:
         result = a + b
         assert float(result.const.sel(e="costs")) == 102.0
         assert float(result.const.sel(e="penalty")) == 201.0
+
+    def test_multi_operand_merge_reordered_pairs_by_label(self, m: Model) -> None:
+        ea = pd.Index(["x", "y", "z"], name="e")
+        er = pd.Index(["z", "y", "x"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series(
+            [1.0, 2.0, 3.0], index=ea
+        )
+        b = m.add_variables(coords=[er], name="b") + pd.Series(
+            [10.0, 20.0, 30.0], index=er
+        )
+        c = m.add_variables(coords=[ea], name="c") + pd.Series(
+            [100, 200, 300.0], index=ea
+        )
+        result = merge([a, b, c], cls=type(a))
+        assert float(result.const.sel(e="x")) == 131.0
+        assert float(result.const.sel(e="z")) == 313.0
+
+    def test_quadratic_merge_reordered_aligns(self, m: Model) -> None:
+        ea = pd.Index(["x", "y", "z"], name="e")
+        er = pd.Index(["z", "y", "x"], name="e")
+        x = m.add_variables(coords=[ea], name="x")
+        y = m.add_variables(coords=[er], name="y")
+        result = (x * x) + (y * y)
+        assert list(result.coeffs.coords["e"].values) == ["x", "y", "z"]
+
+    @pytest.mark.v1
+    def test_reordered_multiindex_raises(self, m: Model) -> None:
+        mi1 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (2, "a")], names=["p", "s"]
+        )
+        mi2 = pd.MultiIndex.from_tuples(
+            [(2, "a"), (1, "b"), (1, "a")], names=["p", "s"]
+        )
+        mi1.name = "snap"
+        mi2.name = "snap"
+        x = m.add_variables(coords=[mi1], name="x")
+        y = m.add_variables(coords=[mi2], name="y")
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            (1 * x) + (1 * y)
 
     @pytest.mark.legacy
     def test_var_plus_var_different_labels_silent(
