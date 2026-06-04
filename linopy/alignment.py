@@ -39,6 +39,35 @@ from xarray.namedarray.utils import is_dict_like
 from linopy.constants import HELPER_DIMS
 from linopy.types import CoordsLike, DimsLike
 
+# Array-like operands that carry no dimension labels of their own: their
+# axes pair with the linopy operand's dims (#736). Single source of truth
+# for the operator dispatch and the broadcasting seam.
+UNLABELED_TYPES = (np.ndarray, list, pl.Series)
+
+
+def as_constant(other: Any) -> Any:
+    """
+    Normalize a degenerate operand for arithmetic on entry.
+
+    Two normalizations let the operators treat every numeric operand the
+    same way downstream:
+
+    - a Python ``list`` carries array data but no numeric operators
+      (``-[1, 2]`` is a ``TypeError``, ``[1, 2] * x`` repeats the list), so
+      it becomes a numpy array;
+    - a 0-d numpy array (``np.array(1)``) is unwrapped to a Python scalar so
+      it takes the scalar fast-path instead of size-pairing.
+
+    Everything else passes through unchanged — typed constants, DataArrays,
+    Variables, and Expressions all already behave.
+    """
+    if isinstance(other, list):
+        other = np.asarray(other)
+    if isinstance(other, np.ndarray) and other.ndim == 0:
+        return other.item()
+    return other
+
+
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
@@ -353,10 +382,13 @@ def as_dataarray(
         if isinstance(arr, np.number):
             arr = float(arr)
         if dims is None:
+            # A scalar broadcasts over the coords' dims, but never over a
+            # helper dim (e.g. ``_term``) — those are storage book-keeping,
+            # not user axes.
             if isinstance(coords, Coordinates):
-                dims = coords.dims
+                dims = [d for d in coords.dims if d not in HELPER_DIMS]
             elif is_dict_like(coords) and np.ndim(arr) == 0:
-                dims = list(coords.keys())
+                dims = [d for d in coords.keys() if d not in HELPER_DIMS]
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
@@ -518,10 +550,102 @@ def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
             )
 
 
+def _pair_axes_by_size(
+    shape: tuple[int, ...], sizes: dict[Hashable, int]
+) -> tuple[list[Hashable] | None, str | None]:
+    """
+    Pair each axis of an unlabeled array with the operand dim of matching size.
+
+    The pairing must be determined by the sizes alone (v1 convention,
+    coordinate-alignment intro): every axis size must match exactly one
+    operand dim, and no two axes may share a size. Returns
+    ``(dims, None)`` on success or ``(None, problem)`` where ``problem``
+    describes why the pairing is impossible or ambiguous.
+    """
+    by_size: dict[int, list[Hashable]] = {}
+    for d, n in sizes.items():
+        by_size.setdefault(n, []).append(d)
+
+    axes_per_size: dict[int, int] = {}
+    for s in shape:
+        axes_per_size[s] = axes_per_size.get(s, 0) + 1
+
+    for s, n_axes in axes_per_size.items():
+        candidates = by_size.get(s, [])
+        if len(candidates) < n_axes:
+            return None, (
+                f"no unambiguous dimension match for an axis of length {s}: "
+                f"the operand has dimensions {dict(sizes)}."
+            )
+        if len(candidates) > 1 or n_axes > 1:
+            return None, (
+                f"axis of length {s} could pair with any of "
+                f"{sorted(candidates, key=str)} — sizes alone cannot decide."
+            )
+
+    return [by_size[s][0] for s in shape], None
+
+
+def _dims_for_unlabeled_operand(
+    shape: tuple[int, ...], expected: dict[Hashable, Any]
+) -> list[Hashable]:
+    """
+    Choose dim names for an unlabeled (numpy / list / polars) arithmetic operand.
+
+    v1 (convention, coordinate-alignment intro / #736): axes pair with the
+    operand's dims by size; ambiguity or a missing match raises, with
+    wrap-in-a-DataArray as the documented resolution. Legacy: axes pair with
+    the leading dims positionally; a deprecation warning fires whenever the
+    v1 pairing would differ from or reject the positional one.
+    """
+    from linopy.semantics import is_v1, warn_legacy
+
+    # A 0-d operand has no axes to pair — it broadcasts over every dim, so it
+    # carries no dim names (matching a bare scalar).
+    if len(shape) == 0:
+        return []
+
+    # Helper dims (e.g. ``_term``) are storage book-keeping, never user axes,
+    # so they are not pairing candidates.
+    candidates = {d: v for d, v in expected.items() if d not in HELPER_DIMS}
+    sizes = {d: len(_as_index(v)) for d, v in candidates.items()}
+    paired, problem = _pair_axes_by_size(shape, sizes)
+    positional = list(candidates)[: len(shape)]
+
+    if is_v1():
+        if problem is not None:
+            raise ValueError(
+                f"Cannot pair an unlabeled array of shape {tuple(shape)} with "
+                f"the operand's dimensions: {problem} Wrap the array in an "
+                f"xarray.DataArray with explicit dims to name its axes."
+            )
+        assert paired is not None
+        return paired
+
+    # LEGACY: remove at 1.0 — positional pairing plus the transition warning.
+    if problem is not None:
+        warn_legacy(
+            f"An unlabeled array of shape {tuple(shape)} was paired with the "
+            f"operand's leading dimension(s) {positional} by position. Under "
+            f"the v1 convention this raises: {problem} Wrap the array in an "
+            f"xarray.DataArray with explicit dims to keep it working."
+        )
+    elif paired != positional:
+        warn_legacy(
+            f"An unlabeled array of shape {tuple(shape)} was paired with the "
+            f"operand's leading dimension(s) {positional} by position. Under "
+            f"the v1 convention it pairs by size instead — with {paired} — "
+            f"which gives a different result. Wrap the array in an "
+            f"xarray.DataArray with explicit dims to make the pairing explicit."
+        )
+    return list(candidates)
+
+
 def _broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    unlabeled_pairing: Literal["positional", "semantic"] = "positional",
     **kwargs: Any,
 ) -> tuple[DataArray, list[_LevelProjection]]:
     """
@@ -531,6 +655,13 @@ def _broadcast_to_coords(
     projections performed along the way, so the public entry points can
     apply their own policy (warn or raise) to partial projections and
     coverage gaps.
+
+    ``unlabeled_pairing`` decides how unlabeled inputs (numpy / list /
+    polars) adopt dim names: ``"positional"`` pairs axes with the leading
+    coords dims (the documented behavior for explicit-coords callers such
+    as ``add_variables``); ``"semantic"`` defers to the arithmetic
+    semantics — by size under v1, positional with a deprecation warning
+    under legacy (#736).
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
@@ -558,8 +689,22 @@ def _broadcast_to_coords(
         # position. A shape mismatch surfaces here as a clear xarray
         # "conflicting sizes" error rather than a confusing
         # "coordinates do not match" further down.
-        if dims is None:
-            dims = list(expected)
+        if (
+            unlabeled_pairing == "semantic"
+            and dims is None
+            and isinstance(arr, UNLABELED_TYPES)
+        ):
+            # A truly unlabeled operand (no ``dims`` hint): the pairing
+            # decides which coords dims its axes adopt (#736) — by size
+            # under v1, positionally with a warning under legacy. An
+            # explicit ``dims`` means the caller already named the axes, so
+            # this is skipped and the names are honored as given.
+            dims = _dims_for_unlabeled_operand(np.shape(arr), expected)
+        elif dims is None:
+            # Helper dims (e.g. ``_term``) are storage book-keeping, never
+            # positional axes of a user operand — exclude them (this is what
+            # passing ``coord_dims`` used to do).
+            dims = [d for d in expected if d not in HELPER_DIMS]
         arr = as_dataarray(arr, coords, dims=dims, **kwargs)
         # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
         # a FutureWarning and isn't needed (the conversion already used it).
@@ -722,7 +867,9 @@ def broadcast_to_coords(
         Broadcast against ``coords``.
     """
     if not strict:
-        da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
+        da, projections = _broadcast_to_coords(
+            arr, coords, dims, unlabeled_pairing="semantic", **kwargs
+        )
         _enforce_implicit_projections(projections)
         return da
 

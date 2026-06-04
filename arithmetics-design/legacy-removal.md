@@ -72,6 +72,11 @@ source tree.
   (`_project_onto_multiindex_levels`, `_LevelProjection`) stays:
   full-coverage full-level projections remain legal under v1 (they are
   the same coordinate spelled differently, §8).
+- `_dims_for_unlabeled_operand`: drop the legacy positional-pairing
+  fallback (the `warn_legacy(...)` branches plus the `return
+  list(candidates)`); the v1 size-pairing — the `is_v1()` block that
+  raises on ambiguity / no-match — becomes the whole function. The
+  `as_constant` / `_pair_axes_by_size` helpers stay (v1-clean).
 
 ### `linopy/piecewise.py` / `linopy/sos_reformulation.py`
 

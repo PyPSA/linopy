@@ -333,9 +333,7 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = broadcast_to_coords(
-            coefficient, coords=self.coords, dims=self.dims, strict=False
-        )
+        coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         # §5: user-supplied NaN in the coefficient must raise (v1) / warn
         # (legacy) — it's the multiplicative analogue of ``x + nan_data``
         # and otherwise enters the expression silently. The default
