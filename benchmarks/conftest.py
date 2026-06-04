@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmarks.registry import ModelSpec
+from benchmarks.registry import BenchSpec
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -43,7 +43,7 @@ def pytest_collection_modifyitems(
             item.add_marker(skip)
 
 
-def maybe_skip(request: pytest.FixtureRequest, spec: ModelSpec, size: int) -> None:
+def maybe_skip(request: pytest.FixtureRequest, spec: BenchSpec, size: int) -> None:
     """
     Apply size-tier skips and ``spec.requires`` importorskips.
 
@@ -64,7 +64,9 @@ def maybe_skip(request: pytest.FixtureRequest, spec: ModelSpec, size: int) -> No
 
     if quick:
         if size > spec.quick_threshold:
-            pytest.skip(f"--quick: skipping {spec.name} size {size}")
+            pytest.skip(f"--quick: skipping {spec.name} {spec.axis}={size}")
     elif not long_:
         if size > spec.long_threshold:
-            pytest.skip(f"long size needs --long: skipping {spec.name} size {size}")
+            pytest.skip(
+                f"long sweep needs --long: skipping {spec.name} {spec.axis}={size}"
+            )

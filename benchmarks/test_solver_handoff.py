@@ -34,7 +34,7 @@ def _make_params() -> list[object]:
                     wrapper,
                     spec,
                     size,
-                    id=f"{solver_name}-{spec.name}-n={size}",
+                    id=f"{solver_name}-{spec.name}-{spec.axis}={size}",
                 )
             )
     return out

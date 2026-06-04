@@ -6,8 +6,9 @@ Three opinionated views, all returning the number of tests rendered:
 - :func:`plot_compare` (2 snapshots) — sorted-by-delta bar chart.
 - :func:`plot_sweep` (3+ snapshots) — heatmap of per-test ratio
   relative to the first snapshot. Useful for cross-version sweeps.
-- :func:`plot_scaling` (1 snapshot) — log-log time vs ``n`` for
-  size-parametrized tests, faceted by phase.
+- :func:`plot_scaling` (1 snapshot) — cost vs the sweep dial for
+  parametrized tests, faceted by phase. Log-log for model ``size``;
+  linear for pattern ``severity`` (0–100).
 
 All three accept a ``metric`` argument selecting which pytest-benchmark
 stat drives the plot. Default is ``min`` — the fastest observed sample
@@ -138,7 +139,7 @@ def plot_compare(
     # vectorised — no per-row dict construction.
     wide = (
         df_long.pivot(
-            index=["test_id", "phase", "model", "size"],
+            index=["test_id", "phase", "model", "size", "axis"],
             columns="snapshot",
             values="value",
         )
@@ -188,7 +189,7 @@ def plot_compare(
     else:
         varying = "model" if facets == "phase" else "phase"
         size_str = df["size"].astype("Int64").astype(str)
-        df["_short"] = df[varying] + "-n=" + size_str
+        df["_short"] = df[varying] + "-" + df["axis"] + "=" + size_str
         other_mask = df["phase"] == "other"
         df.loc[other_mask, "_short"] = (
             df.loc[other_mask, "test_id"].str.split("::").str[-1]
@@ -437,34 +438,47 @@ def plot_scaling(
     sort: SortMode = "absolute",  # noqa: ARG001  (uniform signature, unused here)
     facets: FacetBy | None = None,  # noqa: ARG001  (uniform signature, unused here)
 ) -> tuple[Figure, int]:
-    """Log-log time vs N for size-parametrized tests, faceted by phase."""
+    """
+    Cost vs the sweep dial for parametrized tests, faceted by phase.
+
+    Handles both axes the registry sweeps: model ``size`` (``axis="n"``) and
+    pattern ``severity``. Models scale multiplicatively, so a model-only
+    snapshot is drawn log-log; a severity sweep is linear (it starts at 0 and
+    is a 0–100 percentage, so a log x-axis would be meaningless). A mixed
+    snapshot falls back to linear x. The x-axis label is taken from the data's
+    ``axis`` column rather than hard-coded.
+    """
     import plotly.express as px
 
     df_long, unit = load_long_df(snapshots[:1], metric)
     metric_label = metric if unit == "s" else "peak"
     df = (
         df_long.dropna(subset=["size"])
-        .rename(columns={"size": "n", "value": metric})
-        .sort_values(["phase", "model", "n"])
+        .rename(columns={"value": metric})
+        .sort_values(["phase", "model", "size"])
     )
     if df.empty:
         raise ValueError(
-            "no size-parametrized tests found (expected ``...[<model>-n=<N>]`` ids)"
+            "no parametrized tests found (expected ``...[<model>-<axis>=<N>]`` ids)"
         )
+
+    axes = sorted(df["axis"].unique())
+    x_label = axes[0] if len(axes) == 1 else "sweep value"
+    # Log-x only makes sense for multiplicative size sweeps that stay > 0.
+    log_x = x_label == "n" and bool((df["size"] > 0).all())
 
     fig = px.line(
         df,
-        x="n",
+        x="size",
         y=metric,
         color="model",
         facet_col="phase",
         facet_col_wrap=3,
-        log_x=True,
-        log_y=True,
+        log_x=log_x,
+        log_y=log_x,
         markers=True,
-        title=(
-            f"Scaling: {metric_label} ({unit}) vs problem size ({snapshots[0].stem})"
-        ),
+        labels={"size": x_label},
+        title=(f"Scaling: {metric_label} ({unit}) vs {x_label} ({snapshots[0].stem})"),
     )
     fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
     return fig, len(df)

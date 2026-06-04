@@ -76,13 +76,14 @@ def _fn_name(fn: Callable[..., object]) -> str:
 
 def _row(test_id: str, value: float) -> dict[str, object]:
     """One ``load_long_df``-shaped row for an in-process result."""
-    phase, model, size = parse_test_id(test_id)
+    phase, model, size, axis = parse_test_id(test_id)
     return {
         "snapshot": test_id,
         "test_id": test_id,
         "phase": phase,
         "model": model,
         "size": size,
+        "axis": axis,
         "value": value,
     }
 
@@ -92,7 +93,8 @@ def _frame(rows: list[dict[str, object]]) -> pd.DataFrame:
     import pandas as pd
 
     df = pd.DataFrame(
-        rows, columns=["snapshot", "test_id", "phase", "model", "size", "value"]
+        rows,
+        columns=["snapshot", "test_id", "phase", "model", "size", "axis", "value"],
     )
     df["size"] = df["size"].astype("Int64")
     return df

@@ -17,8 +17,9 @@ plain functions; user-facing invocation goes through the typer CLI::
     python -m benchmarks memory compare <a> <b>
 
 Results land in ``.benchmarks/memory/`` as JSON keyed by full pytest-style
-test IDs (``benchmarks/test_<phase>.py::test_<phase>[<spec>-n=<size>]``)
-so cross-snapshot diffs work uniformly regardless of which phases were run.
+test IDs (``benchmarks/test_<phase>.py::test_<phase>[<spec>-<axis>=<value>]``,
+where ``<axis>`` is ``n`` for a model or ``severity`` for a pattern) so
+cross-snapshot diffs work uniformly regardless of which phases were run.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from typing import TYPE_CHECKING
 from benchmarks.snapshot import write_memory_snapshot
 
 if TYPE_CHECKING:
-    from benchmarks.registry import ModelSpec
+    from benchmarks.registry import BenchSpec
 
 
 def _require_memray() -> None:
@@ -130,7 +131,7 @@ _measure_peak = measure_peak
 
 
 def _measurements(
-    phase: str, spec: ModelSpec, size: int
+    phase: str, spec: BenchSpec, size: int
 ) -> Iterator[tuple[str, Callable[[], object]]]:
     """
     Yield ``(test_id, action)`` pairs for one ``(phase, spec, size)``.
@@ -138,13 +139,15 @@ def _measurements(
     ``action`` is a zero-arg callable; the caller runs it inside a tracker.
     For non-build phases, the model is built once up front (outside the
     tracker) and the action closes over it so only the phase work is
-    counted.
+    counted. ``size`` is the swept value along ``spec.axis`` (model size or
+    pattern severity); the test ids match the shared phase drivers either way.
     """
     name = spec.name
+    axis = spec.axis
 
     if phase == "build":
         yield (
-            f"benchmarks/test_build.py::test_build[{name}-n={size}]",
+            f"benchmarks/test_build.py::test_build[{name}-{axis}={size}]",
             lambda: spec.build(size),
         )
         return
@@ -155,7 +158,7 @@ def _measurements(
         from benchmarks.phases import touch_matrices
 
         yield (
-            f"benchmarks/test_matrices.py::test_matrices[{name}-n={size}]",
+            f"benchmarks/test_matrices.py::test_matrices[{name}-{axis}={size}]",
             lambda: touch_matrices(m),
         )
 
@@ -166,7 +169,7 @@ def _measurements(
         lp_path = Path(tmpdir.name) / "m.lp"
         try:
             yield (
-                f"benchmarks/test_lp_write.py::test_lp_write[{name}-n={size}]",
+                f"benchmarks/test_lp_write.py::test_lp_write[{name}-{axis}={size}]",
                 lambda: write_lp(m, lp_path),
             )
         finally:
@@ -179,13 +182,13 @@ def _measurements(
         nc_path = Path(tmpdir.name) / "m.nc"
         try:
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_write[{name}-n={size}]",
+                f"benchmarks/test_netcdf.py::test_netcdf_write[{name}-{axis}={size}]",
                 lambda: write_netcdf(m, nc_path),
             )
             # ``write_netcdf`` was called by the caller as part of the
             # measurement, so ``nc_path`` now exists for the read.
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_read[{name}-n={size}]",
+                f"benchmarks/test_netcdf.py::test_netcdf_read[{name}-{axis}={size}]",
                 lambda: read_netcdf(nc_path),
             )
         finally:
@@ -205,7 +208,7 @@ def _measurements(
         yield (
             (
                 f"benchmarks/test_solver_handoff.py::test_solver_handoff"
-                f"[highs-{name}-n={size}]"
+                f"[highs-{name}-{axis}={size}]"
             ),
             lambda: highs(m),
         )
@@ -224,12 +227,12 @@ def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, fl
     """
     _require_memray()
 
-    from benchmarks import REGISTRY
+    from benchmarks.registry import all_specs
 
     tag = _phase_tag(phase)
     results: dict[str, float] = {}
 
-    for spec in REGISTRY.values():
+    for spec in all_specs():
         if not spec.applies_to(tag):
             continue
 
@@ -240,11 +243,11 @@ def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, fl
             except ImportError:
                 break
         else:
-            for size in spec.sizes:
-                if quick and size > spec.quick_threshold:
+            for value in spec.sweep:
+                if quick and value > spec.quick_threshold:
                     continue
                 try:
-                    for test_id, action in _measurements(phase, spec, size):
+                    for test_id, action in _measurements(phase, spec, value):
                         try:
                             results[test_id] = _measure_peak(action, repeats=repeats)
                             print(
@@ -258,7 +261,7 @@ def run_phase(phase: str, quick: bool = False, repeats: int = 1) -> dict[str, fl
                             )
                 except Exception as exc:  # noqa: BLE001
                     print(
-                        f"  setup failed {spec.name}/{size}: "
+                        f"  setup failed {spec.name}/{value}: "
                         f"{type(exc).__name__}: {exc}",
                         file=sys.stderr,
                     )

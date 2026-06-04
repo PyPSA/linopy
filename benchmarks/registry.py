@@ -23,8 +23,9 @@ Pattern for downstream use::
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Protocol
 
 import linopy
 
@@ -105,6 +106,17 @@ class ModelSpec:
     quick_threshold: int = 10**9
     long_threshold: int = 10**9
     requires: tuple[str, ...] = ()
+    description: str = ""
+
+    @property
+    def sweep(self) -> tuple[int, ...]:
+        """Values swept along this spec's axis (see :class:`BenchSpec`)."""
+        return self.sizes
+
+    @property
+    def axis(self) -> str:
+        """Short x-axis label for the sweep dial: a model scales by size."""
+        return "n"
 
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases
@@ -183,15 +195,149 @@ def filter_by(
     return out
 
 
-def iter_params(phase: str) -> list[tuple[ModelSpec, int]]:
-    """Pytest parametrize helper — flatten (spec, size) pairs for one phase."""
+def iter_params(
+    phase: str, specs: Iterable[BenchSpec] | None = None
+) -> list[tuple[BenchSpec, int]]:
+    """
+    Pytest parametrize helper — flatten ``(spec, value)`` pairs for one phase.
+
+    ``specs`` defaults to every spec in the suite — models *and* patterns — so a
+    phase driver picks both up automatically. Works over any :class:`BenchSpec`
+    via its ``sweep`` axis, so models (size) and patterns (severity) share one
+    helper. Pass an explicit collection (e.g. ``PATTERNS.values()``) to narrow.
+    """
+    specs = all_specs() if specs is None else specs
     return [
-        (spec, size)
-        for spec in REGISTRY.values()
+        (spec, value)
+        for spec in specs
         if spec.applies_to(phase)
-        for size in spec.sizes
+        for value in spec.sweep
     ]
 
 
-def param_ids(params: list[tuple[ModelSpec, int]]) -> list[str]:
-    return [f"{spec.name}-n={size}" for spec, size in params]
+def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
+    return [f"{spec.name}-{spec.axis}={value}" for spec, value in params]
+
+
+# --- Patterns ---------------------------------------------------------------
+
+DEFAULT_SEVERITIES: tuple[int, ...] = (0, 25, 50, 75, 100)
+
+
+class BenchSpec(Protocol):
+    """
+    The contract models and patterns share, for axis-agnostic harness code.
+
+    Both build a :class:`linopy.Model` from one integer dial and run through
+    the same phases. They differ only in what that dial *means* — captured by
+    ``sweep`` (the values), ``axis`` (the short label, ``"n"`` vs
+    ``"severity"``), and ``description`` (the human one-liner). Read these
+    instead of branching on the concrete type.
+    """
+
+    name: str
+    description: str
+    phases: frozenset[str]
+    requires: tuple[str, ...]
+    quick_threshold: int
+    long_threshold: int
+
+    @property
+    def sweep(self) -> tuple[int, ...]: ...
+    @property
+    def axis(self) -> str: ...
+    def build(self, x: int) -> linopy.Model: ...
+    def applies_to(self, phase: str) -> bool: ...
+
+
+@dataclass(frozen=True, repr=False)
+class PatternSpec:
+    """
+    Declarative description of one *user pattern* (modelling idiom).
+
+    ``build(severity)`` constructs a small, realistic model fragment, where
+    ``severity`` is an int in ``[0, 100]`` dialling the data shape from benign
+    (0) to worst-case (100). The harness measures the act of building it (time
+    + peak memory) across the ``severities`` sweep. ``description`` documents
+    the dial — by convention ``"<what it varies> — 0: <benign>, 100: <worst>"``
+    — and doubles as the plot caption.
+
+    A pattern builds a complete model, so it runs the same ``phases`` as a model
+    by default — the build-vs-export contrast (does the dense-``_term`` bloat
+    reach the matrix / LP file, or collapse?) is the point. The full severity
+    range runs by default; ``--quick`` keeps everything up to the midpoint
+    (``{0, 25, 50}``) so smoke exercises real pathology, not just the benign
+    endpoint, while skipping the heaviest builds.
+    """
+
+    name: str
+    build: Callable[[int], linopy.Model]
+    description: str
+    severities: tuple[int, ...] = DEFAULT_SEVERITIES
+    phases: frozenset[str] = DEFAULT_PHASES
+    requires: tuple[str, ...] = ()
+    quick_threshold: int = 50
+    long_threshold: int = 10**9
+
+    @property
+    def sweep(self) -> tuple[int, ...]:
+        return self.severities
+
+    @property
+    def axis(self) -> str:
+        return "severity"
+
+    def applies_to(self, phase: str) -> bool:
+        return phase in self.phases
+
+    def __repr__(self) -> str:
+        sev = ", ".join(str(s) for s in self.severities)
+        return f"PatternSpec({self.name!r}, severities=[{sev}])"
+
+    def _repr_html_(self) -> str:
+        rows = [
+            ("name", self.name),
+            ("description", self.description),
+            ("severities", ", ".join(str(s) for s in self.severities)),
+            ("phases", ", ".join(sorted(self.phases))),
+            ("requires", ", ".join(self.requires) or "—"),
+        ]
+        body = "".join(
+            f"<tr><th style='text-align:left;padding-right:1em'>{k}</th>"
+            f"<td>{v}</td></tr>"
+            for k, v in rows
+        )
+        return (
+            f"<b>PatternSpec</b> <code>{self.name}</code>"
+            f"<table style='font-size:90%'>{body}</table>"
+        )
+
+
+PATTERNS: dict[str, PatternSpec] = {}
+
+
+def register_pattern(spec: PatternSpec) -> PatternSpec:
+    """Add ``spec`` to the pattern registry. Returns the spec for chaining."""
+    if spec.name in PATTERNS:
+        raise ValueError(f"pattern {spec.name!r} already registered")
+    unknown_phases = spec.phases - ALL_PHASES
+    if unknown_phases:
+        raise ValueError(
+            f"pattern {spec.name!r}: unknown phases {sorted(unknown_phases)}"
+        )
+    if not all(0 <= s <= 100 for s in spec.severities):
+        raise ValueError(
+            f"pattern {spec.name!r}: severities must be ints in [0, 100], "
+            f"got {spec.severities}"
+        )
+    PATTERNS[spec.name] = spec
+    return spec
+
+
+def get_pattern(name: str) -> PatternSpec:
+    return PATTERNS[name]
+
+
+def all_specs() -> list[BenchSpec]:
+    """Every spec in the suite — models then patterns."""
+    return [*REGISTRY.values(), *PATTERNS.values()]

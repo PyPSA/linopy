@@ -33,8 +33,9 @@ if TYPE_CHECKING:
 
     from benchmarks.snapshot import Metric
 
-# Importing the models package triggers each module's ``register(...)`` call.
-from benchmarks import bench, models  # noqa: F401, E402
+# Importing the models / patterns packages triggers each module's
+# ``register(...)`` / ``register_pattern(...)`` call at import time.
+from benchmarks import bench, models, patterns  # noqa: F401, E402
 
 
 def load_long_df(
@@ -62,11 +63,13 @@ from benchmarks.registry import (  # noqa: F401, E402 — re-export
     BUILD,
     CONTINUOUS,
     DEFAULT_PHASES,
+    DEFAULT_SEVERITIES,
     INTEGER,
     LP_WRITE,
     MASKED,
     MATRICES,
     NETCDF,
+    PATTERNS,
     PIECEWISE,
     QUADRATIC,
     REGISTRY,
@@ -75,12 +78,17 @@ from benchmarks.registry import (  # noqa: F401, E402 — re-export
     TO_HIGHSPY,
     TO_MOSEK,
     TO_XPRESS,
+    BenchSpec,
     ModelSpec,
+    PatternSpec,
+    all_specs,
     filter_by,
     get,
+    get_pattern,
     iter_params,
     param_ids,
     register,
+    register_pattern,
 )
 
 __all__ = [
@@ -90,13 +98,17 @@ __all__ = [
     "BUILD",
     "CONTINUOUS",
     "DEFAULT_PHASES",
+    "DEFAULT_SEVERITIES",
     "INTEGER",
     "LP_WRITE",
     "MASKED",
     "MATRICES",
+    "BenchSpec",
     "ModelSpec",
     "NETCDF",
+    "PATTERNS",
     "PIECEWISE",
+    "PatternSpec",
     "QUADRATIC",
     "REGISTRY",
     "SOS",
@@ -104,11 +116,14 @@ __all__ = [
     "TO_HIGHSPY",
     "TO_MOSEK",
     "TO_XPRESS",
+    "all_specs",
     "bench",
     "filter_by",
     "get",
+    "get_pattern",
     "iter_params",
     "load_long_df",
     "param_ids",
     "register",
+    "register_pattern",
 ]

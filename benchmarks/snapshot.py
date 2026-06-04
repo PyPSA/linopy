@@ -15,8 +15,10 @@ Two snapshot shapes, auto-detected on load:
 - **memory** — ``{"label": <str>, "peak_mib": {<id>: <float>}}`` → value
   in **MiB**.
 
-Test ids follow ``…[<model>-n=<size>]``; :func:`parse_test_id` splits one
-into ``(phase, model, size)`` and :func:`synth_test_id` builds one.
+Test ids follow ``…[<model>-<axis>=<value>]`` where ``<axis>`` is the sweep
+dial — ``n`` for a model (size) or ``severity`` for a pattern — and ``<value>``
+is the integer swept. :func:`parse_test_id` splits one into
+``(phase, model, value, axis)`` and :func:`synth_test_id` builds one.
 """
 
 from __future__ import annotations
@@ -31,43 +33,51 @@ if TYPE_CHECKING:
 
 Metric = Literal["min", "median", "mean", "max"]
 
-_SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-n=(\d+)\]")
+_SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-(\w+)=(\d+)\]")
 
 
 # --- test-id grammar -------------------------------------------------------
 
 
-def parse_test_id(test_id: str) -> tuple[str, str, int | None]:
+def parse_test_id(test_id: str) -> tuple[str, str, int | None, str]:
     """
-    Return ``(phase, model, size)`` for a pytest test id.
+    Return ``(phase, model, value, axis)`` for a pytest test id.
 
-    Falls back to ``("other", "other", None)`` for ids that don't match
-    the ``benchmarks/test_<phase>.py::test_<phase>[<model>-n=<size>]``
-    parametrize shape (e.g. ``test_pypsa_carbon_management``).
+    ``value`` is the integer swept along ``axis`` (``"n"`` for a model size,
+    ``"severity"`` for a pattern). Falls back to
+    ``("other", "other", None, "other")`` for ids that don't match the
+    ``…[<model>-<axis>=<value>]`` parametrize shape (e.g.
+    ``test_pypsa_carbon_management``).
     """
     m = _SIZE_RE.match(test_id)
     if m:
         phase = m.group(1).split("::")[-1]
-        return phase, m.group(2), int(m.group(3))
-    return "other", "other", None
+        return phase, m.group(2), int(m.group(4)), m.group(3)
+    return "other", "other", None, "other"
 
 
 def synth_test_id(
-    label: str, *, model: str | None, size: int | None, phase: str | None
+    label: str,
+    *,
+    model: str | None,
+    size: int | None,
+    phase: str | None,
+    axis: str = "n",
 ) -> str:
     """
     Build a snapshot test id from optional metadata.
 
     With all of ``model``/``size``/``phase`` supplied, synthesize
-    ``bench::{phase}[{model}-n={size}]`` — this round-trips through
-    :func:`parse_test_id` into the three columns (so ``plot --view
-    scaling`` works across several sizes). With none supplied, fall back
-    to ``label`` verbatim (lands in the ``"other"`` bucket — still fine
-    for ``compare``). A partial spec is ambiguous and rejected.
+    ``bench::{phase}[{model}-{axis}={size}]`` — this round-trips through
+    :func:`parse_test_id` into the columns (so ``plot --view scaling`` works
+    across several sweep values). ``axis`` defaults to ``"n"`` (a model size);
+    pass ``axis="severity"`` for a pattern. With none of model/size/phase
+    supplied, fall back to ``label`` verbatim (lands in the ``"other"`` bucket
+    — still fine for ``compare``). A partial spec is ambiguous and rejected.
     """
     given = (model is not None, size is not None, phase is not None)
     if all(given):
-        return f"bench::{phase}[{model}-n={size}]"
+        return f"bench::{phase}[{model}-{axis}={size}]"
     if any(given):
         raise ValueError(
             "model, size, and phase must be given together (or all omitted)"
@@ -155,9 +165,10 @@ def load_long_df(
     Return ``(df, unit)`` — one row per ``(snapshot, test_id)`` pair.
 
     Columns: ``snapshot``, ``test_id``, ``phase``, ``model``, ``size``
-    (``Int64``-nullable for the "other" bucket), ``value``. ``unit`` is
-    the shared unit string (``"s"`` for timing, ``"MiB"`` for memory)
-    — every loaded snapshot must agree.
+    (``Int64``-nullable for the "other" bucket), ``axis`` (``"n"`` /
+    ``"severity"`` / ``"other"``), ``value``. ``unit`` is the shared unit
+    string (``"s"`` for timing, ``"MiB"`` for memory) — every loaded snapshot
+    must agree.
 
     Every plot view downstream pivots or filters this single frame so
     test-id parsing, unit checking, and the "x snapshots, y tests"
@@ -170,7 +181,7 @@ def load_long_df(
     rows = []
     for label, vals, _ in raw:
         for test_id, value in vals.items():
-            phase, model, size = parse_test_id(test_id)
+            phase, model, size, axis = parse_test_id(test_id)
             rows.append(
                 {
                     "snapshot": label,
@@ -178,6 +189,7 @@ def load_long_df(
                     "phase": phase,
                     "model": model,
                     "size": size,
+                    "axis": axis,
                     "value": value,
                 }
             )
