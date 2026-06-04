@@ -122,10 +122,10 @@ it does when no dimension matches. The same goes for a 4×4 array against
 `(a: 4, b: 4)`: sizes cannot tell `(a, b)` from `(b, a)`. To name the
 dimensions, wrap the array in a DataArray.
 
-> **TODO — not yet implemented ([#736]).** Today an unlabeled array pairs
-> with the *leading* dimensions positionally, which silently guesses in the
-> ambiguous cases above. The pairing rule builds on the `as_dataarray` /
-> coords-as-truth seam ([#732], merged — now `linopy.alignment`).
+A scalar broadcasts over every dimension and so needs no pairing. A 0-d
+array is treated as a scalar; a Python `list` is read as a numpy array
+(it carries values, not labels). Implemented in `linopy.alignment`
+([#736]).
 
 ### §8. Shared dimensions must match exactly
 

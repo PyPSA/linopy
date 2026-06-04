@@ -34,12 +34,17 @@ Slice F — auxiliary-coordinate conflicts (§11):
     §11 Non-dim coord conflict raises (v1)             → #295
     §11 Non-conflicting aux coords propagate through arithmetic
 
+Slice H — unlabeled-operand pairing (coordinate-alignment intro):
+    Unlabeled operands (numpy / list / polars) pair with the linopy
+    operand's dims by size; ambiguity or no-match raises (v1)   → #736
+
 Slice H — object scope (convention preamble):
     Non-linopy operands behave exactly like constant-only expressions
 """
 
 from __future__ import annotations
 
+import contextlib
 import operator
 import warnings
 from collections.abc import Generator
@@ -47,6 +52,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 
@@ -165,6 +171,226 @@ class TestBroadcastNonSharedDim:
         bcast = xr.DataArray([2.0, 3.0], dims=["scenario"], coords={"scenario": [0, 1]})
         result = x * bcast
         assert set(result.coeffs.dims) == {"time", "scenario", "_term"}
+
+
+# =====================================================================
+# Coordinate-alignment intro — unlabeled operands pair by size (#736)
+# =====================================================================
+
+
+# The three unlabeled types must behave identically; each constructor takes a
+# value sequence so the same cases parametrize over numpy / list / polars.
+UNLABELED_1D = [
+    pytest.param(lambda v: np.asarray(v, dtype=float), id="numpy"),
+    pytest.param(lambda v: [float(x) for x in v], id="list"),
+    pytest.param(lambda v: pl.Series([float(x) for x in v]), id="polars"),
+]
+
+
+class TestUnlabeledPairing:
+    """
+    Unlabeled operands (numpy arrays, lists, polars Series) carry no labels,
+    so they pair with the linopy operand's dims *by size*. Ambiguity (two
+    dims share the size, or the array is square) or no size match raises
+    under v1; legacy pairs with the leading dims positionally and warns when
+    the v1 pairing would differ or reject.
+    """
+
+    @pytest.fixture
+    def xy(self) -> Variable:
+        # dims of distinct sizes so a 1-d operand pairs unambiguously
+        m = Model()
+        return m.add_variables(
+            coords=[pd.RangeIndex(3, name="a"), pd.RangeIndex(4, name="b")], name="xy"
+        )
+
+    @pytest.fixture
+    def square(self) -> Variable:
+        # both dims size 4 → a 1-d length-4 operand is ambiguous
+        m = Model()
+        return m.add_variables(
+            coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")], name="sq"
+        )
+
+    @pytest.fixture
+    def wide(self) -> Variable:
+        # four dims of distinct sizes — a lower-rank operand pairs a subset
+        m = Model()
+        return m.add_variables(
+            coords=[
+                pd.RangeIndex(3, name="a"),
+                pd.RangeIndex(4, name="b"),
+                pd.RangeIndex(5, name="c"),
+                pd.RangeIndex(6, name="d"),
+            ],
+            name="wide",
+        )
+
+    # -- 1-d operands -----------------------------------------------------
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_pairs_by_size(self, xy: Variable, make: Any) -> None:
+        # length-4 array pairs with dim "b" (size 4), not the leading "a" (3)
+        result = (1 * xy) + make(range(4))
+        assert set(result.const.dims) == {"a", "b"}
+        assert result.const.sizes == {"a": 3, "b": 4}
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_ambiguous_square_raises(self, square: Variable, make: Any) -> None:
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            (1 * square) + make(range(4))
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_no_size_match_raises(self, xy: Variable, make: Any) -> None:
+        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
+            (1 * xy) + make(range(7))
+
+    @pytest.mark.v1
+    def test_v1_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
+        # the documented escape hatch: name the axis with a DataArray
+        result = (1 * square) + xr.DataArray(np.arange(4.0), dims=["p"])
+        assert set(result.const.dims) == {"p", "q"}
+
+    # -- multi-dim operands (numpy only — list / polars are 1-d) ----------
+
+    @pytest.mark.v1
+    def test_v1_size_order_independent(self, xy: Variable) -> None:
+        # a 2-d (4, 3) operand pairs (b, a) by size regardless of axis order.
+        result = (1 * xy) + np.ones((4, 3))
+        assert result.const.sizes == {"a": 3, "b": 4}
+
+    @pytest.mark.v1
+    def test_v1_multidim_square_ambiguous_raises(self, square: Variable) -> None:
+        # a 2-d (4, 4) operand against dims (p: 4, q: 4) — sizes cannot tell
+        # (p, q) from (q, p). Exercises the multi-axis-same-size branch the 1-d
+        # cases never reach.
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            (1 * square) + np.ones((4, 4))
+
+    @pytest.mark.v1
+    def test_v1_multidim_no_size_match_raises(self, xy: Variable) -> None:
+        # a 2-d (5, 3) operand against (a: 3, b: 4) — the length-5 axis matches
+        # no dim.
+        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
+            (1 * xy) + np.ones((5, 3))
+
+    @pytest.mark.v1
+    def test_v1_lower_rank_operand_pairs_subset_and_broadcasts(
+        self, wide: Variable
+    ) -> None:
+        # a 2-d (4, 5) operand against four dims pairs its axes with (b, c) by
+        # size and broadcasts over the unpaired (a, d).
+        result = (1 * wide) + np.ones((4, 5))
+        assert result.const.sizes == {"a": 3, "b": 4, "c": 5, "d": 6}
+
+    @pytest.mark.v1
+    def test_v1_ambiguous_axis_within_higher_rank_raises(self) -> None:
+        # a 2-d (4, 5) operand where the length-4 axis matches two dims of the
+        # operand (a: 4, b: 4) — ambiguous even though the length-5 axis is
+        # unique.
+        m = Model()
+        y = m.add_variables(
+            coords=[
+                pd.RangeIndex(4, name="a"),
+                pd.RangeIndex(4, name="b"),
+                pd.RangeIndex(5, name="c"),
+            ],
+            name="y",
+        )
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            (1 * y) + np.ones((4, 5))
+
+    # -- matmul -----------------------------------------------------------
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("make", UNLABELED_1D)
+    def test_v1_matmul_pairs_by_size(self, xy: Variable, make: Any) -> None:
+        # matmul contracts the paired dim: length-4 array pairs with "b"
+        result = (1 * xy) @ make(range(4))
+        assert set(result.coord_dims) == {"a"}
+
+    # -- construction (add_variables bounds) ------------------------------
+
+    @pytest.mark.v1
+    def test_v1_add_variables_bound_pairs_by_size(self) -> None:
+        # The rule is the same for construction inputs: a bare-numpy bound
+        # pairs with the matching dim by size, not positionally (where the
+        # length-5 array would hit the leading dim "a" and conflict).
+        m = Model()
+        x = m.add_variables(
+            coords=[pd.RangeIndex(4, name="a"), pd.RangeIndex(5, name="time")],
+            lower=np.arange(5.0),
+            name="x",
+        )
+        assert dict(x.lower.sizes) == {"a": 4, "time": 5}
+        assert (x.lower.isel(a=0).values == np.arange(5.0)).all()
+
+    @pytest.mark.v1
+    def test_v1_add_variables_ambiguous_bound_raises(self) -> None:
+        m = Model()
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            m.add_variables(
+                coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")],
+                lower=np.arange(4.0),
+                name="x",
+            )
+
+    @pytest.mark.legacy
+    def test_legacy_no_divergence_is_silent(
+        self, xy: Variable, unsilenced: None
+    ) -> None:
+        # length-3 array: legacy pairs positionally with the leading dim "a";
+        # v1 would pair it with "a" too (only "a" is size 3), so there is no
+        # divergence and no warning. Pins the silent case.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            result = (1 * xy) + np.arange(3.0)
+        assert result.const.sizes == {"a": 3, "b": 4}
+        assert (result.const.isel(b=0).values == np.arange(3.0)).all()
+
+    @pytest.mark.legacy
+    def test_legacy_warns_when_v1_would_differ(
+        self, xy: Variable, unsilenced: None
+    ) -> None:
+        # length-4 array: legacy pairs positionally with "a" (size 3) → error,
+        # but the warning fires first explaining the v1 divergence.
+        # legacy positional pairing assigns the len-4 array to "a" (size 3),
+        # which then conflicts — assert it's that shape error, nothing incidental.
+        with pytest.warns(LinopySemanticsWarning, match=r"pairs by size instead"):
+            with contextlib.suppress(ValueError):
+                (1 * xy) + np.arange(4.0)
+
+    @pytest.mark.legacy
+    def test_legacy_ambiguous_pairs_positionally_with_warning(
+        self, square: Variable, unsilenced: None
+    ) -> None:
+        # The square (p:4, q:4) case where v1 *raises* — legacy must instead
+        # pair positionally with the leading dim and warn, never raise. This is
+        # the biggest legacy/v1 divergence and the strongest no-regression guard.
+        with pytest.warns(LinopySemanticsWarning, match=r"this raises"):
+            result = (1 * square) + np.arange(4.0)
+        assert result.const.sizes == {"p": 4, "q": 4}
+        # paired with the leading dim "p": the array varies along p, broadcast over q
+        assert (result.const.isel(q=0).values == np.arange(4.0)).all()
+
+    @pytest.mark.legacy
+    def test_legacy_add_variables_bound_positional(self, unsilenced: None) -> None:
+        # Regression guard for the unification: legacy add_variables still
+        # assigns an unlabeled bound positionally (here unambiguous — only "a"
+        # is size 5 — so it is also silent), producing the pre-#736 result.
+        m = Model()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            x = m.add_variables(
+                coords=[pd.RangeIndex(5, name="a"), pd.RangeIndex(3, name="b")],
+                lower=np.arange(5.0),
+                name="x",
+            )
+        assert dict(x.lower.sizes) == {"a": 5, "b": 3}
+        assert (x.lower.isel(b=0).values == np.arange(5.0)).all()
 
 
 # =====================================================================

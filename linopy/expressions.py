@@ -44,7 +44,13 @@ except ImportError:
 from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
-from linopy.alignment import as_dataarray, broadcast_to_coords, fill_missing_coords
+from linopy.alignment import (
+    _matmul_operand_to_dataarray,
+    as_constant,
+    as_dataarray,
+    broadcast_to_coords,
+    fill_missing_coords,
+)
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
@@ -680,9 +686,7 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const + other)
-        da = broadcast_to_coords(
-            other, coords=self.coords, dims=self.coord_dims, strict=False
-        )
+        da = broadcast_to_coords(other, coords=self.coords, strict=False)
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
@@ -708,9 +712,7 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
-        da = broadcast_to_coords(
-            other, coords=self.coords, dims=self.coord_dims, strict=False
-        )
+        da = broadcast_to_coords(other, coords=self.coords, strict=False)
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
@@ -752,9 +754,7 @@ class BaseExpression(ABC):
         # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(
-            other, coords=self.coords, dims=self.coord_dims, strict=False
-        )
+        factor = broadcast_to_coords(other, coords=self.coords, strict=False)
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -785,9 +785,7 @@ class BaseExpression(ABC):
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(
-            other, coords=self.coords, dims=self.coord_dims, strict=False
-        )
+        factor = broadcast_to_coords(other, coords=self.coords, strict=False)
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -822,6 +820,7 @@ class BaseExpression(ABC):
         )
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
+        other = as_constant(other)
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
@@ -1280,6 +1279,7 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
+        rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
             raise ValueError(
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
@@ -1294,9 +1294,7 @@ class BaseExpression(ABC):
             # through ``sub`` into the RHS and reaches downstream
             # auto-mask handling as "no constraint at this row" (§12).
             if isinstance(rhs, CONSTANT_TYPES):
-                rhs = broadcast_to_coords(
-                    rhs, coords=self.coords, dims=self.coord_dims, strict=False
-                )
+                rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
                 extra_dims = set(rhs.dims) - set(self.coord_dims)
                 if extra_dims:
                     logger.warning(
@@ -1320,9 +1318,7 @@ class BaseExpression(ABC):
         # part of normal arithmetic, so we restore the original NaN mask
         # afterward).
         if isinstance(rhs, CONSTANT_TYPES):
-            rhs = broadcast_to_coords(
-                rhs, coords=self.coords, dims=self.coord_dims, strict=False
-            )
+            rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1844,6 +1840,7 @@ class LinearExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__add__(self)
 
@@ -1879,6 +1876,7 @@ class LinearExpression(BaseExpression):
         | LinearExpression
         | QuadraticExpression,
     ) -> LinearExpression | QuadraticExpression:
+        other = as_constant(other)
         try:
             return self.__add__(-other)
         except TypeError:
@@ -1903,6 +1901,7 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
 
@@ -1948,8 +1947,9 @@ class LinearExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
+        other = as_constant(other)
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2360,6 +2360,7 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        other = as_constant(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for *: "
@@ -2381,6 +2382,7 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        other = as_constant(other)
         try:
             if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
@@ -2407,6 +2409,7 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        other = as_constant(other)
         try:
             return self.__add__(-other)
         except TypeError:
@@ -2430,12 +2433,13 @@ class QuadraticExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
+        other = as_constant(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
