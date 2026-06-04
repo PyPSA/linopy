@@ -809,7 +809,7 @@ class TestExactAlignmentMerge:
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
         result = (1 * a) + (1 * b)
-        assert list(result.coeffs.coords["e"].values) == ["costs", "penalty"]
+        assert list(result.indexes["e"]) == ["costs", "penalty"]
 
     def test_reordered_constants_pair_by_label_not_position(self, m: Model) -> None:
         ea = pd.Index(["costs", "penalty"], name="e")
@@ -842,7 +842,7 @@ class TestExactAlignmentMerge:
         x = m.add_variables(coords=[ea], name="x")
         y = m.add_variables(coords=[er], name="y")
         result = (x * x) + (y * y)
-        assert list(result.coeffs.coords["e"].values) == ["x", "y", "z"]
+        assert list(result.indexes["e"]) == ["x", "y", "z"]
 
     def test_reordered_multiindex_aligns_by_tuple(self, m: Model) -> None:
         mi1 = pd.MultiIndex.from_tuples(
@@ -860,7 +860,7 @@ class TestExactAlignmentMerge:
             [10.0, 20.0, 30.0], index=mi2
         )
         result = x + y
-        got = dict(zip(map(tuple, result.const.indexes["snap"]), result.const.values))
+        got = dict(zip(map(tuple, result.indexes["snap"]), result.const.values))
         assert got == {(1, "a"): 31.0, (1, "b"): 22.0, (2, "a"): 13.0}
 
     @pytest.mark.v1
