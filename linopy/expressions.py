@@ -2659,24 +2659,18 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
-    # §8: align shared user dims by label in one pass — a reorder reindexes,
-    # a differing label set is the mismatch raised/warned below. Runs before
-    # the §11 aux check so reordered aux coords compare in a consistent order.
-    mismatch = None
+    # §8: a dim mismatch is the root cause, so raise it before the §11 aux
+    # check (else a MultiIndex mismatch reads as a level-coord conflict).
     if join is None:
         data, mismatch = conform_merge_dims(data, concat_dim=dim)
+        if is_v1() and mismatch is not None:
+            raise ValueError(_shared_dim_mismatch_message(*mismatch))
+        if mismatch is not None:  # LEGACY: remove at 1.0
+            warn_legacy(
+                _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)
+            )
 
-    # §11: aux-coord conflict fires on every join path — xr.concat(...,
-    # compat="override") silently drops it (the #295 bug v1 closes).
-    enforce_aux_conflict(data)
-
-    if is_v1() and mismatch is not None:
-        raise ValueError(_shared_dim_mismatch_message(*mismatch))
-    # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
-    if mismatch is not None:
-        warn_legacy(
-            _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)
-        )
+    enforce_aux_conflict(data)  # §11
 
     if join is not None:
         override = join == "override"

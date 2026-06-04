@@ -863,6 +863,21 @@ class TestExactAlignmentMerge:
         got = dict(zip(map(tuple, result.const.indexes["snap"]), result.const.values))
         assert got == {(1, "a"): 31.0, (1, "b"): 22.0, (2, "a"): 13.0}
 
+    @pytest.mark.v1
+    def test_different_multiindex_raises_dim_mismatch(self, m: Model) -> None:
+        mi1 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (2, "a")], names=["p", "s"]
+        )
+        mi2 = pd.MultiIndex.from_tuples(
+            [(1, "a"), (1, "b"), (3, "c")], names=["p", "s"]
+        )
+        mi1.name = "snap"
+        mi2.name = "snap"
+        x = m.add_variables(coords=[mi1], name="x")
+        y = m.add_variables(coords=[mi2], name="y")
+        with pytest.raises(ValueError, match="shared dimension 'snap'"):
+            (1 * x) + (1 * y)
+
     @pytest.mark.legacy
     def test_var_plus_var_different_labels_silent(
         self, x: Variable, x_other: Variable
