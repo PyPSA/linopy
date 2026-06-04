@@ -18,4 +18,5 @@ from benchmarks.patterns import (  # noqa: F401
     kvl_cycles,
     merge_balance,
     nodal_balance,
+    rolling,
 )
