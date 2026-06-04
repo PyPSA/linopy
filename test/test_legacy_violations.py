@@ -1096,6 +1096,89 @@ class TestAbsencePropagation:
         assert not np.isnan(result.coeffs.values[0, 0])
         assert not bool(result.isnull().values[0])
 
+    @pytest.mark.legacy
+    def test_legacy_to_linexpr_fills_absent_with_zero(self, xs: Variable) -> None:
+        """
+        Legacy counterpart of the NaN encoding: ``to_linexpr()`` stores
+        the absent slot as a present zero (``const=0``, ``coeff=1`` over
+        the ``vars=-1`` sentinel), so ``isnull()`` is blind to it.
+        """
+        expr = xs.to_linexpr()
+        assert expr.const.values[0] == 0.0
+        assert not np.isnan(expr.coeffs.values[0, 0])
+        assert not bool(expr.isnull().values.any())
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    def test_legacy_scalar_op_fills_absent(self, xs: Variable, op: str) -> None:
+        """
+        Legacy fills the absent slot with 0 before the op, so the shifted
+        slot carries the same value as every present slot (vs v1's NaN).
+        """
+        result = _OPS[op](xs, 3)
+        assert not bool(result.isnull().values[0])
+        expected = {"add": 3.0, "sub": -3.0, "mul": 0.0, "div": 0.0}[op]
+        assert (result.const.values == expected).all()
+
+    @pytest.mark.legacy
+    def test_legacy_add_present_variable_keeps_live_term(
+        self, xs: Variable, x: Variable
+    ) -> None:
+        """
+        ``xs + x``: legacy keeps ``x[0]`` live at the absent slot (the
+        merge does not absorb it), so the slot is present, not NaN.
+        """
+        result = xs + x
+        assert not bool(result.isnull().values[0])
+        # x[0] survives as a live term alongside the xs=-1 sentinel.
+        assert int(x.labels.values[0]) in result.vars.values[0].tolist()
+
+    @pytest.mark.legacy
+    def test_legacy_merge_keeps_live_terms_multi_operand(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """3-operand merge: legacy keeps x[0] and y[0] live at the absent slot."""
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        xs = x.shift(time=1)
+        result = (1 * x) + (1 * y) + xs
+        assert not bool(result.isnull().values[0])
+        live = result.vars.values[0][~np.isnan(result.coeffs.values[0])].tolist()
+        assert int(x.labels.values[0]) in live
+        assert int(y.labels.values[0]) in live
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(
+        "build",
+        [
+            "var_mul_var",
+            "var_pow_2",
+            "expr_mul_var",
+            "expr_mul_expr",
+            "quad_plus_linexpr",
+            "quad_times_scalar",
+        ],
+    )
+    def test_legacy_quadratic_collapses_absent(
+        self, xs: Variable, x: Variable, build: str
+    ) -> None:
+        """
+        Every quadratic build path collapses the absent factor to a
+        present zero under legacy — no NaN signal anywhere (vs v1, which
+        keeps the slot absent).
+        """
+        builders = {
+            "var_mul_var": lambda: xs * x,
+            "var_pow_2": lambda: xs**2,
+            "expr_mul_var": lambda: (1 * xs) * x,
+            "expr_mul_expr": lambda: (1 * xs) * (1 * x),
+            "quad_plus_linexpr": lambda: (xs * x) + (2 * x),
+            "quad_times_scalar": lambda: (xs * x) * 3,
+        }
+        quad = builders[build]()
+        assert not bool(quad.isnull().values[0])
+        assert not np.isnan(quad.coeffs.values[0]).any()
+
 
 class TestFillnaResolves:
     """§7 — fillna()/.where() are how the caller resolves an absent slot."""
@@ -1182,6 +1265,48 @@ class TestFillnaResolves:
         rhs = m.constraints["con0"].rhs.values
         assert not np.isnan(rhs).any()
 
+    @pytest.mark.legacy
+    def test_legacy_expr_fillna_is_noop(self, xs: Variable) -> None:
+        """
+        Legacy has already filled the absent slot with 0, so there is no
+        NaN for ``fillna(42)`` to replace — the 42 never lands (vs v1,
+        which puts 42 at the formerly-absent slot).
+        """
+        result = xs.to_linexpr().fillna(42)
+        assert result.const.values.tolist() == [0.0, 0.0, 0.0, 0.0, 0.0]
+        assert not bool(result.isnull().values.any())
+
+    @pytest.mark.legacy
+    def test_legacy_variable_fillna_numeric_is_noop(self, xs: Variable) -> None:
+        """Same no-op on the Variable path: the fill value is ignored."""
+        from linopy import LinearExpression
+
+        result = xs.fillna(42)
+        assert isinstance(result, LinearExpression)
+        assert result.const.values[0] == 0.0
+
+    @pytest.mark.legacy
+    def test_legacy_outer_fillna_then_add_double_counts(
+        self, m: Model, time: pd.RangeIndex
+    ) -> None:
+        """
+        Legacy never made slot 0 absent, so ``(x + y.shift()).fillna(0)``
+        already carries x[0] (and the y sentinel); the outer ``+ x`` then
+        adds a *second* x[0] — three live terms at slot 0, double-counting
+        x (vs v1's single live x[0]).
+        """
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        expr = (x + y.shift(time=1)).fillna(0) + x
+
+        coeffs0 = expr.coeffs.values[0]
+        vars0 = expr.vars.values[0]
+        live = ~np.isnan(coeffs0)
+        assert int(live.sum()) == 3
+        # x[0] appears twice — the double-count legacy can't avoid.
+        assert vars0[live].tolist().count(int(x.labels.values[0])) == 2
+        assert float(expr.const.values[0]) == 0.0
+
 
 # =====================================================================
 # §4 — Variable.reindex / .reindex_like create absence
@@ -1238,6 +1363,20 @@ class TestVariableReindex:
         expr = wider * 3
         assert bool(expr.isnull().values[5:].all())
         assert not bool(expr.isnull().values[:5].any())
+
+    @pytest.mark.legacy
+    def test_legacy_reindexed_variable_fills_absent_in_arithmetic(
+        self, x: Variable, time: pd.RangeIndex
+    ) -> None:
+        """
+        Legacy collapses the reindex-introduced absence to 0, so the
+        extended slots are present zeros after ``* 3`` (vs v1, which
+        keeps them absent and visible via isnull()).
+        """
+        wider = x.reindex(time=pd.RangeIndex(7, name="time"))
+        expr = wider * 3
+        assert not bool(expr.isnull().values.any())
+        assert expr.const.values.tolist() == [0.0] * 7
 
     def test_where_creates_absence(self, x: Variable) -> None:
         """§4 — ``.where(cond)`` marks slots absent in place."""
@@ -1331,6 +1470,21 @@ class TestNamedMethodJoin:
         """`.le(rhs, join="inner")` lets a subset RHS through cleanly."""
         result = x.le(subset, join="inner")
         assert list(result.coords["time"].values) == [1, 3]
+
+    @pytest.mark.legacy
+    def test_legacy_le_join_inner_keeps_all_coords(
+        self, x: Variable, subset: xr.DataArray
+    ) -> None:
+        """
+        On the constraint path legacy ignores ``join="inner"`` and keeps
+        all left coords, leaving the unmatched RHS slots NaN (vs v1's
+        clean intersection to [1, 3]).
+        """
+        result = x.le(subset, join="inner")
+        assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
+        rhs = result.rhs.values
+        assert np.isnan(rhs[[0, 2, 4]]).all()
+        assert rhs[[1, 3]].tolist() == [10.0, 30.0]
 
     @pytest.mark.v1
     def test_bare_op_still_raises_on_mismatch(
@@ -1466,6 +1620,20 @@ class TestConstraintRHS:
         rhs = constraint.rhs.values
         assert np.isnan(rhs[0])
         assert (rhs[1:] == 10).all()
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
+    def test_legacy_absence_keeps_rhs_at_absent_slot(
+        self, x: Variable, sign: str
+    ) -> None:
+        """
+        Legacy fills the absent LHS slot with 0, so the RHS stays 10
+        everywhere and the constraint is emitted at that slot too (vs
+        v1, where the NaN RHS drops it).
+        """
+        xs = x.shift(time=1)
+        constraint = _SIGNS[sign](xs, 10)
+        assert (constraint.rhs.values == 10).all()
 
     @pytest.mark.v1
     def test_pypsa_1683_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex) -> None:
@@ -1623,18 +1791,6 @@ class TestReductionsSkipAbsent:
     def test_sum_no_dim_fills_absent(self, xs: Variable) -> None:
         result = (xs + 5).sum()
         assert float(result.const) == 25.0
-
-    @pytest.mark.legacy
-    def test_sum_of_all_absent_is_zero_legacy(self, x: Variable) -> None:
-        """
-        Legacy reaches the same 0 by a different route: every absent slot
-        is filled with the zero expression (not NaN), and their sum is 0.
-        """
-        all_absent = x.shift(time=10).to_linexpr()
-        assert not bool(all_absent.isnull().any().item())
-        assert (all_absent.const == 0.0).all().item()
-        result = all_absent.sum("time")
-        assert float(result.const) == 0.0
 
     @pytest.mark.legacy
     def test_groupby_sum_fills_absent(self, xs: Variable) -> None:
