@@ -299,31 +299,50 @@ def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | N
     return None
 
 
-def merge_shared_user_coord_mismatch(
+def conform_merge_dims(
     datasets: Sequence[Dataset], concat_dim: str
-) -> tuple[str, Any, Any] | None:
+) -> tuple[list[Dataset], tuple[str, Any, Any] | None]:
     """
-    Find a shared user dim where the operands' labels disagree.
+    Align shared user dims for a merge, in a single pass over the operands.
 
-    Returns ``(dim_name, left_labels, right_labels)`` for the first
-    mismatch found, or ``None`` if all operands agree. Helper dims
-    (``_term``, ``_factor``) and the concat dim itself are excluded —
-    those legitimately vary across the operands being merged. Compares
-    bare dimension indexes (``d.indexes[k]``) so non-dim (auxiliary)
-    coords are ignored — those are §11's job.
+    §8 aligns by label, not position: a shared user dim whose labels match the
+    first operand's as a *set* but in a different order is reindexed to that
+    order (returned in the conformed list). A dim whose label set differs is a
+    real mismatch, returned as ``(dim, first_labels, other_labels)`` for the
+    caller to raise (v1) / warn (legacy). Helper dims (``_term``, ``_factor``)
+    and the concat dim are excluded; bare dimension indexes are compared so
+    auxiliary coords are §11's job, and MultiIndex dims are left to §11.
     """
+    datasets = list(datasets)
+    if len(datasets) < 2:
+        return datasets, None
     skip = set(HELPER_DIMS) | {concat_dim}
-    per_ds = [
+    indexed = [
         {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
         for d in datasets
     ]
-    shared = set.intersection(*(set(p.keys()) for p in per_ds)) if per_ds else set()
-    for d_name in shared:
-        ref = per_ds[0][d_name]
-        for p in per_ds[1:]:
-            if not ref.equals(p[d_name]):
-                return str(d_name), ref.values, p[d_name].values
-    return None
+    shared = set.intersection(*(set(p) for p in indexed))
+    if not shared:
+        return datasets, None
+
+    out = [datasets[0]]
+    mismatch: tuple[str, Any, Any] | None = None
+    for i in range(1, len(datasets)):
+        reindexer = {}
+        for d in shared:
+            ref, idx = indexed[0][d], indexed[i][d]
+            if ref.equals(idx):
+                continue
+            if (
+                not isinstance(idx, pd.MultiIndex)
+                and len(idx) == len(ref)
+                and set(idx) == set(ref)
+            ):
+                reindexer[d] = ref
+            elif mismatch is None:
+                mismatch = (str(d), ref.values, idx.values)
+        out.append(datasets[i].reindex(reindexer) if reindexer else datasets[i])
+    return out, mismatch
 
 
 def conflicting_aux_coord(

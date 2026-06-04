@@ -94,10 +94,10 @@ from linopy.semantics import (
     _shared_dim_mismatch_message,
     absorb_absence,
     check_user_nan,
+    conform_merge_dims,
     enforce_aux_conflict,
     first_mismatched_dim,
     is_v1,
-    merge_shared_user_coord_mismatch,
     warn_legacy,
 )
 from linopy.types import (
@@ -2567,42 +2567,6 @@ def as_expression(
 Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
 
 
-def _conform_reordered_merge_dims(
-    data: list[Dataset], concat_dim: str
-) -> list[Dataset]:
-    """
-    Reindex shared user dims that carry the same labels in a different order.
-
-    §8 aligns by label, not position: the same labels reordered are the same
-    coordinate, so each operand's shared user dims are conformed to the first
-    operand's order before the §8 / §11 checks and the concat. A pure reorder
-    introduces no new positions (the label set is unchanged) so no absence is
-    created; a genuinely different label *set* is left for the §8 mismatch
-    check to flag. Helper dims (``_term`` / ``_factor``) and the concat dim
-    are excluded — those legitimately vary across the merged operands. Mirrors
-    the constant path's ``_reindex_reordered_dims`` (#550).
-    """
-    if len(data) < 2:
-        return data
-    skip = set(HELPER_DIMS) | {concat_dim}
-    ref = {d: data[0].indexes[d] for d in data[0].indexes if d not in skip}
-    if not ref:
-        return data
-    out = [data[0]]
-    for ds in data[1:]:
-        reindexer = {
-            d: idx
-            for d, idx in ref.items()
-            if d in ds.indexes
-            and not isinstance(ds.indexes[d], pd.MultiIndex)
-            and not ds.indexes[d].equals(idx)
-            and len(ds.indexes[d]) == len(idx)
-            and set(ds.indexes[d]) == set(idx)
-        }
-        out.append(ds.reindex(reindexer) if reindexer else ds)
-    return out
-
-
 @overload
 def merge(
     exprs: Sequence[Mergeable] | Mergeable,
@@ -2695,30 +2659,24 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
-    # §8 aligns by label, not position — a pure reorder is not a mismatch.
+    # §8: align shared user dims by label in one pass — a reorder reindexes,
+    # a differing label set is the mismatch raised/warned below. Runs before
+    # the §11 aux check so reordered aux coords compare in a consistent order.
+    mismatch = None
     if join is None:
-        data = _conform_reordered_merge_dims(data, dim)
+        data, mismatch = conform_merge_dims(data, concat_dim=dim)
 
-    # §11: aux-coord conflict is independent of dim alignment — fires on
-    # every join path. xr.concat(..., compat="override") silently drops
-    # the conflicting aux coord, which is the #295 bug v1 closes; we must
-    # raise (v1) / warn (legacy) before xr.concat sees the data, regardless
-    # of how the caller resolves the §8 dim mismatch.
+    # §11: aux-coord conflict fires on every join path — xr.concat(...,
+    # compat="override") silently drops it (the #295 bug v1 closes).
     enforce_aux_conflict(data)
 
-    # §8: shared *user* dimension coordinates must match exactly across all
-    # operands. Helper dims (_term, _factor) legitimately differ, so we
-    # validate user dims separately and keep xr.concat on join="outer"
-    # (which doesn't enforce "exact" — that's what this check is for).
-    if join is None:
-        mismatch = merge_shared_user_coord_mismatch(data, concat_dim=dim)
-        if is_v1() and mismatch is not None:
-            raise ValueError(_shared_dim_mismatch_message(*mismatch))
-        # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
-        if mismatch is not None:
-            warn_legacy(
-                _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch),
-            )
+    if is_v1() and mismatch is not None:
+        raise ValueError(_shared_dim_mismatch_message(*mismatch))
+    # LEGACY: remove at 1.0 — warn-on-divergence is the migration signal.
+    if mismatch is not None:
+        warn_legacy(
+            _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)
+        )
 
     if join is not None:
         override = join == "override"
