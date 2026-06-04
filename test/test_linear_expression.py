@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -1540,6 +1541,73 @@ class TestGroupbyByAttachedCoordinate:
         # is unhashable and raises in xarray itself, so linopy mirrors that.
         with pytest.raises(TypeError, match="unhashable"):
             expr.groupby([period, season]).sum()
+
+    @staticmethod
+    def _sparse_expr(period_vals: list, season_vals: list) -> LinearExpression:
+        n = len(period_vals)
+        s = pd.RangeIndex(n, name="s")
+        m = Model()
+        x = m.add_variables(coords=[s], name="x")
+        return (1.0 * x).assign_coords(
+            period=xr.DataArray(period_vals, dims="s", coords={"s": s}, name="period"),
+            season=xr.DataArray(season_vals, dims="s", coords={"s": s}, name="season"),
+        )
+
+    @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
+    def test_multikey_fast_path_matches_fallback(self, spelling: type) -> None:
+        # GH #753: the fast path must equal the slow fallback, sparse cells too.
+        expr = self._sparse_expr([2020, 2020, 2030, 2030, 2030], list("wswws"))
+        group = spelling(["period", "season"])
+
+        fast = expr.groupby(group).sum()
+        slow = expr.groupby(group).sum(use_fallback=True)
+
+        assert_linequal(fast, slow)
+
+    def test_multikey_fast_path_is_flat_not_stacked(self) -> None:
+        # built via a stacked index internally, but returns flat separate dims
+        expr = self._sparse_expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        assert {"period", "season"} <= set(grouped.dims)
+        assert "group" not in grouped.dims
+        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+
+    def test_multikey_sparse_combination_is_filled(self) -> None:
+        # (2020, "s") never occurs -> empty term in the flat grid
+        expr = self._sparse_expr([2020, 2020, 2030, 2030], list("wwws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        cell = grouped.sel(period=2020, season="s")
+        assert (cell.vars == -1).all()
+        assert cell.coeffs.isnull().all()
+
+    def test_multikey_dataframe_grouper_stays_compact(self) -> None:
+        # the DataFrame grouper keeps the stacked observed-only group dim
+        expr = self._sparse_expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+
+        grouped = expr.groupby(df).sum()
+
+        assert "group" in grouped.dims
+        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    def test_multikey_blowup_warns_when_sparse(self) -> None:
+        # 200 observed combos, 200x200 grid -> nudge toward the DataFrame grouper
+        expr = self._sparse_expr(list(range(200)), list(range(200)))
+
+        with pytest.warns(UserWarning, match="dense .* grid"):
+            expr.groupby(["period", "season"]).sum()
+
+    def test_multikey_no_warning_when_dense(self) -> None:
+        expr = self._sparse_expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            expr.groupby(["period", "season"]).sum()
 
     @pytest.mark.parametrize("use_fallback", [True, False])
     @pytest.mark.parametrize(
