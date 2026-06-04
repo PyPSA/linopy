@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -1384,9 +1385,83 @@ def test_linear_expression_groupby_on_same_name_as_target_dim(
     assert grouped.nterm == 10
 
 
+class TestMultiKeyFastPath:
+    """
+    Group a LinearExpression by a list of coordinate names: takes the fast
+    reindex path and returns one dimension per key, like the xarray fallback.
+    """
+
+    @staticmethod
+    def _expr(period_vals: list, season_vals: list) -> LinearExpression:
+        n = len(period_vals)
+        s = pd.RangeIndex(n, name="s")
+        m = Model()
+        x = m.add_variables(coords=[s], name="x")
+        return (1.0 * x).assign_coords(
+            period=xr.DataArray(period_vals, dims="s", coords={"s": s}, name="period"),
+            season=xr.DataArray(season_vals, dims="s", coords={"s": s}, name="season"),
+        )
+
+    @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
+    def test_matches_fallback(self, spelling: type) -> None:
+        # the fast path must equal the slow fallback, sparse cells included
+        expr = self._expr([2020, 2020, 2030, 2030, 2030], list("wswws"))
+        group = spelling(["period", "season"])
+
+        fast = expr.groupby(group).sum()
+        slow = expr.groupby(group).sum(use_fallback=True)
+
+        assert_linequal(fast, slow)
+
+    def test_separate_dims_not_stacked(self) -> None:
+        # built via a stacked index internally, but returns one dim per key
+        expr = self._expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        assert {"period", "season"} <= set(grouped.dims)
+        assert "group" not in grouped.dims
+        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+
+    def test_sparse_combination_filled(self) -> None:
+        # (2020, "s") never occurs -> empty term in the grid
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        cell = grouped.sel(period=2020, season="s")
+        assert (cell.vars == -1).all()
+        assert cell.coeffs.isnull().all()
+
+    def test_dataframe_grouper_stays_compact(self) -> None:
+        # the DataFrame grouper keeps the stacked observed-only group dim
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+
+        grouped = expr.groupby(df).sum()
+
+        assert "group" in grouped.dims
+        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    def test_blowup_warns_when_sparse(self) -> None:
+        # 200 observed combos, 200x200 grid -> nudge toward the DataFrame grouper
+        expr = self._expr(list(range(200)), list(range(200)))
+
+        with pytest.warns(UserWarning, match="dense .* grid"):
+            expr.groupby(["period", "season"]).sum()
+
+    def test_no_warning_when_dense(self) -> None:
+        expr = self._expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            expr.groupby(["period", "season"]).sum()
+
+
 class TestGroupbyByAttachedCoordinate:
     """
-    GH #750: group by an attached non-dimension coordinate.
+    Group by an attached non-dimension coordinate.
 
     Asserts grouping against hard-coded ``vars``/``coeffs`` to catch regressions.
     """

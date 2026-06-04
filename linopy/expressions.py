@@ -252,6 +252,20 @@ class LinearExpressionGroupby:
         """
         group = _resolve_group(self.group, self.data)
 
+        # a list of coord names rides the fast path, then unstacks to one dim per key
+        unstack_multikey = False
+        if (
+            not use_fallback
+            and isinstance(group, (list, tuple))
+            and len(group) > 1
+            and all(isinstance(g, str) and g in self.data.coords for g in group)
+        ):
+            coord_dims = {self.data[g].dims for g in group}
+            if len(coord_dims) == 1 and len(next(iter(coord_dims))) == 1:
+                names = list(group)
+                group = self.data[names].to_dataframe()[names]
+                unstack_multikey = True
+
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(group, non_fallback_types) and not use_fallback:
             if isinstance(group, pd.DataFrame):
@@ -297,6 +311,25 @@ class LinearExpressionGroupby:
                 ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
+            if unstack_multikey:
+                # warn before allocating the grid when most cells would be fill
+                mi = ds.indexes[final_group_name].remove_unused_levels()
+                observed = len(mi)
+                grid = int(np.prod([len(level) for level in mi.levels]))
+                if grid > 2 * observed and grid - observed > 10_000:
+                    warn(
+                        f"Grouping a LinearExpression by {names} produces a dense "
+                        f"{grid:,}-cell grid, but only {observed:,} of those "
+                        f"combinations occur -- the {grid - observed:,} absent ones "
+                        f"are materialised as fill values. Group by a `pd.DataFrame` "
+                        f"of these keys instead to keep the result compact over only "
+                        f"the observed combinations.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                ds = ds.unstack(
+                    final_group_name, fill_value=LinearExpression._fill_value
+                )
             return LinearExpression(ds, self.model)
 
         def func(ds: Dataset) -> Dataset:
