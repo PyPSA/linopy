@@ -1563,6 +1563,11 @@ class TestReductionsSkipAbsent:
     rule. The expected behaviour falls out of xarray's ``skipna=True``
     default; these tests pin it under v1 so future changes don't drift.
 
+    Each v1 test is paired with its ``legacy`` counterpart so the
+    divergence is pinned on both sides: legacy fills the absent slot
+    with 0, so ``xs + 5`` stores ``5`` there too and that extra term is
+    counted by the sum (→ 25), whereas v1 skips it (→ 20).
+
     Scope: §13 also names ``mean``, ``resample``, and ``coarsen``, but
     those are not yet exposed on ``LinearExpression`` (see #703). The
     spec text is the rule they will follow when implemented; tests
@@ -1604,6 +1609,42 @@ class TestReductionsSkipAbsent:
         result = (xs + 5).groupby(groups).sum()
         # group 0: [NaN, 5] → 5; group 1: [5, 5, 5] → 15
         assert result.const.values.tolist() == [5.0, 15.0]
+
+    @pytest.mark.legacy
+    def test_sum_over_dim_fills_absent(self, xs: Variable) -> None:
+        """
+        Legacy fills the absent slot at t=0 with 0, so ``xs + 5`` stores
+        ``5`` there and all five 5s are summed → 25 (vs v1's 20).
+        """
+        result = (xs + 5).sum("time")
+        assert float(result.const) == 25.0
+
+    @pytest.mark.legacy
+    def test_sum_no_dim_fills_absent(self, xs: Variable) -> None:
+        result = (xs + 5).sum()
+        assert float(result.const) == 25.0
+
+    @pytest.mark.legacy
+    def test_sum_of_all_absent_is_zero_legacy(self, x: Variable) -> None:
+        """
+        Legacy reaches the same 0 by a different route: every absent slot
+        is filled with the zero expression (not NaN), and their sum is 0.
+        """
+        all_absent = x.shift(time=10).to_linexpr()
+        assert not bool(all_absent.isnull().any().item())
+        assert (all_absent.const == 0.0).all().item()
+        result = all_absent.sum("time")
+        assert float(result.const) == 0.0
+
+    @pytest.mark.legacy
+    def test_groupby_sum_fills_absent(self, xs: Variable) -> None:
+        """Legacy fills the absent member with 0, so group 0 sums [5, 5] → 10."""
+        groups = xr.DataArray(
+            [0, 0, 1, 1, 1], dims=["time"], coords={"time": xs.coords["time"]}
+        )
+        result = (xs + 5).groupby(groups).sum()
+        # group 0: [5, 5] → 10 (vs v1's 5); group 1: [5, 5, 5] → 15
+        assert result.const.values.tolist() == [10.0, 15.0]
 
 
 # =====================================================================
