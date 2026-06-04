@@ -804,6 +804,21 @@ class TestExactAlignmentMerge:
         result = a + b
         assert set(result.coord_dims) == {"time", "scenario"}
 
+    def test_var_plus_var_reordered_labels_align(self, m: Model) -> None:
+        a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
+        b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
+        result = (1 * a) + (1 * b)
+        assert list(result.coeffs.coords["e"].values) == ["costs", "penalty"]
+
+    def test_reordered_constants_pair_by_label_not_position(self, m: Model) -> None:
+        ea = pd.Index(["costs", "penalty"], name="e")
+        eb = pd.Index(["penalty", "costs"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
+        b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
+        result = a + b
+        assert float(result.const.sel(e="costs")) == 102.0
+        assert float(result.const.sel(e="penalty")) == 201.0
+
     @pytest.mark.legacy
     def test_var_plus_var_different_labels_silent(
         self, x: Variable, x_other: Variable
@@ -1531,6 +1546,17 @@ class TestAuxCoordConflict:
         w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
             B=("A", [400, 400, 500])
         )
+        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+            v + w
+
+    @pytest.mark.v1
+    def test_aux_conflict_survives_reordered_dim(self, m: Model) -> None:
+        v = m.add_variables(
+            lower=0, coords=[pd.Index(["x", "y", "z"], name="A")], name="v"
+        ).assign_coords(B=("A", [1, 2, 3]))
+        w = m.add_variables(
+            lower=0, coords=[pd.Index(["z", "y", "x"], name="A")], name="w"
+        ).assign_coords(B=("A", [1, 2, 3]))
         with pytest.raises(ValueError, match="Auxiliary coordinate"):
             v + w
 
