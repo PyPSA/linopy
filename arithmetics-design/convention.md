@@ -125,9 +125,7 @@ dimensions, wrap the array in a DataArray.
 A scalar broadcasts over every dimension and so needs no pairing. A 0-d
 array is treated as a scalar; a Python `list` is read as a numpy array
 (it carries values, not labels). Implemented in `linopy.alignment`
-([#736]); under legacy, unlabeled operands still pair with the *leading*
-dimensions positionally and warn when the size-pairing would differ or
-reject.
+([#736]).
 
 ### §8. Shared dimensions must match exactly
 
