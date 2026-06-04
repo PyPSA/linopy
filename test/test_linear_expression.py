@@ -1436,14 +1436,13 @@ class TestGroupbyByAttachedCoordinate:
             [2.0, 2.0],
         ]
 
-    @pytest.mark.parametrize("use_fallback", [True, False])
     @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
-    def test_multi_key(
-        self, expr: LinearExpression, spelling: type, use_fallback: bool
-    ) -> None:
+    def test_multi_key(self, expr: LinearExpression, spelling: type) -> None:
+        # A multi-key group always goes through the xarray fallback (a list is
+        # not a fast-path type), so there is no separate use_fallback case.
         group = spelling(["period", "season"])
 
-        grouped = expr.groupby(group).sum(use_fallback=use_fallback)
+        grouped = expr.groupby(group).sum()
 
         assert dict(grouped.sizes) == {"period": 2, "season": 2, TERM_DIM: 1}
         assert grouped.data.period.values.tolist() == [2020, 2030]
@@ -1501,6 +1500,24 @@ class TestGroupbyByAttachedCoordinate:
             [[4, 6], [5, 7]],
         ]
         assert (grouped.coeffs == 1.0).all()
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_dimension_coordinate_by_name(self, use_fallback: bool) -> None:
+        # A dimension coordinate may also be grouped by name; it collapses that
+        # dimension and keeps the other one.
+        m = Model()
+        snapshot = pd.RangeIndex(4, name="snapshot")
+        gen = pd.Index(["g1", "g2"], name="gen")
+        y = m.add_variables(coords=[snapshot, gen], name="y")  # labels 0..7
+
+        grouped = (1 * y).groupby("gen").sum(use_fallback=use_fallback)
+
+        assert grouped.data.gen.values.tolist() == ["g1", "g2"]
+        assert grouped.sizes["snapshot"] == 4
+        assert grouped.vars.transpose("gen", "snapshot", TERM_DIM).values.tolist() == [
+            [[0], [2], [4], [6]],
+            [[1], [3], [5], [7]],
+        ]
 
     @pytest.mark.parametrize("use_fallback", [True, False])
     def test_single_element_list_groups_like_scalar(

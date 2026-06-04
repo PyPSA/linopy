@@ -136,6 +136,22 @@ def _expr_unwrap(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_group(group: Any, data: Dataset) -> Any:
+    """
+    Normalize a groupby key.
+
+    Unwrap a single-element key list to the scalar key, and resolve a string
+    naming a coordinate to that coordinate -- so ``groupby("name")`` behaves
+    like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
+    DataFrame, DataArray, multi-key lists) are returned unchanged.
+    """
+    if isinstance(group, (list, tuple)) and len(group) == 1:
+        group = group[0]
+    if isinstance(group, str) and group in data.coords:
+        group = data[group]
+    return group
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -158,10 +174,8 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        group = self.group
-        if isinstance(group, (list, tuple)) and len(group) == 1:
-            # a single-element key groups like the scalar key (xarray parity)
-            group = group[0]
+        data = self.data
+        group = _resolve_group(self.group, data)
 
         if isinstance(group, pd.DataFrame):
             raise ValueError(
@@ -171,13 +185,11 @@ class LinearExpressionGroupby:
             group = DataArray(group, name=group.name or "group")
 
         # Detach a non-dimension coordinate used as the group so xarray does
-        # not try to re-expand it while recombining the groups (GH #750); the
-        # group values are still supplied through ``group`` itself. Only free
-        # (non-indexed) coords are detached -- never a MultiIndex level, whose
-        # removal would leave its dimension without an index.
-        data = self.data
-        if isinstance(group, str) and group in data.coords and group not in data.dims:
-            group = data[group]
+        # not try to re-expand it while recombining the groups; the group
+        # values are still supplied through ``group`` itself. Only free
+        # (non-indexed) coords are detached -- never a MultiIndex level (whose
+        # removal would leave its dimension without an index) and never the
+        # dimension's own coordinate.
         if (
             isinstance(group, DataArray)
             and group.name in set(data.coords) - set(data.dims)
@@ -185,7 +197,7 @@ class LinearExpressionGroupby:
         ):
             data = data.drop_vars([group.name])
 
-        return data.groupby(group=group, **self.kwargs)  # type: ignore[arg-type]
+        return data.groupby(group=group, **self.kwargs)
 
     def map(
         self,
@@ -243,15 +255,9 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
-        group = self.group
-        if isinstance(group, (list, tuple)) and len(group) == 1:
-            # a single-element key groups like the scalar key (xarray parity)
-            group = group[0]
-        # A string selects an existing coordinate, mirroring xarray's
-        # ``Dataset.groupby("name")``. Resolve it to that coordinate so it
-        # takes the fast path below instead of the slower xarray fallback.
-        if isinstance(group, str) and group in self.data.coords:
-            group = self.data[group]
+        # Resolving a coordinate name to its coordinate lets ``groupby("name")``
+        # take the fast path below instead of the slower xarray fallback.
+        group = _resolve_group(self.group, self.data)
 
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(group, non_fallback_types) and not use_fallback:
@@ -285,7 +291,7 @@ class LinearExpressionGroupby:
             # auxiliary (non-dimension) coords such as the one being grouped by.
             # Drop them all before reshaping, otherwise they clash with the
             # regrouped dimension or with the final rename onto
-            # ``final_group_name`` (GH #750).
+            # ``final_group_name``.
             names_to_drop = [
                 name
                 for name, coord in self.data.coords.items()
