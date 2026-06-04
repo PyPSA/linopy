@@ -184,12 +184,7 @@ class LinearExpressionGroupby:
         if isinstance(group, pd.Series):
             group = DataArray(group, name=group.name or "group")
 
-        # Detach a non-dimension coordinate used as the group so xarray does
-        # not try to re-expand it while recombining the groups; the group
-        # values are still supplied through ``group`` itself. Only free
-        # (non-indexed) coords are detached -- never a MultiIndex level (whose
-        # removal would leave its dimension without an index) and never the
-        # dimension's own coordinate.
+        # detach an attached free coordinate (never an indexed/level coord)
         if (
             isinstance(group, DataArray)
             and group.name in set(data.coords) - set(data.dims)
@@ -255,8 +250,6 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
-        # Resolving a coordinate name to its coordinate lets ``groupby("name")``
-        # take the fast path below instead of the slower xarray fallback.
         group = _resolve_group(self.group, self.data)
 
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
@@ -286,12 +279,7 @@ class LinearExpressionGroupby:
             arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
             new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            # Collapsing ``group_dim`` into groups invalidates every coordinate
-            # aligned to it: the dimension index, any MultiIndex levels, and
-            # auxiliary (non-dimension) coords such as the one being grouped by.
-            # Drop them all before reshaping, otherwise they clash with the
-            # regrouped dimension or with the final rename onto
-            # ``final_group_name``.
+            # collapsing group_dim invalidates every coordinate aligned to it
             names_to_drop = [
                 name
                 for name, coord in self.data.coords.items()
