@@ -21,9 +21,11 @@ from typing import Annotated, Literal
 import typer
 
 from benchmarks import (
+    PATTERNS,
     REGISTRY,
     filter_by,
     get,
+    get_pattern,
 )
 from benchmarks.memory import compare as memory_compare
 from benchmarks.memory import save as memory_save
@@ -48,6 +50,7 @@ app.add_typer(memory_app, name="memory")
 
 
 PhaseName = Literal["build", "matrices", "lp_write", "netcdf", "solver_handoff"]
+SpecKind = Literal["all", "models", "patterns"]
 
 
 _PHASE_TEST_FILE: dict[PhaseName, str] = {
@@ -73,39 +76,61 @@ def list_(
         bool,
         typer.Option("--details", "-d", help="Show features and size range."),
     ] = False,
+    kind: Annotated[
+        SpecKind,
+        typer.Option(help="Which specs to list: all (default), models, patterns."),
+    ] = "all",
 ) -> None:
     """
-    List the registered model specs.
+    List the registered specs — models and patterns.
 
-    By default emits one name per line — suitable for piping into other
-    tools. Pass ``--details`` for a small table that also shows the
-    features tags and the size range.
+    By default emits one name per line (both kinds) — suitable for piping into
+    other tools. ``--kind models`` / ``--kind patterns`` narrows to one;
+    ``--details`` shows a per-kind table (features + sizes for models, the
+    severity dial's description for patterns).
     """
+    show_models = kind in ("all", "models")
+    show_patterns = kind in ("all", "patterns")
+
     if not details:
-        for name in sorted(REGISTRY):
-            typer.echo(name)
+        if show_models:
+            for name in sorted(REGISTRY):
+                typer.echo(name)
+        if show_patterns:
+            for name in sorted(PATTERNS):
+                typer.echo(name)
         return
 
-    rows = [
-        (
-            spec.name,
-            ",".join(sorted(spec.features)),
-            f"{spec.sizes[0]}..{spec.sizes[-1]}",
-        )
-        for spec in REGISTRY.values()
-    ]
-    name_w = max(len(r[0]) for r in rows)
-    feat_w = max(len(r[1]) for r in rows)
     # ``secho`` strips colour automatically when stdout isn't a TTY, so
     # piping ``list --details | grep`` still gets plain text.
-    typer.secho(
-        f"{'name':<{name_w}}  {'features':<{feat_w}}  sizes",
-        dim=True,
-    )
-    typer.secho("-" * (name_w + feat_w + 20), dim=True)
-    for name, feats, sizes in rows:
-        typer.secho(f"{name:<{name_w}}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  {feats:<{feat_w}}  {sizes}")
+    if show_models:
+        rows = [
+            (
+                spec.name,
+                ",".join(sorted(spec.features)),
+                f"{spec.sizes[0]}..{spec.sizes[-1]}",
+            )
+            for spec in REGISTRY.values()
+        ]
+        name_w = max(len(r[0]) for r in rows)
+        feat_w = max(len(r[1]) for r in rows)
+        typer.secho("models (sweep size, axis n)", bold=True)
+        typer.secho(f"{'name':<{name_w}}  {'features':<{feat_w}}  sizes", dim=True)
+        typer.secho("-" * (name_w + feat_w + 20), dim=True)
+        for name, feats, sizes in rows:
+            typer.secho(f"{name:<{name_w}}", fg=typer.colors.CYAN, nl=False)
+            typer.echo(f"  {feats:<{feat_w}}  {sizes}")
+
+    if show_patterns:
+        if show_models:
+            typer.echo()
+        pat_w = max(len(p) for p in PATTERNS)
+        typer.secho("patterns (sweep severity 0-100, axis severity)", bold=True)
+        typer.secho(f"{'name':<{pat_w}}  description", dim=True)
+        typer.secho("-" * (pat_w + 40), dim=True)
+        for name in sorted(PATTERNS):
+            typer.secho(f"{name:<{pat_w}}", fg=typer.colors.CYAN, nl=False)
+            typer.echo(f"  {PATTERNS[name].description}")
 
 
 @app.command()
@@ -113,19 +138,12 @@ def show(
     name: Annotated[str, typer.Argument(help="Spec name (see ``list``).")],
 ) -> None:
     """
-    Print full attributes of one model spec.
+    Print full attributes of one model or pattern spec.
 
-    Output includes sizes, feature tags, applicable phases, the quick /
-    long size thresholds, and any optional ``requires=`` dependencies the
-    spec advertises.
+    For a model: sizes, feature tags, applicable phases, the quick / long size
+    thresholds, and any ``requires=`` deps. For a pattern: severities, its
+    ``description`` (what the dial means), phases, thresholds, and requires.
     """
-    try:
-        spec = get(name)
-    except KeyError as exc:
-        typer.secho(f"unknown model: {name!r}", fg=typer.colors.RED, err=True)
-        typer.echo(f"available: {', '.join(sorted(REGISTRY))}", err=True)
-        raise typer.Exit(code=2) from exc
-    typer.echo(repr(spec))
 
     def _row(label: str, value: object) -> None:
         # Dim the label so the eye lands on the value first; ``secho``
@@ -133,13 +151,34 @@ def show(
         typer.secho(f"  {label:<17}", dim=True, nl=False)
         typer.echo(value)
 
-    _row("sizes:", spec.sizes)
-    _row("features:", sorted(spec.features))
-    _row("phases:", sorted(spec.phases))
-    _row("quick_threshold:", spec.quick_threshold)
-    _row("long_threshold:", spec.long_threshold)
-    if spec.requires:
-        _row("requires:", list(spec.requires))
+    if name in REGISTRY:
+        spec = get(name)
+        typer.echo(repr(spec))
+        _row("sizes:", spec.sizes)
+        _row("features:", sorted(spec.features))
+        _row("phases:", sorted(spec.phases))
+        _row("quick_threshold:", spec.quick_threshold)
+        _row("long_threshold:", spec.long_threshold)
+        if spec.requires:
+            _row("requires:", list(spec.requires))
+        return
+
+    if name in PATTERNS:
+        pattern = get_pattern(name)
+        typer.echo(repr(pattern))
+        _row("severities:", pattern.severities)
+        _row("description:", pattern.description)
+        _row("phases:", sorted(pattern.phases))
+        _row("quick_threshold:", pattern.quick_threshold)
+        _row("long_threshold:", pattern.long_threshold)
+        if pattern.requires:
+            _row("requires:", list(pattern.requires))
+        return
+
+    typer.secho(f"unknown spec: {name!r}", fg=typer.colors.RED, err=True)
+    available = sorted(REGISTRY) + sorted(PATTERNS)
+    typer.echo(f"available: {', '.join(available)}", err=True)
+    raise typer.Exit(code=2)
 
 
 @app.command("filter")
@@ -780,13 +819,13 @@ def memory_save_cmd(
     pytest-style test IDs so ``compare`` diffs cleanly across runs that
     selected different subsets.
     """
-    from benchmarks.memory import MEMORY_PHASES
+    from benchmarks.memory import ALL_MEMORY_PHASES
 
     if phase:
-        unknown = [p for p in phase if p not in MEMORY_PHASES]
+        unknown = [p for p in phase if p not in ALL_MEMORY_PHASES]
         if unknown:
             typer.secho(
-                f"unknown phase(s): {unknown}; valid options: {list(MEMORY_PHASES)}",
+                f"unknown phase(s): {unknown}; valid options: {list(ALL_MEMORY_PHASES)}",
                 fg=typer.colors.RED,
                 err=True,
             )

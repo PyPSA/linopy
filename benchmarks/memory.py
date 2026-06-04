@@ -20,6 +20,18 @@ Results land in ``.benchmarks/memory/`` as JSON keyed by full pytest-style
 test IDs (``benchmarks/test_<phase>.py::test_<phase>[<spec>-<axis>=<value>]``,
 where ``<axis>`` is ``n`` for a model or ``severity`` for a pattern) so
 cross-snapshot diffs work uniformly regardless of which phases were run.
+
+The per-phase peaks above are *marginal* — each tracker only sees allocations
+made inside its phase, so the resident model and the build transient are
+excluded (clean for cross-phase / cross-version comparison). The end-to-end
+peak a real build-then-export session hits cannot be recovered by summing or
+maxing those marginals (they share an unmeasured resident baseline and don't
+capture cross-phase accumulation), so it is *measured* directly: the
+``pipeline`` phase runs build → matrices → lp_write in a single tracker and
+reports that one high-water mark — the OOM ceiling. It re-runs those three, so
+it is opt-in (``--phase pipeline``), not in the default set — run it standalone
+to avoid duplicating the per-phase work. Memory-only (no timing twin), keyed by
+a bare ``pipeline[<spec>-<axis>=<value>]`` id.
 """
 
 from __future__ import annotations
@@ -59,6 +71,8 @@ def _require_memray() -> None:
 
 
 RESULTS_DIR = Path(".benchmarks/memory")
+
+# Default phases for ``save`` — each measures one phase's marginal allocation.
 MEMORY_PHASES: tuple[str, ...] = (
     "build",
     "matrices",
@@ -66,6 +80,11 @@ MEMORY_PHASES: tuple[str, ...] = (
     "netcdf",
     "solver_handoff",
 )
+
+# ``pipeline`` re-runs build→matrices→lp_write in one tracker for the end-to-end
+# peak, so it duplicates their work and is *not* in the default set; request it
+# standalone with ``--phase pipeline``. This is the full set ``--phase`` accepts.
+ALL_MEMORY_PHASES: tuple[str, ...] = (*MEMORY_PHASES, "pipeline")
 
 
 def _phase_tag(phase: str) -> str:
@@ -84,6 +103,7 @@ def _phase_tag(phase: str) -> str:
         "lp_write": LP_WRITE,
         "netcdf": NETCDF,
         "solver_handoff": TO_HIGHSPY,  # we always measure the highs handoff
+        "pipeline": BUILD,  # spans build→matrices→lp_write; gated on build support
     }[phase]
 
 
@@ -150,6 +170,24 @@ def _measurements(
             f"benchmarks/test_build.py::test_build[{name}-{axis}={size}]",
             lambda: spec.build(size),
         )
+        return
+
+    if phase == "pipeline":
+        # build→matrices→lp_write in one tracked region (build stays inside).
+        from benchmarks.phases import touch_matrices, write_lp
+
+        tmpdir = tempfile.TemporaryDirectory()
+        lp_path = Path(tmpdir.name) / "m.lp"
+
+        def run_pipeline() -> None:
+            built = spec.build(size)
+            touch_matrices(built)
+            write_lp(built, lp_path)
+
+        try:
+            yield (f"pipeline[{name}-{axis}={size}]", run_pipeline)
+        finally:
+            tmpdir.cleanup()
         return
 
     m = spec.build(size)

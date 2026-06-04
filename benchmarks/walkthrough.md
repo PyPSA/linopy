@@ -112,6 +112,30 @@ phase tag — useful when you only care about a subset of the suite.
 !python -m benchmarks filter --feature quadratic
 ```
 
+## Patterns — severity-swept idioms
+
+Alongside whole-model specs, the suite registers **patterns**: fragments of
+realistic modelling code (a nodal balance, a KVL contraction) parametrised by
+`severity` (0–100) instead of `size`. `severity` dials one data shape from
+benign (0) to pathological (100), so a sweep draws the cost cliff and a
+cross-version `compare` shows a kernel change bending it. `list --kind patterns`
+shows just the patterns; `show <name>` prints what a pattern's dial means.
+
+```{code-cell} ipython3
+!python -m benchmarks show nodal_balance
+```
+
+A pattern builds a complete model, so it runs the **same phases** as a model
+and rides the same phase drivers — there is no separate pattern test file.
+Patterns are tagged by the `severity` axis in their test id, so the usual tools
+target them by filtering on it:
+
+```bash
+pytest benchmarks/ -k severity            # all patterns, every phase
+pytest benchmarks/ -k nodal_balance       # one pattern
+python -m benchmarks memory save mylabel  # memory grid includes patterns
+```
+
 ## Run a timing snapshot
 
 `run` is the main timing entry point. Below we run twice with
@@ -231,6 +255,16 @@ column.
 For cross-version memory tracking (analogous to `sweep` for timing),
 use `memory sweep <v1> <v2> ...` — same per-version venv shape, peak
 RSS metric.
+
+Those per-phase peaks are *marginal* — each tracker sees only its own phase, so
+the resident model is excluded. The end-to-end peak a build-then-export session
+hits can't be recovered by summing them, so it's measured directly by the
+opt-in `pipeline` phase (build → matrices → lp_write in one tracker). It re-runs
+those phases, so it's not in the default set — request it standalone:
+
+```bash
+python -m benchmarks memory save ceiling --phase pipeline
+```
 
 ## Benchmarking custom things — the `bench` API
 
