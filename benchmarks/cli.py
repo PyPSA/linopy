@@ -11,6 +11,7 @@ direct dispatch for registry introspection and memory snapshots.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -660,7 +661,7 @@ def plot(
             help=(
                 "Split compare / scatter into subplots by ``phase`` (test "
                 "file) or ``model`` (parametrize id). Default: no faceting. "
-                "Tests whose ids don't match ``[<model>-n=<size>]`` (e.g. "
+                "Tests whose ids don't match ``[<model>-<axis>=<value>]`` (e.g. "
                 "PyPSA carbon-management) land in an ``other`` facet."
             ),
         ),
@@ -698,8 +699,8 @@ def plot(
       Resolves the absolute-vs-relative tension visually.
     - **sweep** (3+ snapshots) — heatmap of ratio relative to the first
       snapshot, rows = tests, columns = snapshot labels.
-    - **scaling** (1 snapshot) — log-log time vs ``n`` for
-      size-parametrized tests, faceted by phase.
+    - **scaling** (1 snapshot) — cost vs the sweep dial, faceted by phase:
+      log-log for model ``size``, linear for pattern ``severity`` (0-100).
 
     Output is an interactive Plotly HTML file. Open it in any browser
     (or pass ``--open``).
@@ -734,15 +735,15 @@ def plot(
         )
         raise typer.Exit(code=2)
 
-    try:
-        from benchmarks.plotting import RENDERERS
-    except ImportError as exc:
+    # RENDERERS imports fine without plotly (lazy inside each), so check the dep.
+    if importlib.util.find_spec("plotly") is None:
         typer.secho(
             "plotly is required for ``plot`` — ``pip install plotly``",
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(code=2) from exc
+        raise typer.Exit(code=2)
+    from benchmarks.plotting import RENDERERS
 
     # Default filename: ``.benchmarks/plots/<view>.html``. Matches where
     # snapshots already live (and is gitignored), and the per-view name

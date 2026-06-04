@@ -103,7 +103,7 @@ def _phase_tag(phase: str) -> str:
         "lp_write": LP_WRITE,
         "netcdf": NETCDF,
         "solver_handoff": TO_HIGHSPY,  # we always measure the highs handoff
-        "pipeline": BUILD,  # spans build→matrices→lp_write; gated on build support
+        "pipeline": BUILD,
     }[phase]
 
 
@@ -173,7 +173,6 @@ def _measurements(
         return
 
     if phase == "pipeline":
-        # build→matrices→lp_write in one tracked region (build stays inside).
         from benchmarks.phases import touch_matrices, write_lp
 
         tmpdir = tempfile.TemporaryDirectory()

@@ -87,10 +87,9 @@ def synth_test_id(
     supplied, fall back to ``label`` verbatim (lands in the ``"other"`` bucket
     — still fine for ``compare``). A partial spec is ambiguous and rejected.
     """
-    given = (model is not None, size is not None, phase is not None)
-    if all(given):
+    if model is not None and size is not None and phase is not None:
         return f"bench::{phase}[{spec_param_id(model, axis, size)}]"
-    if any(given):
+    if model is not None or size is not None or phase is not None:
         raise ValueError(
             "model, size, and phase must be given together (or all omitted)"
         )
