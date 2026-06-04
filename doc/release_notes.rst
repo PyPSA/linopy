@@ -4,6 +4,9 @@ Release Notes
 Upcoming Version
 ----------------
 
+Version 0.8.0
+-------------
+
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
 
