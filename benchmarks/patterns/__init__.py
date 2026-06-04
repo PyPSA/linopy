@@ -14,6 +14,8 @@ a pattern is one new file plus one import below.
 
 # Side-effect imports — each module calls ``register_pattern(...)`` at import.
 from benchmarks.patterns import (  # noqa: F401
+    flow_sum,
     kvl_cycles,
+    merge_balance,
     nodal_balance,
 )
