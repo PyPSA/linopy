@@ -1,9 +1,7 @@
 name: Benchmark smoke
 
-# Runs the internal benchmark suite under --quick --benchmark-disable so every
-# model spec is built and every phase fires at least once, but no timings are
-# recorded. The goal is "did refactor X break a model spec?" — not regression
-# tracking, which is done out-of-CI on dedicated hardware.
+# Builds every spec and fires every phase once under --quick
+# --benchmark-disable: a "did a refactor break a spec?" check, not timing.
 
 on:
   push:
@@ -40,8 +38,7 @@ jobs:
         python -m benchmarks smoke
 
     - name: Execute walkthrough notebook
-      # Catches doc rot — walkthrough.md is the canonical CLI walkthrough
-      # for the suite and must stay runnable end-to-end.
+      # Catches doc rot: the walkthrough must stay runnable end-to-end.
       run: |
         python -m benchmarks notebook
 
@@ -50,10 +47,8 @@ jobs:
     runs-on: ubuntu-latest
     # Red until CODSPEED_TOKEN is set on the org — don't fail the PR on it.
     continue-on-error: true
-    # Cachegrind is ~10–20× slower than native, so we restrict to ``--quick``
-    # (smallest size per spec) and skip PyPSA end-to-end. The signal we want
-    # here is "did this PR change the instruction count of the hot paths?";
-    # full wall-clock cross-version comparison stays in ``sweep``.
+    # Cachegrind is ~10–20× slower, so --quick only: detects instruction-count
+    # shifts on hot paths; wall-clock comparison stays in ``sweep``.
     steps:
     - uses: actions/checkout@v6
       with:
@@ -65,8 +60,7 @@ jobs:
         python-version: "3.12"
 
     - name: Install pinned benchmark environment
-      # Pinned ``[benchmarks]`` extra (not the lockfile) so Dependabot detects
-      # pyproject.toml and proposes bumps → one attributed CodSpeed delta each.
+      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
       run: |
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"

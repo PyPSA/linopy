@@ -82,24 +82,13 @@ dev = [
     "highspy",
     "jupyter",
 ]
-# Every direct dep that affects measurement is pinned exactly so the
-# environment stays stable over time on the same machine — deltas
-# between two runs then reflect linopy changes, not a numpy/scipy/pytest
-# upgrade. Absolute numbers are still machine-dependent (CPU / cache /
-# memory bandwidth).
-#
-# ``sweep`` installs these into each per-version venv, so the same pin
-# set drives every linopy version in a sweep call — only ``linopy``
-# varies. Transitive deps resolve fresh per venv; uv's deterministic
-# resolution gives identical results across versions within one sweep.
-#
-# ``highspy`` follows the project-wide ``!=1.14.0`` exclusion (see the
-# ``solvers`` extra).
+# Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
+# changes, not dependency bumps. ``sweep`` installs this set into each
+# per-version venv, so only ``linopy`` varies across a sweep.
 benchmarks = [
     "highspy==1.13.1",
     "netcdf4==1.7.4",
-    # numpy held at the last 1.x release so ``sweep`` can still cover linopy
-    # <0.5.1 (numpy<2.0); bump once that drops out of sweep coverage.
+    # last numpy 1.x — keeps sweep coverage back to linopy <0.5.1 (numpy<2)
     "numpy==1.26.4",
     "scipy==1.16.3",
     "xarray==2025.1.2",
