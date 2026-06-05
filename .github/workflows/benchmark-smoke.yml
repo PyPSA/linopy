@@ -33,7 +33,6 @@ jobs:
     - name: Install package and benchmark dependencies
       run: |
         python -m pip install uv
-        # [dev] for pytest + netcdf4; [benchmarks] for pytest-benchmark + pypsa.
         uv pip install --system -e ".[dev,benchmarks]"
 
     - name: Run benchmark smoke
@@ -49,6 +48,8 @@ jobs:
   codspeed:
     name: CodSpeed (micro regression detection)
     runs-on: ubuntu-latest
+    # Red until CODSPEED_TOKEN is set on the org — don't fail the PR on it.
+    continue-on-error: true
     # Cachegrind is ~10–20× slower than native, so we restrict to ``--quick``
     # (smallest size per spec) and skip PyPSA end-to-end. The signal we want
     # here is "did this PR change the instruction count of the hot paths?";
@@ -64,11 +65,8 @@ jobs:
         python-version: "3.12"
 
     - name: Install pinned benchmark environment
-      # Install from the pinned ``[benchmarks]`` extra (not the lockfile)
-      # so Dependabot can auto-detect pyproject.toml and propose bumps
-      # to top-level deps. Each bump → one attributed CodSpeed delta.
-      # The full transitive lockfile is reserved for cross-version
-      # ``sweep`` reproducibility, where machine variance matters more.
+      # Pinned ``[benchmarks]`` extra (not the lockfile) so Dependabot detects
+      # pyproject.toml and proposes bumps → one attributed CodSpeed delta each.
       run: |
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"

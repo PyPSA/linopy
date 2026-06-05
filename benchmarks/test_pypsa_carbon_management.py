@@ -14,7 +14,10 @@ pypsa = pytest.importorskip("pypsa")
 
 @pytest.fixture(scope="module")
 def network() -> Any:
-    return pypsa.examples.carbon_management()
+    try:
+        return pypsa.examples.carbon_management()
+    except Exception as exc:  # network / example-data drift, not a linopy signal
+        pytest.skip(f"pypsa example data unavailable: {exc}")
 
 
 def test_create_model_frozen(benchmark: Callable[..., object], network: Any) -> None:
