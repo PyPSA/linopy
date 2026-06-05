@@ -1245,6 +1245,7 @@ class TestFillnaResolves:
         assert isinstance(result, LinearExpression)
         assert result.const.values[0] == 42.0
 
+    @pytest.mark.v1
     def test_variable_fillna_zero_revives_slot_as_present_zero(
         self, xs: Variable
     ) -> None:
@@ -1283,12 +1284,12 @@ class TestFillnaResolves:
         # outer ``+ x`` is genuinely additive where y.shift was present.
         assert int((~np.isnan(expr.coeffs.values[1])).sum()) == 3
 
+    @pytest.mark.v1
     def test_masked_variable_constraint_via_fillna(self) -> None:
         """
-        ``y.fillna(0)`` yields a NaN-free RHS so ``x + y.fillna(0) >= 10``
-        binds at every slot — under both semantics (required under v1,
-        where absence would otherwise drop the constraint; redundant but
-        harmless under legacy, which already fills 0).
+        v1 counterpart of ``test_masked_variable_model`` — under §6 the
+        constraint ``x + y >= 10`` drops at the masked y slots, so the
+        caller must say ``y.fillna(0)`` to keep ``x >= 10`` there.
         """
         m = Model()
         lower = pd.Series(0, range(10))
