@@ -222,7 +222,7 @@ here as a DataFrame you can sort, filter, or feed onward:
 
 ```{code-cell} ipython3
 wide = df.pivot_table(
-    index=["phase", "model", "size"], columns="snapshot", values="value"
+    index=["phase", "spec", "size"], columns="snapshot", values="value"
 )
 wide["ratio"] = wide["candidate"] / wide["baseline"]
 wide.sort_values("ratio", ascending=False)
@@ -333,12 +333,12 @@ df
 ```
 
 Those label-keyed ids land in the `other` bucket. For a size-`scaling`
-plot, write each result with `model=` / `size=` / `phase=` so the id
+plot, write each result with `spec=` / `size=` / `phase=` so the id
 parses into those columns — `plot` then treats it like any suite
 snapshot:
 
     bench.time(REGISTRY["basic"].build, 100).to_snapshot(
-        snap, model="basic", size=100, phase="build"
+        snap, spec="basic", size=100, phase="build"
     )
 
 ## Extending the suite
