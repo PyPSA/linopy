@@ -248,6 +248,7 @@ Structure
    expressions.LinearExpression.coeffs
    expressions.LinearExpression.const
    expressions.LinearExpression.nterm
+   expressions.LinearExpression.has_terms
 
 Conversion
 ----------
@@ -288,6 +289,7 @@ Structure
    expressions.QuadraticExpression.coeffs
    expressions.QuadraticExpression.const
    expressions.QuadraticExpression.nterm
+   expressions.QuadraticExpression.has_terms
 
 Conversion
 ----------
