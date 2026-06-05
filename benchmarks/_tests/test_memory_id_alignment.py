@@ -25,7 +25,7 @@ from benchmarks.registry import REGISTRY
 
 def _collect_benchmark_ids() -> set[str]:
     """Return the set of node ids pytest collects under ``benchmarks/``."""
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
             sys.executable,
