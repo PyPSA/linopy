@@ -461,7 +461,6 @@ class TestCoordsToDict:
 
     @staticmethod
     def _parse(coords: Any, dims: Any = None) -> dict:
-
         return _coords_to_dict(coords, dims=dims)
 
     # -- container forms ---------------------------------------------------
@@ -480,13 +479,11 @@ class TestCoordsToDict:
 
     # -- pd.Index entries --------------------------------------------------
 
-    def test_named_pd_index_uses_its_name(self) -> None:
-        result = self._parse([pd.Index([0, 1, 2], name="x")])
-        assert set(result) == {"x"}
-
-    def test_unnamed_pd_index_with_dims_uses_dims(self) -> None:
-        result = self._parse([pd.Index([0, 1, 2])], dims=["x"])
-        assert set(result) == {"x"}
+    def test_unnamed_pd_index_named_from_dims_on_a_copy(self) -> None:
+        idx = pd.Index([0, 1, 2])
+        result = self._parse([idx], dims=["x"])
+        assert result["x"].name == "x"
+        assert idx.name is None
 
     def test_unnamed_pd_index_without_dims_is_size_only(self) -> None:
         # Same as a bare sequence: contributes no dim name; xarray assigns
@@ -516,29 +513,72 @@ class TestCoordsToDict:
         with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
             self._parse([mi])
 
+    # -- named-dim forms: every shape that names a dimension ---------------
+
+    @pytest.mark.parametrize(
+        "coords, dims",
+        [
+            ([("x", [0, 1, 2])], None),
+            ([pd.Index([0, 1, 2], name="x")], None),
+            ([pd.Index([0, 1, 2])], ["x"]),
+            ([[0, 1, 2]], ["x"]),
+            ([range(3)], ["x"]),
+            ([np.array([0, 1, 2])], ["x"]),
+        ],
+        ids=[
+            "tuple",
+            "named-index",
+            "unnamed-index+dims",
+            "list+dims",
+            "range+dims",
+            "ndarray+dims",
+        ],
+    )
+    def test_named_dim_form_parses_to_x(self, coords: Any, dims: Any) -> None:
+        result = self._parse(coords, dims=dims)
+        assert set(result) == {"x"}
+        assert list(result["x"]) == [0, 1, 2]
+        assert result["x"].name == "x"
+
+    @pytest.mark.parametrize(
+        "coords, dims",
+        [
+            ([("x", [0, 1, 2])], None),
+            ([pd.Index([0, 1, 2], name="x")], None),
+            ([pd.Index([0, 1, 2])], ["x"]),
+            ([[0, 1, 2]], ["x"]),
+            ([range(3)], ["x"]),
+            ([np.array([0, 1, 2])], ["x"]),
+        ],
+        ids=[
+            "tuple",
+            "named-index",
+            "unnamed-index+dims",
+            "list+dims",
+            "range+dims",
+            "ndarray+dims",
+        ],
+    )
+    def test_named_dim_form_produces_named_dim(self, coords: Any, dims: Any) -> None:
+        m = Model()
+        v = m.add_variables(coords=coords, dims=dims)
+        assert v.dims == ("x",)
+        assert list(v.coords["x"].values) == [0, 1, 2]
+
     # -- bare sequence entries --------------------------------------------
 
     @pytest.mark.parametrize(
         "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
-    )
-    def test_bare_sequence_with_dims_uses_dims(self, entry: Any) -> None:
-        result = self._parse([entry], dims=["x"])
-        assert set(result) == {"x"}
-
-    @pytest.mark.parametrize(
-        "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
+        [[0, 1, 2], range(3), np.array([0, 1, 2])],
+        ids=["list", "range", "ndarray"],
     )
     def test_bare_sequence_without_dims_is_silently_skipped(self, entry: Any) -> None:
         assert self._parse([entry]) == {}
 
     @pytest.mark.parametrize(
         "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
+        [[0, 1, 2], range(3), np.array([0, 1, 2])],
+        ids=["list", "range", "ndarray"],
     )
     def test_bare_sequence_without_dims_falls_through_to_xarray_dim_0(
         self, entry: Any
@@ -546,6 +586,28 @@ class TestCoordsToDict:
         m = Model()
         v = m.add_variables(coords=[entry])
         assert v.dims == ("dim_0",)
+
+    # -- tuple entries: xarray's (dim_name, values) convention -------------
+
+    def test_scalar_bound_with_multiple_tuple_coords(self) -> None:
+        m = Model()
+        v = m.add_variables(
+            lower=0, coords=[("origin", ["a", "b"]), ("dest", ["x", "y"])]
+        )
+        assert v.dims == ("origin", "dest")
+
+    def test_tuple_with_attrs_element_ignores_trailing(self) -> None:
+        result = self._parse([("x", [0, 1, 2], {"units": "m"})])
+        assert set(result) == {"x"}
+        assert list(result["x"]) == [0, 1, 2]
+
+    def test_tuple_too_short_raises(self) -> None:
+        with pytest.raises(TypeError, match=r"\(dim_name, values\) convention"):
+            self._parse([("x",)])
+
+    def test_tuple_of_bare_values_raises(self) -> None:
+        with pytest.raises(TypeError, match=r"\(dim_name, values\) convention"):
+            self._parse([(0, 1, 2)], dims=["x"])
 
     # -- unsupported entries ----------------------------------------------
 
