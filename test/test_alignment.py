@@ -153,39 +153,34 @@ class TestAsDataarrayFromPandas:
         assert list(da.coords[expected_dims[0]].values) == list(df.index)
         assert list(da.coords[expected_dims[1]].values) == list(df.columns)
 
-    def test_series_aligned_coords(self) -> None:
-        """This should not give out a warning even though coords are given."""
-        target_dim = "dim_0"
-        target_index = ["a", "b", "c"]
-        s = pd.Series([1, 2, 3], index=target_index)
-        da = as_dataarray(s, coords=[target_index])
-        assert isinstance(da, DataArray)
-        assert da.dims == (target_dim,)
-        assert list(da.coords[target_dim].values) == target_index
+    @pytest.mark.parametrize(
+        "coords",
+        [[["a", "b", "c"]], {"dim_0": ["a", "b", "c"]}],
+        ids=["list", "dict"],
+    )
+    def test_series_aligned_coords_do_not_warn(self, coords: Any) -> None:
+        """Coords matching the pandas index are accepted silently — no misalignment warning."""
+        s = pd.Series([1, 2, 3], index=["a", "b", "c"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            da = as_dataarray(s, coords=coords)
+        assert da.dims == ("dim_0",)
+        assert list(da.coords["dim_0"].values) == ["a", "b", "c"]
 
-        da = as_dataarray(s, coords={target_dim: target_index})
-        assert isinstance(da, DataArray)
-        assert da.dims == (target_dim,)
-        assert list(da.coords[target_dim].values) == target_index
-
-    def test_dataframe_aligned_coords(self) -> None:
-        """This should not give out a warning even though coords are given."""
-        target_dims = ("dim_0", "dim_1")
-        target_index = ["a", "b"]
-        target_columns = ["A", "B"]
-        df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-        da = as_dataarray(df, coords=[target_index, target_columns])
-        assert isinstance(da, DataArray)
-        assert da.dims == target_dims
-        assert list(da.coords[target_dims[0]].values) == target_index
-        assert list(da.coords[target_dims[1]].values) == target_columns
-
-        coords = dict(zip(target_dims, [target_index, target_columns]))
-        da = as_dataarray(df, coords=coords)
-        assert isinstance(da, DataArray)
-        assert da.dims == target_dims
-        assert list(da.coords[target_dims[0]].values) == target_index
-        assert list(da.coords[target_dims[1]].values) == target_columns
+    @pytest.mark.parametrize(
+        "coords",
+        [[["a", "b"], ["A", "B"]], {"dim_0": ["a", "b"], "dim_1": ["A", "B"]}],
+        ids=["list", "dict"],
+    )
+    def test_dataframe_aligned_coords_do_not_warn(self, coords: Any) -> None:
+        """Coords matching the frame's index/columns are accepted silently."""
+        df = pd.DataFrame([[1, 2], [3, 4]], index=["a", "b"], columns=["A", "B"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            da = as_dataarray(df, coords=coords)
+        assert da.dims == ("dim_0", "dim_1")
+        assert list(da.coords["dim_0"].values) == ["a", "b"]
+        assert list(da.coords["dim_1"].values) == ["A", "B"]
 
     def test_polars_series(self) -> None:
         target_dim = "dim_0"
@@ -545,6 +540,7 @@ class TestCoordsToDict:
             ([_ij_multiindex()], None, r"MultiIndex.*must have \.name set"),
             ([("x",)], None, r"\(dim_name, values\) convention"),
             ([(0, 1, 2)], ["x"], r"\(dim_name, values\) convention"),
+            ([("x", 5)], None, r"with array-like values"),
             (
                 [DataArray([0, 1, 2], dims=["x"])],
                 None,
@@ -556,6 +552,7 @@ class TestCoordsToDict:
             "unnamed-multiindex",
             "tuple-too-short",
             "tuple-bare-values",
+            "tuple-scalar-values",
             "dataarray",
             "unknown-type",
         ],
@@ -991,8 +988,29 @@ class TestValidateAlignment:
 class TestAlign:
     """align() conforms multiple linopy / xarray objects to common coords."""
 
-    def test_align(self, x: Variable, u: Variable) -> None:
+    def test_inner_join_intersects_coords(self, x: Variable) -> None:
+        """Default join keeps only the shared coords (x over [0, 1] ∩ alpha over [1, 2])."""
         alpha = xr.DataArray([1, 2], [[1, 2]])
+
+        x_obs, alpha_obs = align(x, alpha)
+
+        assert isinstance(x_obs, Variable)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert_varequal(x_obs, x.loc[[1]])
+
+    def test_left_join_keeps_left_coords_and_fills(self, x: Variable) -> None:
+        """join='left' keeps x's coords; the right operand is reindexed with NaN."""
+        alpha = xr.DataArray([1, 2], [[1, 2]])
+
+        x_obs, alpha_obs = align(x, alpha, join="left")
+
+        assert isinstance(x_obs, Variable)
+        assert x_obs.shape == alpha_obs.shape == (2,)
+        assert_varequal(x_obs, x)
+        assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
+
+    def test_inner_join_over_multiindex(self, u: Variable) -> None:
+        """Inner join intersects MultiIndex coords element-wise across the stacked dim."""
         beta = xr.DataArray(
             [1, 2, 3],
             [
@@ -1005,30 +1023,21 @@ class TestAlign:
             ],
         )
 
-        # inner join
-        x_obs, alpha_obs = align(x, alpha)
-        assert isinstance(x_obs, Variable)
-        assert x_obs.shape == alpha_obs.shape == (1,)
-        assert_varequal(x_obs, x.loc[[1]])
-
-        # left-join
-        x_obs, alpha_obs = align(x, alpha, join="left")
-        assert x_obs.shape == alpha_obs.shape == (2,)
-        assert isinstance(x_obs, Variable)
-        assert_varequal(x_obs, x)
-        assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
-
-        # multiindex
         beta_obs, u_obs = align(beta, u)
-        assert u_obs.shape == beta_obs.shape == (2,)
+
         assert isinstance(u_obs, Variable)
+        assert u_obs.shape == beta_obs.shape == (2,)
         assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
         assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
 
-        # with linear expression
+    def test_aligns_linear_expression(self, x: Variable) -> None:
+        """A LinearExpression aligns alongside variables, keeping its _term dim."""
+        alpha = xr.DataArray([1, 2], [[1, 2]])
         expr = 20 * x
+
         x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
-        assert x_obs.shape == alpha_obs.shape == (1,)
-        assert expr_obs.shape == (1, 1)  # _term dim
+
         assert isinstance(expr_obs, LinearExpression)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert expr_obs.shape == (1, 1)  # the trailing 1 is the _term dim
         assert_linequal(expr_obs, expr.loc[[1]])

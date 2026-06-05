@@ -158,10 +158,10 @@ def _coords_to_dict(
                 result[dim_names[i]] = pd.Index(c, name=dim_names[i])
         else:
             raise TypeError(
-                f"coords entries must be pd.Index or an unnamed sequence "
-                f"(list / tuple / range / numpy.ndarray); got "
-                f"{type(c).__name__}. For an xarray DataArray coord, pass "
-                f"`variable.indexes[<dim>]` (a pd.Index) instead."
+                f"coords entries must be pd.Index, an unlabeled sequence "
+                f"(list / range / numpy.ndarray), or a (dim_name, values) "
+                f"tuple; got {type(c).__name__}. For an xarray DataArray "
+                f"coord, pass `variable.indexes[<dim>]` (a pd.Index) instead."
             )
     return result
 
