@@ -1,10 +1,11 @@
-name: CodSpeed (simulation + memory)
+name: CodSpeed (memory + simulation)
 
-# CPU instruction counts (cachegrind) AND heap allocations in ONE upload.
+# Heap allocations AND CPU instruction counts (cachegrind) in ONE upload.
 # They must share a run: CodSpeed records one run per (commit, environment),
 # and a second upload to the same environment overwrites the first — the other
 # instrument's benchmarks then show as "skipped". So both are measured serially
-# via ``mode: simulation,memory`` (CodSpeedHQ/action >= 4.12).
+# via ``mode: memory,simulation`` — memory first so the fast, always-on signal
+# lands even if the slow cachegrind pass is interrupted (CodSpeedHQ/action >= 4.12).
 #
 # Cadence: master push (establish/update both baselines) + manual dispatch +
 # opt-in per-PR via the ``trigger:benchmark`` label — which keeps the PR context
@@ -25,7 +26,7 @@ concurrency:
 
 jobs:
   codspeed:
-    name: CodSpeed simulation + memory
+    name: CodSpeed memory + simulation
     # Always on master push / dispatch; on PRs only when explicitly labelled.
     if: >-
       ${{ github.event_name != 'pull_request' ||
@@ -52,10 +53,10 @@ jobs:
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"
 
-    - name: Run benchmarks under CodSpeed (simulation + memory)
+    - name: Run benchmarks under CodSpeed (memory + simulation)
       uses: CodSpeedHQ/action@v4
       with:
-        mode: simulation,memory
+        mode: memory,simulation
         run: |
           pytest benchmarks/ --quick --codspeed
 

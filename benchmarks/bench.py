@@ -1,36 +1,24 @@
 """
 Ad-hoc benchmarking of arbitrary callables on the *current* linopy tree.
 
-Where the pytest suite measures the fixed registry grid and ``sweep``
-measures across installed linopy versions, ``bench`` is for the
-interactive middle: time or memory-profile any callable — a registry
-builder, a phase verb applied to a model you built by hand, or a one-off
-lambda — get a result object back, and either inspect it as a DataFrame
-or drop it into a snapshot the existing ``plot`` / ``compare`` machinery
-already understands::
+Where the pytest suite measures the fixed registry grid and ``sweep`` measures
+across installed linopy versions, ``bench`` is the interactive middle: time or
+memory-profile any callable, get a result object, inspect it as a DataFrame or
+drop it into a snapshot the ``plot`` / ``compare`` machinery already reads::
 
     from benchmarks import bench, REGISTRY
 
     r = bench.time(REGISTRY["basic"].build, 100)
-    r                                  # rich repr in a notebook
     r.to_snapshot("a.json", spec="basic", size=100, phase="build")
-
     bench.compare({"v1": f1, "v2": f2}).to_snapshot("cmp.json")
 
-This plugs into the *output* side of the pipeline (snapshot JSON read by
-``snapshot.load_long_df``), not into ``sweep``: a sweep runs pytest inside
-per-version venvs as subprocesses, so it can only measure importable
-registry models — an in-process callable can't cross that boundary. To
-sweep a custom model across versions, promote it to ``benchmarks/models/``.
+It feeds the output side (snapshot JSON), not ``sweep`` — a sweep runs pytest in
+per-version venvs, so only importable registry models cross that boundary;
+promote a custom model to ``benchmarks/models/`` to sweep it.
 
-**Methodology.** Timing is built on :class:`timeit.Timer`: an
-``autorange`` calibration picks the inner iteration count (so timer
-resolution doesn't dominate fast callables), then the per-iteration time
-is sampled across rounds with the suite's min-of-N convention (the
-fastest sample approximates the no-noise floor). It is *not*
-pytest-benchmark's calibrated timer, so absolute numbers are not
-interchangeable with suite snapshots — compare ``bench`` to ``bench`` and
-suite to suite.
+Timing uses :class:`timeit.Timer` (``autorange`` picks the inner iteration count
+so resolution doesn't dominate) with the suite's min-of-N convention. It is *not*
+pytest-benchmark's timer, so compare ``bench`` to ``bench``, suite to suite.
 """
 
 from __future__ import annotations

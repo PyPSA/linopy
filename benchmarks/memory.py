@@ -1,37 +1,22 @@
 """
 Measure and compare peak memory across the registry × phase grid.
 
-Each measurement uses ``memray.Tracker`` directly so the model construction
-(setup) lives *outside* the tracked region and the peak reflects only the
-phase work itself::
+Each measurement runs the phase work inside ``memray.Tracker`` with model
+construction *outside* it, so the peak reflects only the phase::
 
     m = spec.build(size)            # setup, not tracked
     with memray.Tracker(bin_path):
         wrapper(m)                  # tracked
-    peak = FileReader(bin_path).metadata.peak_memory
 
-This module exposes ``save(label, ...)`` and ``compare(label_a, label_b)`` as
-plain functions; user-facing invocation goes through the typer CLI::
+``save(label, ...)`` / ``compare(a, b)`` back the ``python -m benchmarks memory``
+CLI. Results land in ``.benchmarks/memory/`` as JSON keyed by full pytest-style
+test ids, so cross-snapshot diffs line up with the timing snapshots.
 
-    python -m benchmarks memory save <label> [--quick] [--phase build] ...
-    python -m benchmarks memory compare <a> <b>
-
-Results land in ``.benchmarks/memory/`` as JSON keyed by full pytest-style
-test IDs (``benchmarks/test_<phase>.py::test_<phase>[<spec>-<axis>=<value>]``,
-where ``<axis>`` is ``n`` for a model or ``severity`` for a pattern) so
-cross-snapshot diffs work uniformly regardless of which phases were run.
-
-The per-phase peaks above are *marginal* — each tracker only sees allocations
-made inside its phase, so the resident model and the build transient are
-excluded (clean for cross-phase / cross-version comparison). The end-to-end
-peak a real build-then-export session hits cannot be recovered by summing or
-maxing those marginals (they share an unmeasured resident baseline and don't
-capture cross-phase accumulation), so it is *measured* directly: the
-``pipeline`` phase runs build → matrices → lp_write in a single tracker and
-reports that one high-water mark — the OOM ceiling. It re-runs those three, so
-it is opt-in (``--phase pipeline``), not in the default set — run it standalone
-to avoid duplicating the per-phase work. Memory-only (no timing twin), keyed by
-a bare ``pipeline[<spec>-<axis>=<value>]`` id.
+The per-phase peaks are *marginal* (each tracker sees only its own phase's
+allocations), so the end-to-end OOM ceiling can't be recovered from them: the
+opt-in ``pipeline`` phase (``--phase pipeline``) instead measures
+build → matrices → to_lp under one tracker, keyed by a bare
+``pipeline[<spec>-<axis>=<value>]`` id.
 """
 
 from __future__ import annotations

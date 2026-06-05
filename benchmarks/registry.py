@@ -1,23 +1,20 @@
 """
 Reusable registry of benchmark models.
 
-A :class:`ModelSpec` captures everything needed to drive a model through the
-benchmark suite *and* to use it from any other test or script:
+A :class:`ModelSpec` captures everything to drive a model through the suite and
+to reuse it elsewhere:
 
-- ``build(size) -> linopy.Model``  the actual builder
-- ``sizes``                        canonical sizes the model has been tuned for
-- ``features``                     what kinds of variables / constraints it uses
-- ``phases``                       which benchmark phases apply (lp_write, to_highspy, ...)
-- ``quick_threshold``              max size to keep under ``pytest --quick``
-- ``requires``                     extra modules to ``pytest.importorskip``
+- ``build(size) -> linopy.Model``  the builder
+- ``sizes``                        canonical tuned sizes
+- ``features``                     variable / constraint kinds it uses
+- ``phases``                       applicable phases (to_lp, to_highspy, …)
+- ``quick_threshold``              max size under ``pytest --quick``
+- ``requires``                     modules to ``pytest.importorskip``
 
-Pattern for downstream use::
+::
 
-    from benchmarks import REGISTRY
+    from benchmarks import REGISTRY, filter_by, QUADRATIC
     model = REGISTRY["basic"].build(100)
-
-    # Or pick a subset by feature/phase:
-    from benchmarks import filter_by, QUADRATIC
     qp_specs = filter_by(has_feature=QUADRATIC)
 """
 

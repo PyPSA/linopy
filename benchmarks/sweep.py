@@ -163,10 +163,8 @@ def _provision_venvs(
             vpy = _venv_python(venv)
             spec = _linopy_install_spec(version)
 
-            # Single install pass: pinned infra from pyproject + linopy.
-            # Direct pins in [benchmarks] are sufficient for sweep
-            # reproducibility — uv resolves the same input deterministically
-            # into each per-version venv.
+            # One install pass: pinned infra + linopy; uv resolves the pinned
+            # inputs deterministically into each per-version venv.
             install_args = [
                 "uv",
                 "pip",
@@ -183,8 +181,7 @@ def _provision_venvs(
                 yield _ProvisionedVenv(version, None, None, None, "install")
                 continue
 
-            # Isolated import root (see the docstring): a filtered copy of
-            # ``benchmarks/``, skipping sweep-irrelevant heavy artifacts.
+            # Isolated import root: a filtered copy of ``benchmarks/`` (docstring).
             import_dir = Path(tmp) / "iso"
             import_dir.mkdir()
             shutil.copytree(
@@ -193,8 +190,7 @@ def _provision_venvs(
                 ignore=shutil.ignore_patterns("__pycache__", "*.ipynb", ".DS_Store"),
             )
 
-            # Drop PYTHONPATH so the repo's ``linopy/`` can't shadow the
-            # venv's installed copy (see the docstring).
+            # Drop PYTHONPATH so the repo's ``linopy/`` can't shadow the venv copy.
             env = os.environ.copy()
             env.pop("PYTHONPATH", None)
 
