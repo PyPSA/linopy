@@ -21,12 +21,12 @@ CODSPEED_MODULES = (
 # per-PR by the memory instrument and on master by walltime instead.
 CODSPEED_SIMULATION_MODULES = ("test_build", "test_to_lp")
 
-# Each CodSpeed job passes ``--codspeed-set <instrument>`` so the subset is
-# chosen explicitly, not sniffed from pytest-codspeed internals.
+# Only the cachegrind (simulation) job trims; memory/walltime use the full set
+# (the default). Chosen via our own ``--codspeed-set`` option — no
+# pytest-codspeed internals, no silent mode-sniffing.
 CODSPEED_SETS = {
+    "full": CODSPEED_MODULES,
     "simulation": CODSPEED_SIMULATION_MODULES,
-    "memory": CODSPEED_MODULES,
-    "walltime": CODSPEED_MODULES,
 }
 
 
@@ -40,11 +40,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--codspeed-set",
         choices=sorted(CODSPEED_SETS),
-        default="memory",
+        default="full",
         help=(
-            "CodSpeed instrument whose module subset to run (default 'memory' = "
-            "full eligible set; 'simulation' trims the expensive cachegrind "
-            "phases). Only takes effect under --codspeed."
+            "Which CodSpeed module subset to run (default 'full'; 'simulation' "
+            "trims the expensive cachegrind phases). Only takes effect under "
+            "--codspeed."
         ),
     )
     parser.addoption(
