@@ -430,6 +430,14 @@ def plot_sweep(
     return fig, len(df)
 
 
+# How each sweep axis renders: (x-axis label, log-scaled?). Size is
+# multiplicative → log-log; severity is a 0–100 % dial → linear.
+_AXIS_DISPLAY: dict[str, tuple[str, bool]] = {
+    "n": ("n", True),
+    "severity": ("severity (%)", False),
+}
+
+
 def plot_scaling(
     snapshots: list[Path],
     metric: Metric = "min",
@@ -461,10 +469,12 @@ def plot_scaling(
         )
 
     axes = sorted(df["axis"].unique())
-    x_label = axes[0] if len(axes) == 1 else "sweep value"
-    # Log-x only makes sense for multiplicative size sweeps that stay > 0.
-    log_x = x_label == "n" and bool((df["size"] > 0).all())
+    axis = axes[0] if len(axes) == 1 else "sweep value"
+    x_label, log_axis = _AXIS_DISPLAY.get(axis, (axis, False))
+    # Log only makes sense for multiplicative size sweeps that stay > 0.
+    log_x = log_axis and bool((df["size"] > 0).all())
 
+    metric_word = {"min": "minimum", "max": "maximum"}.get(metric, metric)
     fig = px.line(
         df,
         x="size",
@@ -475,7 +485,7 @@ def plot_scaling(
         log_x=log_x,
         log_y=log_x,
         markers=True,
-        labels={"size": x_label},
+        labels={"size": x_label, metric: f"{unit} ({metric_word})"},
         title=(f"Scaling: {metric_label} ({unit}) vs {x_label} ({snapshots[0].stem})"),
     )
     fig.update_layout(height=max(400, ((df["phase"].nunique() + 2) // 3) * 350))
