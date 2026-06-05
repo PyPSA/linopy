@@ -45,5 +45,6 @@ jobs:
     - name: Run benchmarks under CodSpeed
       uses: CodSpeedHQ/action@v4
       with:
+        mode: simulation  # cachegrind instruction counts (required input in v4)
         run: |
           pytest benchmarks/ --quick --codspeed
