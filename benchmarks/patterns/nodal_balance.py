@@ -20,7 +20,7 @@ from benchmarks.registry import PatternSpec, register_pattern
 
 N_GEN = 2000
 N_BUS = 50
-N_TIME = 24
+N_TIME = 8  # broadcast/volume dim — the groupby pathology is on gen, not time
 
 
 def _bus_of_gen(severity: int) -> np.ndarray:

@@ -22,7 +22,9 @@ from benchmarks.registry import PatternSpec, register_pattern
 
 N_BRANCH = 300
 N_CYCLE = 100
-N_TIME = 24
+N_TIME = 168  # snapshot horizon — sets the always-paid flat level (the
+# densification width is branch; severity dials C's sparsity, which today's
+# kernel ignores, so memory stays flat across severity)
 MIN_PER_CYCLE = 3
 
 

@@ -19,7 +19,7 @@ import linopy
 from benchmarks.registry import PatternSpec, register_pattern
 
 N_BLOCKS = 30
-N_ROW = 200
+N_ROW = 128  # broadcast/volume dim — the ragged padding is on _term, not row
 NARROW = 3
 WIDE = 200
 

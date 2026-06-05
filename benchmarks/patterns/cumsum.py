@@ -18,7 +18,7 @@ import pandas as pd
 import linopy
 from benchmarks.registry import PatternSpec, register_pattern
 
-N_ROW = 200
+N_ROW = 64  # broadcast/volume dim — the triangular fold is on t, not row
 DIM_MAX = 200
 
 

@@ -17,8 +17,8 @@ import pandas as pd
 import linopy
 from benchmarks.registry import PatternSpec, register_pattern
 
-N_UNIT = 200
-N_TIME = 168
+N_UNIT = 8  # broadcast dim — the window densification is on time, not unit
+N_TIME = 1000
 MIN_WINDOW = 1
 
 
@@ -42,7 +42,7 @@ SPEC = register_pattern(
         build=build_rolling,
         description=(
             "rolling-window width — 1: single step (nterm 1), "
-            "168: full-horizon window (nterm 168)"
+            "1000: full-horizon window (nterm 1000)"
         ),
     )
 )
