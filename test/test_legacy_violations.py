@@ -56,10 +56,10 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import LinearExpression, Model, QuadraticExpression
 from linopy.config import LinopySemanticsWarning
 from linopy.expressions import merge
-from linopy.testing import assert_linequal
+from linopy.testing import assert_conequal, assert_linequal, assert_quadequal
 from linopy.variables import Variable
 
 
@@ -2394,3 +2394,159 @@ class TestObjectScope:
         x / da  # works: dividing by a constant
         with pytest.raises(TypeError):
             x / LinearExpression(da, m)
+
+
+# =====================================================================
+# Cross-cutting guard: operations that MUST agree under both semantics
+# =====================================================================
+#
+# The autouse ``semantics`` fixture runs each test under a single mode, so
+# a per-op test that under-asserts (e.g. checks only ``.indexes``) can pass
+# under both modes while the actual result silently diverges — that is how
+# the reordered-merge mispairing slipped through review. This guard builds
+# each mode-invariant operation under *both* semantics and compares them
+# with linopy.testing's strict structural helpers (which align by coords
+# and compare vars/coeffs/const), so a regression that makes one of these
+# paths semantics-dependent fails loudly. Genuinely divergent operations
+# belong in the per-section classes above, not here.
+
+
+def _build_under_both(builder: Any) -> tuple[Any, Any]:
+    """Build ``builder()`` under legacy then v1; return ``(legacy, v1)``."""
+    from linopy.config import options
+
+    saved = options["semantics"]
+    out = {}
+    try:
+        for sem in ("legacy", "v1"):
+            options["semantics"] = sem
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", LinopySemanticsWarning)
+                out[sem] = builder()
+    finally:
+        options["semantics"] = saved
+    return out["legacy"], out["v1"]
+
+
+def _eq_time() -> pd.RangeIndex:
+    return pd.RangeIndex(5, name="time")
+
+
+def _eq_da() -> xr.DataArray:
+    return xr.DataArray(np.arange(1.0, 6.0), dims=["time"], coords={"time": _eq_time()})
+
+
+def _eq_subset() -> xr.DataArray:
+    return xr.DataArray(
+        [10.0, 30.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
+    )
+
+
+def _op_merge_same_coords() -> LinearExpression:
+    m = Model()
+    return m.add_variables(lower=0, coords=[_eq_time()], name="a") + m.add_variables(
+        lower=0, coords=[_eq_time()], name="b"
+    )
+
+
+def _op_merge_broadcast() -> LinearExpression:
+    m = Model()
+    a = m.add_variables(lower=0, coords=[_eq_time()], name="a")
+    b = m.add_variables(lower=0, coords=[pd.Index([0, 1], name="scenario")], name="b")
+    return a + b
+
+
+def _op_quadratic_same_coords() -> QuadraticExpression:
+    m = Model()
+    x = m.add_variables(coords=[_eq_time()], name="x")
+    y = m.add_variables(coords=[_eq_time()], name="y")
+    return (x * x) + (y * y)
+
+
+def _op_add_join_inner() -> LinearExpression:
+    return (
+        Model()
+        .add_variables(coords=[_eq_time()], name="x")
+        .add(_eq_subset(), join="inner")
+    )
+
+
+def _op_add_join_outer() -> LinearExpression:
+    return (
+        Model()
+        .add_variables(coords=[_eq_time()], name="x")
+        .add(_eq_subset(), join="outer")
+    )
+
+
+def _op_add_join_override() -> LinearExpression:
+    relabelled = xr.DataArray(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        dims=["time"],
+        coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+    )
+    return (
+        Model()
+        .add_variables(coords=[_eq_time()], name="x")
+        .add(relabelled, join="override")
+    )
+
+
+def _op_associative() -> LinearExpression:
+    m = Model()
+    x = m.add_variables(coords=[_eq_time()], name="x")
+    y = m.add_variables(lower=0, coords=[_eq_time()], name="y")
+    return (x + _eq_da()) + y
+
+
+def _op_distributive() -> LinearExpression:
+    m = Model()
+    x = m.add_variables(coords=[_eq_time()], name="x")
+    y = m.add_variables(lower=0, coords=[_eq_time()], name="y")
+    return (x + y) * _eq_da()
+
+
+def _op_raw_matches_wrapped() -> LinearExpression:
+    m = Model()
+    x = m.add_variables(coords=[_eq_time()], name="x")
+    return x + LinearExpression(_eq_da(), m)
+
+
+def _op_aux_coord_resolved() -> LinearExpression:
+    m = Model()
+    A = pd.Index([1, 2, 3], name="A")
+    v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+        B=("A", [311, 311, 322])
+    )
+    const = xr.DataArray(
+        [10.0, 20.0, 30.0], dims=["A"], coords={"A": A, "B": ("A", [400, 400, 500])}
+    )
+    return v + const.assign_coords(B=v.coords["B"])
+
+
+def _op_clean_constraint() -> Any:
+    m = Model()
+    x = m.add_variables(coords=[_eq_time()], name="x")
+    return x <= _eq_da()
+
+
+_EQUIVALENT_OPS = [
+    pytest.param(_op_merge_same_coords, assert_linequal, id="merge_same_coords"),
+    pytest.param(_op_merge_broadcast, assert_linequal, id="merge_broadcast"),
+    pytest.param(_op_quadratic_same_coords, assert_quadequal, id="quadratic_same"),
+    pytest.param(_op_add_join_inner, assert_linequal, id="add_join_inner"),
+    pytest.param(_op_add_join_outer, assert_linequal, id="add_join_outer"),
+    pytest.param(_op_add_join_override, assert_linequal, id="add_join_override"),
+    pytest.param(_op_associative, assert_linequal, id="associative_law"),
+    pytest.param(_op_distributive, assert_linequal, id="distributive_law"),
+    pytest.param(_op_raw_matches_wrapped, assert_linequal, id="raw_matches_wrapped"),
+    pytest.param(_op_aux_coord_resolved, assert_linequal, id="aux_coord_resolved"),
+    pytest.param(_op_clean_constraint, assert_conequal, id="clean_constraint"),
+]
+
+
+@pytest.mark.parametrize("builder, comparator", _EQUIVALENT_OPS)
+def test_semantics_invariant_ops_agree(builder: Any, comparator: Any) -> None:
+    """Mode-invariant operations must be byte-identical under both semantics."""
+    legacy, v1 = _build_under_both(builder)
+    comparator(legacy, v1)
