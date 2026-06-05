@@ -223,7 +223,7 @@ def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
 
 # --- Patterns ---------------------------------------------------------------
 
-DEFAULT_SEVERITIES: tuple[int, ...] = (0, 25, 50, 75, 100)
+DEFAULT_SEVERITIES: tuple[int, ...] = (0, 50, 100)
 
 
 class BenchSpec(Protocol):
