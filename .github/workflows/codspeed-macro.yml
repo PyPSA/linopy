@@ -1,15 +1,18 @@
-name: CodSpeed (instrumentation)
+name: CodSpeed (walltime macro)
 
-# Cachegrind micro-benchmarks for instruction-count regression detection.
-# Runs on master (establishing/updating the baseline) and on every PR (compared
-# against that baseline), plus a manual trigger. Deterministic instruction
-# counts run on shared CI runners and consume no CodSpeed macro-runner minutes,
-# so per-PR is free. Wall-clock lives in the macro workflow (codspeed-macro.yml).
+# Wall-clock benchmarks on CodSpeed's dedicated bare-metal macro runners — the
+# mode that reflects the real cost of dense-vs-sparse work (cache, allocation,
+# native numpy/scipy), which instruction counting under-weights.
+#
+# Master-only (updates the walltime baseline) plus manual dispatch for ad-hoc
+# branch/PR checks. Deliberately off every PR: macro-runner minutes are metered
+# (600/month free), unlike the instrumentation workflow.
+#
+# Requires the repo under a GitHub org (macro runners are org-only) with the
+# CodSpeed app installed and CODSPEED_TOKEN set.
 
 on:
   push:
-    branches: [ master ]
-  pull_request:
     branches: [ master ]
   workflow_dispatch:
 
@@ -18,11 +21,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  codspeed:
-    name: CodSpeed (micro regression detection)
-    runs-on: ubuntu-latest
+  macro:
+    name: CodSpeed walltime (macro runner)
+    runs-on: codspeed-macro
     # Red until CODSPEED_TOKEN is set on the org — don't fail master on it.
     continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
     steps:
     - uses: actions/checkout@v6
       with:
@@ -39,9 +45,10 @@ jobs:
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"
 
-    - name: Run benchmarks under CodSpeed
+    - name: Run benchmarks under CodSpeed (walltime)
       uses: CodSpeedHQ/action@v3
       with:
+        mode: walltime
         token: ${{ secrets.CODSPEED_TOKEN }}
         run: |
           pytest benchmarks/ --quick --codspeed
