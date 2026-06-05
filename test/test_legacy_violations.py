@@ -802,11 +802,17 @@ class TestExactAlignmentMerge:
         result = a + b
         assert set(result.coord_dims) == {"time", "scenario"}
 
+    @pytest.mark.v1
     def test_var_plus_var_reordered_labels_align(self, m: Model) -> None:
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
         result = (1 * a) + (1 * b)
         assert list(result.indexes["e"]) == ["costs", "penalty"]
+        # The index alone is identical under legacy — assert the variable
+        # *pairing*: §8 sums a["costs"] with b["costs"], NOT b's leading
+        # (positional) entry b["penalty"].
+        costs = {int(v) for v in result.vars.sel(e="costs").values}
+        assert costs == {int(a.labels.sel(e="costs")), int(b.labels.sel(e="costs"))}
 
     @pytest.mark.v1
     def test_reordered_constants_pair_by_label_not_position(self, m: Model) -> None:
@@ -835,6 +841,7 @@ class TestExactAlignmentMerge:
         assert float(result.const.sel(e="x")) == 131.0
         assert float(result.const.sel(e="z")) == 313.0
 
+    @pytest.mark.v1
     def test_quadratic_merge_reordered_aligns(self, m: Model) -> None:
         ea = pd.Index(["x", "y", "z"], name="e")
         er = pd.Index(["z", "y", "x"], name="e")
@@ -842,6 +849,10 @@ class TestExactAlignmentMerge:
         y = m.add_variables(coords=[er], name="y")
         result = (x * x) + (y * y)
         assert list(result.indexes["e"]) == ["x", "y", "z"]
+        # by-label: the "x" slot holds x["x"]**2 and y["x"]**2, so the only
+        # variable labels there are x["x"] and y["x"] — not y's leading y["z"].
+        labels = {int(v) for v in result.vars.sel(e="x").values.ravel() if v >= 0}
+        assert labels == {int(x.labels.sel(e="x")), int(y.labels.sel(e="x"))}
 
     @pytest.mark.v1
     def test_reordered_multiindex_aligns_by_tuple(self, m: Model) -> None:
@@ -897,6 +908,39 @@ class TestExactAlignmentMerge:
             "\n  Silence:   warnings.filterwarnings('ignore', "
             "category=LinopySemanticsWarning)"
         )
+
+    @pytest.mark.legacy
+    def test_var_plus_var_reordered_pairs_positionally_legacy(self, m: Model) -> None:
+        """
+        Legacy preserves master's #550 behaviour: var+var with reordered
+        labels pairs by position, so the "costs" slot wrongly sums
+        a["costs"] with b's leading entry b["penalty"]. The index still
+        reads as the left operand's order, which is what hides the
+        mispairing — so assert the variable pairing, not just the index.
+        """
+        a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
+        b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
+        result = (1 * a) + (1 * b)
+        assert list(result.indexes["e"]) == ["costs", "penalty"]
+        costs = {int(v) for v in result.vars.sel(e="costs").values}
+        assert costs == {int(a.labels.sel(e="costs")), int(b.labels.sel(e="penalty"))}
+
+    @pytest.mark.legacy
+    def test_quadratic_merge_reordered_pairs_positionally_legacy(
+        self, m: Model
+    ) -> None:
+        """
+        Legacy pairs the quadratic merge by position too: the "x" slot
+        pairs x["x"]**2 with y's leading y["z"]**2, not y["x"]**2.
+        """
+        ea = pd.Index(["x", "y", "z"], name="e")
+        er = pd.Index(["z", "y", "x"], name="e")
+        x = m.add_variables(coords=[ea], name="x")
+        y = m.add_variables(coords=[er], name="y")
+        result = (x * x) + (y * y)
+        assert list(result.indexes["e"]) == ["x", "y", "z"]
+        labels = {int(v) for v in result.vars.sel(e="x").values.ravel() if v >= 0}
+        assert labels == {int(x.labels.sel(e="x")), int(y.labels.sel(e="z"))}
 
     @pytest.mark.v1
     def test_different_multiindex_raises_dim_mismatch(self, m: Model) -> None:
