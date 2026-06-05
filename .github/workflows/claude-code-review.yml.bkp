@@ -78,7 +78,7 @@ jobs:
           #   'Please provide a thorough code review focusing on our coding standards and best practices.' }}
 
           # Project-specific tools for Python development
-          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[dev,solvers])"
+          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[solvers] --group dev)"
 
           # Optional: Skip review for certain conditions
           # if: |

@@ -43,7 +43,7 @@ To run the test suite:
 .. code-block:: bash
 
     # Install development dependencies
-    uv sync --extra dev --extra solvers
+    uv sync --group dev --extra solvers
 
     # Run all tests
     pytest
@@ -56,6 +56,20 @@ To run the test suite:
 
     # Run a specific test function
     pytest test/test_model.py::test_model_creation
+
+The contributor toolchains (``dev``, ``docs``, ``benchmarks``) are
+`PEP 735 <https://peps.python.org/pep-0735/>`_ dependency groups rather than
+extras, so they are installed with ``--group`` instead of ``--extra`` and are
+not reachable through the ``.[...]`` syntax. With pip, dependency groups
+require **pip >= 25.1**:
+
+.. code-block:: bash
+
+    pip install -e . --group dev      # pip >= 25.1
+    uv sync --group dev               # uv (any recent version)
+
+The runtime extras (``solvers``, ``oetc``, ``remote``) are unaffected and are
+still installed the usual way, e.g. ``pip install linopy[solvers]``.
 
 GPU Testing
 -----------
@@ -84,7 +98,7 @@ When working on performance-sensitive code, use the internal benchmark suite in 
 .. code-block:: bash
 
     # Install benchmark dependencies
-    uv sync --extra benchmarks
+    uv sync --group benchmarks
 
     # Quick timing benchmarks
     pytest benchmarks/ --quick
