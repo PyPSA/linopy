@@ -4,15 +4,20 @@ name: CodSpeed (walltime macro)
 # mode that reflects the real cost of dense-vs-sparse work (cache, allocation,
 # native numpy/scipy), which instruction counting under-weights.
 #
-# Master-only (updates the walltime baseline) plus manual dispatch for ad-hoc
-# branch/PR checks. Deliberately off every PR: macro-runner minutes are metered
-# (600/month free), unlike the instrumentation workflow.
+# Master push (updates the walltime baseline) + manual dispatch + opt-in per-PR
+# via the ``trigger:benchmark`` label. Off every *unlabelled* PR: macro-runner
+# minutes are metered (600/month free), and self-hosted bare-metal shouldn't run
+# arbitrary PR code — the label is a maintainer-controlled gate, so only apply it
+# to trusted (same-repo) PRs.
 #
 # Requires the repo under a GitHub org (macro runners are org-only) with the
 # CodSpeed app connected to the repo (OIDC auth — no token secret needed).
 
 on:
   push:
+    branches: [ master ]
+  pull_request:
+    types: [ labeled, synchronize ]
     branches: [ master ]
   workflow_dispatch:
 
@@ -23,6 +28,10 @@ concurrency:
 jobs:
   macro:
     name: CodSpeed walltime (macro runner)
+    # Always on master push / dispatch; on PRs only when explicitly labelled.
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          contains(github.event.pull_request.labels.*.name, 'trigger:benchmark') }}
     runs-on: codspeed-macro
     # Non-gating until the CodSpeed app is connected to the repo (OIDC auth).
     continue-on-error: true

@@ -1,23 +1,18 @@
-name: CodSpeed (memory)
+name: CodSpeed (memory, per-PR)
 
-# Heap-allocation tracking (peak memory, total allocated, allocation count) —
-# the instrument that directly reflects the sparsity/memory work, which neither
-# CPU simulation nor walltime captures. Allocation tracking is deterministic, so
-# this runs per-PR-to-master and on master like the instrumentation job.
+# Fast per-PR heap-allocation check on a GitHub runner — the always-on signal.
+# A *solo* instrument run → one upload per (commit, environment), so nothing
+# overwrites it. (CodSpeed records one run per (commit, environment); a second
+# upload to the same environment supersedes the first, which is why simulation
+# and memory must share one run on master — see codspeed.yml.)
 #
-# Runner: trying standard ubuntu-latest first. The Memory Instrument was
-# documented as "all runners for Rust and C/C++"; if Python memory mode needs a
-# bare-metal/eBPF runner, move this onto `runs-on: codspeed-macro` (org-only).
-#
-# Deep, phase-resolved peak-RSS analysis stays in the in-repo memray harness
-# (`python -m benchmarks memory ...`); this is the dashboard regression net.
+# Skipped when the PR carries the ``trigger:benchmark`` label: that opt-in path
+# runs the full simulation+memory suite (codspeed.yml), which already covers
+# memory, so running this too would double-upload to the same environment.
 
 on:
-  push:
-    branches: [ master ]
   pull_request:
     branches: [ master ]
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,9 +20,10 @@ concurrency:
 
 jobs:
   memory:
-    name: CodSpeed memory (heap allocations)
+    name: CodSpeed memory (per-PR)
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'trigger:benchmark') }}
     runs-on: ubuntu-latest
-    # Non-gating until the CodSpeed app is connected to the repo (OIDC auth).
+    # Non-gating: informational, never blocks a merge.
     continue-on-error: true
     permissions:
       contents: read   # actions/checkout
@@ -43,7 +39,6 @@ jobs:
         python-version: "3.12"
 
     - name: Install pinned benchmark environment
-      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
       run: |
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"

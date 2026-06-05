@@ -1,15 +1,21 @@
-name: CodSpeed (instrumentation)
+name: CodSpeed (simulation + memory)
 
-# Cachegrind micro-benchmarks for instruction-count regression detection.
-# Runs on master (establishing/updating the baseline) and on every PR (compared
-# against that baseline), plus a manual trigger. Deterministic instruction
-# counts run on shared CI runners and consume no CodSpeed macro-runner minutes,
-# so per-PR is free. Wall-clock lives in the macro workflow (codspeed-macro.yml).
+# CPU instruction counts (cachegrind) AND heap allocations in ONE upload.
+# They must share a run: CodSpeed records one run per (commit, environment),
+# and a second upload to the same environment overwrites the first — the other
+# instrument's benchmarks then show as "skipped". So both are measured serially
+# via ``mode: simulation,memory`` (CodSpeedHQ/action >= 4.12).
+#
+# Cadence: master push (establish/update both baselines) + manual dispatch +
+# opt-in per-PR via the ``trigger:benchmark`` label — which keeps the PR context
+# so CodSpeed posts a comment (workflow_dispatch can't). Per-PR memory-only is
+# codspeed-memory.yml; wall-clock (bare-metal) is codspeed-macro.yml.
 
 on:
   push:
     branches: [ master ]
   pull_request:
+    types: [ labeled, synchronize ]
     branches: [ master ]
   workflow_dispatch:
 
@@ -19,13 +25,18 @@ concurrency:
 
 jobs:
   codspeed:
-    name: CodSpeed (micro regression detection)
+    name: CodSpeed simulation + memory
+    # Always on master push / dispatch; on PRs only when explicitly labelled.
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          contains(github.event.pull_request.labels.*.name, 'trigger:benchmark') }}
     runs-on: ubuntu-latest
-    # Non-gating until the CodSpeed app is connected to the repo (OIDC auth).
+    # Non-gating: informational, never blocks a merge.
     continue-on-error: true
     permissions:
-      contents: read   # actions/checkout
-      id-token: write  # OIDC auth with CodSpeed — no token secret
+      contents: read        # actions/checkout
+      id-token: write       # OIDC auth with CodSpeed — no token secret
+      pull-requests: write  # drop the trigger label after the run
     steps:
     - uses: actions/checkout@v6
       with:
@@ -37,16 +48,25 @@ jobs:
         python-version: "3.12"
 
     - name: Install pinned benchmark environment
-      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
       run: |
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"
 
-    - name: Run benchmarks under CodSpeed
+    - name: Run benchmarks under CodSpeed (simulation + memory)
       uses: CodSpeedHQ/action@v4
       with:
-        mode: simulation  # cachegrind instruction counts (required input in v4)
-        # --codspeed-set simulation: trim to the cheap phases (cachegrind is the
-        # slow, least-representative instrument); to_solver stays on memory+walltime.
+        mode: simulation,memory
         run: |
-          pytest benchmarks/ --quick --codspeed --codspeed-set simulation
+          pytest benchmarks/ --quick --codspeed
+
+    - name: Drop the trigger label so it can be re-added to re-run
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.removeLabel({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            name: 'trigger:benchmark',
+          }).catch(() => {})
