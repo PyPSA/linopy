@@ -35,9 +35,7 @@ def _alloc() -> int:
 def test_timing_snapshot_round_trips_into_loader(tmp_path: Path) -> None:
     """A synthesized id parses back into the (phase, spec, size) columns."""
     snap = tmp_path / "t.json"
-    bench.time(_tiny, rounds=3).to_snapshot(
-        snap, spec="basic", size=100, phase="build"
-    )
+    bench.time(_tiny, rounds=3).to_snapshot(snap, spec="basic", size=100, phase="build")
 
     df, unit = load_long_df([snap])
     assert unit == "s"
