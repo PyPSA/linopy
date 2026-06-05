@@ -183,11 +183,8 @@ def _provision_venvs(
                 yield _ProvisionedVenv(version, None, None, None, "install")
                 continue
 
-            # Build the isolated import root described in the docstring:
-            # a filtered copy of ``benchmarks/`` and nothing else. The
-            # heavy, sweep-irrelevant artifacts (the executed notebook,
-            # bytecode caches, macOS cruft) are skipped to keep the
-            # per-version copy cheap.
+            # Isolated import root (see the docstring): a filtered copy of
+            # ``benchmarks/``, skipping sweep-irrelevant heavy artifacts.
             import_dir = Path(tmp) / "iso"
             import_dir.mkdir()
             shutil.copytree(
@@ -196,18 +193,13 @@ def _provision_venvs(
                 ignore=shutil.ignore_patterns("__pycache__", "*.ipynb", ".DS_Store"),
             )
 
-            # No PYTHONPATH manipulation: the copied ``benchmarks`` under
-            # cwd=import_dir carries the harness without pulling the
-            # repo's ``linopy/`` into the import path. Bytecode the
-            # subprocess writes lands in this throwaway copy, never the
-            # working tree, so no PYTHONDONTWRITEBYTECODE is needed.
+            # Drop PYTHONPATH so the repo's ``linopy/`` can't shadow the
+            # venv's installed copy (see the docstring).
             env = os.environ.copy()
             env.pop("PYTHONPATH", None)
 
-            # Preflight: confirm the venv's linopy is what gets imported
-            # under cwd=import_dir. If a future change reintroduces the
-            # dev-linopy shadow bug, this fails loudly here rather than
-            # silently corrupting every snapshot in the sweep.
+            # Preflight: assert the venv's linopy is the one that imports, so a
+            # reintroduced shadow bug fails loudly here, not silently per-run.
             preflight = subprocess.run(
                 [
                     str(vpy),
@@ -393,9 +385,6 @@ def run_memory_sweep(
         # ``_ProvisionedVenv``); narrow for the type checker.
         assert prov.python is not None and prov.import_dir is not None
 
-        # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
-        # under cwd; we run it with cwd pinned to repo root, then move
-        # the file if the user asked for a custom output dir.
         label = f"linopy-{_snapshot_label(prov.version)}"
         mem_cmd = [
             str(prov.python),

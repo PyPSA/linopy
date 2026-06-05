@@ -233,11 +233,9 @@ def plot_compare(
         wrap = facet_kwargs["facet_col_wrap"]
         _hide_non_leftmost_yticks(fig, wrap=wrap)
         _share_axis_labels(fig, y_label="test", x_label=x_label)
-        # Per-wrap-row equal-share layout is plotly's default. Facets
-        # with fewer categories than the row max will show empty space
-        # below their bars — visually loose but the facet header
-        # annotations stay correctly positioned, which a manual
-        # ``domain`` override would scramble.
+        # Keep plotly's default equal-share row layout: shorter facets show
+        # empty space below their bars, but the header annotations stay put
+        # (a manual ``domain`` override would scramble them).
         rows_per_facet = df.groupby(facets)[y_col].nunique().max()
         n_wrap_rows = (df[facets].nunique() + wrap - 1) // wrap
         height = max(500, int(n_wrap_rows * rows_per_facet * 24) + 100)
