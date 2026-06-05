@@ -33,9 +33,16 @@ from numpy import arange
 from xarray import Coordinates, DataArray, Dataset, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes
-from xarray.core.coordinates import CoordinateValidationError
 from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
+
+try:
+    from xarray.core.coordinates import CoordinateValidationError
+except ImportError:
+    # CoordinateValidationError was added in xarray 2025.6.0. On older
+    # versions the same failures surface as plain ValueError, which it
+    # subclasses, so falling back to ValueError preserves the catch below.
+    CoordinateValidationError = ValueError  # type: ignore[assignment, misc]
 
 from linopy.constants import (
     HELPER_DIMS,
