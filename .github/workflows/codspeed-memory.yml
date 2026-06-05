@@ -1,0 +1,56 @@
+name: CodSpeed (memory)
+
+# Heap-allocation tracking (peak memory, total allocated, allocation count) —
+# the instrument that directly reflects the sparsity/memory work, which neither
+# CPU simulation nor walltime captures. Allocation tracking is deterministic, so
+# this runs per-PR-to-master and on master like the instrumentation job.
+#
+# Runner: trying standard ubuntu-latest first. The Memory Instrument was
+# documented as "all runners for Rust and C/C++"; if Python memory mode needs a
+# bare-metal/eBPF runner, move this onto `runs-on: codspeed-macro` (org-only).
+#
+# Deep, phase-resolved peak-RSS analysis stays in the in-repo memray harness
+# (`python -m benchmarks memory ...`); this is the dashboard regression net.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  memory:
+    name: CodSpeed memory (heap allocations)
+    runs-on: ubuntu-latest
+    # Non-gating until the CodSpeed app is connected to the repo (OIDC auth).
+    continue-on-error: true
+    permissions:
+      contents: read   # actions/checkout
+      id-token: write  # OIDC auth with CodSpeed — no token secret
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0  # setuptools_scm
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install pinned benchmark environment
+      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+
+    - name: Run benchmarks under CodSpeed (memory)
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: memory
+        run: |
+          pytest benchmarks/ --quick --codspeed
