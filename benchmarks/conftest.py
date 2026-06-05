@@ -6,6 +6,17 @@ import pytest
 
 from benchmarks.registry import BenchSpec
 
+# Test modules the CodSpeed instruments measure (edit to change coverage).
+# Covers construction, both solver-IO paths (lp_write = file, solver_handoff =
+# direct in-memory), and the matrix build. test_netcdf is excluded — disk I/O is
+# slow and noisy under walltime; it still runs under ``benchmarks smoke``.
+CODSPEED_MODULES = (
+    "test_build",
+    "test_matrices",
+    "test_lp_write",
+    "test_solver_handoff",
+)
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -29,18 +40,20 @@ def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """
-    Drop PyPSA end-to-end tests under ``--quick``.
-
-    The PyPSA carbon-management network is ~30s by itself; CodSpeed under
-    cachegrind would make it minutes. ``--quick`` is for sub-30s sweeps,
-    so the end-to-end module doesn't belong there.
+    ``--quick`` drops the PyPSA end-to-end test (~30s; minutes under cachegrind).
+    ``--codspeed`` narrows the run to ``CODSPEED_MODULES``.
     """
-    if not config.getoption("--quick"):
-        return
-    skip = pytest.mark.skip(reason="--quick: pypsa end-to-end skipped")
-    for item in items:
-        if "test_pypsa_carbon_management" in item.nodeid:
-            item.add_marker(skip)
+    if config.getoption("--quick"):
+        skip = pytest.mark.skip(reason="--quick: pypsa end-to-end skipped")
+        for item in items:
+            if "test_pypsa_carbon_management" in item.nodeid:
+                item.add_marker(skip)
+
+    if getattr(config.option, "codspeed", False):
+        deselected = [i for i in items if i.path.stem not in CODSPEED_MODULES]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = [i for i in items if i.path.stem in CODSPEED_MODULES]
 
 
 def maybe_skip(request: pytest.FixtureRequest, spec: BenchSpec, size: int) -> None:
