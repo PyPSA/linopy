@@ -16,6 +16,19 @@ CODSPEED_MODULES = (
     "test_to_solver",
 )
 
+# Cachegrind (simulation) is ~hundreds× native and under-weights sparse/native
+# work, so the simulation job trims to the cheap phases; to_solver is carried
+# per-PR by the memory instrument and on master by walltime instead.
+CODSPEED_SIMULATION_MODULES = ("test_build", "test_to_lp")
+
+# Each CodSpeed job passes ``--codspeed-set <instrument>`` so the subset is
+# chosen explicitly, not sniffed from pytest-codspeed internals.
+CODSPEED_SETS = {
+    "simulation": CODSPEED_SIMULATION_MODULES,
+    "memory": CODSPEED_MODULES,
+    "walltime": CODSPEED_MODULES,
+}
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -23,6 +36,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Use smaller problem sizes for quick benchmarking (CI smoke).",
+    )
+    parser.addoption(
+        "--codspeed-set",
+        choices=sorted(CODSPEED_SETS),
+        default="memory",
+        help=(
+            "CodSpeed instrument whose module subset to run (default 'memory' = "
+            "full eligible set; 'simulation' trims the expensive cachegrind "
+            "phases). Only takes effect under --codspeed."
+        ),
     )
     parser.addoption(
         "--long",
@@ -40,7 +63,7 @@ def pytest_collection_modifyitems(
 ) -> None:
     """
     ``--quick`` drops the PyPSA end-to-end test (~30s; minutes under cachegrind).
-    ``--codspeed`` narrows the run to ``CODSPEED_MODULES``.
+    ``--codspeed`` narrows the run to the ``--codspeed-set`` instrument subset.
     """
     if config.getoption("--quick"):
         skip = pytest.mark.skip(reason="--quick: pypsa end-to-end skipped")
@@ -49,10 +72,11 @@ def pytest_collection_modifyitems(
                 item.add_marker(skip)
 
     if getattr(config.option, "codspeed", False):
-        deselected = [i for i in items if i.path.stem not in CODSPEED_MODULES]
+        modules = CODSPEED_SETS[config.getoption("--codspeed-set")]
+        deselected = [i for i in items if i.path.stem not in modules]
         if deselected:
             config.hook.pytest_deselected(items=deselected)
-            items[:] = [i for i in items if i.path.stem in CODSPEED_MODULES]
+            items[:] = [i for i in items if i.path.stem in modules]
 
 
 def maybe_skip(request: pytest.FixtureRequest, spec: BenchSpec, size: int) -> None:

@@ -46,5 +46,7 @@ jobs:
       uses: CodSpeedHQ/action@v4
       with:
         mode: simulation  # cachegrind instruction counts (required input in v4)
+        # --codspeed-set simulation: trim to the cheap phases (cachegrind is the
+        # slow, least-representative instrument); to_solver stays on memory+walltime.
         run: |
-          pytest benchmarks/ --quick --codspeed
+          pytest benchmarks/ --quick --codspeed --codspeed-set simulation
