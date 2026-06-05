@@ -1,18 +1,16 @@
-name: CodSpeed (memory, per-PR)
+name: CodSpeed (memory)
 
-# Fast per-PR heap-allocation check on a GitHub runner — the always-on signal.
-# A *solo* instrument run → one upload per (commit, environment), so nothing
-# overwrites it. (CodSpeed records one run per (commit, environment); a second
-# upload to the same environment supersedes the first, which is why simulation
-# and memory must share one run on master — see codspeed.yml.)
-#
-# Skipped when the PR carries the ``trigger:benchmark`` label: that opt-in path
-# runs the full simulation+memory suite (codspeed.yml), which already covers
-# memory, so running this too would double-upload to the same environment.
+# Heap-allocation tracking — the always-on signal for this sparsity/memory fork.
+# Fast (~2 min) and free on a GitHub runner, so it runs on master (baseline) and
+# every PR. A solo instrument on ubuntu: its one upload per (commit, env) never
+# clashes with the walltime run, which is a separate bare-metal environment.
 
 on:
+  push:
+    branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,8 +18,7 @@ concurrency:
 
 jobs:
   memory:
-    name: CodSpeed memory (per-PR)
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'trigger:benchmark') }}
+    name: CodSpeed memory
     runs-on: ubuntu-latest
     # Non-gating: informational, never blocks a merge.
     continue-on-error: true
