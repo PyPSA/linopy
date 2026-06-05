@@ -33,17 +33,17 @@ def _alloc() -> int:
 
 
 def test_timing_snapshot_round_trips_into_loader(tmp_path: Path) -> None:
-    """A synthesized id parses back into the (phase, model, size) columns."""
+    """A synthesized id parses back into the (phase, spec, size) columns."""
     snap = tmp_path / "t.json"
     bench.time(_tiny, rounds=3).to_snapshot(
-        snap, model="basic", size=100, phase="build"
+        snap, spec="basic", size=100, phase="build"
     )
 
     df, unit = load_long_df([snap])
     assert unit == "s"
     assert len(df) == 1
     row = df.iloc[0]
-    assert (row["phase"], row["model"], row["size"]) == ("build", "basic", 100)
+    assert (row["phase"], row["spec"], row["size"]) == ("build", "basic", 100)
     assert row["value"] > 0
 
 
@@ -63,7 +63,7 @@ def test_to_df_columns_match_loader(tmp_path: Path) -> None:
     """In-process ``to_df`` shares the loader's exact column set/order."""
     snap = tmp_path / "t.json"
     result = bench.time(_tiny, rounds=2)
-    result.to_snapshot(snap, model="basic", size=10, phase="build")
+    result.to_snapshot(snap, spec="basic", size=10, phase="build")
 
     loaded, _ = load_long_df([snap])
     assert list(result.to_df().columns) == list(loaded.columns)
@@ -75,7 +75,7 @@ def test_memory_path_round_trips(tmp_path: Path) -> None:
     snap = tmp_path / "m.json"
     result = bench.memory(_alloc)
     assert result.peak_mib > 0
-    result.to_snapshot(snap, model="basic", size=10, phase="build")
+    result.to_snapshot(snap, spec="basic", size=10, phase="build")
 
     df, unit = load_long_df([snap])
     assert unit == "MiB"
@@ -101,7 +101,7 @@ def test_registry_builder_times() -> None:
 
 
 def test_partial_id_spec_rejected(tmp_path: Path) -> None:
-    """A half-given (model/size/phase) id is ambiguous and must error."""
+    """A half-given (spec/size/phase) id is ambiguous and must error."""
     result = bench.time(_tiny, rounds=1)
     with pytest.raises(ValueError, match="given together"):
-        result.to_snapshot(tmp_path / "x.json", model="basic")
+        result.to_snapshot(tmp_path / "x.json", spec="basic")

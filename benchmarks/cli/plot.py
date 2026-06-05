@@ -55,8 +55,8 @@ def plot(
             "--facets",
             help=(
                 "Split compare / scatter into subplots by ``phase`` (test "
-                "file) or ``model`` (parametrize id). Default: no faceting. "
-                "Tests whose ids don't match ``[<model>-<axis>=<value>]`` (e.g. "
+                "file) or ``spec`` (parametrize id). Default: no faceting. "
+                "Tests whose ids don't match ``[<spec>-<axis>=<value>]`` (e.g. "
                 "PyPSA carbon-management) land in an ``other`` facet."
             ),
         ),

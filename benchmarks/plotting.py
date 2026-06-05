@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 PlotView = Literal["compare", "scatter", "sweep", "scaling"]
 SortMode = Literal["absolute", "relative"]
-FacetBy = Literal["phase", "model"]
+FacetBy = Literal["phase", "spec"]
 
 
 def _axis_kwargs(unit: str) -> dict:
@@ -117,10 +117,10 @@ def plot_compare(
     - ``"phase"``: facet by the test file (``test_build``,
       ``test_lp_write``, ...). Best for "everything in this phase moved
       together?".
-    - ``"model"``: facet by the model name (``basic``, ``knapsack``, ...).
+    - ``"spec"``: facet by the spec name (``basic``, ``knapsack``, ...).
       Best for "what happened across all the basic-sized variants?".
 
-    Tests whose IDs don't match the standard ``[<model>-n=<size>]``
+    Tests whose IDs don't match the standard ``[<spec>-n=<size>]``
     parametrize shape (e.g. PyPSA carbon-management) land in an
     ``other`` facet.
     """
@@ -135,11 +135,11 @@ def plot_compare(
     a_label, b_label = labels[0], labels[1]
 
     # Pivot to wide: one row per test, baseline + candidate as columns,
-    # phase / model / size carried through. Then compute deltas
+    # phase / spec / size carried through. Then compute deltas
     # vectorised — no per-row dict construction.
     wide = (
         df_long.pivot(
-            index=["test_id", "phase", "model", "size", "axis"],
+            index=["test_id", "phase", "spec", "size", "axis"],
             columns="snapshot",
             values="value",
         )
@@ -187,7 +187,7 @@ def plot_compare(
     if facets is None:
         y_col = "test_id"
     else:
-        varying = "model" if facets == "phase" else "phase"
+        varying = "spec" if facets == "phase" else "phase"
         size_str = df["size"].astype("Int64").astype(str)
         df["_short"] = df[varying] + "-" + df["axis"] + "=" + size_str
         other_mask = df["phase"] == "other"
@@ -461,11 +461,11 @@ def plot_scaling(
     df = (
         df_long.dropna(subset=["size"])
         .rename(columns={"value": metric})
-        .sort_values(["phase", "model", "size"])
+        .sort_values(["phase", "spec", "size"])
     )
     if df.empty:
         raise ValueError(
-            "no parametrized tests found (expected ``...[<model>-<axis>=<N>]`` ids)"
+            "no parametrized tests found (expected ``...[<spec>-<axis>=<N>]`` ids)"
         )
 
     axes = sorted(df["axis"].unique())
@@ -479,7 +479,7 @@ def plot_scaling(
         df,
         x="size",
         y=metric,
-        color="model",
+        color="spec",
         facet_col="phase",
         facet_col_wrap=3,
         log_x=log_x,

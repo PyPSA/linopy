@@ -13,7 +13,7 @@ already understands::
 
     r = bench.time(REGISTRY["basic"].build, 100)
     r                                  # rich repr in a notebook
-    r.to_snapshot("a.json", model="basic", size=100, phase="build")
+    r.to_snapshot("a.json", spec="basic", size=100, phase="build")
 
     bench.compare({"v1": f1, "v2": f2}).to_snapshot("cmp.json")
 
@@ -76,12 +76,12 @@ def _fn_name(fn: Callable[..., object]) -> str:
 
 def _row(test_id: str, value: float) -> dict[str, object]:
     """One ``load_long_df``-shaped row for an in-process result."""
-    phase, model, size, axis = parse_test_id(test_id)
+    phase, spec, size, axis = parse_test_id(test_id)
     return {
         "snapshot": test_id,
         "test_id": test_id,
         "phase": phase,
-        "model": model,
+        "spec": spec,
         "size": size,
         "axis": axis,
         "value": value,
@@ -94,7 +94,7 @@ def _frame(rows: list[dict[str, object]]) -> pd.DataFrame:
 
     df = pd.DataFrame(
         rows,
-        columns=["snapshot", "test_id", "phase", "model", "size", "axis", "value"],
+        columns=["snapshot", "test_id", "phase", "spec", "size", "axis", "value"],
     )
     df["size"] = df["size"].astype("Int64")
     return df
@@ -115,12 +115,12 @@ class TimingResult:
         self,
         path: str | Path,
         *,
-        model: str | None = None,
+        spec: str | None = None,
         size: int | None = None,
         phase: str | None = None,
     ) -> Path:
         """Write a pytest-benchmark-shaped timing snapshot (seconds)."""
-        test_id = synth_test_id(self.label, model=model, size=size, phase=phase)
+        test_id = synth_test_id(self.label, spec=spec, size=size, phase=phase)
         return write_timing_snapshot(path, [(test_id, dict(self.stats))])
 
     def to_df(self) -> pd.DataFrame:
@@ -158,12 +158,12 @@ class MemoryResult:
         self,
         path: str | Path,
         *,
-        model: str | None = None,
+        spec: str | None = None,
         size: int | None = None,
         phase: str | None = None,
     ) -> Path:
         """Write a memory.py-shaped snapshot (peak MiB)."""
-        test_id = synth_test_id(self.label, model=model, size=size, phase=phase)
+        test_id = synth_test_id(self.label, spec=spec, size=size, phase=phase)
         return write_memory_snapshot(path, self.label, {test_id: self.peak_mib})
 
     def to_df(self) -> pd.DataFrame:
@@ -187,7 +187,7 @@ class ResultSet:
     ``to_snapshot`` writes every result into a single file keyed by its
     label — the natural "compare these N variants" case. For
     size-parametrized ``scaling`` plots, write each result individually
-    with ``model``/``size``/``phase`` instead.
+    with ``spec``/``size``/``phase`` instead.
     """
 
     results: list[TimingResult | MemoryResult] = field(default_factory=list)

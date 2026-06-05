@@ -48,7 +48,7 @@ def load_long_df(
     can do their own analysis without importing the plotting module
     (which pulls in plotly). Returns ``(df, unit)`` where ``df`` has one
     row per ``(snapshot, test_id)`` with columns ``snapshot, test_id,
-    phase, model, size, value``, and ``unit`` is ``"s"`` (timing) or
+    phase, spec, size, value``, and ``unit`` is ``"s"`` (timing) or
     ``"MiB"`` (memory).
     """
     from benchmarks.snapshot import load_long_df as _impl

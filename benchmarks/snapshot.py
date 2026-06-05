@@ -15,10 +15,10 @@ Two snapshot shapes, auto-detected on load:
 - **memory** — ``{"label": <str>, "peak_mib": {<id>: <float>}}`` → value
   in **MiB**.
 
-Test ids follow ``…[<model>-<axis>=<value>]`` where ``<axis>`` is the sweep
+Test ids follow ``…[<spec>-<axis>=<value>]`` where ``<axis>`` is the sweep
 dial — ``n`` for a model (size) or ``severity`` for a pattern — and ``<value>``
 is the integer swept. :func:`parse_test_id` splits one into
-``(phase, model, value, axis)`` and :func:`synth_test_id` builds one.
+``(phase, spec, value, axis)`` and :func:`synth_test_id` builds one.
 """
 
 from __future__ import annotations
@@ -41,12 +41,12 @@ _SIZE_RE = re.compile(r"(.*)\[([^\[\]]+?)-(\w+)=(\d+)\]")
 
 def parse_test_id(test_id: str) -> tuple[str, str, int | None, str]:
     """
-    Return ``(phase, model, value, axis)`` for a pytest test id.
+    Return ``(phase, spec, value, axis)`` for a pytest test id.
 
     ``value`` is the integer swept along ``axis`` (``"n"`` for a model size,
     ``"severity"`` for a pattern). Falls back to
     ``("other", "other", None, "other")`` for ids that don't match the
-    ``…[<model>-<axis>=<value>]`` parametrize shape (e.g.
+    ``…[<spec>-<axis>=<value>]`` parametrize shape (e.g.
     ``test_pypsa_carbon_management``).
     """
     m = _SIZE_RE.match(test_id)
@@ -71,7 +71,7 @@ def spec_param_id(name: str, axis: str, value: object) -> str:
 def synth_test_id(
     label: str,
     *,
-    model: str | None,
+    spec: str | None,
     size: int | None,
     phase: str | None,
     axis: str = "n",
@@ -79,19 +79,19 @@ def synth_test_id(
     """
     Build a snapshot test id from optional metadata.
 
-    With all of ``model``/``size``/``phase`` supplied, synthesize
-    ``bench::{phase}[{model}-{axis}={size}]`` — this round-trips through
+    With all of ``spec``/``size``/``phase`` supplied, synthesize
+    ``bench::{phase}[{spec}-{axis}={size}]`` — this round-trips through
     :func:`parse_test_id` into the columns (so ``plot --view scaling`` works
     across several sweep values). ``axis`` defaults to ``"n"`` (a model size);
-    pass ``axis="severity"`` for a pattern. With none of model/size/phase
+    pass ``axis="severity"`` for a pattern. With none of spec/size/phase
     supplied, fall back to ``label`` verbatim (lands in the ``"other"`` bucket
     — still fine for ``compare``). A partial spec is ambiguous and rejected.
     """
-    if model is not None and size is not None and phase is not None:
-        return f"bench::{phase}[{spec_param_id(model, axis, size)}]"
-    if model is not None or size is not None or phase is not None:
+    if spec is not None and size is not None and phase is not None:
+        return f"bench::{phase}[{spec_param_id(spec, axis, size)}]"
+    if spec is not None or size is not None or phase is not None:
         raise ValueError(
-            "model, size, and phase must be given together (or all omitted)"
+            "spec, size, and phase must be given together (or all omitted)"
         )
     return label
 
@@ -175,7 +175,7 @@ def load_long_df(
     """
     Return ``(df, unit)`` — one row per ``(snapshot, test_id)`` pair.
 
-    Columns: ``snapshot``, ``test_id``, ``phase``, ``model``, ``size``
+    Columns: ``snapshot``, ``test_id``, ``phase``, ``spec``, ``size``
     (``Int64``-nullable for the "other" bucket), ``axis`` (``"n"`` /
     ``"severity"`` / ``"other"``), ``value``. ``unit`` is the shared unit
     string (``"s"`` for timing, ``"MiB"`` for memory) — every loaded snapshot
@@ -192,13 +192,13 @@ def load_long_df(
     rows = []
     for label, vals, _ in raw:
         for test_id, value in vals.items():
-            phase, model, size, axis = parse_test_id(test_id)
+            phase, spec, size, axis = parse_test_id(test_id)
             rows.append(
                 {
                     "snapshot": label,
                     "test_id": test_id,
                     "phase": phase,
-                    "model": model,
+                    "spec": spec,
                     "size": size,
                     "axis": axis,
                     "value": value,
