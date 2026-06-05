@@ -39,9 +39,7 @@ from xarray.namedarray.utils import is_dict_like
 try:
     from xarray.core.coordinates import CoordinateValidationError
 except ImportError:
-    # CoordinateValidationError was added in xarray 2025.6.0. On older
-    # versions the same failures surface as plain ValueError, which it
-    # subclasses, so falling back to ValueError preserves the catch below.
+    # Added in xarray 2025.6.0; it subclasses ValueError on newer versions.
     CoordinateValidationError = ValueError  # type: ignore[assignment, misc]
 
 from linopy.constants import (
