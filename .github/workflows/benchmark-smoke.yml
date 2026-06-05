@@ -41,33 +41,3 @@ jobs:
       # Catches doc rot: the walkthrough must stay runnable end-to-end.
       run: |
         python -m benchmarks notebook
-
-  codspeed:
-    name: CodSpeed (micro regression detection)
-    runs-on: ubuntu-latest
-    # Red until CODSPEED_TOKEN is set on the org — don't fail the PR on it.
-    continue-on-error: true
-    # Cachegrind is ~10–20× slower, so --quick only: detects instruction-count
-    # shifts on hot paths; wall-clock comparison stays in ``sweep``.
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: 0  # setuptools_scm
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
-
-    - name: Install pinned benchmark environment
-      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
-      run: |
-        python -m pip install uv
-        uv pip install --system -e ".[dev,benchmarks]"
-
-    - name: Run benchmarks under CodSpeed
-      uses: CodSpeedHQ/action@v3
-      with:
-        token: ${{ secrets.CODSPEED_TOKEN }}
-        run: |
-          pytest benchmarks/ --quick --codspeed
