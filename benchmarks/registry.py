@@ -47,8 +47,9 @@ ALL_FEATURES = frozenset(
 
 BUILD = "build"
 MATRICES = "matrices"
-LP_WRITE = "lp_write"
-NETCDF = "netcdf"
+TO_LP = "to_lp"
+TO_NETCDF = "to_netcdf"
+FROM_NETCDF = "from_netcdf"
 TO_HIGHSPY = "to_highspy"
 TO_GUROBIPY = "to_gurobipy"
 TO_MOSEK = "to_mosek"
@@ -58,8 +59,9 @@ ALL_PHASES = frozenset(
     {
         BUILD,
         MATRICES,
-        LP_WRITE,
-        NETCDF,
+        TO_LP,
+        TO_NETCDF,
+        FROM_NETCDF,
         TO_HIGHSPY,
         TO_GUROBIPY,
         TO_MOSEK,
@@ -74,8 +76,9 @@ DEFAULT_PHASES = frozenset(
     {
         BUILD,
         MATRICES,
-        LP_WRITE,
-        NETCDF,
+        TO_LP,
+        TO_NETCDF,
+        FROM_NETCDF,
         TO_HIGHSPY,
         TO_GUROBIPY,
         TO_MOSEK,

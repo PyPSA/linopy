@@ -37,9 +37,9 @@ For what this notebook deliberately doesn't duplicate:
 | ---------------- | --------------------------------- | -------------------------------------------------------------- |
 | `build`          | `test_build.py`                   | constructing variables / expressions / constraints / objective |
 | `matrices`       | `test_matrices.py`                | `A`, `b`, `c`, bounds, labels, `Q` for QP                      |
-| `lp_write`       | `test_lp_write.py`                | `model.to_file(...)` — LP / MPS serialization                  |
-| `netcdf`         | `test_netcdf.py`                  | `to_netcdf` / `read_netcdf` round-trip                         |
-| `solver_handoff` | `test_solver_handoff.py`          | `lp.io.to_highspy` / `to_gurobipy` / `to_mosek` / `to_xpress`  |
+| `to_lp`          | `test_to_lp.py`                   | `model.to_file(...)` — LP / MPS serialization                  |
+| `to_netcdf` / `from_netcdf` | `test_netcdf.py`       | netCDF write / read round-trip                                 |
+| `to_solver`      | `test_to_solver.py`               | `lp.io.to_highspy` / `to_gurobipy` / `to_mosek` / `to_xpress`  |
 | end-to-end       | `test_pypsa_carbon_management.py` | fixed PyPSA model → highspy; sweeps `freeze_constraints`       |
 
 Solver algorithm runtime is intentionally out of scope.

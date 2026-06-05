@@ -9,13 +9,13 @@ import pytest
 
 from benchmarks.conftest import maybe_skip
 from benchmarks.phases import write_lp
-from benchmarks.registry import LP_WRITE, ModelSpec, iter_params, param_ids
+from benchmarks.registry import TO_LP, ModelSpec, iter_params, param_ids
 
-_PARAMS = iter_params(LP_WRITE)
+_PARAMS = iter_params(TO_LP)
 
 
 @pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
-def test_lp_write(
+def test_to_lp(
     benchmark: Callable[..., object],
     spec: ModelSpec,
     size: int,

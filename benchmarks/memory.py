@@ -76,12 +76,13 @@ RESULTS_DIR = Path(".benchmarks/memory")
 MEMORY_PHASES: tuple[str, ...] = (
     "build",
     "matrices",
-    "lp_write",
-    "netcdf",
-    "solver_handoff",
+    "to_lp",
+    "to_netcdf",
+    "from_netcdf",
+    "to_solver",
 )
 
-# ``pipeline`` re-runs build→matrices→lp_write in one tracker for the end-to-end
+# ``pipeline`` re-runs build→matrices→to_lp in one tracker for the end-to-end
 # peak, so it duplicates their work and is *not* in the default set; request it
 # standalone with ``--phase pipeline``. This is the full set ``--phase`` accepts.
 ALL_MEMORY_PHASES: tuple[str, ...] = (*MEMORY_PHASES, "pipeline")
@@ -91,18 +92,20 @@ def _phase_tag(phase: str) -> str:
     """Map a phase name to the registry phase tag used by ``spec.applies_to``."""
     from benchmarks.registry import (
         BUILD,
-        LP_WRITE,
+        FROM_NETCDF,
         MATRICES,
-        NETCDF,
         TO_HIGHSPY,
+        TO_LP,
+        TO_NETCDF,
     )
 
     return {
         "build": BUILD,
         "matrices": MATRICES,
-        "lp_write": LP_WRITE,
-        "netcdf": NETCDF,
-        "solver_handoff": TO_HIGHSPY,  # we always measure the highs handoff
+        "to_lp": TO_LP,
+        "to_netcdf": TO_NETCDF,
+        "from_netcdf": FROM_NETCDF,
+        "to_solver": TO_HIGHSPY,  # we always measure the highs handoff
         "pipeline": BUILD,
     }[phase]
 
@@ -199,39 +202,47 @@ def _measurements(
             lambda: touch_matrices(m),
         )
 
-    elif phase == "lp_write":
+    elif phase == "to_lp":
         from benchmarks.phases import write_lp
 
         tmpdir = tempfile.TemporaryDirectory()
         lp_path = Path(tmpdir.name) / "m.lp"
         try:
             yield (
-                f"benchmarks/test_lp_write.py::test_lp_write[{spec_param_id(name, axis, size)}]",
+                f"benchmarks/test_to_lp.py::test_to_lp[{spec_param_id(name, axis, size)}]",
                 lambda: write_lp(m, lp_path),
             )
         finally:
             tmpdir.cleanup()
 
-    elif phase == "netcdf":
-        from benchmarks.phases import read_netcdf, write_netcdf
+    elif phase == "to_netcdf":
+        from benchmarks.phases import write_netcdf
 
         tmpdir = tempfile.TemporaryDirectory()
         nc_path = Path(tmpdir.name) / "m.nc"
         try:
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_write[{spec_param_id(name, axis, size)}]",
+                f"benchmarks/test_netcdf.py::test_to_netcdf[{spec_param_id(name, axis, size)}]",
                 lambda: write_netcdf(m, nc_path),
             )
-            # ``write_netcdf`` was called by the caller as part of the
-            # measurement, so ``nc_path`` now exists for the read.
+        finally:
+            tmpdir.cleanup()
+
+    elif phase == "from_netcdf":
+        from benchmarks.phases import read_netcdf, write_netcdf
+
+        tmpdir = tempfile.TemporaryDirectory()
+        nc_path = Path(tmpdir.name) / "m.nc"
+        write_netcdf(m, nc_path)  # setup: written outside the tracker
+        try:
             yield (
-                f"benchmarks/test_netcdf.py::test_netcdf_read[{spec_param_id(name, axis, size)}]",
+                f"benchmarks/test_netcdf.py::test_from_netcdf[{spec_param_id(name, axis, size)}]",
                 lambda: read_netcdf(nc_path),
             )
         finally:
             tmpdir.cleanup()
 
-    elif phase == "solver_handoff":
+    elif phase == "to_solver":
         from benchmarks.phases import SOLVER_HANDOFFS
 
         # Memory currently tracks only HiGHS — look it up by name so a
@@ -244,7 +255,7 @@ def _measurements(
 
         yield (
             (
-                f"benchmarks/test_solver_handoff.py::test_solver_handoff"
+                f"benchmarks/test_to_solver.py::test_to_solver"
                 f"[highs-{spec_param_id(name, axis, size)}]"
             ),
             lambda: highs(m),

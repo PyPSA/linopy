@@ -42,7 +42,7 @@ def _make_params() -> list[object]:
 
 
 @pytest.mark.parametrize("solver_name,wrapper,spec,size", _make_params())
-def test_solver_handoff(
+def test_to_solver(
     benchmark: Callable[..., object],
     solver_name: str,
     wrapper: Callable[..., object],

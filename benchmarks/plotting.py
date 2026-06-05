@@ -115,7 +115,7 @@ def plot_compare(
 
     - ``None`` (default): one flat bar chart.
     - ``"phase"``: facet by the test file (``test_build``,
-      ``test_lp_write``, ...). Best for "everything in this phase moved
+      ``test_to_lp``, ...). Best for "everything in this phase moved
       together?".
     - ``"spec"``: facet by the spec name (``basic``, ``knapsack``, ...).
       Best for "what happened across all the basic-sized variants?".

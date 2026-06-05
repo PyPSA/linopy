@@ -27,8 +27,8 @@ def memory_save_cmd(
             "--phase",
             help=(
                 "Restrict measurement to these phases. Pass multiple ``--phase`` "
-                "to select more than one. Default: all (build, matrices, lp_write,"
-                " netcdf, solver_handoff)."
+                "to select more than one. Default: all (build, matrices, to_lp,"
+                " to_netcdf, from_netcdf, to_solver)."
             ),
         ),
     ] = None,

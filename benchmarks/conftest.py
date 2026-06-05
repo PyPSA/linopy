@@ -7,14 +7,13 @@ import pytest
 from benchmarks.registry import BenchSpec
 
 # Test modules the CodSpeed instruments measure (edit to change coverage).
-# Covers construction, both solver-IO paths (lp_write = file, solver_handoff =
-# direct in-memory), and the matrix build. test_netcdf is excluded — disk I/O is
-# slow and noisy under walltime; it still runs under ``benchmarks smoke``.
+# build + the two export paths: to_lp (LP text) and to_solver (direct handoff,
+# which also exercises matrix-gen). matrices is dropped — a subset of to_solver;
+# netcdf excluded — disk I/O, noisy. All still run under ``benchmarks smoke``.
 CODSPEED_MODULES = (
     "test_build",
-    "test_matrices",
-    "test_lp_write",
-    "test_solver_handoff",
+    "test_to_lp",
+    "test_to_solver",
 )
 
 

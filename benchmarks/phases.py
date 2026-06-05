@@ -66,7 +66,7 @@ def write_netcdf(m: linopy.Model, path: Path) -> None:
 
 
 # (solver_name, registry phase tag, wrapper) — consumed by the pytest
-# parametrization in ``test_solver_handoff.py`` and by ``memory.py``,
+# parametrization in ``test_to_solver.py`` and by ``memory.py``,
 # which looks up the "highs" entry. Adding a solver here automatically
 # extends both drivers.
 #

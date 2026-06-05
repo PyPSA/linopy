@@ -28,11 +28,12 @@ import linopy
 from benchmarks.registry import (
     BUILD,
     CONTINUOUS,
-    LP_WRITE,
+    FROM_NETCDF,
     MATRICES,
-    NETCDF,
     SOS,
     TO_GUROBIPY,
+    TO_LP,
+    TO_NETCDF,
     TO_XPRESS,
     ModelSpec,
     register,
@@ -85,8 +86,9 @@ if _API_AVAILABLE:
                 {
                     BUILD,
                     MATRICES,
-                    LP_WRITE,
-                    NETCDF,
+                    TO_LP,
+                    TO_NETCDF,
+                    FROM_NETCDF,
                     TO_GUROBIPY,
                     TO_XPRESS,
                 }

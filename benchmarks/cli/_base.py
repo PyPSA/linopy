@@ -33,16 +33,19 @@ memory_app = typer.Typer(
 app.add_typer(memory_app, name="memory")
 
 
-PhaseName = Literal["build", "matrices", "lp_write", "netcdf", "solver_handoff"]
+PhaseName = Literal[
+    "build", "matrices", "to_lp", "to_netcdf", "from_netcdf", "to_solver"
+]
 SpecKind = Literal["all", "models", "patterns"]
 
 
 _PHASE_TEST_FILE: dict[PhaseName, str] = {
     "build": "benchmarks/test_build.py",
     "matrices": "benchmarks/test_matrices.py",
-    "lp_write": "benchmarks/test_lp_write.py",
-    "netcdf": "benchmarks/test_netcdf.py",
-    "solver_handoff": "benchmarks/test_solver_handoff.py",
+    "to_lp": "benchmarks/test_to_lp.py",
+    "to_netcdf": "benchmarks/test_netcdf.py::test_to_netcdf",
+    "from_netcdf": "benchmarks/test_netcdf.py::test_from_netcdf",
+    "to_solver": "benchmarks/test_to_solver.py",
 }
 
 # pytest args that constitute a "smoke" run — quick sizes, no timings.
