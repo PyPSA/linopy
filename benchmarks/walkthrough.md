@@ -144,16 +144,16 @@ python -m benchmarks memory save mylabel --filter severity   # patterns, memory
 ## Run a timing snapshot
 
 `run` is the main timing entry point. Below we run twice with
-`--quick --phase build` (~10 s each) to get a baseline / candidate
-pair we can diff. On a real PR you'd run once on `master` and once on
-your branch.
+`--quick --phase build --filter basic` (one model, ~3 s each) to get a
+baseline / candidate pair we can diff. Drop `--filter basic` to sweep the
+whole registry. On a real PR you'd run once on `master` and once on your branch.
 
 ```{code-cell} ipython3
-!python -m benchmarks run --quick --phase build --json {baseline}
+!python -m benchmarks run --quick --phase build --filter basic --json {baseline}
 ```
 
 ```{code-cell} ipython3
-!python -m benchmarks run --quick --phase build --json {candidate}
+!python -m benchmarks run --quick --phase build --filter basic --json {candidate}
 ```
 
 The diff between two `--quick` runs of the same code is just
@@ -241,11 +241,11 @@ tracked region so peak reflects only the phase work, not model
 construction.
 
 ```{code-cell} ipython3
-!python -m benchmarks memory save baseline_mem --quick --phase build
+!python -m benchmarks memory save baseline_mem --quick --phase build --filter basic
 ```
 
 ```{code-cell} ipython3
-!python -m benchmarks memory save candidate_mem --quick --phase build
+!python -m benchmarks memory save candidate_mem --quick --phase build --filter basic
 ```
 
 `memory compare` prints a per-test table of the two labels with
