@@ -5,8 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 import linopy
+from benchmarks.registry import CONTINUOUS, ModelSpec, register
 
-SIZES = [10, 50, 100, 250, 500, 1000]
+SIZES = (10, 50, 100, 250, 500, 1000)
 
 
 def build_expression_arithmetic(n: int) -> linopy.Model:
@@ -28,3 +29,15 @@ def build_expression_arithmetic(n: int) -> linopy.Model:
     m.add_constraints(expr1.sum("j") >= -10, name="row_sum")
     m.add_objective(combined.sum())
     return m
+
+
+SPEC = register(
+    ModelSpec(
+        name="expression_arithmetic",
+        build=build_expression_arithmetic,
+        sizes=SIZES,
+        features=frozenset({CONTINUOUS}),
+        quick_threshold=10,
+        long_threshold=500,
+    )
+)

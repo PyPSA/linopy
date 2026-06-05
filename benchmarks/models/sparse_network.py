@@ -7,8 +7,9 @@ import pandas as pd
 import xarray as xr
 
 import linopy
+from benchmarks.registry import CONTINUOUS, ModelSpec, register
 
-SIZES = [10, 50, 100, 250, 500, 1000]
+SIZES = (10, 50, 100, 250, 500, 1000)
 
 
 def build_sparse_network(n_buses: int) -> linopy.Model:
@@ -48,3 +49,15 @@ def build_sparse_network(n_buses: int) -> linopy.Model:
 
     m.add_objective(gen.sum())
     return m
+
+
+SPEC = register(
+    ModelSpec(
+        name="sparse_network",
+        build=build_sparse_network,
+        sizes=SIZES,
+        features=frozenset({CONTINUOUS}),
+        quick_threshold=10,
+        long_threshold=500,
+    )
+)

@@ -1,0 +1,45 @@
+name: CodSpeed
+
+# Cachegrind micro-benchmarks for instruction-count regression detection.
+# Runs only when master advances (establishing/updating the baseline) plus a
+# manual trigger for ad-hoc branch checks — deliberately off every PR: the
+# cachegrind run is ~10–20× slower and regressions surface as master-to-master
+# deltas. Wall-clock comparison stays in ``sweep``.
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codspeed:
+    name: CodSpeed (micro regression detection)
+    runs-on: ubuntu-latest
+    # Red until CODSPEED_TOKEN is set on the org — don't fail master on it.
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0  # setuptools_scm
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install pinned benchmark environment
+      # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+
+    - name: Run benchmarks under CodSpeed
+      uses: CodSpeedHQ/action@v3
+      with:
+        token: ${{ secrets.CODSPEED_TOKEN }}
+        run: |
+          pytest benchmarks/ --quick --codspeed
