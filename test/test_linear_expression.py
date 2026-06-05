@@ -17,7 +17,14 @@ import xarray as xr
 from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
+from linopy import (
+    EvolvingAPIWarning,
+    LinearExpression,
+    Model,
+    QuadraticExpression,
+    Variable,
+    merge,
+)
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -288,6 +295,27 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
+    """
+    Expression over a MultiIndex dim times a single-level constant.
+
+    Mirrors PyPSA's ``soc_delta * storage_weightings``: ``u`` is indexed by
+    the (level1, level2) MultiIndex ``dim_3``; the weighting is indexed only
+    by ``level1``. The product must not raise, and each ``dim_3`` entry must
+    take the weight of its ``level1``.
+    """
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        expr = (1 * u) * by_level1
+
+    coeffs = expr.coeffs.squeeze("_term")
+    assert coeffs.sel(dim_3=(1, "a")).item() == 10.0
+    assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
+    assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
+    assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
     with pytest.raises(TypeError):
         x / x
@@ -516,6 +544,47 @@ def test_matmul_expr_and_const(x: Variable, y: Variable) -> None:
     assert_linequal(res, target)
 
     assert_linequal(expr.dot(const), target)
+
+
+def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
+    """
+    A @ b contracts the genuinely shared dims and keeps the rest.
+
+    ``z`` has dims (dim_0, dim_1); ``b`` has (dim_1, location). Only dim_1
+    is shared, so the result must keep dim_0 and location. A conversion that
+    broadcast ``b`` to ``z``'s coords would expand dim_0 into ``b`` and
+    contract it away too — collapsing the result to (location,) only.
+    """
+    expr = 1 * z
+    b = xr.DataArray(
+        np.ones((3, 2)),
+        coords={"dim_1": expr.data.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"dim_0", "location"}
+    assert_linequal(res, (expr * b).sum("dim_1"))
+
+
+def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
+    """B covering all of a's dims (and more) contracts a's dims, keeping b's extras."""
+    expr = 1 * z  # dims (dim_0, dim_1)
+    b = xr.DataArray(
+        np.ones((2, 3, 2)),
+        coords={
+            "dim_0": expr.data.indexes["dim_0"],
+            "dim_1": expr.data.indexes["dim_1"],
+            "location": ["L1", "L2"],
+        },
+        dims=["dim_0", "dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"location"}
+    assert_linequal(res, (expr * b).sum(["dim_0", "dim_1"]))
 
 
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
@@ -1085,6 +1154,56 @@ def test_linear_expression_isnull(v: Variable) -> None:
     filter = (expr.coeffs >= 10).any(TERM_DIM)
     expr = expr.where(filter)
     assert expr.isnull().sum() == 10
+
+
+class TestHasTerms:
+    """has_terms: true at slots with at least one live term, regardless of the constant."""
+
+    def test_basic_and_masking(self, v: Variable) -> None:
+        expr = np.arange(20) * v
+        assert expr.has_terms.all()
+
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
+
+    def test_ignores_const(self, v: Variable) -> None:
+        # has_terms differs from isnull() at slots whose constant was revived by
+        # fillna: no longer null, but still without terms
+        expr = np.arange(20) * v
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.isnull(), ~masked.has_terms)
+
+        filled = masked.fillna(0)
+        assert not filled.isnull().any()
+        assert_equal(filled.has_terms, filter.rename("has_terms"))
+
+    def test_merge_reindex(self, x: Variable, y: Variable) -> None:
+        # the nodal-balance pattern: outer merge, then reindex to a superset of
+        # coordinates; slots beyond the original coordinates carry no terms
+        lhs = merge([1 * x, 1 * y], join="outer").reindex(
+            dim_0=pd.RangeIndex(4, name="dim_0")
+        )
+        assert lhs.has_terms.values.tolist() == [True, True, False, False]
+
+    def test_constant_only(self, m: Model) -> None:
+        expr = LinearExpression(xr.DataArray([1, 2], dims=["dim_0"]), m)
+        assert expr.nterm == 0
+        assert not expr.has_terms.any()
+
+    def test_quadratic(self, v: Variable) -> None:
+        # linear terms inside a quadratic expression carry one factor == -1;
+        # they must still count as live terms
+        quad = v * v + 2 * v
+        assert quad.has_terms.all()
+        assert TERM_DIM not in quad.has_terms.dims
+
+        filter = xr.DataArray(
+            np.arange(20) >= 10, dims="dim_2", coords={"dim_2": range(20)}
+        )
+        masked = quad.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
 
 
 def test_linear_expression_flat(v: Variable) -> None:
