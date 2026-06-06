@@ -61,6 +61,39 @@ def _symmetric_clip(magnitudes: np.ndarray, override: float | None, pct: float =
     return bound if bound > 0 else (float(mags.max()) or 1e-9)
 
 
+def _fold_label(fold: float) -> str:
+    """Format a fold-change for a colourbar tick: ``2×``, ``1/4×``, ``1.5×``."""
+    if abs(fold - 1.0) < 1e-9:
+        return "1×"
+    return f"{fold:.3g}×" if fold > 1.0 else f"1/{1.0 / fold:.3g}×"
+
+
+def _fold_ticks(bound: float) -> tuple[list[float], list[str]]:
+    """
+    Colourbar ticks (positions in log2 units, fold-change labels) spanning ±bound.
+
+    Diverging fold scale: ticks are symmetric about ``1×`` (log2 0). A wide range
+    gets clean powers of two (``2×``, ``1/4×``); a sub-2× range gets round folds
+    (``1.5×``, ``1.25×``, ``1.1×``) that fit inside it — so a small ``--clip`` like
+    1.5 shows several round labels instead of just ``1×`` (integer log2 steps would
+    fall *outside* the range and vanish). An extremely tight range with no round
+    fold inside falls back to two evenly-spaced ticks so labels never collapse.
+    """
+    if bound >= 1.0:
+        pos = [2.0**t for t in range(1, int(bound) + 1)]  # 2×, 4×, 8×, …
+    else:
+        pos = [f for f in (1.1, 1.25, 1.5) if float(np.log2(f)) <= bound + 1e-9]
+        if len(pos) < 2:
+            pos = [2.0 ** (bound / 2), 2.0**bound]
+
+    vals, text = [0.0], ["1×"]
+    for f in sorted(pos):
+        lv = float(np.log2(f))
+        vals = [-lv, *vals, lv]
+        text = [_fold_label(1.0 / f), *text, _fold_label(f)]
+    return vals, text
+
+
 def _axis_kwargs(unit: str) -> dict:
     """``update_xaxes`` kwargs for a given unit."""
     if unit == "s":
@@ -400,15 +433,12 @@ def plot_sweep(
         title=f"{metric_label} fold-change vs baseline ({versions[0]})",
         labels={"x": "version", "y": "test", "color": "fold"},
     )
-    # Fold-change ticks at integer log2 steps spanning the actual colour range.
-    hi = max(1, int(bound))
-    ticks = list(range(-hi, hi + 1))
+    # Fold-change ticks spanning the actual colour range — clean powers of two
+    # for a wide range, evenly-spaced folds for a tight one (so a small --clip
+    # like 1.5 still shows several labels instead of just 1×).
+    tickvals, ticktext = _fold_ticks(bound)
     fig.update_coloraxes(
-        colorbar=dict(
-            tickvals=ticks,
-            ticktext=[f"{2**t}×" if t >= 0 else f"1/{2**-t}×" for t in ticks],
-            title="fold",
-        )
+        colorbar=dict(tickvals=tickvals, ticktext=ticktext, title="fold")
     )
     fig.update_traces(
         text=ratio.round(2).values,
