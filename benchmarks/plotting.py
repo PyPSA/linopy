@@ -347,7 +347,7 @@ def plot_scatter(
         **extra,
     )
     fig.add_hline(
-        y=1.0, line_dash="dash", line_color="grey", annotation_text="no change"
+        y=1.0, line_dash="dash", line_color="grey",
     )
     fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
     if facets is not None:

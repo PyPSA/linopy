@@ -60,7 +60,6 @@ SPEC = register(
         sizes=SIZES,
         features=frozenset({CONTINUOUS, QUADRATIC}),
         phases=DEFAULT_PHASES,
-        quick_threshold=10,
         long_threshold=1_000,
     )
 )

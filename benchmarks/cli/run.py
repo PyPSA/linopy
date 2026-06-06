@@ -14,6 +14,7 @@ import typer
 from benchmarks.cli._base import (
     _PHASE_TEST_FILE,
     _SMOKE_PYTEST_ARGS,
+    Measure,
     PhaseName,
     app,
 )
@@ -51,6 +52,21 @@ def smoke(ctx: typer.Context) -> None:
 )
 def run(
     ctx: typer.Context,
+    metric: Annotated[
+        Measure,
+        typer.Option(
+            "--metric",
+            help=(
+                "What to measure: ``time`` (pytest-benchmark wall clock), "
+                "``memory`` (peak RSS via memray), or ``both`` (sequential). "
+                "Default: time."
+            ),
+        ),
+    ] = Measure.time,
+    quick: Annotated[
+        bool,
+        typer.Option("--quick", help="Use each spec's quick subset of sizes."),
+    ] = False,
     long: Annotated[
         bool,
         typer.Option(
@@ -68,61 +84,135 @@ def run(
             "--filter",
             "-k",
             help=(
-                "pytest ``-k`` expression selecting specs by name/id — e.g. "
-                "``basic`` (one spec), ``severity`` (patterns), "
-                "``'build and basic'``."
+                "Select specs by name/id — a pytest ``-k`` expression for time, "
+                "a substring for memory. E.g. ``basic``, ``severity``."
             ),
+        ),
+    ] = None,
+    size: Annotated[
+        list[int] | None,
+        typer.Option("--size", help="Run only these model sizes (repeatable)."),
+    ] = None,
+    severity: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--severity", help="Run only these pattern severities (repeatable)."
         ),
     ] = None,
     json_out: Annotated[
         Path | None,
-        typer.Option("--json", help="Save pytest-benchmark JSON to this path."),
+        typer.Option(
+            "--json",
+            help=(
+                "Save the snapshot to this path (pytest-benchmark JSON for time, "
+                "peak-RSS JSON for memory). Without it, results are only printed."
+            ),
+        ),
     ] = None,
     rounds: Annotated[
         int | None,
         typer.Option(
             "--rounds",
             help=(
-                "Force pytest-benchmark to run exactly N rounds per test "
-                "(passes ``--benchmark-min-rounds=N --benchmark-max-time=0``). "
-                "Default: pytest-benchmark auto-tunes per test (5–40+ rounds "
-                "depending on cost). Use a fixed N for uniform measurement "
-                "across versions in a sweep."
+                "Time only: force pytest-benchmark to run exactly N rounds per "
+                "test (``--benchmark-min-rounds=N --benchmark-max-time=0``). "
+                "Default: auto-tuned per test."
             ),
         ),
     ] = None,
+    repeats: Annotated[
+        int,
+        typer.Option(
+            "--repeats",
+            help="Memory only: min-of-N peak per measurement (default 1).",
+        ),
+    ] = 1,
 ) -> None:
     """
-    Default timing run. Records timings with pytest-benchmark.
+    Single-environment benchmark run — time, memory, or both.
 
-    Without ``--long``, sizes above each spec's ``long_threshold`` are
-    skipped — keeps the wall-clock around 45s instead of several minutes.
-    Add ``--long`` for the full sweep including the heaviest sizes
-    (knapsack at 1M, basic at 1600, pypsa_scigrid at >50).
+    ``--metric time`` (default) records wall-clock with pytest-benchmark;
+    ``--metric memory`` tracks peak RSS via memray; ``--metric both`` runs
+    them sequentially. Results print to the terminal; pass ``--json PATH``
+    to also save a snapshot (one rule for both metrics).
 
-    Any trailing arguments are forwarded to pytest verbatim, e.g.::
+    Without ``--quick``/``--long``, sizes above each spec's ``long_threshold``
+    are skipped — keeps the wall-clock manageable. ``--size``/``--severity``
+    pin exact values on either axis.
+
+    Trailing arguments are forwarded to pytest (time only), e.g.::
 
         python -m benchmarks run --long -- --tb=short -x
-
-    To skip timing entirely (e.g. just verifying everything runs at a
-    bigger size), use ``smoke`` instead, or pass ``--benchmark-disable``
-    as a trailing arg.
+        python -m benchmarks run --metric memory --json mem.json -k basic
     """
-    args: list[str] = []
-    args.append(_PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/")
-    if long:
-        args.append("--long")
-    args.append("--benchmark-only")
-    if json_out is not None:
-        args.extend(["--benchmark-json", str(json_out)])
-    if rounds is not None:
-        args.extend([f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"])
+    sizes = tuple(size or ())
+    severities = tuple(severity or ())
 
-    if filter_expr:
-        args.extend(["-k", filter_expr])
+    if metric is not Measure.time and rounds is not None:
+        typer.secho("--rounds is timing-only", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    if metric is Measure.both and json_out is not None:
+        typer.secho(
+            "--json can't be used with --metric both (formats would collide); "
+            "run each metric separately to save",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
-    args.extend(ctx.args)
-    _run_pytest(args)
+    def _timing() -> None:
+        args: list[str] = []
+        args.append(_PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/")
+        if quick:
+            args.append("--quick")
+        elif long:
+            args.append("--long")
+        for s in sizes:
+            args.extend(["--size", str(s)])
+        for s in severities:
+            args.extend(["--severity", str(s)])
+        args.append("--benchmark-only")
+        if json_out is not None:
+            args.extend(["--benchmark-json", str(json_out)])
+        if rounds is not None:
+            args.extend([f"--benchmark-min-rounds={rounds}", "--benchmark-max-time=0"])
+        if filter_expr:
+            args.extend(["-k", filter_expr])
+        args.extend(ctx.args)
+        _run_pytest(args)
+
+    def _memory() -> None:
+        from benchmarks import memory as mem
+        from benchmarks.snapshot import write_memory_snapshot
+
+        results = mem.measure(
+            quick=quick,
+            phases=[phase] if phase is not None else None,
+            repeats=repeats,
+            filter_expr=filter_expr,
+            long=long,
+            sizes=sizes,
+            severities=severities,
+        )
+        if not results:
+            typer.secho("no measurements produced", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        if json_out is not None:
+            write_memory_snapshot(json_out, json_out.stem, results)
+            typer.secho(
+                f"saved {len(results)} measurements to {json_out}",
+                fg=typer.colors.GREEN,
+            )
+        else:
+            typer.secho(
+                f"{len(results)} measurements (pass --json to save)",
+                fg=typer.colors.GREEN,
+            )
+
+    if metric in (Measure.time, Measure.both):
+        _timing()
+    if metric in (Measure.memory, Measure.both):
+        _memory()
 
 
 @app.command()

@@ -1,7 +1,7 @@
 """
 Cross-version sweep orchestration — build a fresh per-version uv venv,
 install the pinned benchmark infra plus a target ``linopy``, and run the
-suite (timing) or ``memory save`` (peak RSS) inside it.
+suite (timing) or ``run --metric memory`` (peak RSS) inside it.
 
 The heavy provisioning loop and the two sweep bodies live here so
 ``cli.py`` stays a thin layer of typer command shims. The CLI resolves
@@ -31,7 +31,7 @@ def _benchmarks_extra_pins() -> list[str]:
     """
     Return the pins from ``pyproject.toml``'s ``[benchmarks]`` extra.
 
-    Both ``sweep`` and ``memory sweep`` install these into each
+    Both ``sweep`` and ``sweep --metric memory`` install these into each
     per-version venv. Direct pins are kept in pyproject as the single
     source of truth — bump them there and both sweeps pick up the
     change. Transitive deps resolve fresh per venv; uv's deterministic
@@ -99,7 +99,7 @@ def _provision_venvs(
     """
     Yield one fresh per-version uv venv for each linopy version.
 
-    Used by both ``sweep`` and ``memory sweep`` so the venv plumbing
+    Used by both ``sweep`` and ``sweep --metric memory`` so the venv plumbing
     (uv venv → install ``[benchmarks]`` pins + the target linopy →
     set up an isolated import root) lives in one place. The caller
     supplies the tempdir prefix (so ``ps``/``lsof`` can distinguish
@@ -348,12 +348,13 @@ def run_memory_sweep(
     *,
     output_dir: Path,
     quick: bool = False,
+    long: bool = False,
     phases: list[str] | None = None,
     repeats: int = 1,
     as_of: str | None = None,
 ) -> None:
     """
-    Memory sweep: invoke ``memory save`` in each per-version venv.
+    Memory sweep: invoke ``run --metric memory`` in each per-version venv.
 
     Mirrors :func:`run_sweep` but tracks peak RSS. Each version's
     snapshot lands at ``<output_dir>/linopy-<version>.json``.
@@ -382,16 +383,24 @@ def run_memory_sweep(
         assert prov.python is not None and prov.import_dir is not None
 
         label = f"linopy-{_snapshot_label(prov.version)}"
+        # Write the snapshot straight to the user's output_dir — an absolute
+        # path, so the ``cwd=import_dir`` subprocess still lands it there.
+        # ``run --metric memory`` uses the --json filename stem as the label.
+        target = (output_dir / f"{label}.json").resolve()
         mem_cmd = [
             str(prov.python),
             "-m",
             "benchmarks",
+            "run",
+            "--metric",
             "memory",
-            "save",
-            label,
+            "--json",
+            str(target),
         ]
         if quick:
             mem_cmd.append("--quick")
+        elif long:
+            mem_cmd.append("--long")
         for ph in phases or []:
             mem_cmd.extend(["--phase", ph])
         if repeats > 1:
@@ -399,16 +408,6 @@ def run_memory_sweep(
 
         typer.secho(f"$ {' '.join(mem_cmd)}", fg=typer.colors.BRIGHT_BLACK)
         subprocess.run(mem_cmd, env=prov.env, cwd=str(prov.import_dir), check=False)
-
-        # ``memory save`` writes to ``.benchmarks/memory/<label>.json``
-        # relative to its cwd — here, the isolated import_dir. Move it
-        # under the user's chosen output_dir (resolves under repo_root
-        # by default).
-        default_path = prov.import_dir / ".benchmarks" / "memory" / f"{label}.json"
-        target = output_dir / f"{label}.json"
-        if default_path.exists() and default_path.resolve() != target.resolve():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            default_path.replace(target)
 
         if target.exists():
             typer.secho(f"saved {target}", fg=typer.colors.GREEN)

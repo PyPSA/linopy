@@ -10,10 +10,11 @@ import typer
 from benchmarks.cli._base import (
     _PHASE_TEST_FILE,
     _SMOKE_PYTEST_ARGS,
+    Measure,
     PhaseName,
     app,
 )
-from benchmarks.sweep import run_sweep
+from benchmarks.sweep import run_memory_sweep, run_sweep
 
 
 @app.command(
@@ -25,10 +26,35 @@ def sweep(
         list[str],
         typer.Argument(help="linopy versions, e.g. 0.4.0 0.5.0 (or any pip spec)."),
     ],
+    metric: Annotated[
+        Measure,
+        typer.Option(
+            "--metric",
+            help=(
+                "What to measure: ``time`` (pytest-benchmark wall clock), "
+                "``memory`` (peak RSS via memray), or ``both`` (sequential). "
+                "Default: time."
+            ),
+        ),
+    ] = Measure.time,
     output_dir: Annotated[
-        Path,
-        typer.Option("--output-dir", "-o", help="Where to save snapshot JSONs."),
-    ] = Path(".benchmarks/sweep"),
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            "-o",
+            help=(
+                "Where to save snapshot JSONs. Default: ``.benchmarks/<metric>/`` "
+                "(``both`` writes ``time`` and ``memory`` subdirs)."
+            ),
+        ),
+    ] = None,
+    repeats: Annotated[
+        int,
+        typer.Option(
+            "--repeats",
+            help="Memory only: min-of-N peak per measurement (default 1).",
+        ),
+    ] = 1,
     long: Annotated[
         bool, typer.Option("--long", help="Include the slowest sizes.")
     ] = False,
@@ -120,17 +146,49 @@ def sweep(
     Wall-clock: roughly 1-2 minutes per version (venv + install +
     benchmarks). uv's wheel cache makes repeated runs much faster.
     """
-    test_target = _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
-    run_sweep(
-        versions,
-        output_dir=output_dir,
-        test_target=test_target,
-        smoke_args=_SMOKE_PYTEST_ARGS,
-        long=long,
-        quick=quick,
-        rounds=rounds,
-        filter_expr=filter_expr,
-        smoke=smoke,
-        as_of=as_of,
-        extra_args=ctx.args,
-    )
+    # Timing-only knobs can't apply to a memory run.
+    if metric is not Measure.time and (smoke or rounds is not None):
+        typer.secho(
+            "--smoke / --rounds are timing-only (use --metric time)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    def _timing(out: Path) -> None:
+        test_target = _PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/"
+        run_sweep(
+            versions,
+            output_dir=out,
+            test_target=test_target,
+            smoke_args=_SMOKE_PYTEST_ARGS,
+            long=long,
+            quick=quick,
+            rounds=rounds,
+            filter_expr=filter_expr,
+            smoke=smoke,
+            as_of=as_of,
+            extra_args=ctx.args,
+        )
+
+    def _memory(out: Path) -> None:
+        run_memory_sweep(
+            versions,
+            output_dir=out,
+            quick=quick,
+            long=long,
+            phases=[phase] if phase is not None else None,
+            repeats=repeats,
+            as_of=as_of,
+        )
+
+    # ``both`` runs sequentially into per-metric subdirs so the two
+    # ``linopy-<version>.json`` snapshot sets never collide.
+    if metric is Measure.both:
+        base = output_dir
+        _timing(base / "time" if base else Path(".benchmarks/time"))
+        _memory(base / "memory" if base else Path(".benchmarks/memory"))
+    elif metric is Measure.memory:
+        _memory(output_dir or Path(".benchmarks/memory"))
+    else:
+        _timing(output_dir or Path(".benchmarks/time"))

@@ -32,10 +32,10 @@ SPEC = register(
         build=build_pypsa_scigrid,
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
-        # quick_threshold=0 keeps pypsa_scigrid out of --quick entirely —
-        # PyPSA import + example loading dominates the smoke wall-clock
-        # otherwise. It still runs in default and --long modes.
-        quick_threshold=0,
+        # quick_sizes=() keeps pypsa_scigrid out of --quick entirely — PyPSA
+        # import + example loading dominates the smoke wall-clock otherwise.
+        # It still runs in default and --long modes.
+        quick_sizes=(),
         long_threshold=50,
         requires=("pypsa",),
     )

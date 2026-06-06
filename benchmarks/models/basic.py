@@ -25,7 +25,6 @@ SPEC = register(
         build=build_basic,
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
-        quick_threshold=10,
         long_threshold=500,
     )
 )

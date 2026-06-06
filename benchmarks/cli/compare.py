@@ -16,11 +16,11 @@ from benchmarks.cli._base import _suggest_snapshots, app
 )
 def compare(ctx: typer.Context) -> None:
     """
-    Compare timing snapshots side-by-side via ``pytest-benchmark compare``.
+    Compare two snapshots side-by-side — timing or memory, auto-detected.
 
-    Thin wrapper around the upstream tool so the whole suite stays under
-    one entry point. Pass the snapshot paths first, then any pytest-benchmark
-    flags::
+    Timing snapshots wrap ``pytest-benchmark compare``; memory snapshots
+    (``peak_mib`` key) get a peak-RSS table. Pass the snapshot paths first,
+    then any pytest-benchmark flags (timing only)::
 
         python -m benchmarks compare a.json b.json
         python -m benchmarks compare a.json b.json --group-by=name
@@ -29,8 +29,9 @@ def compare(ctx: typer.Context) -> None:
     With no arguments (or missing paths), prints what snapshots exist
     under ``.benchmarks/`` so you can copy-paste the path you want.
 
-    For memory snapshots use ``memory compare`` instead — different format,
-    different tool.
+    Memory snapshots (``peak_mib`` key) are auto-detected and diffed with a
+    peak-RSS table; timing snapshots go through pytest-benchmark. The two
+    can't be mixed in one call.
 
     Implementation note: typer/click don't have a clean idiom for "list-typed
     positional + pass-through", so this command parses ``ctx.args`` by hand
@@ -61,6 +62,38 @@ def compare(ctx: typer.Context) -> None:
     if missing:
         _suggest_snapshots(f"missing snapshots: {[str(p) for p in missing]}")
         raise typer.Exit(code=2)
+
+    # Auto-detect the metric from the snapshots (memory snapshots load as MiB,
+    # timing as s) and route accordingly — no ``memory compare`` needed.
+    # ``load_snapshot`` validates each file, so a malformed/unreadable one
+    # fails here with a clear, file-named message instead of a raw traceback.
+    from benchmarks.snapshot import load_snapshot
+
+    try:
+        units = [load_snapshot(p)[2] for p in snapshots]
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+    is_memory = [u == "MiB" for u in units]
+    if any(is_memory):
+        if not all(is_memory):
+            typer.secho(
+                "can't compare memory and timing snapshots together",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if len(snapshots) != 2:
+            typer.secho(
+                "memory compare takes exactly 2 snapshots",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        from benchmarks.memory import compare_snapshots
+
+        compare_snapshots(snapshots[0], snapshots[1])
+        return
 
     # Override pytest-benchmark's wide default table: ``--group-by=fullname``
     # gives each test its own (baseline, candidate) mini-table and

@@ -25,7 +25,6 @@ from benchmarks.cli import run  # noqa: F401
 from benchmarks.cli import sweep  # noqa: F401
 from benchmarks.cli import compare  # noqa: F401
 from benchmarks.cli import plot  # noqa: F401
-from benchmarks.cli import memory  # noqa: F401
 
 # isort: on
 

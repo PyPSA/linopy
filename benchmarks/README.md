@@ -14,8 +14,8 @@ This README only covers install and how to open the walkthrough.
 
 ## Models vs patterns
 
-Two kinds of benchmark spec, same harness (time + peak memory, same phases),
-distinguished by their sweep axis:
+Two kinds of benchmark spec, same harness (time *or* peak memory — a
+`run`/`sweep` `--metric` flag, same phases), distinguished by their sweep axis:
 
 - **Models** (`models/`, `REGISTRY`) — whole `linopy.Model`s swept over
   `size` (axis `n`): "how does cost scale with the problem?"

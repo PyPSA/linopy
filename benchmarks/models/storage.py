@@ -50,7 +50,6 @@ SPEC = register(
         build=build_storage,
         sizes=SIZES,
         features=frozenset({CONTINUOUS}),
-        quick_threshold=10,
         long_threshold=500,
         description="storage SoC recursion via .shift() — bidiagonal intertemporal coupling",
     )

@@ -81,6 +81,8 @@ os.environ["FORCE_COLOR"] = "1"
 _tmp = Path(tempfile.mkdtemp(prefix="bench-walkthrough-"))
 baseline = _tmp / "baseline.json"
 candidate = _tmp / "candidate.json"
+baseline_mem = _tmp / "baseline_mem.json"
+candidate_mem = _tmp / "candidate_mem.json"
 scatter_html = _tmp / "scatter.html"
 compare_html = _tmp / "compare.html"
 
@@ -131,15 +133,16 @@ Patterns are tagged by the `severity` axis in their test id, so the usual tools
 target them by filtering on it:
 
 ```bash
-pytest benchmarks/ -k severity                        # all patterns, every phase
-pytest benchmarks/ -k nodal_balance                   # one pattern
-python -m benchmarks run --filter severity --quick    # patterns, timing
-python -m benchmarks memory save mylabel --filter severity   # patterns, memory
+pytest benchmarks/ -k severity                                  # all patterns, every phase
+pytest benchmarks/ -k nodal_balance                             # one pattern
+python -m benchmarks run --filter severity --quick              # patterns, timing
+python -m benchmarks run --metric memory --filter severity --quick  # patterns, memory
 ```
 
-(`--filter`/`-k` selects specs by name or id substring on both `run` and
-`memory save` — `nodal_balance` for one spec, `severity` for all patterns,
-`n=` for models. `list --kind {models,patterns}` browses them.)
+(`--filter`/`-k` selects specs by name or id substring on `run` for either
+metric — `nodal_balance` for one spec, `severity` for all patterns, `n=` for
+models. Or pin exact values with `--size` / `--severity`. `list --kind
+{models,patterns}` browses them.)
 
 ## Run a timing snapshot
 
@@ -234,32 +237,33 @@ to `python -m benchmarks plot` for the rendered version.)
 
 ## Memory snapshots
 
-`memory save <label>` runs benchmarks under `memray.Tracker` and
-writes peak allocations (MiB) per `(phase, spec, size)` to
-`.benchmarks/memory/<label>.json`. The model is built **outside** the
-tracked region so peak reflects only the phase work, not model
-construction.
+Memory is just a `--metric` on the same `run` command — `--metric memory`
+tracks peak allocations (MiB) per `(phase, spec, size)` via `memray.Tracker`
+instead of wall-clock, with the same flags. The model is built **outside** the
+tracked region so peak reflects only the phase work, not model construction.
+`--json` saves the snapshot (its filename stem becomes the label).
 
 ```{code-cell} ipython3
-!python -m benchmarks memory save baseline_mem --quick --phase build --filter basic
+!python -m benchmarks run --metric memory --quick --phase build --filter basic --json {baseline_mem}
 ```
 
 ```{code-cell} ipython3
-!python -m benchmarks memory save candidate_mem --quick --phase build --filter basic
+!python -m benchmarks run --metric memory --quick --phase build --filter basic --json {candidate_mem}
 ```
 
-`memory compare` prints a per-test table of the two labels with
-percent change — same shape as the timing `compare`, different
-metric. Tests present in only one snapshot show `—` for the missing
-column.
+`compare` auto-detects memory snapshots (the `peak_mib` key) and prints a
+per-test table with percent change — same shape as the timing `compare`,
+different metric. Tests present in only one snapshot show `—` for the missing
+column. (`plot` auto-detects them too.)
 
 ```{code-cell} ipython3
-!python -m benchmarks memory compare baseline_mem candidate_mem
+!python -m benchmarks compare {baseline_mem} {candidate_mem}
 ```
 
-For cross-version memory tracking (analogous to `sweep` for timing),
-use `memory sweep <v1> <v2> ...` — same per-version venv shape, peak
-RSS metric.
+For cross-version memory tracking, use `sweep --metric memory <v1> <v2> ...`
+— the same per-version venv shape as the timing sweep, peak-RSS metric.
+`--metric both` runs time then memory in one pass (sequentially — memray's
+overhead would skew wall-clock if they ran together).
 
 Those per-phase peaks are *marginal* — each tracker sees only its own phase, so
 the resident model is excluded. The end-to-end peak a build-then-export session
@@ -268,7 +272,7 @@ opt-in `pipeline` phase (build → matrices → lp_write in one tracker). It re-
 those phases, so it's not in the default set — request it standalone:
 
 ```bash
-python -m benchmarks memory save ceiling --phase pipeline
+python -m benchmarks run --metric memory --phase pipeline --json ceiling.json
 ```
 
 ## Benchmarking custom things — the `bench` API

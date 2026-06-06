@@ -93,7 +93,7 @@ def show(
         _row("sizes:", spec.sizes)
         _row("features:", sorted(spec.features))
         _row("phases:", sorted(spec.phases))
-        _row("quick_threshold:", spec.quick_threshold)
+        _row("quick:", spec.quick_subset)
         _row("long_threshold:", spec.long_threshold)
         if spec.requires:
             _row("requires:", list(spec.requires))
@@ -105,7 +105,7 @@ def show(
         _row("severities:", pattern.severities)
         _row("description:", pattern.description)
         _row("phases:", sorted(pattern.phases))
-        _row("quick_threshold:", pattern.quick_threshold)
+        _row("quick:", pattern.quick_subset)
         _row("long_threshold:", pattern.long_threshold)
         if pattern.requires:
             _row("requires:", list(pattern.requires))

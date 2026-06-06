@@ -86,7 +86,6 @@ if _API_AVAILABLE:
             # reformulation (pure MILP with binaries), which every supported
             # solver handles.
             phases=DEFAULT_PHASES,
-            quick_threshold=10,
             long_threshold=1_000,
         )
     )

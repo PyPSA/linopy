@@ -8,7 +8,7 @@ to reuse it elsewhere:
 - ``sizes``                        canonical tuned sizes
 - ``features``                     variable / constraint kinds it uses
 - ``phases``                       applicable phases (to_lp, to_highspy, …)
-- ``quick_threshold``              max size under ``pytest --quick``
+- ``quick_sizes``                  ``--quick`` subset (default: first/mid/last)
 - ``requires``                     modules to ``pytest.importorskip``
 
 ::
@@ -84,18 +84,34 @@ DEFAULT_PHASES = frozenset(
 )
 
 
+def _quick_subset(values: tuple[int, ...]) -> tuple[int, ...]:
+    """
+    The curated ``--quick`` subset of a sweep: first, middle, last.
+
+    Three representative points — a cheap smoke size, the midpoint, and the
+    peak — deduped (so 1–2 value sweeps collapse cleanly). For the 3-value
+    severity sweep this is the whole ``(0, 50, 100)``.
+    """
+    if not values:
+        return ()
+    picks = (values[0], values[len(values) // 2], values[-1])
+    return tuple(dict.fromkeys(picks))
+
+
 @dataclass(frozen=True, repr=False)
 class ModelSpec:
     """
     Declarative description of one benchmark model.
 
-    Three size tiers gate the cost of a default ``pytest benchmarks/`` run:
+    Three tiers gate the cost of a default ``pytest benchmarks/`` run:
 
-    - ``size <= quick_threshold``: included under ``--quick`` (smoke / CI).
-    - ``size <= long_threshold``: included by default (medium-cost regression).
-    - ``size >  long_threshold``: only included under ``--long`` (full sweep).
+    - ``--quick``: only ``quick_subset`` — an explicit subset (defaults to the
+      first / middle / last of ``sizes``). The per-PR / CI smoke set.
+    - default: every size up to ``long_threshold`` (medium-cost regression).
+    - ``--long``: every size, no cap.
 
-    Without explicit values, both thresholds default to "no cap".
+    ``long_threshold`` defaults to "no cap"; set ``quick_sizes`` to override the
+    derived quick subset (``()`` opts the spec out of ``--quick`` entirely).
     """
 
     name: str
@@ -103,7 +119,7 @@ class ModelSpec:
     sizes: tuple[int, ...]
     features: frozenset[str] = frozenset({CONTINUOUS})
     phases: frozenset[str] = DEFAULT_PHASES
-    quick_threshold: int = 10**9
+    quick_sizes: tuple[int, ...] | None = None
     long_threshold: int = 10**9
     requires: tuple[str, ...] = ()
     description: str = ""
@@ -117,6 +133,14 @@ class ModelSpec:
     def axis(self) -> str:
         """Short x-axis label for the sweep dial: a model scales by size."""
         return "n"
+
+    @property
+    def quick_subset(self) -> tuple[int, ...]:
+        """
+        Sizes that run under ``--quick`` — the derived first/mid/last,
+        unless ``quick_sizes`` overrides it (``()`` opts out entirely).
+        """
+        return _quick_subset(self.sweep) if self.quick_sizes is None else self.quick_sizes
 
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases
@@ -140,7 +164,7 @@ class ModelSpec:
             ("features", ", ".join(sorted(self.features))),
             ("sizes", ", ".join(str(s) for s in self.sizes)),
             ("phases", ", ".join(sorted(self.phases))),
-            ("quick_threshold", self.quick_threshold),
+            ("quick", ", ".join(str(s) for s in self.quick_subset) or "—"),
             ("long_threshold", self.long_threshold),
             ("requires", ", ".join(self.requires) or "—"),
         ]
@@ -223,7 +247,7 @@ def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
 
 # --- Patterns ---------------------------------------------------------------
 
-DEFAULT_SEVERITIES: tuple[int, ...] = (0, 50, 100)
+DEFAULT_SEVERITIES: tuple[int, ...] = (0, 25, 50, 75, 100)
 
 
 class BenchSpec(Protocol):
@@ -246,7 +270,7 @@ class BenchSpec(Protocol):
     @property
     def requires(self) -> tuple[str, ...]: ...
     @property
-    def quick_threshold(self) -> int: ...
+    def quick_subset(self) -> tuple[int, ...]: ...
     @property
     def long_threshold(self) -> int: ...
     @property
@@ -273,9 +297,10 @@ class PatternSpec:
     A pattern builds a complete model, so it runs the same ``phases`` as a model
     by default — the build-vs-export contrast (does the dense-``_term`` bloat
     reach the matrix / LP file, or collapse?) is the point. The full severity
-    range runs by default; ``--quick`` keeps everything up to the midpoint
-    (``{0, 25, 50}``) so smoke exercises real pathology, not just the benign
-    endpoint, while skipping the heaviest builds.
+    range (``0, 25, 50, 75, 100``) runs by default; ``--quick`` keeps the
+    ``quick_subset`` (first/middle/last of ``severities`` — ``(0, 50, 100)``) so
+    smoke exercises the benign, midpoint *and* worst-case shapes, while the full
+    sweep keeps the finer resolution.
     """
 
     name: str
@@ -284,7 +309,7 @@ class PatternSpec:
     severities: tuple[int, ...] = DEFAULT_SEVERITIES
     phases: frozenset[str] = DEFAULT_PHASES
     requires: tuple[str, ...] = ()
-    quick_threshold: int = 50
+    quick_sizes: tuple[int, ...] | None = None
     long_threshold: int = 10**9
 
     @property
@@ -294,6 +319,14 @@ class PatternSpec:
     @property
     def axis(self) -> str:
         return "severity"
+
+    @property
+    def quick_subset(self) -> tuple[int, ...]:
+        """
+        Severities that run under ``--quick`` — the derived first/mid/last,
+        unless ``quick_sizes`` overrides it (``()`` opts out entirely).
+        """
+        return _quick_subset(self.sweep) if self.quick_sizes is None else self.quick_sizes
 
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases
@@ -349,3 +382,37 @@ def get_pattern(name: str) -> PatternSpec:
 def all_specs() -> list[BenchSpec]:
     """Every spec in the suite — models then patterns."""
     return [*REGISTRY.values(), *PATTERNS.values()]
+
+
+def skip_reason(
+    spec: BenchSpec,
+    value: int,
+    *,
+    quick: bool = False,
+    long: bool = False,
+    sizes: tuple[int, ...] = (),
+    severities: tuple[int, ...] = (),
+) -> str | None:
+    """
+    Why ``(spec, value)`` is excluded under this selection, or ``None`` to run.
+
+    Single source of truth for size/severity selection, shared by pytest
+    (``conftest.maybe_skip``) and the memory engine (``memory.run_phase``) so
+    the two can't drift. Precedence, most specific first:
+
+    - a manual axis list (``sizes`` for models, ``severities`` for patterns)
+      → run only those values;
+    - ``--quick`` → only ``spec.quick_subset``;
+    - default → skip ``value > long_threshold``;
+    - ``--long`` → no cap.
+    """
+    manual = severities if spec.axis == "severity" else sizes
+    if manual:
+        return None if value in manual else f"{spec.axis}={value} not selected"
+    if quick:
+        if value not in spec.quick_subset:
+            return f"--quick: skipping {spec.name} {spec.axis}={value}"
+        return None
+    if not long and value > spec.long_threshold:
+        return f"long sweep needs --long: skipping {spec.name} {spec.axis}={value}"
+    return None

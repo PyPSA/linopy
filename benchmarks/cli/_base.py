@@ -2,8 +2,9 @@
 Shared app object, types, and helpers for the benchmark CLI.
 
 The command groups (``introspect``, ``run``, ``sweep``, ``compare``,
-``plot``, ``memory``) all register onto the single ``app`` defined here, so
-the user-facing command surface stays flat (``python -m benchmarks run`` etc.).
+``plot``) all register onto the single ``app`` defined here, so the
+user-facing command surface stays flat (``python -m benchmarks run`` etc.).
+Time vs memory is a ``--metric`` flag on ``run``/``sweep``, not a sub-app.
 
 Note on colour: ``typer.secho`` strips colour automatically when stdout isn't
 a TTY, so piping any command into ``grep`` still yields plain text.
@@ -11,11 +12,26 @@ a TTY, so piping any command into ``grep`` still yields plain text.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Literal
 
 import typer
 
 from benchmarks.snapshot import discover_snapshots
+
+
+class Measure(StrEnum):
+    """
+    What a measuring command records — orthogonal to the workflow.
+
+    ``time`` runs pytest-benchmark (wall clock); ``memory`` tracks peak RSS
+    via memray; ``both`` runs them sequentially (never concurrently — memray's
+    overhead would skew the wall-clock numbers).
+    """
+
+    time = "time"
+    memory = "memory"
+    both = "both"
 
 app = typer.Typer(
     help=(
@@ -25,13 +41,6 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
-
-memory_app = typer.Typer(
-    help="Peak-RSS memory snapshots (pytest-memray under the hood).",
-    no_args_is_help=True,
-)
-app.add_typer(memory_app, name="memory")
-
 
 PhaseName = Literal[
     "build", "matrices", "to_lp", "to_netcdf", "from_netcdf", "to_solver"

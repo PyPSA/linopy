@@ -134,9 +134,17 @@ def load_snapshot(
     - memory (``{"peak_mib": {id: float}}``) → ``value`` is the peak in
       **MiB**; ``metric`` is ignored.
     """
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{path}: not a readable JSON snapshot ({exc})") from exc
     if "peak_mib" in data:
         return path.stem, dict(data["peak_mib"]), "MiB"
+    if "benchmarks" not in data:
+        raise ValueError(
+            f"{path}: unrecognized snapshot shape "
+            "(no 'peak_mib' memory key or 'benchmarks' timing key)"
+        )
     values = {bm["fullname"]: bm["stats"][metric] for bm in data["benchmarks"]}
     return path.stem, values, "s"
 
