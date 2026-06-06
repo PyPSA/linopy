@@ -42,10 +42,10 @@ def plot(
         SortMode,
         typer.Option(
             help=(
-                "Compare-view sort and bar dimension. ``absolute`` (default) "
-                "uses ``b - a`` in seconds so the biggest actual-time impacts "
-                "float to the bottom — avoids over-weighting cheap "
-                "microsecond tests. ``relative`` uses percent change."
+                "Compare-view bar metric *and* sort. ``absolute`` (default) "
+                "ranks by ``b - a`` (actual-time/MiB impact, not over-weighting "
+                "tiny tests); ``relative`` by percent change. Bars are ordered by "
+                "it — biggest regressions on top, improvements at the bottom."
             )
         ),
     ] = "absolute",
@@ -58,6 +58,19 @@ def plot(
                 "file) or ``spec`` (parametrize id). Default: no faceting. "
                 "Tests whose ids don't match ``[<spec>-<axis>=<value>]`` (e.g. "
                 "PyPSA carbon-management) land in an ``other`` facet."
+            ),
+        ),
+    ] = None,
+    clip: Annotated[
+        float | None,
+        typer.Option(
+            "--clip",
+            help=(
+                "Clamp the *colour* scale (the one thing you can't zoom after "
+                "the plot is drawn); default is the symmetric p95. Unit follows "
+                "the plot's colour: a fold-change (>1) for fold-coloured sweep "
+                "(``--clip 8`` = ⅛×–8×), an absolute Δ for Δ-coloured "
+                "scatter/compare. scaling has no diverging colour and ignores it."
             ),
         ),
     ] = None,
@@ -129,6 +142,17 @@ def plot(
             "scaling view takes exactly 1 snapshot", fg=typer.colors.RED, err=True
         )
         raise typer.Exit(code=2)
+    if clip is not None:
+        if clip <= 0:
+            typer.secho("--clip must be positive", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=2)
+        if chosen == "sweep" and clip <= 1:
+            typer.secho(
+                "sweep --clip is a fold-change > 1 (colour is log₂; e.g. 8 = ⅛×–8×)",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
 
     # RENDERERS imports fine without plotly (lazy inside each), so check the dep.
     if importlib.util.find_spec("plotly") is None:
@@ -147,7 +171,7 @@ def plot(
         output = Path(".benchmarks") / "plots" / f"{chosen}.html"
 
     try:
-        fig, n_tests = RENDERERS[chosen](snapshots, metric, sort, facets)
+        fig, n_tests = RENDERERS[chosen](snapshots, metric, sort, facets, clip)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
