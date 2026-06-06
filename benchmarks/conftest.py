@@ -29,7 +29,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Include the slowest sizes (above each spec's long_threshold). "
+            "Include the slowest sizes (each spec's long_sizes). "
             "Default runs skip them."
         ),
     )
@@ -86,7 +86,7 @@ def maybe_skip(request: pytest.FixtureRequest, spec: BenchSpec, size: int) -> No
     - ``--size N`` / ``--severity S`` → run only the listed values for that
       axis (models read ``--size``, patterns ``--severity``); overrides tiers.
     - ``--quick``                     → only ``spec.quick_subset``
-    - default (no flag)               → skip ``size > long_threshold``
+    - default (no flag)               → skip sizes in ``spec.long_sizes``
     - ``--long``                      → no size cap
 
     A manual axis flag wins over ``--quick``/``--long``; ``--quick`` in turn

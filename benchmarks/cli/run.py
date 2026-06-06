@@ -71,7 +71,7 @@ def run(
         bool,
         typer.Option(
             "--long",
-            help="Include the slowest sizes (above each spec's long_threshold).",
+            help="Include the slowest sizes (each spec's long_sizes).",
         ),
     ] = False,
     phase: Annotated[
@@ -136,7 +136,7 @@ def run(
     them sequentially. Results print to the terminal; pass ``--json PATH``
     to also save a snapshot (one rule for both metrics).
 
-    Without ``--quick``/``--long``, sizes above each spec's ``long_threshold``
+    Without ``--quick``/``--long``, each spec's ``long_sizes`` (the heaviest)
     are skipped — keeps the wall-clock manageable. ``--size``/``--severity``
     pin exact values on either axis.
 

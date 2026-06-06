@@ -8,6 +8,8 @@ import linopy
 from benchmarks.registry import BINARY, DEFAULT_PHASES, ModelSpec, register
 
 SIZES = (100, 1_000, 10_000, 100_000, 1_000_000)
+QUICK_SIZES = (100, 10_000)
+LONG_SIZES = (100_000, 1_000_000)
 
 
 def build_knapsack(n: int) -> linopy.Model:
@@ -29,8 +31,9 @@ SPEC = register(
         name="knapsack",
         build=build_knapsack,
         sizes=SIZES,
+        quick_sizes=QUICK_SIZES,
+        long_sizes=LONG_SIZES,
         features=frozenset({BINARY}),
         phases=DEFAULT_PHASES,  # HiGHS handles binary; matrices handles MILP
-        long_threshold=10_000,
     )
 )

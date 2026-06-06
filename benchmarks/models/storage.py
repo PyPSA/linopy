@@ -20,6 +20,8 @@ import linopy
 from benchmarks.registry import CONTINUOUS, ModelSpec, register
 
 SIZES = (10, 50, 100, 250, 500, 1000)
+QUICK_SIZES = (10, 250)
+LONG_SIZES = (1000,)
 N_TIME = 168
 DECAY = 0.99
 ETA = 0.95
@@ -49,8 +51,9 @@ SPEC = register(
         name="storage",
         build=build_storage,
         sizes=SIZES,
+        quick_sizes=QUICK_SIZES,
+        long_sizes=LONG_SIZES,
         features=frozenset({CONTINUOUS}),
-        long_threshold=500,
         description="storage SoC recursion via .shift() — bidiagonal intertemporal coupling",
     )
 )

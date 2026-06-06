@@ -35,6 +35,8 @@ from benchmarks.registry import (
 )
 
 SIZES = (10, 50, 100, 500, 1000)
+QUICK_SIZES = (10, 100)
+LONG_SIZES = (1000,)
 
 
 def build_masked(n: int) -> linopy.Model:
@@ -83,8 +85,9 @@ SPEC = register(
         name="masked",
         build=build_masked,
         sizes=SIZES,
+        quick_sizes=QUICK_SIZES,
+        long_sizes=LONG_SIZES,
         features=frozenset({CONTINUOUS, MASKED}),
         phases=DEFAULT_PHASES,
-        long_threshold=500,
     )
 )
