@@ -136,6 +136,67 @@ def _expr_unwrap(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_group(group: Any, data: Dataset) -> Any:
+    """
+    Normalize a groupby key.
+
+    Unwrap a single-element key list to the scalar key, and resolve a string
+    naming a coordinate to that coordinate -- so ``groupby("name")`` behaves
+    like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
+    DataFrame, DataArray, multi-key lists) are returned unchanged.
+    """
+    if isinstance(group, (list, tuple)) and len(group) == 1:
+        group = group[0]
+    if isinstance(group, str) and group in data.coords:
+        group = data[group]
+    return group
+
+
+def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
+    """
+    Gather a multi-key list of coordinate names into a value frame.
+
+    Return a DataFrame of the named coordinates when all keys are 1-D
+    coordinates sharing a single dimension -- so the list rides the fast
+    reindex path -- otherwise None.
+    """
+    is_name_list = (
+        isinstance(group, (list, tuple))
+        and len(group) > 1
+        and all(isinstance(g, str) and g in data.coords for g in group)
+    )
+    if not is_name_list:
+        return None
+    coord_dims = {data[g].dims for g in group}
+    if len(coord_dims) != 1 or len(next(iter(coord_dims))) != 1:
+        return None
+    names = list(group)
+    return data[names].to_dataframe()[names]
+
+
+def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
+    """
+    Unstack a stacked multi-key group dimension into one dimension per key.
+
+    Warn before materialising the grid when most cells would be fill values,
+    pointing to ``observed=True`` for a compact result.
+    """
+    mi = ds.indexes[dim].remove_unused_levels()
+    observed = len(mi)
+    grid = int(np.prod([len(level) for level in mi.levels]))
+    if grid > 2 * observed and grid - observed > 10_000:
+        warn(
+            f"Grouping a LinearExpression by {list(mi.names)} produces a dense "
+            f"{grid:,}-cell grid, but only {observed:,} of those combinations "
+            f"occur -- the {grid - observed:,} absent ones are materialised as "
+            f"fill values. Pass `observed=True` to keep the result compact over "
+            f"only the observed combinations.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return ds.unstack(dim, fill_value=LinearExpression._fill_value)
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -158,17 +219,25 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        if isinstance(self.group, pd.DataFrame):
+        data = self.data
+        group = _resolve_group(self.group, data)
+
+        if isinstance(group, pd.DataFrame):
             raise ValueError(
                 "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
             )
-        if isinstance(self.group, pd.Series):
-            group_name = self.group.name or "group"
-            group = DataArray(self.group, name=group_name)
-        else:
-            group = self.group  # type: ignore
+        if isinstance(group, pd.Series):
+            group = DataArray(group, name=group.name or "group")
 
-        return self.data.groupby(group=group, **self.kwargs)
+        # detach an attached free coordinate (never an indexed/level coord)
+        if (
+            isinstance(group, DataArray)
+            and group.name in set(data.coords) - set(data.dims)
+            and group.name not in data.xindexes
+        ):
+            data = data.drop_vars([group.name])
+
+        return data.groupby(group=group, **self.kwargs)
 
     def map(
         self,
@@ -200,7 +269,9 @@ class LinearExpressionGroupby:
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
 
-    def sum(self, use_fallback: bool = False, **kwargs: Any) -> LinearExpression:
+    def sum(
+        self, use_fallback: bool = False, observed: bool = False, **kwargs: Any
+    ) -> LinearExpression:
         """
         Sum the groupby object.
 
@@ -218,6 +289,13 @@ class LinearExpressionGroupby:
             Whether to use the fallback implementation, which is a sort of default
             xarray implementation. If set to False, the operation will be much
             faster but keyword arguments are ignored. Defaults to False.
+        observed : bool
+            Only applies when grouping by a list of coordinate names. If True,
+            keep the result stacked over the observed key combinations (a
+            ``MultiIndex`` ``group`` dimension) instead of unstacking into one
+            dimension per key, which materialises the dense cartesian grid.
+            Defaults to False, mirroring xarray. Not supported together with
+            `use_fallback`.
         **kwargs
             Arbitrary keyword arguments.
 
@@ -226,9 +304,22 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
+        if observed and use_fallback:
+            raise ValueError(
+                "`observed=True` is not supported with `use_fallback=True`."
+            )
+
+        group = _resolve_group(self.group, self.data)
+
+        # a list of coord names rides the fast path as a value frame
+        multikey_frame = (
+            None if use_fallback else _multikey_value_frame(group, self.data)
+        )
+        if multikey_frame is not None:
+            group = multikey_frame
+
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
-        if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
+        if isinstance(group, non_fallback_types) and not use_fallback:
             if isinstance(group, pd.DataFrame):
                 # dataframes do not have a name, so we need to set it
                 final_group_name = "group"
@@ -254,10 +345,12 @@ class LinearExpressionGroupby:
             arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
             new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            coords = self.data.indexes[group_dim]
-            names_to_drop = [coords.name]
-            if isinstance(coords, pd.MultiIndex):
-                names_to_drop += list(coords.names)
+            # collapsing group_dim invalidates every coordinate aligned to it
+            names_to_drop = [
+                name
+                for name, coord in self.data.coords.items()
+                if group_dim in coord.dims
+            ]
             ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
@@ -270,6 +363,8 @@ class LinearExpressionGroupby:
                 ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
+            if multikey_frame is not None and not observed:
+                ds = _unstack_multikey(ds, final_group_name)
             return LinearExpression(ds, self.model)
 
         def func(ds: Dataset) -> Dataset:
