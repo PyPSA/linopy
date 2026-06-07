@@ -33,6 +33,7 @@ class Measure(StrEnum):
     memory = "memory"
     both = "both"
 
+
 app = typer.Typer(
     help=(
         "Linopy internal benchmark suite — a thin layer over pytest plus "

@@ -332,9 +332,7 @@ class PatternSpec:
         ``--quick`` severities — ``quick_sizes`` if set, else
         ``QUICK_SEVERITIES`` ``(0, 50, 100)``.
         """
-        return (
-            self.quick_sizes if self.quick_sizes is not None else QUICK_SEVERITIES
-        )
+        return self.quick_sizes if self.quick_sizes is not None else QUICK_SEVERITIES
 
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases

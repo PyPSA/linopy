@@ -45,7 +45,9 @@ def _diverging_kwargs(midpoint: float = 0.0) -> dict:
     }
 
 
-def _symmetric_clip(magnitudes: np.ndarray, override: float | None, pct: float = 95.0) -> float:
+def _symmetric_clip(
+    magnitudes: np.ndarray, override: float | None, pct: float = 95.0
+) -> float:
     """
     Symmetric colour bound for a diverging scale: ``override`` if given, else the
     ``pct`` percentile of ``|magnitudes|`` — so a few outliers don't wash the rest
@@ -380,7 +382,9 @@ def plot_scatter(
         **extra,
     )
     fig.add_hline(
-        y=1.0, line_dash="dash", line_color="grey",
+        y=1.0,
+        line_dash="dash",
+        line_color="grey",
     )
     fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="DarkSlateGrey")))
     if facets is not None:
