@@ -1445,7 +1445,7 @@ class TestMultiKeyFastPath:
         assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
 
     def test_blowup_warns_when_sparse(self) -> None:
-        # 200 observed combos, 200x200 grid -> nudge toward the DataFrame grouper
+        # 200 observed combos, 200x200 grid -> nudge toward observed=True
         expr = self._expr(list(range(200)), list(range(200)))
 
         with pytest.warns(UserWarning, match="dense .* grid"):
@@ -1457,6 +1457,32 @@ class TestMultiKeyFastPath:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             expr.groupby(["period", "season"]).sum()
+
+    def test_observed_keeps_stacked(self) -> None:
+        # observed=True skips the unstack: compact stacked MultiIndex,
+        # identical to the DataFrame grouper output
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+
+        grouped = expr.groupby(["period", "season"]).sum(observed=True)
+
+        assert_linequal(grouped, expr.groupby(df).sum())
+        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    def test_observed_silences_blowup_warning(self) -> None:
+        expr = self._expr(list(range(200)), list(range(200)))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            grouped = expr.groupby(["period", "season"]).sum(observed=True)
+
+        assert grouped.sizes["group"] == 200
+
+    def test_observed_with_fallback_raises(self) -> None:
+        expr = self._expr([2020, 2020], list("ws"))
+
+        with pytest.raises(ValueError, match="observed"):
+            expr.groupby(["period", "season"]).sum(use_fallback=True, observed=True)
 
 
 class TestGroupbyByAttachedCoordinate:

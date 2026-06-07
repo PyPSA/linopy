@@ -152,6 +152,51 @@ def _resolve_group(group: Any, data: Dataset) -> Any:
     return group
 
 
+def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
+    """
+    Gather a multi-key list of coordinate names into a value frame.
+
+    Return a DataFrame of the named coordinates when all keys are 1-D
+    coordinates sharing a single dimension -- so the list rides the fast
+    reindex path -- otherwise None.
+    """
+    is_name_list = (
+        isinstance(group, (list, tuple))
+        and len(group) > 1
+        and all(isinstance(g, str) and g in data.coords for g in group)
+    )
+    if not is_name_list:
+        return None
+    coord_dims = {data[g].dims for g in group}
+    if len(coord_dims) != 1 or len(next(iter(coord_dims))) != 1:
+        return None
+    names = list(group)
+    return data[names].to_dataframe()[names]
+
+
+def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
+    """
+    Unstack a stacked multi-key group dimension into one dimension per key.
+
+    Warn before materialising the grid when most cells would be fill values,
+    pointing to ``observed=True`` for a compact result.
+    """
+    mi = ds.indexes[dim].remove_unused_levels()
+    observed = len(mi)
+    grid = int(np.prod([len(level) for level in mi.levels]))
+    if grid > 2 * observed and grid - observed > 10_000:
+        warn(
+            f"Grouping a LinearExpression by {list(mi.names)} produces a dense "
+            f"{grid:,}-cell grid, but only {observed:,} of those combinations "
+            f"occur -- the {grid - observed:,} absent ones are materialised as "
+            f"fill values. Pass `observed=True` to keep the result compact over "
+            f"only the observed combinations.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return ds.unstack(dim, fill_value=LinearExpression._fill_value)
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -224,7 +269,9 @@ class LinearExpressionGroupby:
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
 
-    def sum(self, use_fallback: bool = False, **kwargs: Any) -> LinearExpression:
+    def sum(
+        self, use_fallback: bool = False, observed: bool = False, **kwargs: Any
+    ) -> LinearExpression:
         """
         Sum the groupby object.
 
@@ -242,6 +289,13 @@ class LinearExpressionGroupby:
             Whether to use the fallback implementation, which is a sort of default
             xarray implementation. If set to False, the operation will be much
             faster but keyword arguments are ignored. Defaults to False.
+        observed : bool
+            Only applies when grouping by a list of coordinate names. If True,
+            keep the result stacked over the observed key combinations (a
+            ``MultiIndex`` ``group`` dimension) instead of unstacking into one
+            dimension per key, which materialises the dense cartesian grid.
+            Defaults to False, mirroring xarray. Not supported together with
+            `use_fallback`.
         **kwargs
             Arbitrary keyword arguments.
 
@@ -250,21 +304,19 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
+        if observed and use_fallback:
+            raise ValueError(
+                "`observed=True` is not supported with `use_fallback=True`."
+            )
+
         group = _resolve_group(self.group, self.data)
 
-        # a list of coord names rides the fast path, then unstacks to one dim per key
-        unstack_multikey = False
-        if (
-            not use_fallback
-            and isinstance(group, (list, tuple))
-            and len(group) > 1
-            and all(isinstance(g, str) and g in self.data.coords for g in group)
-        ):
-            coord_dims = {self.data[g].dims for g in group}
-            if len(coord_dims) == 1 and len(next(iter(coord_dims))) == 1:
-                names = list(group)
-                group = self.data[names].to_dataframe()[names]
-                unstack_multikey = True
+        # a list of coord names rides the fast path as a value frame
+        multikey_frame = (
+            None if use_fallback else _multikey_value_frame(group, self.data)
+        )
+        if multikey_frame is not None:
+            group = multikey_frame
 
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(group, non_fallback_types) and not use_fallback:
@@ -311,25 +363,8 @@ class LinearExpressionGroupby:
                 ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
-            if unstack_multikey:
-                # warn before allocating the grid when most cells would be fill
-                mi = ds.indexes[final_group_name].remove_unused_levels()
-                observed = len(mi)
-                grid = int(np.prod([len(level) for level in mi.levels]))
-                if grid > 2 * observed and grid - observed > 10_000:
-                    warn(
-                        f"Grouping a LinearExpression by {names} produces a dense "
-                        f"{grid:,}-cell grid, but only {observed:,} of those "
-                        f"combinations occur -- the {grid - observed:,} absent ones "
-                        f"are materialised as fill values. Group by a `pd.DataFrame` "
-                        f"of these keys instead to keep the result compact over only "
-                        f"the observed combinations.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                ds = ds.unstack(
-                    final_group_name, fill_value=LinearExpression._fill_value
-                )
+            if multikey_frame is not None and not observed:
+                ds = _unstack_multikey(ds, final_group_name)
             return LinearExpression(ds, self.model)
 
         def func(ds: Dataset) -> Dataset:
