@@ -406,7 +406,7 @@ class TestAddVariablesBoundsWithCoords:
         var = model.add_variables(lower=lower, coords=coords, name="x")
         assert var.shape == (3,)
         assert var.dims == ("x",)
-        assert list(var.data.coords["x"].values) == [0, 1, 2]
+        assert list(var.coords["x"].values) == [0, 1, 2]
 
     # -- DataArray validation: mismatch and extra dims ---------------------
 
@@ -569,7 +569,7 @@ class TestAddVariablesBoundsWithCoords:
         assert var.dims == ("time", "space", "colour")
         assert var.data.lower.dims == ("time", "space", "colour")
         assert var.data.upper.dims == ("time", "space", "colour")
-        assert var.data.sizes == {"time": 3, "space": 2, "colour": 1}
+        assert var.sizes == {"time": 3, "space": 2, "colour": 1}
         assert not var.data.lower.isnull().any()
         assert (var.data.lower.sel(space="a", colour="red") == [-1, -2, -3]).all()
         assert (var.data.lower.sel(space="b", colour="red") == [-1, -2, -3]).all()
@@ -607,7 +607,7 @@ class TestAddVariablesBoundsWithCoords:
         time = pd.RangeIndex(3, name="time")
         base = model.add_variables(lower=0, coords=[time], name="base")
         lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
-        var = model.add_variables(lower=lower, coords=base.data.coords, name="x2")
+        var = model.add_variables(lower=lower, coords=base.coords, name="x2")
         assert var.shape == (3,)
 
     # -- Mixed bound type combinations ------------------------------------
@@ -665,7 +665,7 @@ class TestAddVariablesBoundsWithCoords:
         var = model.add_variables(
             lower=lower, upper=upper, coords=[time, space], name="x"
         )
-        assert var.data.sizes == {"time": 3, "space": 2}
+        assert var.sizes == {"time": 3, "space": 2}
         assert not var.data.lower.isnull().any()
         assert not var.data.upper.isnull().any()
         assert (var.data.upper.sel(time=0) == [10, 20]).all()
@@ -698,7 +698,7 @@ class TestAddVariablesBoundsWithCoords:
         """When coords is None, dims/coords are inferred from the bounds."""
         var = model.add_variables(lower=lower, name="x")
         assert var.dims == ("x",)
-        assert list(var.data.coords["x"].values) == [10, 20, 30]
+        assert list(var.coords["x"].values) == [10, 20, 30]
 
     def test_coords_inferred_multidim(self, model: "Model") -> None:
         lower = DataArray(
@@ -708,7 +708,7 @@ class TestAddVariablesBoundsWithCoords:
         )
         var = model.add_variables(lower=lower, name="x")
         assert set(var.dims) == {"time", "space"}
-        assert var.data.sizes == {"time": 3, "space": 2}
+        assert var.sizes == {"time": 3, "space": 2}
 
     # -- Multi-dimensional coords -----------------------------------------
 
@@ -728,7 +728,7 @@ class TestAddVariablesBoundsWithCoords:
     def test_multidim_coords_with_scalar(self, model: "Model", coords: Any) -> None:
         var = model.add_variables(lower=0, upper=1, coords=coords, name="x")
         assert set(var.dims) == {"time", "space"}
-        assert var.data.sizes == {"time": 3, "space": 2}
+        assert var.sizes == {"time": 3, "space": 2}
 
     def test_multidim_dataarray_with_coords(self, model: "Model") -> None:
         lower = DataArray(
@@ -739,7 +739,7 @@ class TestAddVariablesBoundsWithCoords:
         coords = [pd.RangeIndex(3, name="time"), pd.Index(["a", "b"], name="space")]
         var = model.add_variables(lower=lower, coords=coords, name="x")
         assert set(var.dims) == {"time", "space"}
-        assert var.data.sizes == {"time": 3, "space": 2}
+        assert var.sizes == {"time": 3, "space": 2}
         assert not var.data.lower.isnull().any()
 
     def test_bounds_with_different_dim_order(self, model: "Model") -> None:
@@ -759,7 +759,7 @@ class TestAddVariablesBoundsWithCoords:
         var = model.add_variables(
             lower=lower, upper=upper, coords=[time, space], name="x"
         )
-        assert var.data.sizes == {"time": 3, "space": 2}
+        assert var.sizes == {"time": 3, "space": 2}
         assert (var.data.lower.values == 0).all()
         assert (var.data.upper.values == 1).all()
 
@@ -769,7 +769,7 @@ class TestAddVariablesBoundsWithCoords:
         """Same coord values in different order should reindex, not raise."""
         lower = DataArray([10, 20, 30], dims=["x"], coords={"x": ["c", "a", "b"]})
         var = model.add_variables(lower=lower, coords={"x": ["a", "b", "c"]}, name="x")
-        assert list(var.data.coords["x"].values) == ["a", "b", "c"]
+        assert list(var.coords["x"].values) == ["a", "b", "c"]
         # Values must follow the reindexed order, not the original
         assert list(var.data.lower.values) == [20, 30, 10]
 
@@ -790,7 +790,7 @@ class TestAddVariablesBoundsWithCoords:
         )
         var = model.add_variables(lower=lower, coords=coords, name="x")
         assert var.dims == ("region",)
-        assert list(var.data.coords["region"].values) == ["north", "south", "east"]
+        assert list(var.coords["region"].values) == ["north", "south", "east"]
 
     def test_datetime_coordinates(self, model: "Model") -> None:
         dates = pd.date_range("2025-01-01", periods=3)

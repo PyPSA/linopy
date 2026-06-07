@@ -62,7 +62,7 @@ def test_linexpr_with_helper_dims_as_coords(m: Model) -> None:
     assert set(HELPER_DIMS).intersection(set(data.coords))
 
     expr = LinearExpression(data, m)
-    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
+    assert not set(HELPER_DIMS).intersection(set(expr.coords))
 
 
 def test_linexpr_with_data_without_coords(m: Model) -> None:
@@ -558,7 +558,7 @@ def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
     expr = 1 * z
     b = xr.DataArray(
         np.ones((3, 2)),
-        coords={"dim_1": expr.data.indexes["dim_1"], "location": ["L1", "L2"]},
+        coords={"dim_1": expr.indexes["dim_1"], "location": ["L1", "L2"]},
         dims=["dim_1", "location"],
     )
 
@@ -574,8 +574,8 @@ def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
     b = xr.DataArray(
         np.ones((2, 3, 2)),
         coords={
-            "dim_0": expr.data.indexes["dim_0"],
-            "dim_1": expr.data.indexes["dim_1"],
+            "dim_0": expr.indexes["dim_0"],
+            "dim_1": expr.indexes["dim_1"],
             "location": ["L1", "L2"],
         },
         dims=["dim_0", "dim_1", "location"],
@@ -2061,35 +2061,35 @@ class TestJoinParameter:
 
         def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_add_expr_join_outer(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_add_expr_join_left(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="left")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
         def test_add_expr_join_right(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="right")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
         def test_add_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_add_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().add(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_add_constant_join_override(self, a: Variable, c: Variable) -> None:
             expr = a.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [0, 1, 2]})
             result = expr.add(const, join="override")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
             assert (result.const.values == const.values).all()
 
         def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
@@ -2110,7 +2110,7 @@ class TestJoinParameter:
     class TestSubtraction:
         def test_sub_expr_join_inner(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().sub(b.to_linexpr(), join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_sub_constant_override(self, a: Variable) -> None:
             expr = 1 * a + 5
@@ -2123,12 +2123,12 @@ class TestJoinParameter:
         def test_mul_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_mul_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().mul(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
             assert result.coeffs.sel(i=0).item() == 0
             assert result.coeffs.sel(i=1).item() == 2
             assert result.coeffs.sel(i=2).item() == 3
@@ -2141,12 +2141,12 @@ class TestJoinParameter:
         def test_div_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_div_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_div_expr_with_join_raises(self, a: Variable, b: Variable) -> None:
             with pytest.raises(TypeError):
@@ -2155,21 +2155,21 @@ class TestJoinParameter:
     class TestVariableOperations:
         def test_variable_add_join(self, a: Variable, b: Variable) -> None:
             result = a.add(b, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_sub_join(self, a: Variable, b: Variable) -> None:
             result = a.sub(b, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_mul_join(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_div_join(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.div(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_add_outer_values(self, a: Variable, b: Variable) -> None:
             result = a.add(b, join="outer")
@@ -2195,14 +2195,14 @@ class TestJoinParameter:
 
         def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
             result = a.to_linexpr().add(c.to_linexpr(), join="override")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
     class TestMerge:
         def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="inner"
             )
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
             result = merge(
@@ -2214,13 +2214,13 @@ class TestJoinParameter:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="left"
             )
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
         def test_merge_join_right(self, a: Variable, b: Variable) -> None:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="right"
             )
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
     class TestValueVerification:
         def test_add_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
@@ -2319,13 +2319,13 @@ class TestJoinParameter:
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
         def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
             quad = a.to_linexpr() * a.to_linexpr()
             const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
             result = quad.add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [0, 1]
+            assert list(result.indexes["i"]) == [0, 1]
 
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
@@ -2333,4 +2333,4 @@ class TestJoinParameter:
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
