@@ -70,7 +70,9 @@ def _coords_to_dict(
     Sequence-entry rules (``i`` is the position in ``coords``, ``dims[i]``
     is the matching entry in ``dims`` when one exists). An entry is
     *unlabeled* if it's an unnamed ``pd.Index`` or a bare ``list`` /
-    ``tuple`` / ``range`` / ``ndarray``.
+    ``range`` / ``ndarray``. A ``tuple`` is **not** unlabeled: following
+    xarray, it is read as ``(dim_name, values[, attrs])`` — the first
+    element names the dimension.
 
     +---------------------------------+-----------------------+-----------+
     | Entry                           | Naming source         | Outcome   |
@@ -84,6 +86,12 @@ def _coords_to_dict(
     |                                 |                       | assigns   |
     |                                 |                       | ``dim_0`` |
     |                                 |                       | etc.      |
+    +---------------------------------+-----------------------+-----------+
+    | ``(name, values)`` tuple        | ``name`` (1st elem)   | accepted  |
+    |                                 |                       | (xarray   |
+    |                                 |                       | form)     |
+    +---------------------------------+-----------------------+-----------+
+    | tuple of length < 2             | —                     | TypeError |
     +---------------------------------+-----------------------+-----------+
     | ``pd.MultiIndex`` with ``.name``| ``.name``             | accepted  |
     +---------------------------------+-----------------------+-----------+
@@ -129,16 +137,36 @@ def _coords_to_dict(
                 else (dim_names[i] if dim_names and i < len(dim_names) else None)
             )
             if name is not None:
-                result[name] = c
-        elif isinstance(c, list | tuple | range | np.ndarray):
+                result[name] = c if c.name == name else c.rename(name)
+        elif isinstance(c, tuple):
+            if (
+                len(c) < 2
+                or not isinstance(c[0], Hashable)
+                or isinstance(c[0], list | tuple | np.ndarray)
+            ):
+                raise TypeError(
+                    f"tuple coords entries follow xarray's (dim_name, values) "
+                    f"convention; got {c!r}. Pass a list for a bare sequence "
+                    f"of coordinate values."
+                )
+            name, values = c[0], c[1]
+            try:
+                result[name] = pd.Index(values, name=name)
+            except TypeError as err:
+                raise TypeError(
+                    f"tuple coords entries follow xarray's (dim_name, values) "
+                    f"convention with array-like values; got {c!r}. Pass a "
+                    f"list for a bare sequence of coordinate values."
+                ) from err
+        elif isinstance(c, list | range | np.ndarray):
             if dim_names and i < len(dim_names):
                 result[dim_names[i]] = pd.Index(c, name=dim_names[i])
         else:
             raise TypeError(
-                f"coords entries must be pd.Index or an unnamed sequence "
-                f"(list / tuple / range / numpy.ndarray); got "
-                f"{type(c).__name__}. For an xarray DataArray coord, pass "
-                f"`variable.indexes[<dim>]` (a pd.Index) instead."
+                f"coords entries must be pd.Index, an unlabeled sequence "
+                f"(list / range / numpy.ndarray), or a (dim_name, values) "
+                f"tuple; got {type(c).__name__}. For an xarray DataArray "
+                f"coord, pass `variable.indexes[<dim>]` (a pd.Index) instead."
             )
     return result
 
@@ -531,11 +559,6 @@ def _broadcast_to_coords(
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
-
-    if isinstance(coords, list | tuple) and any(isinstance(c, tuple) for c in coords):
-        # xarray reads bare `(a, b)` as `(dim_name, values)`; normalize so a
-        # coords entry passed as a tuple behaves identically to a list.
-        coords = [list(c) if isinstance(c, tuple) else c for c in coords]
 
     expected = _coords_to_dict(coords, dims=dims)
     if not expected:
