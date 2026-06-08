@@ -6,20 +6,17 @@ from collections.abc import Callable
 
 import pytest
 
-from benchmarks.conftest import maybe_skip
-from benchmarks.phases import touch_matrices
-from benchmarks.registry import MATRICES, ModelSpec, iter_params, param_ids
+from benchmarks.conftest import run_case
+from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.registry import MATRICES
 
-_PARAMS = iter_params(MATRICES)
+_CASES = list(phase_cases(MATRICES))
 
 
-@pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
+@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
 def test_matrices(
     benchmark: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
 ) -> None:
-    maybe_skip(request, spec, size)
-    m = spec.build(size)
-    benchmark(touch_matrices, m)
+    run_case(benchmark, case, request)

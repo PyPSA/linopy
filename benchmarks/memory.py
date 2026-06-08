@@ -15,8 +15,8 @@ test ids, so cross-snapshot diffs line up with the timing snapshots.
 The per-phase peaks are *marginal* (each tracker sees only its own phase's
 allocations), so the end-to-end OOM ceiling can't be recovered from them: the
 opt-in ``pipeline`` phase (``--phase pipeline``) instead measures
-build → matrices → to_lp under one tracker, keyed by a bare
-``pipeline[<spec>-<axis>=<value>]`` id.
+build → matrices → to_lp under one tracker, keyed by the same node id as the
+timing pipeline test (``test_pipeline.py::test_pipeline[...]``).
 """
 
 from __future__ import annotations
@@ -28,11 +28,10 @@ import platform
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarks.registry import spec_param_id
 from benchmarks.snapshot import write_memory_snapshot
 
 if TYPE_CHECKING:
@@ -72,28 +71,6 @@ MEMORY_PHASES: tuple[str, ...] = (
 # peak, so it duplicates their work and is *not* in the default set; request it
 # standalone with ``--phase pipeline``. This is the full set ``--phase`` accepts.
 ALL_MEMORY_PHASES: tuple[str, ...] = (*MEMORY_PHASES, "pipeline")
-
-
-def _phase_tag(phase: str) -> str:
-    """Map a phase name to the registry phase tag used by ``spec.applies_to``."""
-    from benchmarks.registry import (
-        BUILD,
-        FROM_NETCDF,
-        MATRICES,
-        TO_HIGHSPY,
-        TO_LP,
-        TO_NETCDF,
-    )
-
-    return {
-        "build": BUILD,
-        "matrices": MATRICES,
-        "to_lp": TO_LP,
-        "to_netcdf": TO_NETCDF,
-        "from_netcdf": FROM_NETCDF,
-        "to_solver": TO_HIGHSPY,  # we always measure the highs handoff
-        "pipeline": BUILD,
-    }[phase]
 
 
 def measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
@@ -139,116 +116,14 @@ def measure_peak(action: Callable[[], object], repeats: int = 1) -> float:
 _measure_peak = measure_peak
 
 
-def _measurements(
-    phase: str, spec: BenchSpec, size: int
-) -> Iterator[tuple[str, Callable[[], object]]]:
-    """
-    Yield ``(test_id, action)`` pairs for one ``(phase, spec, size)``.
-
-    ``action`` is a zero-arg callable; the caller runs it inside a tracker.
-    For non-build phases, the model is built once up front (outside the
-    tracker) and the action closes over it so only the phase work is
-    counted. ``size`` is the swept value along ``spec.axis`` (model size or
-    pattern severity); the test ids match the shared phase drivers either way.
-    """
-    name = spec.name
-    axis = spec.axis
-
-    if phase == "build":
-        yield (
-            f"benchmarks/test_build.py::test_build[{spec_param_id(name, axis, size)}]",
-            lambda: spec.build(size),
-        )
-        return
-
-    if phase == "pipeline":
-        from benchmarks.phases import touch_matrices, write_lp
-
-        tmpdir = tempfile.TemporaryDirectory()
-        lp_path = Path(tmpdir.name) / "m.lp"
-
-        def run_pipeline() -> None:
-            built = spec.build(size)
-            touch_matrices(built)
-            write_lp(built, lp_path)
-
+def _deps_available(spec: BenchSpec) -> bool:
+    """True if every module in ``spec.requires`` imports (e.g. pypsa)."""
+    for mod in spec.requires:
         try:
-            yield (f"pipeline[{spec_param_id(name, axis, size)}]", run_pipeline)
-        finally:
-            tmpdir.cleanup()
-        return
-
-    m = spec.build(size)
-
-    if phase == "matrices":
-        from benchmarks.phases import touch_matrices
-
-        yield (
-            f"benchmarks/test_matrices.py::test_matrices[{spec_param_id(name, axis, size)}]",
-            lambda: touch_matrices(m),
-        )
-
-    elif phase == "to_lp":
-        from benchmarks.phases import write_lp
-
-        tmpdir = tempfile.TemporaryDirectory()
-        lp_path = Path(tmpdir.name) / "m.lp"
-        try:
-            yield (
-                f"benchmarks/test_to_lp.py::test_to_lp[{spec_param_id(name, axis, size)}]",
-                lambda: write_lp(m, lp_path),
-            )
-        finally:
-            tmpdir.cleanup()
-
-    elif phase == "to_netcdf":
-        from benchmarks.phases import write_netcdf
-
-        tmpdir = tempfile.TemporaryDirectory()
-        nc_path = Path(tmpdir.name) / "m.nc"
-        try:
-            yield (
-                f"benchmarks/test_netcdf.py::test_to_netcdf[{spec_param_id(name, axis, size)}]",
-                lambda: write_netcdf(m, nc_path),
-            )
-        finally:
-            tmpdir.cleanup()
-
-    elif phase == "from_netcdf":
-        from benchmarks.phases import read_netcdf, write_netcdf
-
-        tmpdir = tempfile.TemporaryDirectory()
-        nc_path = Path(tmpdir.name) / "m.nc"
-        write_netcdf(m, nc_path)  # setup: written outside the tracker
-        try:
-            yield (
-                f"benchmarks/test_netcdf.py::test_from_netcdf[{spec_param_id(name, axis, size)}]",
-                lambda: read_netcdf(nc_path),
-            )
-        finally:
-            tmpdir.cleanup()
-
-    elif phase == "to_solver":
-        from benchmarks.phases import SOLVER_HANDOFFS
-
-        # Memory currently tracks only HiGHS — look it up by name so a
-        # reordering of SOLVER_HANDOFFS doesn't silently swap solvers.
-        # Older linopy releases without ``to_highspy`` skip the phase
-        # silently rather than emitting an id with no possible match.
-        highs = next((w for n, _, w in SOLVER_HANDOFFS if n == "highs"), None)
-        if highs is None:
-            return
-
-        yield (
-            (
-                f"benchmarks/test_to_solver.py::test_to_solver"
-                f"[highs-{spec_param_id(name, axis, size)}]"
-            ),
-            lambda: highs(m),
-        )
-
-    else:
-        raise ValueError(f"unknown phase: {phase!r}")
+            __import__(mod)
+        except ImportError:
+            return False
+    return True
 
 
 def run_phase(
@@ -261,67 +136,50 @@ def run_phase(
     severities: tuple[int, ...] = (),
 ) -> dict[str, float]:
     """
-    Measure peak memory for every applicable ``(spec, size)`` under one phase.
+    Measure peak memory for every applicable case under one phase.
 
-    Returns a ``{test_id: peak_mib}`` mapping. Invoked once per phase as a
-    subprocess by :func:`measure` for isolation. ``repeats`` is forwarded to
-    :func:`measure_peak` so callers can dial up signal-to-noise. ``filter_expr``
-    keeps only specs whose ``<name>-<axis>=<value>`` key contains it — e.g.
-    ``"nodal_balance"`` (one spec), ``"severity"`` (patterns), ``"n="`` (models).
-    Size selection (``quick`` / ``long`` / ``sizes`` / ``severities``) shares
-    :func:`benchmarks.registry.skip_reason` with pytest so the two never drift.
+    Returns a ``{test_id: peak_mib}`` mapping. The work, ids and size selection
+    come from :func:`benchmarks.phases.phase_cases` / ``skip_reason`` — the same
+    source the pytest drivers consume, so the two layers can't drift. Invoked
+    once per phase as a subprocess by :func:`measure` for isolation.
+    ``filter_expr`` keeps only cases whose id-suffix contains it (e.g.
+    ``"nodal_balance"``, ``"severity"``, ``"n="``); ``repeats`` is forwarded to
+    :func:`measure_peak`.
     """
     _require_memray()
 
-    from benchmarks.registry import all_specs, skip_reason
+    from benchmarks.phases import PHASE_NODE, phase_cases
+    from benchmarks.registry import skip_reason
 
-    tag = _phase_tag(phase)
+    node = PHASE_NODE[phase]
     results: dict[str, float] = {}
 
-    for spec in all_specs():
-        if not spec.applies_to(tag):
+    for case in phase_cases(phase):
+        if case.skip:
+            continue
+        if not _deps_available(case.spec):
+            continue
+        if skip_reason(
+            case.spec,
+            case.value,
+            quick=quick,
+            long=long,
+            sizes=sizes,
+            severities=severities,
+        ):
+            continue
+        if filter_expr and filter_expr not in case.id:
             continue
 
-        # Optional-dep gate (e.g. pypsa_scigrid needs pypsa).
-        for mod in spec.requires:
-            try:
-                __import__(mod)
-            except ImportError:
-                break
-        else:
-            for value in spec.sweep:
-                if skip_reason(
-                    spec,
-                    value,
-                    quick=quick,
-                    long=long,
-                    sizes=sizes,
-                    severities=severities,
-                ):
-                    continue
-                key = spec_param_id(spec.name, spec.axis, value)
-                if filter_expr and filter_expr not in key:
-                    continue
-                try:
-                    for test_id, action in _measurements(phase, spec, value):
-                        try:
-                            results[test_id] = _measure_peak(action, repeats=repeats)
-                            print(
-                                f"  {test_id} → {results[test_id]:.1f} MiB",
-                                file=sys.stderr,
-                            )
-                        except Exception as exc:  # noqa: BLE001
-                            print(
-                                f"  skip {test_id}: {type(exc).__name__}: {exc}",
-                                file=sys.stderr,
-                            )
-                except Exception as exc:  # noqa: BLE001
-                    print(
-                        f"  setup failed {spec.name}/{value}: "
-                        f"{type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                    )
-                gc.collect()
+        test_id = f"{node}[{case.id}]"
+        try:
+            with case.run() as action:
+                peak = measure_peak(action, repeats=repeats)
+            results[test_id] = peak
+            print(f"  {test_id} → {peak:.1f} MiB", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  skip {test_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        gc.collect()
 
     return results
 

@@ -3,26 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 import pytest
 
-from benchmarks.conftest import maybe_skip
-from benchmarks.phases import write_lp
-from benchmarks.registry import TO_LP, ModelSpec, iter_params, param_ids
+from benchmarks.conftest import run_case
+from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.registry import TO_LP
 
-_PARAMS = iter_params(TO_LP)
+_CASES = list(phase_cases(TO_LP))
 
 
-@pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
+@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
 def test_to_lp(
     benchmark: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
-    tmp_path: Path,
 ) -> None:
-    maybe_skip(request, spec, size)
-    m = spec.build(size)
-    lp_file = tmp_path / "model.lp"
-    benchmark(write_lp, m, lp_file)
+    run_case(benchmark, case, request)

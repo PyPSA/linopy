@@ -9,48 +9,30 @@ written artifact.
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 import pytest
 
-from benchmarks.conftest import maybe_skip
-from benchmarks.phases import read_netcdf, write_netcdf
-from benchmarks.registry import (
-    FROM_NETCDF,
-    TO_NETCDF,
-    ModelSpec,
-    iter_params,
-    param_ids,
-)
+from benchmarks.conftest import run_case
+from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.registry import FROM_NETCDF, TO_NETCDF
 
-_WRITE_PARAMS = iter_params(TO_NETCDF)
-_READ_PARAMS = iter_params(FROM_NETCDF)
+_WRITE_CASES = list(phase_cases(TO_NETCDF))
+_READ_CASES = list(phase_cases(FROM_NETCDF))
 
 
-@pytest.mark.parametrize("spec,size", _WRITE_PARAMS, ids=param_ids(_WRITE_PARAMS))
+@pytest.mark.parametrize("case", _WRITE_CASES, ids=[c.id for c in _WRITE_CASES])
 def test_to_netcdf(
     benchmark: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
-    tmp_path: Path,
 ) -> None:
-    maybe_skip(request, spec, size)
-    m = spec.build(size)
-    out = tmp_path / "model.nc"
-    benchmark(write_netcdf, m, out)
+    run_case(benchmark, case, request)
 
 
-@pytest.mark.parametrize("spec,size", _READ_PARAMS, ids=param_ids(_READ_PARAMS))
+@pytest.mark.parametrize("case", _READ_CASES, ids=[c.id for c in _READ_CASES])
 def test_from_netcdf(
     benchmark: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
-    tmp_path: Path,
 ) -> None:
-    maybe_skip(request, spec, size)
-    m = spec.build(size)
-    out = tmp_path / "model.nc"
-    write_netcdf(m, out)
-    benchmark(read_netcdf, out)
+    run_case(benchmark, case, request)

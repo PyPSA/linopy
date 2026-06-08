@@ -18,39 +18,16 @@ from collections.abc import Callable
 
 import pytest
 
-from benchmarks.conftest import maybe_skip
-from benchmarks.phases import SOLVER_HANDOFFS
-from benchmarks.registry import ModelSpec, iter_params, spec_param_id
-from linopy.solvers import available_solvers
+from benchmarks.conftest import run_case
+from benchmarks.phases import PhaseCase, phase_cases
+
+_CASES = list(phase_cases("to_solver"))
 
 
-def _make_params() -> list[object]:
-    out: list[object] = []
-    for solver_name, phase, wrapper in SOLVER_HANDOFFS:
-        for spec, size in iter_params(phase):
-            out.append(
-                pytest.param(
-                    solver_name,
-                    wrapper,
-                    spec,
-                    size,
-                    id=f"{solver_name}-{spec_param_id(spec.name, spec.axis, size)}",
-                )
-            )
-    return out
-
-
-@pytest.mark.parametrize("solver_name,wrapper,spec,size", _make_params())
+@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
 def test_to_solver(
     benchmark: Callable[..., object],
-    solver_name: str,
-    wrapper: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
 ) -> None:
-    if solver_name not in available_solvers:
-        pytest.skip(f"{solver_name} not installed")
-    maybe_skip(request, spec, size)
-    model = spec.build(size)
-    benchmark(wrapper, model)
+    run_case(benchmark, case, request)

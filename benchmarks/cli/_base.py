@@ -44,7 +44,7 @@ app = typer.Typer(
 )
 
 PhaseName = Literal[
-    "build", "matrices", "to_lp", "to_netcdf", "from_netcdf", "to_solver"
+    "build", "matrices", "to_lp", "to_netcdf", "from_netcdf", "to_solver", "pipeline"
 ]
 SpecKind = Literal["all", "models", "patterns"]
 
@@ -56,6 +56,7 @@ _PHASE_TEST_FILE: dict[PhaseName, str] = {
     "to_netcdf": "benchmarks/test_netcdf.py::test_to_netcdf",
     "from_netcdf": "benchmarks/test_netcdf.py::test_from_netcdf",
     "to_solver": "benchmarks/test_to_solver.py",
+    "pipeline": "benchmarks/test_pipeline.py",
 }
 
 # pytest args that constitute a "smoke" run — quick sizes, no timings.

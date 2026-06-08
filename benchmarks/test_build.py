@@ -6,18 +6,17 @@ from collections.abc import Callable
 
 import pytest
 
-from benchmarks.conftest import maybe_skip
-from benchmarks.registry import BUILD, ModelSpec, iter_params, param_ids
+from benchmarks.conftest import run_case
+from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.registry import BUILD
 
-_PARAMS = iter_params(BUILD)
+_CASES = list(phase_cases(BUILD))
 
 
-@pytest.mark.parametrize("spec,size", _PARAMS, ids=param_ids(_PARAMS))
+@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
 def test_build(
     benchmark: Callable[..., object],
-    spec: ModelSpec,
-    size: int,
+    case: PhaseCase,
     request: pytest.FixtureRequest,
 ) -> None:
-    maybe_skip(request, spec, size)
-    benchmark(spec.build, size)
+    run_case(benchmark, case, request)

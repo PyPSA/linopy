@@ -163,6 +163,8 @@ def run(
     def _timing() -> None:
         args: list[str] = []
         args.append(_PHASE_TEST_FILE[phase] if phase is not None else "benchmarks/")
+        if phase == "pipeline":
+            args.append("--pipeline")
         if quick:
             args.append("--quick")
         elif long:
