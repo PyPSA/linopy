@@ -1,0 +1,43 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+  # Allow CodSpeed to trigger backtest performance analysis to generate
+  # the initial baseline data.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write  # Required for OpenID Connect authentication with CodSpeed
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Needed for setuptools_scm
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install package and benchmark dependencies
+        run: |
+          python -m pip install uv
+          uv pip install --system . pytest-codspeed
+
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: pytest benchmarks/test_build.py benchmarks/test_lp_write.py benchmarks/test_matrices.py --quick --codspeed

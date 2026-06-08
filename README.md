@@ -5,6 +5,7 @@
 [![Tests](https://github.com/PyPSA/linopy/actions/workflows/test.yml/badge.svg)](https://github.com/PyPSA/linopy/actions/workflows/test.yml)
 [![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/)
 [![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/PyPSA/linopy?utm_source=badge)
 
 
 
