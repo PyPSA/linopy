@@ -482,3 +482,17 @@ class TestFixIO:
         m2.variables["z"].unrelax()
         assert m2.variables["z"].attrs["binary"]
         assert "z" not in m2._relaxed_registry
+
+
+def test_fix_aligns_positional_value_to_named_dimension() -> None:
+    # fix() delegates alignment to the (separately tested) broadcast_to_coords;
+    # this only guards that it passes the variable's own coords, so a positional
+    # value lands on the named dimension instead of gaining a spurious dim_0.
+    m = Model()
+    m.add_variables(
+        lower=-5, upper=5, coords=[pd.Index([2020, 2030, 2040], name="time")], name="t"
+    )
+    m.variables["t"].fix([1.0, 2.0, 3.0])
+    con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}t"]
+    assert con.rhs.dims == ("time",)
+    np.testing.assert_array_almost_equal(con.rhs.values, [1.0, 2.0, 3.0])

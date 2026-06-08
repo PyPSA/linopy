@@ -6,6 +6,7 @@ Upcoming Version
 
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
+* ``Variable.fix(value)`` now places ``value`` correctly on variables with named dimensions; previously array values could be misaligned.
 
 **Features**
 

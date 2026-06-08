@@ -31,7 +31,7 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
@@ -1368,7 +1368,9 @@ class Variable:
                 )
                 raise ValueError(msg) from None
 
-        value = as_dataarray(value).broadcast_like(self.labels)
+        value = broadcast_to_coords(
+            value, self.coords, label=f"fix() for variable '{self.name}'"
+        )
 
         if self.attrs.get("integer") or self.attrs.get("binary"):
             value = value.round(0)
