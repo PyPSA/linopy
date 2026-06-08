@@ -52,18 +52,6 @@ def parse_test_id(test_id: str) -> tuple[str, str, int | None, str]:
     return "other", "other", None, "other"
 
 
-def spec_param_id(name: str, axis: str, value: object) -> str:
-    """
-    The ``<name>-<axis>=<value>`` fragment that fills a test id's ``[...]``.
-
-    The single source of truth for the parametrize-id shape — pytest param ids
-    (:func:`benchmarks.registry.param_ids`), the memory grid's test ids, and
-    the solver-handoff ids all build on it, and :func:`parse_test_id` reads it
-    back. Keep it in lock-step with ``_SIZE_RE``.
-    """
-    return f"{name}-{axis}={value}"
-
-
 def synth_test_id(
     label: str,
     *,
@@ -84,6 +72,8 @@ def synth_test_id(
     — still fine for ``compare``). A partial spec is ambiguous and rejected.
     """
     if spec is not None and size is not None and phase is not None:
+        from benchmarks.registry import spec_param_id
+
         return f"bench::{phase}[{spec_param_id(spec, axis, size)}]"
     if spec is not None or size is not None or phase is not None:
         raise ValueError(

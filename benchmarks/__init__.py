@@ -34,8 +34,11 @@ if TYPE_CHECKING:
     from benchmarks.snapshot import Metric
 
 # Importing the models / patterns packages triggers each module's
-# ``register(...)`` / ``register_pattern(...)`` call at import time.
-from benchmarks import bench, models, patterns  # noqa: F401, E402
+# ``register(...)`` / ``register_pattern(...)`` call at import time. ``bench``
+# (analytics) is intentionally NOT eagerly imported — that keeps ``import
+# benchmarks`` / the CodSpeed CI baseline free of the local-only layer;
+# ``from benchmarks import bench`` still works (submodule import on demand).
+from benchmarks import models, patterns  # noqa: F401, E402
 
 
 def load_long_df(

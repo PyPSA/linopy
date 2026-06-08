@@ -32,7 +32,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarks.snapshot import spec_param_id, write_memory_snapshot
+from benchmarks.registry import spec_param_id
+from benchmarks.snapshot import write_memory_snapshot
 
 if TYPE_CHECKING:
     from benchmarks.registry import BenchSpec

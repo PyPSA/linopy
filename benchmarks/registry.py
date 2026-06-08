@@ -244,9 +244,18 @@ def iter_params(
     ]
 
 
-def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
-    from benchmarks.snapshot import spec_param_id
+def spec_param_id(name: str, axis: str, value: object) -> str:
+    """
+    The ``<name>-<axis>=<value>`` fragment that fills a test id's ``[...]``.
 
+    Single source of truth for the parametrize-id shape — pytest param ids
+    (:func:`param_ids`), the memory grid's test ids, and the solver-handoff ids
+    all build on it; :func:`benchmarks.snapshot.parse_test_id` reads it back.
+    """
+    return f"{name}-{axis}={value}"
+
+
+def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
     return [spec_param_id(spec.name, spec.axis, value) for spec, value in params]
 
 
