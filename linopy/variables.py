@@ -56,10 +56,11 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
-    FIX_CONSTRAINT_PREFIX,
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    STASHED_LOWER,
+    STASHED_UPPER,
     TERM_DIM,
 )
 from linopy.types import (
@@ -1341,9 +1342,15 @@ class Variable:
         overwrite: bool = True,
     ) -> None:
         """
-        Fix the variable to a given value by adding an equality constraint.
+        Fix the variable to a given value by collapsing its bounds.
+
+        Sets ``lower = upper = value``.
 
         If no value is given, the current solution value is used.
+
+        A fix value outside the variable's current bounds emits a warning, but
+        does not cause infeasibilities (the bounds are overridden). Fixing a
+        binary variable to anything other than 0 or 1 raises.
 
         Parameters
         ----------
@@ -1354,8 +1361,9 @@ class Variable:
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
         overwrite : bool, optional
-            If True (default), overwrite an existing fix constraint for this
-            variable. If False, raise an error if the variable is already fixed.
+            If True (default), re-fix a variable that is already fixed to the
+            new value (the originally stashed bounds are kept). If False, raise
+            an error if the variable is already fixed.
         """
         if value is None:
             try:
@@ -1377,41 +1385,59 @@ class Variable:
         else:
             value = value.round(decimals)
 
-        if (value < self.lower).any() or (value > self.upper).any():
+        if self.fixed and not overwrite:
             msg = (
-                f"Fix values for variable '{self.name}' are outside the "
-                "variable bounds."
+                f"Variable '{self.name}' is already fixed. Use "
+                "overwrite=True to replace the existing fix value."
             )
             raise ValueError(msg)
 
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if self.fixed:
+            lower, upper = self.data[STASHED_LOWER], self.data[STASHED_UPPER]
+        else:
+            lower, upper = self.data.lower, self.data.upper
 
-        if constraint_name in self.model.constraints:
-            if not overwrite:
+        if self.attrs.get("binary"):
+            if (((value != 0) & (value != 1)).any()).item():
                 msg = (
-                    f"Variable '{self.name}' is already fixed. Use "
-                    "overwrite=True to replace the existing fix constraint."
+                    f"Cannot fix binary variable '{self.name}' to a value "
+                    "other than 0 or 1."
                 )
                 raise ValueError(msg)
-            self.model.remove_constraints(constraint_name)
+        elif (value < lower).any() or (value > upper).any():
+            warn(
+                f"Fix values for variable '{self.name}' lie outside its current "
+                "bounds; the bounds are overridden by the fix value.",
+                UserWarning,
+                stacklevel=2,
+            )
 
-        self.model.add_constraints(self, "=", value, name=constraint_name)
+        if not self.fixed:
+            self._data = assign_multiindex_safe(
+                self.data,
+                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
+            )
+
+        self.lower = value
+        self.upper = value
 
     def unfix(self) -> None:
         """
-        Remove the fix constraint for this variable.
+        Unfix the variable, restoring the bounds it had before :meth:`fix`.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        if constraint_name in self.model.constraints:
-            self.model.remove_constraints(constraint_name)
+        if not self.fixed:
+            return
+
+        self.lower = self.data[STASHED_LOWER]
+        self.upper = self.data[STASHED_UPPER]
+        self._data = self.data.drop_vars([STASHED_LOWER, STASHED_UPPER])
 
     @property
     def fixed(self) -> bool:
         """
         Return whether the variable is currently fixed.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        return constraint_name in self.model.constraints
+        return STASHED_LOWER in self.data
 
 
 class AtIndexer:

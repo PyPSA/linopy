@@ -737,6 +737,53 @@ def test_milp_binary_model(
     ).all()
 
 
+# (kind, add_variables kwargs, fixval, objective coef). The coef drives the var
+# to the bound opposite fixval, so ending at fixval proves the fix is honored;
+# the two rows per kind cover collapsing the lower and the upper bound.
+FIXED_VAR_CASES = [
+    pytest.param("continuous", {}, 7.0, 100, id="continuous-lower-raised"),
+    pytest.param("continuous", {}, 3.0, -100, id="continuous-upper-lowered"),
+    pytest.param("integer", {"integer": True}, 7.0, 100, id="integer-lower-raised"),
+    pytest.param("integer", {"integer": True}, 3.0, -100, id="integer-upper-lowered"),
+    pytest.param("binary", {"binary": True}, 1.0, 100, id="binary-1"),
+    pytest.param("binary", {"binary": True}, 0.0, -100, id="binary-0"),
+]
+
+
+@pytest.mark.parametrize("kind,var_kwargs,fixval,coef", FIXED_VAR_CASES)
+@pytest.mark.parametrize(
+    "solver,io_api,explicit_coordinate_names",
+    [p for p in params if p[0] not in ["mindopt"]],
+)
+def test_fixed_variable_is_held(
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+    kind: str,
+    var_kwargs: dict,
+    fixval: float,
+    coef: float,
+) -> None:
+    if kind in ("integer", "binary") and solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    m = Model()
+    if "binary" in var_kwargs:
+        v = m.add_variables(name="v", **var_kwargs)
+    else:
+        v = m.add_variables(lower=0, upper=10, name="v", **var_kwargs)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(x >= 2, name="c")
+    m.add_objective(x + coef * v)
+    v.fix(fixval)
+
+    status, condition = m.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert condition == "optimal"
+    assert float(m.solution.v) == pytest.approx(fixval)
+
+
 @pytest.mark.parametrize(
     "solver,io_api,explicit_coordinate_names",
     [p for p in params if p[0] not in ["mindopt"]],

@@ -245,10 +245,12 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
+    # Fixed binaries need explicit bounds; the `binary` section implies [0, 1].
     names = (
         list(m.variables.continuous)
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
+        + [n for n in m.variables.binaries if m.variables[n].fixed]
     )
     if not len(list(names)):
         return
