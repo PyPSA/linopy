@@ -21,6 +21,25 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 
+def _stack(csrs: list) -> scipy.sparse.csr_array | None:
+    """Vertically stack CSR blocks, or None when there are none."""
+    if not csrs:
+        return None
+    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+
+
+def _concat(arrays: list, dtype: type | None = None) -> ndarray:
+    """Concatenate arrays, or an empty array when there are none."""
+    return np.concatenate(arrays) if arrays else np.array([], dtype=dtype)
+
+
+def _binval_per_row(binval: int | np.ndarray, n: int) -> ndarray:
+    """Broadcast an indicator triggering value to one entry per active row."""
+    if np.ndim(binval) == 0:
+        return np.full(n, int(binval), dtype=np.intp)
+    return np.asarray(binval, dtype=np.intp).ravel()
+
+
 class MatrixAccessor:
     """
     Helper class to quickly access model related vectors and matrices.
@@ -86,11 +105,7 @@ class MatrixAccessor:
                 ind_sense.append(sense)
                 ind_binvar.append(label_to_pos[cc._binvar_labels])
                 binval = cast("int | np.ndarray", cc._binval)
-                n = len(b)
-                if np.ndim(binval) == 0:
-                    ind_binval.append(np.full(n, int(binval), dtype=np.intp))
-                else:
-                    ind_binval.append(np.asarray(binval, dtype=np.intp).ravel())
+                ind_binval.append(_binval_per_row(binval, len(b)))
             else:
                 csr, _, b, sense = c.to_matrix_with_rhs(label_index)
                 reg_csrs.append(csr)
@@ -98,30 +113,14 @@ class MatrixAccessor:
                 reg_sense.append(sense)
 
         self.clabels: ndarray = m.constraints.label_index.clabels
-        self.A: scipy.sparse.csr_array | None = (
-            cast(scipy.sparse.csr_array, scipy.sparse.vstack(reg_csrs, format="csr"))
-            if reg_csrs
-            else None
-        )
-        self.b: ndarray = np.concatenate(reg_b) if reg_b else np.array([])
-        self.sense: ndarray = (
-            np.concatenate(reg_sense) if reg_sense else np.array([], dtype=object)
-        )
-        self.indicator_A: scipy.sparse.csr_array | None = (
-            cast(scipy.sparse.csr_array, scipy.sparse.vstack(ind_csrs, format="csr"))
-            if ind_csrs
-            else None
-        )
-        self.indicator_b: ndarray = np.concatenate(ind_b) if ind_b else np.array([])
-        self.indicator_sense: ndarray = (
-            np.concatenate(ind_sense) if ind_sense else np.array([], dtype=object)
-        )
-        self.indicator_binvar: ndarray = (
-            np.concatenate(ind_binvar) if ind_binvar else np.array([], dtype=np.intp)
-        )
-        self.indicator_binval: ndarray = (
-            np.concatenate(ind_binval) if ind_binval else np.array([], dtype=np.intp)
-        )
+        self.A: scipy.sparse.csr_array | None = _stack(reg_csrs)
+        self.b: ndarray = _concat(reg_b)
+        self.sense: ndarray = _concat(reg_sense, dtype=object)
+        self.indicator_A: scipy.sparse.csr_array | None = _stack(ind_csrs)
+        self.indicator_b: ndarray = _concat(ind_b)
+        self.indicator_sense: ndarray = _concat(ind_sense, dtype=object)
+        self.indicator_binvar: ndarray = _concat(ind_binvar, dtype=np.intp)
+        self.indicator_binval: ndarray = _concat(ind_binval, dtype=np.intp)
 
     @cached_property
     def c(self) -> ndarray:

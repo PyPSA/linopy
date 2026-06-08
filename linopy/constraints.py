@@ -194,6 +194,12 @@ class ConstraintBase(ABC):
     def binary_val(self) -> int | np.ndarray | None:
         """Get the indicator triggering value(s), or None."""
 
+    @property
+    def data_attrs(self) -> list[str]:
+        """Data variables that define this constraint's persistent state."""
+        base = list(Constraints.dataset_attrs)
+        return base + ["binary_var", "binary_val"] if self.is_indicator else base
+
     @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
         """Check if the constraint references any of the given variable labels."""

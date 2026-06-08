@@ -1187,10 +1187,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         d = con.mutable().data
         if include_solution:
             return d.copy(deep=deep)
-        cols = m.constraints.dataset_attrs + (
-            ["binary_var", "binary_val"] if con.is_indicator else []
-        )
-        return d[cols].copy(deep=deep)
+        return d[con.data_attrs].copy(deep=deep)
 
     new_model._constraints = Constraints(
         {
