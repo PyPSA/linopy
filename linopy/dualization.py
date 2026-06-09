@@ -1,5 +1,5 @@
 """
-Linopy dual module.
+Linopy dualization module.
 
 This module contains implementations for constructing the dual of a linear optimization problem.
 """
@@ -51,63 +51,24 @@ def _lift_bounds_to_constraints(m: Model) -> None:
     m : Model
         Model to mutate in-place.
     """
-    logger.debug("Converting finite variable bounds to explicit constraints.")
-    logger.debug("Relaxing converted variable bounds to [-inf, inf].")
-
     for var_name, var in m.variables.items():
         label_mask = var.labels != -1
         lb = var.lower
         ub = var.upper
 
-        finite_lb = xr.DataArray(
-            np.isfinite(lb.values),
-            coords=lb.coords,
-            dims=lb.dims,
-        )
-        finite_ub = xr.DataArray(
-            np.isfinite(ub.values),
-            coords=ub.coords,
-            dims=ub.dims,
-        )
+        finite_lb = xr.DataArray(np.isfinite(lb.values), coords=lb.coords, dims=lb.dims)
+        finite_ub = xr.DataArray(np.isfinite(ub.values), coords=ub.coords, dims=ub.dims)
 
-        lower_mask = label_mask & finite_lb
-        upper_mask = label_mask & finite_ub
-
-        # Lower bound.
-        if f"{var_name}-bound-lower" not in m.constraints:
-            if bool(lower_mask.any()):
-                m.add_constraints(
-                    var >= lb,
-                    name=f"{var_name}-bound-lower",
-                    mask=lower_mask,
-                )
-                logger.debug(f"Added lower bound constraint for '{var_name}'.")
-
-                # Remove converted bounds to avoid double-counting in the dual.
-                # Rely on the new constraints instead.
-                var.lower.values[lower_mask.values] = -np.inf
-            else:
-                logger.debug(
-                    f"Variable '{var_name}' has no finite lower bound, skipping."
-                )
-
-        # Upper bound.
-        if f"{var_name}-bound-upper" not in m.constraints:
-            if bool(upper_mask.any()):
-                m.add_constraints(
-                    var <= ub,
-                    name=f"{var_name}-bound-upper",
-                    mask=upper_mask,
-                )
-                logger.debug(f"Added upper bound constraint for '{var_name}'.")
-
-                # Remove converted bounds to avoid double-counting in the dual.
-                # Rely on the new constraints instead.
-                var.upper.values[upper_mask.values] = np.inf
-            else:
-                logger.debug(
-                    f"Variable '{var_name}' has no finite upper bound, skipping."
-                )
+        bound_specs = [
+            ("lower", var >= lb, label_mask & finite_lb, var.lower, -np.inf),
+            ("upper", var <= ub, label_mask & finite_ub, var.upper, np.inf),
+        ]
+        for suffix, con, bound_mask, bound, relaxed in bound_specs:
+            con_name = f"{var_name}-bound-{suffix}"
+            if con_name in m.constraints or not bool(bound_mask.any()):
+                continue
+            m.add_constraints(con, name=con_name, mask=bound_mask)
+            bound.values[bound_mask.values] = relaxed
 
 
 def _dual_bounds_from_constraint_signs(
@@ -128,29 +89,22 @@ def _dual_bounds_from_constraint_signs(
     is_ge = signs == ">="
     valid_sign = is_eq | is_le | is_ge
 
-    # Bounds for invalid signs are irrelevant because invalid entries are
-    # masked out by the caller. Use finite placeholders to avoid NaNs.
     lower = xr.zeros_like(labels, dtype=float)
     upper = xr.zeros_like(labels, dtype=float)
 
-    # Equality constraints: dual variable is free.
     lower = lower.where(~is_eq, -np.inf)
     upper = upper.where(~is_eq, np.inf)
 
     if primal_is_min:
-        # <= constraints in a min primal: dual <= 0.
         lower = lower.where(~is_le, -np.inf)
         upper = upper.where(~is_le, 0.0)
 
-        # >= constraints in a min primal: dual >= 0.
         lower = lower.where(~is_ge, 0.0)
         upper = upper.where(~is_ge, np.inf)
     else:
-        # <= constraints in a max primal: dual >= 0.
         lower = lower.where(~is_le, 0.0)
         upper = upper.where(~is_le, np.inf)
 
-        # >= constraints in a max primal: dual <= 0.
         lower = lower.where(~is_ge, -np.inf)
         upper = upper.where(~is_ge, 0.0)
 
@@ -222,8 +176,8 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
             f"with shape {con.shape} and dims {con.labels.dims}."
         )
         coords = (
-            [con.labels.coords[dim] for dim in con.labels.dims]
-            if con.labels.dims
+            [con.indexes[dim] for dim in con.labels.dims]
+            if con.coord_dims
             else None
         )
         dual_vars[name] = m_dual.add_variables(
@@ -318,17 +272,11 @@ def _extract_dual_feas_entries(
     flat_c = clabels[A_coo.row].astype(np.int64)
     coeffs = A_coo.data
 
-    # Drop entries where either label is masked.
     has_labels = (flat_v != -1) & (flat_c != -1)
     flat_v, flat_c, coeffs = flat_v[has_labels], flat_c[has_labels], coeffs[has_labels]
 
-    # Map primal constraint labels to flat dual variable labels.
-    n = len(flat_con_to_dual)
-    in_range = (flat_c >= 0) & (flat_c < n)
-    flat_d = np.full(len(flat_c), -1, dtype=np.int64)
-    flat_d[in_range] = flat_con_to_dual[flat_c[in_range]]
+    flat_d = _gather_with_default(flat_c, flat_con_to_dual, -1, np.int64)
 
-    # Drop entries with no corresponding dual variable.
     has_dual = flat_d != -1
     return flat_v[has_dual], flat_d[has_dual], coeffs[has_dual]
 
@@ -384,6 +332,20 @@ def _build_label_to_flat_index_lookup(labels: np.ndarray) -> np.ndarray:
     return lookup
 
 
+def _gather_with_default(
+    labels: np.ndarray, lookup: np.ndarray, default: float, dtype: type
+) -> np.ndarray:
+    """
+    Gather ``lookup[labels]`` elementwise, using ``default`` where ``labels`` fall
+    outside ``lookup``'s range (including the -1 masked sentinel).
+    """
+    out = np.full(len(labels), default, dtype=dtype)
+    in_range = (labels >= 0) & (labels < len(lookup))
+    if in_range.any():
+        out[in_range] = lookup[labels[in_range].astype(np.int64)]
+    return out
+
+
 def _lookup_flat_indices(labels: np.ndarray, lookup: np.ndarray) -> np.ndarray:
     """
     Look up flat indices for flat labels.
@@ -394,13 +356,7 @@ def _lookup_flat_indices(labels: np.ndarray, lookup: np.ndarray) -> np.ndarray:
 
     Labels outside the lookup range, including masked labels, map to -1.
     """
-    flat_indices = np.full(len(labels), -1, dtype=np.int64)
-
-    in_range = (labels >= 0) & (labels < len(lookup))
-    if in_range.any():
-        flat_indices[in_range] = lookup[labels[in_range].astype(np.int64)]
-
-    return flat_indices
+    return _gather_with_default(labels, lookup, -1, np.int64)
 
 
 def _term_slots_for_sorted_flat_indices(sorted_flat_indices: np.ndarray) -> np.ndarray:
@@ -463,15 +419,12 @@ def _build_dual_feas_lhs(
     var_flat = var.labels.values.ravel().astype(np.int64)
     n_elements = len(var_flat)
 
-    # Map flat variable labels to flat indices in this variable.
     var_to_idx = _build_label_to_flat_index_lookup(var_flat)
     if not len(var_to_idx):
         return LinearExpression(None, m_dual)
 
-    # Locate entries that belong to this variable via bounded lookup.
     lin_idx = _lookup_flat_indices(flat_v, var_to_idx)
 
-    # Keep only entries that belong to this variable.
     keep = lin_idx != -1
     if not keep.any():
         return LinearExpression(None, m_dual)
@@ -480,24 +433,19 @@ def _build_dual_feas_lhs(
     dual_labels = flat_d[keep]
     coeffs = nnz_data[keep]
 
-    # Sort by flat index so entries for the same element are contiguous.
     order = np.argsort(lin_idx, kind="stable")
     lin_idx = lin_idx[order]
     dual_labels = dual_labels[order]
     coeffs = coeffs[order]
 
-    # Assign each term to a column slot within its variable-element group.
-    # Each run of equal ``lin_idx`` values corresponds to one variable element.
     col_idx = _term_slots_for_sorted_flat_indices(lin_idx)
     max_terms = int(col_idx.max()) + 1
 
-    # Populate (n_elements, max_terms) arrays via advanced indexing.
     dual_labels_2d = np.full((n_elements, max_terms), -1, dtype=np.int64)
     dual_coeffs_2d = np.zeros((n_elements, max_terms), dtype=np.float64)
     dual_labels_2d[lin_idx, col_idx] = dual_labels
     dual_coeffs_2d[lin_idx, col_idx] = coeffs
 
-    # Wrap in a LinearExpression, reshaping to (*var_dims, _term).
     target_shape = var.labels.shape + (max_terms,)
     dims = list(var.labels.dims) + ["_term"]
     ds = xr.Dataset(
@@ -560,13 +508,7 @@ def _add_dual_feasibility_constraints(
         mask = var.labels != -1
         var_flat = var.labels.values.ravel().astype(np.int64)
 
-        # RHS: objective coefficient for each element of this variable.
-        c_arr = np.zeros(len(var_flat), dtype=np.float64)
-        in_c_range = (var_flat >= 0) & (var_flat < len(c_lookup))
-
-        if in_c_range.any():
-            c_arr[in_c_range] = c_lookup[var_flat[in_c_range]]
-
+        c_arr = _gather_with_default(var_flat, c_lookup, 0.0, np.float64)
         c_vals = xr.DataArray(
             c_arr.reshape(var.labels.shape),
             coords=var.labels.coords,
@@ -576,10 +518,6 @@ def _add_dual_feasibility_constraints(
         lhs = _build_dual_feas_lhs(var, flat_v, flat_d, nnz_data, m_dual)
 
         if lhs.is_constant:
-            # If c_j is zero, the condition is redundant. If c_j is nonzero, the
-            # condition is impossible because it reduces to 0 == c_j. Since this
-            # constant-only condition has no variables to add to the dual model, we
-            # report it and skip adding the constraint.
             if np.any(c_arr[mask.values.ravel()] != 0):
                 logger.warning(
                     f"Variable '{var_name}' has no constraint connections but has "

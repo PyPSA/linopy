@@ -54,7 +54,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
-from linopy.dual import dualize
+from linopy.dualization import dualize
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,

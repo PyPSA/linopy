@@ -1,4 +1,4 @@
-"""Tests for linopy/dual.py - LP dualization."""
+"""Tests for linopy/dualization.py - LP dualization."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import xarray as xr
 from _pytest.logging import LogCaptureFixture
 
 from linopy import Model
-from linopy.dual import (
+from linopy.dualization import (
     _build_label_to_flat_index_lookup,
     _build_obj_coeff_lookup,
     _dual_bounds_from_constraint_signs,
