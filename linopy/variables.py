@@ -59,6 +59,7 @@ from linopy.constants import (
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    STASHED_ATTRS,
     STASHED_LOWER,
     STASHED_UPPER,
     TERM_DIM,
@@ -1014,7 +1015,7 @@ class Variable:
         -------
         df : pandas.DataFrame
         """
-        ds = self.data
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
 
         def mask_func(data: pd.DataFrame) -> pd.Series:
             return data["labels"] != -1
@@ -1034,7 +1035,8 @@ class Variable:
         -------
         pl.DataFrame
         """
-        df = to_polars(self.data)
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
+        df = to_polars(ds)
         df = filter_nulls_polars(df)
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
@@ -1376,35 +1378,39 @@ class Variable:
                 )
                 raise ValueError(msg) from None
 
-        value = broadcast_to_coords(
-            value, self.coords, label=f"fix() for variable '{self.name}'"
-        )
+        is_fixed = self.fixed
+        is_binary = self.attrs["binary"]
+        is_integer = self.attrs["integer"]
 
-        if self.attrs.get("integer") or self.attrs.get("binary"):
-            value = value.round(0)
-        else:
-            value = value.round(decimals)
-
-        if self.fixed and not overwrite:
+        if is_fixed and not overwrite:
             msg = (
                 f"Variable '{self.name}' is already fixed. Use "
                 "overwrite=True to replace the existing fix value."
             )
             raise ValueError(msg)
 
-        if self.fixed:
+        value = broadcast_to_coords(
+            value, self.coords, label=f"fix() for variable '{self.name}'"
+        )
+
+        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+            msg = (
+                f"Cannot fix binary variable '{self.name}' to a value "
+                "other than 0 or 1."
+            )
+            raise ValueError(msg)
+
+        if is_integer or is_binary:
+            value = value.round(0)
+        else:
+            value = value.round(decimals)
+
+        if is_fixed:
             lower, upper = self.data[STASHED_LOWER], self.data[STASHED_UPPER]
         else:
             lower, upper = self.data.lower, self.data.upper
 
-        if self.attrs.get("binary"):
-            if (((value != 0) & (value != 1)).any()).item():
-                msg = (
-                    f"Cannot fix binary variable '{self.name}' to a value "
-                    "other than 0 or 1."
-                )
-                raise ValueError(msg)
-        elif (value < lower).any() or (value > upper).any():
+        if not is_binary and ((value < lower).any() or (value > upper).any()):
             warn(
                 f"Fix values for variable '{self.name}' lie outside its current "
                 "bounds; the bounds are overridden by the fix value.",
@@ -1412,7 +1418,7 @@ class Variable:
                 stacklevel=2,
             )
 
-        if not self.fixed:
+        if not is_fixed:
             self._data = assign_multiindex_safe(
                 self.data,
                 **{STASHED_LOWER: lower, STASHED_UPPER: upper},
@@ -1430,14 +1436,14 @@ class Variable:
 
         self.lower = self.data[STASHED_LOWER]
         self.upper = self.data[STASHED_UPPER]
-        self._data = self.data.drop_vars([STASHED_LOWER, STASHED_UPPER])
+        self._data = self.data.drop_vars(STASHED_ATTRS)
 
     @property
     def fixed(self) -> bool:
         """
         Return whether the variable is currently fixed.
         """
-        return STASHED_LOWER in self.data
+        return all(attr in self.data for attr in STASHED_ATTRS)
 
 
 class AtIndexer:
@@ -1753,7 +1759,7 @@ class Variables:
         decimals : int, optional
             Number of decimal places to round continuous variables to.
         overwrite : bool, optional
-            If True, overwrite existing fix constraints.
+            If True, re-fix variables that are already fixed.
         """
         for var in self.data.values():
             var.fix(value=value, decimals=decimals, overwrite=overwrite)

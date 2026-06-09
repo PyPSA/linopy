@@ -39,6 +39,7 @@ sign_replace_dict: dict[str, str] = {
 
 STASHED_LOWER = "_stashed_lower"
 STASHED_UPPER = "_stashed_upper"
+STASHED_ATTRS: list[str] = [STASHED_LOWER, STASHED_UPPER]
 
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"

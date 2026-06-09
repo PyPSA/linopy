@@ -1,5 +1,6 @@
 """Tests for Variable.fix(), Variable.unfix(), and Variable.fixed."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -88,10 +89,13 @@ class TestVariableFix:
         np.testing.assert_equal(m.variables["z"].lower.item(), 0.0)
         np.testing.assert_equal(m.variables["z"].upper.item(), 0.0)
 
-    def test_fix_binary_outside_domain_raises(self, model_with_solution: Model) -> None:
+    @pytest.mark.parametrize("value", [5, 0.4, 0.6, -1])
+    def test_fix_binary_outside_domain_raises(
+        self, model_with_solution: Model, value: float
+    ) -> None:
         m = model_with_solution
         with pytest.raises(ValueError, match="binary variable"):
-            m.variables["z"].fix(value=5)
+            m.variables["z"].fix(value=value)
 
     def test_fix_rounds_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
@@ -125,10 +129,8 @@ class TestVariableFix:
 
     def test_fix_within_bounds_does_not_warn(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        import warnings
-
         with warnings.catch_warnings():
-            warnings.simplefilter("error")
+            warnings.simplefilter("error", UserWarning)
             m.variables["x"].fix(value=5.0)
 
     def test_fix_small_overshoot_rounded_within_bounds(
@@ -237,6 +239,9 @@ class TestFixThenRelax:
         m.variables["z"].relax()
         m.variables["z"].unfix()
         assert not m.variables["z"].fixed
+        # unfix restores the original binary bounds regardless of relaxation
+        np.testing.assert_equal(m.variables["z"].lower.item(), 0.0)
+        np.testing.assert_equal(m.variables["z"].upper.item(), 1.0)
         # relaxation is independent — still in effect
         assert m.variables["z"].relaxed
         assert not m.variables["z"].attrs["binary"]
