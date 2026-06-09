@@ -7,6 +7,7 @@ Organized by the module's public surface:
 
 - ``TestAsDataarrayFrom*``      — :func:`as_dataarray` (convert only)
 - ``TestCoordsToDict``          — the coords-entry naming rules
+- ``TestAddVariablesCoords``    — coords/dims → variable dims (end-to-end)
 - ``TestBroadcastToCoords``     — ``broadcast_to_coords(strict=False)``
 - ``TestMultiIndexProjection``  — implicit MI-level projection (values,
   deprecation warnings, coverage gaps) — the legacy/v1 fork point
@@ -152,39 +153,34 @@ class TestAsDataarrayFromPandas:
         assert list(da.coords[expected_dims[0]].values) == list(df.index)
         assert list(da.coords[expected_dims[1]].values) == list(df.columns)
 
-    def test_series_aligned_coords(self) -> None:
-        """This should not give out a warning even though coords are given."""
-        target_dim = "dim_0"
-        target_index = ["a", "b", "c"]
-        s = pd.Series([1, 2, 3], index=target_index)
-        da = as_dataarray(s, coords=[target_index])
-        assert isinstance(da, DataArray)
-        assert da.dims == (target_dim,)
-        assert list(da.coords[target_dim].values) == target_index
+    @pytest.mark.parametrize(
+        "coords",
+        [[["a", "b", "c"]], {"dim_0": ["a", "b", "c"]}],
+        ids=["list", "dict"],
+    )
+    def test_series_aligned_coords_do_not_warn(self, coords: Any) -> None:
+        """Coords matching the pandas index are accepted silently — no misalignment warning."""
+        s = pd.Series([1, 2, 3], index=["a", "b", "c"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            da = as_dataarray(s, coords=coords)
+        assert da.dims == ("dim_0",)
+        assert list(da.coords["dim_0"].values) == ["a", "b", "c"]
 
-        da = as_dataarray(s, coords={target_dim: target_index})
-        assert isinstance(da, DataArray)
-        assert da.dims == (target_dim,)
-        assert list(da.coords[target_dim].values) == target_index
-
-    def test_dataframe_aligned_coords(self) -> None:
-        """This should not give out a warning even though coords are given."""
-        target_dims = ("dim_0", "dim_1")
-        target_index = ["a", "b"]
-        target_columns = ["A", "B"]
-        df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-        da = as_dataarray(df, coords=[target_index, target_columns])
-        assert isinstance(da, DataArray)
-        assert da.dims == target_dims
-        assert list(da.coords[target_dims[0]].values) == target_index
-        assert list(da.coords[target_dims[1]].values) == target_columns
-
-        coords = dict(zip(target_dims, [target_index, target_columns]))
-        da = as_dataarray(df, coords=coords)
-        assert isinstance(da, DataArray)
-        assert da.dims == target_dims
-        assert list(da.coords[target_dims[0]].values) == target_index
-        assert list(da.coords[target_dims[1]].values) == target_columns
+    @pytest.mark.parametrize(
+        "coords",
+        [[["a", "b"], ["A", "B"]], {"dim_0": ["a", "b"], "dim_1": ["A", "B"]}],
+        ids=["list", "dict"],
+    )
+    def test_dataframe_aligned_coords_do_not_warn(self, coords: Any) -> None:
+        """Coords matching the frame's index/columns are accepted silently."""
+        df = pd.DataFrame([[1, 2], [3, 4]], index=["a", "b"], columns=["A", "B"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            da = as_dataarray(df, coords=coords)
+        assert da.dims == ("dim_0", "dim_1")
+        assert list(da.coords["dim_0"].values) == ["a", "b"]
+        assert list(da.coords["dim_1"].values) == ["A", "B"]
 
     def test_polars_series(self) -> None:
         target_dim = "dim_0"
@@ -445,6 +441,18 @@ class TestAsDataarrayMultiIndexCoords:
         assert set(da.coords.keys()) == {"station", "letter", "num"}
 
 
+def _ij_multiindex() -> pd.MultiIndex:
+    """Unnamed (i, j) MultiIndex used across the coords-entry tests."""
+    return pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
+
+
+def _named_multiindex(name: str = "multi") -> pd.MultiIndex:
+    """:func:`_ij_multiindex` carrying an overall index name."""
+    mi = _ij_multiindex()
+    mi.name = name
+    return mi
+
+
 # ---------------------------------------------------------------------------
 # _coords_to_dict — the coords-entry naming rules
 # ---------------------------------------------------------------------------
@@ -452,112 +460,153 @@ class TestAsDataarrayMultiIndexCoords:
 
 class TestCoordsToDict:
     """
-    One test per row of the ``_coords_to_dict`` rules table.
-
-    Each test name states the rule it pins; the assertions show the
-    expected outcome. Together they form the executable spec of how
-    sequence-form ``coords`` entries are named.
+    Executable spec of ``_coords_to_dict``: how each coords-entry form is
+    named or rejected, parameterized by entry form. The end-to-end dim
+    assignment these feed lives in :class:`TestAddVariablesCoords`.
     """
 
     @staticmethod
     def _parse(coords: Any, dims: Any = None) -> dict:
-
         return _coords_to_dict(coords, dims=dims)
 
-    # -- container forms ---------------------------------------------------
+    @pytest.mark.parametrize(
+        "coords, dims",
+        [
+            ([("x", [0, 1, 2])], None),
+            ([pd.Index([0, 1, 2], name="x")], None),
+            ([pd.Index([0, 1, 2])], ["x"]),
+            ([[0, 1, 2]], ["x"]),
+            ([range(3)], ["x"]),
+            ([np.array([0, 1, 2])], ["x"]),
+        ],
+        ids=[
+            "tuple",
+            "named-index",
+            "unnamed-index+dims",
+            "list+dims",
+            "range+dims",
+            "ndarray+dims",
+        ],
+    )
+    def test_named_form_parses_to_x(self, coords: Any, dims: Any) -> None:
+        """Each naming form parses to {"x": [0, 1, 2]} (tuple = xarray form)."""
+        result = self._parse(coords, dims=dims)
+        assert set(result) == {"x"}
+        assert list(result["x"]) == [0, 1, 2]
+        assert result["x"].name == "x"
 
-    def test_mapping_is_returned_as_shallow_dict_copy(self) -> None:
+    @pytest.mark.parametrize(
+        "coords, expected",
+        [
+            (
+                xr.Coordinates.from_pandas_multiindex(_ij_multiindex(), "stacked"),
+                {"stacked"},
+            ),
+            ([_named_multiindex()], {"multi"}),
+            ([("x", [0, 1, 2], {"units": "m"})], {"x"}),
+        ],
+        ids=["xarray-coordinates", "named-multiindex", "tuple-with-attrs"],
+    )
+    def test_other_forms_parse_to_expected_names(
+        self, coords: Any, expected: set
+    ) -> None:
+        assert set(self._parse(coords)) == expected
+
+    def test_mapping_returns_shallow_copy(self) -> None:
         src = {"x": [0, 1, 2], "y": [10, 20]}
         result = self._parse(src)
         assert result == src
         assert result is not src
 
-    def test_xarray_coordinates_keeps_only_dim_entries(self) -> None:
-        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-        coords = xr.Coordinates.from_pandas_multiindex(midx, "stacked")
-        result = self._parse(coords)
-        assert set(result) == {"stacked"}
-
-    # -- pd.Index entries --------------------------------------------------
-
-    def test_named_pd_index_uses_its_name(self) -> None:
-        result = self._parse([pd.Index([0, 1, 2], name="x")])
-        assert set(result) == {"x"}
-
-    def test_unnamed_pd_index_with_dims_uses_dims(self) -> None:
-        result = self._parse([pd.Index([0, 1, 2])], dims=["x"])
-        assert set(result) == {"x"}
-
-    def test_unnamed_pd_index_without_dims_is_size_only(self) -> None:
-        # Same as a bare sequence: contributes no dim name; xarray assigns
-        # ``dim_0`` downstream.
-        assert self._parse([pd.Index([0, 1, 2])]) == {}
-        m = Model()
-        v = m.add_variables(coords=[pd.Index([0, 1, 2])])
-        assert v.dims == ("dim_0",)
-
-    # -- pd.MultiIndex entries --------------------------------------------
-
-    def test_named_multiindex_uses_its_name(self) -> None:
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-        mi.name = "multi"
-        result = self._parse([mi])
-        assert set(result) == {"multi"}
-
-    def test_unnamed_multiindex_with_dims_uses_dims(self) -> None:
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-        result = self._parse([mi], dims=["multi"])
-        assert set(result) == {"multi"}
-        assert result["multi"].name == "multi"
-        assert mi.name is None  # caller's MultiIndex not mutated
-
-    def test_unnamed_multiindex_without_dims_raises(self) -> None:
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-        with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
-            self._parse([mi])
-
-    # -- bare sequence entries --------------------------------------------
-
     @pytest.mark.parametrize(
-        "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
+        "entry", [pd.Index([0, 1, 2]), _ij_multiindex()], ids=["index", "multiindex"]
     )
-    def test_bare_sequence_with_dims_uses_dims(self, entry: Any) -> None:
+    def test_unnamed_index_named_from_dims_on_a_copy(self, entry: Any) -> None:
         result = self._parse([entry], dims=["x"])
-        assert set(result) == {"x"}
+        assert result["x"].name == "x"
+        assert entry.name is None  # caller not mutated
 
     @pytest.mark.parametrize(
         "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
+        [[0, 1, 2], range(3), np.array([0, 1, 2]), pd.Index([0, 1, 2])],
+        ids=["list", "range", "ndarray", "unnamed-index"],
     )
-    def test_bare_sequence_without_dims_is_silently_skipped(self, entry: Any) -> None:
+    def test_unlabeled_without_dims_is_skipped(self, entry: Any) -> None:
         assert self._parse([entry]) == {}
 
     @pytest.mark.parametrize(
-        "entry",
-        [[0, 1, 2], (0, 1, 2), range(3), np.array([0, 1, 2])],
-        ids=["list", "tuple", "range", "ndarray"],
+        "coords, dims, match",
+        [
+            ([_ij_multiindex()], None, r"MultiIndex.*must have \.name set"),
+            ([("x",)], None, r"\(dim_name, values\) convention"),
+            ([(0, 1, 2)], ["x"], r"\(dim_name, values\) convention"),
+            ([("x", 5)], None, r"with array-like values"),
+            (
+                [DataArray([0, 1, 2], dims=["x"])],
+                None,
+                r"coords entries must be pd\.Index",
+            ),
+            ([object()], None, r"coords entries must be pd\.Index"),
+        ],
+        ids=[
+            "unnamed-multiindex",
+            "tuple-too-short",
+            "tuple-bare-values",
+            "tuple-scalar-values",
+            "dataarray",
+            "unknown-type",
+        ],
     )
-    def test_bare_sequence_without_dims_falls_through_to_xarray_dim_0(
-        self, entry: Any
+    def test_invalid_entry_raises_typeerror(
+        self, coords: Any, dims: Any, match: str
+    ) -> None:
+        with pytest.raises(TypeError, match=match):
+            self._parse(coords, dims=dims)
+
+
+# ---------------------------------------------------------------------------
+# add_variables — coords / dims map to the variable's dimensions
+# ---------------------------------------------------------------------------
+
+
+class TestAddVariablesCoords:
+    """End-to-end: each coords / dims form sets the variable's dimensions."""
+
+    @pytest.mark.parametrize(
+        "coords, dims, expected_dims",
+        [
+            ([("x", [0, 1, 2])], None, ("x",)),
+            ([pd.Index([0, 1, 2], name="x")], None, ("x",)),
+            ([pd.Index([0, 1, 2])], ["x"], ("x",)),
+            ([[0, 1, 2]], ["x"], ("x",)),
+            ([range(3)], ["x"], ("x",)),
+            ([np.array([0, 1, 2])], ["x"], ("x",)),
+            ([[0, 1, 2]], None, ("dim_0",)),
+            ([range(3)], None, ("dim_0",)),
+            ([np.array([0, 1, 2])], None, ("dim_0",)),
+            ([pd.Index([0, 1, 2])], None, ("dim_0",)),
+            ([("origin", ["a", "b"]), ("dest", ["x", "y"])], None, ("origin", "dest")),
+        ],
+        ids=[
+            "tuple",
+            "named-index",
+            "unnamed-index+dims",
+            "list+dims",
+            "range+dims",
+            "ndarray+dims",
+            "list",
+            "range",
+            "ndarray",
+            "unnamed-index",
+            "multiple-tuples",
+        ],
+    )
+    def test_coords_set_variable_dims(
+        self, coords: Any, dims: Any, expected_dims: tuple
     ) -> None:
         m = Model()
-        v = m.add_variables(coords=[entry])
-        assert v.dims == ("dim_0",)
-
-    # -- unsupported entries ----------------------------------------------
-
-    def test_dataarray_entry_raises(self) -> None:
-        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
-            self._parse([DataArray([0, 1, 2], dims=["x"])])
-
-    def test_unknown_type_entry_raises(self) -> None:
-        class Foo: ...
-
-        with pytest.raises(TypeError, match=r"coords entries must be pd\.Index"):
-            self._parse([Foo()])
+        v = m.add_variables(lower=0, coords=coords, dims=dims)
+        assert v.dims == expected_dims
 
 
 # ---------------------------------------------------------------------------
@@ -939,8 +988,29 @@ class TestValidateAlignment:
 class TestAlign:
     """align() conforms multiple linopy / xarray objects to common coords."""
 
-    def test_align(self, x: Variable, u: Variable) -> None:
+    def test_inner_join_intersects_coords(self, x: Variable) -> None:
+        """Default join keeps only the shared coords (x over [0, 1] ∩ alpha over [1, 2])."""
         alpha = xr.DataArray([1, 2], [[1, 2]])
+
+        x_obs, alpha_obs = align(x, alpha)
+
+        assert isinstance(x_obs, Variable)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert_varequal(x_obs, x.loc[[1]])
+
+    def test_left_join_keeps_left_coords_and_fills(self, x: Variable) -> None:
+        """join='left' keeps x's coords; the right operand is reindexed with NaN."""
+        alpha = xr.DataArray([1, 2], [[1, 2]])
+
+        x_obs, alpha_obs = align(x, alpha, join="left")
+
+        assert isinstance(x_obs, Variable)
+        assert x_obs.shape == alpha_obs.shape == (2,)
+        assert_varequal(x_obs, x)
+        assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
+
+    def test_inner_join_over_multiindex(self, u: Variable) -> None:
+        """Inner join intersects MultiIndex coords element-wise across the stacked dim."""
         beta = xr.DataArray(
             [1, 2, 3],
             [
@@ -953,30 +1023,21 @@ class TestAlign:
             ],
         )
 
-        # inner join
-        x_obs, alpha_obs = align(x, alpha)
-        assert isinstance(x_obs, Variable)
-        assert x_obs.shape == alpha_obs.shape == (1,)
-        assert_varequal(x_obs, x.loc[[1]])
-
-        # left-join
-        x_obs, alpha_obs = align(x, alpha, join="left")
-        assert x_obs.shape == alpha_obs.shape == (2,)
-        assert isinstance(x_obs, Variable)
-        assert_varequal(x_obs, x)
-        assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
-
-        # multiindex
         beta_obs, u_obs = align(beta, u)
-        assert u_obs.shape == beta_obs.shape == (2,)
+
         assert isinstance(u_obs, Variable)
+        assert u_obs.shape == beta_obs.shape == (2,)
         assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
         assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
 
-        # with linear expression
+    def test_aligns_linear_expression(self, x: Variable) -> None:
+        """A LinearExpression aligns alongside variables, keeping its _term dim."""
+        alpha = xr.DataArray([1, 2], [[1, 2]])
         expr = 20 * x
+
         x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
-        assert x_obs.shape == alpha_obs.shape == (1,)
-        assert expr_obs.shape == (1, 1)  # _term dim
+
         assert isinstance(expr_obs, LinearExpression)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert expr_obs.shape == (1, 1)  # the trailing 1 is the _term dim
         assert_linequal(expr_obs, expr.loc[[1]])
