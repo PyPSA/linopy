@@ -54,6 +54,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.dualization import dualize
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
@@ -2304,3 +2305,5 @@ class Model:
     to_xpress = to_xpress
 
     to_block_files = to_block_files
+
+    dualize = dualize
