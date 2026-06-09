@@ -172,19 +172,6 @@ class TestVariableFix:
             m.variables["y"].upper.values, [2.71828, -1.41421]
         )
 
-    def test_fix_aligns_positional_value_to_named_dimension(self) -> None:
-        m = Model()
-        t = m.add_variables(
-            lower=-5,
-            upper=5,
-            coords=[pd.Index([2020, 2030, 2040], name="time")],
-            name="t",
-        )
-        t.fix([1.0, 2.0, 3.0])
-        assert t.lower.dims == ("time",)
-        np.testing.assert_array_almost_equal(t.lower.values, [1.0, 2.0, 3.0])
-        np.testing.assert_array_almost_equal(t.upper.values, [1.0, 2.0, 3.0])
-
 
 class TestVariableUnfix:
     def test_unfix_restores_bounds(self, model_with_solution: Model) -> None:
@@ -592,3 +579,48 @@ class TestFixIO:
         m2.variables["z"].unrelax()
         assert m2.variables["z"].attrs["binary"]
         assert "z" not in m2._relaxed_registry
+
+
+TIME = pd.Index([2020, 2030, 2040], name="time")
+
+ALIGNED_VALUES = [
+    pytest.param(5.0, [5.0, 5.0, 5.0], id="scalar-broadcast"),
+    pytest.param([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], id="list"),
+    pytest.param(np.array([1.0, 2.0, 3.0]), [1.0, 2.0, 3.0], id="ndarray"),
+    pytest.param(pd.Series([1.0, 2.0, 3.0], index=TIME), [1.0, 2.0, 3.0], id="series"),
+    pytest.param(
+        pd.Series([3.0, 1.0, 2.0], index=pd.Index([2040, 2020, 2030], name="time")),
+        [1.0, 2.0, 3.0],
+        id="series-reordered",
+    ),
+    pytest.param(
+        DataArray([1.0, 2.0, 3.0], coords=[TIME]), [1.0, 2.0, 3.0], id="dataarray"
+    ),
+]
+
+
+class TestFixValueAlignment:
+    """fix() aligns the value to the variable's own coords (broadcast_to_coords)."""
+
+    @pytest.fixture
+    def variable(self):
+        m = Model()
+        m.add_variables(lower=-5, upper=5, coords=[TIME], name="t")
+        return m.variables["t"]
+
+    @pytest.mark.parametrize("value, expected", ALIGNED_VALUES)
+    def test_aligns_to_named_dimension(self, variable, value, expected) -> None:
+        variable.fix(value)
+        con = variable.model.constraints[f"{FIX_CONSTRAINT_PREFIX}t"]
+        assert con.rhs.dims == ("time",)
+        np.testing.assert_array_almost_equal(con.rhs.values, expected)
+
+    def test_unknown_dimension_rejected(self, variable) -> None:
+        value = pd.Series([1.0, 2.0], index=pd.Index([0, 1], name="other"))
+        with pytest.raises(ValueError, match="fix.. for variable 't'"):
+            variable.fix(value)
+
+    def test_partial_value_rejected(self, variable) -> None:
+        value = pd.Series([1.0, 3.0], index=pd.Index([2020, 2040], name="time"))
+        with pytest.raises(ValueError, match="fix.. for variable 't'"):
+            variable.fix(value)
