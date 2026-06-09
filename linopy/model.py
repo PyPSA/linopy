@@ -1149,16 +1149,8 @@ class Model:
         -------
         None.
         """
-        from linopy.constants import FIX_CONSTRAINT_PREFIX
-
         variable = self.variables[name]
 
-        # Clean up fix constraint if present
-        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
-        if fix_name in self.constraints:
-            self.constraints.remove(fix_name)
-
-        # Clean up relaxed registry if present
         self._relaxed_registry.pop(name, None)
 
         to_remove = [

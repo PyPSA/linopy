@@ -1,5 +1,6 @@
 """Tests for Variable.fix(), Variable.unfix(), and Variable.fixed."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -55,58 +56,92 @@ class TestVariableFix:
         m = model_with_solution
         m.variables["x"].fix(value=value)
         assert m.variables["x"].fixed
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 5.0)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 5.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 5.0)
 
     @pytest.mark.parametrize("value", ARRAY_VALUES)
     def test_fix_array_dtypes(self, model_with_solution: Model, value: object) -> None:
         m = model_with_solution
         m.variables["y"].fix(value=value)
         assert m.variables["y"].fixed
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}y"]
-        np.testing.assert_array_almost_equal(con.rhs.values, [2.5, -1.5])
+        np.testing.assert_array_almost_equal(m.variables["y"].lower.values, [2.5, -1.5])
+        np.testing.assert_array_almost_equal(m.variables["y"].upper.values, [2.5, -1.5])
 
     def test_fix_uses_solution(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["x"].fix()
         assert m.variables["x"].fixed
-        assert f"{FIX_CONSTRAINT_PREFIX}x" in m.constraints
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 3.14159265)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 3.14159265)
+
+    def test_fix_does_not_add_constraint(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=5.0)
+        assert len(m.constraints) == 0
 
     def test_fix_rounds_binary(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["z"].fix()
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}z"]
-        np.testing.assert_equal(con.rhs.item(), 1.0)
+        np.testing.assert_equal(m.variables["z"].lower.item(), 1.0)
+        np.testing.assert_equal(m.variables["z"].upper.item(), 1.0)
+
+    def test_fix_binary_to_zero(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].fix(value=0)
+        np.testing.assert_equal(m.variables["z"].lower.item(), 0.0)
+        np.testing.assert_equal(m.variables["z"].upper.item(), 0.0)
+
+    @pytest.mark.parametrize("value", [5, 0.4, 0.6, -1])
+    def test_fix_binary_outside_domain_raises(
+        self, model_with_solution: Model, value: float
+    ) -> None:
+        m = model_with_solution
+        with pytest.raises(ValueError, match="binary variable"):
+            m.variables["z"].fix(value=value)
 
     def test_fix_rounds_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["w"].fix()
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}w"]
-        np.testing.assert_equal(con.rhs.item(), 42.0)
+        np.testing.assert_equal(m.variables["w"].lower.item(), 42.0)
+        np.testing.assert_equal(m.variables["w"].upper.item(), 42.0)
 
     def test_fix_rounds_continuous(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["x"].fix(decimals=4)
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 3.1416, decimal=4)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 3.1416, decimal=4)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 3.1416, decimal=4)
 
-    def test_fix_raises_above_upper_bound(self, model_with_solution: Model) -> None:
+    def test_fix_above_upper_bound_warns_and_overrides(
+        self, model_with_solution: Model
+    ) -> None:
         m = model_with_solution
-        with pytest.raises(ValueError, match="outside the variable bounds"):
+        with pytest.warns(UserWarning, match="outside its current"):
             m.variables["x"].fix(value=11.0)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 11.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 11.0)
 
-    def test_fix_raises_below_lower_bound(self, model_with_solution: Model) -> None:
+    def test_fix_below_lower_bound_warns_and_overrides(
+        self, model_with_solution: Model
+    ) -> None:
         m = model_with_solution
-        with pytest.raises(ValueError, match="outside the variable bounds"):
+        with pytest.warns(UserWarning, match="outside its current"):
             m.variables["x"].fix(value=-1.0)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), -1.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), -1.0)
+
+    def test_fix_within_bounds_does_not_warn(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            m.variables["x"].fix(value=5.0)
 
     def test_fix_small_overshoot_rounded_within_bounds(
         self, model_with_solution: Model
     ) -> None:
         m = model_with_solution
         m.variables["x"].fix(value=10.0000000001)
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 10.0)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 10.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 10.0)
 
     def test_fix_raises_if_already_fixed_no_overwrite(
         self, model_with_solution: Model
@@ -116,28 +151,54 @@ class TestVariableFix:
         with pytest.raises(ValueError, match="already fixed"):
             m.variables["x"].fix(value=5.0, overwrite=False)
 
-    def test_fix_overwrite_replaces_existing(self, model_with_solution: Model) -> None:
+    def test_fix_overwrite_keeps_original_stashed_bounds(
+        self, model_with_solution: Model
+    ) -> None:
         m = model_with_solution
         m.variables["x"].fix(value=3.0)
         m.variables["x"].fix(value=5.0, overwrite=True)
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 5.0)
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 5.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 5.0)
+        m.variables["x"].unfix()
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 0.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 10.0)
 
     def test_fix_multidimensional(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["y"].fix()
         assert m.variables["y"].fixed
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}y"]
-        np.testing.assert_array_almost_equal(con.rhs.values, [2.71828, -1.41421])
+        np.testing.assert_array_almost_equal(
+            m.variables["y"].lower.values, [2.71828, -1.41421]
+        )
+        np.testing.assert_array_almost_equal(
+            m.variables["y"].upper.values, [2.71828, -1.41421]
+        )
 
 
 class TestVariableUnfix:
-    def test_unfix_removes_constraint(self, model_with_solution: Model) -> None:
+    def test_unfix_restores_bounds(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["x"].fix(value=5.0)
         m.variables["x"].unfix()
         assert not m.variables["x"].fixed
-        assert f"{FIX_CONSTRAINT_PREFIX}x" not in m.constraints
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 0.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 10.0)
+
+    def test_unfix_restores_multidimensional_bounds(
+        self, model_with_solution: Model
+    ) -> None:
+        m = model_with_solution
+        m.variables["y"].fix()
+        m.variables["y"].unfix()
+        np.testing.assert_array_almost_equal(m.variables["y"].lower.values, [-5, -5])
+        np.testing.assert_array_almost_equal(m.variables["y"].upper.values, [5, 5])
+
+    def test_unfix_restores_binary_bounds(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].fix()
+        m.variables["z"].unfix()
+        np.testing.assert_equal(m.variables["z"].lower.item(), 0.0)
+        np.testing.assert_equal(m.variables["z"].upper.item(), 1.0)
 
     def test_unfix_noop_if_not_fixed(self, model_with_solution: Model) -> None:
         m = model_with_solution
@@ -158,9 +219,7 @@ class TestUnfixDoesNotUnrelaxIndependently:
     def test_unfix_on_relaxed_only_variable(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["z"].relax()
-        # unfix should be a no-op — no fix constraint exists
         m.variables["z"].unfix()
-        # relaxation should still be in effect
         assert m.variables["z"].relaxed
         assert not m.variables["z"].attrs["binary"]
 
@@ -182,6 +241,9 @@ class TestFixThenRelax:
         m.variables["z"].relax()
         m.variables["z"].unfix()
         assert not m.variables["z"].fixed
+        # unfix restores the original binary bounds regardless of relaxation
+        np.testing.assert_equal(m.variables["z"].lower.item(), 0.0)
+        np.testing.assert_equal(m.variables["z"].upper.item(), 1.0)
         # relaxation is independent — still in effect
         assert m.variables["z"].relaxed
         assert not m.variables["z"].attrs["binary"]
@@ -238,6 +300,8 @@ class TestVariablesContainerFixUnfix:
         m.variables.unfix()
         for name in m.variables:
             assert not m.variables[name].fixed
+        np.testing.assert_almost_equal(m.variables["x"].lower.item(), 0.0)
+        np.testing.assert_almost_equal(m.variables["x"].upper.item(), 10.0)
 
     def test_fix_integers_only(self, model_with_solution: Model) -> None:
         m = model_with_solution
@@ -424,7 +488,7 @@ class TestRemoveVariablesCleansUpFix:
         m = model_with_solution
         m.variables["x"].fix(value=5.0)
         m.remove_variables("x")
-        assert f"{FIX_CONSTRAINT_PREFIX}x" not in m.constraints
+        assert "x" not in m.variables
 
     def test_remove_relaxed_variable(self, model_with_solution: Model) -> None:
         m = model_with_solution
@@ -432,10 +496,45 @@ class TestRemoveVariablesCleansUpFix:
         m.variables["z"].relax()
         m.remove_variables("z")
         assert "z" not in m._relaxed_registry
-        assert f"{FIX_CONSTRAINT_PREFIX}z" not in m.constraints
+        assert "z" not in m.variables
 
 
 class TestFixIO:
+    def test_fixed_bounds_survive_netcdf(
+        self, model_with_solution: Model, tmp_path: Path
+    ) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=5.0)
+        m.variables["y"].fix()
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+
+        from linopy.io import read_netcdf
+
+        m2 = read_netcdf(path)
+        assert m2.variables["x"].fixed
+        assert m2.variables["y"].fixed
+        np.testing.assert_almost_equal(m2.variables["x"].lower.item(), 5.0)
+        np.testing.assert_almost_equal(m2.variables["x"].upper.item(), 5.0)
+
+    def test_unfix_after_roundtrip_restores_bounds(
+        self, model_with_solution: Model, tmp_path: Path
+    ) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=5.0)
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+
+        from linopy.io import read_netcdf
+
+        m2 = read_netcdf(path)
+        m2.variables["x"].unfix()
+        assert not m2.variables["x"].fixed
+        np.testing.assert_almost_equal(m2.variables["x"].lower.item(), 0.0)
+        np.testing.assert_almost_equal(m2.variables["x"].upper.item(), 10.0)
+
     def test_relaxed_registry_survives_netcdf(
         self, model_with_solution: Model, tmp_path: Path
     ) -> None:
@@ -452,9 +551,8 @@ class TestFixIO:
 
         m2 = read_netcdf(path)
         assert m2._relaxed_registry == {"z": "binary", "w": "integer"}
-        # Fix constraints should also survive
-        assert f"{FIX_CONSTRAINT_PREFIX}z" in m2.constraints
-        assert f"{FIX_CONSTRAINT_PREFIX}w" in m2.constraints
+        assert m2.variables["z"].fixed
+        assert m2.variables["w"].fixed
 
     def test_empty_registry_netcdf(
         self, model_with_solution: Model, tmp_path: Path

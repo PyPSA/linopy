@@ -1268,12 +1268,6 @@ class Highs(Solver[None]):
                 [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
             )
             h.changeColsIntegrality(len(labels), labels, integrality)
-            if len(model.binaries):
-                labels = np.arange(len(vtypes))[vtypes == "B"]
-                n = len(labels)
-                h.changeColsBounds(
-                    n, labels, np.zeros_like(labels), np.ones_like(labels)
-                )
 
         c = M.c
         h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
@@ -2827,9 +2821,6 @@ class Mosek(Solver[None]):
         if len(model.binaries.labels) + len(model.integers.labels) > 0:
             idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
             task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-            if len(model.binaries.labels) > 0:
-                bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
-                task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
 
         if len(model.constraints) > 0:
             if set_names:
