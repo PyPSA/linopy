@@ -37,7 +37,9 @@ sign_replace_dict: dict[str, str] = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
-FIX_CONSTRAINT_PREFIX = "__fix__"
+STASHED_LOWER = "_stashed_lower"
+STASHED_UPPER = "_stashed_upper"
+STASHED_ATTRS: list[str] = [STASHED_LOWER, STASHED_UPPER]
 
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
@@ -91,6 +93,10 @@ HELPER_DIMS: list[str] = [
 SOS_TYPE_ATTR = "sos_type"
 SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
+
+# Indicator constraint attribute keys
+INDICATOR_BINARY_VAR_ATTR = "indicator_binary_var"
+INDICATOR_BINARY_VAL_ATTR = "indicator_binary_val"
 
 
 class EvolvingAPIWarning(FutureWarning):
