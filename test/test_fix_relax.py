@@ -496,7 +496,9 @@ ALIGNED_VALUES = [
         [1.0, 2.0, 3.0],
         id="series-reordered",
     ),
-    pytest.param(DataArray([1.0, 2.0, 3.0], coords=[TIME]), [1.0, 2.0, 3.0], id="dataarray"),
+    pytest.param(
+        DataArray([1.0, 2.0, 3.0], coords=[TIME]), [1.0, 2.0, 3.0], id="dataarray"
+    ),
 ]
 
 
