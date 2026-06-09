@@ -176,9 +176,7 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
             f"with shape {con.shape} and dims {con.labels.dims}."
         )
         coords = (
-            [con.indexes[dim] for dim in con.labels.dims]
-            if con.coord_dims
-            else None
+            [con.indexes[dim] for dim in con.labels.dims] if con.coord_dims else None
         )
         dual_vars[name] = m_dual.add_variables(
             lower=lower,
