@@ -614,9 +614,9 @@ class TestFixValueAlignment:
         self, variable: Variable, value: ConstantLike, expected: ConstantLike
     ) -> None:
         variable.fix(value)
-        con = variable.model.constraints[f"{FIX_CONSTRAINT_PREFIX}t"]
-        assert con.rhs.dims == ("time",)
-        np.testing.assert_array_almost_equal(con.rhs.values, expected)
+        assert variable.lower.dims == ("time",)
+        np.testing.assert_array_almost_equal(variable.lower.values, expected)
+        np.testing.assert_array_almost_equal(variable.upper.values, expected)
 
     def test_unknown_dimension_rejected(self, variable: Variable) -> None:
         value = pd.Series([1.0, 2.0], index=pd.Index([0, 1], name="other"))
