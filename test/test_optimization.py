@@ -737,9 +737,6 @@ def test_milp_binary_model(
     ).all()
 
 
-# (kind, add_variables kwargs, fixval, objective coef). The coef drives the var
-# to the bound opposite fixval, so ending at fixval proves the fix is honored;
-# the two rows per kind cover collapsing the lower and the upper bound.
 FIXED_VAR_CASES = [
     pytest.param("continuous", {}, 7.0, 100, id="continuous-lower-raised"),
     pytest.param("continuous", {}, 3.0, -100, id="continuous-upper-lowered"),

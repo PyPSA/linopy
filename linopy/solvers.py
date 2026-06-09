@@ -2821,7 +2821,6 @@ class Mosek(Solver[None]):
         if len(model.binaries.labels) + len(model.integers.labels) > 0:
             idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
             task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-            # Do not reset binary bounds to [0, 1]; that would free a fixed binary.
 
         if len(model.constraints) > 0:
             if set_names:

@@ -172,6 +172,19 @@ class TestVariableFix:
             m.variables["y"].upper.values, [2.71828, -1.41421]
         )
 
+    def test_fix_aligns_positional_value_to_named_dimension(self) -> None:
+        m = Model()
+        t = m.add_variables(
+            lower=-5,
+            upper=5,
+            coords=[pd.Index([2020, 2030, 2040], name="time")],
+            name="t",
+        )
+        t.fix([1.0, 2.0, 3.0])
+        assert t.lower.dims == ("time",)
+        np.testing.assert_array_almost_equal(t.lower.values, [1.0, 2.0, 3.0])
+        np.testing.assert_array_almost_equal(t.upper.values, [1.0, 2.0, 3.0])
+
 
 class TestVariableUnfix:
     def test_unfix_restores_bounds(self, model_with_solution: Model) -> None:
@@ -579,14 +592,3 @@ class TestFixIO:
         m2.variables["z"].unrelax()
         assert m2.variables["z"].attrs["binary"]
         assert "z" not in m2._relaxed_registry
-
-
-def test_fix_aligns_positional_value_to_named_dimension() -> None:
-    m = Model()
-    t = m.add_variables(
-        lower=-5, upper=5, coords=[pd.Index([2020, 2030, 2040], name="time")], name="t"
-    )
-    t.fix([1.0, 2.0, 3.0])
-    assert t.lower.dims == ("time",)
-    np.testing.assert_array_almost_equal(t.lower.values, [1.0, 2.0, 3.0])
-    np.testing.assert_array_almost_equal(t.upper.values, [1.0, 2.0, 3.0])
