@@ -337,7 +337,7 @@ def _gather_with_default(
     Gather ``lookup[labels]`` elementwise, using ``default`` where ``labels`` fall
     outside ``lookup``'s range (including the -1 masked sentinel).
     """
-    out = np.full(len(labels), default, dtype=dtype)
+    out: np.ndarray = np.full(len(labels), default, dtype=dtype)
     in_range = (labels >= 0) & (labels < len(lookup))
     if in_range.any():
         out[in_range] = lookup[labels[in_range].astype(np.int64)]
