@@ -7,8 +7,9 @@ import pandas as pd
 import pytest
 from xarray import DataArray
 
-from linopy import Model
+from linopy import Model, Variable
 from linopy.constants import FIX_CONSTRAINT_PREFIX
+from linopy.types import ConstantLike
 
 
 @pytest.fixture
@@ -506,24 +507,24 @@ class TestFixValueAlignment:
     """fix() aligns the value to the variable's own coords (broadcast_to_coords)."""
 
     @pytest.fixture
-    def variable(self):
+    def variable(self) -> Variable:
         m = Model()
         m.add_variables(lower=-5, upper=5, coords=[TIME], name="t")
         return m.variables["t"]
 
     @pytest.mark.parametrize("value, expected", ALIGNED_VALUES)
-    def test_aligns_to_named_dimension(self, variable, value, expected) -> None:
+    def test_aligns_to_named_dimension(self, variable: Variable, value: ConstantLike, expected: ConstantLike) -> None:
         variable.fix(value)
         con = variable.model.constraints[f"{FIX_CONSTRAINT_PREFIX}t"]
         assert con.rhs.dims == ("time",)
         np.testing.assert_array_almost_equal(con.rhs.values, expected)
 
-    def test_unknown_dimension_rejected(self, variable) -> None:
+    def test_unknown_dimension_rejected(self, variable: Variable) -> None:
         value = pd.Series([1.0, 2.0], index=pd.Index([0, 1], name="other"))
         with pytest.raises(ValueError, match="fix.. for variable 't'"):
             variable.fix(value)
 
-    def test_partial_value_rejected(self, variable) -> None:
+    def test_partial_value_rejected(self, variable: Variable) -> None:
         value = pd.Series([1.0, 3.0], index=pd.Index([2020, 2040], name="time"))
         with pytest.raises(ValueError, match="fix.. for variable 't'"):
             variable.fix(value)
