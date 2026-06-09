@@ -298,6 +298,16 @@ class Model:
         return self._constraints
 
     @property
+    def indicator_constraints(self) -> Constraints:
+        """
+        Indicator constraints assigned to the model.
+
+        Returns the subset of ``model.constraints`` for which
+        ``is_indicator`` is True.
+        """
+        return self.constraints.indicator
+
+    @property
     def objective(self) -> Objective:
         """
         Objective assigned to the model.
@@ -890,6 +900,76 @@ class Model:
 
     add_piecewise_formulation = add_piecewise_formulation
 
+    def _resolve_constraint_name(self, name: str | None, prefix: str = "con") -> str:
+        """Validate a constraint name or generate one from ``prefix``."""
+        if name in list(self.constraints):
+            raise ValueError(f"Constraint '{name}' already assigned to model")
+        if name is None:
+            name = f"{prefix}{self._connameCounter}"
+            self._connameCounter += 1
+        return name
+
+    def _constraint_data_from_lhs(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
+    ) -> Dataset:
+        """Build the constraint Dataset from an ``lhs`` and optional ``sign``/``rhs``."""
+        msg_required = (
+            f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
+        )
+        msg_must_be_none = (
+            f"`sign` and `rhs` must be None when `lhs` is a {type(lhs).__name__}."
+        )
+        if isinstance(lhs, LinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return lhs.to_constraint(sign, rhs).data
+        elif isinstance(lhs, list | tuple):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return self.linexpr(*lhs).to_constraint(sign, rhs).data
+        elif callable(lhs):
+            assert coords is not None, "`coords` must be given when lhs is a function"
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return Constraint.from_rule(self, lhs, coords).data
+        elif isinstance(lhs, AnonymousScalarConstraint):
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return lhs.to_constraint().data
+        elif isinstance(lhs, ConstraintBase):
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return lhs.data
+        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return lhs.to_linexpr().to_constraint(sign, rhs).data
+        else:
+            raise TypeError(
+                f"`lhs` must be a LinearExpression, Variable, Constraint, tuple, or "
+                f"callable, got {type(lhs).__name__}."
+            )
+
+    def _allocate_constraint_labels(
+        self, data: Dataset, name: str, mask: DataArray | None = None
+    ) -> Dataset:
+        """Assign label ranges from the constraint counter and apply an optional mask."""
+        start = self._cCounter
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._cCounter += data.labels.size
+        if mask is not None:
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
+        return data.assign_attrs(label_range=(start, end), name=name)
+
     @overload
     def add_constraints(
         self,
@@ -980,14 +1060,7 @@ class Model:
             The added constraint (Constraint by default, or CSRConstraint if freeze=True).
         """
 
-        msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-        msg_sign_rhs_not_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-
-        if name in list(self.constraints):
-            raise ValueError(f"Constraint '{name}' already assigned to model")
-        elif name is None:
-            name = f"con{self._connameCounter}"
-            self._connameCounter += 1
+        name = self._resolve_constraint_name(name)
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
@@ -999,37 +1072,7 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        if isinstance(lhs, LinearExpression):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_not_none)
-            data = lhs.to_constraint(sign, rhs).data
-        elif isinstance(lhs, list | tuple):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_none)
-            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
-        # directly convert first argument to a constraint
-        elif callable(lhs):
-            assert coords is not None, "`coords` must be given when lhs is a function"
-            rule = lhs
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = Constraint.from_rule(self, rule, coords).data
-        elif isinstance(lhs, AnonymousScalarConstraint):
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = lhs.to_constraint().data
-        elif isinstance(lhs, ConstraintBase):
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = lhs.data
-        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_not_none)
-            data = lhs.to_linexpr().to_constraint(sign, rhs).data
-        else:
-            raise ValueError(
-                f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
-            )
+        data = self._constraint_data_from_lhs(lhs, sign, rhs, coords)
 
         invalid_infinity_values = (
             (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
@@ -1081,15 +1124,7 @@ class Model:
 
         self.check_force_dim_names(data)
 
-        start = self._cCounter
-        end = start + data.labels.size
-        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
-        self._cCounter += data.labels.size
-
-        if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
-
-        data = data.assign_attrs(label_range=(start, end), name=name)
+        data = self._allocate_constraint_labels(data, name, mask)
 
         if self.chunk:
             data = data.chunk(self.chunk)
@@ -1098,6 +1133,80 @@ class Model:
         if freeze is None:
             freeze = self.freeze_constraints
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
+
+    def add_indicator_constraints(
+        self,
+        binary_var: Variable,
+        binary_val: int,
+        lhs: ConstraintLike | ExpressionLike | VariableLike,
+        sign: SignLike | None = None,
+        rhs: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> ConstraintBase:
+        """
+        Add indicator constraints to the model.
+
+        An indicator constraint has the form:
+            (binary_var == binary_val) => (linear_constraint)
+
+        The linear constraint is only enforced when binary_var equals
+        binary_val. These constraints are handled natively by solvers
+        like Gurobi and CPLEX via general constraints.
+
+        Parameters
+        ----------
+        binary_var : linopy.Variable
+            Binary variable serving as the indicator. Must have binary=True.
+        binary_val : int
+            Triggering value, must be 0 or 1.
+        lhs : linopy.Constraint, linopy.LinearExpression, or linopy.Variable
+            The conditionally enforced constraint. If a LinearExpression or
+            Variable is passed, ``sign`` and ``rhs`` must also be provided.
+        sign : str, optional
+            Constraint sign ('<=', '>=', '='). Required when ``lhs`` is an
+            expression.
+        rhs : numeric, optional
+            Right-hand side. Required when ``lhs`` is an expression.
+        name : str, optional
+            Name for the indicator constraint group.
+
+        Returns
+        -------
+        linopy.constraints.ConstraintBase
+            The added indicator constraint.
+        """
+        if not binary_var.attrs.get("binary", False):
+            raise ValueError(
+                "Indicator variable must be binary. "
+                f"Variable '{binary_var.name}' is not binary."
+            )
+
+        if binary_val not in (0, 1):
+            raise ValueError(f"binary_val must be 0 or 1, got {binary_val}.")
+
+        name = self._resolve_constraint_name(name, prefix="indcon")
+        if sign is not None:
+            sign = maybe_replace_signs(as_dataarray(sign))
+
+        data = self._constraint_data_from_lhs(lhs, sign, rhs)
+
+        data["binary_var"] = binary_var.labels
+        data["binary_val"] = binary_val
+
+        data["labels"] = -1
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
+        data = self._allocate_constraint_labels(data, name)
+
+        con = Constraint(data, name=name, model=self, skip_broadcast=True)
+        freeze = self.freeze_constraints
+        return self.constraints.add(con, freeze=freeze and not self.chunk)
+
+    def remove_indicator_constraints(self, name: str) -> None:
+        """
+        Remove indicator constraint by name.
+        """
+        self.constraints.remove(name)
 
     def add_objective(
         self,
@@ -1882,6 +1991,8 @@ class Model:
         if len(result.solution.dual):
             dual = result.solution.dual
             for _, con in self.constraints.items():
+                if con.is_indicator:
+                    continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 con.dual = xr.DataArray(

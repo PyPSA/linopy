@@ -137,6 +137,7 @@ class SolverFeature(Enum):
     GPU_ONLY = auto()
     IIS_COMPUTATION = auto()
     SOS_CONSTRAINTS = auto()
+    INDICATOR_CONSTRAINTS = auto()
     SEMI_CONTINUOUS_VARIABLES = auto()
     SOLVER_ATTRIBUTE_ACCESS = auto()
     MIP_DUAL_BOUND_REPORT = auto()
@@ -566,6 +567,14 @@ class Solver(ABC, Generic[EnvType]):
                 f"Solver {solver_name} does not support SOS constraints. "
                 "Reformulate first via `Model.solve(reformulate_sos=True)` or "
                 "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
+            )
+
+        if model.indicator_constraints and not cls.supports(
+            SolverFeature.INDICATOR_CONSTRAINTS
+        ):
+            raise ValueError(
+                f"Solver {solver_name} does not support indicator constraints. "
+                "Use a solver that supports them."
             )
 
     def _build_direct(self, **build_kwargs: Any) -> None:
@@ -1500,6 +1509,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.IIS_COMPUTATION,
             SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.INDICATOR_CONSTRAINTS,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
             SolverFeature.MIP_DUAL_BOUND_REPORT,
@@ -1585,8 +1595,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         if model.objective.sense == "max":
             gm.ModelSense = -1
 
-        if len(model.constraints):
-            assert M.A is not None
+        if M.A is not None:
             c = gm.addMConstr(M.A, x, M.sense, M.b)
             if set_names:
                 names = print_constraints(M.clabels)
@@ -1594,6 +1603,27 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         for sos_type, positions, weights in _iter_sos_sets(model):
             gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
+
+        if M.indicator_A is not None:
+            sense_map = {
+                "<": gurobipy.GRB.LESS_EQUAL,
+                ">": gurobipy.GRB.GREATER_EQUAL,
+                "=": gurobipy.GRB.EQUAL,
+            }
+            x_list = x.tolist()
+            A = M.indicator_A
+            for i in range(A.shape[0]):
+                lhs = gurobipy.LinExpr()
+                start, end = A.indptr[i], A.indptr[i + 1]
+                for col, coeff in zip(A.indices[start:end], A.data[start:end]):
+                    lhs.add(x_list[int(col)], float(coeff))
+                gm.addGenConstrIndicator(
+                    x_list[int(M.indicator_binvar[i])],
+                    bool(M.indicator_binval[i]),
+                    lhs,
+                    sense_map[str(M.indicator_sense[i])],
+                    float(M.indicator_b[i]),
+                )
 
         gm.update()
         return gm
@@ -1807,6 +1837,7 @@ class Cplex(Solver[None]):
             SolverFeature.LP_FILE_NAMES,
             SolverFeature.READ_MODEL_FROM_FILE,
             SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.INDICATOR_CONSTRAINTS,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
         }
     )

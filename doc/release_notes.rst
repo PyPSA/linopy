@@ -40,6 +40,10 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * New ``linopy.licensed_solvers``: the subset of installed solvers that currently pass a license check. Handy in tests and for picking a solver at runtime.
 * New helpers for explicit license checks: ``linopy.solvers.check_solver_licenses("gurobi", "mosek")``, ``Gurobi.license_status()``, ``Gurobi.is_available()``. They return a ``LicenseStatus`` dataclass (``name``, ``ok``, ``message``).
 
+*Constraints — indicator constraints*
+
+* Add indicator constraints for solvers that support them. They are part of the unified constraints container: ``model.add_indicator_constraints`` returns a ``Constraint`` and the constraint is stored in ``model.constraints`` (filterable via ``model.constraints.indicator`` / ``model.constraints.regular``), so it round-trips through netCDF and ``model.copy()``.
+
 *Compact multi-key grouping*
 
 * ``LinearExpressionGroupby.sum`` gains a pandas-style ``observed`` parameter for grouping by a list of coordinate names: ``expr.groupby(["period", "season"]).sum(observed=True)`` keeps the result stacked over only the observed key combinations (a ``MultiIndex`` ``group`` dimension) instead of unstacking into one dimension per key, which materialises the dense cartesian grid. The default ``observed=False`` mirrors xarray. When the grid would be mostly fill values, a ``UserWarning`` points to ``observed=True``.
