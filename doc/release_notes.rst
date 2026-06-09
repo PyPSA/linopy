@@ -6,6 +6,9 @@ Upcoming Version
 
 * Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
+* ``Variable.fix(value)`` now places ``value`` correctly on variables with named dimensions; previously array values could be misaligned.
+* ``Variable.fix()`` now fixes a variable by collapsing its bounds (``lower = upper = value``) instead of adding a ``__fix__`` equality constraint; ``unfix()`` restores the original bounds (`#769 <https://github.com/PyPSA/linopy/issues/769>`_). A fix outside the current bounds now warns and overrides instead of raising, and its shadow price appears as the variable's reduced cost rather than a constraint dual.
+* Binary variable bounds are now respected by the solver, so fixing a binary works (they were previously forced to ``[0, 1]``).
 
 **Features**
 
