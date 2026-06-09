@@ -9,7 +9,6 @@ import pytest
 from xarray import DataArray
 
 from linopy import Model, Variable
-from linopy.constants import FIX_CONSTRAINT_PREFIX
 from linopy.types import ConstantLike
 
 
