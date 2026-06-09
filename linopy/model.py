@@ -20,18 +20,17 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, ndarray
+from numpy import inf
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
-    as_dataarray,
     assign_multiindex_safe,
     best_int,
-    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -111,73 +110,6 @@ if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
 
 logger = logging.getLogger(__name__)
-
-
-def _coords_to_dict(
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
-) -> dict[str, Any]:
-    """Normalize coords to a dict mapping dim names to coordinate values."""
-    if isinstance(coords, Mapping):
-        return dict(coords)
-    # Sequence of indexes
-    result: dict[str, Any] = {}
-    for c in coords:
-        if isinstance(c, pd.Index) and c.name:
-            result[c.name] = c
-    return result
-
-
-def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
-    """
-    Validate and expand DataArray bounds against explicit coords.
-
-    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
-    will handle conversion). For DataArray inputs:
-
-    - Raises ``ValueError`` if the array has dimensions not in coords.
-    - Raises ``ValueError`` if shared dimension coordinates don't match.
-    - Expands missing dimensions via ``expand_dims``.
-    """
-    if not isinstance(arr, DataArray):
-        return arr
-
-    expected = _coords_to_dict(coords)
-    if not expected:
-        return arr
-
-    extra = set(arr.dims) - set(expected)
-    if extra:
-        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
-
-    for dim, coord_values in expected.items():
-        if dim not in arr.dims:
-            continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
-            continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
-        actual_idx = arr.coords[dim].to_index()
-        if not actual_idx.equals(expected_idx):
-            # Same values, different order → reindex to match expected order
-            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
-                expected_idx
-            ):
-                arr = arr.reindex({dim: expected_idx})
-            else:
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' do not match: "
-                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-                )
-
-    # Expand missing dimensions
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if expand:
-        arr = arr.expand_dims(expand)
-
-    return arr
 
 
 class Model:
@@ -658,9 +590,9 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         name: str | None = None,
-        mask: DataArray | ndarray | Series | None = None,
+        mask: MaskLike | None = None,
         binary: bool = False,
         integer: bool = False,
         semi_continuous: bool = False,
@@ -683,12 +615,27 @@ class Model:
         upper : TYPE, optional
             Upper bound of the variable(s). Ignored if `binary` is True.
             The default is inf.
-        coords : list/xarray.Coordinates, optional
-            The coords of the variable array.
-            These are directly passed to the DataArray creation of
-            `lower` and `upper`. For every single combination of
-            coordinates a optimization variable is added to the model.
-            The default is None.
+        coords : list/dict/xarray.Coordinates, optional
+            The coords of the variable array. When provided with **named
+            dimensions** (a ``Mapping``, ``xarray.Coordinates``, a
+            sequence of named ``pd.Index`` objects, or an unnamed
+            sequence paired with ``dims=`` in ``**kwargs``), ``coords``
+            is the source of truth for the variable's dimensions,
+            order, and values. ``lower``, ``upper`` and ``mask`` are
+            aligned to this contract:
+
+            - dims of every bound must be a subset of ``coords.dims``;
+              extra dims raise ``ValueError``;
+            - dim order in the variable always follows ``coords``;
+            - shared-dim coordinate values must equal ``coords``; same
+              values in a different order are auto-reindexed, different
+              value sets raise ``ValueError``;
+            - dims listed in ``coords`` but missing from a bound are
+              broadcast to ``coords`` shape.
+
+            One optimization variable is added per combination of
+            coordinates. The default is ``None``, in which case the
+            shape is inferred from the bounds.
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
@@ -741,6 +688,67 @@ class Model:
         [7]: x[7] ∈ [0, inf]
         [8]: x[8] ∈ [0, inf]
         [9]: x[9] ∈ [0, inf]
+
+        Strict coords-as-truth: a bound with an extra dim raises.
+
+        >>> import xarray as xr
+        >>> m = Model()
+        >>> bad = xr.DataArray(
+        ...     [[1.0, 2.0, 3.0]] * 2,
+        ...     dims=["extra", "x"],
+        ...     coords={"x": [0, 1, 2]},
+        ... )
+        >>> m.add_variables(lower=bad, coords=[pd.Index([0, 1, 2], name="x")], name="v")
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
+
+        Strict coords-as-truth: a bound whose shared-dim values don't
+        match raises.
+
+        >>> m = Model()
+        >>> wrong = xr.DataArray(
+        ...     [1.0, 2.0, 3.0], dims=["x"], coords={"x": [10, 20, 30]}
+        ... )
+        >>> m.add_variables(
+        ...     lower=wrong, coords=[pd.Index([0, 1, 2], name="x")], name="v"
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound: coordinate values for dimension 'x' do not match coords ...
+
+        Strict coords-as-truth, helpful side: a bound whose coord values
+        match ``coords`` only in a different order is auto-reindexed.
+
+        >>> m = Model()
+        >>> reordered = xr.DataArray(
+        ...     [3.0, 1.0, 2.0], dims=["x"], coords={"x": ["c", "a", "b"]}
+        ... )
+        >>> v = m.add_variables(
+        ...     lower=reordered,
+        ...     coords=[pd.Index(["a", "b", "c"], name="x")],
+        ...     name="r",
+        ... )
+        >>> v.lower.values.tolist()
+        [1.0, 2.0, 3.0]
+
+        Unnamed-coords sequence + ``dims=`` opts into the same strict
+        enforcement as a named index — extra dims still raise.
+
+        >>> m = Model()
+        >>> m.add_variables(lower=bad, coords=[[0, 1, 2]], dims=["x"], name="w")
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
+
+        The same strict contract applies to ``mask`` (including with
+        ``coords=[[...]], dims=[...]``).
+
+        >>> m = Model()
+        >>> m.add_variables(mask=bad, coords=[[0, 1, 2]], dims=["x"], name="wm")
+        Traceback (most recent call last):
+        ...
+        ValueError: mask has dimension(s) ['extra'] not declared in coords ...
         """
         if name is None:
             name = f"var{self._varnameCounter}"
@@ -766,14 +774,12 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        if coords is not None:
-            lower = _validate_dataarray_bounds(lower, coords)
-            upper = _validate_dataarray_bounds(upper, coords)
-
+        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
+        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         data = Dataset(
             {
-                "lower": as_dataarray(lower, coords, **kwargs),
-                "upper": as_dataarray(upper, coords, **kwargs),
+                "lower": lower_da,
+                "upper": upper_da,
                 "labels": -1,
             }
         )
@@ -782,8 +788,12 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = broadcast_to_coords(
+                mask,
+                coords if coords is not None else data.coords,
+                label="mask",
+                **kwargs,
+            ).astype(bool)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -892,7 +902,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
     ) -> Constraint: ...
@@ -908,7 +918,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
     ) -> CSRConstraint: ...
@@ -923,7 +933,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
         freeze: bool | None = None,
     ) -> ConstraintBase:
@@ -1047,8 +1057,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
@@ -1429,7 +1438,7 @@ class Model:
 
     @overload
     def linexpr(
-        self, *args: Sequence[Sequence | pd.Index | DataArray] | Mapping
+        self, *args: Sequence[Sequence | pd.Index] | Mapping
     ) -> LinearExpression: ...
 
     @overload
@@ -1442,7 +1451,7 @@ class Model:
         *args: tuple[ConstantLike, str | Variable | ScalarVariable]
         | ConstantLike
         | Callable
-        | Sequence[Sequence | pd.Index | DataArray]
+        | Sequence[Sequence | pd.Index]
         | Mapping,
     ) -> LinearExpression:
         """

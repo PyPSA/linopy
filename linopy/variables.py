@@ -31,11 +31,11 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -327,7 +327,9 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = broadcast_to_coords(
+            coefficient, coords=self.coords, dims=self.dims, strict=False
+        )
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(

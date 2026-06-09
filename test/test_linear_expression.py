@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -17,7 +18,14 @@ import xarray as xr
 from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
+from linopy import (
+    EvolvingAPIWarning,
+    LinearExpression,
+    Model,
+    QuadraticExpression,
+    Variable,
+    merge,
+)
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -55,7 +63,7 @@ def test_linexpr_with_helper_dims_as_coords(m: Model) -> None:
     assert set(HELPER_DIMS).intersection(set(data.coords))
 
     expr = LinearExpression(data, m)
-    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
+    assert not set(HELPER_DIMS).intersection(set(expr.coords))
 
 
 def test_linexpr_with_data_without_coords(m: Model) -> None:
@@ -288,6 +296,27 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
+    """
+    Expression over a MultiIndex dim times a single-level constant.
+
+    Mirrors PyPSA's ``soc_delta * storage_weightings``: ``u`` is indexed by
+    the (level1, level2) MultiIndex ``dim_3``; the weighting is indexed only
+    by ``level1``. The product must not raise, and each ``dim_3`` entry must
+    take the weight of its ``level1``.
+    """
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        expr = (1 * u) * by_level1
+
+    coeffs = expr.coeffs.squeeze("_term")
+    assert coeffs.sel(dim_3=(1, "a")).item() == 10.0
+    assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
+    assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
+    assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
     with pytest.raises(TypeError):
         x / x
@@ -516,6 +545,47 @@ def test_matmul_expr_and_const(x: Variable, y: Variable) -> None:
     assert_linequal(res, target)
 
     assert_linequal(expr.dot(const), target)
+
+
+def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
+    """
+    A @ b contracts the genuinely shared dims and keeps the rest.
+
+    ``z`` has dims (dim_0, dim_1); ``b`` has (dim_1, location). Only dim_1
+    is shared, so the result must keep dim_0 and location. A conversion that
+    broadcast ``b`` to ``z``'s coords would expand dim_0 into ``b`` and
+    contract it away too — collapsing the result to (location,) only.
+    """
+    expr = 1 * z
+    b = xr.DataArray(
+        np.ones((3, 2)),
+        coords={"dim_1": expr.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"dim_0", "location"}
+    assert_linequal(res, (expr * b).sum("dim_1"))
+
+
+def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
+    """B covering all of a's dims (and more) contracts a's dims, keeping b's extras."""
+    expr = 1 * z  # dims (dim_0, dim_1)
+    b = xr.DataArray(
+        np.ones((2, 3, 2)),
+        coords={
+            "dim_0": expr.indexes["dim_0"],
+            "dim_1": expr.indexes["dim_1"],
+            "location": ["L1", "L2"],
+        },
+        dims=["dim_0", "dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert set(res.coord_dims) == {"location"}
+    assert_linequal(res, (expr * b).sum(["dim_0", "dim_1"]))
 
 
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
@@ -1087,6 +1157,56 @@ def test_linear_expression_isnull(v: Variable) -> None:
     assert expr.isnull().sum() == 10
 
 
+class TestHasTerms:
+    """has_terms: true at slots with at least one live term, regardless of the constant."""
+
+    def test_basic_and_masking(self, v: Variable) -> None:
+        expr = np.arange(20) * v
+        assert expr.has_terms.all()
+
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
+
+    def test_ignores_const(self, v: Variable) -> None:
+        # has_terms differs from isnull() at slots whose constant was revived by
+        # fillna: no longer null, but still without terms
+        expr = np.arange(20) * v
+        filter = (expr.coeffs >= 10).any(TERM_DIM)
+        masked = expr.where(filter)
+        assert_equal(masked.isnull(), ~masked.has_terms)
+
+        filled = masked.fillna(0)
+        assert not filled.isnull().any()
+        assert_equal(filled.has_terms, filter.rename("has_terms"))
+
+    def test_merge_reindex(self, x: Variable, y: Variable) -> None:
+        # the nodal-balance pattern: outer merge, then reindex to a superset of
+        # coordinates; slots beyond the original coordinates carry no terms
+        lhs = merge([1 * x, 1 * y], join="outer").reindex(
+            dim_0=pd.RangeIndex(4, name="dim_0")
+        )
+        assert lhs.has_terms.values.tolist() == [True, True, False, False]
+
+    def test_constant_only(self, m: Model) -> None:
+        expr = LinearExpression(xr.DataArray([1, 2], dims=["dim_0"]), m)
+        assert expr.nterm == 0
+        assert not expr.has_terms.any()
+
+    def test_quadratic(self, v: Variable) -> None:
+        # linear terms inside a quadratic expression carry one factor == -1;
+        # they must still count as live terms
+        quad = v * v + 2 * v
+        assert quad.has_terms.all()
+        assert TERM_DIM not in quad.has_terms.dims
+
+        filter = xr.DataArray(
+            np.arange(20) >= 10, dims="dim_2", coords={"dim_2": range(20)}
+        )
+        masked = quad.where(filter)
+        assert_equal(masked.has_terms, filter.rename("has_terms"))
+
+
 def test_linear_expression_flat(v: Variable) -> None:
     coeff = np.arange(1, 21)  # use non-zero coefficients
     expr = coeff * v
@@ -1263,6 +1383,288 @@ def test_linear_expression_groupby_on_same_name_as_target_dim(
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.nterm == 10
+
+
+class TestMultiKeyFastPath:
+    """
+    Group a LinearExpression by a list of coordinate names: takes the fast
+    reindex path and returns one dimension per key, like the xarray fallback.
+    """
+
+    @staticmethod
+    def _expr(period_vals: list, season_vals: list) -> LinearExpression:
+        n = len(period_vals)
+        s = pd.RangeIndex(n, name="s")
+        m = Model()
+        x = m.add_variables(coords=[s], name="x")
+        return (1.0 * x).assign_coords(
+            period=xr.DataArray(period_vals, dims="s", coords={"s": s}, name="period"),
+            season=xr.DataArray(season_vals, dims="s", coords={"s": s}, name="season"),
+        )
+
+    @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
+    def test_matches_fallback(self, spelling: type) -> None:
+        # the fast path must equal the slow fallback, sparse cells included
+        expr = self._expr([2020, 2020, 2030, 2030, 2030], list("wswws"))
+        group = spelling(["period", "season"])
+
+        fast = expr.groupby(group).sum()
+        slow = expr.groupby(group).sum(use_fallback=True)
+
+        assert_linequal(fast, slow)
+
+    def test_separate_dims_not_stacked(self) -> None:
+        # built via a stacked index internally, but returns one dim per key
+        expr = self._expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        assert {"period", "season"} <= set(grouped.dims)
+        assert "group" not in grouped.dims
+        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+
+    def test_sparse_combination_filled(self) -> None:
+        # (2020, "s") never occurs -> empty term in the grid
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+
+        grouped = expr.groupby(["period", "season"]).sum()
+
+        cell = grouped.sel(period=2020, season="s")
+        assert (cell.vars == -1).all()
+        assert cell.coeffs.isnull().all()
+
+    def test_dataframe_grouper_stays_compact(self) -> None:
+        # the DataFrame grouper keeps the stacked observed-only group dim
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+
+        grouped = expr.groupby(df).sum()
+
+        assert "group" in grouped.dims
+        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    def test_blowup_warns_when_sparse(self) -> None:
+        # 200 observed combos, 200x200 grid -> nudge toward observed=True
+        expr = self._expr(list(range(200)), list(range(200)))
+
+        with pytest.warns(UserWarning, match="dense .* grid"):
+            expr.groupby(["period", "season"]).sum()
+
+    def test_no_warning_when_dense(self) -> None:
+        expr = self._expr([2020, 2020, 2030, 2030], list("wsws"))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            expr.groupby(["period", "season"]).sum()
+
+    def test_observed_keeps_stacked(self) -> None:
+        # observed=True skips the unstack: compact stacked MultiIndex,
+        # identical to the DataFrame grouper output
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+
+        grouped = expr.groupby(["period", "season"]).sum(observed=True)
+
+        assert_linequal(grouped, expr.groupby(df).sum())
+        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    def test_observed_silences_blowup_warning(self) -> None:
+        expr = self._expr(list(range(200)), list(range(200)))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            grouped = expr.groupby(["period", "season"]).sum(observed=True)
+
+        assert grouped.sizes["group"] == 200
+
+    def test_observed_with_fallback_raises(self) -> None:
+        expr = self._expr([2020, 2020], list("ws"))
+
+        with pytest.raises(ValueError, match="observed"):
+            expr.groupby(["period", "season"]).sum(use_fallback=True, observed=True)
+
+
+class TestGroupbyByAttachedCoordinate:
+    """
+    Group by an attached non-dimension coordinate.
+
+    Asserts grouping against hard-coded ``vars``/``coeffs`` to catch regressions.
+    """
+
+    @pytest.fixture
+    def t(self) -> pd.RangeIndex:
+        return pd.RangeIndex(4, name="t")
+
+    @pytest.fixture
+    def period(self, t: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(
+            [2020, 2020, 2030, 2030], dims="t", coords={"t": t}, name="period"
+        )
+
+    @pytest.fixture
+    def season(self, t: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(list("wsws"), dims="t", coords={"t": t}, name="season")
+
+    @pytest.fixture
+    def expr(
+        self, t: pd.RangeIndex, period: xr.DataArray, season: xr.DataArray
+    ) -> LinearExpression:
+        m = Model()
+        x = m.add_variables(coords=[t], name="x")
+        return (2.0 * x).assign_coords(period=period, season=season)
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    @pytest.mark.parametrize("by", ["name", "dataarray"])
+    def test_single_key(
+        self,
+        expr: LinearExpression,
+        period: xr.DataArray,
+        by: str,
+        use_fallback: bool,
+    ) -> None:
+        group = "period" if by == "name" else period
+
+        grouped = expr.groupby(group).sum(use_fallback=use_fallback)
+
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert grouped.coeffs.transpose("period", TERM_DIM).values.tolist() == [
+            [2.0, 2.0],
+            [2.0, 2.0],
+        ]
+
+    @pytest.mark.parametrize("spelling", [list, tuple], ids=["list", "tuple"])
+    def test_multi_key(self, expr: LinearExpression, spelling: type) -> None:
+        # A multi-key group always goes through the xarray fallback (a list is
+        # not a fast-path type), so there is no separate use_fallback case.
+        group = spelling(["period", "season"])
+
+        grouped = expr.groupby(group).sum()
+
+        assert dict(grouped.sizes) == {"period": 2, "season": 2, TERM_DIM: 1}
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.data.season.values.tolist() == ["s", "w"]
+        assert grouped.vars.transpose("period", "season", TERM_DIM).values.tolist() == [
+            [[1], [0]],
+            [[3], [2]],
+        ]
+        assert (grouped.coeffs == 2.0).all()
+
+    def test_extra_aux_coord_does_not_change_result(
+        self, t: pd.RangeIndex, period: xr.DataArray
+    ) -> None:
+        # A second auxiliary coord on the grouped dimension must neither break
+        # the reshape (it raised ``KeyError`` before the fix) nor change the sum.
+        m = Model()
+        x = m.add_variables(coords=[t], name="x")
+        timestep = xr.DataArray(
+            list("abab"), dims="t", coords={"t": t}, name="timestep"
+        )
+        expr = (2.0 * x).assign_coords(period=period, timestep=timestep)
+
+        grouped = expr.groupby("period").sum()
+
+        assert "timestep" not in grouped.coords
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert (grouped.coeffs == 2.0).all()
+
+    @pytest.mark.parametrize("by", ["name", "dataarray"])
+    def test_two_dimensional(self, by: str) -> None:
+        # Grouping one dimension of a 2-D variable by an aux coord must keep the
+        # other dimension intact and pair up the right variable labels.
+        m = Model()
+        snapshot = pd.RangeIndex(4, name="snapshot")
+        gen = pd.Index(["g1", "g2"], name="gen")
+        y = m.add_variables(coords=[snapshot, gen], name="y")  # labels 0..7
+        period = xr.DataArray(
+            [2020, 2020, 2030, 2030],
+            dims="snapshot",
+            coords={"snapshot": snapshot},
+            name="period",
+        )
+        expr = (1.0 * y).assign_coords(period=period)
+        group = "period" if by == "name" else period
+
+        grouped = expr.groupby(group).sum()
+
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.data.gen.values.tolist() == ["g1", "g2"]
+        assert grouped.vars.transpose("period", "gen", TERM_DIM).values.tolist() == [
+            [[0, 2], [1, 3]],
+            [[4, 6], [5, 7]],
+        ]
+        assert (grouped.coeffs == 1.0).all()
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_dimension_coordinate_by_name(self, use_fallback: bool) -> None:
+        # A dimension coordinate may also be grouped by name; it collapses that
+        # dimension and keeps the other one.
+        m = Model()
+        snapshot = pd.RangeIndex(4, name="snapshot")
+        gen = pd.Index(["g1", "g2"], name="gen")
+        y = m.add_variables(coords=[snapshot, gen], name="y")  # labels 0..7
+
+        grouped = (1 * y).groupby("gen").sum(use_fallback=use_fallback)
+
+        assert grouped.data.gen.values.tolist() == ["g1", "g2"]
+        assert grouped.sizes["snapshot"] == 4
+        assert grouped.vars.transpose("gen", "snapshot", TERM_DIM).values.tolist() == [
+            [[0], [2], [4], [6]],
+            [[1], [3], [5], [7]],
+        ]
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_single_element_list_groups_like_scalar(
+        self, expr: LinearExpression, use_fallback: bool
+    ) -> None:
+        # ``groupby(["period"])`` groups like the scalar key, mirroring xarray.
+        grouped = expr.groupby(["period"]).sum(use_fallback=use_fallback)
+
+        assert grouped.data.period.values.tolist() == [2020, 2030]
+        assert grouped.vars.transpose("period", TERM_DIM).values.tolist() == [
+            [0, 1],
+            [2, 3],
+        ]
+        assert (grouped.coeffs == 2.0).all()
+
+    def test_multi_key_dataarrays_unsupported(
+        self, expr: LinearExpression, period: xr.DataArray, season: xr.DataArray
+    ) -> None:
+        # Multi-key grouping must be spelled with names; a list of DataArrays
+        # is unhashable and raises in xarray itself, so linopy mirrors that.
+        with pytest.raises(TypeError, match="unhashable"):
+            expr.groupby([period, season]).sum()
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    @pytest.mark.parametrize(
+        "level, values, vars_",
+        [
+            ("period", [2020, 2030], [[0, 1, 2], [3, 4, 5]]),
+            ("timestep", ["t1", "t2", "t3"], [[0, 3], [1, 4], [2, 5]]),
+        ],
+    )
+    def test_multiindex_level(
+        self, level: str, values: list, vars_: list, use_fallback: bool
+    ) -> None:
+        # Grouping by a level of a real ``MultiIndex`` dimension (the
+        # pydata/xarray#6836 case, fixed upstream) works through linopy.
+        m = Model()
+        mi = pd.MultiIndex.from_product(
+            [[2020, 2030], ["t1", "t2", "t3"]], names=["period", "timestep"]
+        )
+        x = m.add_variables(coords={"snapshot": mi}, name="x")  # labels 0..5
+
+        grouped = (1 * x).groupby(level).sum(use_fallback=use_fallback)
+
+        assert grouped.data[level].values.tolist() == values
+        assert grouped.vars.transpose(level, TERM_DIM).values.tolist() == vars_
 
 
 @pytest.mark.parametrize("use_fallback", [True])
@@ -1942,35 +2344,35 @@ class TestJoinParameter:
 
         def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_add_expr_join_outer(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_add_expr_join_left(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="left")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
         def test_add_expr_join_right(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="right")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
         def test_add_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_add_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().add(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_add_constant_join_override(self, a: Variable, c: Variable) -> None:
             expr = a.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [0, 1, 2]})
             result = expr.add(const, join="override")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
             assert (result.const.values == const.values).all()
 
         def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
@@ -1991,7 +2393,7 @@ class TestJoinParameter:
     class TestSubtraction:
         def test_sub_expr_join_inner(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().sub(b.to_linexpr(), join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_sub_constant_override(self, a: Variable) -> None:
             expr = 1 * a + 5
@@ -2004,12 +2406,12 @@ class TestJoinParameter:
         def test_mul_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_mul_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().mul(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
             assert result.coeffs.sel(i=0).item() == 0
             assert result.coeffs.sel(i=1).item() == 2
             assert result.coeffs.sel(i=2).item() == 3
@@ -2022,12 +2424,12 @@ class TestJoinParameter:
         def test_div_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_div_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="outer")
-            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert list(result.indexes["i"]) == [0, 1, 2, 3]
 
         def test_div_expr_with_join_raises(self, a: Variable, b: Variable) -> None:
             with pytest.raises(TypeError):
@@ -2036,21 +2438,21 @@ class TestJoinParameter:
     class TestVariableOperations:
         def test_variable_add_join(self, a: Variable, b: Variable) -> None:
             result = a.add(b, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_sub_join(self, a: Variable, b: Variable) -> None:
             result = a.sub(b, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_mul_join(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_div_join(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.div(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_variable_add_outer_values(self, a: Variable, b: Variable) -> None:
             result = a.add(b, join="outer")
@@ -2076,14 +2478,14 @@ class TestJoinParameter:
 
         def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
             result = a.to_linexpr().add(c.to_linexpr(), join="override")
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
     class TestMerge:
         def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="inner"
             )
-            assert list(result.data.indexes["i"]) == [1, 2]
+            assert list(result.indexes["i"]) == [1, 2]
 
         def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
             result = merge(
@@ -2095,13 +2497,13 @@ class TestJoinParameter:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="left"
             )
-            assert list(result.data.indexes["i"]) == [0, 1, 2]
+            assert list(result.indexes["i"]) == [0, 1, 2]
 
         def test_merge_join_right(self, a: Variable, b: Variable) -> None:
             result = merge(
                 [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="right"
             )
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
     class TestValueVerification:
         def test_add_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
@@ -2200,13 +2602,13 @@ class TestJoinParameter:
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]
 
         def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
             quad = a.to_linexpr() * a.to_linexpr()
             const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
             result = quad.add(const, join="inner")
-            assert list(result.data.indexes["i"]) == [0, 1]
+            assert list(result.indexes["i"]) == [0, 1]
 
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
@@ -2214,4 +2616,4 @@ class TestJoinParameter:
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
-            assert list(result.data.indexes["i"]) == [1, 2, 3]
+            assert list(result.indexes["i"]) == [1, 2, 3]

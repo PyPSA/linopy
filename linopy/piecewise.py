@@ -1006,20 +1006,18 @@ def _broadcast_points(
 
     lin_exprs = [_to_linexpr(e) for e in exprs]
 
-    target_dims: set[str] = set()
-    for le in lin_exprs:
-        target_dims.update(str(d) for d in le.coord_dims)
+    point_dims = {str(d) for d in points.dims}
 
-    missing = target_dims - skip - {str(d) for d in points.dims}
-    if not missing:
-        return points
-
+    # Iterate exprs/dims in order; a set would give a hash-dependent,
+    # run-varying expanded dimension order.
     expand_map: dict[str, list] = {}
-    for d in missing:
-        for le in lin_exprs:
+    for le in lin_exprs:
+        for dim in le.coord_dims:
+            d = str(dim)
+            if d in skip or d in point_dims or d in expand_map:
+                continue
             if d in le.coords:
-                expand_map[str(d)] = list(le.coords[d].values)
-                break
+                expand_map[d] = list(le.coords[d].values)
 
     if expand_map:
         points = points.expand_dims(expand_map)

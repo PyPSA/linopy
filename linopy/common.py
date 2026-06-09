@@ -10,7 +10,7 @@ from __future__ import annotations
 import operator
 import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
-from functools import cached_property, partial, reduce, wraps
+from functools import cached_property, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
@@ -18,17 +18,15 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import arange, nan, signedinteger
+from numpy import nan, signedinteger
 from polars.datatypes import DataTypeClass
-from xarray import Coordinates, DataArray, Dataset, apply_ufunc, broadcast
+from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
-from xarray.core import dtypes, indexing
-from xarray.core.types import JoinOptions, T_Alignable
+from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
 from linopy.constants import (
-    HELPER_DIMS,
     SIGNS,
     SIGNS_alternative,
     SIGNS_pretty,
@@ -36,8 +34,6 @@ from linopy.constants import (
 )
 from linopy.types import (
     CONSTANT_TYPES,
-    CoordsLike,
-    DimsLike,
     SideLike,
 )
 
@@ -114,192 +110,6 @@ def format_string_as_variable_name(name: Hashable) -> str:
         str: The formatted name.
     """
     return str(name).replace(" ", "_").replace("-", "_")
-
-
-def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
-    """
-    Returns the element at the specified index of the list, or None if the index
-    is out of bounds.
-    """
-    if lst is None:
-        return None
-    if isinstance(lst, Sequence | Iterable):
-        lst = list(lst)
-    else:
-        lst = [lst]
-    return lst[index] if 0 <= index < len(lst) else None
-
-
-def pandas_to_dataarray(
-    arr: pd.DataFrame | pd.Series,
-    coords: CoordsLike | None = None,
-    dims: DimsLike | None = None,
-    **kwargs: Any,
-) -> DataArray:
-    """
-    Convert a pandas DataFrame or Series to a DataArray.
-
-    As pandas objects already have a concept of coordinates, the
-    coordinates (index, columns) will be used as coordinates for the DataArray.
-    Solely the dimension names can be specified.
-
-    Parameters
-    ----------
-        arr (Union[pd.DataFrame, pd.Series]):
-            The input pandas DataFrame or Series.
-        coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Union[list, None]):
-            The dimensions for the DataArray. If None, the column names of the DataFrame or the index names of the Series will be used.
-        **kwargs:
-            Additional keyword arguments to be passed to the DataArray constructor.
-
-    Returns
-    -------
-        DataArray:
-            The converted DataArray.
-    """
-    dims = [
-        axis.name or get_from_iterable(dims, i) or f"dim_{i}"
-        for i, axis in enumerate(arr.axes)
-    ]
-    return DataArray(arr, coords=None, dims=dims, **kwargs)
-
-
-def numpy_to_dataarray(
-    arr: np.ndarray,
-    coords: CoordsLike | None = None,
-    dims: DimsLike | None = None,
-    **kwargs: Any,
-) -> DataArray:
-    """
-    Convert a numpy array to a DataArray.
-
-    Parameters
-    ----------
-        arr (np.ndarray):
-            The input numpy array.
-        coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Union[list, None]):
-            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
-        **kwargs:
-            Additional keyword arguments to be passed to the DataArray constructor.
-
-    Returns
-    -------
-        DataArray:
-            The converted DataArray.
-    """
-    # fallback case for zero dim arrays
-    if arr.ndim == 0:
-        if dims is None and is_dict_like(coords):
-            dims = list(coords.keys())
-        return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
-
-    if isinstance(dims, Iterable | Sequence):
-        dims = list(dims)
-    elif dims is not None:
-        dims = [dims]
-
-    if dims is not None and len(dims):
-        dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(arr.ndim)]
-
-    if dims is not None and len(dims) and coords is not None:
-        if isinstance(coords, list):
-            coords = dict(zip(dims, coords[: arr.ndim]))
-        elif is_dict_like(coords):
-            coords = {k: v for k, v in coords.items() if k in dims}
-
-    return DataArray(arr, coords=coords, dims=dims, **kwargs)
-
-
-def as_dataarray(
-    arr: Any,
-    coords: CoordsLike | None = None,
-    dims: DimsLike | None = None,
-    **kwargs: Any,
-) -> DataArray:
-    """
-    Convert an object to a DataArray.
-
-    Parameters
-    ----------
-        arr:
-            The input object.
-        coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Union[list, None]):
-            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
-        **kwargs:
-            Additional keyword arguments to be passed to the DataArray constructor.
-
-    Returns
-    -------
-        DataArray:
-            The converted DataArray.
-    """
-    if isinstance(arr, pd.Series | pd.DataFrame):
-        arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, np.ndarray):
-        arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, pl.Series):
-        arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, np.number | int | float | str | bool | list):
-        if isinstance(arr, np.number):
-            arr = float(arr)
-        if dims is None:
-            if isinstance(coords, Coordinates):
-                dims = coords.dims
-            elif is_dict_like(coords) and np.ndim(arr) == 0:
-                dims = list(coords.keys())
-        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
-    elif not isinstance(arr, DataArray):
-        supported_types = [
-            np.number,
-            str,
-            bool,
-            list,
-            pd.Series,
-            pd.DataFrame,
-            np.ndarray,
-            DataArray,
-            pl.Series,
-        ]
-        supported_types_str = ", ".join([t.__name__ for t in supported_types])
-        raise TypeError(
-            f"Unsupported type of arr: {type(arr)}. Supported types are: {supported_types_str}"
-        )
-
-    arr = fill_missing_coords(arr)
-    return arr
-
-
-def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
-    """
-    Broadcast a boolean mask to match the shape of labels.
-
-    Ensures that mask dimensions are a subset of labels dimensions, broadcasts
-    the mask accordingly, and fills any NaN values (from missing coordinates)
-    with False while emitting a FutureWarning.
-    """
-    assert set(mask.dims).issubset(labels.dims), (
-        "Dimensions of mask not a subset of resulting labels dimensions."
-    )
-    mask = mask.broadcast_like(labels)
-    if mask.isnull().any():
-        warn(
-            "Mask contains coordinates not covered by the data dimensions. "
-            "Missing values will be filled with False (masked out). "
-            "In a future version, this will raise an error. "
-            "Use mask.reindex() or `linopy.align()` to explicitly handle missing "
-            "coordinates.",
-            FutureWarning,
-            stacklevel=3,
-        )
-        mask = mask.fillna(False).astype(bool)
-    return mask
 
 
 # TODO: rename to to_pandas_dataframe
@@ -524,44 +334,6 @@ def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
     """
     remainders = list(set(ds) - set(fields))
     return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
-
-
-@overload
-def fill_missing_coords(ds: DataArray, fill_helper_dims: bool = False) -> DataArray: ...
-
-
-@overload
-def fill_missing_coords(ds: Dataset, fill_helper_dims: bool = False) -> Dataset: ...
-
-
-def fill_missing_coords(
-    ds: DataArray | Dataset, fill_helper_dims: bool = False
-) -> Dataset | DataArray:
-    """
-    Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
-
-    This function fills in the integer coordinates for all dimensions of a
-    Dataset or DataArray that have no coordinates assigned yet.
-
-    Parameters
-    ----------
-    ds : xarray.DataArray or xarray.Dataset
-    fill_helper_dims : bool, optional
-        Whether to fill in integer coordinates for helper dimensions, by default False.
-
-    """
-    ds = ds.copy()
-    if not isinstance(ds, Dataset | DataArray):
-        raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
-
-    skip_dims = [] if fill_helper_dims else HELPER_DIMS
-
-    # Fill in missing integer coordinates
-    for dim in ds.dims:
-        if dim not in ds.coords and dim not in skip_dims:
-            ds.coords[dim] = arange(ds.sizes[dim])
-
-    return ds
 
 
 T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
@@ -1299,103 +1071,6 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     """
     common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
-
-
-def align(
-    *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
-    join: JoinOptions = "inner",
-    copy: bool = True,
-    indexes: Any = None,
-    exclude: str | Iterable[Hashable] = frozenset(),
-    fill_value: Any = dtypes.NA,
-) -> tuple[LinearExpression | QuadraticExpression | Variable | T_Alignable, ...]:
-    """
-    Given any number of Variables, Expressions, Dataset and/or DataArray objects,
-    returns new objects with aligned indexes and dimension sizes.
-
-    Array from the aligned objects are suitable as input to mathematical
-    operators, because along each dimension they have the same index and size.
-
-    Missing values (if ``join != 'inner'``) are filled with ``fill_value``.
-    The default fill value is NaN.
-
-    This functions essentially wraps the xarray function
-    :py:func:`xarray.align`.
-
-    Parameters
-    ----------
-    *objects : Variable, LinearExpression, Dataset or DataArray
-        Objects to align.
-    join : {"outer", "inner", "left", "right", "exact", "override"}, optional
-        Method for joining the indexes of the passed objects along each
-        dimension:
-
-        - "outer": use the union of object indexes
-        - "inner": use the intersection of object indexes
-        - "left": use indexes from the first object with each dimension
-        - "right": use indexes from the last object with each dimension
-        - "exact": instead of aligning, raise `ValueError` when indexes to be
-        aligned are not equal
-        - "override": if indexes are of same size, rewrite indexes to be
-        those of the first object with that dimension. Indexes for the same
-        dimension must have the same size in all objects.
-
-    copy : bool, default: True
-        If ``copy=True``, data in the return values is always copied. If
-        ``copy=False`` and reindexing is unnecessary, or can be performed with
-        only slice operations, then the output may share memory with the input.
-        In either case, new xarray objects are always returned.
-    indexes : dict-like, optional
-        Any indexes explicitly provided with the `indexes` argument should be
-        used in preference to the aligned indexes.
-    exclude : str, iterable of hashable or None, optional
-        Dimensions that must be excluded from alignment
-    fill_value : scalar or dict-like, optional
-        Value to use for newly missing values. If a dict-like, maps
-        variable names to fill values. Use a data array's name to
-        refer to its values.
-
-    Returns
-    -------
-    aligned : tuple of DataArray or Dataset
-        Tuple of objects with the same type as `*objects` with aligned
-        coordinates.
-
-
-    """
-    from linopy.expressions import LinearExpression, QuadraticExpression
-    from linopy.variables import Variable
-
-    finisher: list[partial[Any] | Callable[[Any], Any]] = []
-    das: list[Any] = []
-    for obj in objects:
-        if isinstance(obj, LinearExpression | QuadraticExpression):
-            finisher.append(partial(obj.__class__, model=obj.model))
-            das.append(obj.data)
-        elif isinstance(obj, Variable):
-            finisher.append(
-                partial(
-                    obj.__class__,
-                    model=obj.model,
-                    name=obj.data.attrs["name"],
-                    skip_broadcast=True,
-                )
-            )
-            das.append(obj.data)
-        else:
-            finisher.append(lambda x: x)
-            das.append(obj)
-
-    exclude = frozenset(exclude).union(HELPER_DIMS)
-    aligned = xr_align(
-        *das,
-        join=join,
-        copy=copy,
-        indexes=indexes,
-        exclude=exclude,
-        fill_value=fill_value,
-    )
-    return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
 LocT = TypeVar(
