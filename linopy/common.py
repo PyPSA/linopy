@@ -786,7 +786,11 @@ class ConstraintLabelIndex:
     @cached_property
     def clabels(self) -> np.ndarray:
         """Active constraint labels in build order, shape (n_active_cons,)."""
-        label_lists = [c.active_labels() for c in self._constraints.data.values()]
+        label_lists = [
+            c.active_labels()
+            for c in self._constraints.data.values()
+            if not c.is_indicator
+        ]
         return (
             np.concatenate(label_lists) if label_lists else np.array([], dtype=np.intp)
         )

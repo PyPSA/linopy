@@ -20,6 +20,10 @@ Version 0.8.0
 * After ``model.solve()``, the solver object stays available on ``model.solver``. You can inspect it, reuse it, or release the underlying solver (and its license) by calling ``model.solver.close()`` or assigning ``model.solver = None``. It is also released automatically when the model is garbage-collected.
 * New ``SolverReport`` on the result (``result.report``) reports runtime, MIP gap, dual (best) bound, and iteration counts. It is shown in ``repr(result)`` and currently populated by CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
 
+*Dualize LP models*
+
+* New ``Model.dualize()`` constructs the LP dual as a standalone model, lifting finite variable bounds into explicit constraints so they are reflected in the dual. Dual variables are named after the primal constraints. Works for linear problems with linear objective and constraints. (https://github.com/PyPSA/linopy/pull/626)
+
 *A new way to call a solver (advanced)*
 
 Most users should keep calling ``model.solve(...)``. If you want more control, you can now build the solver yourself and run it in two steps:
@@ -42,6 +46,10 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``linopy.available_solvers`` no longer tries to acquire licenses at import time, so importing linopy is faster and doesn't grab a license from solvers like Gurobi or Mosek. **Note:** membership now means "the package is installed", not "I have a working license" (see Breaking Changes). Call ``available_solvers.refresh()`` to re-scan. Same for ``quadratic_solvers``.
 * New ``linopy.licensed_solvers``: the subset of installed solvers that currently pass a license check. Handy in tests and for picking a solver at runtime.
 * New helpers for explicit license checks: ``linopy.solvers.check_solver_licenses("gurobi", "mosek")``, ``Gurobi.license_status()``, ``Gurobi.is_available()``. They return a ``LicenseStatus`` dataclass (``name``, ``ok``, ``message``).
+
+*Constraints — indicator constraints*
+
+* Add indicator constraints for solvers that support them. They are part of the unified constraints container: ``model.add_indicator_constraints`` returns a ``Constraint`` and the constraint is stored in ``model.constraints`` (filterable via ``model.constraints.indicator`` / ``model.constraints.regular``), so it round-trips through netCDF and ``model.copy()``.
 
 *Compact multi-key grouping*
 
@@ -73,6 +81,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
 * ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
 * ``add_piecewise_formulation`` now produces a reproducible dimension order in the broadcast breakpoint array. The previous set-based expansion gave a hash-randomized order that varied between processes.
+* ``Variable.fix(value)`` now places ``value`` correctly fix binary variables and correctly work on variables with named dimensions; previously array values could be misaligned.
 
 **Breaking Changes**
 
@@ -91,6 +100,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
 * ``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
 * Adopt Python 3.11 type-syntax: the status enums (``ModelStatus``, ``SolverStatus``, ``TerminationCondition``) are now ``StrEnum``, and classmethods plus the expression base class use ``Self`` instead of string forward-references and a self-typed ``TypeVar``. No user-visible change — ``Model.solve()`` still returns ``(status, termination_condition)`` as plain strings.
+* ``Variable.fix()`` now fixes a variable by collapsing its bounds (``lower = upper = value``) instead of adding a ``__fix__`` equality constraint; ``unfix()`` restores the original bounds (`#769 <https://github.com/PyPSA/linopy/issues/769>`_). A fix outside the current bounds now warns and overrides instead of raising, and its shadow price appears as the variable's reduced cost rather than a constraint dual.
 
 Version 0.7.0
 -------------
