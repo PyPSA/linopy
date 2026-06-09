@@ -249,7 +249,9 @@ def bounds_to_file(
         list(m.variables.continuous)
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
-        + [n for n in m.variables.binaries if m.variables[n].fixed] # fixed binaries need bounds
+        + [
+            n for n in m.variables.binaries if m.variables[n].fixed
+        ]  # fixed binaries need bounds
     )
     if not len(list(names)):
         return
