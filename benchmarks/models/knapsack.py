@@ -1,12 +1,15 @@
-"""Knapsack benchmark model: N binary variables, 1 constraint."""
+"""Knapsack benchmark model: N binary variables, 1 constraint (MILP, binary)."""
 
 from __future__ import annotations
 
 import numpy as np
 
 import linopy
+from benchmarks.registry import BINARY, DEFAULT_PHASES, ModelSpec, register
 
-SIZES = [100, 1_000, 10_000, 100_000, 1_000_000]
+SIZES = (100, 1_000, 10_000, 100_000, 1_000_000)
+QUICK_SIZES = (100, 10_000)
+LONG_SIZES = (100_000, 1_000_000)
 
 
 def build_knapsack(n: int) -> linopy.Model:
@@ -21,3 +24,16 @@ def build_knapsack(n: int) -> linopy.Model:
     m.add_constraints((x * weights).sum() <= capacity, name="capacity")
     m.add_objective(-(x * values).sum())
     return m
+
+
+SPEC = register(
+    ModelSpec(
+        name="knapsack",
+        build=build_knapsack,
+        sizes=SIZES,
+        quick_sizes=QUICK_SIZES,
+        long_sizes=LONG_SIZES,
+        features=frozenset({BINARY}),
+        phases=DEFAULT_PHASES,  # HiGHS handles binary; matrices handles MILP
+    )
+)

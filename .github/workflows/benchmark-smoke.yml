@@ -1,0 +1,43 @@
+name: Benchmark smoke
+
+# Builds every spec and fires every phase once under --quick
+# --benchmark-disable: a "did a refactor break a spec?" check, not timing.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Benchmark smoke (quick)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0  # setuptools_scm
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install package and benchmark dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+
+    - name: Run benchmark smoke
+      run: |
+        python -m benchmarks smoke
+
+    - name: Execute walkthrough notebook
+      # Catches doc rot: the walkthrough must stay runnable end-to-end.
+      run: |
+        python -m benchmarks notebook

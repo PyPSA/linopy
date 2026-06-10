@@ -1,21 +1,25 @@
-"""Model builders for benchmarks."""
+"""
+Model builders for benchmarks.
 
-from benchmarks.models.basic import SIZES as BASIC_SIZES
-from benchmarks.models.basic import build_basic
-from benchmarks.models.expression_arithmetic import SIZES as EXPR_SIZES
-from benchmarks.models.expression_arithmetic import build_expression_arithmetic
-from benchmarks.models.knapsack import SIZES as KNAPSACK_SIZES
-from benchmarks.models.knapsack import build_knapsack
-from benchmarks.models.sparse_network import SIZES as SPARSE_SIZES
-from benchmarks.models.sparse_network import build_sparse_network
+Importing this package triggers every submodule's ``register(...)`` call,
+populating :data:`benchmarks.registry.REGISTRY`. Each submodule exposes a
+``build_<name>(size) -> linopy.Model`` callable and a module-level ``SPEC``
+:class:`~benchmarks.registry.ModelSpec`. The documented access path is
+``REGISTRY["<name>"]``; submodule re-exports are intentionally not exposed
+here so that adding a new model is one new file plus one import below.
+"""
 
-__all__ = [
-    "BASIC_SIZES",
-    "EXPR_SIZES",
-    "KNAPSACK_SIZES",
-    "SPARSE_SIZES",
-    "build_basic",
-    "build_expression_arithmetic",
-    "build_knapsack",
-    "build_sparse_network",
-]
+# Side-effect imports — each module calls ``register(...)`` at import time.
+from benchmarks.models import (  # noqa: F401
+    basic,
+    expression_arithmetic,
+    knapsack,
+    masked,
+    milp,
+    piecewise,
+    pypsa_scigrid,
+    qp,
+    sos,
+    sparse_network,
+    storage,
+)
