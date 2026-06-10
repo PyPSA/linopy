@@ -77,4 +77,5 @@ __all__ = (
     "read_netcdf",
     "segments",
     "tangent_lines",
+    "declarative_model"
 )
