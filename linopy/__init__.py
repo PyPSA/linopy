@@ -27,6 +27,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.declarative.build import declarative_model
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables

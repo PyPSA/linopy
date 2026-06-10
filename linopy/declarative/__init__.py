@@ -1,0 +1,1 @@
+"""Linopy declarative text math interface."""
