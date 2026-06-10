@@ -31,11 +31,11 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -55,10 +55,12 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
-    FIX_CONSTRAINT_PREFIX,
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    STASHED_ATTRS,
+    STASHED_LOWER,
+    STASHED_UPPER,
     TERM_DIM,
 )
 from linopy.types import (
@@ -327,7 +329,9 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = broadcast_to_coords(
+            coefficient, coords=self.coords, dims=self.dims, strict=False
+        )
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
@@ -1093,7 +1097,7 @@ class Variable:
         -------
         df : pandas.DataFrame
         """
-        ds = self.data
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
 
         def mask_func(data: pd.DataFrame) -> pd.Series:
             return data["labels"] != -1
@@ -1113,7 +1117,8 @@ class Variable:
         -------
         pl.DataFrame
         """
-        df = to_polars(self.data)
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
+        df = to_polars(ds)
         df = filter_nulls_polars(df)
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
@@ -1421,9 +1426,15 @@ class Variable:
         overwrite: bool = True,
     ) -> None:
         """
-        Fix the variable to a given value by adding an equality constraint.
+        Fix the variable to a given value by collapsing its bounds.
+
+        Sets ``lower = upper = value``.
 
         If no value is given, the current solution value is used.
+
+        A fix value outside the variable's current bounds emits a warning, but
+        does not cause infeasibilities (the bounds are overridden). Fixing a
+        binary variable to anything other than 0 or 1 raises.
 
         Parameters
         ----------
@@ -1434,8 +1445,9 @@ class Variable:
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
         overwrite : bool, optional
-            If True (default), overwrite an existing fix constraint for this
-            variable. If False, raise an error if the variable is already fixed.
+            If True (default), re-fix a variable that is already fixed to the
+            new value (the originally stashed bounds are kept). If False, raise
+            an error if the variable is already fixed.
         """
         if value is None:
             try:
@@ -1448,48 +1460,72 @@ class Variable:
                 )
                 raise ValueError(msg) from None
 
-        value = as_dataarray(value).broadcast_like(self.labels)
+        is_fixed = self.fixed
+        is_binary = self.attrs["binary"]
+        is_integer = self.attrs["integer"]
 
-        if self.attrs.get("integer") or self.attrs.get("binary"):
+        if is_fixed and not overwrite:
+            msg = (
+                f"Variable '{self.name}' is already fixed. Use "
+                "overwrite=True to replace the existing fix value."
+            )
+            raise ValueError(msg)
+
+        value = broadcast_to_coords(
+            value, self.coords, label=f"fix() for variable '{self.name}'"
+        )
+
+        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+            msg = (
+                f"Cannot fix binary variable '{self.name}' to a value "
+                "other than 0 or 1."
+            )
+            raise ValueError(msg)
+
+        if is_integer or is_binary:
             value = value.round(0)
         else:
             value = value.round(decimals)
 
-        if (value < self.lower).any() or (value > self.upper).any():
-            msg = (
-                f"Fix values for variable '{self.name}' are outside the "
-                "variable bounds."
+        if is_fixed:
+            lower, upper = self.data[STASHED_LOWER], self.data[STASHED_UPPER]
+        else:
+            lower, upper = self.data.lower, self.data.upper
+
+        if not is_binary and ((value < lower).any() or (value > upper).any()):
+            warn(
+                f"Fix values for variable '{self.name}' lie outside its current "
+                "bounds; the bounds are overridden by the fix value.",
+                UserWarning,
+                stacklevel=2,
             )
-            raise ValueError(msg)
 
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if not is_fixed:
+            self._data = assign_multiindex_safe(
+                self.data,
+                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
+            )
 
-        if constraint_name in self.model.constraints:
-            if not overwrite:
-                msg = (
-                    f"Variable '{self.name}' is already fixed. Use "
-                    "overwrite=True to replace the existing fix constraint."
-                )
-                raise ValueError(msg)
-            self.model.remove_constraints(constraint_name)
-
-        self.model.add_constraints(self, "=", value, name=constraint_name)
+        self.lower = value
+        self.upper = value
 
     def unfix(self) -> None:
         """
-        Remove the fix constraint for this variable.
+        Unfix the variable, restoring the bounds it had before :meth:`fix`.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        if constraint_name in self.model.constraints:
-            self.model.remove_constraints(constraint_name)
+        if not self.fixed:
+            return
+
+        self.lower = self.data[STASHED_LOWER]
+        self.upper = self.data[STASHED_UPPER]
+        self._data = self.data.drop_vars(STASHED_ATTRS)
 
     @property
     def fixed(self) -> bool:
         """
         Return whether the variable is currently fixed.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        return constraint_name in self.model.constraints
+        return all(attr in self.data for attr in STASHED_ATTRS)
 
 
 class AtIndexer:
@@ -1805,7 +1841,7 @@ class Variables:
         decimals : int, optional
             Number of decimal places to round continuous variables to.
         overwrite : bool, optional
-            If True, overwrite existing fix constraints.
+            If True, re-fix variables that are already fixed.
         """
         for var in self.data.values():
             var.fix(value=value, decimals=decimals, overwrite=overwrite)

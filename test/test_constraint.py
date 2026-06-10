@@ -564,6 +564,45 @@ def test_constraint_rhs_setter_with_expression_and_constant(
     assert mc.lhs.nterm == 2
 
 
+def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
+    """Rhs assignment broadcasts against the constraint coords: missing dims expand."""
+    m = Model()
+    x = m.add_variables(
+        coords=[pd.RangeIndex(2, name="i"), pd.RangeIndex(3, name="j")], name="x"
+    )
+    con = m.add_constraints(1 * x >= 0, name="con")
+
+    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})  # type: ignore
+
+    assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
+    assert (con.rhs.sel(i=1) == 2.0).all()
+
+
+def test_constraint_rhs_setter_projects_multiindex_level() -> None:
+    """
+    Rhs indexed by one MultiIndex level is projected onto the stacked dim.
+
+    Regression: as_expression must convert constants with the broadcast rung
+    (broadcast_to_coords), not plain conversion — otherwise the level dim
+    collides with the MI level coord downstream (xarray AlignmentError).
+    """
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
+    m = Model()
+    x = m.add_variables(coords=coords, name="x")
+    con = m.add_constraints(1 * x >= 0, name="con")
+
+    rhs_by_level = xr.DataArray(
+        [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
+    )
+    with pytest.warns(linopy.EvolvingAPIWarning, match="broadcasting level subset"):
+        con.rhs = rhs_by_level  # type: ignore
+
+    assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
+    assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
+
+
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:
     # Test that assigning labels raises AttributeError (Constraint is frozen)
     with pytest.raises(AttributeError):
@@ -594,7 +633,7 @@ def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     # Use Constraint so sign data can be patched
     con = m.add_constraints(x >= 0, name="mixed", freeze=False)
     # Replace sign data with mixed signs across the first dimension
-    n = con.data.sizes["first"]
+    n = con.sizes["first"]
     signs = np.array(["<=" if i % 2 == 0 else ">=" for i in range(n)])
     con.data["sign"] = xr.DataArray(signs, dims=con.data["sign"].dims)
     df = con.to_polars()
@@ -739,7 +778,7 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
     con = Constraint(data, m, "c")
 
     expr = m.add_constraints(con)
-    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
+    assert not set(HELPER_DIMS).intersection(set(expr.coords))
 
 
 def test_constraint_matrix(m: Model) -> None:
