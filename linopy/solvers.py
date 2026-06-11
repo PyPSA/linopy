@@ -19,7 +19,7 @@ import threading
 import warnings
 from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -36,6 +36,7 @@ from scipy.sparse import tril, triu
 import linopy.io
 from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
+    EQUAL,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
     Result,
@@ -44,7 +45,27 @@ from linopy.constants import (
     SolverStatus,
     Status,
     TerminationCondition,
+    short_GREATER_EQUAL,
+    short_LESS_EQUAL,
 )
+from linopy.persistent import (
+    ModelDiff,
+    ModelSnapshot,
+    RebuildReason,
+    RebuildRequiredError,
+    UnsupportedUpdate,
+    UpdatesDisabledError,
+    VarKind,
+    clear_coef_dirty,
+)
+
+
+def _int_list(arr: np.ndarray, dtype: type = np.int64) -> list[int]:
+    return arr.astype(dtype, copy=False).tolist()
+
+
+def _float_list(arr: np.ndarray) -> list[float]:
+    return arr.astype(float, copy=False).tolist()
 
 
 def _parse_int_label(name: str) -> int:
@@ -400,11 +421,22 @@ class Solver(ABC, Generic[EnvType]):
     Subclasses provide ``_build_direct`` / ``_run_direct`` (when supporting the
     direct API) and ``_run_file`` (when supporting LP/MPS files). Construction
     goes via :meth:`Solver.from_name` or :meth:`Solver.from_model`.
+
+    ``track_updates`` toggles persistent-update support:
+
+    * ``False`` (default) — one-shot mode. No :class:`ModelSnapshot` is
+      captured at build time; any later ``solve(model=...)`` or
+      ``update(model)`` raises :class:`UpdatesDisabledError`. Use for
+      throw-away solver instances and high-level ``Model.solve(...)``.
+    * ``True`` — long-lived mode. A snapshot is captured at build time and
+      re-captured after each successful in-place update, enabling
+      diff-based ``solve(model=...)`` / ``update(model)`` across iterations.
     """
 
     model: Model | None = None
     io_api: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
+    track_updates: bool = False
 
     # Runtime state — never set via constructor.
     status: Status | None = field(init=False, default=None, repr=False)
@@ -422,9 +454,18 @@ class Solver(ABC, Generic[EnvType]):
     _n_cons: int = field(init=False, default=0, repr=False)
     _problem_fn: Path | None = field(init=False, default=None, repr=False)
 
+    snapshot: ModelSnapshot | None = field(init=False, default=None, repr=False)
+    _rebuilds: int = field(init=False, default=0, repr=False)
+    _in_place_updates: int = field(init=False, default=0, repr=False)
+    _last_rebuild_reason: RebuildReason | None = field(
+        init=False, default=None, repr=False
+    )
+
     display_name: ClassVar[str] = ""
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
     accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
+    supports_persistent_update: ClassVar[bool] = False
+    supports_sign_update: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if type(self) is Solver:
@@ -437,10 +478,116 @@ class Solver(ABC, Generic[EnvType]):
                 "Please install first to initialize solver instance."
             )
             raise ImportError(msg)
+        self._lock: threading.Lock = threading.Lock()
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        """
+        Apply an in-place :class:`ModelDiff` to the built native model.
+
+        Template method: validates the diff up front (a rejected update
+        leaves the native model untouched), then walks the sections in a
+        fixed order, dispatching to the per-backend ``_apply_*`` hooks.
+        """
+        if not type(self).supports_persistent_update:
+            raise UnsupportedUpdate(type(self).__name__)
+        self._validate_update(diff)
+        ctx = self._apply_begin(var_label_index, con_label_index)
+        if diff.var_bounds_indices.size:
+            self._apply_var_bounds(
+                ctx,
+                diff.var_bounds_indices,
+                diff.var_bounds_lower,
+                diff.var_bounds_upper,
+            )
+        if diff.var_type_positions.size:
+            self._apply_var_types(ctx, diff.var_type_positions, diff.var_type_kinds)
+            self._reclamp_binary_bounds(
+                ctx, diff.var_type_positions, diff.var_type_kinds
+            )
+        if diff.con_rhs_indices.size:
+            self._apply_con_rhs(ctx, diff)
+        if diff.con_sign_indices.size:
+            self._apply_con_signs(ctx, diff.con_sign_indices, diff.con_sign_values)
+        if diff.n_coef_updates:
+            self._apply_con_coefs(
+                ctx, diff.con_coef_rows, diff.con_coef_cols, diff.con_coef_vals
+            )
+        if diff.obj_c_indices is not None:
+            assert diff.obj_c_values is not None
+            self._apply_obj_linear(ctx, diff.obj_c_indices, diff.obj_c_values)
+        if diff.obj_sense is not None:
+            self._apply_obj_sense(ctx, diff.obj_sense)
+            self.sense = diff.obj_sense
+        self._apply_end(ctx)
+
+    def _validate_update(self, diff: ModelDiff) -> None:
+        """Reject unsupported diff content before any native mutation."""
+        if diff.con_sign_indices.size and not type(self).supports_sign_update:
+            raise UnsupportedUpdate(
+                f"{self.display_name} does not support in-place constraint sign change"
+            )
+
+    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
+        """Backend prep + validation; the return value is passed to every hook."""
+        return self.solver_model
+
+    def _apply_end(self, ctx: Any) -> None:
+        return None
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _reclamp_binary_bounds(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        """
+        Re-clamp variables switched to BINARY to [0, 1].
+
+        Compensates for backends whose native type system only has a generic
+        integer kind; backends where the binary type implies the bounds
+        (Gurobi) override with a no-op.
+        """
+        binary_mask = kinds == VarKind.BINARY
+        if binary_mask.any():
+            bin_positions = positions[binary_mask]
+            n = bin_positions.size
+            self._apply_var_bounds(ctx, bin_positions, np.zeros(n), np.ones(n))
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        raise NotImplementedError
+
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        raise NotImplementedError
 
     @property
     def solver_options(self) -> dict[str, Any]:
-        """Back-compat alias for ``self.options``."""
         return self.options
 
     @classmethod
@@ -497,17 +644,35 @@ class Solver(ABC, Generic[EnvType]):
     @staticmethod
     def from_name(
         name: str,
-        model: Model,
+        model: Model | None = None,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
+        track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
-        """Construct and build the solver subclass registered as ``name``."""
+        """
+        Construct the solver subclass registered as ``name``.
+
+        With ``model`` supplied, the solver is built immediately. Without it,
+        an unbuilt instance is returned and the first ``solve(model, ...)``
+        call performs the build. See :class:`Solver` for ``track_updates``.
+        """
         cls = _solver_class_for(name)
         if cls is None:
             raise ValueError(f"unknown solver: {name}")
+        if model is None:
+            return cls(
+                model=None,
+                io_api=io_api,
+                options=options or {},
+                track_updates=track_updates,
+            )
         return cls.from_model(
-            model, io_api=io_api, options=options or {}, **build_kwargs
+            model,
+            io_api=io_api,
+            options=options or {},
+            track_updates=track_updates,
+            **build_kwargs,
         )
 
     @classmethod
@@ -516,10 +681,16 @@ class Solver(ABC, Generic[EnvType]):
         model: Model,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
+        track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
         """Instantiate and build the solver against ``model``."""
-        instance = cls(model=model, io_api=io_api, options=options or {})
+        instance = cls(
+            model=model,
+            io_api=io_api,
+            options=options or {},
+            track_updates=track_updates,
+        )
         instance._build(**build_kwargs)
         return instance
 
@@ -539,6 +710,9 @@ class Solver(ABC, Generic[EnvType]):
         self._validate_model()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
+            if self.track_updates:
+                self.snapshot = ModelSnapshot.capture(self.model)
+                clear_coef_dirty(self.model)
         else:
             self._build_file(**build_kwargs)
 
@@ -616,38 +790,196 @@ class Solver(ABC, Generic[EnvType]):
             self.io_api = read_io_api_from_problem_file(problem_fn)
         self._cache_model_sizes(model)
 
-    def solve(self, **run_kwargs: Any) -> Result:
+    def solve(
+        self,
+        model: Model | None = None,
+        assign: bool = False,
+        ignore_dims: Iterable[str] = (),
+        disallow_rebuild: bool = False,
+        **run_kwargs: Any,
+    ) -> Result:
         """
         Run the prepared solver and return a :class:`Result`.
 
-        The canonical low-level pattern is::
+        With ``model`` supplied, diff against the previous build and either
+        apply in place or rebuild before running. Requires ``io_api='direct'``.
+        With ``assign=True`` the Result is written back to the target Model
+        via :meth:`Model.assign_result`.
 
-            solver = Solver.from_name("gurobi", model, io_api="direct")
-            result = solver.solve()
-            model.assign_result(result, solver=solver)
+        Coordinate alignment is checked on every dim by default. Pass
+        ``ignore_dims`` to exclude dims whose coord values legitimately shift
+        between solves.
 
-        Passing ``solver=`` to :meth:`Model.assign_result` wires
-        ``model.solver`` so post-solve helpers like
-        :meth:`Model.compute_infeasibilities` keep working.
+        Pass ``disallow_rebuild=True`` to guarantee that an existing solver
+        model is updated in place — any condition that would force a rebuild
+        (structural change, sparsity change, backend rejection, …) raises
+        :class:`RebuildRequiredError` instead. The initial build on the first
+        ``solve(model, ...)`` is still allowed.
 
-        Raises
-        ------
-        ValueError
-            If the attached model has no objective set. Submit-time check
-            shared by both ``Model.solve()`` and direct-Solver callers.
+        Thread safety: the solver lock is held for the entire call,
+        including the native run. This is deliberate — diff/apply and the
+        run must be atomic (otherwise a concurrent apply would change the
+        problem between apply and run), and native solver handles are not
+        thread-safe. Concurrent solves therefore serialize per Solver
+        instance; use separate instances for parallelism. Pure diff
+        computation (``update(model, apply=False)``) does not take the lock.
         """
-        if self.model is not None and self.model.objective.expression.empty:
-            raise ValueError(
-                "No objective has been set on the model. Use `m.add_objective(...)` "
-                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+        if model is not None and self.io_api != "direct":
+            raise ValueError("solve(model=...) requires io_api='direct'")
+
+        with self._lock:
+            if model is not None:
+                if self.solver_model is None:
+                    self.model = model
+                    self._build()
+                else:
+                    if not self.track_updates and model is self.model:
+                        raise UpdatesDisabledError(
+                            "Solver was constructed with track_updates=False; "
+                            "in-place mutations of the build-time Model cannot "
+                            "be detected without a snapshot. Pass a freshly "
+                            "built Model instance, or reconstruct the solver "
+                            "with Solver.from_name(..., track_updates=True)."
+                        )
+                    self._update_locked(
+                        model,
+                        apply=True,
+                        ignore_dims=ignore_dims,
+                        disallow_rebuild=disallow_rebuild,
+                    )
+                target = model
+            else:
+                target = self.model  # type: ignore[assignment]
+
+            if self.model is not None and self.model.objective.expression.empty:
+                raise ValueError(
+                    "No objective has been set on the model. Use `m.add_objective(...)` "
+                    "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+                )
+            if self.io_api == "direct" or self.solver_model is not None:
+                result = self._run_direct(**run_kwargs)
+            elif self._problem_fn is not None:
+                result = self._run_file(**run_kwargs)
+            else:
+                raise RuntimeError(
+                    "Solver has not been built; call Solver.from_name(...) or _build() first."
+                )
+
+            if assign and target is not None:
+                target.assign_result(result, solver=self)
+        return result
+
+    def update(
+        self,
+        model: Model,
+        apply: bool = True,
+        ignore_dims: Iterable[str] = (),
+    ) -> ModelDiff | RebuildReason:
+        """
+        Diff ``model`` against the solver state and optionally apply it.
+
+        With ``apply=False`` the diff is computed without taking the solver
+        lock, so it can overlap a concurrently running solve. The preview
+        always runs a full comparison (no ``_coef_dirty`` shortcut — a
+        concurrent apply may clear the flag against a newer snapshot), so it
+        can report raw in-place ``.values[...]`` mutations that the apply
+        path, which trusts the flag for the build-time model, would miss.
+        """
+        if self.io_api != "direct":
+            raise ValueError("update requires io_api='direct'")
+        if self.solver_model is None:
+            raise RuntimeError("Solver has not been built")
+        if not self.track_updates and model is self.model:
+            raise UpdatesDisabledError(
+                "Solver was constructed with track_updates=False; "
+                "in-place mutations of the build-time Model cannot be "
+                "detected without a snapshot. Pass a freshly built Model "
+                "instance, or reconstruct the solver with "
+                "Solver.from_name(..., track_updates=True)."
             )
-        if self.io_api == "direct" or self.solver_model is not None:
-            return self._run_direct(**run_kwargs)
-        if self._problem_fn is not None:
-            return self._run_file(**run_kwargs)
-        raise RuntimeError(
-            "Solver has not been built; call Solver.from_name(...) or _build() first."
-        )
+        if not apply:
+            return self._diff_unlocked(model, ignore_dims)
+        with self._lock:
+            return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
+
+    def _diff_unlocked(
+        self, model: Model, ignore_dims: Iterable[str]
+    ) -> ModelDiff | RebuildReason:
+        """
+        Compute a diff without the solver lock.
+
+        Snapshot and baseline refs are read once; snapshot buffers are
+        immutable after capture, so the walk is consistent even while a
+        concurrent apply swaps ``self.snapshot``. The fallback baseline
+        (``from_models``) is only consistent if no thread concurrently
+        mutates either Model.
+        """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return ModelDiff.from_snapshot(
+                snapshot, model, same_model=False, ignore_dims=ignore_dims
+            )
+        baseline = self.model
+        assert baseline is not None
+        return ModelDiff.from_models(baseline, model, ignore_dims=ignore_dims)
+
+    def _update_locked(
+        self,
+        model: Model,
+        apply: bool,
+        ignore_dims: Iterable[str] = (),
+        disallow_rebuild: bool = False,
+    ) -> ModelDiff | RebuildReason:
+        if apply and not type(self).supports_persistent_update:
+            if disallow_rebuild:
+                raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
+            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
+            return RebuildReason.BACKEND_REJECTED
+        if self.snapshot is not None:
+            same_model = model is self.model
+            diff = ModelDiff.from_snapshot(
+                self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
+            )
+        else:
+            assert self.model is not None
+            diff = ModelDiff.from_models(self.model, model, ignore_dims=ignore_dims)
+        if isinstance(diff, RebuildReason):
+            if not apply:
+                return diff
+            if disallow_rebuild:
+                raise RebuildRequiredError(diff)
+            self._rebuild(model, diff)
+            return diff
+        if not apply:
+            return diff
+        try:
+            self.apply_update(
+                diff,
+                model.variables.label_index,
+                model.constraints.label_index,
+            )
+        except Exception as exc:
+            if disallow_rebuild:
+                raise RebuildRequiredError(
+                    RebuildReason.BACKEND_REJECTED, str(exc)
+                ) from exc
+            self._last_rebuild_reason = RebuildReason.BACKEND_REJECTED
+            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
+            return diff
+        self.model = model
+        if self.track_updates:
+            self.snapshot = diff.snapshot
+            clear_coef_dirty(model)
+        self._in_place_updates += 1
+        self._last_rebuild_reason = None
+        return diff
+
+    def _rebuild(self, model: Model, reason: RebuildReason) -> None:
+        self.close()
+        self.model = model
+        self._build()
+        self._rebuilds += 1
+        self._last_rebuild_reason = reason
 
     def _run_direct(self, **run_kwargs: Any) -> Result:
         """Run the pre-built native solver model. Override per-solver."""
@@ -800,6 +1132,18 @@ class Solver(ABC, Generic[EnvType]):
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
             self.close()
+
+    def __getstate__(self) -> dict[str, Any]:
+        drop = {"solver_model", "env", "_env_stack", "snapshot", "_lock"}
+        return {k: v for k, v in self.__dict__.items() if k not in drop}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.solver_model = None
+        self.env = None
+        self._env_stack = None
+        self.snapshot = None
+        self._lock = threading.Lock()
 
     def __repr__(self) -> str:
         status = self.status.status.value if self.status is not None else "unsolved"
@@ -1209,11 +1553,60 @@ class Highs(Solver[None]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
         return _has_module("highspy")
+
+    @classmethod
+    @functools.cache
+    def _vtype_map(cls) -> dict[VarKind, Any]:
+        return {
+            VarKind.CONTINUOUS: highspy.HighsVarType.kContinuous,
+            VarKind.BINARY: highspy.HighsVarType.kInteger,
+            VarKind.INTEGER: highspy.HighsVarType.kInteger,
+            VarKind.SEMI_CONTINUOUS: highspy.HighsVarType.kSemiContinuous,
+        }
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        ctx.changeColsBounds(indices.size, indices, lower, upper)
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        type_map = self._vtype_map()
+        integrality = np.fromiter(
+            (int(type_map[k]) for k in kinds),
+            dtype=np.uint8,
+            count=positions.size,
+        )
+        ctx.changeColsIntegrality(positions.size, positions, integrality)
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        lower, upper = diff.con_rhs_as_bounds()
+        for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
+            ctx.changeRowBounds(int(pos), float(lo), float(up))
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        for i in range(rows.size):
+            ctx.changeCoeff(int(rows[i]), int(cols[i]), float(vals[i]))
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.changeColsCost(indices.size, indices, values)
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        native = (
+            highspy.ObjSense.kMaximize if sense == "max" else highspy.ObjSense.kMinimize
+        )
+        ctx.changeObjectiveSense(native)
 
     def _build_direct(
         self,
@@ -1515,6 +1908,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
+    supports_sign_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
@@ -1627,6 +2022,91 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         gm.update()
         return gm
+
+    _GUROBI_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
+        VarKind.CONTINUOUS: "C",
+        VarKind.BINARY: "B",
+        VarKind.INTEGER: "I",
+        VarKind.SEMI_CONTINUOUS: "S",
+    }
+    _GUROBI_SIGN_MAP: ClassVar[dict[str, str]] = {
+        short_LESS_EQUAL: "<",
+        short_GREATER_EQUAL: ">",
+        EQUAL: "=",
+    }
+    _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
+
+    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
+        gm = self.solver_model
+        gurobi_vars = gm.getVars()
+        gurobi_cons = gm.getConstrs()
+        if len(gurobi_vars) != var_label_index.n_active_vars:
+            raise UnsupportedUpdate("gurobi var count mismatch")
+        if len(gurobi_cons) != con_label_index.n_active_cons:
+            raise UnsupportedUpdate("gurobi con count mismatch")
+        return (gm, gurobi_vars, gurobi_cons)
+
+    def _apply_end(self, ctx: Any) -> None:
+        ctx[0].update()
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(i)] for i in indices]
+        gm.setAttr("LB", subset, lower.tolist())
+        gm.setAttr("UB", subset, upper.tolist())
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(p)] for p in positions]
+        vtypes = [self._GUROBI_VTYPE_MAP[k] for k in kinds]
+        gm.setAttr("VType", subset, vtypes)
+
+    def _reclamp_binary_bounds(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        # Gurobi's VType 'B' natively implies [0, 1]; no bound writes needed.
+        return None
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        gm, _, gcons = ctx
+        subset = [gcons[int(r)] for r in diff.con_rhs_indices]
+        gm.setAttr("RHS", subset, diff.con_rhs_values.tolist())
+
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        gm, _, gcons = ctx
+        senses = []
+        for s in signs:
+            s_str = str(s)
+            if s_str not in self._GUROBI_SIGN_MAP:
+                raise UnsupportedUpdate(f"unknown sign {s_str!r}")
+            senses.append(self._GUROBI_SIGN_MAP[s_str])
+        subset = [gcons[int(r)] for r in indices]
+        gm.setAttr("Sense", subset, senses)
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        gm, gvars, gcons = ctx
+        for i in range(rows.size):
+            gm.chgCoeff(gcons[int(rows[i])], gvars[int(cols[i])], float(vals[i]))
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(i)] for i in indices]
+        gm.setAttr("Obj", subset, values.tolist())
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense not in self._GUROBI_SENSE_MAP:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
+        ctx[0].ModelSense = self._GUROBI_SENSE_MAP[sense]
 
     def _run_direct(
         self,
@@ -2108,11 +2588,73 @@ class Xpress(Solver[None]):
             SolverFeature.SOS_CONSTRAINTS,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
+    supports_sign_update: ClassVar[bool] = True
+
+    _XPRESS_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
+        VarKind.CONTINUOUS: "C",
+        VarKind.BINARY: "B",
+        VarKind.INTEGER: "I",
+        VarKind.SEMI_CONTINUOUS: "S",
+    }
+    _XPRESS_ROWTYPE_MAP: ClassVar[dict[str, str]] = {
+        short_LESS_EQUAL: "L",
+        short_GREATER_EQUAL: "G",
+        EQUAL: "E",
+    }
 
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
         return _has_module("xpress")
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        cols = np.concatenate([indices, indices]).astype(np.int64, copy=False)
+        btypes = ["L"] * indices.size + ["U"] * indices.size
+        lb = np.where(np.isneginf(lower), -xpress.infinity, lower)
+        ub = np.where(np.isposinf(upper), xpress.infinity, upper)
+        vals = np.concatenate([lb, ub]).astype(float, copy=False)
+        ctx.chgbounds(cols.tolist(), btypes, vals.tolist())
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        coltypes = [self._XPRESS_VTYPE_MAP[k] for k in kinds]
+        ctx.chgcoltype(positions.tolist(), coltypes)
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        ctx.chgrhs(_int_list(diff.con_rhs_indices), _float_list(diff.con_rhs_values))
+
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        rowtypes = []
+        for s in signs:
+            s_str = str(s)
+            if s_str not in self._XPRESS_ROWTYPE_MAP:
+                raise UnsupportedUpdate(f"unknown sign {s_str!r}")
+            rowtypes.append(self._XPRESS_ROWTYPE_MAP[s_str])
+        ctx.chgrowtype(_int_list(indices), rowtypes)
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        ctx.chgmcoef(_int_list(rows), _int_list(cols), _float_list(vals))
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.chgobj(_int_list(indices), _float_list(values))
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense == "max":
+            ctx.chgobjsense(xpress.maximize)
+        elif sense == "min":
+            ctx.chgobjsense(xpress.minimize)
+        else:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
 
     def _build_direct(
         self,
@@ -2750,6 +3292,7 @@ class Mosek(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
@@ -2760,6 +3303,60 @@ class Mosek(Solver[None]):
     def _license_probe(cls) -> None:
         with mosek.Env() as env, env.Task(0, 0) as task:
             task.optimize()
+
+    def _validate_update(self, diff: ModelDiff) -> None:
+        super()._validate_update(diff)
+        if (diff.var_type_kinds == VarKind.SEMI_CONTINUOUS).any():
+            raise UnsupportedUpdate("MOSEK does not support semi-continuous variables")
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        for k in range(indices.size):
+            j = int(indices[k])
+            lb = float(lower[k])
+            ub = float(upper[k])
+            ctx.chgvarbound(j, 1, int(np.isfinite(lb)), lb)
+            ctx.chgvarbound(j, 0, int(np.isfinite(ub)), ub)
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        integer_mask = (kinds == VarKind.BINARY) | (kinds == VarKind.INTEGER)
+        vartypes = np.where(
+            integer_mask,
+            mosek.variabletype.type_int,
+            mosek.variabletype.type_cont,
+        ).tolist()
+        ctx.putvartypelist(_int_list(positions, np.int32), vartypes)
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        lower, upper = diff.con_rhs_as_bounds()
+        for k, i in enumerate(diff.con_rhs_indices):
+            lo = float(lower[k])
+            up = float(upper[k])
+            ctx.chgconbound(int(i), 1, int(np.isfinite(lo)), lo)
+            ctx.chgconbound(int(i), 0, int(np.isfinite(up)), up)
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        ctx.putaijlist(
+            _int_list(rows, np.int32), _int_list(cols, np.int32), _float_list(vals)
+        )
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.putclist(_int_list(indices, np.int32), _float_list(values))
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense == "max":
+            ctx.putobjsense(mosek.objsense.maximize)
+        elif sense == "min":
+            ctx.putobjsense(mosek.objsense.minimize)
+        else:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
 
     def _run_direct(
         self,

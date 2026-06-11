@@ -4,6 +4,19 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Features**
+
+*In-place solver updates (persistent re-solve)*
+
+* A built solver can now be re-solved against a mutated ``Model`` without a full rebuild. Construct with ``Solver.from_name(..., track_updates=True)`` and re-call ``solver.solve(model)`` after edits — the diff against the previous build is applied in place when the backend supports it, falling back to a rebuild otherwise. Supported on HiGHS, Gurobi, Xpress, and Mosek (``io_api="direct"``).
+* Pass ``disallow_rebuild=True`` to ``solve(model, ...)`` to guarantee an in-place update or raise ``RebuildRequiredError``. Inspect ``solver._last_rebuild_reason`` (a ``RebuildReason``, or ``None`` after an in-place update) to understand why a rebuild was triggered.
+* New ``linopy.persistent`` module exposes ``ModelSnapshot``, ``ModelDiff``, and ``RebuildReason`` for users who want to introspect or build the diff themselves. ``ModelDiff.from_snapshot`` / ``from_models`` return the ``RebuildReason`` directly when the change cannot be applied in place.
+
+**Deprecations**
+
+* Mutation via assignment to ``Variable.lower`` / ``Variable.upper`` / ``Constraint.coeffs`` / ``Constraint.vars`` / ``Constraint.lhs`` / ``Constraint.sign`` / ``Constraint.rhs`` is deprecated and emits a ``DeprecationWarning``. Use ``Variable.update(...)`` / ``Constraint.update(...)`` instead — the canonical mutation API with one validation path and one place that flips the persistent-solver dirty flag. Read access to these properties is unchanged. The setters will be removed in a future release.
+* Passing a raw ``DataArray`` of integer labels to ``Constraint.vars = ...`` setter is deprecated and emits a ``FutureWarning``. Pass a ``Variable`` to ``Constraint.update()`` instead — it is the supported input. The ``DataArray`` path will be removed in a future release.
+
 Version 0.8.0
 -------------
 
