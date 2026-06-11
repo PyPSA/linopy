@@ -572,7 +572,7 @@ def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
     )
     con = m.add_constraints(1 * x >= 0, name="con")
 
-    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})  # type: ignore
+    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})
 
     assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
     assert (con.rhs.sel(i=1) == 2.0).all()
@@ -597,7 +597,7 @@ def test_constraint_rhs_setter_projects_multiindex_level() -> None:
         [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
     )
     with pytest.warns(linopy.EvolvingAPIWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level  # type: ignore
+        con.rhs = rhs_by_level
 
     assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
     assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0

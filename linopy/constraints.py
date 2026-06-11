@@ -1418,6 +1418,7 @@ class Constraint(ConstraintBase):
                     "Constraint.update: positional `constraint` argument "
                     "cannot be combined with keyword arguments."
                 )
+            con: ConstraintBase
             if isinstance(constraint, AnonymousScalarConstraint):
                 con = constraint.to_constraint()
             elif isinstance(constraint, ConstraintBase):
@@ -1442,11 +1443,14 @@ class Constraint(ConstraintBase):
 
         # 1. lhs replacement first so subsequent rhs= rearrangement sees the new lhs.
         if lhs is not None:
-            self._assign_lhs(
-                expressions.as_expression(
-                    lhs, self.model, coords=self.coords, dims=self.coord_dims
-                )
+            expr = expressions.as_expression(
+                lhs, self.model, coords=self.coords, dims=self.coord_dims
             )
+            if isinstance(expr, expressions.QuadraticExpression):
+                raise TypeError(
+                    "Constraint.update: lhs must be linear; got a quadratic expression."
+                )
+            self._assign_lhs(expr)
 
         # 2. rhs (rearranges non-constant part onto lhs).
         if rhs is not None:

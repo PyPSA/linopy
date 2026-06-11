@@ -122,4 +122,5 @@ def test_duplicate_variable_terms_summed() -> None:
     m2.add_objective(x2.sum())
 
     diff = ModelDiff.from_models(m1, m2)
+    assert isinstance(diff, ModelDiff)
     assert diff.is_empty

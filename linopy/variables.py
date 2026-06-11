@@ -1505,8 +1505,7 @@ class Variable:
                 **{STASHED_LOWER: lower, STASHED_UPPER: upper},
             )
 
-        self.lower = value
-        self.upper = value
+        self.update(lower=value, upper=value)
 
     def unfix(self) -> None:
         """
@@ -1515,8 +1514,7 @@ class Variable:
         if not self.fixed:
             return
 
-        self.lower = self.data[STASHED_LOWER]
-        self.upper = self.data[STASHED_UPPER]
+        self.update(lower=self.data[STASHED_LOWER], upper=self.data[STASHED_UPPER])
         self._data = self.data.drop_vars(STASHED_ATTRS)
 
     @property
