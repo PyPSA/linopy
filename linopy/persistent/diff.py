@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -82,6 +83,16 @@ def _structural_reason(base: StructuralKey, model: Model) -> RebuildReason | Non
     return None
 
 
+@dataclass(frozen=True)
+class _CoefDelta:
+    """Coefficient changes of one container, expanded to COO lazily."""
+
+    buf: ContainerConBuffers
+    changed_rows: np.ndarray
+    row_positions: np.ndarray
+    nnz: int
+
+
 @dataclass
 class ModelDiff:
     """
@@ -90,6 +101,11 @@ class ModelDiff:
     Instances are produced by :meth:`from_snapshot` / :meth:`from_models`;
     any condition that cannot be expressed as an in-place delta is returned
     as a :class:`RebuildReason` instead of a diff.
+
+    Coefficient changes are stored per container as ``coef_deltas``
+    (changed rows referencing the container's CSR buffers) and expanded to
+    COO triplets — ``con_coef_rows`` / ``con_coef_cols`` / ``con_coef_vals``
+    — on first access.
     """
 
     var_bounds_indices: np.ndarray
@@ -98,9 +114,8 @@ class ModelDiff:
     var_type_positions: np.ndarray
     var_type_kinds: np.ndarray
 
-    con_coef_rows: np.ndarray
-    con_coef_cols: np.ndarray
-    con_coef_vals: np.ndarray
+    coef_deltas: list[_CoefDelta]
+    n_coef_updates: int
 
     con_rhs_indices: np.ndarray
     con_rhs_values: np.ndarray
@@ -121,7 +136,7 @@ class ModelDiff:
         return (
             self.var_bounds_indices.size == 0
             and self.var_type_positions.size == 0
-            and self.con_coef_rows.size == 0
+            and self.n_coef_updates == 0
             and self.con_rhs_indices.size == 0
             and self.con_sign_indices.size == 0
             and self.obj_c_indices is None
@@ -136,9 +151,36 @@ class ModelDiff:
     def changed_constraints(self) -> set[str]:
         return set(self.con_slices)
 
+    @cached_property
+    def _coef_coo(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rows = np.empty(self.n_coef_updates, dtype=np.int32)
+        cols = np.empty(self.n_coef_updates, dtype=np.int32)
+        vals = np.empty(self.n_coef_updates, dtype=np.float64)
+        cursor = 0
+        for delta in self.coef_deltas:
+            indptr = delta.buf.indptr
+            starts = indptr[delta.changed_rows]
+            counts = indptr[delta.changed_rows + 1] - starts
+            run_offsets = np.repeat(np.cumsum(counts) - counts, counts)
+            flat = np.repeat(starts, counts) + np.arange(delta.nnz) - run_offsets
+            sl = slice(cursor, cursor + delta.nnz)
+            rows[sl] = np.repeat(delta.row_positions, counts)
+            cols[sl] = delta.buf.indices[flat]
+            vals[sl] = delta.buf.data[flat]
+            cursor += delta.nnz
+        return rows, cols, vals
+
     @property
-    def n_coef_updates(self) -> int:
-        return int(self.con_coef_vals.size)
+    def con_coef_rows(self) -> np.ndarray:
+        return self._coef_coo[0]
+
+    @property
+    def con_coef_cols(self) -> np.ndarray:
+        return self._coef_coo[1]
+
+    @property
+    def con_coef_vals(self) -> np.ndarray:
+        return self._coef_coo[2]
 
     def con_rhs_as_bounds(self) -> tuple[np.ndarray, np.ndarray]:
         """Return (lower, upper) row-bounds form of the RHS updates."""
@@ -154,7 +196,7 @@ class ModelDiff:
             "var_type": int(self.var_type_positions.size),
             "con_rhs": int(self.con_rhs_indices.size),
             "con_sign": int(self.con_sign_indices.size),
-            "con_coef_updates": int(self.con_coef_vals.size),
+            "con_coef_updates": self.n_coef_updates,
             "obj_linear_changed": self.obj_c_indices is not None,
             "obj_sense_changed_to": self.obj_sense,
         }
@@ -349,9 +391,7 @@ class _DiffBuilder:
         self.var_type_pos: list[np.ndarray] = []
         self.var_type_kinds: list[np.ndarray] = []
 
-        self.con_coef_rows: list[np.ndarray] = []
-        self.con_coef_cols: list[np.ndarray] = []
-        self.con_coef_vals: list[np.ndarray] = []
+        self.coef_deltas: list[_CoefDelta] = []
         self.con_rhs_idx: list[np.ndarray] = []
         self.con_rhs_vals: list[np.ndarray] = []
         self.con_rhs_signs: list[np.ndarray] = []
@@ -467,11 +507,15 @@ class _DiffBuilder:
 
         c_start, r_start, s_start = self._cc_cur, self._cr_cur, self._cs_cur
         if changed_rows is not None:
-            rows, cols, vals = self._expand_coefs_coo(new_buf, changed_rows)
-            self.con_coef_rows.append(rows)
-            self.con_coef_cols.append(cols)
-            self.con_coef_vals.append(vals)
-            self._cc_cur += rows.size
+            row_positions = self.con_l2p[new_buf.active_labels[changed_rows]].astype(
+                np.int32, copy=False
+            )
+            indptr = new_buf.indptr
+            nnz = int((indptr[changed_rows + 1] - indptr[changed_rows]).sum())
+            self.coef_deltas.append(
+                _CoefDelta(new_buf, changed_rows, row_positions, nnz)
+            )
+            self._cc_cur += nnz
         if rhs_idx is not None:
             positions = self.con_l2p[new_buf.active_labels[rhs_idx]]
             self.con_rhs_idx.append(positions.astype(np.int32, copy=False))
@@ -515,29 +559,6 @@ class _DiffBuilder:
             self.obj_sense = model.objective.sense
         return None
 
-    def _expand_coefs_coo(
-        self, new_buf: ContainerConBuffers, changed_rows: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        row_positions = self.con_l2p[new_buf.active_labels[changed_rows]].astype(
-            np.int32, copy=False
-        )
-        indptr = new_buf.indptr
-        nnz_per_changed = (indptr[changed_rows + 1] - indptr[changed_rows]).astype(
-            np.int32
-        )
-        total_nnz = int(nnz_per_changed.sum())
-        rows = np.repeat(row_positions, nnz_per_changed)
-        cols = np.empty(total_nnz, dtype=np.int32)
-        vals = np.empty(total_nnz, dtype=np.float64)
-        cursor = 0
-        for i in changed_rows:
-            s, e = int(indptr[i]), int(indptr[i + 1])
-            n = e - s
-            cols[cursor : cursor + n] = new_buf.indices[s:e]
-            vals[cursor : cursor + n] = new_buf.data[s:e]
-            cursor += n
-        return rows, cols, vals
-
     def finalize(self) -> ModelDiff:
         return ModelDiff(
             var_bounds_indices=_cat(self.var_bounds_idx, np.int32),
@@ -545,9 +566,8 @@ class _DiffBuilder:
             var_bounds_upper=_cat(self.var_bounds_up, np.float64),
             var_type_positions=_cat(self.var_type_pos, np.int32),
             var_type_kinds=_cat(self.var_type_kinds, object),
-            con_coef_rows=_cat(self.con_coef_rows, np.int32),
-            con_coef_cols=_cat(self.con_coef_cols, np.int32),
-            con_coef_vals=_cat(self.con_coef_vals, np.float64),
+            coef_deltas=self.coef_deltas,
+            n_coef_updates=self._cc_cur,
             con_rhs_indices=_cat(self.con_rhs_idx, np.int32),
             con_rhs_values=_cat(self.con_rhs_vals, np.float64),
             con_rhs_signs=_cat(self.con_rhs_signs, "U1"),

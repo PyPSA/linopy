@@ -123,6 +123,25 @@ def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     np.testing.assert_array_equal(vals, np.full(vals.size, 6.0))
 
 
+def test_coef_changes_across_containers(baseline: Model) -> None:
+    snap = ModelSnapshot.capture(baseline)
+    c1 = baseline.constraints["c1"]
+    c2 = baseline.constraints["c2"]
+    c1.update(coeffs=c1.coeffs * 3)
+    c2.update(coeffs=c2.coeffs * 2)
+    diff = ModelDiff.from_snapshot(snap, baseline)
+    assert isinstance(diff, ModelDiff)
+    sl1 = diff.con_slices["c1"].coef
+    sl2 = diff.con_slices["c2"].coef
+    assert diff.n_coef_updates == (sl1.stop - sl1.start) + (sl2.stop - sl2.start)
+    np.testing.assert_array_equal(
+        diff.con_coef_vals[sl1], np.full(sl1.stop - sl1.start, 6.0)
+    )
+    np.testing.assert_array_equal(
+        diff.con_coef_vals[sl2], np.full(sl2.stop - sl2.start, 2.0)
+    )
+
+
 def test_coef_sparsity_change(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     x = baseline.variables["x"]

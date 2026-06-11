@@ -1456,7 +1456,7 @@ class Highs(Solver[None]):
             for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
                 h.changeRowBounds(int(pos), float(lo), float(up))
 
-        if diff.con_coef_vals.size:
+        if diff.n_coef_updates:
             rows = diff.con_coef_rows
             cols = diff.con_coef_cols
             vals = diff.con_coef_vals
@@ -1956,7 +1956,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 senses.append(sign_map[s_str])
             gm.setAttr("Sense", con_subset, senses)
 
-        if diff.con_coef_vals.size:
+        if diff.n_coef_updates:
             rows = diff.con_coef_rows
             cols = diff.con_coef_cols
             vals = diff.con_coef_vals
@@ -2535,7 +2535,7 @@ class Xpress(Solver[None]):
                 diff.con_sign_indices.astype(np.int64, copy=False).tolist(), rowtypes
             )
 
-        if diff.con_coef_vals.size:
+        if diff.n_coef_updates:
             p.chgmcoef(
                 diff.con_coef_rows.astype(np.int64, copy=False).tolist(),
                 diff.con_coef_cols.astype(np.int64, copy=False).tolist(),
@@ -3258,7 +3258,7 @@ class Mosek(Solver[None]):
                 t.chgconbound(int(i), 1, int(np.isfinite(lo)), lo)
                 t.chgconbound(int(i), 0, int(np.isfinite(up)), up)
 
-        if diff.con_coef_vals.size:
+        if diff.n_coef_updates:
             t.putaijlist(
                 diff.con_coef_rows.astype(np.int32, copy=False).tolist(),
                 diff.con_coef_cols.astype(np.int32, copy=False).tolist(),
