@@ -60,6 +60,14 @@ from linopy.persistent import (
 )
 
 
+def _int_list(arr: np.ndarray, dtype: type = np.int64) -> list[int]:
+    return arr.astype(dtype, copy=False).tolist()
+
+
+def _float_list(arr: np.ndarray) -> list[float]:
+    return arr.astype(float, copy=False).tolist()
+
+
 def _parse_int_label(name: str) -> int:
     """Strip leading non-digits and parse the integer label."""
     s = str(name)
@@ -457,6 +465,7 @@ class Solver(ABC, Generic[EnvType]):
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
     accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
     supports_persistent_update: ClassVar[bool] = False
+    supports_sign_update: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if type(self) is Solver:
@@ -477,7 +486,105 @@ class Solver(ABC, Generic[EnvType]):
         var_label_index: Any,
         con_label_index: Any,
     ) -> None:
-        raise UnsupportedUpdate(type(self).__name__)
+        """
+        Apply an in-place :class:`ModelDiff` to the built native model.
+
+        Template method: validates the diff up front (a rejected update
+        leaves the native model untouched), then walks the sections in a
+        fixed order, dispatching to the per-backend ``_apply_*`` hooks.
+        """
+        if not type(self).supports_persistent_update:
+            raise UnsupportedUpdate(type(self).__name__)
+        self._validate_update(diff)
+        ctx = self._apply_begin(var_label_index, con_label_index)
+        if diff.var_bounds_indices.size:
+            self._apply_var_bounds(
+                ctx,
+                diff.var_bounds_indices,
+                diff.var_bounds_lower,
+                diff.var_bounds_upper,
+            )
+        if diff.var_type_positions.size:
+            self._apply_var_types(ctx, diff.var_type_positions, diff.var_type_kinds)
+            self._reclamp_binary_bounds(
+                ctx, diff.var_type_positions, diff.var_type_kinds
+            )
+        if diff.con_rhs_indices.size:
+            self._apply_con_rhs(ctx, diff)
+        if diff.con_sign_indices.size:
+            self._apply_con_signs(ctx, diff.con_sign_indices, diff.con_sign_values)
+        if diff.n_coef_updates:
+            self._apply_con_coefs(
+                ctx, diff.con_coef_rows, diff.con_coef_cols, diff.con_coef_vals
+            )
+        if diff.obj_c_indices is not None:
+            assert diff.obj_c_values is not None
+            self._apply_obj_linear(ctx, diff.obj_c_indices, diff.obj_c_values)
+        if diff.obj_sense is not None:
+            self._apply_obj_sense(ctx, diff.obj_sense)
+            self.sense = diff.obj_sense
+        self._apply_end(ctx)
+
+    def _validate_update(self, diff: ModelDiff) -> None:
+        """Reject unsupported diff content before any native mutation."""
+        if diff.con_sign_indices.size and not type(self).supports_sign_update:
+            raise UnsupportedUpdate(
+                f"{self.display_name} does not support in-place constraint sign change"
+            )
+
+    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
+        """Backend prep + validation; the return value is passed to every hook."""
+        return self.solver_model
+
+    def _apply_end(self, ctx: Any) -> None:
+        return None
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _reclamp_binary_bounds(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        """
+        Re-clamp variables switched to BINARY to [0, 1].
+
+        Compensates for backends whose native type system only has a generic
+        integer kind; backends where the binary type implies the bounds
+        (Gurobi) override with a no-op.
+        """
+        binary_mask = kinds == VarKind.BINARY
+        if binary_mask.any():
+            bin_positions = positions[binary_mask]
+            n = bin_positions.size
+            self._apply_var_bounds(ctx, bin_positions, np.zeros(n), np.ones(n))
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        raise NotImplementedError
+
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        raise NotImplementedError
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        raise NotImplementedError
 
     @property
     def solver_options(self) -> dict[str, Any]:
@@ -1412,82 +1519,53 @@ class Highs(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("highspy")
 
-    _HIGHS_VTYPE_MAP: ClassVar[dict[VarKind, Any]] = {}
-
-    def apply_update(
-        self,
-        diff: ModelDiff,
-        var_label_index: Any,
-        con_label_index: Any,
-    ) -> None:
-        if diff.con_sign_indices.size:
-            raise UnsupportedUpdate(
-                "HiGHS does not support in-place constraint sign change"
-            )
-
-        h = self.solver_model
-        type_map = self._HIGHS_VTYPE_MAP or self._init_highs_vtype_map()
-
-        if diff.var_bounds_indices.size:
-            indices = diff.var_bounds_indices
-            h.changeColsBounds(
-                indices.size, indices, diff.var_bounds_lower, diff.var_bounds_upper
-            )
-
-        if diff.var_type_positions.size:
-            positions = diff.var_type_positions
-            kinds = diff.var_type_kinds
-            integrality = np.fromiter(
-                (int(type_map[k]) for k in kinds),
-                dtype=np.uint8,
-                count=positions.size,
-            )
-            h.changeColsIntegrality(positions.size, positions, integrality)
-            binary_mask = kinds == VarKind.BINARY
-            if binary_mask.any():
-                bin_positions = positions[binary_mask]
-                n = bin_positions.size
-                h.changeColsBounds(
-                    n,
-                    bin_positions,
-                    np.zeros(n, dtype=np.float64),
-                    np.ones(n, dtype=np.float64),
-                )
-
-        if diff.con_rhs_indices.size:
-            lower, upper = diff.con_rhs_as_bounds()
-            for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
-                h.changeRowBounds(int(pos), float(lo), float(up))
-
-        if diff.n_coef_updates:
-            rows = diff.con_coef_rows
-            cols = diff.con_coef_cols
-            vals = diff.con_coef_vals
-            for i in range(rows.size):
-                h.changeCoeff(int(rows[i]), int(cols[i]), float(vals[i]))
-
-        if diff.obj_c_indices is not None:
-            indices = diff.obj_c_indices
-            h.changeColsCost(indices.size, indices, diff.obj_c_values)
-
-        if diff.obj_sense is not None:
-            sense = (
-                highspy.ObjSense.kMaximize
-                if diff.obj_sense == "max"
-                else highspy.ObjSense.kMinimize
-            )
-            h.changeObjectiveSense(sense)
-            self.sense = diff.obj_sense
-
     @classmethod
-    def _init_highs_vtype_map(cls) -> dict[VarKind, Any]:
-        cls._HIGHS_VTYPE_MAP = {
+    @functools.cache
+    def _vtype_map(cls) -> dict[VarKind, Any]:
+        return {
             VarKind.CONTINUOUS: highspy.HighsVarType.kContinuous,
             VarKind.BINARY: highspy.HighsVarType.kInteger,
             VarKind.INTEGER: highspy.HighsVarType.kInteger,
             VarKind.SEMI_CONTINUOUS: highspy.HighsVarType.kSemiContinuous,
         }
-        return cls._HIGHS_VTYPE_MAP
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        ctx.changeColsBounds(indices.size, indices, lower, upper)
+
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        type_map = self._vtype_map()
+        integrality = np.fromiter(
+            (int(type_map[k]) for k in kinds),
+            dtype=np.uint8,
+            count=positions.size,
+        )
+        ctx.changeColsIntegrality(positions.size, positions, integrality)
+
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        lower, upper = diff.con_rhs_as_bounds()
+        for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
+            ctx.changeRowBounds(int(pos), float(lo), float(up))
+
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        for i in range(rows.size):
+            ctx.changeCoeff(int(rows[i]), int(cols[i]), float(vals[i]))
+
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.changeColsCost(indices.size, indices, values)
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        native = (
+            highspy.ObjSense.kMaximize if sense == "max" else highspy.ObjSense.kMinimize
+        )
+        ctx.changeObjectiveSense(native)
 
     def _build_direct(
         self,
@@ -1790,6 +1868,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         }
     )
     supports_persistent_update: ClassVar[bool] = True
+    supports_sign_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
@@ -1916,71 +1995,77 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     }
     _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
 
-    def apply_update(
-        self,
-        diff: ModelDiff,
-        var_label_index: Any,
-        con_label_index: Any,
-    ) -> None:
+    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
         gm = self.solver_model
-        n_active_vars = var_label_index.n_active_vars
-        n_active_cons = con_label_index.n_active_cons
-
         gurobi_vars = gm.getVars()
         gurobi_cons = gm.getConstrs()
-        if len(gurobi_vars) != n_active_vars:
+        if len(gurobi_vars) != var_label_index.n_active_vars:
             raise UnsupportedUpdate("gurobi var count mismatch")
-        if len(gurobi_cons) != n_active_cons:
+        if len(gurobi_cons) != con_label_index.n_active_cons:
             raise UnsupportedUpdate("gurobi con count mismatch")
+        return (gm, gurobi_vars, gurobi_cons)
 
-        if diff.var_bounds_indices.size:
-            var_subset = [gurobi_vars[int(i)] for i in diff.var_bounds_indices]
-            gm.setAttr("LB", var_subset, diff.var_bounds_lower.tolist())
-            gm.setAttr("UB", var_subset, diff.var_bounds_upper.tolist())
+    def _apply_end(self, ctx: Any) -> None:
+        ctx[0].update()
 
-        if diff.var_type_positions.size:
-            vtype_map = self._GUROBI_VTYPE_MAP
-            type_subset = [gurobi_vars[int(p)] for p in diff.var_type_positions]
-            vtypes = [vtype_map[k] for k in diff.var_type_kinds]
-            gm.setAttr("VType", type_subset, vtypes)
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(i)] for i in indices]
+        gm.setAttr("LB", subset, lower.tolist())
+        gm.setAttr("UB", subset, upper.tolist())
 
-        if diff.con_rhs_indices.size:
-            con_subset = [gurobi_cons[int(r)] for r in diff.con_rhs_indices]
-            gm.setAttr("RHS", con_subset, diff.con_rhs_values.tolist())
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(p)] for p in positions]
+        vtypes = [self._GUROBI_VTYPE_MAP[k] for k in kinds]
+        gm.setAttr("VType", subset, vtypes)
 
-        if diff.con_sign_indices.size:
-            sign_map = self._GUROBI_SIGN_MAP
-            con_subset = [gurobi_cons[int(r)] for r in diff.con_sign_indices]
-            senses = []
-            for s in diff.con_sign_values:
-                s_str = str(s)
-                if s_str not in sign_map:
-                    raise UnsupportedUpdate(f"unknown sign {s_str!r}")
-                senses.append(sign_map[s_str])
-            gm.setAttr("Sense", con_subset, senses)
+    def _reclamp_binary_bounds(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        # Gurobi's VType 'B' natively implies [0, 1]; no bound writes needed.
+        return None
 
-        if diff.n_coef_updates:
-            rows = diff.con_coef_rows
-            cols = diff.con_coef_cols
-            vals = diff.con_coef_vals
-            for i in range(rows.size):
-                gm.chgCoeff(
-                    gurobi_cons[int(rows[i])],
-                    gurobi_vars[int(cols[i])],
-                    float(vals[i]),
-                )
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        gm, _, gcons = ctx
+        subset = [gcons[int(r)] for r in diff.con_rhs_indices]
+        gm.setAttr("RHS", subset, diff.con_rhs_values.tolist())
 
-        if diff.obj_c_indices is not None:
-            assert diff.obj_c_values is not None
-            var_subset = [gurobi_vars[int(i)] for i in diff.obj_c_indices]
-            gm.setAttr("Obj", var_subset, diff.obj_c_values.tolist())
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        gm, _, gcons = ctx
+        senses = []
+        for s in signs:
+            s_str = str(s)
+            if s_str not in self._GUROBI_SIGN_MAP:
+                raise UnsupportedUpdate(f"unknown sign {s_str!r}")
+            senses.append(self._GUROBI_SIGN_MAP[s_str])
+        subset = [gcons[int(r)] for r in indices]
+        gm.setAttr("Sense", subset, senses)
 
-        if diff.obj_sense is not None:
-            if diff.obj_sense not in self._GUROBI_SENSE_MAP:
-                raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
-            gm.ModelSense = self._GUROBI_SENSE_MAP[diff.obj_sense]
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        gm, gvars, gcons = ctx
+        for i in range(rows.size):
+            gm.chgCoeff(gcons[int(rows[i])], gvars[int(cols[i])], float(vals[i]))
 
-        gm.update()
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        gm, gvars, _ = ctx
+        subset = [gvars[int(i)] for i in indices]
+        gm.setAttr("Obj", subset, values.tolist())
+
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense not in self._GUROBI_SENSE_MAP:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
+        ctx[0].ModelSense = self._GUROBI_SENSE_MAP[sense]
 
     def _run_direct(
         self,
@@ -2463,6 +2548,7 @@ class Xpress(Solver[None]):
         }
     )
     supports_persistent_update: ClassVar[bool] = True
+    supports_sign_update: ClassVar[bool] = True
 
     _XPRESS_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
         VarKind.CONTINUOUS: "C",
@@ -2481,85 +2567,53 @@ class Xpress(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("xpress")
 
-    def apply_update(
-        self,
-        diff: ModelDiff,
-        var_label_index: Any,
-        con_label_index: Any,
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> None:
-        p = self.solver_model
+        cols = np.concatenate([indices, indices]).astype(np.int64, copy=False)
+        btypes = ["L"] * indices.size + ["U"] * indices.size
+        lb = np.where(np.isneginf(lower), -xpress.infinity, lower)
+        ub = np.where(np.isposinf(upper), xpress.infinity, upper)
+        vals = np.concatenate([lb, ub]).astype(float, copy=False)
+        ctx.chgbounds(cols.tolist(), btypes, vals.tolist())
 
-        if diff.var_bounds_indices.size:
-            idx = diff.var_bounds_indices
-            cols = np.concatenate([idx, idx]).astype(np.int64, copy=False)
-            btypes = ["L"] * idx.size + ["U"] * idx.size
-            lb = np.where(
-                np.isneginf(diff.var_bounds_lower),
-                -xpress.infinity,
-                diff.var_bounds_lower,
-            )
-            ub = np.where(
-                np.isposinf(diff.var_bounds_upper),
-                xpress.infinity,
-                diff.var_bounds_upper,
-            )
-            vals = np.concatenate([lb, ub]).astype(float, copy=False)
-            p.chgbounds(cols.tolist(), btypes, vals.tolist())
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        coltypes = [self._XPRESS_VTYPE_MAP[k] for k in kinds]
+        ctx.chgcoltype(positions.tolist(), coltypes)
 
-        if diff.var_type_positions.size:
-            vtype_map = self._XPRESS_VTYPE_MAP
-            positions = diff.var_type_positions
-            coltypes = [vtype_map[k] for k in diff.var_type_kinds]
-            p.chgcoltype(positions.tolist(), coltypes)
-            binary_mask = diff.var_type_kinds == VarKind.BINARY
-            if binary_mask.any():
-                bin_positions = positions[binary_mask].astype(np.int64, copy=False)
-                n = bin_positions.size
-                cols = np.concatenate([bin_positions, bin_positions])
-                btypes = ["L"] * n + ["U"] * n
-                vals = np.concatenate([np.zeros(n), np.ones(n)])
-                p.chgbounds(cols.tolist(), btypes, vals.tolist())
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        ctx.chgrhs(_int_list(diff.con_rhs_indices), _float_list(diff.con_rhs_values))
 
-        if diff.con_rhs_indices.size:
-            p.chgrhs(
-                diff.con_rhs_indices.astype(np.int64, copy=False).tolist(),
-                diff.con_rhs_values.astype(float, copy=False).tolist(),
-            )
+    def _apply_con_signs(
+        self, ctx: Any, indices: np.ndarray, signs: np.ndarray
+    ) -> None:
+        rowtypes = []
+        for s in signs:
+            s_str = str(s)
+            if s_str not in self._XPRESS_ROWTYPE_MAP:
+                raise UnsupportedUpdate(f"unknown sign {s_str!r}")
+            rowtypes.append(self._XPRESS_ROWTYPE_MAP[s_str])
+        ctx.chgrowtype(_int_list(indices), rowtypes)
 
-        if diff.con_sign_indices.size:
-            rowtype_map = self._XPRESS_ROWTYPE_MAP
-            rowtypes = []
-            for s in diff.con_sign_values:
-                s_str = str(s)
-                if s_str not in rowtype_map:
-                    raise UnsupportedUpdate(f"unknown sign {s_str!r}")
-                rowtypes.append(rowtype_map[s_str])
-            p.chgrowtype(
-                diff.con_sign_indices.astype(np.int64, copy=False).tolist(), rowtypes
-            )
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        ctx.chgmcoef(_int_list(rows), _int_list(cols), _float_list(vals))
 
-        if diff.n_coef_updates:
-            p.chgmcoef(
-                diff.con_coef_rows.astype(np.int64, copy=False).tolist(),
-                diff.con_coef_cols.astype(np.int64, copy=False).tolist(),
-                diff.con_coef_vals.astype(float, copy=False).tolist(),
-            )
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.chgobj(_int_list(indices), _float_list(values))
 
-        if diff.obj_c_indices is not None:
-            assert diff.obj_c_values is not None
-            p.chgobj(
-                diff.obj_c_indices.astype(np.int64, copy=False).tolist(),
-                diff.obj_c_values.astype(float, copy=False).tolist(),
-            )
-
-        if diff.obj_sense is not None:
-            if diff.obj_sense == "max":
-                p.chgobjsense(xpress.maximize)
-            elif diff.obj_sense == "min":
-                p.chgobjsense(xpress.minimize)
-            else:
-                raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
-            self.sense = diff.obj_sense
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense == "max":
+            ctx.chgobjsense(xpress.maximize)
+        elif sense == "min":
+            ctx.chgobjsense(xpress.minimize)
+        else:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
 
     def _build_direct(
         self,
@@ -3209,80 +3263,59 @@ class Mosek(Solver[None]):
         with mosek.Env() as env, env.Task(0, 0) as task:
             task.optimize()
 
-    def apply_update(
-        self,
-        diff: ModelDiff,
-        var_label_index: Any,
-        con_label_index: Any,
+    def _validate_update(self, diff: ModelDiff) -> None:
+        super()._validate_update(diff)
+        if (diff.var_type_kinds == VarKind.SEMI_CONTINUOUS).any():
+            raise UnsupportedUpdate("MOSEK does not support semi-continuous variables")
+
+    def _apply_var_bounds(
+        self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> None:
-        if diff.con_sign_indices.size:
-            raise UnsupportedUpdate(
-                "MOSEK does not support in-place constraint sign change"
-            )
+        for k in range(indices.size):
+            j = int(indices[k])
+            lb = float(lower[k])
+            ub = float(upper[k])
+            ctx.chgvarbound(j, 1, int(np.isfinite(lb)), lb)
+            ctx.chgvarbound(j, 0, int(np.isfinite(ub)), ub)
 
-        t = self.solver_model
+    def _apply_var_types(
+        self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
+    ) -> None:
+        integer_mask = (kinds == VarKind.BINARY) | (kinds == VarKind.INTEGER)
+        vartypes = np.where(
+            integer_mask,
+            mosek.variabletype.type_int,
+            mosek.variabletype.type_cont,
+        ).tolist()
+        ctx.putvartypelist(_int_list(positions, np.int32), vartypes)
 
-        if diff.var_bounds_indices.size:
-            indices = diff.var_bounds_indices
-            lowers = diff.var_bounds_lower
-            uppers = diff.var_bounds_upper
-            for k in range(indices.size):
-                j = int(indices[k])
-                lb = float(lowers[k])
-                ub = float(uppers[k])
-                t.chgvarbound(j, 1, int(np.isfinite(lb)), lb)
-                t.chgvarbound(j, 0, int(np.isfinite(ub)), ub)
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        lower, upper = diff.con_rhs_as_bounds()
+        for k, i in enumerate(diff.con_rhs_indices):
+            lo = float(lower[k])
+            up = float(upper[k])
+            ctx.chgconbound(int(i), 1, int(np.isfinite(lo)), lo)
+            ctx.chgconbound(int(i), 0, int(np.isfinite(up)), up)
 
-        if diff.var_type_positions.size:
-            positions = diff.var_type_positions
-            kinds = diff.var_type_kinds
-            if (kinds == VarKind.SEMI_CONTINUOUS).any():
-                raise UnsupportedUpdate(
-                    "MOSEK does not support semi-continuous variables"
-                )
-            integer_mask = (kinds == VarKind.BINARY) | (kinds == VarKind.INTEGER)
-            vartypes = np.where(
-                integer_mask,
-                mosek.variabletype.type_int,
-                mosek.variabletype.type_cont,
-            ).tolist()
-            t.putvartypelist(positions.astype(np.int32, copy=False).tolist(), vartypes)
-            binary_mask = kinds == VarKind.BINARY
-            if binary_mask.any():
-                for j in positions[binary_mask]:
-                    t.chgvarbound(int(j), 1, 1, 0.0)
-                    t.chgvarbound(int(j), 0, 1, 1.0)
+    def _apply_con_coefs(
+        self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
+    ) -> None:
+        ctx.putaijlist(
+            _int_list(rows, np.int32), _int_list(cols, np.int32), _float_list(vals)
+        )
 
-        if diff.con_rhs_indices.size:
-            lower, upper = diff.con_rhs_as_bounds()
-            for k, i in enumerate(diff.con_rhs_indices):
-                lo = float(lower[k])
-                up = float(upper[k])
-                t.chgconbound(int(i), 1, int(np.isfinite(lo)), lo)
-                t.chgconbound(int(i), 0, int(np.isfinite(up)), up)
+    def _apply_obj_linear(
+        self, ctx: Any, indices: np.ndarray, values: np.ndarray
+    ) -> None:
+        ctx.putclist(_int_list(indices, np.int32), _float_list(values))
 
-        if diff.n_coef_updates:
-            t.putaijlist(
-                diff.con_coef_rows.astype(np.int32, copy=False).tolist(),
-                diff.con_coef_cols.astype(np.int32, copy=False).tolist(),
-                diff.con_coef_vals.astype(float, copy=False).tolist(),
-            )
-
-        if diff.obj_c_indices is not None:
-            assert diff.obj_c_values is not None
-            t.putclist(
-                diff.obj_c_indices.astype(np.int32, copy=False).tolist(),
-                diff.obj_c_values.astype(float, copy=False).tolist(),
-            )
-
-        if diff.obj_sense is not None:
-            if diff.obj_sense == "max":
-                t.putobjsense(mosek.objsense.maximize)
-            elif diff.obj_sense == "min":
-                t.putobjsense(mosek.objsense.minimize)
-            else:
-                raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
-            self.sense = diff.obj_sense
+    def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
+        if sense == "max":
+            ctx.putobjsense(mosek.objsense.maximize)
+        elif sense == "min":
+            ctx.putobjsense(mosek.objsense.minimize)
+        else:
+            raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
 
     def _run_direct(
         self,
