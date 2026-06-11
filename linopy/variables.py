@@ -64,7 +64,6 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.types import (
-    CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
@@ -996,7 +995,7 @@ class Variable:
         ):
             if val is None:
                 continue
-            if not isinstance(val, CONSTANT_TYPES):
+            if not isinstance(val, ConstantLike):
                 raise TypeError(
                     f"Variable.update({name}=...) must be a constant; "
                     f"got {type(val).__name__}."

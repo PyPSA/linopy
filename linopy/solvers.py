@@ -448,8 +448,8 @@ class Solver(ABC, Generic[EnvType]):
     snapshot: ModelSnapshot | None = field(init=False, default=None, repr=False)
     _rebuilds: int = field(init=False, default=0, repr=False)
     _in_place_updates: int = field(init=False, default=0, repr=False)
-    _last_rebuild_reason: RebuildReason = field(
-        init=False, default=RebuildReason.NONE, repr=False
+    _last_rebuild_reason: RebuildReason | None = field(
+        init=False, default=None, repr=False
     )
 
     display_name: ClassVar[str] = ""
@@ -757,7 +757,7 @@ class Solver(ABC, Generic[EnvType]):
         model: Model,
         apply: bool = True,
         ignore_dims: Iterable[str] = (),
-    ) -> ModelDiff:
+    ) -> ModelDiff | RebuildReason:
         if self.io_api != "direct":
             raise ValueError("update requires io_api='direct'")
         if self.solver_model is None:
@@ -779,13 +779,12 @@ class Solver(ABC, Generic[EnvType]):
         apply: bool,
         ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
-    ) -> ModelDiff:
+    ) -> ModelDiff | RebuildReason:
         if apply and not type(self).supports_persistent_update:
             if disallow_rebuild:
                 raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
-            diff = ModelDiff(rebuild_reason=RebuildReason.BACKEND_REJECTED)
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
-            return diff
+            return RebuildReason.BACKEND_REJECTED
         if self.snapshot is not None:
             same_model = model is self.model
             diff = ModelDiff.from_snapshot(
@@ -794,12 +793,14 @@ class Solver(ABC, Generic[EnvType]):
         else:
             assert self.model is not None
             diff = ModelDiff.from_models(self.model, model, ignore_dims=ignore_dims)
-        if not apply:
-            return diff
-        if diff.rebuild_required:
+        if isinstance(diff, RebuildReason):
+            if not apply:
+                return diff
             if disallow_rebuild:
-                raise RebuildRequiredError(diff.rebuild_reason)
-            self._rebuild(model, diff.rebuild_reason)
+                raise RebuildRequiredError(diff)
+            self._rebuild(model, diff)
+            return diff
+        if not apply:
             return diff
         try:
             self.apply_update(
@@ -819,7 +820,7 @@ class Solver(ABC, Generic[EnvType]):
         if self.track_updates:
             self.snapshot = ModelSnapshot.capture(model)
         self._in_place_updates += 1
-        self._last_rebuild_reason = RebuildReason.NONE
+        self._last_rebuild_reason = None
         return diff
 
     def _rebuild(self, model: Model, reason: RebuildReason) -> None:

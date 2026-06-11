@@ -54,27 +54,40 @@ def _objective_linear_vector(model: Model) -> np.ndarray:
 
 
 def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
+    # Boolean masking copies, so the buffers never alias the live model
+    # arrays — the snapshot stays a valid baseline even after in-place
+    # ``.values[...]`` mutations.
     labels_flat = var.labels.values.ravel()
     mask = labels_flat != -1
     return ContainerVarBuffers(
-        lower=np.ascontiguousarray(var.lower.values.ravel()[mask], dtype=np.float64),
-        upper=np.ascontiguousarray(var.upper.values.ravel()[mask], dtype=np.float64),
+        lower=var.lower.values.ravel()[mask].astype(np.float64, copy=False),
+        upper=var.upper.values.ravel()[mask].astype(np.float64, copy=False),
         type=_variable_type(var),
-        active_labels=np.ascontiguousarray(labels_flat[mask], dtype=np.int64),
+        active_labels=labels_flat[mask].astype(np.int64, copy=False),
     )
 
 
 def _extract_con_buffers(
     con: ConstraintBase, var_label_index: VariableLabelIndex
 ) -> ContainerConBuffers:
+    """
+    Extract flat constraint buffers without copying.
+
+    Mutable ``Constraint`` objects build fresh arrays in
+    ``to_matrix_with_rhs``, so the buffers are exclusively owned.
+    ``CSRConstraint`` returns its stored arrays — the buffers share memory
+    with the constraint, every mutation path rebinds whole arrays
+    (copy-on-write), and the diff uses object identity to skip comparisons
+    on untouched containers.
+    """
     csr, con_labels, b, sense = con.to_matrix_with_rhs(var_label_index)
     return ContainerConBuffers(
-        indptr=csr.indptr.astype(np.int32, copy=True),
-        indices=csr.indices.astype(np.int32, copy=True),
-        data=csr.data.astype(np.float64, copy=True),
-        rhs=np.asarray(b, dtype=np.float64).copy(),
-        sign=np.asarray(sense, dtype="U1").copy(),
-        active_labels=np.asarray(con_labels, dtype=np.int64).copy(),
+        indptr=csr.indptr,
+        indices=csr.indices,
+        data=np.asarray(csr.data, dtype=np.float64),
+        rhs=np.asarray(b, dtype=np.float64),
+        sign=np.asarray(sense, dtype="U1"),
+        active_labels=np.asarray(con_labels, dtype=np.int64),
     )
 
 

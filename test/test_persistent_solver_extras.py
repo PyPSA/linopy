@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from linopy import Model
-from linopy.persistent import RebuildReason, UpdatesDisabledError
+from linopy.persistent import ModelDiff, RebuildReason, UpdatesDisabledError
 from linopy.solvers import Gurobi, Highs, Solver
 
 _BACKENDS: dict[str, tuple[type[Solver], dict[str, Any]]] = {
@@ -339,7 +339,7 @@ def test_scenario_sweep_in_place(
 
     assert s._rebuilds == 0
     assert s._in_place_updates == 1
-    assert s._last_rebuild_reason is RebuildReason.NONE
+    assert s._last_rebuild_reason is None
 
     fresh = _base_model()
     _apply_scenario(fresh, scenario)
@@ -460,6 +460,7 @@ def test_track_updates_false_cross_instance_update(solver_name: str) -> None:
     m2 = _base_model()
     m2.constraints["c1"].rhs = 8.0
     diff = s.update(m2, apply=False)
+    assert isinstance(diff, ModelDiff)
     assert diff.summary()["con_rhs"] == 3
     assert "c1" in diff.changed_constraints
     assert s.snapshot is None

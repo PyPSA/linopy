@@ -113,4 +113,5 @@ def test_update_without_snapshot_raises(model: Model) -> None:
 def test_unmutated_resolve_diff_is_empty(model: Model) -> None:
     s = _built(model)
     diff = s.update(model, apply=False)
+    assert isinstance(diff, ModelDiff)
     assert diff.is_empty

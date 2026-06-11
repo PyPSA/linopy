@@ -956,9 +956,19 @@ class CSRConstraint(ConstraintBase):
         return self._con_labels
 
     def sanitize_zeros(self) -> CSRConstraint:
-        """Remove terms with zero or near-zero coefficients (mutates in-place)."""
-        self._csr.data[np.abs(self._csr.data) <= 1e-10] = 0
-        self._csr.eliminate_zeros()
+        """
+        Remove terms with zero or near-zero coefficients.
+
+        Copy-on-write: rebinds ``_csr`` instead of mutating its arrays, so
+        external holders of the previous arrays (e.g. a ModelSnapshot
+        sharing them) keep a valid baseline.
+        """
+        zeros = np.abs(self._csr.data) <= 1e-10
+        if zeros.any():
+            csr = self._csr.copy()
+            csr.data[zeros] = 0
+            csr.eliminate_zeros()
+            self._csr = csr
         return self
 
     def sanitize_missings(self) -> CSRConstraint:

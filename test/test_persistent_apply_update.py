@@ -92,7 +92,7 @@ def test_var_lb_in_place(solver_name: str) -> None:
     obj = _solve(s, m)
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
-    assert s._last_rebuild_reason is RebuildReason.NONE
+    assert s._last_rebuild_reason is None
     assert obj > base_obj
 
 

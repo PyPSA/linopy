@@ -60,7 +60,7 @@ def test_shape_mismatch_triggers_sparsity_rebuild(baseline_model: Model) -> None
     y = baseline_model.variables["y"]
     baseline_model.constraints["c1"].lhs = 2 * x + 0 * y.sum()
     diff = ModelDiff.from_snapshot(snap, baseline_model)
-    assert diff.rebuild_reason in {
+    assert diff in {
         RebuildReason.SPARSITY,
         RebuildReason.STRUCTURAL_LABELS,
     }
@@ -73,6 +73,7 @@ def test_zero_row_container_capture() -> None:
     snap = ModelSnapshot.capture(m)
     assert snap.con_buffers == {}
     diff = ModelDiff.from_snapshot(snap, m)
+    assert isinstance(diff, ModelDiff)
     assert diff.is_empty
 
 
@@ -82,8 +83,8 @@ def test_con_buffers_dtypes(baseline_model: Model) -> None:
     assert buf.rhs.dtype == np.float64
     assert buf.sign.dtype == np.dtype("U1")
     assert buf.data.dtype == np.float64
-    assert buf.indices.dtype == np.int32
-    assert buf.indptr.dtype == np.int32
+    assert np.issubdtype(buf.indices.dtype, np.integer)
+    assert np.issubdtype(buf.indptr.dtype, np.integer)
 
 
 def test_masked_rows_excluded_from_active_labels() -> None:
