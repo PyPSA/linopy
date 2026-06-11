@@ -815,6 +815,14 @@ class Solver(ABC, Generic[EnvType]):
         (structural change, sparsity change, backend rejection, …) raises
         :class:`RebuildRequiredError` instead. The initial build on the first
         ``solve(model, ...)`` is still allowed.
+
+        Thread safety: the solver lock is held for the entire call,
+        including the native run. This is deliberate — diff/apply and the
+        run must be atomic (otherwise a concurrent apply would change the
+        problem between apply and run), and native solver handles are not
+        thread-safe. Concurrent solves therefore serialize per Solver
+        instance; use separate instances for parallelism. Pure diff
+        computation (``update(model, apply=False)``) does not take the lock.
         """
         if model is not None and self.io_api != "direct":
             raise ValueError("solve(model=...) requires io_api='direct'")
@@ -867,6 +875,16 @@ class Solver(ABC, Generic[EnvType]):
         apply: bool = True,
         ignore_dims: Iterable[str] = (),
     ) -> ModelDiff | RebuildReason:
+        """
+        Diff ``model`` against the solver state and optionally apply it.
+
+        With ``apply=False`` the diff is computed without taking the solver
+        lock, so it can overlap a concurrently running solve. The preview
+        always runs a full comparison (no ``_coef_dirty`` shortcut — a
+        concurrent apply may clear the flag against a newer snapshot), so it
+        can report raw in-place ``.values[...]`` mutations that the apply
+        path, which trusts the flag for the build-time model, would miss.
+        """
         if self.io_api != "direct":
             raise ValueError("update requires io_api='direct'")
         if self.solver_model is None:
@@ -879,8 +897,31 @@ class Solver(ABC, Generic[EnvType]):
                 "instance, or reconstruct the solver with "
                 "Solver.from_name(..., track_updates=True)."
             )
+        if not apply:
+            return self._diff_unlocked(model, ignore_dims)
         with self._lock:
             return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
+
+    def _diff_unlocked(
+        self, model: Model, ignore_dims: Iterable[str]
+    ) -> ModelDiff | RebuildReason:
+        """
+        Compute a diff without the solver lock.
+
+        Snapshot and baseline refs are read once; snapshot buffers are
+        immutable after capture, so the walk is consistent even while a
+        concurrent apply swaps ``self.snapshot``. The fallback baseline
+        (``from_models``) is only consistent if no thread concurrently
+        mutates either Model.
+        """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return ModelDiff.from_snapshot(
+                snapshot, model, same_model=False, ignore_dims=ignore_dims
+            )
+        baseline = self.model
+        assert baseline is not None
+        return ModelDiff.from_models(baseline, model, ignore_dims=ignore_dims)
 
     def _update_locked(
         self,

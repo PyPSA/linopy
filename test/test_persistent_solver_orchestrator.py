@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import threading
 from typing import Any
 
 import pytest
@@ -162,3 +163,55 @@ def test_update_apply_false_leaves_state_untouched(model: Model) -> None:
     assert isinstance(diff, ModelDiff)
     assert c._coef_dirty is True
     assert s.snapshot is snap_before
+
+
+def test_update_apply_false_does_not_block_running_solve(
+    model: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = _built_persistent(model)
+    solve_entered = threading.Event()
+    release_solve = threading.Event()
+    original_run = s._run_direct
+
+    def _gated_run(**kwargs: Any) -> Result:
+        solve_entered.set()
+        assert release_solve.wait(timeout=5)
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(s, "_run_direct", _gated_run)
+
+    solver_thread = threading.Thread(target=s.solve)
+    solver_thread.start()
+    try:
+        assert solve_entered.wait(timeout=5)
+
+        result: list[ModelDiff | RebuildReason] = []
+        preview_thread = threading.Thread(
+            target=lambda: result.append(s.update(model, apply=False))
+        )
+        preview_thread.start()
+        preview_thread.join(timeout=2)
+        assert not preview_thread.is_alive(), "preview blocked on a running solve"
+        assert isinstance(result[0], ModelDiff)
+    finally:
+        release_solve.set()
+        solver_thread.join(timeout=5)
+
+
+def test_preview_detects_raw_mutation_apply_skips_it(model: Model) -> None:
+    """
+    Pins the documented preview/apply asymmetry for unsupported raw
+    ``.values[...]`` coefficient mutations on the build-time model.
+    """
+    s = _built_persistent(model)
+    c = model.constraints["c1"]
+    c.coeffs.values[...] = c.coeffs.values * 2
+    assert c._coef_dirty is False
+
+    preview = s.update(model, apply=False)
+    assert isinstance(preview, ModelDiff)
+    assert "c1" in preview.changed_constraints
+
+    applied = s.update(model)
+    assert isinstance(applied, ModelDiff)
+    assert "c1" not in applied.changed_constraints
