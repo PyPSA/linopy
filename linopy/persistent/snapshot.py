@@ -132,6 +132,19 @@ def _coord_snapshot(obj: Variable | ConstraintBase) -> dict[str, np.ndarray]:
     return {str(name): np.asarray(idx) for name, idx in obj.indexes.items()}
 
 
+def clear_coef_dirty(model: Model) -> None:
+    """
+    Reset ``Constraint._coef_dirty`` on every constraint of ``model``.
+
+    Must be called exactly when a snapshot reflecting the model's current
+    state is adopted by a tracking solver — clearing without adopting makes
+    a later ``same_model=True`` diff silently skip changed coefficients.
+    """
+    for con in model.constraints.data.values():
+        if isinstance(con, Constraint):
+            con._coef_dirty = False
+
+
 @dataclass
 class ModelSnapshot:
     structural_key: StructuralKey
@@ -168,10 +181,6 @@ class ModelSnapshot:
         con_coords = {
             name: _coord_snapshot(con) for name, con in model.constraints.items()
         }
-
-        for con in model.constraints.data.values():
-            if isinstance(con, Constraint):
-                con._coef_dirty = False
 
         return cls(
             structural_key=structural_key,

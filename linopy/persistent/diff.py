@@ -131,6 +131,12 @@ class ModelDiff:
     var_slices: dict[str, VarSlice]
     con_slices: dict[str, ConSlice]
 
+    #: Snapshot of the diffed (target) model state, assembled from the
+    #: buffers the diff walk already extracted — adopting it after a
+    #: successful apply replaces a full re-capture. Note: holding a diff
+    #: therefore pins all container buffers for its lifetime.
+    snapshot: ModelSnapshot
+
     @property
     def is_empty(self) -> bool:
         return (
@@ -277,6 +283,7 @@ class ModelDiff:
             model.variables.label_index,
             model.constraints.label_index,
             frozenset(ignore_dims),
+            structural_key=snapshot.structural_key,
         )
 
         for name, var in model.variables.items():
@@ -333,10 +340,19 @@ class ModelDiff:
         if reason is not None:
             return reason
 
+        var_idx_b = model_b.variables.label_index
+        con_idx_b = model_b.constraints.label_index
+        key_b = StructuralKey(
+            var_container_names=tuple(model_b.variables),
+            con_container_names=tuple(model_b.constraints),
+            vlabels=var_idx_b.vlabels,
+            clabels=con_idx_b.clabels,
+        )
         builder = _DiffBuilder(
-            model_b.variables.label_index,
-            model_b.constraints.label_index,
+            var_idx_b,
+            con_idx_b,
             frozenset(ignore_dims),
+            structural_key=key_b,
         )
 
         for name, var_b in model_b.variables.items():
@@ -379,11 +395,21 @@ class _DiffBuilder:
         var_label_index: VariableLabelIndex,
         con_label_index: ConstraintLabelIndex,
         ignored: frozenset[str],
+        structural_key: StructuralKey,
     ) -> None:
         self.var_label_index = var_label_index
         self.var_l2p = var_label_index.label_to_pos
         self.con_l2p = con_label_index.label_to_pos
         self.ignored = ignored
+        self.structural_key = structural_key
+
+        # Target-state material for the snapshot assembled in finalize().
+        self.var_buffers: dict[str, ContainerVarBuffers] = {}
+        self.con_buffers: dict[str, ContainerConBuffers] = {}
+        self.var_coords: dict[str, dict[str, np.ndarray]] = {}
+        self.con_coords: dict[str, dict[str, np.ndarray]] = {}
+        self._snap_obj_c: np.ndarray | None = None
+        self._snap_obj_sense: str | None = None
 
         self.var_bounds_idx: list[np.ndarray] = []
         self.var_bounds_lo: list[np.ndarray] = []
@@ -419,11 +445,14 @@ class _DiffBuilder:
         base_coords: dict[str, np.ndarray],
     ) -> RebuildReason | None:
         new_buf = _extract_var_buffers(var)
+        new_coords = _coord_snapshot(var)
+        self.var_buffers[name] = new_buf
+        self.var_coords[name] = new_coords
         if new_buf.lower.shape != base_buf.lower.shape:
             return RebuildReason.COORD_REINDEX
         if not _same(new_buf.active_labels, base_buf.active_labels):
             return RebuildReason.STRUCTURAL_LABELS
-        if not _coords_equal(base_coords, _coord_snapshot(var), self.ignored):
+        if not _coords_equal(base_coords, new_coords, self.ignored):
             return RebuildReason.COORD_REINDEX
 
         bound_mask = (new_buf.lower != base_buf.lower) | (
@@ -468,11 +497,14 @@ class _DiffBuilder:
         skip_coef_compare: bool,
     ) -> RebuildReason | None:
         new_buf = _extract_con_buffers(con, self.var_label_index)
+        new_coords = _coord_snapshot(con)
+        self.con_buffers[name] = new_buf
+        self.con_coords[name] = new_coords
         if new_buf.indptr.shape != base_buf.indptr.shape:
             return RebuildReason.COORD_REINDEX
         if not _same(new_buf.active_labels, base_buf.active_labels):
             return RebuildReason.STRUCTURAL_LABELS
-        if not _coords_equal(base_coords, _coord_snapshot(con), self.ignored):
+        if not _coords_equal(base_coords, new_coords, self.ignored):
             return RebuildReason.COORD_REINDEX
         if not _same(new_buf.indptr, base_buf.indptr):
             return RebuildReason.SPARSITY
@@ -547,6 +579,8 @@ class _DiffBuilder:
             return RebuildReason.QUAD_OBJ
 
         obj_c = _objective_linear_vector(model)
+        self._snap_obj_c = obj_c
+        self._snap_obj_sense = model.objective.sense
         if obj_c.shape != base_obj_c.shape:
             return RebuildReason.COORD_REINDEX
         obj_diff_mask = obj_c != base_obj_c
@@ -560,7 +594,19 @@ class _DiffBuilder:
         return None
 
     def finalize(self) -> ModelDiff:
+        assert self._snap_obj_c is not None and self._snap_obj_sense is not None
+        snapshot = ModelSnapshot(
+            structural_key=self.structural_key,
+            var_buffers=self.var_buffers,
+            con_buffers=self.con_buffers,
+            var_coords=self.var_coords,
+            con_coords=self.con_coords,
+            obj_c=self._snap_obj_c,
+            obj_quad_present=False,
+            obj_sense=self._snap_obj_sense,
+        )
         return ModelDiff(
+            snapshot=snapshot,
             var_bounds_indices=_cat(self.var_bounds_idx, np.int32),
             var_bounds_lower=_cat(self.var_bounds_lo, np.float64),
             var_bounds_upper=_cat(self.var_bounds_up, np.float64),

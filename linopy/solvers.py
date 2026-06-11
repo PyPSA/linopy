@@ -56,6 +56,7 @@ from linopy.persistent import (
     UnsupportedUpdate,
     UpdatesDisabledError,
     VarKind,
+    clear_coef_dirty,
 )
 
 
@@ -604,6 +605,7 @@ class Solver(ABC, Generic[EnvType]):
             self._build_direct(**build_kwargs)
             if self.track_updates:
                 self.snapshot = ModelSnapshot.capture(self.model)
+                clear_coef_dirty(self.model)
         else:
             self._build_file(**build_kwargs)
 
@@ -818,7 +820,8 @@ class Solver(ABC, Generic[EnvType]):
             return diff
         self.model = model
         if self.track_updates:
-            self.snapshot = ModelSnapshot.capture(model)
+            self.snapshot = diff.snapshot
+            clear_coef_dirty(model)
         self._in_place_updates += 1
         self._last_rebuild_reason = None
         return diff

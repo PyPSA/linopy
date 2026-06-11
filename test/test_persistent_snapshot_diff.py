@@ -205,3 +205,90 @@ def test_ignore_dims_detects_coord_change() -> None:
 
     assert ModelDiff.from_snapshot(snap, m2) is RebuildReason.COORD_REINDEX
     assert isinstance(ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"}), ModelDiff)
+
+
+def _assert_snapshot_equal(a: ModelSnapshot, b: ModelSnapshot) -> None:
+    assert a.structural_key == b.structural_key
+    assert a.var_buffers.keys() == b.var_buffers.keys()
+    assert a.con_buffers.keys() == b.con_buffers.keys()
+    for name, va in a.var_buffers.items():
+        vb = b.var_buffers[name]
+        np.testing.assert_array_equal(va.lower, vb.lower)
+        np.testing.assert_array_equal(va.upper, vb.upper)
+        np.testing.assert_array_equal(va.active_labels, vb.active_labels)
+        assert va.type is vb.type
+    for name, ca in a.con_buffers.items():
+        cb = b.con_buffers[name]
+        for attr in ("indptr", "indices", "data", "rhs", "sign", "active_labels"):
+            np.testing.assert_array_equal(getattr(ca, attr), getattr(cb, attr))
+    for coords_a, coords_b in (
+        (a.var_coords, b.var_coords),
+        (a.con_coords, b.con_coords),
+    ):
+        assert coords_a.keys() == coords_b.keys()
+        for name in coords_a:
+            assert coords_a[name].keys() == coords_b[name].keys()
+            for dim in coords_a[name]:
+                np.testing.assert_array_equal(coords_a[name][dim], coords_b[name][dim])
+    np.testing.assert_array_equal(a.obj_c, b.obj_c)
+    assert a.obj_quad_present == b.obj_quad_present
+    assert a.obj_sense == b.obj_sense
+
+
+def test_capture_is_pure(baseline: Model) -> None:
+    c = baseline.constraints["c1"]
+    c.update(coeffs=c.coeffs * 2)
+    assert c._coef_dirty is True
+    ModelSnapshot.capture(baseline)
+    assert c._coef_dirty is True
+
+
+@pytest.mark.parametrize(
+    "mutate", ["none", "rhs", "bounds", "coeffs", "objective", "combined"]
+)
+def test_diff_snapshot_matches_capture(baseline: Model, mutate: str) -> None:
+    snap = ModelSnapshot.capture(baseline)
+    x = baseline.variables["x"]
+    y = baseline.variables["y"]
+    if mutate in ("rhs", "combined"):
+        baseline.constraints["c1"].update(rhs=9)
+    if mutate in ("bounds", "combined"):
+        x.update(lower=1)
+    if mutate in ("coeffs", "combined"):
+        c2 = baseline.constraints["c2"]
+        c2.update(coeffs=c2.coeffs * 3)
+    if mutate in ("objective", "combined"):
+        baseline.add_objective(3 * x.sum() + 2 * y.sum(), overwrite=True)
+    diff = ModelDiff.from_snapshot(snap, baseline)
+    assert isinstance(diff, ModelDiff)
+    _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(baseline))
+
+
+def test_diff_snapshot_matches_capture_under_ignore_dims() -> None:
+    def build(t0: int) -> Model:
+        m = Model()
+        t = pd.Index(range(t0, t0 + 3), name="t")
+        m.add_variables(0, 10, coords=[t], name="x")
+        m.add_constraints(m.variables["x"] >= 0, name="c1")
+        m.add_objective(m.variables["x"].sum())
+        return m
+
+    m1, m2 = build(0), build(10)
+    snap = ModelSnapshot.capture(m1)
+    diff = ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"})
+    assert isinstance(diff, ModelDiff)
+    _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
+
+
+def test_from_models_snapshot_matches_capture() -> None:
+    def build(rhs: float) -> Model:
+        m = Model()
+        x = m.add_variables(0, 10, coords=[range(3)], name="x")
+        m.add_constraints(2 * x >= rhs, name="c1")
+        m.add_objective(x.sum())
+        return m
+
+    m1, m2 = build(4.0), build(7.0)
+    diff = ModelDiff.from_models(m1, m2)
+    assert isinstance(diff, ModelDiff)
+    _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))

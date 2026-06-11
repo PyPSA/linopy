@@ -115,3 +115,50 @@ def test_unmutated_resolve_diff_is_empty(model: Model) -> None:
     diff = s.update(model, apply=False)
     assert isinstance(diff, ModelDiff)
     assert diff.is_empty
+
+
+class FakePersistentSolver(FakeSolver):
+    supports_persistent_update = True
+
+    def apply_update(
+        self, diff: ModelDiff, var_label_index: Any, con_label_index: Any
+    ) -> None:
+        return None
+
+
+def _built_persistent(model: Model) -> FakePersistentSolver:
+    s = FakePersistentSolver(model=model, io_api="direct", track_updates=True)
+    s._build()
+    return s
+
+
+def test_build_clears_coef_dirty(model: Model) -> None:
+    c = model.constraints["c1"]
+    c.update(coeffs=c.coeffs * 2)
+    assert c._coef_dirty is True
+    _built_persistent(model)
+    assert c._coef_dirty is False
+
+
+def test_in_place_update_adopts_diff_snapshot(model: Model) -> None:
+    s = _built_persistent(model)
+    c = model.constraints["c1"]
+    c.update(coeffs=c.coeffs * 2)
+    diff = s.update(model)
+    assert isinstance(diff, ModelDiff)
+    assert s.snapshot is diff.snapshot
+    assert c._coef_dirty is False
+    rediff = s.update(model, apply=False)
+    assert isinstance(rediff, ModelDiff)
+    assert rediff.is_empty
+
+
+def test_update_apply_false_leaves_state_untouched(model: Model) -> None:
+    s = _built_persistent(model)
+    snap_before = s.snapshot
+    c = model.constraints["c1"]
+    c.update(coeffs=c.coeffs * 2)
+    diff = s.update(model, apply=False)
+    assert isinstance(diff, ModelDiff)
+    assert c._coef_dirty is True
+    assert s.snapshot is snap_before

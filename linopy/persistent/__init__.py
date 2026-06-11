@@ -19,6 +19,7 @@ from linopy.persistent.snapshot import (
     ModelSnapshot,
     StructuralKey,
     VarKind,
+    clear_coef_dirty,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "UpdatesDisabledError",
     "VarKind",
     "VarSlice",
+    "clear_coef_dirty",
 ]
