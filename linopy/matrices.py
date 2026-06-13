@@ -15,6 +15,7 @@ import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
+from linopy.common import constraint_scaling_lookup, variable_scaling_lookup
 from linopy.constraints import CSRConstraint
 
 if TYPE_CHECKING:
@@ -58,6 +59,12 @@ class MatrixAccessor:
         m = self._parent
         label_index = m.variables.label_index
         self.vlabels: ndarray = label_index.vlabels
+        var_scaling_by_label = variable_scaling_lookup(m)
+        self.var_scaling: ndarray = (
+            var_scaling_by_label[self.vlabels]
+            if len(self.vlabels)
+            else np.array([], dtype=float)
+        )
 
         lb_list = []
         ub_list = []
@@ -81,8 +88,8 @@ class MatrixAccessor:
             vtypes_list.append(np.full(mask.sum(), vtype))
 
         if lb_list:
-            self.lb: ndarray = np.concatenate(lb_list)
-            self.ub: ndarray = np.concatenate(ub_list)
+            self.lb: ndarray = np.concatenate(lb_list) * self.var_scaling
+            self.ub: ndarray = np.concatenate(ub_list) * self.var_scaling
             self.vtypes: ndarray = np.concatenate(vtypes_list)
         else:
             self.lb = np.array([])
@@ -93,13 +100,26 @@ class MatrixAccessor:
         m = self._parent
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
+        con_scaling_by_label = constraint_scaling_lookup(m)
+
+        def scale_rows_and_cols(
+            csr: scipy.sparse.csr_array, con_labels: np.ndarray, b: np.ndarray
+        ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
+            if csr.shape[0] == 0:
+                return csr, b
+            row_scaling = con_scaling_by_label[con_labels]
+            csr = csr.multiply(1 / row_scaling[:, np.newaxis])
+            if csr.shape[1] and len(self.var_scaling):
+                csr = csr.multiply(1 / self.var_scaling[np.newaxis, :])
+            return cast(scipy.sparse.csr_array, csr), b / row_scaling
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
         for c in m.constraints.data.values():
             if c.is_indicator:
                 cc = c if isinstance(c, CSRConstraint) else c.freeze()
-                csr, _, b, sense = cc.to_matrix_with_rhs(label_index)
+                csr, con_labels, b, sense = cc.to_matrix_with_rhs(label_index)
+                csr, b = scale_rows_and_cols(csr, con_labels, b)
                 ind_csrs.append(csr)
                 ind_b.append(b)
                 ind_sense.append(sense)
@@ -107,7 +127,8 @@ class MatrixAccessor:
                 binval = cast("int | np.ndarray", cc._binval)
                 ind_binval.append(_binval_per_row(binval, len(b)))
             else:
-                csr, _, b, sense = c.to_matrix_with_rhs(label_index)
+                csr, con_labels, b, sense = c.to_matrix_with_rhs(label_index)
+                csr, b = scale_rows_and_cols(csr, con_labels, b)
                 reg_csrs.append(csr)
                 reg_b.append(b)
                 reg_sense.append(sense)
@@ -144,7 +165,10 @@ class MatrixAccessor:
             coeffs = expr.data.coeffs.values.ravel()
 
         mask = var_labels != -1
-        np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
+        positions = label_to_pos[var_labels[mask]]
+        scaled_coeffs = coeffs[mask] / self.var_scaling[positions]
+        scaled_coeffs = scaled_coeffs / m.objective.scaling
+        np.add.at(result, positions, scaled_coeffs)
         return result
 
     @cached_property
@@ -154,7 +178,12 @@ class MatrixAccessor:
         expr = m.objective.expression
         if not isinstance(expr, expressions.QuadraticExpression):
             return None
-        return expr.to_matrix()[self.vlabels][:, self.vlabels]
+        q = expr.to_matrix()[self.vlabels][:, self.vlabels]
+        if q.nnz:
+            q = q.multiply(1 / self.var_scaling[:, np.newaxis])
+            q = q.multiply(1 / self.var_scaling[np.newaxis, :])
+            q = q / self._parent.objective.scaling
+        return q
 
     @cached_property
     def sol(self) -> ndarray:

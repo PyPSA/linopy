@@ -53,6 +53,7 @@ from linopy.common import (
     set_int_index,
     to_dataframe,
     to_polars,
+    validate_scaling,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -85,7 +86,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan}
+FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan, "scaling": 1.0}
 
 
 def varwrap(
@@ -197,6 +198,13 @@ class Variable:
         data = data.assign_attrs(name=name)
         if not skip_broadcast:
             (data,) = broadcast(data)
+        if "scaling" not in data:
+            data = assign_multiindex_safe(
+                data, scaling=DataArray(1.0).broadcast_like(data.labels)
+            )
+        data = assign_multiindex_safe(
+            data, scaling=validate_scaling(data.scaling, f"scaling for variable '{name}'")
+        )
         for attr in ("lower", "upper"):
             # convert to float, important for  operations like "shift"
             if not issubdtype(data[attr].dtype, floating):
@@ -310,6 +318,24 @@ class Variable:
         Convert the variable labels to a pandas Series.
         """
         return self.labels.to_pandas()
+
+    @property
+    def scaling(self) -> DataArray:
+        """Scaling factor supplied for this variable."""
+        return self.data.scaling
+
+    @scaling.setter
+    def scaling(self, value: ConstantLike) -> None:
+        value = broadcast_to_coords(
+            value,
+            coords=self.coords,
+            dims=self.dims,
+            label=f"scaling for variable '{self.name}'",
+            strict=False,
+        )
+        value = value.reindex_like(self.labels, fill_value=1.0)
+        value = validate_scaling(value, f"scaling for variable '{self.name}'")
+        self._data = assign_multiindex_safe(self.data, scaling=value)
 
     def to_linexpr(
         self,
@@ -1009,7 +1035,8 @@ class Variable:
         Convert the variable to a pandas DataFrame.
 
         The resulting DataFrame represents a long table format of the variable
-        with columns `labels`, `lower`, `upper` which are not masked.
+        with columns ``labels``, ``lower``, ``upper`` and ``scaling`` which are
+        not masked.
 
         Returns
         -------
@@ -1028,8 +1055,8 @@ class Variable:
         """
         Convert all variables to a single polars DataFrame.
 
-        The resulting dataframe is a long format of the variables
-        with columns `labels`, `lower`, 'upper` and `mask`.
+        The resulting dataframe is a long format of the variables with columns
+        ``labels``, ``lower``, ``upper`` and ``scaling``.
 
         Returns
         -------
@@ -1135,9 +1162,24 @@ class Variable:
         elif isinstance(other, Variable):
             _other = other.data
         elif isinstance(other, ScalarVariable):
-            _other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
-        elif isinstance(other, dict | Dataset):
+            _other = {
+                "labels": other.label,
+                "lower": other.lower,
+                "upper": other.upper,
+                "scaling": other.scaling,
+            }
+        elif isinstance(other, dict):
+            _other = dict(other)
+            _other.setdefault("scaling", self._fill_value["scaling"])
+        elif isinstance(other, Dataset):
             _other = other
+            if "scaling" not in _other:
+                _other = assign_multiindex_safe(
+                    _other,
+                    scaling=DataArray(self._fill_value["scaling"]).broadcast_like(
+                        _other.labels
+                    ),
+                )
         else:
             raise ValueError(
                 f"other must be a Variable, ScalarVariable, dict or Dataset, got {type(other)}"
@@ -1479,8 +1521,8 @@ class Variables:
     _label_position_index: LabelPositionIndex | None = None
     _variable_label_index: VariableLabelIndex | None = None
 
-    dataset_attrs = ["labels", "lower", "upper"]
-    dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
+    dataset_attrs = ["labels", "lower", "upper", "scaling"]
+    dataset_names = ["Labels", "Lower bounds", "Upper bounds", "Scaling factors"]
 
     def _formatted_names(self) -> dict[str, str]:
         """
@@ -1656,6 +1698,13 @@ class Variables:
         Get the upper bounds of all variables.
         """
         return save_join(*[v.upper.rename(k) for k, v in self.items()])
+
+    @property
+    def scaling(self) -> Dataset:
+        """
+        Get the scaling factors of all variables.
+        """
+        return save_join(*[v.scaling.rename(k) for k, v in self.items()])
 
     @property
     def nvars(self) -> int:
@@ -1941,8 +1990,8 @@ class Variables:
         """
         Convert all variables to a single pandas Dataframe.
 
-        The resulting dataframe is a long format of the variables
-        with columns `labels`, `lower`, 'upper` and `mask`.
+        The resulting dataframe is a long format of the variables with columns
+        ``labels``, ``lower``, ``upper``, ``scaling`` and ``key``.
 
         Returns
         -------
@@ -2028,6 +2077,14 @@ class ScalarVariable:
         """
         name, position = self.model.variables.get_label_position(self.label)
         return self.model.variables[name].upper.sel(position).item()
+
+    @property
+    def scaling(self) -> float:
+        """
+        Get the scaling factor of the variable.
+        """
+        name, position = self.model.variables.get_label_position(self.label)
+        return self.model.variables[name].scaling.sel(position).item()
 
     @property
     def model(self) -> Model:

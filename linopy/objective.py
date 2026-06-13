@@ -38,7 +38,10 @@ def objwrap(
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return obj.__class__(
-            method(obj.expression, *default_args, *args, **kwargs), obj.model, obj.sense
+            method(obj.expression, *default_args, *args, **kwargs),
+            obj.model,
+            obj.sense,
+            obj.scaling,
         )
 
     _objwrap.__doc__ = (
@@ -55,7 +58,7 @@ class Objective:
     An objective expression containing all relevant information.
     """
 
-    __slots__ = ("_expression", "_model", "_sense", "_value")
+    __slots__ = ("_expression", "_model", "_sense", "_scaling", "_value")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -67,11 +70,13 @@ class Objective:
         expression: expressions.LinearExpression | expressions.QuadraticExpression,
         model: Model,
         sense: str = "min",
+        scaling: ConstantLike = 1,
     ) -> None:
         self._model: Model = model
         self._value: float | None = None
 
         self.sense: str = sense
+        self.scaling = scaling
         self.expression: (
             expressions.LinearExpression | expressions.QuadraticExpression
         ) = expression
@@ -218,6 +223,22 @@ class Objective:
         self._sense = sense
 
     @property
+    def scaling(self) -> float:
+        """
+        Returns the positive objective scaling factor.
+        """
+        return self._scaling
+
+    @scaling.setter
+    def scaling(self, scaling: ConstantLike) -> None:
+        if not isinstance(scaling, int | float | np.floating | np.integer):
+            raise TypeError("Objective scaling must be a numeric scalar.")
+        scaling = float(scaling)
+        if not np.isfinite(scaling) or scaling <= 0:
+            raise ValueError("Objective scaling must be finite and positive.")
+        self._scaling = scaling
+
+    @property
     def value(self) -> float64 | float | None:
         """
         Returns the value of the objective.
@@ -256,24 +277,26 @@ class Objective:
         if isinstance(expr, Objective):
             expr = expr.expression
 
-        return Objective(self.expression + expr, self.model, self.sense)
+        return Objective(self.expression + expr, self.model, self.sense, self.scaling)
 
     def __sub__(self, expr: LinearExpression | Objective) -> Objective:
         if not isinstance(expr, Objective):
             expr = Objective(expr, self.model)
-        return Objective(self.expression - expr.expression, self.model, self.sense)
+        return Objective(
+            self.expression - expr.expression, self.model, self.sense, self.scaling
+        )
 
     def __mul__(self, expr: ConstantLike) -> Objective:
         # only allow scalar multiplication
         if not isinstance(expr, int | float | np.floating | np.integer):
             raise ValueError("Invalid type for multiplication.")
-        return Objective(self.expression * expr, self.model, self.sense)
+        return Objective(self.expression * expr, self.model, self.sense, self.scaling)
 
     def __neg__(self) -> Objective:
-        return Objective(-self.expression, self.model, self.sense)
+        return Objective(-self.expression, self.model, self.sense, self.scaling)
 
     def __truediv__(self, expr: ConstantLike) -> Objective:
         # only allow scalar division
         if not isinstance(expr, int | float | np.floating | np.integer):
             raise ValueError("Invalid type for division.")
-        return Objective(self.expression / expr, self.model, self.sense)
+        return Objective(self.expression / expr, self.model, self.sense, self.scaling)
