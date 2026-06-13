@@ -76,3 +76,29 @@ def build_model(spec: BenchSpec, n: int) -> linopy.Model:
     """Build ``spec`` at ``n`` — the untimed setup, after the requires-skip."""
     require(spec)
     return spec.build(n)
+
+
+@pytest.fixture(autouse=True)
+def _benchmem_dims(request: pytest.FixtureRequest, benchmark: object) -> None:
+    """
+    Mirror each case's ``spec``/``phase``/``axis`` into pytest-benchmark
+    ``extra_info`` as analysis dims, so a ``--benchmark-json`` run plots cleanly
+    under pytest-benchmem — which reads dims from ``params``/``extra_info`` and
+    can see neither the (unserialisable) spec param nor the phase, which lives in
+    the test-function name. The numeric ``n`` is already a clean param. No-op
+    under CodSpeed, whose fixture carries no ``extra_info``.
+    """
+    callspec = getattr(request.node, "callspec", None)
+    info = getattr(benchmark, "extra_info", None)
+    func = getattr(request, "function", None)
+    if (
+        callspec is None
+        or info is None
+        or func is None
+        or "spec" not in callspec.params
+    ):
+        return
+    spec = callspec.params["spec"]
+    info.update(
+        spec=spec.name, phase=func.__name__.removeprefix("test_"), axis=spec.axis
+    )
