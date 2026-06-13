@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from benchmarks.registry import ModelSpec, register
+from benchmarks.registry import BenchSpec, register
 
 if TYPE_CHECKING:
     import linopy
@@ -27,10 +27,10 @@ def build_pypsa_scigrid(snapshots: int = 100) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="pypsa_scigrid",
         build=build_pypsa_scigrid,
-        sizes=SIZES,
+        sweep=SIZES,
         requires=("pypsa",),
     )
 )

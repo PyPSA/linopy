@@ -24,7 +24,7 @@ import numpy as np
 import linopy
 from benchmarks.registry import (
     DEFAULT_PHASES,
-    ModelSpec,
+    BenchSpec,
     register,
 )
 
@@ -52,10 +52,10 @@ def build_qp(n_assets: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="qp",
         build=build_qp,
-        sizes=SIZES,
+        sweep=SIZES,
         phases=DEFAULT_PHASES,
     )
 )

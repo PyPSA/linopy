@@ -16,7 +16,7 @@ from __future__ import annotations
 import pandas as pd
 
 import linopy
-from benchmarks.registry import PatternSpec, register_pattern
+from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
 
 N_ROW = 64  # broadcast/volume dim — the triangular fold is on t, not row
 DIM_MAX = 200
@@ -35,8 +35,10 @@ def build_cumsum(severity: int) -> linopy.Model:
 
 
 SPEC = register_pattern(
-    PatternSpec(
+    BenchSpec(
         name="cumsum",
         build=build_cumsum,
+        sweep=SEVERITIES,
+        axis="severity",
     )
 )

@@ -17,7 +17,7 @@ from __future__ import annotations
 import pandas as pd
 
 import linopy
-from benchmarks.registry import ModelSpec, register
+from benchmarks.registry import BenchSpec, register
 
 SIZES = (10, 250)
 N_TIME = 168
@@ -45,9 +45,9 @@ def build_storage(n_storage: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="storage",
         build=build_storage,
-        sizes=SIZES,
+        sweep=SIZES,
     )
 )

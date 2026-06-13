@@ -33,7 +33,7 @@ from benchmarks.registry import (
     TO_LP,
     TO_NETCDF,
     TO_XPRESS,
-    ModelSpec,
+    BenchSpec,
     register,
 )
 
@@ -69,13 +69,13 @@ def build_sos(n_gens: int) -> linopy.Model:
 
 # ``add_sos_constraints`` is a recent API. On older linopy we silently skip
 # registering this model — the rest of the suite stays usable.
-SPEC: ModelSpec | None
+SPEC: BenchSpec | None
 if _API_AVAILABLE:
     SPEC = register(
-        ModelSpec(
+        BenchSpec(
             name="sos",
             build=build_sos,
-            sizes=SIZES,
+            sweep=SIZES,
             # HiGHS / Mosek lack native SOS in linopy — would need
             # ``reformulate_sos=True``, which mutates the model and defeats
             # the benchmark. Only solvers with native SOS appear here.

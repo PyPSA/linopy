@@ -18,7 +18,7 @@ import pandas as pd
 import xarray as xr
 
 import linopy
-from benchmarks.registry import PatternSpec, register_pattern
+from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
 
 N_BRANCH = 300
 N_CYCLE = 100
@@ -64,8 +64,10 @@ def build_kvl_cycles(severity: int) -> linopy.Model:
 
 
 SPEC = register_pattern(
-    PatternSpec(
+    BenchSpec(
         name="kvl_cycles",
         build=build_kvl_cycles,
+        sweep=SEVERITIES,
+        axis="severity",
     )
 )

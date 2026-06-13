@@ -15,7 +15,7 @@ from __future__ import annotations
 import pandas as pd
 
 import linopy
-from benchmarks.registry import PatternSpec, register_pattern
+from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
 
 N_UNIT = 8  # broadcast dim — the window densification is on time, not unit
 N_TIME = 1000
@@ -37,8 +37,10 @@ def build_rolling(severity: int) -> linopy.Model:
 
 
 SPEC = register_pattern(
-    PatternSpec(
+    BenchSpec(
         name="rolling",
         build=build_rolling,
+        sweep=SEVERITIES,
+        axis="severity",
     )
 )

@@ -5,7 +5,7 @@ A pattern is a fragment of real modelling code (a balance constraint, a KVL
 contraction), not a whole model and not an isolated method call. Each is
 measured the same way a model is — time and peak memory, through the shared
 phases — but parametrised by ``severity`` (0–100, how pathological the data
-shape is) instead of ``size``. See :class:`benchmarks.registry.PatternSpec`.
+shape is) instead of ``size``. See :class:`benchmarks.registry.BenchSpec`.
 
 Importing this package registers every idiom into
 :data:`benchmarks.registry.PATTERNS` (mirrors :mod:`benchmarks.models`); adding

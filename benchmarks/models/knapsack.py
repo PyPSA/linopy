@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import linopy
-from benchmarks.registry import DEFAULT_PHASES, ModelSpec, register
+from benchmarks.registry import DEFAULT_PHASES, BenchSpec, register
 
 SIZES = (100, 10_000)
 
@@ -25,10 +25,10 @@ def build_knapsack(n: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="knapsack",
         build=build_knapsack,
-        sizes=SIZES,
+        sweep=SIZES,
         phases=DEFAULT_PHASES,  # HiGHS handles binary; matrices handles MILP
     )
 )

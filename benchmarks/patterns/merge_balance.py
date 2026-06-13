@@ -16,7 +16,7 @@ from __future__ import annotations
 import pandas as pd
 
 import linopy
-from benchmarks.registry import PatternSpec, register_pattern
+from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
 
 N_BLOCKS = 30
 N_ROW = 128  # broadcast/volume dim — the ragged padding is on _term, not row
@@ -48,8 +48,10 @@ def build_merge_balance(severity: int) -> linopy.Model:
 
 
 SPEC = register_pattern(
-    PatternSpec(
+    BenchSpec(
         name="merge_balance",
         build=build_merge_balance,
+        sweep=SEVERITIES,
+        axis="severity",
     )
 )

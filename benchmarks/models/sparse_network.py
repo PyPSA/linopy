@@ -7,7 +7,7 @@ import pandas as pd
 import xarray as xr
 
 import linopy
-from benchmarks.registry import ModelSpec, register
+from benchmarks.registry import BenchSpec, register
 
 SIZES = (10, 250)
 
@@ -52,9 +52,9 @@ def build_sparse_network(n_buses: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="sparse_network",
         build=build_sparse_network,
-        sizes=SIZES,
+        sweep=SIZES,
     )
 )

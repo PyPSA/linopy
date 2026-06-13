@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import linopy
-from benchmarks.registry import ModelSpec, register
+from benchmarks.registry import BenchSpec, register
 
 SIZES = (10, 250)
 
@@ -32,9 +32,9 @@ def build_expression_arithmetic(n: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="expression_arithmetic",
         build=build_expression_arithmetic,
-        sizes=SIZES,
+        sweep=SIZES,
     )
 )

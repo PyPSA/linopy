@@ -24,7 +24,7 @@ import numpy as np
 import linopy
 from benchmarks.registry import (
     DEFAULT_PHASES,
-    ModelSpec,
+    BenchSpec,
     register,
 )
 
@@ -66,10 +66,10 @@ def build_milp(n: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="milp",
         build=build_milp,
-        sizes=SIZES,
+        sweep=SIZES,
         phases=DEFAULT_PHASES,
     )
 )

@@ -25,7 +25,7 @@ import warnings
 import linopy
 from benchmarks.registry import (
     DEFAULT_PHASES,
-    ModelSpec,
+    BenchSpec,
     register,
 )
 
@@ -72,13 +72,13 @@ def build_piecewise(n_gens: int) -> linopy.Model:
 
 # ``add_piecewise_formulation`` is a recent (still-evolving) API. Skip
 # registration silently on older linopy so the rest of the suite stays usable.
-SPEC: ModelSpec | None
+SPEC: BenchSpec | None
 if _API_AVAILABLE:
     SPEC = register(
-        ModelSpec(
+        BenchSpec(
             name="piecewise",
             build=build_piecewise,
-            sizes=SIZES,
+            sweep=SIZES,
             # Monotonic breakpoints + ``method="auto"`` → incremental
             # reformulation (pure MILP with binaries), which every supported
             # solver handles.

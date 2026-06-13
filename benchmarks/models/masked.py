@@ -28,7 +28,7 @@ import xarray as xr
 import linopy
 from benchmarks.registry import (
     DEFAULT_PHASES,
-    ModelSpec,
+    BenchSpec,
     register,
 )
 
@@ -77,10 +77,10 @@ def build_masked(n: int) -> linopy.Model:
 
 
 SPEC = register(
-    ModelSpec(
+    BenchSpec(
         name="masked",
         build=build_masked,
-        sizes=SIZES,
+        sweep=SIZES,
         phases=DEFAULT_PHASES,
     )
 )

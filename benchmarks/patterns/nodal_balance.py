@@ -16,7 +16,7 @@ import pandas as pd
 import xarray as xr
 
 import linopy
-from benchmarks.registry import PatternSpec, register_pattern
+from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
 
 N_GEN = 2000
 N_BUS = 50
@@ -63,8 +63,10 @@ def build_nodal_balance(severity: int) -> linopy.Model:
 
 
 SPEC = register_pattern(
-    PatternSpec(
+    BenchSpec(
         name="nodal_balance",
         build=build_nodal_balance,
+        sweep=SEVERITIES,
+        axis="severity",
     )
 )
