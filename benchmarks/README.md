@@ -1,94 +1,74 @@
 # Internal Performance Benchmarks
 
-Measures linopy's own performance (build time, LP write speed, memory usage) across problem sizes using [pytest-benchmark](https://pytest-benchmark.readthedocs.io/) and [pytest-memray](https://pytest-memray.readthedocs.io/). Use these to check whether a code change introduces a regression or improvement.
+End-to-end performance tracking for `linopy` — build → matrix generation →
+LP / netCDF (de)serialization → solver handoff → a fixed PyPSA model. Solver
+algorithm runtime is out of scope.
 
-> **Note:** The `benchmark/` directory (singular) contains *external* benchmarks comparing linopy against other modeling frameworks. This directory (`benchmarks/`) is for *internal* performance tracking only.
+The suite is a set of `pytest-benchmark` tests driven by a model registry.
+**CodSpeed** measures them in CI (walltime on dedicated runners, memory on every
+PR); locally you just run `pytest`.
 
-## Setup
+> `benchmark/` (singular) is the legacy external-framework suite.
+> `benchmarks/` (plural) is this internal suite.
 
-```bash
-pip install -e ".[benchmarks]"
-```
+## Models vs patterns
 
-## Running benchmarks
+Two kinds of benchmark spec, same harness and same phases, distinguished by
+their sweep axis:
 
-```bash
-# Quick smoke test (small sizes only)
-pytest benchmarks/ --quick
+- **Models** (`models/`, `REGISTRY`) — whole `linopy.Model`s swept over
+  `size` (axis `n`): "how does cost scale with the problem?"
+- **Patterns** (`patterns/`, `PATTERNS`) — fragments of realistic modelling
+  code (a balance constraint, a KVL contraction) swept over `severity`
+  (0–100, axis `severity`): "how does cost respond as one data shape goes
+  from benign to pathological?"
 
-# Full timing benchmarks
-pytest benchmarks/test_build.py benchmarks/test_lp_write.py benchmarks/test_matrices.py
+Both kinds build a complete `linopy.Model`, so both run the **same phases** and
+share the phase drivers (`test_build.py`, `test_matrices.py`, …) — they're just
+more `(spec, value)` rows, tagged by `axis`. There is no separate pattern
+driver. Running a pattern through `build` *and* `to_lp` shows whether a
+dense-`_term` blow-up propagates to export or collapses.
 
-# Run a specific model
-pytest benchmarks/test_build.py -k basic
-```
+Patterns target the operations where the dense-`_term` representation forces
+materialisation — `groupby().sum()` padding, sparse `@` densification — so a
+`severity` sweep draws the cost cliff. Adding either kind is one file: drop it
+in `models/` or `patterns/`, call `register(...)` / `register_pattern(...)`.
 
-## Comparing timing between branches
-
-```bash
-# Save baseline results on master
-git checkout master
-pytest benchmarks/test_build.py --benchmark-save=master
-
-# Switch to feature branch and compare
-git checkout my-feature
-pytest benchmarks/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
-
-# Compare saved results without re-running
-pytest-benchmark compare 0001_master 0002_my-feature --columns=median,iqr
-```
-
-Results are stored in `.benchmarks/` (gitignored).
-
-## Memory benchmarks
-
-`memory.py` runs each test in a separate process with pytest-memray to get accurate per-test peak memory (including C/numpy allocations). Results are saved as JSON and can be compared across branches.
-
-By default, only the build phase (`test_build.py`) is measured. Unlike timing benchmarks where `benchmark()` isolates the measured function, memray tracks all allocations within a test — including model construction in setup. This means LP write and matrix tests would report build + phase memory combined, making the phase-specific contribution impossible to isolate. Since model construction dominates memory usage, measuring build alone gives the most actionable numbers.
+## Install
 
 ```bash
-# Save baseline on master
-git checkout master
-python benchmarks/memory.py save master
-
-# Save feature branch
-git checkout my-feature
-python benchmarks/memory.py save my-feature
-
-# Compare
-python benchmarks/memory.py compare master my-feature
-
-# Quick mode (smaller sizes, faster)
-python benchmarks/memory.py save master --quick
-
-# Measure a specific phase (includes build overhead)
-python benchmarks/memory.py save master --test-path benchmarks/test_lp_write.py
+uv sync --extra dev --extra benchmarks
+source .venv/bin/activate
 ```
 
-Results are stored in `.benchmarks/memory/` (gitignored). Requires Linux or macOS (memray is not available on Windows).
+`pypsa` is optional — `pypsa_scigrid` and `test_pypsa_carbon_management.py`
+skip gracefully without it: `uv pip install pypsa`.
 
-> **Note:** Small tests (~5 MiB) are near the import-overhead floor and may show noise of ~1 MiB between runs. Focus on larger tests for meaningful memory comparisons. Do not combine `--memray` with timing benchmarks — memray adds ~2x overhead that invalidates timing results.
+The `[benchmarks]` extra in `pyproject.toml` pins every direct dep that affects
+measurement (`numpy`, `scipy`, `xarray`, `pandas`, `polars`, `dask`, …) so
+run-to-run deltas reflect linopy changes, not dependency bumps.
 
-## Models
+## Running
 
-| Model | Description | Sizes |
-|-------|-------------|-------|
-| `basic` | Dense N*N model, 2*N^2 vars/cons | 10 — 1600 |
-| `knapsack` | N binary variables, 1 constraint | 100 — 1M |
-| `expression_arithmetic` | Broadcasting, scaling, summation across dims | 10 — 1000 |
-| `sparse_network` | Ring network with mismatched bus/line coords | 10 — 1000 |
-| `pypsa_scigrid` | Real power system (requires `pypsa`) | 10 — 200 snapshots |
+```bash
+pytest benchmarks/                       # the suite
+pytest benchmarks/ --benchmark-disable -q   # smoke: every spec builds once
+pytest benchmarks/ --pipeline            # + the opt-in end-to-end pipeline test
+```
 
-## Phases
+Each spec declares one `sizes` (models) / `severities` (patterns) tuple — a
+small representative set, kept tight because CodSpeed measures it on every PR.
+Need a scaling curve? That's a local pytest-benchmem job, not this suite.
 
-| Phase | File | What it measures |
-|-------|------|------------------|
-| Build | `test_build.py` | Model construction (add_variables, add_constraints, add_objective) |
-| LP write | `test_lp_write.py` | Writing the model to an LP file |
-| Matrices | `test_matrices.py` | Generating sparse matrices (A, b, c, bounds) from the model |
+## CI
 
-## Adding a new model
+- **Smoke** (`benchmark-smoke.yml`) — every PR: every spec builds and every
+  phase fires once under `--benchmark-disable`. A "did a refactor break a
+  spec?" check, not timing.
+- **CodSpeed memory** (`codspeed-memory.yml`) — every PR: heap-allocation
+  tracking, informational, non-gating.
+- **CodSpeed walltime** (`codspeed-macro.yml`) — on `master` or a PR labelled
+  `trigger:benchmark`: wall-clock on dedicated bare-metal runners.
 
-1. Create `benchmarks/models/my_model.py` with a `build_my_model(n)` function and a `SIZES` list
-2. Add parametrized tests in the relevant `test_*.py` files
-3. Add a quick threshold in `conftest.py`
+Activating CodSpeed upstream needs a maintainer to connect the repo to the
+CodSpeed app (OIDC auth, no token secret); the workflows are already wired.

@@ -2,48 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from benchmarks.conftest import skip_if_quick
-from benchmarks.models import (
-    BASIC_SIZES,
-    EXPR_SIZES,
-    SPARSE_SIZES,
-    build_basic,
-    build_expression_arithmetic,
-    build_sparse_network,
-)
+from benchmarks.conftest import build_model, cases
+from benchmarks.phases import touch_matrices
+from benchmarks.registry import MATRICES
+
+if TYPE_CHECKING:
+    from benchmarks.registry import BenchSpec
 
 
-def _access_matrices(m):
-    """Access all matrix properties to force computation."""
-    matrices = m.matrices
-    _ = matrices.A
-    _ = matrices.b
-    _ = matrices.c
-    _ = matrices.lb
-    _ = matrices.ub
-    _ = matrices.sense
-    _ = matrices.vlabels
-    _ = matrices.clabels
-
-
-@pytest.mark.parametrize("n", BASIC_SIZES, ids=[f"n={n}" for n in BASIC_SIZES])
-def test_matrices_basic(benchmark, n, request):
-    skip_if_quick(request, "basic", n)
-    m = build_basic(n)
-    benchmark(_access_matrices, m)
-
-
-@pytest.mark.parametrize("n", EXPR_SIZES, ids=[f"n={n}" for n in EXPR_SIZES])
-def test_matrices_expression_arithmetic(benchmark, n, request):
-    skip_if_quick(request, "expression_arithmetic", n)
-    m = build_expression_arithmetic(n)
-    benchmark(_access_matrices, m)
-
-
-@pytest.mark.parametrize("n", SPARSE_SIZES, ids=[f"n={n}" for n in SPARSE_SIZES])
-def test_matrices_sparse_network(benchmark, n, request):
-    skip_if_quick(request, "sparse_network", n)
-    m = build_sparse_network(n)
-    benchmark(_access_matrices, m)
+@cases(MATRICES)
+def test_matrices(benchmark: Callable[..., object], spec: BenchSpec, n: int) -> None:
+    m = build_model(spec, n)
+    benchmark(lambda: touch_matrices(m))
