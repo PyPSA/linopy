@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Bug fixes**
+
+* LP file export now writes a ``bounds`` section for binary variables whose bounds were tightened below the implied ``[0, 1]`` (e.g. masking out entries with ``upper = 0``). Previously such bounds were silently dropped, so the same model could relax when solved through ``io_api="lp"`` while ``io_api="direct"`` honored them. (https://github.com/PyPSA/linopy/issues/776)
+
 Version 0.8.0
 -------------
 

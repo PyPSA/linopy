@@ -515,6 +515,64 @@ def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
     assert "=" in content
 
 
+def test_to_file_lp_binary_default_bounds_omitted(tmp_path: Path) -> None:
+    """A binary with the implied [0, 1] bounds gets no bounds section."""
+    m = Model()
+    b = m.add_variables(binary=True, coords=[pd.RangeIndex(3, name="t")], name="b")
+    m.add_constraints(b.sum() >= 1, name="c")
+    m.add_objective(b.sum())
+
+    fn = tmp_path / "binary_default.lp"
+    m.to_file(fn)
+    assert "bounds" not in fn.read_text()
+
+
+def test_to_file_lp_binary_tightened_bounds(tmp_path: Path) -> None:
+    """
+    Per-element bounds tighter than [0, 1] on a binary reach the LP file.
+
+    Regression test for https://github.com/PyPSA/linopy/issues/776: the LP
+    export used to emit binaries only in the `binary` section (implied
+    [0, 1]), diverging from the direct API which honored the bounds.
+    """
+    m = Model()
+    x = m.add_variables(binary=True, coords=[pd.RangeIndex(4, name="t")], name="x")
+    x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+    m.add_constraints(x.sum() >= 2, name="atleast2")
+    m.add_objective(-1 * x.sum())
+
+    fn = tmp_path / "binary_tightened.lp"
+    m.to_file(fn)
+    content = fn.read_text()
+
+    bounds_section = content.split("bounds")[1].split("binary")[0]
+    labels = m.variables["x"].labels.values
+    for label in labels[2:]:
+        assert f"x{label} <= +0.0" in bounds_section
+
+
+@pytest.mark.skipif(not available_solvers, reason="No solver installed")
+def test_lp_and_direct_agree_on_binary_bounds(tmp_path: Path) -> None:
+    """The LP and direct paths see the same feasible set for tightened binaries."""
+    solver = available_solvers[0]
+
+    def build() -> Model:
+        m = Model()
+        x = m.add_variables(binary=True, coords=[pd.RangeIndex(4, name="t")], name="x")
+        x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+        m.add_constraints(x.sum() >= 2, name="atleast2")
+        m.add_objective(-1 * x.sum())
+        return m
+
+    m_direct = build()
+    m_direct.solve(solver_name=solver, io_api="direct")
+
+    m_lp = build()
+    m_lp.solve(solver_name=solver, io_api="lp")
+
+    assert m_direct.objective.value == m_lp.objective.value == -2
+
+
 def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
     """Test that frozen and mutable constraints produce identical LP output."""
     m_frozen = Model()
