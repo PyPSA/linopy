@@ -1,4 +1,4 @@
-"""Benchmark configuration and shared fixtures."""
+"""Benchmark configuration and shared test helpers."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from benchmarks.registry import iter_params, spec_param_id
 
-    from benchmarks.phases import PhaseCase
+if TYPE_CHECKING:
+    import linopy
+    from benchmarks.registry import BenchSpec
 
 # Test modules the CodSpeed instruments measure (edit to change coverage).
 # build + the two export paths: to_lp (LP text) and to_solver (direct handoff,
@@ -55,14 +56,23 @@ def pytest_collection_modifyitems(
             items[:] = [i for i in items if i.path.stem in CODSPEED_MODULES]
 
 
-def run_case(benchmark: Callable[..., object], case: PhaseCase) -> None:
-    """
-    Shared pytest-benchmark driver for one :class:`PhaseCase`: honour its
-    ``skip`` and ``requires``, then run its action under ``benchmark``.
-    """
-    if case.skip:
-        pytest.skip(case.skip)
-    for mod in case.spec.requires:
+def cases(phase: str) -> pytest.MarkDecorator:
+    """Parametrize a phase driver over every ``(spec, n)`` that phase runs."""
+    params = iter_params(phase)
+    return pytest.mark.parametrize(
+        ("spec", "n"),
+        params,
+        ids=[spec_param_id(s.name, s.axis, v) for s, v in params],
+    )
+
+
+def require(spec: BenchSpec) -> None:
+    """``importorskip`` a spec's optional dependencies before it runs."""
+    for mod in spec.requires:
         pytest.importorskip(mod)
-    with case.run() as action:
-        benchmark(action)
+
+
+def build_model(spec: BenchSpec, n: int) -> linopy.Model:
+    """Build ``spec`` at ``n`` — the untimed setup, after the requires-skip."""
+    require(spec)
+    return spec.build(n)

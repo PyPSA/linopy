@@ -9,28 +9,31 @@ written artifact.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import pytest
-
-from benchmarks.conftest import run_case
-from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.conftest import build_model, cases
+from benchmarks.phases import read_netcdf, write_netcdf
 from benchmarks.registry import FROM_NETCDF, TO_NETCDF
 
-_WRITE_CASES = list(phase_cases(TO_NETCDF))
-_READ_CASES = list(phase_cases(FROM_NETCDF))
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from benchmarks.registry import BenchSpec
 
 
-@pytest.mark.parametrize("case", _WRITE_CASES, ids=[c.id for c in _WRITE_CASES])
+@cases(TO_NETCDF)
 def test_to_netcdf(
-    benchmark: Callable[..., object],
-    case: PhaseCase,
+    benchmark: Callable[..., object], spec: BenchSpec, n: int, tmp_path: Path
 ) -> None:
-    run_case(benchmark, case)
+    m = build_model(spec, n)
+    benchmark(lambda: write_netcdf(m, tmp_path / "model.nc"))
 
 
-@pytest.mark.parametrize("case", _READ_CASES, ids=[c.id for c in _READ_CASES])
+@cases(FROM_NETCDF)
 def test_from_netcdf(
-    benchmark: Callable[..., object],
-    case: PhaseCase,
+    benchmark: Callable[..., object], spec: BenchSpec, n: int, tmp_path: Path
 ) -> None:
-    run_case(benchmark, case)
+    m = build_model(spec, n)
+    path = tmp_path / "model.nc"
+    write_netcdf(m, path)  # setup — untimed
+    benchmark(lambda: read_netcdf(path))

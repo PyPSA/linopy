@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import pytest
-
-from benchmarks.conftest import run_case
-from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.conftest import build_model, cases
+from benchmarks.phases import write_lp
 from benchmarks.registry import TO_LP
 
-_CASES = list(phase_cases(TO_LP))
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from benchmarks.registry import BenchSpec
 
 
-@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
+@cases(TO_LP)
 def test_to_lp(
-    benchmark: Callable[..., object],
-    case: PhaseCase,
+    benchmark: Callable[..., object], spec: BenchSpec, n: int, tmp_path: Path
 ) -> None:
-    run_case(benchmark, case)
+    m = build_model(spec, n)
+    path = tmp_path / "model.lp"
+    benchmark(lambda: write_lp(m, path))

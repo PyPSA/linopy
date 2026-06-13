@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import pytest
-
-from benchmarks.conftest import run_case
-from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.conftest import build_model, cases
+from benchmarks.phases import touch_matrices
 from benchmarks.registry import MATRICES
 
-_CASES = list(phase_cases(MATRICES))
+if TYPE_CHECKING:
+    from benchmarks.registry import BenchSpec
 
 
-@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
-def test_matrices(
-    benchmark: Callable[..., object],
-    case: PhaseCase,
-) -> None:
-    run_case(benchmark, case)
+@cases(MATRICES)
+def test_matrices(benchmark: Callable[..., object], spec: BenchSpec, n: int) -> None:
+    m = build_model(spec, n)
+    benchmark(lambda: touch_matrices(m))

@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import pytest
-
-from benchmarks.conftest import run_case
-from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.conftest import cases, require
 from benchmarks.registry import BUILD
 
-_CASES = list(phase_cases(BUILD))
+if TYPE_CHECKING:
+    from benchmarks.registry import BenchSpec
 
 
-@pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
-def test_build(
-    benchmark: Callable[..., object],
-    case: PhaseCase,
-) -> None:
-    run_case(benchmark, case)
+@cases(BUILD)
+def test_build(benchmark: Callable[..., object], spec: BenchSpec, n: int) -> None:
+    require(spec)
+    benchmark(lambda: spec.build(n))
