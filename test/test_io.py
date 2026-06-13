@@ -221,6 +221,32 @@ def test_read_netcdf_with_multiindex_legacy_list_attr(
     assert_model_equal(m, read_netcdf(fn_legacy))
 
 
+def test_model_to_netcdf_stamps_version(model: Model, tmp_path: Path) -> None:
+    from importlib.metadata import version
+
+    from linopy.io import NETCDF_VERSION_ATTR
+
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+
+    ds = xr.load_dataset(fn)
+    assert ds.attrs[NETCDF_VERSION_ATTR] == version("linopy")
+
+
+def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
+    from linopy.io import NETCDF_VERSION_ATTR
+
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+
+    ds = xr.load_dataset(fn).load()
+    del ds.attrs[NETCDF_VERSION_ATTR]
+    fn_legacy = tmp_path / "legacy.nc"
+    ds.to_netcdf(fn_legacy)
+
+    assert_model_equal(model, read_netcdf(fn_legacy))
+
+
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_file_lp(model: Model, tmp_path: Path) -> None:
     import gurobipy

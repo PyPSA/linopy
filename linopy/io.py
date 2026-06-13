@@ -12,6 +12,7 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable
+from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+NETCDF_VERSION_ATTR = "_linopy_version"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -971,6 +974,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
