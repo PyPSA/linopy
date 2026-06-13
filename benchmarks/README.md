@@ -21,8 +21,7 @@ their sweep axis:
 - **Patterns** (`patterns/`, `PATTERNS`) — fragments of realistic modelling
   code (a balance constraint, a KVL contraction) swept over `severity`
   (0–100, axis `severity`): "how does cost respond as one data shape goes
-  from benign to pathological?" Each `PatternSpec.description` documents what
-  its dial means (`"0: …, 100: …"`).
+  from benign to pathological?"
 
 Both kinds build a complete `linopy.Model`, so both run the **same phases** and
 share the phase drivers (`test_build.py`, `test_matrices.py`, …) — they're just

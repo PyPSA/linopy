@@ -4,8 +4,7 @@ End-to-end pipeline benchmark: build → matrices → LP write in one region.
 Opt-in (deselected unless ``--pipeline``): it re-runs the per-phase work and,
 unlike the individual phase benchmarks, *includes the model build* — so it
 captures the end-to-end cost/peak a real build-then-export session hits, which
-can't be recovered by summing the marginal per-phase numbers. The memory side
-measures the same thing via ``... --metric memory --phase pipeline``.
+can't be recovered by summing the marginal per-phase numbers.
 """
 
 from __future__ import annotations

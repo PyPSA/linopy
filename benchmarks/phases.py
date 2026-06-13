@@ -102,13 +102,13 @@ Action = Callable[[], object]
 CaseFactory = Callable[[], AbstractContextManager[Action]]
 
 PIPELINE = "pipeline"
+TO_SOLVER = "to_solver"
 
 
 class PhaseCase(NamedTuple):
     """One parametrization of a phase — what the pytest drivers consume."""
 
     spec: BenchSpec
-    value: int
     id: str
     run: CaseFactory
     skip: str | None
@@ -179,6 +179,7 @@ _PHASE_CASE: dict[
     TO_LP: (TO_LP, _to_lp_case),
     TO_NETCDF: (TO_NETCDF, _to_netcdf_case),
     FROM_NETCDF: (FROM_NETCDF, _from_netcdf_case),
+    # pipeline parametrizes off the to_lp specs — it ends in an LP write.
     PIPELINE: (TO_LP, _pipeline_case),
 }
 
@@ -193,16 +194,16 @@ def phase_cases(phase: str) -> Iterator[PhaseCase]:
     id-suffix); every other phase yields one case per applicable ``(spec,
     value)``. ``skip`` is set for solvers that aren't installed.
     """
-    if phase == "to_solver":
+    if phase == TO_SOLVER:
         for name, tag, wrapper in SOLVER_HANDOFFS:
             skip = None if name in available_solvers else f"{name} not installed"
             for spec, value in iter_params(tag):
                 sfx = f"{name}-{spec_param_id(spec.name, spec.axis, value)}"
                 run = partial(_solver_case, spec, value, wrapper)
-                yield PhaseCase(spec, value, sfx, run, skip)
+                yield PhaseCase(spec, sfx, run, skip)
         return
 
     tag, case = _PHASE_CASE[phase]
     for spec, value in iter_params(tag):
         sfx = spec_param_id(spec.name, spec.axis, value)
-        yield PhaseCase(spec, value, sfx, partial(case, spec, value), None)
+        yield PhaseCase(spec, sfx, partial(case, spec, value), None)

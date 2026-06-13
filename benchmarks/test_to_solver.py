@@ -19,9 +19,9 @@ from collections.abc import Callable
 import pytest
 
 from benchmarks.conftest import run_case
-from benchmarks.phases import PhaseCase, phase_cases
+from benchmarks.phases import TO_SOLVER, PhaseCase, phase_cases
 
-_CASES = list(phase_cases("to_solver"))
+_CASES = list(phase_cases(TO_SOLVER))
 
 
 @pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
