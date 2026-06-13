@@ -1,18 +1,8 @@
 """
-Reusable registry of benchmark models.
+Registry of benchmark models and patterns.
 
-A :class:`ModelSpec` captures everything to drive a model through the suite and
-to reuse it elsewhere:
-
-- ``build(size) -> linopy.Model``  the builder
-- ``sizes``                        canonical tuned sizes
-- ``features``                     variable / constraint kinds it uses
-- ``phases``                       applicable phases (to_lp, to_highspy, …)
-- ``quick_sizes``                  ``--quick`` subset (per spec)
-- ``long_sizes``                   heaviest sizes, held back to ``--long``
-- ``requires``                     modules to ``pytest.importorskip``
-
-::
+A :class:`ModelSpec` / :class:`PatternSpec` declares how to build a model and
+which sizes / phases it runs; ``register(...)`` adds it to :data:`REGISTRY`::
 
     from benchmarks import REGISTRY
     model = REGISTRY["basic"].build(100)
@@ -85,13 +75,7 @@ DEFAULT_PHASES = frozenset(
 
 
 def _quick_subset(values: tuple[int, ...]) -> tuple[int, ...]:
-    """
-    The curated ``--quick`` subset of a sweep: first, middle, last.
-
-    Three representative points — a cheap smoke size, the midpoint, and the
-    peak — deduped (so 1–2 value sweeps collapse cleanly). For the 3-value
-    severity sweep this is the whole ``(0, 50, 100)``.
-    """
+    """The ``--quick`` subset of a sweep: first, middle, last (deduped)."""
     if not values:
         return ()
     picks = (values[0], values[len(values) // 2], values[-1])
@@ -103,15 +87,9 @@ class ModelSpec:
     """
     Declarative description of one benchmark model.
 
-    Three explicit size tiers gate run cost (each a subset, or the whole, of
-    ``sizes`` — declared per spec, no thresholds):
-
-    - ``--quick``: only ``quick_sizes`` — the per-PR / CI smoke set.
-    - default: ``sizes`` minus ``long_sizes`` — medium-cost regression.
-    - ``--long``: every size in ``sizes``.
-
-    ``quick_sizes=()`` opts a spec out of ``--quick`` entirely; ``long_sizes``
-    lists the heaviest sizes held back from the default run.
+    Three size tiers gate run cost (each a subset of ``sizes``): ``--quick``
+    runs ``quick_sizes`` (``()`` opts out), the default runs ``sizes`` minus
+    ``long_sizes``, and ``--long`` runs every size.
     """
 
     name: str
@@ -131,7 +109,7 @@ class ModelSpec:
 
     @property
     def axis(self) -> str:
-        """Short x-axis label for the sweep dial: a model scales by size."""
+        """Sweep axis label — models scale by size."""
         return "n"
 
     @property
@@ -161,27 +139,6 @@ class ModelSpec:
         )
         return f"ModelSpec({self.name!r}, features={{{feats}}}, sizes={size_range})"
 
-    def _repr_html_(self) -> str:
-        # Rich rendering for Jupyter — a compact two-column table.
-        rows = [
-            ("name", self.name),
-            ("features", ", ".join(sorted(self.features))),
-            ("sizes", ", ".join(str(s) for s in self.sizes)),
-            ("phases", ", ".join(sorted(self.phases))),
-            ("quick", ", ".join(str(s) for s in self.quick_subset) or "—"),
-            ("long", ", ".join(str(s) for s in self.long_sizes) or "—"),
-            ("requires", ", ".join(self.requires) or "—"),
-        ]
-        body = "".join(
-            f"<tr><th style='text-align:left;padding-right:1em'>{k}</th>"
-            f"<td>{v}</td></tr>"
-            for k, v in rows
-        )
-        return (
-            f"<b>ModelSpec</b> <code>{self.name}</code>"
-            f"<table style='font-size:90%'>{body}</table>"
-        )
-
 
 REGISTRY: dict[str, ModelSpec] = {}
 
@@ -208,12 +165,8 @@ def iter_params(
     phase: str, specs: Iterable[BenchSpec] | None = None
 ) -> list[tuple[BenchSpec, int]]:
     """
-    Pytest parametrize helper — flatten ``(spec, value)`` pairs for one phase.
-
-    ``specs`` defaults to every spec in the suite — models *and* patterns — so a
-    phase driver picks both up automatically. Works over any :class:`BenchSpec`
-    via its ``sweep`` axis, so models (size) and patterns (severity) share one
-    helper. Pass an explicit collection (e.g. ``PATTERNS.values()``) to narrow.
+    Flatten ``(spec, value)`` pairs for one phase — the pytest parametrize
+    source. ``specs`` defaults to every model and pattern in the suite.
     """
     specs = all_specs() if specs is None else specs
     return [
@@ -277,20 +230,11 @@ class PatternSpec:
     """
     Declarative description of one *user pattern* (modelling idiom).
 
-    ``build(severity)`` constructs a small, realistic model fragment, where
-    ``severity`` is an int in ``[0, 100]`` dialling the data shape from benign
-    (0) to worst-case (100). The harness measures the act of building it (time
-    + peak memory) across the ``severities`` sweep. ``description`` documents
-    the dial — by convention ``"<what it varies> — 0: <benign>, 100: <worst>"``
-    — and doubles as the plot caption.
-
-    A pattern builds a complete model, so it runs the same ``phases`` as a model
-    by default — the build-vs-export contrast (does the dense-``_term`` bloat
-    reach the matrix / LP file, or collapse?) is the point. The full severity
-    range ``DEFAULT_SEVERITIES`` runs by default; ``--quick`` keeps
-    ``QUICK_SEVERITIES`` ``(0, 50, 100)`` — the benign, midpoint *and* worst-case
-    shapes — while the full sweep keeps the finer resolution. Patterns have no
-    ``long_sizes`` (every severity runs by default).
+    ``build(severity)`` constructs a realistic model fragment, where
+    ``severity`` (0–100) dials the data shape from benign to worst-case. A
+    pattern builds a complete model, so it runs the same ``phases`` as a model
+    — the build-vs-export contrast is the point. ``--quick`` keeps
+    ``QUICK_SEVERITIES`` ``(0, 50, 100)``; ``description`` documents the dial.
     """
 
     name: str
@@ -324,24 +268,6 @@ class PatternSpec:
     def __repr__(self) -> str:
         sev = ", ".join(str(s) for s in self.severities)
         return f"PatternSpec({self.name!r}, severities=[{sev}])"
-
-    def _repr_html_(self) -> str:
-        rows = [
-            ("name", self.name),
-            ("description", self.description),
-            ("severities", ", ".join(str(s) for s in self.severities)),
-            ("phases", ", ".join(sorted(self.phases))),
-            ("requires", ", ".join(self.requires) or "—"),
-        ]
-        body = "".join(
-            f"<tr><th style='text-align:left;padding-right:1em'>{k}</th>"
-            f"<td>{v}</td></tr>"
-            for k, v in rows
-        )
-        return (
-            f"<b>PatternSpec</b> <code>{self.name}</code>"
-            f"<table style='font-size:90%'>{body}</table>"
-        )
 
 
 PATTERNS: dict[str, PatternSpec] = {}

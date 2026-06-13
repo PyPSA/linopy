@@ -103,18 +103,9 @@ def pytest_collection_modifyitems(
 
 def maybe_skip(request: pytest.FixtureRequest, spec: BenchSpec, size: int) -> None:
     """
-    Apply size selection and ``spec.requires`` importorskips.
-
-    Selection (most specific first):
-
-    - ``--size N`` / ``--severity S`` → run only the listed values for that
-      axis (models read ``--size``, patterns ``--severity``); overrides tiers.
-    - ``--quick``                     → only ``spec.quick_subset``
-    - default (no flag)               → skip sizes in ``spec.long_sizes``
-    - ``--long``                      → no size cap
-
-    A manual axis flag wins over ``--quick``/``--long``; ``--quick`` in turn
-    wins over ``--long`` (the more restrictive mode is honoured).
+    Apply ``spec.requires`` importorskips and size/severity selection — the
+    ``--size``/``--severity``/``--quick``/``--long`` flags, resolved by
+    :func:`skip_reason`.
     """
     for mod in spec.requires:
         pytest.importorskip(mod)
@@ -137,11 +128,8 @@ def run_case(
     request: pytest.FixtureRequest,
 ) -> None:
     """
-    Shared pytest-benchmark driver body for one :class:`PhaseCase`.
-
-    Honours the case's own ``skip`` (e.g. solver not installed) and the size
-    tiers (via :func:`maybe_skip`), then runs the case's measured action under
-    ``benchmark`` inside the case's setup/teardown context.
+    Shared pytest-benchmark driver for one :class:`PhaseCase`: honour its
+    ``skip`` and the size tiers, then run its action under ``benchmark``.
     """
     if case.skip:
         pytest.skip(case.skip)
