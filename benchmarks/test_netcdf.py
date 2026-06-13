@@ -24,15 +24,13 @@ _READ_CASES = list(phase_cases(FROM_NETCDF))
 def test_to_netcdf(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)
 
 
 @pytest.mark.parametrize("case", _READ_CASES, ids=[c.id for c in _READ_CASES])
 def test_from_netcdf(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

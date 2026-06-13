@@ -28,6 +28,5 @@ _CASES = list(phase_cases("to_solver"))
 def test_to_solver(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

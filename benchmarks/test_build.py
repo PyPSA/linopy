@@ -17,6 +17,5 @@ _CASES = list(phase_cases(BUILD))
 def test_build(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

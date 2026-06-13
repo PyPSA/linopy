@@ -66,9 +66,5 @@ SPEC = register_pattern(
     PatternSpec(
         name="nodal_balance",
         build=build_nodal_balance,
-        description=(
-            "generator→bus skew — 0: uniform (~N/B per bus), "
-            "100: one hub holds the rest"
-        ),
     )
 )

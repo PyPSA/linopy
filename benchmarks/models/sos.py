@@ -27,10 +27,8 @@ import xarray as xr
 import linopy
 from benchmarks.registry import (
     BUILD,
-    CONTINUOUS,
     FROM_NETCDF,
     MATRICES,
-    SOS,
     TO_GUROBIPY,
     TO_LP,
     TO_NETCDF,
@@ -39,9 +37,7 @@ from benchmarks.registry import (
     register,
 )
 
-SIZES = (10, 100, 1_000, 10_000)
-QUICK_SIZES = (10, 1_000)
-LONG_SIZES = (10_000,)
+SIZES = (10, 1_000)
 
 _N_MODES = 5
 _API_AVAILABLE = hasattr(linopy.Model, "add_sos_constraints")
@@ -80,9 +76,6 @@ if _API_AVAILABLE:
             name="sos",
             build=build_sos,
             sizes=SIZES,
-            quick_sizes=QUICK_SIZES,
-            long_sizes=LONG_SIZES,
-            features=frozenset({CONTINUOUS, SOS}),
             # HiGHS / Mosek lack native SOS in linopy — would need
             # ``reformulate_sos=True``, which mutates the model and defeats
             # the benchmark. Only solvers with native SOS appear here.

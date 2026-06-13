@@ -17,6 +17,5 @@ _CASES = list(phase_cases(TO_LP))
 def test_to_lp(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

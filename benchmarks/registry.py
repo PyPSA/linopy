@@ -16,20 +16,6 @@ from typing import Protocol
 
 import linopy
 
-# --- Feature tags -----------------------------------------------------------
-
-CONTINUOUS = "continuous"
-BINARY = "binary"
-INTEGER = "integer"
-QUADRATIC = "quadratic"
-SOS = "sos"
-PIECEWISE = "piecewise"
-MASKED = "masked"
-
-ALL_FEATURES = frozenset(
-    {CONTINUOUS, BINARY, INTEGER, QUADRATIC, SOS, PIECEWISE, MASKED}
-)
-
 # --- Phase tags -------------------------------------------------------------
 
 BUILD = "build"
@@ -56,51 +42,20 @@ ALL_PHASES = frozenset(
     }
 )
 
-# Phases every "well-behaved LP / MILP" can do. Models with features the
-# default solvers can't ingest natively (e.g. native SOS for HiGHS) override
-# this with a narrower set.
-DEFAULT_PHASES = frozenset(
-    {
-        BUILD,
-        MATRICES,
-        TO_LP,
-        TO_NETCDF,
-        FROM_NETCDF,
-        TO_HIGHSPY,
-        TO_GUROBIPY,
-        TO_MOSEK,
-        TO_XPRESS,
-    }
-)
-
-
-def _quick_subset(values: tuple[int, ...]) -> tuple[int, ...]:
-    """The ``--quick`` subset of a sweep: first, middle, last (deduped)."""
-    if not values:
-        return ()
-    picks = (values[0], values[len(values) // 2], values[-1])
-    return tuple(dict.fromkeys(picks))
+# The default phase set; a spec overrides with a narrower one when the default
+# solvers can't ingest it natively (e.g. native SOS for HiGHS).
+DEFAULT_PHASES = ALL_PHASES
 
 
 @dataclass(frozen=True, repr=False)
 class ModelSpec:
-    """
-    Declarative description of one benchmark model.
-
-    Three size tiers gate run cost (each a subset of ``sizes``): ``--quick``
-    runs ``quick_sizes`` (``()`` opts out), the default runs ``sizes`` minus
-    ``long_sizes``, and ``--long`` runs every size.
-    """
+    """Declarative description of one benchmark model — it runs ``sizes``."""
 
     name: str
     build: Callable[[int], linopy.Model]
     sizes: tuple[int, ...]
-    features: frozenset[str] = frozenset({CONTINUOUS})
     phases: frozenset[str] = DEFAULT_PHASES
-    quick_sizes: tuple[int, ...] | None = None
-    long_sizes: tuple[int, ...] = ()
     requires: tuple[str, ...] = ()
-    description: str = ""
 
     @property
     def sweep(self) -> tuple[int, ...]:
@@ -112,32 +67,16 @@ class ModelSpec:
         """Sweep axis label — models scale by size."""
         return "n"
 
-    @property
-    def quick_subset(self) -> tuple[int, ...]:
-        """
-        ``--quick`` sizes — ``quick_sizes`` (``()`` opts out); falls back to
-        first/mid/last of ``sizes`` if unset.
-        """
-        return (
-            self.quick_sizes
-            if self.quick_sizes is not None
-            else _quick_subset(self.sweep)
-        )
-
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases
 
-    def has_feature(self, feature: str) -> bool:
-        return feature in self.features
-
     def __repr__(self) -> str:
-        feats = ",".join(sorted(self.features))
         size_range = (
             f"{self.sizes[0]}..{self.sizes[-1]}"
             if len(self.sizes) > 1
             else str(self.sizes[0])
         )
-        return f"ModelSpec({self.name!r}, features={{{feats}}}, sizes={size_range})"
+        return f"ModelSpec({self.name!r}, sizes={size_range})"
 
 
 REGISTRY: dict[str, ModelSpec] = {}
@@ -147,11 +86,6 @@ def register(spec: ModelSpec) -> ModelSpec:
     """Add ``spec`` to the global registry. Returns the spec for chaining."""
     if spec.name in REGISTRY:
         raise ValueError(f"model {spec.name!r} already registered")
-    unknown_features = spec.features - ALL_FEATURES
-    if unknown_features:
-        raise ValueError(
-            f"model {spec.name!r}: unknown features {sorted(unknown_features)}"
-        )
     unknown_phases = spec.phases - ALL_PHASES
     if unknown_phases:
         raise ValueError(
@@ -189,8 +123,7 @@ def spec_param_id(name: str, axis: str, value: object) -> str:
 
 # --- Patterns ---------------------------------------------------------------
 
-DEFAULT_SEVERITIES: tuple[int, ...] = (0, 25, 50, 75, 100)  # full sweep / --long
-QUICK_SEVERITIES: tuple[int, ...] = (0, 50, 100)  # --quick (per-PR)
+SEVERITIES: tuple[int, ...] = (0, 50, 100)  # the severity sweep every pattern runs
 
 
 class BenchSpec(Protocol):
@@ -199,23 +132,16 @@ class BenchSpec(Protocol):
 
     Both build a :class:`linopy.Model` from one integer dial and run through
     the same phases. They differ only in what that dial *means* — captured by
-    ``sweep`` (the values), ``axis`` (the short label, ``"n"`` vs
-    ``"severity"``), and ``description`` (the human one-liner). Read these
-    instead of branching on the concrete type.
+    ``sweep`` (the values) and ``axis`` (the short label, ``"n"`` vs
+    ``"severity"``). Read these instead of branching on the concrete type.
     """
 
     @property
     def name(self) -> str: ...
     @property
-    def description(self) -> str: ...
-    @property
     def phases(self) -> frozenset[str]: ...
     @property
     def requires(self) -> tuple[str, ...]: ...
-    @property
-    def quick_subset(self) -> tuple[int, ...]: ...
-    @property
-    def long_sizes(self) -> tuple[int, ...]: ...
     @property
     def build(self) -> Callable[[int], linopy.Model]: ...
     @property
@@ -233,18 +159,15 @@ class PatternSpec:
     ``build(severity)`` constructs a realistic model fragment, where
     ``severity`` (0–100) dials the data shape from benign to worst-case. A
     pattern builds a complete model, so it runs the same ``phases`` as a model
-    — the build-vs-export contrast is the point. ``--quick`` keeps
-    ``QUICK_SEVERITIES`` ``(0, 50, 100)``; ``description`` documents the dial.
+    — the build-vs-export contrast is the point. It runs the ``severities``
+    sweep (default ``SEVERITIES``).
     """
 
     name: str
     build: Callable[[int], linopy.Model]
-    description: str
-    severities: tuple[int, ...] = DEFAULT_SEVERITIES
+    severities: tuple[int, ...] = SEVERITIES
     phases: frozenset[str] = DEFAULT_PHASES
     requires: tuple[str, ...] = ()
-    quick_sizes: tuple[int, ...] | None = None
-    long_sizes: tuple[int, ...] = ()
 
     @property
     def sweep(self) -> tuple[int, ...]:
@@ -253,14 +176,6 @@ class PatternSpec:
     @property
     def axis(self) -> str:
         return "severity"
-
-    @property
-    def quick_subset(self) -> tuple[int, ...]:
-        """
-        ``--quick`` severities — ``quick_sizes`` if set, else
-        ``QUICK_SEVERITIES`` ``(0, 50, 100)``.
-        """
-        return self.quick_sizes if self.quick_sizes is not None else QUICK_SEVERITIES
 
     def applies_to(self, phase: str) -> bool:
         return phase in self.phases
@@ -294,36 +209,3 @@ def register_pattern(spec: PatternSpec) -> PatternSpec:
 def all_specs() -> list[BenchSpec]:
     """Every spec in the suite — models then patterns."""
     return [*REGISTRY.values(), *PATTERNS.values()]
-
-
-def skip_reason(
-    spec: BenchSpec,
-    value: int,
-    *,
-    quick: bool = False,
-    long: bool = False,
-    sizes: tuple[int, ...] = (),
-    severities: tuple[int, ...] = (),
-) -> str | None:
-    """
-    Why ``(spec, value)`` is excluded under this selection, or ``None`` to run.
-
-    Single source of truth for size/severity selection, applied by
-    ``conftest.maybe_skip``. Precedence, most specific first:
-
-    - a manual axis list (``sizes`` for models, ``severities`` for patterns)
-      → run only those values;
-    - ``--quick`` → only ``spec.quick_subset``;
-    - default → skip values in ``spec.long_sizes`` (the heaviest, held back);
-    - ``--long`` → everything.
-    """
-    manual = severities if spec.axis == "severity" else sizes
-    if manual:
-        return None if value in manual else f"{spec.axis}={value} not selected"
-    if quick:
-        if value not in spec.quick_subset:
-            return f"--quick: skipping {spec.name} {spec.axis}={value}"
-        return None
-    if not long and value in spec.long_sizes:
-        return f"long sweep needs --long: skipping {spec.name} {spec.axis}={value}"
-    return None

@@ -1,6 +1,5 @@
 """
-Linopy benchmark suite — run with ``pytest benchmarks/`` (``--quick`` for the
-smaller per-PR subset).
+Linopy benchmark suite — run with ``pytest benchmarks/``.
 
 The model registry it drives is reusable on its own::
 

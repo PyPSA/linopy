@@ -23,16 +23,12 @@ import numpy as np
 
 import linopy
 from benchmarks.registry import (
-    CONTINUOUS,
     DEFAULT_PHASES,
-    QUADRATIC,
     ModelSpec,
     register,
 )
 
-SIZES = (10, 100, 1_000, 5_000, 20_000)
-QUICK_SIZES = (10, 1_000)
-LONG_SIZES = (5_000, 20_000)
+SIZES = (10, 1_000)
 
 
 def build_qp(n_assets: int) -> linopy.Model:
@@ -60,9 +56,6 @@ SPEC = register(
         name="qp",
         build=build_qp,
         sizes=SIZES,
-        quick_sizes=QUICK_SIZES,
-        long_sizes=LONG_SIZES,
-        features=frozenset({CONTINUOUS, QUADRATIC}),
         phases=DEFAULT_PHASES,
     )
 )

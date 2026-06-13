@@ -24,6 +24,5 @@ _CASES = list(phase_cases(PIPELINE))
 def test_pipeline(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

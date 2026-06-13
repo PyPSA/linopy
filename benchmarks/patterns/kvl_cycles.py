@@ -67,9 +67,5 @@ SPEC = register_pattern(
     PatternSpec(
         name="kvl_cycles",
         build=build_kvl_cycles,
-        description=(
-            "cycle-matrix sparsity — 0: dense, 100: ~3 branches/cycle "
-            "(current @ densifies to nterm=n_branch regardless)"
-        ),
     )
 )

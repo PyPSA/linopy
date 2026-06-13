@@ -5,11 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 import linopy
-from benchmarks.registry import CONTINUOUS, ModelSpec, register
+from benchmarks.registry import ModelSpec, register
 
-SIZES = (10, 50, 100, 250, 500, 1000)
-QUICK_SIZES = (10, 250)
-LONG_SIZES = (1000,)
+SIZES = (10, 250)
 
 
 def build_expression_arithmetic(n: int) -> linopy.Model:
@@ -38,8 +36,5 @@ SPEC = register(
         name="expression_arithmetic",
         build=build_expression_arithmetic,
         sizes=SIZES,
-        quick_sizes=QUICK_SIZES,
-        long_sizes=LONG_SIZES,
-        features=frozenset({CONTINUOUS}),
     )
 )

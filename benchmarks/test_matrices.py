@@ -17,6 +17,5 @@ _CASES = list(phase_cases(MATRICES))
 def test_matrices(
     benchmark: Callable[..., object],
     case: PhaseCase,
-    request: pytest.FixtureRequest,
 ) -> None:
-    run_case(benchmark, case, request)
+    run_case(benchmark, case)

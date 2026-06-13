@@ -38,9 +38,5 @@ SPEC = register_pattern(
     PatternSpec(
         name="cumsum",
         build=build_cumsum,
-        description=(
-            "cumulated-dim size — 0: size-2 dim (nterm 2), "
-            "100: size-200 dim (nterm 200, triangular)"
-        ),
     )
 )

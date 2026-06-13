@@ -52,20 +52,20 @@ run-to-run deltas reflect linopy changes, not dependency bumps.
 ## Running
 
 ```bash
-pytest benchmarks/                       # the full suite
-pytest benchmarks/ --quick               # the per-PR subset (smaller sizes)
-pytest benchmarks/ --quick --benchmark-disable -q   # smoke: every spec builds once
+pytest benchmarks/                       # the suite
+pytest benchmarks/ --benchmark-disable -q   # smoke: every spec builds once
+pytest benchmarks/ --pipeline            # + the opt-in end-to-end pipeline test
 ```
 
-Size tiers are explicit per spec (`SIZES` / `QUICK_SIZES` / `LONG_SIZES`):
-`--quick` runs the subset, the default is `SIZES − LONG_SIZES`, `--long` runs
-everything. A single `skip_reason` gates the suite.
+Each spec declares one `sizes` (models) / `severities` (patterns) tuple — a
+small representative set, kept tight because CodSpeed measures it on every PR.
+Need a scaling curve? That's a local pytest-benchmem job, not this suite.
 
 ## CI
 
 - **Smoke** (`benchmark-smoke.yml`) — every PR: every spec builds and every
-  phase fires once under `--quick --benchmark-disable`. A "did a refactor break
-  a spec?" check, not timing.
+  phase fires once under `--benchmark-disable`. A "did a refactor break a
+  spec?" check, not timing.
 - **CodSpeed memory** (`codspeed-memory.yml`) — every PR: heap-allocation
   tracking, informational, non-gating.
 - **CodSpeed walltime** (`codspeed-macro.yml`) — on `master` or a PR labelled

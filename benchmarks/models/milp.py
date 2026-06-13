@@ -23,16 +23,12 @@ import numpy as np
 
 import linopy
 from benchmarks.registry import (
-    CONTINUOUS,
     DEFAULT_PHASES,
-    INTEGER,
     ModelSpec,
     register,
 )
 
-SIZES = (10, 25, 50, 100, 200)
-QUICK_SIZES = (10, 50)
-LONG_SIZES = (200,)
+SIZES = (10, 50)
 
 
 def build_milp(n: int) -> linopy.Model:
@@ -74,9 +70,6 @@ SPEC = register(
         name="milp",
         build=build_milp,
         sizes=SIZES,
-        quick_sizes=QUICK_SIZES,
-        long_sizes=LONG_SIZES,
-        features=frozenset({INTEGER, CONTINUOUS}),
         phases=DEFAULT_PHASES,
     )
 )

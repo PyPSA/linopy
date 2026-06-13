@@ -1,7 +1,7 @@
 name: Benchmark smoke
 
-# Builds every spec and fires every phase once under --quick
-# --benchmark-disable: a "did a refactor break a spec?" check, not timing.
+# Builds every spec and fires every phase once (--benchmark-disable):
+# a "did a refactor break a spec?" check, not timing.
 
 on:
   push:
@@ -36,4 +36,4 @@ jobs:
     - name: Run benchmark smoke
       # Every spec builds at one size and every phase fires once, no timings.
       run: |
-        pytest benchmarks/ --quick --benchmark-disable -q
+        pytest benchmarks/ --benchmark-disable -q

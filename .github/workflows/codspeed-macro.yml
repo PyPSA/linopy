@@ -59,4 +59,4 @@ jobs:
       with:
         mode: walltime
         run: |
-          pytest benchmarks/ --quick --codspeed
+          pytest benchmarks/ --codspeed

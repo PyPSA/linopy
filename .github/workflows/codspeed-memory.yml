@@ -45,4 +45,4 @@ jobs:
       with:
         mode: memory
         run: |
-          pytest benchmarks/ --quick --codspeed
+          pytest benchmarks/ --codspeed

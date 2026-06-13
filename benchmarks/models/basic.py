@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import linopy
-from benchmarks.registry import CONTINUOUS, ModelSpec, register
+from benchmarks.registry import ModelSpec, register
 
-SIZES = (10, 50, 100, 250, 500, 1000, 1600)
-QUICK_SIZES = (10, 250)
-LONG_SIZES = (1000, 1600)
+SIZES = (10, 250)
 
 
 def build_basic(n: int) -> linopy.Model:
@@ -26,8 +24,5 @@ SPEC = register(
         name="basic",
         build=build_basic,
         sizes=SIZES,
-        quick_sizes=QUICK_SIZES,
-        long_sizes=LONG_SIZES,
-        features=frozenset({CONTINUOUS}),
     )
 )

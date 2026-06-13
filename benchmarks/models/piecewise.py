@@ -24,16 +24,12 @@ import warnings
 
 import linopy
 from benchmarks.registry import (
-    CONTINUOUS,
     DEFAULT_PHASES,
-    PIECEWISE,
     ModelSpec,
     register,
 )
 
-SIZES = (10, 100, 1_000, 5_000)
-QUICK_SIZES = (10, 1_000)
-LONG_SIZES = (5_000,)
+SIZES = (10, 1_000)
 
 _API_AVAILABLE = hasattr(linopy.Model, "add_piecewise_formulation") and hasattr(
     linopy, "EvolvingAPIWarning"
@@ -83,9 +79,6 @@ if _API_AVAILABLE:
             name="piecewise",
             build=build_piecewise,
             sizes=SIZES,
-            quick_sizes=QUICK_SIZES,
-            long_sizes=LONG_SIZES,
-            features=frozenset({CONTINUOUS, PIECEWISE}),
             # Monotonic breakpoints + ``method="auto"`` → incremental
             # reformulation (pure MILP with binaries), which every supported
             # solver handles.

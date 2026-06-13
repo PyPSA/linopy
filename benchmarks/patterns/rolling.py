@@ -40,9 +40,5 @@ SPEC = register_pattern(
     PatternSpec(
         name="rolling",
         build=build_rolling,
-        description=(
-            "rolling-window width — 1: single step (nterm 1), "
-            "1000: full-horizon window (nterm 1000)"
-        ),
     )
 )

@@ -51,9 +51,5 @@ SPEC = register_pattern(
     PatternSpec(
         name="merge_balance",
         build=build_merge_balance,
-        description=(
-            "ragged-merge block width — 0: all blocks narrow, "
-            "100: one wide block pads every block to its width"
-        ),
     )
 )
