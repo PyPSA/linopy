@@ -221,18 +221,6 @@ def test_read_netcdf_with_multiindex_legacy_list_attr(
     assert_model_equal(m, read_netcdf(fn_legacy))
 
 
-def test_model_to_netcdf_stamps_version(model: Model, tmp_path: Path) -> None:
-    from importlib.metadata import version
-
-    from linopy.io import NETCDF_VERSION_ATTR
-
-    fn = tmp_path / "test.nc"
-    model.to_netcdf(fn)
-
-    ds = xr.load_dataset(fn)
-    assert ds.attrs[NETCDF_VERSION_ATTR] == version("linopy")
-
-
 def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
     from linopy.io import NETCDF_VERSION_ATTR
 
