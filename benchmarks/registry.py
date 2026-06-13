@@ -14,9 +14,8 @@ to reuse it elsewhere:
 
 ::
 
-    from benchmarks import REGISTRY, filter_by, QUADRATIC
+    from benchmarks import REGISTRY
     model = REGISTRY["basic"].build(100)
-    qp_specs = filter_by(has_feature=QUADRATIC)
 """
 
 from __future__ import annotations
@@ -205,25 +204,6 @@ def register(spec: ModelSpec) -> ModelSpec:
     return spec
 
 
-def get(name: str) -> ModelSpec:
-    return REGISTRY[name]
-
-
-def filter_by(
-    *,
-    has_feature: str | None = None,
-    has_phase: str | None = None,
-) -> list[ModelSpec]:
-    out = []
-    for spec in REGISTRY.values():
-        if has_feature is not None and not spec.has_feature(has_feature):
-            continue
-        if has_phase is not None and not spec.applies_to(has_phase):
-            continue
-        out.append(spec)
-    return out
-
-
 def iter_params(
     phase: str, specs: Iterable[BenchSpec] | None = None
 ) -> list[tuple[BenchSpec, int]]:
@@ -248,15 +228,10 @@ def spec_param_id(name: str, axis: str, value: object) -> str:
     """
     The ``<name>-<axis>=<value>`` fragment that fills a test id's ``[...]``.
 
-    Single source of truth for the parametrize-id shape — pytest param ids
-    (:func:`param_ids`), the memory grid's test ids, and the solver-handoff ids
-    all build on it; :func:`benchmarks.snapshot.parse_test_id` reads it back.
+    Single source of truth for the parametrize-id shape — the pytest param
+    ids and the solver-handoff ids all build on it.
     """
     return f"{name}-{axis}={value}"
-
-
-def param_ids(params: list[tuple[BenchSpec, int]]) -> list[str]:
-    return [spec_param_id(spec.name, spec.axis, value) for spec, value in params]
 
 
 # --- Patterns ---------------------------------------------------------------
@@ -390,10 +365,6 @@ def register_pattern(spec: PatternSpec) -> PatternSpec:
     return spec
 
 
-def get_pattern(name: str) -> PatternSpec:
-    return PATTERNS[name]
-
-
 def all_specs() -> list[BenchSpec]:
     """Every spec in the suite — models then patterns."""
     return [*REGISTRY.values(), *PATTERNS.values()]
@@ -411,9 +382,8 @@ def skip_reason(
     """
     Why ``(spec, value)`` is excluded under this selection, or ``None`` to run.
 
-    Single source of truth for size/severity selection, shared by pytest
-    (``conftest.maybe_skip``) and the memory engine (``memory.run_phase``) so
-    the two can't drift. Precedence, most specific first:
+    Single source of truth for size/severity selection, applied by
+    ``conftest.maybe_skip``. Precedence, most specific first:
 
     - a manual axis list (``sizes`` for models, ``severities`` for patterns)
       → run only those values;

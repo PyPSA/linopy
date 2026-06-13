@@ -1,12 +1,8 @@
 """
 Single source of truth for *what each benchmark phase does to a model*.
 
-Both drivers import these verbs:
-
-- the pytest ``test_<phase>.py`` files wrap them in ``benchmark(...)``;
-- ``memory.py`` wraps them in ``memray.Tracker(...)``.
-
-So the measured operation is defined once. Setup — building the model,
+The pytest ``test_<phase>.py`` files wrap these verbs in ``benchmark(...)``,
+so the measured operation is defined once. Setup — building the model,
 creating scratch files — stays in the caller; only the verb itself
 lives here.
 """
@@ -84,13 +80,11 @@ def write_netcdf(m: linopy.Model, path: Path) -> None:
 
 
 # (solver_name, registry phase tag, wrapper) — consumed by the pytest
-# parametrization in ``test_to_solver.py`` and by ``memory.py``,
-# which looks up the "highs" entry. Adding a solver here automatically
-# extends both drivers.
+# parametrization in ``test_to_solver.py``. Adding a solver here
+# automatically extends the suite.
 #
 # Each wrapper is fetched via ``getattr`` so the tuple silently drops
-# any solver wrapper missing from the installed ``linopy`` — necessary
-# for cross-version ``sweep`` runs against older releases (e.g.
+# any solver wrapper missing from the installed ``linopy`` (e.g.
 # ``to_xpress`` doesn't exist before linopy 0.7.1).
 SOLVER_HANDOFFS: tuple[tuple[str, str, Callable[[linopy.Model], object]], ...] = tuple(
     (name, tag, wrapper)
@@ -109,19 +103,9 @@ CaseFactory = Callable[[], AbstractContextManager[Action]]
 
 PIPELINE = "pipeline"
 
-PHASE_NODE: dict[str, str] = {
-    BUILD: "benchmarks/test_build.py::test_build",
-    MATRICES: "benchmarks/test_matrices.py::test_matrices",
-    TO_LP: "benchmarks/test_to_lp.py::test_to_lp",
-    TO_NETCDF: "benchmarks/test_netcdf.py::test_to_netcdf",
-    FROM_NETCDF: "benchmarks/test_netcdf.py::test_from_netcdf",
-    "to_solver": "benchmarks/test_to_solver.py::test_to_solver",
-    PIPELINE: "benchmarks/test_pipeline.py::test_pipeline",
-}
-
 
 class PhaseCase(NamedTuple):
-    """One parametrization of a phase — what both drivers consume."""
+    """One parametrization of a phase — what the pytest drivers consume."""
 
     spec: BenchSpec
     value: int
@@ -187,7 +171,9 @@ def _pipeline_case(spec: BenchSpec, value: int) -> Iterator[Action]:
         yield action
 
 
-_PHASE_CASE: dict[str, tuple[str, Callable[[BenchSpec, int], AbstractContextManager[Action]]]] = {
+_PHASE_CASE: dict[
+    str, tuple[str, Callable[[BenchSpec, int], AbstractContextManager[Action]]]
+] = {
     BUILD: (BUILD, _build_case),
     MATRICES: (MATRICES, _matrices_case),
     TO_LP: (TO_LP, _to_lp_case),
@@ -200,8 +186,8 @@ _PHASE_CASE: dict[str, tuple[str, Callable[[BenchSpec, int], AbstractContextMana
 def phase_cases(phase: str) -> Iterator[PhaseCase]:
     """
     Yield every ``(spec, value)`` parametrization of one phase as a runnable
-    case — the single source of truth for "what runs + its id", shared by the
-    pytest drivers and the memray engine.
+    case — the single source of truth for "what runs + its id" across the
+    pytest drivers.
 
     ``to_solver`` expands to one case per available solver (the solver in the
     id-suffix); every other phase yields one case per applicable ``(spec,

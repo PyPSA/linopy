@@ -83,12 +83,10 @@ dev = [
     "jupyter",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
-# changes, not dependency bumps. ``sweep`` installs this set into each
-# per-version venv, so only ``linopy`` varies across a sweep.
+# changes, not dependency bumps.
 benchmarks = [
     "highspy==1.13.1",
     "netcdf4==1.7.4",
-    # last numpy 1.x — keeps sweep coverage back to linopy <0.5.1 (numpy<2)
     "numpy==1.26.4",
     "scipy==1.16.3",
     "xarray==2025.1.2",
@@ -99,10 +97,6 @@ benchmarks = [
     "pytest-benchmark==5.2.3",
     "pytest-memray==1.8.0",
     "pytest-codspeed==5.0.3",
-    "jupytext==1.19.3",
-    "nbconvert==7.17.1",
-    "typer==0.26.2",
-    "plotly==6.7.0",
 ]
 solvers = [
     "gurobipy",

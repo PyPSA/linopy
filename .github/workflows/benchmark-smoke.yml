@@ -34,10 +34,6 @@ jobs:
         uv pip install --system -e ".[dev,benchmarks]"
 
     - name: Run benchmark smoke
+      # Every spec builds at one size and every phase fires once, no timings.
       run: |
-        python -m benchmarks smoke
-
-    - name: Execute walkthrough notebook
-      # Catches doc rot: the walkthrough must stay runnable end-to-end.
-      run: |
-        python -m benchmarks notebook
+        pytest benchmarks/ --quick --benchmark-disable -q
