@@ -1,9 +1,7 @@
 name: CodSpeed (memory)
 
-# Heap-allocation tracking — the always-on signal for this sparsity/memory fork.
-# Fast (~2 min) and free on a GitHub runner, so it runs on master (baseline) and
-# every PR. A solo instrument on ubuntu: its one upload per (commit, env) never
-# clashes with the walltime run, which is a separate bare-metal environment.
+# Heap-allocation tracking on a free GitHub runner — the always-on memory
+# signal, on master and every PR.
 
 on:
   push:
@@ -30,10 +28,10 @@ jobs:
       with:
         fetch-depth: 0  # setuptools_scm
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.13
       uses: actions/setup-python@v6
       with:
-        python-version: "3.12"
+        python-version: "3.13"
 
     - name: Install pinned benchmark environment
       run: |

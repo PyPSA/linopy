@@ -1,17 +1,7 @@
 name: CodSpeed (walltime macro)
 
-# Wall-clock benchmarks on CodSpeed's dedicated bare-metal macro runners — the
-# mode that reflects the real cost of dense-vs-sparse work (cache, allocation,
-# native numpy/scipy), which instruction counting under-weights.
-#
-# Master push (updates the walltime baseline) + manual dispatch + opt-in per-PR
-# via the ``trigger:benchmark`` label. Off every *unlabelled* PR: macro-runner
-# minutes are metered (600/month free), and self-hosted bare-metal shouldn't run
-# arbitrary PR code — the label is a maintainer-controlled gate, so only apply it
-# to trusted (same-repo) PRs.
-#
-# Requires the repo under a GitHub org (macro runners are org-only) with the
-# CodSpeed app connected to the repo (OIDC auth — no token secret needed).
+# Wall-clock on CodSpeed macro runners: master + the maintainer-gated
+# `trigger:benchmark` label (bare-metal shouldn't run arbitrary PR code).
 
 on:
   push:
@@ -43,10 +33,10 @@ jobs:
       with:
         fetch-depth: 0  # setuptools_scm
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.13
       uses: actions/setup-python@v6
       with:
-        python-version: "3.12"
+        python-version: "3.13"
 
     - name: Install pinned benchmark environment
       # Pinned ``[benchmarks]`` extra so Dependabot bumps → one CodSpeed delta each.
