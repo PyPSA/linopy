@@ -65,10 +65,10 @@ Need a scaling curve? That's a local pytest-benchmem job, not this suite.
 - **Smoke** (`benchmark-smoke.yml`) — every PR: every spec builds and every
   phase fires once under `--benchmark-disable`. A "did a refactor break a
   spec?" check, not timing.
-- **CodSpeed memory** (`codspeed-memory.yml`) — every PR: heap-allocation
-  tracking, informational, non-gating.
-- **CodSpeed walltime** (`codspeed-macro.yml`) — on `master` or a PR labelled
-  `trigger:benchmark`: wall-clock on dedicated bare-metal runners.
+- **CodSpeed** (`codspeed.yml`) — two jobs: **memory** (heap-allocation
+  tracking, every PR, free GitHub runner) and **walltime** (bare-metal macro
+  runner, on `master` or a PR labelled `trigger:benchmark`). Informational,
+  non-gating.
 
 Activating CodSpeed upstream needs a maintainer to connect the repo to the
 CodSpeed app (OIDC auth, no token secret); the workflows are already wired.
