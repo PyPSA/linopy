@@ -25,7 +25,7 @@ from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -493,7 +493,7 @@ class Solver(ABC, Generic[EnvType]):
         leaves the native model untouched), then walks the sections in a
         fixed order, dispatching to the per-backend ``_apply_*`` hooks.
         """
-        if not type(self).supports_persistent_update:
+        if not self.supports_persistent_update:
             raise UnsupportedUpdate(type(self).__name__)
         self._validate_update(diff)
         ctx = self._apply_begin(var_label_index, con_label_index)
@@ -527,7 +527,7 @@ class Solver(ABC, Generic[EnvType]):
 
     def _validate_update(self, diff: ModelDiff) -> None:
         """Reject unsupported diff content before any native mutation."""
-        if diff.con_sign_indices.size and not type(self).supports_sign_update:
+        if diff.con_sign_indices.size and not self.supports_sign_update:
             raise UnsupportedUpdate(
                 f"{self.display_name} does not support in-place constraint sign change"
             )
@@ -841,9 +841,8 @@ class Solver(ABC, Generic[EnvType]):
                             "built Model instance, or reconstruct the solver "
                             "with Solver.from_name(..., track_updates=True)."
                         )
-                    self._update_locked(
+                    self._apply_locked(
                         model,
-                        apply=True,
                         ignore_dims=ignore_dims,
                         disallow_rebuild=disallow_rebuild,
                     )
@@ -898,59 +897,49 @@ class Solver(ABC, Generic[EnvType]):
                 "Solver.from_name(..., track_updates=True)."
             )
         if not apply:
-            return self._diff_unlocked(model, ignore_dims)
+            return self._compute_diff(model, ignore_dims, same_model=False)
         with self._lock:
-            return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
+            return self._apply_locked(model, ignore_dims=ignore_dims)
 
-    def _diff_unlocked(
-        self, model: Model, ignore_dims: Iterable[str]
+    def _compute_diff(
+        self, model: Model, ignore_dims: Iterable[str], same_model: bool
     ) -> ModelDiff | RebuildReason:
         """
-        Compute a diff without the solver lock.
+        Diff ``model`` against the solver baseline (the captured snapshot, or
+        the build-time Model when no snapshot is tracked).
 
-        Snapshot and baseline refs are read once; snapshot buffers are
-        immutable after capture, so the walk is consistent even while a
-        concurrent apply swaps ``self.snapshot``. The fallback baseline
-        (``from_models``) is only consistent if no thread concurrently
-        mutates either Model.
+        ``same_model=True`` lets ``from_snapshot`` trust the ``_coef_dirty``
+        flag and skip the coefficient re-walk; ``same_model=False`` forces a
+        full comparison. Snapshot and baseline refs are read once, so the walk
+        stays consistent even while a concurrent apply swaps ``self.snapshot``;
+        the ``from_models`` fallback is only consistent if no thread
+        concurrently mutates either Model.
         """
         snapshot = self.snapshot
         if snapshot is not None:
             return ModelDiff.from_snapshot(
-                snapshot, model, same_model=False, ignore_dims=ignore_dims
+                snapshot, model, same_model=same_model, ignore_dims=ignore_dims
             )
         baseline = self.model
         assert baseline is not None
         return ModelDiff.from_models(baseline, model, ignore_dims=ignore_dims)
 
-    def _update_locked(
+    def _apply_locked(
         self,
         model: Model,
-        apply: bool,
         ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
     ) -> ModelDiff | RebuildReason:
-        if apply and not type(self).supports_persistent_update:
+        if not self.supports_persistent_update:
             if disallow_rebuild:
                 raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return RebuildReason.BACKEND_REJECTED
-        if self.snapshot is not None:
-            same_model = model is self.model
-            diff = ModelDiff.from_snapshot(
-                self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
-            )
-        else:
-            assert self.model is not None
-            diff = ModelDiff.from_models(self.model, model, ignore_dims=ignore_dims)
+        diff = self._compute_diff(model, ignore_dims, same_model=model is self.model)
         if isinstance(diff, RebuildReason):
-            if not apply:
-                return diff
             if disallow_rebuild:
                 raise RebuildRequiredError(diff)
             self._rebuild(model, diff)
-            return diff
-        if not apply:
             return diff
         try:
             self.apply_update(
@@ -1881,6 +1870,12 @@ class Highs(Solver[None]):
         )
 
 
+class _GurobiApplyCtx(NamedTuple):
+    gm: Any
+    gvars: list[Any]
+    gcons: list[Any]
+
+
 class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
     Solver subclass for the gurobi solver.
@@ -2044,10 +2039,10 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             raise UnsupportedUpdate("gurobi var count mismatch")
         if len(gurobi_cons) != con_label_index.n_active_cons:
             raise UnsupportedUpdate("gurobi con count mismatch")
-        return (gm, gurobi_vars, gurobi_cons)
+        return _GurobiApplyCtx(gm, gurobi_vars, gurobi_cons)
 
     def _apply_end(self, ctx: Any) -> None:
-        ctx[0].update()
+        ctx.gm.update()
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
@@ -2106,7 +2101,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
         if sense not in self._GUROBI_SENSE_MAP:
             raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
-        ctx[0].ModelSense = self._GUROBI_SENSE_MAP[sense]
+        ctx.gm.ModelSense = self._GUROBI_SENSE_MAP[sense]
 
     def _run_direct(
         self,
