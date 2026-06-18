@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
+
 Version 0.8.0
 -------------
 
