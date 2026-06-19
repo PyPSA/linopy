@@ -3,6 +3,8 @@
 This module aims at testing the correct assignment of variable to the model.
 """
 
+from typing import Any
+
 import dask
 import numpy as np
 import pandas as pd
@@ -269,7 +271,7 @@ def test_variable_assignment_binary_force_on() -> None:
         ),
     ],
 )
-def test_variable_assignment_binary_array_bounds_ok(upper) -> None:
+def test_variable_assignment_binary_array_bounds_ok(upper: Any) -> None:
     """0/1 bounds accepted, NaN tolerated (for masking), across containers."""
     Model().add_variables(binary=True, upper=upper, coords=[pd.RangeIndex(4, name="t")])
 
@@ -286,7 +288,7 @@ def test_variable_assignment_binary_array_bounds_ok(upper) -> None:
         ),
     ],
 )
-def test_variable_assignment_binary_array_bounds_error(upper) -> None:
+def test_variable_assignment_binary_array_bounds_error(upper: Any) -> None:
     """A non-0/1 value is rejected, even when NaN is also present."""
     with pytest.raises(ValueError, match="must be 0 or 1"):
         Model().add_variables(
@@ -295,12 +297,12 @@ def test_variable_assignment_binary_array_bounds_error(upper) -> None:
 
 
 @pytest.mark.parametrize("bound", [0, 1, 0.0, 1.0])
-def test_variable_assignment_binary_scalar_bound_ok(bound) -> None:
+def test_variable_assignment_binary_scalar_bound_ok(bound: float) -> None:
     Model().add_variables(binary=True, upper=bound, coords=[pd.RangeIndex(2)])
 
 
 @pytest.mark.parametrize("bound", [0.5, 2, -1])
-def test_variable_assignment_binary_scalar_bound_error(bound) -> None:
+def test_variable_assignment_binary_scalar_bound_error(bound: float) -> None:
     with pytest.raises(ValueError, match="must be 0 or 1"):
         Model().add_variables(binary=True, upper=bound, coords=[pd.RangeIndex(2)])
 
