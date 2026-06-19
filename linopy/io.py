@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from highspy.highs import Highs
 
     from linopy.model import Model
+    from linopy.variables import Variable
 
 
 logger = logging.getLogger(__name__)
@@ -238,6 +239,17 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
+def _binary_has_nondefault_bounds(var: Variable) -> bool:
+    """
+    Whether a binary variable carries bounds other than the implied (0, 1).
+
+    Scans the raw bound values (a single vectorised pass each), so masked
+    slots are tolerated: a false positive only routes the variable through
+    the bounds loop, where masked labels are dropped before writing.
+    """
+    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+
+
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
@@ -253,8 +265,10 @@ def bounds_to_file(
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
         + [
-            n for n in m.variables.binaries if m.variables[n].fixed
-        ]  # fixed binaries need bounds
+            n
+            for n in m.variables.binaries
+            if _binary_has_nondefault_bounds(m.variables[n])
+        ]
     )
     if not len(list(names)):
         return

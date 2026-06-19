@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021.
 import importlib.util
 import json
 import pickle
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -527,6 +528,62 @@ def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
     assert "<=" in content
     assert ">=" in content
     assert "=" in content
+
+
+class TestLPBinaryBounds:
+    """LP export honors binary bounds tightened below [0, 1] (#776)."""
+
+    @pytest.fixture
+    def make_tightened_model(self) -> Callable[[], Model]:
+        def build() -> Model:
+            m = Model()
+            x = m.add_variables(
+                binary=True, coords=[pd.RangeIndex(4, name="t")], name="x"
+            )
+            x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+            m.add_constraints(x.sum() >= 2, name="atleast2")
+            m.add_objective(-1 * x.sum())
+            return m
+
+        return build
+
+    def test_default_bounds_omitted(self, tmp_path: Path) -> None:
+        """A binary with the implied [0, 1] bounds gets no bounds section."""
+        m = Model()
+        b = m.add_variables(binary=True, coords=[pd.RangeIndex(3, name="t")], name="b")
+        m.add_constraints(b.sum() >= 1, name="c")
+        m.add_objective(b.sum())
+
+        fn = tmp_path / "binary_default.lp"
+        m.to_file(fn)
+        assert "bounds" not in fn.read_text()
+
+    def test_tightened_bounds_written(
+        self, make_tightened_model: Callable[[], Model], tmp_path: Path
+    ) -> None:
+        """Per-element bounds tighter than [0, 1] reach the LP `bounds` section."""
+        m = make_tightened_model()
+        fn = tmp_path / "binary_tightened.lp"
+        m.to_file(fn)
+
+        bounds_section = fn.read_text().split("bounds")[1].split("binary")[0]
+        for label in m.variables["x"].labels.values[2:]:
+            assert f"x{label} <= +0.0" in bounds_section
+
+    @pytest.mark.skipif(not available_solvers, reason="No solver installed")
+    def test_lp_and_direct_agree(
+        self, make_tightened_model: Callable[[], Model]
+    ) -> None:
+        """LP and direct paths see the same feasible set for tightened binaries."""
+        solver = available_solvers[0]
+
+        m_direct = make_tightened_model()
+        m_direct.solve(solver_name=solver, io_api="direct")
+
+        m_lp = make_tightened_model()
+        m_lp.solve(solver_name=solver, io_api="lp")
+
+        assert m_direct.objective.value == m_lp.objective.value == -2
 
 
 def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
