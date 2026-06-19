@@ -221,6 +221,20 @@ def test_read_netcdf_with_multiindex_legacy_list_attr(
     assert_model_equal(m, read_netcdf(fn_legacy))
 
 
+def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
+    from linopy.io import NETCDF_VERSION_ATTR
+
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+
+    ds = xr.load_dataset(fn).load()
+    del ds.attrs[NETCDF_VERSION_ATTR]
+    fn_legacy = tmp_path / "legacy.nc"
+    ds.to_netcdf(fn_legacy)
+
+    assert_model_equal(model, read_netcdf(fn_legacy))
+
+
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_file_lp(model: Model, tmp_path: Path) -> None:
     import gurobipy
@@ -515,62 +529,58 @@ def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
     assert "=" in content
 
 
-def test_to_file_lp_binary_default_bounds_omitted(tmp_path: Path) -> None:
-    """A binary with the implied [0, 1] bounds gets no bounds section."""
-    m = Model()
-    b = m.add_variables(binary=True, coords=[pd.RangeIndex(3, name="t")], name="b")
-    m.add_constraints(b.sum() >= 1, name="c")
-    m.add_objective(b.sum())
+class TestLPBinaryBounds:
+    """LP export honors binary bounds tightened below [0, 1] (#776)."""
 
-    fn = tmp_path / "binary_default.lp"
-    m.to_file(fn)
-    assert "bounds" not in fn.read_text()
+    @pytest.fixture
+    def make_tightened_model(self):
+        def build() -> Model:
+            m = Model()
+            x = m.add_variables(
+                binary=True, coords=[pd.RangeIndex(4, name="t")], name="x"
+            )
+            x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+            m.add_constraints(x.sum() >= 2, name="atleast2")
+            m.add_objective(-1 * x.sum())
+            return m
 
+        return build
 
-def test_to_file_lp_binary_tightened_bounds(tmp_path: Path) -> None:
-    """
-    Per-element bounds tighter than [0, 1] on a binary reach the LP file.
-
-    Regression test for https://github.com/PyPSA/linopy/issues/776: the LP
-    export used to emit binaries only in the `binary` section (implied
-    [0, 1]), diverging from the direct API which honored the bounds.
-    """
-    m = Model()
-    x = m.add_variables(binary=True, coords=[pd.RangeIndex(4, name="t")], name="x")
-    x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
-    m.add_constraints(x.sum() >= 2, name="atleast2")
-    m.add_objective(-1 * x.sum())
-
-    fn = tmp_path / "binary_tightened.lp"
-    m.to_file(fn)
-    content = fn.read_text()
-
-    bounds_section = content.split("bounds")[1].split("binary")[0]
-    labels = m.variables["x"].labels.values
-    for label in labels[2:]:
-        assert f"x{label} <= +0.0" in bounds_section
-
-
-@pytest.mark.skipif(not available_solvers, reason="No solver installed")
-def test_lp_and_direct_agree_on_binary_bounds(tmp_path: Path) -> None:
-    """The LP and direct paths see the same feasible set for tightened binaries."""
-    solver = available_solvers[0]
-
-    def build() -> Model:
+    def test_default_bounds_omitted(self, tmp_path: Path) -> None:
+        """A binary with the implied [0, 1] bounds gets no bounds section."""
         m = Model()
-        x = m.add_variables(binary=True, coords=[pd.RangeIndex(4, name="t")], name="x")
-        x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
-        m.add_constraints(x.sum() >= 2, name="atleast2")
-        m.add_objective(-1 * x.sum())
-        return m
+        b = m.add_variables(binary=True, coords=[pd.RangeIndex(3, name="t")], name="b")
+        m.add_constraints(b.sum() >= 1, name="c")
+        m.add_objective(b.sum())
 
-    m_direct = build()
-    m_direct.solve(solver_name=solver, io_api="direct")
+        fn = tmp_path / "binary_default.lp"
+        m.to_file(fn)
+        assert "bounds" not in fn.read_text()
 
-    m_lp = build()
-    m_lp.solve(solver_name=solver, io_api="lp")
+    def test_tightened_bounds_written(
+        self, make_tightened_model, tmp_path: Path
+    ) -> None:
+        """Per-element bounds tighter than [0, 1] reach the LP `bounds` section."""
+        m = make_tightened_model()
+        fn = tmp_path / "binary_tightened.lp"
+        m.to_file(fn)
 
-    assert m_direct.objective.value == m_lp.objective.value == -2
+        bounds_section = fn.read_text().split("bounds")[1].split("binary")[0]
+        for label in m.variables["x"].labels.values[2:]:
+            assert f"x{label} <= +0.0" in bounds_section
+
+    @pytest.mark.skipif(not available_solvers, reason="No solver installed")
+    def test_lp_and_direct_agree(self, make_tightened_model) -> None:
+        """LP and direct paths see the same feasible set for tightened binaries."""
+        solver = available_solvers[0]
+
+        m_direct = make_tightened_model()
+        m_direct.solve(solver_name=solver, io_api="direct")
+
+        m_lp = make_tightened_model()
+        m_lp.solve(solver_name=solver, io_api="lp")
+
+        assert m_direct.objective.value == m_lp.objective.value == -2
 
 
 def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
