@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021.
 import importlib.util
 import json
 import pickle
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -533,7 +534,7 @@ class TestLPBinaryBounds:
     """LP export honors binary bounds tightened below [0, 1] (#776)."""
 
     @pytest.fixture
-    def make_tightened_model(self):
+    def make_tightened_model(self) -> Callable[[], Model]:
         def build() -> Model:
             m = Model()
             x = m.add_variables(
@@ -558,7 +559,7 @@ class TestLPBinaryBounds:
         assert "bounds" not in fn.read_text()
 
     def test_tightened_bounds_written(
-        self, make_tightened_model, tmp_path: Path
+        self, make_tightened_model: Callable[[], Model], tmp_path: Path
     ) -> None:
         """Per-element bounds tighter than [0, 1] reach the LP `bounds` section."""
         m = make_tightened_model()
@@ -570,7 +571,9 @@ class TestLPBinaryBounds:
             assert f"x{label} <= +0.0" in bounds_section
 
     @pytest.mark.skipif(not available_solvers, reason="No solver installed")
-    def test_lp_and_direct_agree(self, make_tightened_model) -> None:
+    def test_lp_and_direct_agree(
+        self, make_tightened_model: Callable[[], Model]
+    ) -> None:
         """LP and direct paths see the same feasible set for tightened binaries."""
         solver = available_solvers[0]
 
