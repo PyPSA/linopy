@@ -536,7 +536,9 @@ class TestLPBinaryBounds:
     def make_tightened_model(self):
         def build() -> Model:
             m = Model()
-            x = m.add_variables(binary=True, coords=[pd.RangeIndex(4, name="t")], name="x")
+            x = m.add_variables(
+                binary=True, coords=[pd.RangeIndex(4, name="t")], name="x"
+            )
             x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
             m.add_constraints(x.sum() >= 2, name="atleast2")
             m.add_objective(-1 * x.sum())
@@ -555,7 +557,9 @@ class TestLPBinaryBounds:
         m.to_file(fn)
         assert "bounds" not in fn.read_text()
 
-    def test_tightened_bounds_written(self, make_tightened_model, tmp_path: Path) -> None:
+    def test_tightened_bounds_written(
+        self, make_tightened_model, tmp_path: Path
+    ) -> None:
         """Per-element bounds tighter than [0, 1] reach the LP `bounds` section."""
         m = make_tightened_model()
         fn = tmp_path / "binary_tightened.lp"
