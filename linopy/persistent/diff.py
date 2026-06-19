@@ -328,63 +328,16 @@ class ModelDiff:
         shortcut applies between independently-built models. Returns a
         :class:`ModelDiff` or the :class:`RebuildReason` preventing an
         in-place update.
+
+        Captures a snapshot of ``model_a`` and defers to
+        :meth:`from_snapshot` with ``same_model=False``.
         """
-        var_idx_a = model_a.variables.label_index
-        key_a = StructuralKey(
-            var_container_names=tuple(model_a.variables),
-            con_container_names=tuple(model_a.constraints),
-            vlabels=var_idx_a.vlabels,
-            clabels=model_a.constraints.label_index.clabels,
-        )
-        reason = _structural_reason(key_a, model_b)
-        if reason is not None:
-            return reason
-
-        var_idx_b = model_b.variables.label_index
-        con_idx_b = model_b.constraints.label_index
-        key_b = StructuralKey(
-            var_container_names=tuple(model_b.variables),
-            con_container_names=tuple(model_b.constraints),
-            vlabels=var_idx_b.vlabels,
-            clabels=con_idx_b.clabels,
-        )
-        builder = _DiffBuilder(
-            var_idx_b,
-            con_idx_b,
-            frozenset(ignore_dims),
-            structural_key=key_b,
-        )
-
-        for name, var_b in model_b.variables.items():
-            var_a = model_a.variables[name]
-            reason = builder.diff_var(
-                name, var_b, _extract_var_buffers(var_a), _coord_snapshot(var_a)
-            )
-            if reason is not None:
-                return reason
-
-        for name, con_b in model_b.constraints.items():
-            con_a = model_a.constraints[name]
-            reason = builder.diff_con(
-                name,
-                con_b,
-                _extract_con_buffers(con_a, var_idx_a),
-                _coord_snapshot(con_a),
-                skip_coef_compare=False,
-            )
-            if reason is not None:
-                return reason
-
-        reason = builder.diff_objective(
+        return cls.from_snapshot(
+            ModelSnapshot.capture(model_a),
             model_b,
-            _objective_linear_vector(model_a),
-            model_a.objective.is_quadratic,
-            model_a.objective.sense,
+            same_model=False,
+            ignore_dims=ignore_dims,
         )
-        if reason is not None:
-            return reason
-
-        return builder.finalize()
 
 
 class _DiffBuilder:
