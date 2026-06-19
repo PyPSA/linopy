@@ -401,10 +401,6 @@ class _DiffBuilder:
         new_coords = _coord_snapshot(var)
         self.var_buffers[name] = new_buf
         self.var_coords[name] = new_coords
-        if new_buf.lower.shape != base_buf.lower.shape:
-            return RebuildReason.COORD_REINDEX
-        if not _same(new_buf.active_labels, base_buf.active_labels):
-            return RebuildReason.STRUCTURAL_LABELS
         if not _coords_equal(base_coords, new_coords, self.ignored):
             return RebuildReason.COORD_REINDEX
 
@@ -453,10 +449,6 @@ class _DiffBuilder:
         new_coords = _coord_snapshot(con)
         self.con_buffers[name] = new_buf
         self.con_coords[name] = new_coords
-        if new_buf.indptr.shape != base_buf.indptr.shape:
-            return RebuildReason.COORD_REINDEX
-        if not _same(new_buf.active_labels, base_buf.active_labels):
-            return RebuildReason.STRUCTURAL_LABELS
         if not _coords_equal(base_coords, new_coords, self.ignored):
             return RebuildReason.COORD_REINDEX
         if not _same(new_buf.indptr, base_buf.indptr):
@@ -534,8 +526,6 @@ class _DiffBuilder:
         obj_c = _objective_linear_vector(model)
         self._snap_obj_c = obj_c
         self._snap_obj_sense = model.objective.sense
-        if obj_c.shape != base_obj_c.shape:
-            return RebuildReason.COORD_REINDEX
         obj_diff_mask = obj_c != base_obj_c
         if obj_diff_mask.any():
             self.obj_c_indices = np.flatnonzero(obj_diff_mask).astype(
