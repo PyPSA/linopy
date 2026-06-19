@@ -59,7 +59,7 @@ jobs:
           # assignee_trigger: "claude-bot"
 
           # Project-specific tools for Python development
-          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[dev,solvers])"
+          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[solvers] --group dev)"
 
           # Custom instructions for linopy project
           custom_instructions: |

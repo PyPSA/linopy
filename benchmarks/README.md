@@ -7,7 +7,8 @@ Measures linopy's own performance (build time, LP write speed, memory usage) acr
 ## Setup
 
 ```bash
-pip install -e ".[benchmarks]"
+pip install -e . --group benchmarks   # pip >= 25.1
+# or: uv sync --group benchmarks
 ```
 
 ## Running benchmarks

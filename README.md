@@ -159,7 +159,7 @@ Note that these do have to be installed by the user separately.
 To set up a local development environment for linopy and to run the same tests that are run in the CI, you can run:
 
 ```sh
-uv sync --extra dev --extra solvers
+uv sync --group dev --extra solvers
 source .venv/bin/activate
 pytest
 ```

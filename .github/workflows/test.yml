@@ -82,7 +82,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc]"
+        uv pip install --system "$(ls dist/*.whl)[solvers,oetc]" --group dev
 
     - name: Test with pytest
       env:
@@ -120,7 +120,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev]"
+        uv pip install --system "$(ls dist/*.whl)" --group dev
 
     - name: Run type checker (mypy)
       run: |
