@@ -12,6 +12,7 @@ from linopy.persistent import (
     ModelSnapshot,
     RebuildReason,
     StructuralKey,
+    VarKind,
 )
 
 
@@ -292,3 +293,108 @@ def test_from_models_snapshot_matches_capture() -> None:
     diff = ModelDiff.from_models(m1, m2)
     assert isinstance(diff, ModelDiff)
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"binary": True}, VarKind.BINARY),
+        ({"lower": 0, "upper": 10, "integer": True}, VarKind.INTEGER),
+        ({"lower": 1, "upper": 10, "semi_continuous": True}, VarKind.SEMI_CONTINUOUS),
+    ],
+)
+def test_variable_kind_captured(kwargs: dict, expected: VarKind) -> None:
+    m = Model()
+    m.add_variables(coords=[range(2)], name="x", **kwargs)
+    m.add_objective(m.variables["x"].sum())
+    snap = ModelSnapshot.capture(m)
+    assert snap.var_buffers["x"].type is expected
+
+
+def test_variable_type_change_via_from_models() -> None:
+    def build(integer: bool) -> Model:
+        m = Model()
+        m.add_variables(0, 10, coords=[range(3)], name="x", integer=integer)
+        m.add_constraints(m.variables["x"] >= 1, name="c1")
+        m.add_objective(m.variables["x"].sum())
+        return m
+
+    diff = ModelDiff.from_models(build(False), build(True))
+    assert isinstance(diff, ModelDiff)
+    sl = diff.var_slices["x"].type
+    assert sl.stop > sl.start
+    assert diff.var_type_kinds[sl][0] is VarKind.INTEGER
+
+
+def test_quadratic_objective_triggers_rebuild() -> None:
+    m = Model()
+    x = m.add_variables(0, 10, coords=[range(3)], name="x")
+    m.add_constraints(x >= 1, name="c1")
+    m.add_objective((x * x).sum())
+    snap = ModelSnapshot.capture(m)
+    x.update(lower=2)
+    assert ModelDiff.from_snapshot(snap, m) is RebuildReason.QUAD_OBJ
+
+
+def test_variable_count_change_is_structural() -> None:
+    def build(n: int) -> Model:
+        m = Model()
+        x = m.add_variables(0, 10, coords=[range(n)], name="x")
+        m.add_constraints(x >= 1, name="c1")
+        m.add_objective(x.sum())
+        return m
+
+    assert ModelDiff.from_models(build(3), build(4)) is RebuildReason.STRUCTURAL_LABELS
+
+
+def test_constraint_count_change_is_structural() -> None:
+    def build(aggregate: bool) -> Model:
+        m = Model()
+        x = m.add_variables(0, 10, coords=[range(3)], name="x")
+        m.add_constraints(x.sum() >= 1 if aggregate else x >= 1, name="c1")
+        m.add_objective(x.sum())
+        return m
+
+    diff = ModelDiff.from_models(build(False), build(True))
+    assert diff is RebuildReason.STRUCTURAL_LABELS
+
+
+def test_indices_change_triggers_sparsity() -> None:
+    def build(on: int) -> Model:
+        m = Model()
+        x = m.add_variables(0, 10, coords=[range(2)], name="x")
+        m.add_constraints(x.loc[on] >= 1, name="c1")
+        m.add_objective(x.sum())
+        return m
+
+    assert ModelDiff.from_models(build(0), build(1)) is RebuildReason.SPARSITY
+
+
+def test_sign_only_mutation(baseline: Model) -> None:
+    snap = ModelSnapshot.capture(baseline)
+    baseline.constraints["c1"].update(sign="<=")
+    diff = ModelDiff.from_snapshot(snap, baseline)
+    assert isinstance(diff, ModelDiff)
+    sl = diff.con_slices["c1"]
+    assert sl.sign.stop > sl.sign.start
+    assert sl.coef.stop == sl.coef.start
+
+
+def test_inspect_and_repr(baseline: Model) -> None:
+    snap = ModelSnapshot.capture(baseline)
+    assert repr(ModelDiff.from_snapshot(snap, baseline)) == "ModelDiff(empty)"
+
+    baseline.variables["x"].update(lower=1)
+    c1 = baseline.constraints["c1"]
+    c1.update(coeffs=c1.coeffs * 2, rhs=9, sign="<=")
+    diff = ModelDiff.from_snapshot(snap, baseline)
+    assert isinstance(diff, ModelDiff)
+
+    var_info = diff.inspect_variable("x")
+    assert "lower" in var_info and "bounds_indices" in var_info
+    con_info = diff.inspect_constraint("c1")
+    assert {"coef_vals", "rhs_values", "sign_values"} <= con_info.keys()
+
+    assert diff.inspect_variable("missing") == {}
+    assert diff.inspect_constraint("missing") == {}
+    assert repr(diff).startswith("ModelDiff(") and "empty" not in repr(diff)
