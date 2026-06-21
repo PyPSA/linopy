@@ -95,6 +95,31 @@ def test_add_constraints_uses_model_freeze_default() -> None:
     )
 
 
+def test_csr_constraint_handles_empty_rows() -> None:
+    """
+    An empty constraint group must round-trip through freeze.
+
+    Regression test: `CSRConstraint.from_mutable` used to reshape
+    `con.vars` with an inferred `-1` dimension, which NumPy refuses for a
+    size-0 array (`cannot reshape array of size 0 into shape (0,newaxis)`).
+    """
+    m = Model(freeze_constraints=True)
+    x = m.add_variables(
+        lower=0.0,
+        coords=[range(3), range(2)],
+        dims=["time", "product"],
+        name="x",
+    )
+    empty = x.isel(time=range(1, 1))
+    c = m.add_constraints(empty == 0, name="empty")
+    assert isinstance(c, linopy.constraints.CSRConstraint)
+    assert c.size == 0
+    # Solving a model with only an empty constraint group is also fine.
+    m.add_objective(x.sum())
+    m.solve("highs", io_api="direct", output_flag=False)
+    assert m.status == "ok"
+
+
 def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
     assert c.name == "c"
 
