@@ -6,6 +6,10 @@ Upcoming Version
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
 
+**Features**
+
+* ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
+
 **Bug fixes**
 
 * LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
