@@ -11,6 +11,13 @@ PR); locally you just run `pytest`.
 > `benchmark/` (singular) is the legacy external-framework suite.
 > `benchmarks/` (plural) is this internal suite.
 
+## Layout
+
+- `registry.py`, `phases.py`, `conftest.py` — the harness (specs, measured
+  verbs, pytest wiring).
+- `models/`, `patterns/` — the subjects; each file self-registers one `BenchSpec`.
+- `drivers/` — one `test_<phase>.py` per measured phase.
+
 ## Models vs patterns
 
 Two kinds of benchmark spec, same harness and same phases, distinguished by
@@ -24,9 +31,9 @@ their sweep axis:
   from benign to pathological?"
 
 Both kinds build a complete `linopy.Model`, so both run the **same phases** and
-share the phase drivers (`test_build.py`, `test_matrices.py`, …) — they're just
-more `(spec, value)` rows, tagged by `axis`. There is no separate pattern
-driver. Running a pattern through `build` *and* `to_lp` shows whether a
+share the phase drivers (`drivers/test_build.py`, `drivers/test_matrices.py`, …)
+— they're just more `(spec, value)` rows, tagged by `axis`. There is no separate
+pattern driver. Running a pattern through `build` *and* `to_lp` shows whether a
 dense-`_term` blow-up propagates to export or collapses.
 
 Patterns target the operations where the dense-`_term` representation forces
@@ -41,7 +48,7 @@ uv sync --extra dev --extra benchmarks
 source .venv/bin/activate
 ```
 
-`pypsa` is optional — `pypsa_scigrid` and `test_pypsa_carbon_management.py`
+`pypsa` is optional — `pypsa_scigrid` and `drivers/test_pypsa_carbon_management.py`
 skip gracefully without it: `uv pip install pypsa`.
 
 The `[benchmarks]` extra in `pyproject.toml` pins every direct dep that affects
