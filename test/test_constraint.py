@@ -95,15 +95,20 @@ def test_add_constraints_uses_model_freeze_default() -> None:
     )
 
 
-def test_csr_constraint_handles_empty_rows() -> None:
-    """
-    An empty constraint group must round-trip through freeze.
+def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
+    assert c.name == "c"
 
-    Regression test: `CSRConstraint.from_mutable` used to reshape
-    `con.vars` with an inferred `-1` dimension, which NumPy refuses for a
-    size-0 array (`cannot reshape array of size 0 into shape (0,newaxis)`).
-    """
-    m = Model(freeze_constraints=True)
+
+def test_empty_constraints_repr() -> None:
+    # test empty contraints
+    Model().constraints.__repr__()
+
+
+@pytest.mark.parametrize("freeze_constraints", [True, False])
+def test_constraint_handles_empty_rows(freeze_constraints: bool) -> None:
+    """An empty constraint group must be accepted and solve cleanly."""
+
+    m = Model(freeze_constraints=freeze_constraints)
     x = m.add_variables(
         lower=0.0,
         coords=[range(3), range(2)],
@@ -112,21 +117,12 @@ def test_csr_constraint_handles_empty_rows() -> None:
     )
     empty = x.isel(time=range(1, 1))
     c = m.add_constraints(empty == 0, name="empty")
-    assert isinstance(c, linopy.constraints.CSRConstraint)
+    assert isinstance(c, linopy.constraints.ConstraintBase)
     assert c.size == 0
     # Solving a model with only an empty constraint group is also fine.
     m.add_objective(x.sum())
     m.solve("highs", io_api="direct", output_flag=False)
     assert m.status == "ok"
-
-
-def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
-    assert c.name == "c"
-
-
-def test_empty_constraints_repr() -> None:
-    # test empty contraints
-    Model().constraints.__repr__()
 
 
 def test_cannot_create_constraint_without_variable() -> None:

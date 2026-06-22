@@ -1081,10 +1081,7 @@ class CSRConstraint(ConstraintBase):
         # Build active_mask aligned with con_labels (rows in csr)
         # Use same filter as to_matrix: label != -1 AND at least one var != -1
         labels_flat = con.labels.values.ravel()
-        # Explicit term count, not -1: NumPy can't infer a (0, -1) reshape for
-        # an empty group (size-0 vars). _term is the trailing dim of con.vars.
-        nterm = con.vars.sizes.get(TERM_DIM, 0)
-        vars_flat = con.vars.values.reshape(len(labels_flat), nterm)
+        vars_flat = con.vars.values.reshape(len(labels_flat), con.nterm)
         active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
         rhs = con.rhs.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
