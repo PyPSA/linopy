@@ -30,7 +30,7 @@ jobs:
         shell: bash -l {0}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: PyPSA/pypsa-eur
           ref: master
