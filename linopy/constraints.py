@@ -1081,7 +1081,7 @@ class CSRConstraint(ConstraintBase):
         # Build active_mask aligned with con_labels (rows in csr)
         # Use same filter as to_matrix: label != -1 AND at least one var != -1
         labels_flat = con.labels.values.ravel()
-        vars_flat = con.vars.values.reshape(len(labels_flat), -1)
+        vars_flat = con.vars.values.reshape(len(labels_flat), con.nterm)
         active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
         rhs = con.rhs.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()

@@ -104,6 +104,27 @@ def test_empty_constraints_repr() -> None:
     Model().constraints.__repr__()
 
 
+@pytest.mark.parametrize("freeze_constraints", [True, False])
+def test_constraint_handles_empty_rows(freeze_constraints: bool) -> None:
+    """An empty constraint group must be accepted and solve cleanly."""
+
+    m = Model(freeze_constraints=freeze_constraints)
+    x = m.add_variables(
+        lower=0.0,
+        coords=[range(3), range(2)],
+        dims=["time", "product"],
+        name="x",
+    )
+    empty = x.isel(time=range(1, 1))
+    c = m.add_constraints(empty == 0, name="empty")
+    assert isinstance(c, linopy.constraints.ConstraintBase)
+    assert c.size == 0
+    # Solving a model with only an empty constraint group is also fine.
+    m.add_objective(x.sum())
+    m.solve("highs", io_api="direct", output_flag=False)
+    assert m.status == "ok"
+
+
 def test_cannot_create_constraint_without_variable() -> None:
     model = linopy.Model()
     with pytest.raises(ValueError):

@@ -13,6 +13,7 @@ Upcoming Version
 **Bug fixes**
 
 * LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
+* Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 
 Version 0.8.0
 -------------
