@@ -93,7 +93,7 @@ benchmarks = [
     "pandas==3.0.3",
     "polars==1.41.2",
     "dask==2026.6.0",
-    "pytest==9.1.0",
+    "pytest==9.1.1",
     "pytest-benchmark==5.2.3",
     "pytest-memray==1.8.0",
     "pytest-codspeed==5.0.3",
