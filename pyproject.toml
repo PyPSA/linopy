@@ -82,11 +82,21 @@ dev = [
     "highspy",
     "jupyter",
 ]
+# Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
+# changes, not dependency bumps.
 benchmarks = [
-    "pytest-benchmark",
-    "pypsa",
-    "highspy>=1.7.1",
-    "pytest-memray",
+    "highspy==1.13.1",
+    "netcdf4==1.7.4",
+    "numpy==2.4.6",
+    "scipy==1.17.1",
+    "xarray==2026.4.0",
+    "pandas==3.0.3",
+    "polars==1.41.2",
+    "dask==2026.6.0",
+    "pytest==9.1.0",
+    "pytest-benchmark==5.2.3",
+    "pytest-memray==1.8.0",
+    "pytest-codspeed==5.0.3",
 ]
 solvers = [
     "gurobipy",
@@ -139,7 +149,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', 'benchmark/*', 'benchmarks/*', 'doc/*']
+exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true
