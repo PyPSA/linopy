@@ -55,7 +55,7 @@ remote = [
 ]
 docs = [
     "ipython==8.26.0",
-    "numpydoc==1.7.0",
+    "numpydoc==1.10.0",
     "sphinx==7.3.7",
     "sphinx_rtd_theme==2.0.0",
     "sphinx_book_theme==1.2.0",
