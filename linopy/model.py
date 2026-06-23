@@ -620,11 +620,11 @@ class Model:
         Parameters
         ----------
         lower : float/array_like, optional
-            Lower bound of the variable(s). Ignored if `binary` is True.
-            The default is -inf.
+            Lower bound of the variable(s). For binary variables it
+            defaults to 0 and, if given, must be 0 or 1. The default is -inf.
         upper : TYPE, optional
-            Upper bound of the variable(s). Ignored if `binary` is True.
-            The default is inf.
+            Upper bound of the variable(s). For binary variables it
+            defaults to 1 and, if given, must be 0 or 1. The default is inf.
         coords : list/dict/xarray.Coordinates, optional
             The coords of the variable array. When provided with **named
             dimensions** (a ``Mapping``, ``xarray.Coordinates``, a
@@ -773,10 +773,14 @@ class Model:
             )
 
         if binary:
-            if (lower != -inf) or (upper != inf):
-                raise ValueError("Binary variables cannot have lower or upper bounds.")
-            else:
-                lower, upper = 0, 1
+            if np.isscalar(lower) and lower == -inf:
+                lower = 0
+            elif not (np.isin(lower, (0, 1)) | pd.isna(lower)).all():
+                raise ValueError("Binary variable lower bounds must be 0 or 1.")
+            if np.isscalar(upper) and upper == inf:
+                upper = 1
+            elif not (np.isin(upper, (0, 1)) | pd.isna(upper)).all():
+                raise ValueError("Binary variable upper bounds must be 0 or 1.")
 
         if semi_continuous:
             if not np.isscalar(lower) or float(lower) <= 0:  # type: ignore[arg-type]

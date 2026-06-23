@@ -12,6 +12,7 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable
+from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,9 +34,12 @@ if TYPE_CHECKING:
     from highspy.highs import Highs
 
     from linopy.model import Model
+    from linopy.variables import Variable
 
 
 logger = logging.getLogger(__name__)
+
+NETCDF_VERSION_ATTR = "_linopy_version"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -235,6 +239,17 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
+def _binary_has_nondefault_bounds(var: Variable) -> bool:
+    """
+    Whether a binary variable carries bounds other than the implied (0, 1).
+
+    Scans the raw bound values (a single vectorised pass each), so masked
+    slots are tolerated: a false positive only routes the variable through
+    the bounds loop, where masked labels are dropped before writing.
+    """
+    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+
+
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
@@ -250,8 +265,10 @@ def bounds_to_file(
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
         + [
-            n for n in m.variables.binaries if m.variables[n].fixed
-        ]  # fixed binaries need bounds
+            n
+            for n in m.variables.binaries
+            if _binary_has_nondefault_bounds(m.variables[n])
+        ]
     )
     if not len(list(names)):
         return
@@ -971,6 +988,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
