@@ -1990,7 +1990,7 @@ class Model:
         for _, var in self.variables.items():
             start, end = var.range
             var.solution = xr.DataArray(
-                primal[start:end].reshape(var.shape), var.coords
+                primal[start:end].reshape(var.shape), var.coords, dims=var.dims
             )
 
         if len(result.solution.dual):

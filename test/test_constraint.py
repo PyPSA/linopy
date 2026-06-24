@@ -378,7 +378,9 @@ def test_constraint_vars_setter(
 def test_constraint_vars_setter_with_array(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.vars = x.labels
+    """Passing a raw DataArray is deprecated but still works for back-compat."""
+    with pytest.warns(FutureWarning, match="DataArray"):
+        mc.vars = x.labels
     assert_equal(mc.vars, x.labels)
 
 
@@ -442,15 +444,124 @@ def test_constraint_sign_setter_invalid(
 
 def test_constraint_rhs_setter(mc: linopy.constraints.Constraint) -> None:
     sizes = mc.sizes
-    mc.rhs = 2  # type: ignore
+    mc.rhs = 2
     assert (mc.rhs == 2).all()
     assert mc.sizes == sizes
+
+
+def test_constraint_update_rhs_and_sign(mc: linopy.constraints.Constraint) -> None:
+    mc.update(rhs=5, sign=EQUAL)
+    assert (mc.rhs == 5).all()
+    assert (mc.sign == EQUAL).all()
+
+
+def test_constraint_update_no_kwargs_is_noop(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    old_rhs = mc.rhs.copy()
+    old_sign = mc.sign.copy()
+    mc.update()
+    assert (mc.rhs == old_rhs).all()
+    assert (mc.sign == old_sign).all()
+
+
+def test_constraint_update_rearranges_variable_rhs(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """
+    Variable / Expression rhs is moved onto lhs; only the constant
+    part lands on rhs (mirrors add_constraints and the .rhs setter).
+    """
+    mc.update(rhs=x + 3)
+    assert (mc.rhs == 3).all()
+    assert mc.lhs.nterm == 2  # original term + the rearranged -x
+
+
+def test_constraint_update_returns_self(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    out = mc.update(rhs=7)
+    assert out is mc
+
+
+def test_constraint_update_positional_constraint_expression(
+    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """``c.update(x + 5 <= 3)`` replaces lhs / sign / rhs in one call."""
+    mc.update(x + y <= 7)
+    assert (mc.rhs == 7).all()
+    assert (mc.sign == LESS_EQUAL).all()
+    assert mc.lhs.nterm == 2
+
+
+def test_constraint_update_positional_rejects_mixing_kwargs(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """Positional constraint can't be combined with keyword updates."""
+    with pytest.raises(TypeError, match="cannot be combined with keyword"):
+        mc.update(x <= 3, sign=EQUAL)
+
+
+def test_constraint_update_positional_rejects_non_constraint(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    """Random objects are rejected with a clear error."""
+    with pytest.raises(TypeError, match="must be a ConstraintLike"):
+        mc.update("not a constraint")  # type: ignore
+
+
+def test_constraint_update_lhs_only(
+    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """lhs= alone replaces the expression; rhs and sign untouched."""
+    old_rhs = mc.rhs.copy()
+    old_sign = mc.sign.copy()
+    mc.update(lhs=5 * x + 7 * y)
+    assert (mc.rhs == old_rhs).all()
+    assert (mc.sign == old_sign).all()
+    assert mc.lhs.nterm == 2
+
+
+def test_constraint_update_coeffs_only_keeps_values(
+    mc: linopy.constraints.Constraint,
+) -> None:
+    """coeffs= alone replaces the coef array element-wise; vars untouched."""
+    old_vars = mc.vars.copy()
+    mc.update(coeffs=mc.coeffs * 10)
+    assert (mc.vars == old_vars).all()
+    # original was mc.lhs with leading coeff; *10 → all coeffs *10
+    assert mc.coeffs.max() >= 10
+
+
+def test_constraint_update_lhs_and_sign_together(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """Compound updates compose: lhs replacement + sign flip in one call."""
+    mc.update(lhs=2 * x, sign=EQUAL)
+    assert (mc.sign == EQUAL).all()
+    assert mc.lhs.nterm == 1
+
+
+def test_constraint_update_lhs_and_coeffs_rejected(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """lhs= (full replacement) and coeffs= (partial) are mutually exclusive."""
+    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
+        mc.update(lhs=2 * x, coeffs=mc.coeffs * 2)
+
+
+def test_constraint_update_lhs_and_variables_rejected(
+    mc: linopy.constraints.Constraint, x: linopy.Variable
+) -> None:
+    """lhs= (full replacement) and variables= (partial) are mutually exclusive."""
+    with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
+        mc.update(lhs=2 * x, variables=mc.vars)
 
 
 def test_constraint_rhs_setter_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.rhs = x  # type: ignore
+    mc.rhs = x
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 2
@@ -482,7 +593,7 @@ def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
     )
     con = m.add_constraints(1 * x >= 0, name="con")
 
-    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})  # type: ignore
+    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})
 
     assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
     assert (con.rhs.sel(i=1) == 2.0).all()
@@ -507,7 +618,7 @@ def test_constraint_rhs_setter_projects_multiindex_level() -> None:
         [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
     )
     with pytest.warns(linopy.EvolvingAPIWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level  # type: ignore
+        con.rhs = rhs_by_level
 
     assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
     assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
