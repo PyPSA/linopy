@@ -619,7 +619,7 @@ def test_constraint_rhs_setter_projects_multiindex_level() -> None:
         [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
     )
     with pytest.warns(linopy.LinopySemanticsWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level  # type: ignore
+        con.rhs = rhs_by_level
 
     assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
     assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
@@ -639,7 +639,7 @@ def test_constraint_rhs_setter_mi_level_raises_v1() -> None:
         [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
     )
     with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
-        con.rhs = rhs_by_level  # type: ignore
+        con.rhs = rhs_by_level
 
 
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:

@@ -48,7 +48,7 @@ import contextlib
 import operator
 import warnings
 from collections.abc import Generator
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -2460,22 +2460,24 @@ def _op_quadratic_same_coords() -> QuadraticExpression:
     m = Model()
     x = m.add_variables(coords=[_eq_time()], name="x")
     y = m.add_variables(coords=[_eq_time()], name="y")
-    return (x * x) + (y * y)
+    return cast(QuadraticExpression, (x * x) + (y * y))
 
 
 def _op_add_join_inner() -> LinearExpression:
-    return (
+    return cast(
+        LinearExpression,
         Model()
         .add_variables(coords=[_eq_time()], name="x")
-        .add(_eq_subset(), join="inner")
+        .add(_eq_subset(), join="inner"),
     )
 
 
 def _op_add_join_outer() -> LinearExpression:
-    return (
+    return cast(
+        LinearExpression,
         Model()
         .add_variables(coords=[_eq_time()], name="x")
-        .add(_eq_subset(), join="outer")
+        .add(_eq_subset(), join="outer"),
     )
 
 
@@ -2485,10 +2487,11 @@ def _op_add_join_override() -> LinearExpression:
         dims=["time"],
         coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
     )
-    return (
+    return cast(
+        LinearExpression,
         Model()
         .add_variables(coords=[_eq_time()], name="x")
-        .add(relabelled, join="override")
+        .add(relabelled, join="override"),
     )
 
 
