@@ -1223,6 +1223,8 @@ class Variable:
             raise ValueError(
                 f"other must be a Variable, ScalarVariable, dict or Dataset, got {type(other)}"
             )
+        if isinstance(_other, dict):
+            _other = {**{k: np.nan for k in self.data}, **_other}
         return self.__class__(
             self.data.where(cond, _other, **kwargs), self.model, self.name
         )

@@ -276,6 +276,15 @@ def test_variable_where(x: linopy.Variable) -> None:
         x.where([True] * 4 + [False] * 6, 0)  # type: ignore
 
 
+def test_variable_where_with_solution(x: linopy.Variable) -> None:
+    x.solution = xr.DataArray(np.arange(10.0), coords=x.labels.coords)
+    cond = [True] * 4 + [False] * 6
+    filtered = x.where(cond)
+    assert filtered.labels[9] == x._fill_value["labels"]
+    assert filtered.data["solution"][0] == 0.0
+    assert np.isnan(filtered.data["solution"][9])
+
+
 def test_variable_shift(x: linopy.Variable) -> None:
     x = x.shift(first=3)
     assert isinstance(x, linopy.variables.Variable)
