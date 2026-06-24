@@ -12,6 +12,7 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable
+from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,9 +34,12 @@ if TYPE_CHECKING:
     from highspy.highs import Highs
 
     from linopy.model import Model
+    from linopy.variables import Variable
 
 
 logger = logging.getLogger(__name__)
+
+NETCDF_VERSION_ATTR = "_linopy_version"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -235,6 +239,17 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
+def _binary_has_nondefault_bounds(var: Variable) -> bool:
+    """
+    Whether a binary variable carries bounds other than the implied (0, 1).
+
+    Scans the raw bound values (a single vectorised pass each), so masked
+    slots are tolerated: a false positive only routes the variable through
+    the bounds loop, where masked labels are dropped before writing.
+    """
+    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+
+
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
@@ -249,6 +264,11 @@ def bounds_to_file(
         list(m.variables.continuous)
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
+        + [
+            n
+            for n in m.variables.binaries
+            if _binary_has_nondefault_bounds(m.variables[n])
+        ]
     )
     if not len(list(names)):
         return
@@ -459,6 +479,61 @@ def sos_to_file(
             _format_and_write(df, columns, f)
 
 
+def indicator_constraints_to_file(
+    m: Model,
+    f: BufferedWriter,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write indicator constraints to the s.t. section of an LP file.
+
+    Indicator constraints appear in the Subject To section with the format:
+    ``ic0: x0 = 1 -> +1.0 x1 <= 5.0``
+    """
+    if not len(m.constraints.indicator):
+        return
+
+    if not len(m.constraints.regular):
+        f.write(b"\n\ns.t.\n\n")
+
+    print_variable_scalar, _ = get_printers_scalar(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    for con in m.constraints.indicator.data.values():
+        ic_data = con.data
+        labels_flat = ic_data.labels.values.flatten()
+        binary_var_flat = ic_data.binary_var.values.flatten()
+        binary_val_flat = np.broadcast_to(
+            ic_data.binary_val.values, labels_flat.shape
+        ).flatten()
+        coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
+        vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
+        sign_flat = np.broadcast_to(ic_data.sign.values, labels_flat.shape).flatten()
+        rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
+
+        for i in range(len(labels_flat)):
+            if labels_flat[i] == -1:
+                continue
+
+            bvar_name = print_variable_scalar(binary_var_flat[i : i + 1])[0]
+            valid = vars_flat[i] != -1
+            var_names = print_variable_scalar(vars_flat[i][valid])
+
+            terms = []
+            for coeff, var_name in zip(coeffs_flat[i][valid], var_names):
+                coeff = float(coeff)
+                prefix = "+" if coeff >= 0 else ""
+                terms.append(f"{prefix}{coeff} {var_name}")
+
+            lhs_str = " ".join(terms)
+            line = (
+                f"ic{labels_flat[i]}: {bvar_name} = {int(binary_val_flat[i])} -> "
+                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i])}\n"
+            )
+            f.write(line.encode())
+
+
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
@@ -467,7 +542,8 @@ def constraints_to_file(
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:
-    if not len(m.constraints):
+    regular = m.constraints.regular
+    if not len(regular):
         return
 
     print_variable, print_constraint = get_printers(
@@ -475,10 +551,10 @@ def constraints_to_file(
     )
 
     f.write(b"\n\ns.t.\n\n")
-    names = m.constraints
+    names = list(regular)
     if progress:
         names = tqdm(
-            list(names),
+            names,
             desc="Writing constraints.",
             colour=TQDM_COLOR,
         )
@@ -486,7 +562,7 @@ def constraints_to_file(
     # to make this even faster, we can use polars expression
     # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
-        con = m.constraints[name]
+        con = regular[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
 
@@ -545,6 +621,11 @@ def to_lp_file(
             f=f,
             progress=progress,
             slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        indicator_constraints_to_file(
+            m,
+            f=f,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
@@ -907,6 +988,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
@@ -1092,7 +1174,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, Constraints
+    from linopy.constraints import Constraint, ConstraintBase, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1122,15 +1204,15 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
+    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
+        d = con.mutable().data
+        if include_solution:
+            return d.copy(deep=deep)
+        return d[con.data_attrs].copy(deep=deep)
+
     new_model._constraints = Constraints(
         {
-            name: Constraint(
-                con.mutable().data.copy(deep=deep)
-                if include_solution
-                else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),
-                new_model,
-                name,
-            )
+            name: Constraint(_copy_con_data(con), new_model, name)
             for name, con in m.constraints.items()
         },
         new_model,

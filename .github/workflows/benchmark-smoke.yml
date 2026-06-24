@@ -1,0 +1,39 @@
+name: Benchmark smoke
+
+# Builds every spec and fires every phase once (--benchmark-disable):
+# a "did a refactor break a spec?" check, not timing.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Benchmark smoke (quick)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0  # setuptools_scm
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+
+    - name: Install package and benchmark dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+
+    - name: Run benchmark smoke
+      # Every spec builds at one size and every phase fires once, no timings.
+      run: |
+        pytest benchmarks/ --benchmark-disable -q

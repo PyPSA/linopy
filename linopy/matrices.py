@@ -21,6 +21,25 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 
+def _stack(csrs: list) -> scipy.sparse.csr_array | None:
+    """Vertically stack CSR blocks, or None when there are none."""
+    if not csrs:
+        return None
+    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+
+
+def _concat(arrays: list, dtype: type | None = None) -> ndarray:
+    """Concatenate arrays, or an empty array when there are none."""
+    return np.concatenate(arrays) if arrays else np.array([], dtype=dtype)
+
+
+def _binval_per_row(binval: int | np.ndarray, n: int) -> ndarray:
+    """Broadcast an indicator triggering value to one entry per active row."""
+    if np.ndim(binval) == 0:
+        return np.full(n, int(binval), dtype=np.intp)
+    return np.asarray(binval, dtype=np.intp).ravel()
+
+
 class MatrixAccessor:
     """
     Helper class to quickly access model related vectors and matrices.
@@ -72,30 +91,36 @@ class MatrixAccessor:
 
     def _build_cons(self) -> None:
         m = self._parent
-
-        if not len(m.constraints):
-            self.clabels: ndarray = np.array([], dtype=np.intp)
-            self.b: ndarray = np.array([])
-            self.sense: ndarray = np.array([], dtype=object)
-            self.A: scipy.sparse.csr_array | None = None
-            return
-
         label_index = m.variables.label_index
-        csrs = []
-        b_list = []
-        sense_list = []
-        for c in m.constraints.data.values():
-            csr, _, b, sense = c.to_matrix_with_rhs(label_index)
-            csrs.append(csr)
-            b_list.append(b)
-            sense_list.append(sense)
+        label_to_pos = label_index.label_to_pos
 
-        self.A = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
-        self.clabels = m.constraints.label_index.clabels
-        self.b = np.concatenate(b_list) if b_list else np.array([])
-        self.sense = (
-            np.concatenate(sense_list) if sense_list else np.array([], dtype=object)
-        )
+        reg_csrs, reg_b, reg_sense = [], [], []
+        ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
+        for c in m.constraints.data.values():
+            if c.is_indicator:
+                cc = c if isinstance(c, CSRConstraint) else c.freeze()
+                csr, _, b, sense = cc.to_matrix_with_rhs(label_index)
+                ind_csrs.append(csr)
+                ind_b.append(b)
+                ind_sense.append(sense)
+                ind_binvar.append(label_to_pos[cc._binvar_labels])
+                binval = cast("int | np.ndarray", cc._binval)
+                ind_binval.append(_binval_per_row(binval, len(b)))
+            else:
+                csr, _, b, sense = c.to_matrix_with_rhs(label_index)
+                reg_csrs.append(csr)
+                reg_b.append(b)
+                reg_sense.append(sense)
+
+        self.clabels: ndarray = m.constraints.label_index.clabels
+        self.A: scipy.sparse.csr_array | None = _stack(reg_csrs)
+        self.b: ndarray = _concat(reg_b)
+        self.sense: ndarray = _concat(reg_sense, dtype=object)
+        self.indicator_A: scipy.sparse.csr_array | None = _stack(ind_csrs)
+        self.indicator_b: ndarray = _concat(ind_b)
+        self.indicator_sense: ndarray = _concat(ind_sense, dtype=object)
+        self.indicator_binvar: ndarray = _concat(ind_binvar, dtype=np.intp)
+        self.indicator_binval: ndarray = _concat(ind_binval, dtype=np.intp)
 
     @cached_property
     def c(self) -> ndarray:
@@ -157,6 +182,8 @@ class MatrixAccessor:
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
+            if c.is_indicator:
+                continue
             if isinstance(c, CSRConstraint):
                 # _dual is active-only
                 if c._dual is not None:
