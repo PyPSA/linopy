@@ -868,10 +868,10 @@ def _resolve_active(
     if not bool(covered.all()):
         raise ValueError(
             "`active` is not defined over the full coordinate of the "
-            "piecewise formulation; it has missing or masked entries that "
-            "would be gated to zero. Pass `active_fill=1` to treat them as "
-            "always active (or `0` as always off), or pass a fully-defined "
-            "`active`."
+            "piecewise formulation: it is missing labels (a subset of the "
+            "coordinate) or has masked entries, which would be gated to "
+            "zero. Pass `active_fill=1` to treat those entries as always "
+            "active (or `0` as always off), or pass a fully-defined `active`."
         )
     return active
 
@@ -1157,9 +1157,10 @@ def add_piecewise_formulation(
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
 
-        ``active`` must cover the formulation's full coordinate; a partial
-        gate (subset or masked) is rejected unless ``active_fill`` is set
-        (see below).
+        ``active`` must cover the formulation's full coordinate.  A
+        *partial* gate — one defined over only a subset of the coordinate's
+        labels, or carrying masked entries — is rejected unless
+        ``active_fill`` is set (see below).
 
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
@@ -1173,9 +1174,10 @@ def add_piecewise_formulation(
         must add the complementary bound yourself (e.g., a big-M
         coupling ``y`` with ``active``).
     active_fill : int, optional
-        Fill value for entries where ``active`` is missing/masked: ``1``
-        treats them as always active (ungated), ``0`` as always off. When
-        ``None`` (the default) a partial ``active`` is rejected instead.
+        Fill value for the gap entries of a partial ``active`` — those where
+        ``active`` has no label (a subset of the coordinate) or is masked:
+        ``1`` treats them as always active (ungated), ``0`` as always off.
+        When ``None`` (the default) a partial ``active`` is rejected instead.
         Useful when one formulation mixes gated and ungated entities (e.g.
         committable and non-committable units sharing a ``status``).
         Transitional convenience: under v1 semantics, pad ``active``
