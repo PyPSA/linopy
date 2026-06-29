@@ -70,6 +70,4 @@ def active_gate(
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
     )
     gate = _to_linexpr(active).reindex(coords)
-    term_dims = [d for d in gate.vars.dims if d not in gate.coord_dims]
-    present = (gate.vars >= 0).any(term_dims)
-    return gate.where(present, fill_value)
+    return gate.where(gate.has_terms, fill_value)

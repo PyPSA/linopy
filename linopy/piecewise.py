@@ -855,9 +855,8 @@ def _validate_active_coverage(active: LinearExpression, reference: DataArray) ->
     }
     aligned = active.reindex(indexers) if indexers else active
     term_dims = [d for d in aligned.vars.dims if d not in aligned.coord_dims]
-    has_variable = (aligned.vars >= 0).any(term_dims)
     dangling = ((aligned.vars < 0) & aligned.coeffs.notnull()).any(term_dims)
-    covered = has_variable | (aligned.const.notnull() & ~dangling)
+    covered = aligned.has_terms | (aligned.const.notnull() & ~dangling)
     if not bool(covered.all()):
         raise ValueError(
             "`active` is not defined over the full coordinate of the "
