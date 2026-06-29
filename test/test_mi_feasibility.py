@@ -161,31 +161,39 @@ def test_output_restacks_to_mi() -> None:
 
 
 # --- storage SOC: the per-period roll, composed into a real constraint -------- #
-def test_storage_soc_lp_equivalent(tmp_path) -> None:
+@pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic"])
+def test_storage_soc_lp_equivalent(tmp_path, boundary) -> None:
     """
     Storage SOC: flat+aux builds the byte-identical LP to an explicit per-period roll.
 
-    Cyclic-per-period SOC -- ``soc[t] = soc[t-1] + charge[t] - demand[t]``, wrapping
-    within each period. ``flat`` builds the previous SOC with
-    ``groupby("period").roll``; ``oracle`` with an explicit per-period positional
-    roll (= what PyPSA's global roll + ``FILL_VALUE`` rebuild computes). A byte-equal
-    LP file is the whole proof -- same solver model, not just same optimum.
+    SOC dynamics ``soc[t] = soc[t-1] + charge[t] - demand[t]`` with the previous
+    value rolled per period -- ``cyclic`` (period start wraps to the period's last
+    step) or ``non-cyclic`` (no carry-over across the start, the boundary ramps and
+    non-cyclic storage use). ``flat`` builds the previous SOC with
+    ``groupby("period").roll`` (+ a period-start ``where`` mask for non-cyclic);
+    ``oracle`` with an explicit per-period positional roll. A byte-equal LP file is
+    the whole proof -- same solver model.
 
-    The ``global`` build (period-*unaware* roll, the mistake ``FILL_VALUE`` corrects)
-    is the negative control: its LP differs at the two period-start rows, so the
-    check can fail -- it is not vacuously true.
+    Teeth: the two boundaries give *different* LPs (the mask/wrap is not a no-op);
+    and for ``cyclic`` a period-unaware global roll diverges at the period-start
+    rows. (Non-cyclic masks those rows away, so the global roll is *not* a useful
+    control there -- the boundary difference is.)
     """
     s = pd.RangeIndex(N, name="snapshot")
     period = xr.DataArray(PERIOD_OF, dims="snapshot", coords={"snapshot": s})
     demand = xr.DataArray(
         [1.0, 3.0, 2.0, 2.0, 1.0, 3.0], dims="snapshot", coords={"snapshot": s}
     )
+    starts = [int(np.flatnonzero(PERIOD_OF == p)[0]) for p in PERIODS]
+    is_start = xr.DataArray(
+        np.isin(np.arange(N), starts), dims="snapshot", coords={"snapshot": s}
+    )
     prev_pos = np.empty(N, int)  # per-period cyclic-previous position
     for p in PERIODS:
         pos = np.flatnonzero(PERIOD_OF == p)
         prev_pos[pos] = np.roll(pos, 1)
 
-    def lp(kind: str) -> str:
+    def lp(kind: str, bnd: str) -> str:
         m = Model()
         soc = m.add_variables(lower=0, coords=[s], name="soc")
         charge = m.add_variables(lower=0, coords=[s], name="charge")
@@ -198,10 +206,15 @@ def test_storage_soc_lp_equivalent(tmp_path) -> None:
             prev = (1.0 * soc).isel(snapshot=prev_pos).assign_coords(snapshot=s)
         else:  # period-unaware global roll -- the wrong build
             prev = (1.0 * soc).roll(snapshot=1)
+        if bnd == "non-cyclic":  # no carry-over across the period start
+            prev = prev.where(~is_start)
         m.add_constraints(1.0 * soc - prev - 1.0 * charge == -demand, name="soc")
-        path = tmp_path / f"{kind}.lp"
+        path = tmp_path / f"{kind}_{bnd}.lp"
         m.to_file(path, io_api="lp")
         return path.read_text()
 
-    assert lp("flat") == lp("oracle")  # flat+aux builds the identical model
-    assert lp("global") != lp("oracle")  # ...and the check can fail (has teeth)
+    other = "non-cyclic" if boundary == "cyclic" else "cyclic"
+    assert lp("flat", boundary) == lp("oracle", boundary)  # flat+aux == explicit roll
+    assert lp("flat", boundary) != lp("flat", other)  # boundary rule is real (teeth)
+    if boundary == "cyclic":  # period-unaware roll diverges (masked away if non-cyclic)
+        assert lp("global", "cyclic") != lp("oracle", "cyclic")
