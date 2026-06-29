@@ -294,7 +294,7 @@ class _LazyModule:
 
 
 gurobipy = _LazyModule("gurobipy")  # type: ignore[assignment]
-highspy = _LazyModule("highspy")
+highspy = _LazyModule("highspy")  # type: ignore[assignment]
 scip = _LazyModule("pyscipopt")
 cplex = _LazyModule("cplex")
 knitro = _LazyModule("knitro")
