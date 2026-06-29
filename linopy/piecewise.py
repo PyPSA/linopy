@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # most once per process.  Without dedup, a single model build emits the
 # verbose warning hundreds of times and drowns out other output.
 _EvolvingApiKey: TypeAlias = Literal[
-    "tangent_lines", "add_piecewise_formulation", "Slopes", "active_gate"
+    "tangent_lines", "add_piecewise_formulation", "Slopes"
 ]
 _emitted_evolving_warnings: set[_EvolvingApiKey] = set()
 
@@ -838,14 +838,18 @@ def tangent_lines(
 # ---------------------------------------------------------------------------
 
 
-def _validate_active_coverage(active: LinearExpression, reference: DataArray) -> None:
+def _resolve_active(
+    active: LinearExpression, reference: DataArray, active_fill: int | None
+) -> LinearExpression:
     """
-    Reject an ``active`` gate that does not cover the formulation.
+    Resolve a possibly-partial ``active`` gate against the formulation.
 
-    Entries where ``active`` is missing (a strict subset) or masked would
-    otherwise be gated as if ``active=0`` and forced to zero.  Such gates
-    must be padded to full coverage (e.g. via :func:`active_gate`) before
-    use.  Dimensions absent from ``active`` broadcast and are not checked.
+    A gate defined over only a subset of the indexed dimension (or with
+    masked entries) would otherwise be gated as if ``active=0`` and forced
+    to zero. With ``active_fill is None`` such a gate is rejected; otherwise
+    the gaps are filled with ``active_fill`` (``1`` = always active, ``0`` =
+    always off). Dimensions absent from ``active`` broadcast and are left
+    untouched.
     """
     skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
     indexers = {
@@ -854,6 +858,10 @@ def _validate_active_coverage(active: LinearExpression, reference: DataArray) ->
         if d in reference.indexes and d not in skip
     }
     aligned = active.reindex(indexers) if indexers else active
+
+    if active_fill is not None:
+        return aligned.where(aligned.has_terms, active_fill)
+
     term_dims = [d for d in aligned.vars.dims if d not in aligned.coord_dims]
     dangling = ((aligned.vars < 0) & aligned.coeffs.notnull()).any(term_dims)
     covered = aligned.has_terms | (aligned.const.notnull() & ~dangling)
@@ -861,10 +869,11 @@ def _validate_active_coverage(active: LinearExpression, reference: DataArray) ->
         raise ValueError(
             "`active` is not defined over the full coordinate of the "
             "piecewise formulation; it has missing or masked entries that "
-            "would be gated to zero. Pad it to full coverage first, e.g. "
-            "`active=linopy.active_gate(active, {dim: labels})` (missing "
-            "entries become always-active), or pass a fully-defined `active`."
+            "would be gated to zero. Pass `active_fill=1` to treat them as "
+            "always active (or `0` as always off), or pass a fully-defined "
+            "`active`."
         )
+    return active
 
 
 def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
@@ -1064,6 +1073,7 @@ def add_piecewise_formulation(
     | tuple[LinExprLike, BreaksOrSlopes, Literal["==", "<=", ">="]],
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
+    active_fill: int | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
@@ -1148,8 +1158,8 @@ def add_piecewise_formulation(
         Not supported with ``method="lp"``.
 
         ``active`` must cover the formulation's full coordinate; a partial
-        gate (subset or masked) is rejected. Pad it with
-        :func:`~linopy.active_gate` to leave missing entries ungated.
+        gate (subset or masked) is rejected unless ``active_fill`` is set
+        (see below).
 
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
@@ -1162,6 +1172,15 @@ def add_piecewise_formulation(
         automatically.  For outputs that genuinely need both signs you
         must add the complementary bound yourself (e.g., a big-M
         coupling ``y`` with ``active``).
+    active_fill : int, optional
+        Fill value for entries where ``active`` is missing/masked: ``1``
+        treats them as always active (ungated), ``0`` as always off. When
+        ``None`` (the default) a partial ``active`` is rejected instead.
+        Useful when one formulation mixes gated and ungated entities (e.g.
+        committable and non-committable units sharing a ``status``).
+        Transitional convenience: under v1 semantics, pad ``active``
+        explicitly with ``active.reindex(coords).fillna(value)`` instead —
+        this parameter is slated for removal then.
     name : str, optional
         Base name for generated variables/constraints.
 
@@ -1318,9 +1337,12 @@ def add_piecewise_formulation(
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
 
-    active_expr = _to_linexpr(active) if active is not None else None
-    if active_expr is not None:
-        _validate_active_coverage(active_expr, bp_list[0])
+    if active is None:
+        if active_fill is not None:
+            raise ValueError("`active_fill` has no effect without `active`.")
+        active_expr = None
+    else:
+        active_expr = _resolve_active(_to_linexpr(active), bp_list[0], active_fill)
 
     if signed_idx is None:
         inputs = _PwlInputs(

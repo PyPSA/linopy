@@ -480,7 +480,6 @@ Construction helpers
    piecewise.breakpoints
    piecewise.segments
    piecewise.Slopes
-   active_gate
 
 PiecewiseFormulation
 --------------------

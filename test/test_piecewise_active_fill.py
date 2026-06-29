@@ -1,10 +1,11 @@
 """
-Tests for the partial-``active`` gate and the ``active_gate`` helper (#796).
+Tests for the ``active_fill`` parameter of ``add_piecewise_formulation`` (#796).
 
-Kept in a dedicated module because ``active_gate`` is a temporary legacy
-stopgap (see ``linopy/_active_gate.py``): once the v1 arithmetic semantics
-(#717) land, the helper is expected to be deprecated and these tests removed
-or rewritten against the bare ``reindex().fillna()`` idiom.
+``active_fill`` is a transitional convenience: it pads a partial ``active``
+gate (a subset of the indexed dimension, or a masked gate) to full coverage.
+It is slated for removal once the v1 arithmetic semantics (#717) make
+``active.reindex(coords).fillna(value)`` correct on its own, so these tests
+live in a dedicated module that can be dropped with the parameter.
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ from typing import Any, Literal, TypeAlias
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
-from linopy import Model, active_gate, available_solvers, segments
+from linopy import Model, available_solvers, segments
+from linopy.piecewise import _resolve_active
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
@@ -50,12 +53,6 @@ def _masked_gate(m: Model) -> Any:
     return m.add_variables(binary=True, coords=[_PWL_GENS], name="u", mask=mask)
 
 
-_PARTIAL_GATES = [
-    pytest.param(_subset_gate, id="strict-subset"),
-    pytest.param(_masked_gate, id="masked"),
-]
-
-
 def _full_gate(m: Model) -> Any:
     return m.add_variables(binary=True, coords=[_PWL_GENS], name="u")
 
@@ -64,19 +61,21 @@ def _scalar_gate(m: Model) -> Any:
     return m.add_variables(binary=True, name="u")
 
 
-def _padded(make: GateBuilder, fill_value: float = 1) -> GateBuilder:
-    return lambda m: active_gate(make(m), {"gen": _PWL_GENS}, fill_value)
+_PARTIAL_GATES = [
+    pytest.param(_subset_gate, id="strict-subset"),
+    pytest.param(_masked_gate, id="masked"),
+]
 
-
-# (builder, should_raise): raw partial gates are rejected; padded/full/scalar ok.
+# (builder, active_fill, should_raise): partial gates raise unless active_fill
+# is set; full/scalar gates are always fine.
 _COVERAGE_CASES = [
-    pytest.param(_subset_gate, True, id="strict-subset-raises"),
-    pytest.param(_masked_gate, True, id="masked-raises"),
-    pytest.param(_padded(_subset_gate), False, id="padded-subset-ok"),
-    pytest.param(_padded(_masked_gate), False, id="padded-masked-ok"),
-    pytest.param(_padded(_subset_gate, 0), False, id="padded-off-ok"),
-    pytest.param(_full_gate, False, id="full-ok"),
-    pytest.param(_scalar_gate, False, id="scalar-ok"),
+    pytest.param(_subset_gate, None, True, id="subset-None-raises"),
+    pytest.param(_masked_gate, None, True, id="masked-None-raises"),
+    pytest.param(_subset_gate, 1, False, id="subset-fill1-ok"),
+    pytest.param(_masked_gate, 1, False, id="masked-fill1-ok"),
+    pytest.param(_subset_gate, 0, False, id="subset-fill0-ok"),
+    pytest.param(_full_gate, None, False, id="full-ok"),
+    pytest.param(_scalar_gate, None, False, id="scalar-ok"),
 ]
 
 
@@ -87,21 +86,25 @@ def _solve_partial_gate(
     method: Method,
     disjunctive: bool = False,
 ) -> None:
-    """Pad a partial gate, force the committable units off, demand "b" runs."""
+    """Fill a partial gate, force the committable units off, demand "b" runs."""
     m = Model()
     x = m.add_variables(lower=0, upper=100, coords=[_PWL_GENS], name="x")
     y = m.add_variables(lower=0, coords=[_PWL_GENS], name="y")
     u = make_active(m)
-    gate = active_gate(u, {"gen": _PWL_GENS})
     if disjunctive:
         m.add_piecewise_formulation(
             (x, segments([[0.0, 50.0], [50.0, 100.0]])),
             (y, segments([[0.0, 10.0], [10.0, 50.0]])),
-            active=gate,
+            active=u,
+            active_fill=1,
         )
     else:
         m.add_piecewise_formulation(
-            (x, [0, 50, 100]), (y, [0, 10, 50]), active=gate, method=method
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
+            active=u,
+            active_fill=1,
+            method=method,
         )
     m.add_constraints(u <= 0, name="force_off")
     m.add_constraints(x.sel(gen="b") >= 50, name="demand")
@@ -114,26 +117,29 @@ def _solve_partial_gate(
     np.testing.assert_allclose(float(y.solution.sel(gen="b")), 10, atol=1e-4)
 
 
-class TestActiveGateHelper:
-    """``active_gate`` pads a partial gate; gaps -> ``fill_value``."""
+class TestResolveActiveFill:
+    """The private ``_resolve_active`` fills gaps with ``active_fill``."""
 
     @pytest.mark.parametrize("fill_value", [1, 0])
-    @pytest.mark.parametrize(
-        "make_active",
-        [*_PARTIAL_GATES, pytest.param(lambda m: 2 * _subset_gate(m), id="linexpr")],
-    )
+    @pytest.mark.parametrize("make_active", _PARTIAL_GATES)
     def test_fills_gap(self, make_active: GateBuilder, fill_value: float) -> None:
-        gate = active_gate(make_active(Model()), {"gen": _PWL_GENS}, fill_value)
+        reference = xr.DataArray(np.zeros(len(_PWL_GENS)), coords=[_PWL_GENS])
+        gate = _resolve_active(1 * make_active(Model()), reference, fill_value)
         assert gate.const.sel(gen="b").item() == fill_value
-        assert bool((gate.vars.sel(gen="b") < 0).all())
-        assert bool((gate.vars.sel(gen="a") >= 0).any())
+        assert bool((gate.vars.sel(gen="b") < 0).all())  # no variable at "b"
+        assert bool((gate.vars.sel(gen="a") >= 0).any())  # variable kept at "a"
 
 
-class TestPartialActiveValidation:
-    """``add_piecewise_formulation`` rejects an under-defined ``active`` (#796)."""
+class TestActiveFillValidation:
+    """``add_piecewise_formulation`` gates a partial ``active`` via ``active_fill``."""
 
-    @pytest.mark.parametrize("make_active, should_raise", _COVERAGE_CASES)
-    def test_coverage(self, make_active: GateBuilder, should_raise: bool) -> None:
+    @pytest.mark.parametrize("make_active, active_fill, should_raise", _COVERAGE_CASES)
+    def test_coverage(
+        self,
+        make_active: GateBuilder,
+        active_fill: float | None,
+        should_raise: bool,
+    ) -> None:
         m = Model()
         x = m.add_variables(lower=0, upper=100, coords=[_PWL_GENS], name="x")
         y = m.add_variables(lower=0, coords=[_PWL_GENS], name="y")
@@ -143,14 +149,27 @@ class TestPartialActiveValidation:
                 (x, [0, 50, 100]),
                 (y, [0, 10, 50]),
                 active=make_active(m),
+                active_fill=active_fill,
                 method="incremental",
             )
 
         if should_raise:
-            with pytest.raises(ValueError, match="active_gate"):
+            with pytest.raises(ValueError, match="active_fill"):
                 build()
         else:
             build()
+
+    def test_active_fill_without_active_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, coords=[_PWL_GENS], name="x")
+        y = m.add_variables(lower=0, coords=[_PWL_GENS], name="y")
+        with pytest.raises(ValueError, match="without `active`"):
+            m.add_piecewise_formulation(
+                (x, [0, 50, 100]),
+                (y, [0, 10, 50]),
+                active_fill=1,
+                method="incremental",
+            )
 
     def test_lower_dimensional_active_broadcasts(self) -> None:
         """A gate missing an entire dim broadcasts and must not be rejected."""
@@ -165,8 +184,8 @@ class TestPartialActiveValidation:
 
 
 @pytest.mark.skipif(len(_any_solvers) == 0, reason="No solver available")
-class TestSolverPartialActiveGate:
-    """End-to-end: a padded partial gate leaves ungated units free (#796)."""
+class TestSolverActiveFill:
+    """End-to-end: ``active_fill`` leaves ungated units free (#796)."""
 
     @pytest.fixture(params=_any_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
@@ -178,7 +197,7 @@ class TestSolverPartialActiveGate:
 
 
 @pytest.mark.skipif(len(_sos2_solvers) == 0, reason="No SOS2-capable solver")
-class TestSolverPartialActiveGateSOS2:
+class TestSolverActiveFillSOS2:
     @pytest.fixture(params=_sos2_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
