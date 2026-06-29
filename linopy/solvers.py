@@ -1656,7 +1656,7 @@ class Highs(Solver[None]):
             int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
             labels = np.arange(len(vtypes))[int_mask]
             integrality = np.array(
-                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.uint8
             )
             h.changeColsIntegrality(len(labels), labels, integrality)
 
