@@ -158,3 +158,50 @@ def test_output_restacks_to_mi() -> None:
     assert isinstance(restacked.indexes["snapshot"], pd.MultiIndex)
     assert np.array_equal(restacked.values, sol.values)
     assert list(restacked.to_dataframe().index.names) == ["period", "timestep"]
+
+
+# --- storage SOC: the per-period roll, composed into a real constraint -------- #
+def test_storage_soc_lp_equivalent(tmp_path) -> None:
+    """
+    Storage SOC: flat+aux builds the byte-identical LP to an explicit per-period roll.
+
+    Cyclic-per-period SOC -- ``soc[t] = soc[t-1] + charge[t] - demand[t]``, wrapping
+    within each period. ``flat`` builds the previous SOC with
+    ``groupby("period").roll``; ``oracle`` with an explicit per-period positional
+    roll (= what PyPSA's global roll + ``FILL_VALUE`` rebuild computes). A byte-equal
+    LP file is the whole proof -- same solver model, not just same optimum.
+
+    The ``global`` build (period-*unaware* roll, the mistake ``FILL_VALUE`` corrects)
+    is the negative control: its LP differs at the two period-start rows, so the
+    check can fail -- it is not vacuously true.
+    """
+    s = pd.RangeIndex(N, name="snapshot")
+    period = xr.DataArray(PERIOD_OF, dims="snapshot", coords={"snapshot": s})
+    demand = xr.DataArray(
+        [1.0, 3.0, 2.0, 2.0, 1.0, 3.0], dims="snapshot", coords={"snapshot": s}
+    )
+    prev_pos = np.empty(N, int)  # per-period cyclic-previous position
+    for p in PERIODS:
+        pos = np.flatnonzero(PERIOD_OF == p)
+        prev_pos[pos] = np.roll(pos, 1)
+
+    def lp(kind: str) -> str:
+        m = Model()
+        soc = m.add_variables(lower=0, coords=[s], name="soc")
+        charge = m.add_variables(lower=0, coords=[s], name="charge")
+        if kind == "flat":  # per-period roll falls out of groupby
+            prev = (1.0 * soc).assign_coords(period=period).groupby("period")
+            prev = prev.roll(snapshot=1)
+            if "period" in prev.coords:  # legacy keeps the aux coord, v1 consumes it
+                prev = prev.drop_vars("period")
+        elif kind == "oracle":  # explicit per-period positional roll
+            prev = (1.0 * soc).isel(snapshot=prev_pos).assign_coords(snapshot=s)
+        else:  # period-unaware global roll -- the wrong build
+            prev = (1.0 * soc).roll(snapshot=1)
+        m.add_constraints(1.0 * soc - prev - 1.0 * charge == -demand, name="soc")
+        path = tmp_path / f"{kind}.lp"
+        m.to_file(path, io_api="lp")
+        return path.read_text()
+
+    assert lp("flat") == lp("oracle")  # flat+aux builds the identical model
+    assert lp("global") != lp("oracle")  # ...and the check can fail (has teeth)
