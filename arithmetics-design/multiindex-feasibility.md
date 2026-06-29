@@ -7,6 +7,27 @@
 > in [`test/test_mi_feasibility.py`](../test/test_mi_feasibility.py) (runs under
 > both `legacy` and `v1`).
 
+## Where MultiIndex is used in PyPSA
+
+**Working assumption, stated boldly so it can be falsified: inside the linopy model
+PyPSA uses a `pd.MultiIndex` in _exactly one place_ — the `snapshot` dimension**
+(multi-period `(period, timestep)`). Everything else that looks MultiIndex-ish is
+*not* an in-model index — which is why only those rows below carry a ⊥ tag:
+
+- **`stochastic` `(scenario, name)`** — `scenario` and `name` are separate N-D dims
+  inside linopy; the MI is only an `xarray.stack` at the pandas output
+  (`components/array.py` @ v1.2.4). Not an in-model MI.
+- **`n.snapshots`** — a real MI, but it lives in PyPSA's *public API*, never handed
+  to linopy as a model index.
+- **`output` / `dual`** — MI appears only on the returned pandas object, rebuilt at
+  the boundary by the caller.
+
+So the whole linopy-side question collapses to **one axis, `snapshot`**, and the
+rest of this note works from that premise. Other axes (contingencies, a future
+Monte-Carlo #1484) are *assumed* to follow the same N-D pattern, not audited — if
+PyPSA holds an in-model MultiIndex anywhere else, this assumption and the scope
+below need revisiting. **Corrections welcome.**
+
 **Question.** Can v1 drop the stacked `pd.MultiIndex` snapshot for a flat
 `snapshot` dim carrying `period`/`timestep` as auxiliary level coords?
 
@@ -114,6 +135,18 @@ The 🟢 rows answer the **steady-state (linopy)** question; the 🔵
 rows are **PyPSA-owned** and answer the **transition** question — verified by
 solution-equivalence on real networks (multi-period, stochastic, Monte-Carlo)
 plus scoping the public `n.snapshots` change.
+
+## What `reset_index` changes (and doesn't)
+
+Today `snapshot` is a **single dimension** whose *index* is a `MultiIndex(period,
+timestep)`; `period`/`timestep` are **levels, never dimensions**. They surface as a
+real dim only *momentarily* — `.sel(period=p)` collapses the 2-level MI to one level
+and xarray renames `snapshot → timestep`; the two never coexist as independent dims.
+That is exactly why per-period code must `.sel`-collapse, loop, or reach into `.data`
+(the SOC/KVL/objective coupling). `reset_index("snapshot")` flips **only** the index
+type (MultiIndex → flat), not the dim count — `('snapshot', 'name')` before and
+after — demoting the levels to ordinary aux coords; collapse/loop/`.data` then becomes
+direct `groupby`/`where`. That one line *is* the whole flat+aux transformation.
 
 ## Sub-decision: the snapshot dim coordinate
 
