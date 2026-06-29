@@ -51,7 +51,7 @@ compose); PyPSA links are pinned at **v1.2.4** (commit [`fb425cb`](https://githu
 | **period roll** | `roll(1)` + `_period_start_mask` | `groupby("period").map(roll)` | 🟢 (#751) | 🟢 mask-free (boundary from grouping) | [`constraints.py` L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694) (SOC) |
 | **level groupby** | `groupby(MI level)` ❌ broken ([xarray#6836](https://github.com/pydata/xarray/issues/6836)) | `groupby("period").sum()` | 🟢 (#751) | 🟢 not just *nicer* — MI is *broken*, not merely workaround-y; flat+aux groups by the aux coord and just works (#751) | — |
 | **storage SOC** | `.data.sel().roll` + `FILL_VALUE` rebuild; `_period_start_mask` (shared w/ ramps) | previous-SOC via `groupby("period").roll`, then period-start: wrap (cyclic) · `.where` drops the term (non-cyclic) · `mask=` drops the row (ramp) | 🟢 | 🟢 deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908); boundary mask [`common.py` L22](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L22) → also ramps [`constraints.py` L838](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L838) |
-| **stochastic** | `scenario` is a clean dim *into* linopy; `(scenario, name)` MI only on the pandas round-trip | `scenario` dim unchanged; round-trip rebuild like `output` | 🔵 | ⚪ same mechanism as snapshot (name axis) — but PyPSA is *adding* MI here, not removing it | scenario MI [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); feature [PyPSA#1154](https://github.com/PyPSA/PyPSA/pull/1154), [#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants *more*; round-trip MI [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64) |
+| **stochastic** | `scenario` is a clean dim *into* linopy; `(scenario, name)` MI only on the pandas round-trip | `scenario` dim unchanged; round-trip rebuild like `output` | 🔵 | ⚪ *not* an in-model MI — `scenario`/`name` are separate dims (N-D); the `(scenario, name)` MI is only `.stack`→pandas at output. Nothing to decompose; already the flat+aux target form, PyPSA's MI here is output-cosmetic | `(scenario,name)` *pandas cols* [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); feature [PyPSA#1154](https://github.com/PyPSA/PyPSA/pull/1154), [#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants *more*; output `.stack(scenario,name)` [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64) |
 | **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | 🟢 | 🟢 cheap boundary conversion (PyPSA's choice) | — |
 | **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | 🔵 | 🟢 removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
 | **n.snapshots** | `pd.MultiIndex` public API | flat dim + level coords | 🔵 | 🔴 PyPSA API migration | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
@@ -89,13 +89,15 @@ conclusion for linopy is clean: **accept MI as input sugar, decompose on entry
 (`reset_index`), and never reconstruct — flat in, flat out. linopy drops
 MultiIndex from its mental model entirely.**
 
-The remaining cost is **not inside linopy**: it is (a) whether PyPSA keeps
-`n.snapshots` as MI — a cheap boundary wrap it can do on its own side, decoupled
-from this decision — and (b) the **stochastic / Monte-Carlo direction**
-(`stochastic` row), a *second* MI `(scenario, name)` that PyPSA is actively
-entrenching ([#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants an MI level
-per sampled dimension). That is the genuine open risk, and it is a PyPSA-side
-call — linopy works either way.
+The remaining cost is **not inside linopy**, and it is essentially **one** thing:
+whether PyPSA keeps `n.snapshots` as MI — a cheap boundary wrap it can do on its
+own side, decoupled from this decision. The **stochastic / Monte-Carlo direction**
+(`stochastic` row) turns out *not* to be a second in-model MI at all: `scenario`
+and `name` are separate N-D dims inside linopy, and the `(scenario, name)` MI is
+only an `xarray.stack` at the pandas output. So there is nothing to decompose —
+it is already the flat+aux form. The one thing to watch is whether future
+Monte-Carlo work ([#1484](https://github.com/PyPSA/PyPSA/issues/1484)) introduces an
+*in-model* stacked index rather than more dims; nothing in v1.2.4 does.
 
 **Side finding (not a row):** `Variable.sel` can't MI-tuple-select
 (`x.sel(snapshot=(p, slice))` → `InvalidIndexError`), which is why PyPSA drops to
@@ -146,15 +148,16 @@ the growth `reindex_like(lhs.data)` linked above exist because MI groupby is bro
 pydata/xarray#6836). #751 fixed the level groupby, so flat+aux **deletes** those
 specific reaches rather than re-spelling them. These build-time sites `.sel` the
 *stored* MI mid-build, so they migrate whether or not PyPSA re-stacks the output.
-What's left to decide is only the **public `n.snapshots`** question and the
-stochastic 2nd MI (`n.snapshots`/`stochastic` rows), pressure-tested against
-[PyPSA#1484](https://github.com/PyPSA/PyPSA/issues/1484) (Monte-Carlo, which wants
-an MI level per sampled dimension).
+What's left to decide is only the **public `n.snapshots`** question (`n.snapshots`
+row). Stochastic is *not* a second in-model MI — `scenario`/`name` are separate
+N-D dims, the MI is pandas-output only — so the only watch item is whether
+[PyPSA#1484](https://github.com/PyPSA/PyPSA/issues/1484) (Monte-Carlo) ever turns
+that into an in-model stacked index; v1.2.4 does not.
 
 ## Decision record (to fill once the open rows close)
 
-> _The `n.snapshots` scope, the stochastic-MI resolution, and the evidence rows
-> that justify them. This note, once complete, is what closes #744._
+> _The `n.snapshots` scope (the one real open item) and the evidence rows that
+> justify it. This note, once complete, is what closes #744._
 
 - **linopy drops MultiIndex from its mental model** — accept MI as input sugar,
   decompose on entry (`reset_index`), never reconstruct (flat in, flat out).
@@ -164,6 +167,7 @@ an MI level per sampled dimension).
   PyPSA owns (`output` row, tested); no MI adapter lives inside linopy.
 - **`n.snapshots`** — PyPSA's independent, decoupled choice: keep MI (wrap at its
   own boundary) or flatten. _TBD, PyPSA-side._
-- **Stochastic 2nd MI `(scenario, name)`** (`stochastic` row) — the genuine open risk;
-  PyPSA is entrenching it ([#1484](https://github.com/PyPSA/PyPSA/issues/1484)).
-  Resolve via a PyPSA-side solution-equivalence spike. _TBD._
+- **Stochastic is N-D, not a second MI** (`stochastic` row) — `scenario`/`name` are
+  separate dims; the `(scenario, name)` MI is only an output `.stack`. No in-model MI
+  to remove. Watch only whether [#1484](https://github.com/PyPSA/PyPSA/issues/1484)
+  (Monte-Carlo) introduces an in-model stacked index; v1.2.4 does not. _Low risk._
