@@ -565,6 +565,22 @@ manual gating.
    variable: combined with the ``y ≤ 0`` constraint from deactivation,
    this forces ``y = 0`` automatically.
 
+Partial gates
+^^^^^^^^^^^^^
+
+``active`` must cover the formulation's full coordinate; a gate defined
+over only a subset (or with masked entries) is rejected. Pad it with
+:func:`~linopy.active_gate`, which leaves missing entries always-active
+(``fill_value=1``) or off (``0``) — handy when one formulation mixes
+committable and non-committable units sharing a single ``status``:
+
+.. code-block:: python
+
+    gate = linopy.active_gate(status, {"unit": units})
+    m.add_piecewise_formulation(
+        (power, [30, 60, 100]), (fuel, [40, 90, 170]), active=gate
+    )
+
 Auto-broadcasting
 ~~~~~~~~~~~~~~~~~
 

@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # most once per process.  Without dedup, a single model build emits the
 # verbose warning hundreds of times and drowns out other output.
 _EvolvingApiKey: TypeAlias = Literal[
-    "tangent_lines", "add_piecewise_formulation", "Slopes"
+    "tangent_lines", "add_piecewise_formulation", "Slopes", "active_gate"
 ]
 _emitted_evolving_warnings: set[_EvolvingApiKey] = set()
 
@@ -838,6 +838,36 @@ def tangent_lines(
 # ---------------------------------------------------------------------------
 
 
+def _validate_active_coverage(active: LinearExpression, reference: DataArray) -> None:
+    """
+    Reject an ``active`` gate that does not cover the formulation.
+
+    Entries where ``active`` is missing (a strict subset) or masked would
+    otherwise be gated as if ``active=0`` and forced to zero.  Such gates
+    must be padded to full coverage (e.g. via :func:`active_gate`) before
+    use.  Dimensions absent from ``active`` broadcast and are not checked.
+    """
+    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    indexers = {
+        d: reference.indexes[d]
+        for d in active.coord_dims
+        if d in reference.indexes and d not in skip
+    }
+    aligned = active.reindex(indexers) if indexers else active
+    term_dims = [d for d in aligned.vars.dims if d not in aligned.coord_dims]
+    has_variable = (aligned.vars >= 0).any(term_dims)
+    dangling = ((aligned.vars < 0) & aligned.coeffs.notnull()).any(term_dims)
+    covered = has_variable | (aligned.const.notnull() & ~dangling)
+    if not bool(covered.all()):
+        raise ValueError(
+            "`active` is not defined over the full coordinate of the "
+            "piecewise formulation; it has missing or masked entries that "
+            "would be gated to zero. Pad it to full coverage first, e.g. "
+            "`active=linopy.active_gate(active, {dim: labels})` (missing "
+            "entries become always-active), or pass a fully-defined `active`."
+        )
+
+
 def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
     """
     Validate that two breakpoint arrays have compatible shapes.
@@ -1118,6 +1148,10 @@ def add_piecewise_formulation(
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
 
+        ``active`` must cover the formulation's full coordinate; a partial
+        gate (subset or masked) is rejected. Pad it with
+        :func:`~linopy.active_gate` to leave missing entries ungated.
+
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
         only pushes the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
@@ -1286,6 +1320,8 @@ def add_piecewise_formulation(
             link_coords.append(f"_pwl_{i}")
 
     active_expr = _to_linexpr(active) if active is not None else None
+    if active_expr is not None:
+        _validate_active_coverage(active_expr, bp_list[0])
 
     if signed_idx is None:
         inputs = _PwlInputs(

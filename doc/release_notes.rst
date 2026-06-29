@@ -20,6 +20,7 @@ Upcoming Version
 *Other*
 
 * ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
+* New ``linopy.active_gate`` helper pads a partial ``active`` gate for ``add_piecewise_formulation`` to full coverage (missing/masked entries become always-active, or off with ``fill_value=0``). Partial gates that were previously zeroed silently are now rejected with a clear error. (https://github.com/PyPSA/linopy/issues/796)
 
 **Deprecations**
 
