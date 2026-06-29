@@ -160,9 +160,9 @@ def test_output_restacks_to_mi() -> None:
     assert list(restacked.to_dataframe().index.names) == ["period", "timestep"]
 
 
-# --- storage SOC: the per-period roll, composed into a real constraint -------- #
+# --- period-start boundary: the per-period roll composed into a constraint ---- #
 @pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic", "ramp"])
-def test_storage_soc_lp_equivalent(tmp_path, boundary) -> None:
+def test_period_boundary_lp_identical(tmp_path, boundary) -> None:
     """
     Per-period roll, composed into a constraint: flat+aux builds the byte-identical
     LP to an explicit per-period roll, for every period boundary PyPSA spells.
