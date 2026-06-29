@@ -122,7 +122,7 @@ class TestResolveActiveFill:
 
     @pytest.mark.parametrize("fill_value", [1, 0])
     @pytest.mark.parametrize("make_active", _PARTIAL_GATES)
-    def test_fills_gap(self, make_active: GateBuilder, fill_value: float) -> None:
+    def test_fills_gap(self, make_active: GateBuilder, fill_value: int) -> None:
         reference = xr.DataArray(np.zeros(len(_PWL_GENS)), coords=[_PWL_GENS])
         gate = _resolve_active(1 * make_active(Model()), reference, fill_value)
         assert gate.const.sel(gen="b").item() == fill_value
@@ -137,7 +137,7 @@ class TestActiveFillValidation:
     def test_coverage(
         self,
         make_active: GateBuilder,
-        active_fill: float | None,
+        active_fill: int | None,
         should_raise: bool,
     ) -> None:
         m = Model()
