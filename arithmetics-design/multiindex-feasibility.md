@@ -9,24 +9,20 @@
 
 ## Where MultiIndex is used in PyPSA
 
-**Working assumption, stated boldly so it can be falsified: inside the linopy model
-PyPSA uses a `pd.MultiIndex` in _exactly one place_ — the `snapshot` dimension**
-(multi-period `(period, timestep)`). Everything else that looks MultiIndex-ish is
-*not* an in-model index — which is why only those rows below carry a ⊥ tag:
+Inside the linopy model, PyPSA uses a `pd.MultiIndex` in **exactly one place — the
+`snapshot` dimension** (multi-period `(period, timestep)`). Everything else that
+looks MultiIndex-ish is *not* an in-model index — which is why only those rows below
+carry a ⊥ tag:
 
 - **`stochastic` `(scenario, name)`** — `scenario` and `name` are separate N-D dims
   inside linopy; the MI is only an `xarray.stack` at the pandas output
-  (`components/array.py` @ v1.2.4). Not an in-model MI.
-- **`n.snapshots`** — a real MI, but it lives in PyPSA's *public API*, never handed
-  to linopy as a model index.
+  (`components/array.py` @ v1.2.4).
+- **`n.snapshots`** — a real MI, but in PyPSA's *public API*, never handed to linopy
+  as a model index.
 - **`output` / `dual`** — MI appears only on the returned pandas object, rebuilt at
   the boundary by the caller.
 
-So the whole linopy-side question collapses to **one axis, `snapshot`**, and the
-rest of this note works from that premise. Other axes (contingencies, a future
-Monte-Carlo #1484) are *assumed* to follow the same N-D pattern, not audited — if
-PyPSA holds an in-model MultiIndex anywhere else, this assumption and the scope
-below need revisiting. **Corrections welcome.**
+So the whole linopy-side question is **one axis, `snapshot`**.
 
 **Question.** Can v1 drop the stacked `pd.MultiIndex` snapshot for a flat
 `snapshot` dim carrying `period`/`timestep` as auxiliary level coords?
