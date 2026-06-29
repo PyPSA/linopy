@@ -161,23 +161,28 @@ def test_output_restacks_to_mi() -> None:
 
 
 # --- storage SOC: the per-period roll, composed into a real constraint -------- #
-@pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic"])
+@pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic", "ramp"])
 def test_storage_soc_lp_equivalent(tmp_path, boundary) -> None:
     """
-    Storage SOC: flat+aux builds the byte-identical LP to an explicit per-period roll.
+    Per-period roll, composed into a constraint: flat+aux builds the byte-identical
+    LP to an explicit per-period roll, for every period boundary PyPSA spells.
 
-    SOC dynamics ``soc[t] = soc[t-1] + charge[t] - demand[t]`` with the previous
-    value rolled per period -- ``cyclic`` (period start wraps to the period's last
-    step) or ``non-cyclic`` (no carry-over across the start, the boundary ramps and
-    non-cyclic storage use). ``flat`` builds the previous SOC with
-    ``groupby("period").roll`` (+ a period-start ``where`` mask for non-cyclic);
-    ``oracle`` with an explicit per-period positional roll. A byte-equal LP file is
-    the whole proof -- same solver model.
+    ``soc[t] = soc[t-1] + charge[t] - demand[t]`` with the previous value rolled per
+    period; only the *period start* differs (constraints.py @ v1.2.4):
 
-    Teeth: the two boundaries give *different* LPs (the mask/wrap is not a no-op);
-    and for ``cyclic`` a period-unaware global roll diverges at the period-start
-    rows. (Non-cyclic masks those rows away, so the global roll is *not* a useful
-    control there -- the boundary difference is.)
+    * ``cyclic`` -- wrap to the period's last step (``cyclic_state_of_charge``).
+    * ``non-cyclic`` -- drop the previous *term*, keep the row, initial SOC -> rhs:
+      PyPSA's ``previous_soc...roll(1).where(include_previous_soc)`` (L1691). A
+      ``where`` on the term, *not* a dropped row.
+    * ``ramp`` -- drop the whole *row* (no previous to ramp from): the
+      ``_period_start_mask`` used as a constraint ``mask`` (L838).
+
+    ``flat`` builds the previous SOC with ``groupby("period").roll``; ``oracle`` with
+    an explicit per-period positional roll. A byte-equal LP file is the whole proof.
+
+    Teeth: each boundary differs from the ``cyclic`` baseline (mask/wrap/row-drop is
+    not a no-op); and for ``cyclic`` a period-unaware global roll diverges at the
+    period-start rows (the other two mask those rows, so it is no control there).
     """
     s = pd.RangeIndex(N, name="snapshot")
     period = xr.DataArray(PERIOD_OF, dims="snapshot", coords={"snapshot": s})
@@ -206,15 +211,19 @@ def test_storage_soc_lp_equivalent(tmp_path, boundary) -> None:
             prev = (1.0 * soc).isel(snapshot=prev_pos).assign_coords(snapshot=s)
         else:  # period-unaware global roll -- the wrong build
             prev = (1.0 * soc).roll(snapshot=1)
-        if bnd == "non-cyclic":  # no carry-over across the period start
+        if bnd == "non-cyclic":  # drop the previous term, keep the row (PyPSA .where)
             prev = prev.where(~is_start)
-        m.add_constraints(1.0 * soc - prev - 1.0 * charge == -demand, name="soc")
+        con = 1.0 * soc - prev - 1.0 * charge == -demand
+        if bnd == "ramp":  # drop the whole row at the period start (constraint mask)
+            m.add_constraints(con, name="soc", mask=~is_start)
+        else:
+            m.add_constraints(con, name="soc")
         path = tmp_path / f"{kind}_{bnd}.lp"
         m.to_file(path, io_api="lp")
         return path.read_text()
 
-    other = "non-cyclic" if boundary == "cyclic" else "cyclic"
+    contrast = {"cyclic": "non-cyclic", "non-cyclic": "cyclic", "ramp": "cyclic"}
     assert lp("flat", boundary) == lp("oracle", boundary)  # flat+aux == explicit roll
-    assert lp("flat", boundary) != lp("flat", other)  # boundary rule is real (teeth)
-    if boundary == "cyclic":  # period-unaware roll diverges (masked away if non-cyclic)
+    assert lp("flat", boundary) != lp("flat", contrast[boundary])  # boundary is real
+    if boundary == "cyclic":  # period-unaware roll diverges (masked away otherwise)
         assert lp("global", "cyclic") != lp("oracle", "cyclic")
