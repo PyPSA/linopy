@@ -16,7 +16,7 @@ check, not asserted.
 
 ## Data model under test
 
-| | today (C) | proposed (flat+aux) |
+| | today (MI) | proposed (flat+aux) |
 |---|---|---|
 | snapshot dim | `MultiIndex[(period, timestep)]` | flat `snapshot` dim |
 | level identity | MI levels | `period`/`timestep` **aux coords** on `snapshot` |
@@ -29,24 +29,46 @@ The entry conversion is byte-identical across linopy's supported xarray range
 
 ## Feasibility matrix
 
-Two axes, deliberately separate:
-- **feasible** — can flat+aux build an *equivalent model*? ✅ verified (has a test) · ☐ open.
-- **desirable** — is the flat+aux form at least as good, across three facets — *nicer* (ergonomics), *safer* (catches errors), *flexible* (coords stay manipulable)? 👍 better · ➖ parity · ⚠️ friction/cost · ☐ TBD.
+Two axes — **feasible** (can flat+aux build an *equivalent model*?) and
+**desirable** (our *opinion*: is it at least as good — *nicer* / *safer* /
+*flexible*?):
 
-The `entry`–`model` rows are tracked in `test/test_mi_feasibility.py`; PyPSA links
+| bubble | feasible | desirable |
+|---|---|---|
+| 🟢 | works today (tested) | better |
+| 🔵 | achievable (unimplemented) | — |
+| ⚪ | — | parity |
+| 🔴 | not feasible | worse |
+
+The 🟢 rows are tracked in `test/test_mi_feasibility.py`; PyPSA links
 are pinned at **v1.2.4** (commit [`fb425cb`](https://github.com/PyPSA/PyPSA/tree/v1.2.4)).
 
 | op | MI form | flat+aux form | feasible | desirable | PyPSA call site @ v1.2.4 |
 |---|---|---|---|---|---|
-| **entry** | `coords=[mi]` | `reset_index(dim)` | ✅ | 👍 deletes MI machinery | — |
-| **select** | `sel(snapshot=(p, slice))` | `where(period == p)` | ✅ | ➖ parity | [`constraints.py` L1235‑1248](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1235-L1248) (KVL per-period) |
-| **roll** | per-period `sel`-loop | `groupby("period").roll` | ✅ (#751) | 👍 deletes `.data` loop | [`constraints.py` L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694) (SOC) |
-| **group** | level groupby | `groupby("period").sum()` | ✅ (#751) | 👍 flat works (#751); MI level-groupby broken upstream ([xarray#6836](https://github.com/pydata/xarray/issues/6836)) | — |
-| **model** | MI per-period LP | flat+aux LP (solved `==`) | ✅ | ➖ parity | — |
-| **soc** | `.data.sel().roll` + `FILL_VALUE` rebuild | previous-SOC via `groupby("period").roll` | ☐ | 👍 deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908) |
-| **stoch** | stochastic = 2nd MI (scenario) | two aux-coord groups (`period`+`scenario`) | ☐ | ☐ TBD | — |
-| **output** | `solution`/`dual` MI-indexed | flat + level coords (A) or re-stacked (B) | ☐ | ⚠️ A/B trade-off | — |
-| **n.snapshots** | `pd.MultiIndex` public API | flat dim + level coords | ☐ | ⚠️ PyPSA API migration | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
+| **entry** | `coords=[mi]` | `reset_index(dim)` | 🟢 | 🟢 deletes MI machinery | [`constraints.py` L1052](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1052) (`from_pandas_multiindex`) |
+| **level select** | `sel(snapshot=(p, slice))` | `where(period == p)` | 🟢 | ⚪ parity | [`constraints.py` L1235‑1248](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1235-L1248) (KVL; the per-period loop is topology-driven — `cycle_matrix(period)` — not MI, so flat+aux only swaps the `sns.get_loc` slice for `where`, the loop stays) |
+| **period roll** | `roll(1)` + `_period_start_mask` | `groupby("period").map(roll)` | 🟢 (#751) | 🟢 mask-free (boundary from grouping) | [`constraints.py` L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694) (SOC) |
+| **level groupby** | `groupby(MI level)` ❌ broken ([xarray#6836](https://github.com/pydata/xarray/issues/6836)) | `groupby("period").sum()` | 🟢 (#751) | 🟢 not just *nicer* — MI is *broken*, not merely workaround-y; flat+aux groups by the aux coord and just works (#751) | — |
+| **solve LP** | per-period `isel`-sum `≥ d`, solved | `groupby("period").sum() ≥ d`, solved `==` | 🟢 | ⚪ parity | — |
+| **storage SOC** | `.data.sel().roll` + `FILL_VALUE` rebuild; `_period_start_mask` (shared w/ ramps) | previous-SOC via `groupby("period").roll`; `where(period==…)` mask | 🔵 | 🟢 deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908); boundary mask [`common.py` L22](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L22) → also ramps [`constraints.py` L838](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L838) |
+| **stochastic** | `scenario` is a clean dim *into* linopy; `(scenario, name)` MI only on the pandas round-trip | `scenario` dim unchanged; round-trip rebuild like `output` | 🔵 | ⚪ same mechanism as snapshot (name axis) — but PyPSA is *adding* MI here, not removing it | scenario MI [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); feature [PyPSA#1154](https://github.com/PyPSA/PyPSA/pull/1154), [#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants *more*; round-trip MI [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64) |
+| **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | 🟢 | 🟢 cheap boundary conversion (PyPSA's choice) | — |
+| **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | 🔵 | 🟢 removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
+| **n.snapshots** | `pd.MultiIndex` public API | flat dim + level coords | 🔵 | 🔴 PyPSA API migration | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
+
+**No row needs a linopy change to be feasible.** The `entry` conversion is a
+user-side `reset_index` with today's linopy; linopy auto-accepting `coords=[mi]`
+and decomposing it would be *optional* input sugar. Dropping MI is a simplification
+linopy chooses, not a capability it must add.
+
+**`level groupby` is the one row where flat+aux is *necessary*, not merely
+preferable.** Elsewhere flat+aux is parity or deletes a workaround for something MI
+still does; here grouping by an MI *level* is broken upstream (xarray#6836, outside
+linopy's control) — there is no working native path at all. flat+aux groups by the
+aux-coord *name*, which #751 routed onto the existing fast path. (The dense-`_term`
+memory cost of groupby-sum, [#756](https://github.com/PyPSA/linopy/issues/756)/[#757](https://github.com/PyPSA/linopy/issues/757),
+is real but representation-agnostic — both forms hit the same `unstack` — so it is
+*not* what separates MI from flat+aux here.)
 
 The per-op cells above are the *nicer* facet. Two more facets are
 **representation-wide**, not per-op (both verified this session):
@@ -59,12 +81,21 @@ The per-op cells above are the *nicer* facet. Two more facets are
   like any coord; on an MI the same reassignment raises *"cannot drop or update
   coordinate … would corrupt the index"*. Removing MI removes that rigidity.
 
-The two axes tell different stories: flat+aux is **feasible almost everywhere**,
+The two axes tell different stories: flat+aux is **feasible almost everywhere**
 and **desirable for every build-time op** — nicer (deletes MI machinery and
-PyPSA's `.data`/`FILL_VALUE` workarounds), safer, and more flexible. The only ⚠️
-cost sits at the **public boundary** (`output`, `n.snapshots`), which is exactly
-the A-vs-B question. So "is it nice?" and "is it possible?" point the same way for
-the internals; the debate is purely about the user-facing API.
+PyPSA's `.data`/`FILL_VALUE` workarounds), safer, and more flexible. The output
+boundary is a **cheap conversion PyPSA owns** (`output` row, tested), and the one MI that lived *inside* a linopy object — `model.parameters.snapshots` (`snapshots param` row) — goes flat too. So the
+conclusion for linopy is clean: **accept MI as input sugar, decompose on entry
+(`reset_index`), and never reconstruct — flat in, flat out. linopy drops
+MultiIndex from its mental model entirely.**
+
+The remaining cost is **not inside linopy**: it is (a) whether PyPSA keeps
+`n.snapshots` as MI — a cheap boundary wrap it can do on its own side, decoupled
+from this decision — and (b) the **stochastic / Monte-Carlo direction**
+(`stochastic` row), a *second* MI `(scenario, name)` that PyPSA is actively
+entrenching ([#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants an MI level
+per sampled dimension). That is the genuine open risk, and it is a PyPSA-side
+call — linopy works either way.
 
 **Side finding (not a row):** `Variable.sel` can't MI-tuple-select
 (`x.sel(snapshot=(p, slice))` → `InvalidIndexError`), which is why PyPSA drops to
@@ -72,7 +103,7 @@ the internals; the debate is purely about the user-facing API.
 becomes `where(period == p)` / `isel`, removing the internals reach. Pinned by
 `test_variable_mi_tuple_sel_not_forwarded`.
 
-The `entry`–`model` rows answer the **steady-state (linopy)** question; the open
+The 🟢 rows answer the **steady-state (linopy)** question; the 🔵
 rows are **PyPSA-owned** and answer the **transition** question — verified by
 solution-equivalence on real networks (multi-period, stochastic, Monte-Carlo)
 plus scoping the public `n.snapshots` change.
@@ -106,25 +137,33 @@ plain single-period datetime snapshot dim. The single line for §11 is just:
 
 ## Transition shape (PyPSA)
 
-PyPSA's hard MI couplings are a short, enumerated set
-([#752](https://github.com/PyPSA/linopy/issues/752)) — the SOC roll + `FILL_VALUE`
-rebuild and the growth `reindex_like(lhs.data)` linked above. These are *reluctant
-workarounds*: the code comment says *"internal xarray multi-index difficulties"*
-(cf. pydata/xarray#6836). #751 fixed the level groupby, so migrating these sites
-**deletes** the `.data`-reach rather than re-spelling it. The build-time sites
-break under **A and B equally** (they `.sel` the *stored* MI mid-build), so they
-migrate regardless; A vs B is decided only by the **public `n.snapshots`** question
-(`output`/`n.snapshots` rows), pressure-tested against
+[#752](https://github.com/PyPSA/linopy/issues/752) catalogues PyPSA **reaching
+into linopy internals** (term-storage: `.data`, `vars`/`coeffs`/`const`, `_term`,
+the `FILL_VALUE` sentinel) — *not* MI per se. But several of those reaches are
+**MI-driven workarounds**: the SOC `.data.sel().roll` + `FILL_VALUE` rebuild and
+the growth `reindex_like(lhs.data)` linked above exist because MI groupby is broken
+(the code comment says *"internal xarray multi-index difficulties"*, cf.
+pydata/xarray#6836). #751 fixed the level groupby, so flat+aux **deletes** those
+specific reaches rather than re-spelling them. These build-time sites `.sel` the
+*stored* MI mid-build, so they migrate whether or not PyPSA re-stacks the output.
+What's left to decide is only the **public `n.snapshots`** question and the
+stochastic 2nd MI (`n.snapshots`/`stochastic` rows), pressure-tested against
 [PyPSA#1484](https://github.com/PyPSA/PyPSA/issues/1484) (Monte-Carlo, which wants
 an MI level per sampled dimension).
 
 ## Decision record (to fill once the open rows close)
 
-> _Outcome, the chosen option (A — return flat / B — re-stack MI at the boundary),
-> the `n.snapshots` migration scope, and the evidence rows that justify it. This
-> note, once complete, is what closes #744._
+> _The `n.snapshots` scope, the stochastic-MI resolution, and the evidence rows
+> that justify them. This note, once complete, is what closes #744._
 
-- **Internal normalization to flat+aux:** _safe to adopt regardless of A/B_ —
-  cheap, canonical, version-safe (`entry` row + version sweep). **[provisional]**
-- **A vs B:** _TBD_ — gated on the `output`/`n.snapshots` rows and the PyPSA
-  stochastic experiments.
+- **linopy drops MultiIndex from its mental model** — accept MI as input sugar,
+  decompose on entry (`reset_index`), never reconstruct (flat in, flat out).
+  Internal normalization is safe to adopt now: cheap, canonical, version-safe
+  (`entry` row + version sweep). **[provisional — internals verified]**
+- **Output: linopy returns flat** — the re-stack is a cheap boundary conversion
+  PyPSA owns (`output` row, tested); no MI adapter lives inside linopy.
+- **`n.snapshots`** — PyPSA's independent, decoupled choice: keep MI (wrap at its
+  own boundary) or flatten. _TBD, PyPSA-side._
+- **Stochastic 2nd MI `(scenario, name)`** (`stochastic` row) — the genuine open risk;
+  PyPSA is entrenching it ([#1484](https://github.com/PyPSA/PyPSA/issues/1484)).
+  Resolve via a PyPSA-side solution-equivalence spike. _TBD._
