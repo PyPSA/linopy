@@ -319,12 +319,12 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
 
 
 @pytest.mark.v1
-def test_multiply_expression_by_mi_level_constant_raises_v1(u: Variable) -> None:
-    """v1: the implicit level projection in arithmetic must be explicit."""
+def test_multiply_expression_by_level_aux_coord_v1(u: Variable) -> None:
+    """v1: weight each entry by its `level1` explicitly via the aux coord."""
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
-
-    with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
-        (1 * u) * by_level1
+    weights = by_level1.sel(level1=u.coords["level1"])
+    coeffs = ((1 * u) * weights).coeffs.squeeze("_term")
+    assert coeffs.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
 
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:

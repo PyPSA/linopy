@@ -117,9 +117,6 @@ def m() -> Model:
     m.add_variables(4, pd.Series([8, 10]), name="y")
     m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
     m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    m.add_variables(coords=[idx], name="u")
     return m
 
 
@@ -145,4 +142,19 @@ def v(m: Model) -> Variable:
 
 @pytest.fixture
 def u(m: Model) -> Variable:
+    """
+    `dim_3` variable: a (level1, level2) MultiIndex under legacy, the flat dim +
+    level1/level2 aux coords equivalent under v1 (where MultiIndex is disallowed).
+    """
+    from linopy.semantics import is_v1
+
+    if is_v1():
+        m.add_variables(coords=[pd.RangeIndex(4, name="dim_3")], name="u")
+        return m.variables["u"].assign_coords(
+            level1=("dim_3", [1, 1, 2, 2]),
+            level2=("dim_3", ["a", "b", "a", "b"]),
+        )
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    m.add_variables(coords=[idx], name="u")
     return m.variables["u"]

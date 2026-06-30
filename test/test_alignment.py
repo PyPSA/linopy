@@ -1105,8 +1105,9 @@ class TestAlign:
         assert_varequal(x_obs, x)
         assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
 
+    @pytest.mark.legacy
     def test_inner_join_over_multiindex(self, u: Variable) -> None:
-        """Inner join intersects MultiIndex coords element-wise across the stacked dim."""
+        """Legacy: inner join intersects MultiIndex coords element-wise across the dim."""
         beta = xr.DataArray(
             [1, 2, 3],
             [
