@@ -7,8 +7,8 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
-import logging
 import warnings
+from collections import Counter
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -29,7 +29,7 @@ from linopy import (
     Variable,
     merge,
 )
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
@@ -1912,8 +1912,8 @@ def test_linear_expression_groupby_from_variable(v: Variable) -> None:
 
 
 @pytest.fixture
-def scatter_ctx() -> SimpleNamespace:
-    """Shared 60-element building blocks for the scatter-vs-unstack case table."""
+def groupby_ctx() -> SimpleNamespace:
+    """Shared 60-element building blocks for the groupby-sum case table."""
     m = Model()
     rng = np.random.default_rng(0)
     idx = pd.RangeIndex(60, name="elem")
@@ -1955,9 +1955,9 @@ def scatter_ctx() -> SimpleNamespace:
     )
 
 
-# Each case maps a structure to (expr, groups) from `scatter_ctx`. The skewed
+# Each case maps a structure to (expr, groups) from `groupby_ctx`. The skewed
 # group puts ~half the elements in group 0 and spreads 1..7 over the rest.
-SCATTER_EQUALS_UNSTACK_CASES = {
+GROUPBY_SUM_CASES = {
     "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
     "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
     "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
@@ -1979,37 +1979,84 @@ SCATTER_EQUALS_UNSTACK_CASES = {
 }
 
 
-class TestGroupbySumScatterKernel:
+def _term_multisets(
+    ds: xr.Dataset, row_dim: str, labels: list, loop_dims: list
+) -> dict:
     """
-    ``groupby(...).sum()`` takes a scatter fast path (``_sum_by_scatter``) for
-    numpy-backed expressions and falls back to the xarray unstack machinery
-    (``_sum_by_unstack``) for chunked data and exotic coordinates. These tests
-    pin the two kernels together and cover the structural edge cases.
+    Map ``(group label, slice over loop dims)`` to a multiset of live terms.
+
+    A term is a coefficient paired with its sorted variable labels (one label for
+    a linear term, two for a quadratic factor pair); fill terms (all labels -1)
+    are skipped. Rows sharing a group label are merged, so the same helper
+    summarises the per-element input and the per-group result.
     """
+    coeffs = ds.coeffs.transpose(row_dim, *loop_dims, TERM_DIM).values
+    var_dims = [row_dim, *loop_dims, TERM_DIM]
+    if FACTOR_DIM in ds.vars.dims:
+        var_dims.append(FACTOR_DIM)
+    vars_ = ds.vars.transpose(*var_dims).values
+    if FACTOR_DIM not in ds.vars.dims:
+        vars_ = vars_[..., None]
 
-    @staticmethod
-    def _assert_kernels_identical(gb: Any, groups: pd.Series, m: Model) -> None:
-        """Force both kernels and assert they produce the same expression."""
-        scatter = LinearExpression(gb._sum_by_scatter(groups).rename(_group="g"), m)
-        unstack = LinearExpression(gb._sum_by_unstack(groups).rename(_group="g"), m)
+    terms: dict = {}
+    for r in range(coeffs.shape[0]):
+        for loop in np.ndindex(*coeffs.shape[1:-1]):
+            bucket = terms.setdefault((labels[r], loop), Counter())
+            cs, vs = coeffs[(r, *loop)], vars_[(r, *loop)]
+            for t in range(cs.shape[0]):
+                factors = tuple(sorted(int(f) for f in vs[t]))
+                if all(f == -1 for f in factors):
+                    continue
+                bucket[(round(float(cs[t]), 9), factors)] += 1
+    return terms
 
-        assert scatter.data.coeffs.dims == unstack.data.coeffs.dims
-        assert scatter.data.const.dims == unstack.data.const.dims
-        assert list(scatter.data.coords) == list(unstack.data.coords)
-        for name in scatter.data.coords:
-            assert_equal(scatter.data[name], unstack.data[name])
 
-        np.testing.assert_array_equal(scatter.vars.values, unstack.vars.values)
-        np.testing.assert_array_equal(scatter.coeffs.values, unstack.coeffs.values)
-        # constants may differ only by floating-point summation order
+def _assert_grouped_sum_correct(
+    expr: LinearExpression, groups: pd.Series, *, chunked: bool = False
+) -> None:
+    """
+    Verify ``groupby(...).sum()`` from first principles, without a reference
+    implementation.
+
+    For every group and every slice over the non-grouped dimensions, the result's
+    live terms must be exactly the multiset of its members' terms, and its
+    constant the members' NaN-skipping sum. With ``chunked=True`` the same check
+    runs against dask-backed input, exercising the lazy kernel.
+    """
+    group_dim = groups.index.name
+    gname = groups.name
+    if chunked:
+        expr = LinearExpression(expr.data.chunk({group_dim: 17}), expr.model)
+    in_ds = expr.data
+    out_ds = expr.groupby(groups).sum().data
+    loop_dims = [d for d in in_ds.coeffs.dims if d not in (group_dim, TERM_DIM)]
+
+    expected = _term_multisets(in_ds, group_dim, list(groups.values), loop_dims)
+    actual = _term_multisets(out_ds, gname, list(out_ds[gname].values), loop_dims)
+    assert actual == expected
+
+    const_loop = [d for d in in_ds.const.dims if d != group_dim]
+    in_const = np.nan_to_num(in_ds.const.transpose(group_dim, *const_loop).values)
+    out_const = out_ds.const.transpose(gname, *const_loop).values
+    member_of = np.asarray(groups.values)
+    for i, g in enumerate(out_ds[gname].values):
         np.testing.assert_allclose(
-            scatter.const.values, unstack.const.values, rtol=1e-12
+            in_const[member_of == g].sum(0), out_const[i], rtol=1e-9, atol=1e-12
         )
+
+
+class TestGroupbySumKernel:
+    """
+    ``groupby(...).sum()`` builds the padded result with a single
+    :func:`xarray.apply_ufunc` kernel (``_grouped_sum``) over numpy and chunked
+    (dask) data. These tests verify that kernel from first principles and cover
+    the structural edge cases.
+    """
 
     def test_skewed_unsorted_groups(self, v: Variable) -> None:
         """
-        The scatter-based fast path must match the xarray fallback for groups
-        that are unsorted, non-contiguous and of very different sizes.
+        The kernel must match the xarray fallback for groups that are unsorted,
+        non-contiguous and of very different sizes.
         """
         expr = 2 * v + 5
         # 'b' appears 14 times, 'c' 5 times, 'a' once, scattered over the dimension
@@ -2033,18 +2080,21 @@ class TestGroupbySumScatterKernel:
             assert (vars_of_group >= 0).sum() == len(members) * expr.nterm
             assert grouped.const.sel(letter=letter).item() == 5 * len(members)
 
-    def test_chunked_uses_unstack(
-        self, v: Variable, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Chunked (dask-backed) expressions group via xarray's unstack path."""
+    @pytest.mark.parametrize("chunks", [{"dim_2": 5}, {"dim_2": 5, "_term": 1}])
+    def test_chunked_runs_lazily(self, v: Variable, chunks: dict) -> None:
+        """
+        The kernel handles chunked (dask) data, staying lazy until computed. It
+        gathers both the grouped and term dimensions into single chunks, so a
+        split ``_term`` (a core dim of the scatter) is handled too.
+        """
         pytest.importorskip("dask")
-        expr = 2 * v + 5
+        expr = 2 * v + 3 * v + 5  # nterm 2, so `_term` can be split
         groups = pd.Series([1] * 12 + [2] * 8, index=v.indexes["dim_2"], name="group")
 
-        chunked = LinearExpression(expr.data.chunk({"dim_2": 5}), expr.model)
-        with caplog.at_level(logging.DEBUG, logger="linopy.expressions"):
-            grouped_chunked = chunked.groupby(groups).sum()
-        assert "falling back to the unstack kernel" in caplog.text
+        chunked = LinearExpression(expr.data.chunk(chunks), expr.model)
+        grouped_chunked = chunked.groupby(groups).sum()
+        # the result stays a lazy dask graph until explicitly computed
+        assert grouped_chunked.data.vars.chunks is not None
 
         grouped = expr.groupby(groups).sum()
         assert grouped_chunked.nterm == grouped.nterm
@@ -2060,8 +2110,101 @@ class TestGroupbySumScatterKernel:
         with pytest.raises(ValueError, match="NaN"):
             expr.groupby(groups).sum()
 
+    def test_exact_padded_layout(self) -> None:
+        """
+        Pin the concrete padded layout the property checks abstract away: member
+        order within a group, fill at the end of a short group's block, the
+        ``(g, _term)`` dim order, and the per-group constant sum.
+        """
+        m = Model()
+        idx = pd.RangeIndex(4, name="elem")
+        x = m.add_variables(coords=[idx], name="x")
+        groups = pd.Series([0, 0, 1, 0], index=idx, name="g")
+
+        grouped = (2 * x + 5).groupby(groups).sum()
+        lab = x.labels.values
+
+        assert grouped.data.vars.dims == ("g", "_term")
+        assert list(grouped.data.g.values) == [0, 1]
+        assert grouped.nterm == 3  # max group size (3) * input nterm (1)
+        # group 0 holds members 0, 1, 3 in order; group 1 holds member 2 then fill
+        np.testing.assert_array_equal(
+            grouped.data.vars.values, [[lab[0], lab[1], lab[3]], [lab[2], -1, -1]]
+        )
+        np.testing.assert_array_equal(
+            grouped.data.coeffs.values, [[2.0, 2.0, 2.0], [2.0, np.nan, np.nan]]
+        )
+        np.testing.assert_array_equal(grouped.const.values, [15.0, 5.0])
+
+    def test_exact_padded_layout_multidim(self) -> None:
+        """
+        Anchor the layout with a non-grouped dim and two input terms: the
+        ``(nterm, max_size)`` interleaving and per-slice padding must hold.
+        """
+        m = Model()
+        other = pd.Index(list("ab"), name="other")
+        idx = pd.RangeIndex(4, name="elem")
+        y = m.add_variables(coords=[other, idx], name="y")
+        groups = pd.Series([0, 0, 1, 0], index=idx, name="g")
+
+        grouped = (2 * y + 3 * y + 1).groupby(groups).sum()
+        lab = y.labels.values  # (other, elem)
+
+        assert set(grouped.data.vars.dims) == {"g", "other", "_term"}
+        # the non-grouped coord survives; the group coord holds the sorted keys
+        assert list(grouped.data.other.values) == ["a", "b"]
+        assert list(grouped.data.g.values) == [0, 1]
+        assert grouped.nterm == 6  # max group size (3) * input nterm (2)
+        # group 0 holds members 0, 1, 3 in order; group 1 holds member 2 then fill
+        m0 = [0, 1, 3]
+        exp_vars = [
+            [list(lab[o, m0]) * 2 for o in (0, 1)],
+            [[lab[o, 2], -1, -1] * 2 for o in (0, 1)],
+        ]
+        np.testing.assert_array_equal(
+            grouped.data.vars.transpose("g", "other", "_term").values, exp_vars
+        )
+        term, pad = [2.0, 2, 2, 3, 3, 3], [2.0, np.nan, np.nan, 3, np.nan, np.nan]
+        np.testing.assert_array_equal(
+            grouped.data.coeffs.transpose("g", "other", "_term").values,
+            [[term, term], [pad, pad]],
+        )
+        np.testing.assert_array_equal(
+            grouped.data.const.transpose("g", "other").values, [[3.0, 3], [1, 1]]
+        )
+
+    def test_exact_padded_layout_quadratic(self) -> None:
+        """
+        Anchor the layout for a quadratic: the ``_factor`` axis must scatter
+        through to the padded result alongside the term positions.
+        """
+        m = Model()
+        idx = pd.RangeIndex(4, name="elem")
+        x = m.add_variables(coords=[idx], name="x")
+        y = m.add_variables(coords=[idx], name="y")
+        groups = pd.Series([0, 0, 1, 0], index=idx, name="g")
+
+        grouped = (x * y).groupby(groups).sum()
+        lx, ly = x.labels.values, y.labels.values
+
+        assert set(grouped.data.vars.dims) == {"g", "_factor", "_term"}
+        assert grouped.nterm == 3
+        # factor 0 carries x, factor 1 carries y; members 0, 1, 3 then fill
+        m0 = [0, 1, 3]
+        exp_vars = [
+            [list(lx[m0]), list(ly[m0])],
+            [[lx[2], -1, -1], [ly[2], -1, -1]],
+        ]
+        np.testing.assert_array_equal(
+            grouped.data.vars.transpose("g", "_factor", "_term").values, exp_vars
+        )
+        np.testing.assert_array_equal(
+            grouped.data.coeffs.transpose("g", "_term").values,
+            [[1.0, 1, 1], [1, np.nan, np.nan]],
+        )
+
     def test_empty_groups(self) -> None:
-        """An empty group dimension scatters into an empty, well-formed result."""
+        """An empty group dimension produces an empty, well-formed result."""
         m = Model()
         idx = pd.RangeIndex(0, name="elem")
         x = m.add_variables(coords=[idx], name="x")
@@ -2071,28 +2214,27 @@ class TestGroupbySumScatterKernel:
         assert grouped.nterm == 0
         assert dict(grouped.data.sizes) == {"g": 0, "_term": 0}
 
+    @pytest.mark.parametrize("backend", ["numpy", "dask"])
     @pytest.mark.parametrize(
         "build",
-        SCATTER_EQUALS_UNSTACK_CASES.values(),
-        ids=SCATTER_EQUALS_UNSTACK_CASES.keys(),
+        GROUPBY_SUM_CASES.values(),
+        ids=GROUPBY_SUM_CASES.keys(),
     )
-    def test_scatter_equals_unstack(
+    def test_grouped_sum_correct(
         self,
         build: Callable[[SimpleNamespace], tuple[LinearExpression, pd.Series]],
-        scatter_ctx: SimpleNamespace,
+        groupby_ctx: SimpleNamespace,
+        backend: str,
     ) -> None:
         """
-        Lock the two groupby-sum kernels together.
-
-        The fast path scatters terms into numpy arrays (``_sum_by_scatter``);
-        the unstack implementation (``_sum_by_unstack``) is kept for chunked
-        data. Both must stay interchangeable — if an xarray/pandas update
-        changes the unstack output or an edge case diverges, this fails. See
-        ``SCATTER_EQUALS_UNSTACK_CASES`` for the structures covered.
+        Each group's terms and constant must match its members, from first
+        principles, on both numpy and dask backends. See ``GROUPBY_SUM_CASES``
+        for the structures covered.
         """
-        expr, groups = build(scatter_ctx)
-        gb = expr.groupby(groups)
-        self._assert_kernels_identical(gb, groups, scatter_ctx.m)
+        if backend == "dask":
+            pytest.importorskip("dask")
+        expr, groups = build(groupby_ctx)
+        _assert_grouped_sum_correct(expr, groups, chunked=backend == "dask")
 
 
 def test_linear_expression_rolling(v: Variable) -> None:
