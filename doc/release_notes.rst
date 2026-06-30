@@ -32,6 +32,7 @@ Upcoming Version
 * LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
+* ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail.
 
 Version 0.8.0
 -------------
