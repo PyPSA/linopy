@@ -8,37 +8,33 @@
 
 ## Verdict
 
-**Feasible — and the change is mostly *subtraction*.** No new capability is
-required: the flat+aux model builds with today's linopy, and all seven in-linopy MI
-uses have a flat+aux form that builds the identical model, tested under both
-semantics. PyPSA uses a MultiIndex on exactly one axis, `snapshot`
-`(period, timestep)`, accepted as *input sugar*, `reset_index`'d on entry —
-**flat in / flat out**, never reconstructed.
+**Feasible, and PyPSA stays stable.** The maintainer's question is whether linopy
+can be simplified *without destabilising PyPSA*, its primary consumer — and it can.
+The flat+aux model builds with today's linopy (no new capability), and every one of
+the seven in-linopy MI uses has a flat+aux form that builds the **identical** model,
+tested under both `legacy` and `v1`. PyPSA's interface does not move: it hands linopy
+an MI snapshot and gets MI-indexed results back exactly as today. MI becomes
+**boundary sugar** — `reset_index` on the way in, re-stack on the way out — so
+nothing PyPSA relies on breaks.
 
-Adopting it as v1 is not "zero changes", but it pays off on four axes:
+With stability assured, the change is mostly *subtraction*, and it pays off where a
+maintainer feels it:
 
-- **Simpler implementation** — deletes ~300 lines of first-class-MI machinery, half
-  of it one cluster (the `alignment.py` level-projection subsystem); see *What linopy
-  can strip*.
-- **Simpler mental model — linopy's own.** linopy stops having to know
-  `pd.MultiIndex` exists at all: no MI quirks to cover (level alignment, *"would
-  corrupt the index"* guards, reconstruction), no levels masquerading as dimensions.
-  Its model becomes purely **xarray-native** — plain dims + ordinary aux coords,
-  exactly what linopy is already built on. MI lives only at the boundary as
-  input/output sugar, never inside linopy.
-- **Enables features** — the MI-level groupby that's broken upstream (xarray#6836)
-  just works on a flat dim (#751); aux coords compose with `groupby`/`where`/
-  `drop_vars` where an MI can't; and it removes the MI coupling that forces PyPSA to
-  reach into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)).
-- **No UX cost** — MI is still accepted as input and re-stacked on output if the
-  caller wants; the only thing lost is `.sel` by level *tuple*, replaced by
-  `where(period==…)`.
+- **Less to maintain** — ~300 lines of first-class-MI machinery go, half of it one
+  cluster (the `alignment.py` level-projection subsystem); see *What linopy can strip*.
+- **xarray-native internals** — linopy stops having to know `pd.MultiIndex` exists or
+  cover its quirks (level alignment, *"would corrupt the index"* guards,
+  reconstruction); the model is just dims + ordinary aux coords, what linopy is
+  already built on.
+- **Unblocks work** — the MI-level groupby broken upstream (xarray#6836) works on a
+  flat dim (#751), and the MI coupling that makes PyPSA reach into linopy internals
+  ([#752](https://github.com/PyPSA/linopy/issues/752)) goes away.
 
-The few small additive things to get right (positional snapshot alignment; shrink the
-MI-input path to *accept-then-`reset_index`*) are minor against that.
+The small additive work (positional snapshot alignment; shrink the MI-input path to
+*accept-then-`reset_index`*) is minor against that.
 
-**One open item, and it is PyPSA's, not linopy's:** whether `n.snapshots` stays a
-MultiIndex — a cheap boundary wrap PyPSA owns.
+**One open item, and it is PyPSA's own, decoupled call:** whether `n.snapshots` stays
+a MultiIndex — a cheap boundary wrap. linopy works either way.
 
 Everything below is evidence: the **matrix** of the seven in-linopy ops (settled,
 tested now), then the two **PyPSA-side usages** (the transition, PyPSA-owned).
