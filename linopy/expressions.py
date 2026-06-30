@@ -341,9 +341,17 @@ class LinearExpressionGroupby:
             # At this point, group is always a pandas Series
             assert isinstance(group, pd.Series)
 
-            if self._can_sum_by_scatter(group):
+            numpy_backed = all(
+                isinstance(self.data[k].data, np.ndarray)
+                for k in ("coeffs", "vars", "const")
+            )
+            if numpy_backed:
                 ds = self._sum_by_scatter(group)
             else:
+                logger.debug(
+                    "groupby-sum: non-numpy-backed (e.g. dask) data, "
+                    "falling back to the unstack kernel."
+                )
                 ds = self._sum_by_unstack(group)
 
             if int_map is not None:
@@ -365,32 +373,6 @@ class LinearExpressionGroupby:
 
         return self.map(func, **kwargs, shortcut=True)
 
-    def _can_sum_by_scatter(self, group: pd.Series) -> bool:
-        """
-        Whether :meth:`_sum_by_scatter` covers the structure of the data.
-
-        The scatter kernel requires numpy-backed arrays (chunked data cannot be
-        scattered into preallocated numpy arrays) and no coordinates tied to
-        the grouped dimension besides its own index. Everything else falls
-        back to :meth:`_sum_by_unstack`.
-        """
-        data = self.data
-        group_dim = group.index.name
-
-        numpy_backed = all(
-            isinstance(data[k].data, np.ndarray) for k in ("coeffs", "vars", "const")
-        )
-        if not numpy_backed:
-            return False
-
-        index = data.indexes.get(group_dim)
-        index_names = {group_dim, *(index.names if index is not None else ())}
-        return all(
-            coord.dims == (group_dim,) and name in index_names
-            for name, coord in data.coords.items()
-            if group_dim in coord.dims
-        )
-
     def _sum_by_scatter(self, group: pd.Series) -> Dataset:
         """
         Sum groups by scattering all terms directly into the final padded arrays.
@@ -403,8 +385,8 @@ class LinearExpressionGroupby:
         Only the term and constant values are computed with numpy; the result
         structure (dimensions, coordinates and their order) is assembled by
         xarray itself and thereby matches the result of unstacking the group
-        dimension. :meth:`_can_sum_by_scatter` decides whether the data is
-        simple enough for this kernel.
+        dimension. The caller dispatches here only for numpy-backed data
+        (chunked data uses :meth:`_sum_by_unstack`).
         """
         data = self.data
         group_dim = group.index.name
@@ -467,8 +449,9 @@ class LinearExpressionGroupby:
         Sum groups by unstacking the group dimension into a padded helper
         dimension and summing over it.
 
-        Equivalent to :meth:`_sum_by_scatter` but goes through xarray's
-        unstack/stack machinery, which also supports chunked (dask) data.
+        Equivalent to :meth:`_sum_by_scatter`, but goes through xarray's
+        unstack/stack machinery. It is the fallback for chunked (dask) data,
+        which cannot be scattered into preallocated numpy buffers.
         """
         group_dim = group.index.name
         arrays = [group, group.groupby(group).cumcount()]
