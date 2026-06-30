@@ -838,6 +838,44 @@ def tangent_lines(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_active(
+    active: LinearExpression, reference: DataArray, active_fill: int | None
+) -> LinearExpression:
+    """
+    Resolve a possibly-partial ``active`` gate against the formulation.
+
+    A gate defined over only a subset of the indexed dimension (or with
+    masked entries) would otherwise be gated as if ``active=0`` and forced
+    to zero. With ``active_fill is None`` such a gate is rejected; otherwise
+    the gaps are filled with ``active_fill`` (``1`` = always active, ``0`` =
+    always off). Dimensions absent from ``active`` broadcast and are left
+    untouched.
+    """
+    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    indexers = {
+        d: reference.indexes[d]
+        for d in active.coord_dims
+        if d in reference.indexes and d not in skip
+    }
+    aligned = active.reindex(indexers) if indexers else active
+
+    if active_fill is not None:
+        return aligned.where(aligned.has_terms, active_fill)
+
+    term_dims = [d for d in aligned.vars.dims if d not in aligned.coord_dims]
+    dangling = ((aligned.vars < 0) & aligned.coeffs.notnull()).any(term_dims)
+    covered = aligned.has_terms | (aligned.const.notnull() & ~dangling)
+    if not bool(covered.all()):
+        raise ValueError(
+            "`active` is not defined over the full coordinate of the "
+            "piecewise formulation: it is missing labels (a subset of the "
+            "coordinate) or has masked entries, which would be gated to "
+            "zero. Pass `active_fill=1` to treat those entries as always "
+            "active (or `0` as always off), or pass a fully-defined `active`."
+        )
+    return active
+
+
 def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
     """
     Validate that two breakpoint arrays have compatible shapes.
@@ -1035,6 +1073,7 @@ def add_piecewise_formulation(
     | tuple[LinExprLike, BreaksOrSlopes, Literal["==", "<=", ">="]],
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
+    active_fill: int | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
@@ -1118,6 +1157,11 @@ def add_piecewise_formulation(
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
 
+        ``active`` must cover the formulation's full coordinate.  A
+        *partial* gate — one defined over only a subset of the coordinate's
+        labels, or carrying masked entries — is rejected unless
+        ``active_fill`` is set (see below).
+
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
         only pushes the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
@@ -1129,6 +1173,16 @@ def add_piecewise_formulation(
         automatically.  For outputs that genuinely need both signs you
         must add the complementary bound yourself (e.g., a big-M
         coupling ``y`` with ``active``).
+    active_fill : int, optional
+        Fill value for the gap entries of a partial ``active`` — those where
+        ``active`` has no label (a subset of the coordinate) or is masked:
+        ``1`` treats them as always active (ungated), ``0`` as always off.
+        When ``None`` (the default) a partial ``active`` is rejected instead.
+        Useful when one formulation mixes gated and ungated entities (e.g.
+        committable and non-committable units sharing a ``status``).
+        Transitional convenience: under v1 semantics, pad ``active``
+        explicitly with ``active.reindex(coords).fillna(value)`` instead —
+        this parameter is slated for removal then.
     name : str, optional
         Base name for generated variables/constraints.
 
@@ -1285,7 +1339,12 @@ def add_piecewise_formulation(
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
 
-    active_expr = _to_linexpr(active) if active is not None else None
+    if active is None:
+        if active_fill is not None:
+            raise ValueError("`active_fill` has no effect without `active`.")
+        active_expr = None
+    else:
+        active_expr = _resolve_active(_to_linexpr(active), bp_list[0], active_fill)
 
     if signed_idx is None:
         inputs = _PwlInputs(
