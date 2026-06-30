@@ -29,14 +29,16 @@ semantics. The change is mostly **subtraction**:
   (#751); the MI coupling forcing PyPSA into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)) goes.
 
 The choices this forces are tabled in *Design decisions* — most settled pending
-adoption. **Two are genuinely open, the second the harder:**
+adoption. **Two are genuinely open** (the second reaches external code, but via the
+standard `legacy`/`v1` deprecation):
 
 1. **`n.snapshots`** — PyPSA's own decoupled call: keep the MI (a cheap boundary wrap)
    or flatten; linopy works either way.
 2. **multi-key `groupby`** — the *one* place linopy itself mints an MI (not PyPSA): a
-   multi-key grouper returns a stacked `group` MultiIndex, consumed *downstream* (see
-   *Second MI surface*). The same flat+aux fix, linopy-owned — but on a **public API**
-   with **external** consumers, so it needs a deprecation path, not a boundary fix.
+   multi-key grouper returns a stacked `group` MultiIndex, consumed *downstream* (the
+   **multi-key `groupby`** matrix row). Same flat+aux fix, linopy-owned; external `.sel(group=…)`
+   consumers migrate via the `legacy`/`v1` switch (warn → raise) — a guided migration,
+   not a hard break. Open part: the blast radius.
 
 *Proof set, not universal: a PyPSA-Eur spot-check already surfaced a real second case
 (multi-key `groupby`, below), so the generalization is not free — other forks/plugins
@@ -47,12 +49,12 @@ welcome — audit your own multi-key `groupby` + `.sel(group=…)`.*
 
 ## The evidence
 
-PyPSA's observed MI uses of linopy, split by whether the MI **enters the model**.
-The **snapshot** surface is the matrix below (the second surface, multi-key `groupby`,
-has its own section). All ✅ (tested under `legacy`+`v1`; build-time rewrites
-also compose into an identical LP, `test_per_period_lp_equivalent`). Glyph =
-**feasible** (✅ tested · 🔲 achievable · ❌ no); word = **desirable** (better · parity
-· worse).
+linopy's **in-model** MI uses. The first seven are the **snapshot** surface (PyPSA
+passes the MI *in*) — all ✅, tested under `legacy`+`v1` and shown to compose into an
+identical LP (`test_per_period_lp_equivalent`). The eighth is **multi-key `groupby`** —
+the one MI *linopy itself mints* — 🔲 achievable (a linopy change + a downstream
+migration, captioned below). Glyph = **feasible** (✅ tested · 🔲 achievable · ❌ no);
+word = **desirable** (better · parity · worse).
 
 | op | MI form | flat+aux form | feasible | desirable | PyPSA call site @ v1.2.4 |
 |---|---|---|---|---|---|
@@ -63,6 +65,7 @@ also compose into an identical LP, `test_per_period_lp_equivalent`). Glyph =
 | **storage SOC** | `.data.sel().roll` + `FILL_VALUE` rebuild; `_period_start_mask` (shared w/ ramps) | previous-SOC via `groupby("period").roll`, then period-start: wrap (cyclic) · `.where` term (non-cyclic) · `mask=` row (ramp) | ✅ | better — deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908); boundary mask [`common.py` L22](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L22) → also ramps [`constraints.py` L838](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L838) |
 | **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | ✅ | better — cheap boundary conversion (PyPSA's choice) | — |
 | **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | ✅ | better — removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
+| **multi-key `groupby`** *(linopy-minted)* | `groupby(country×carrier).sum()` → stacked `group` MI; consumed `.sel(group=…)`/`.intersection`/`.loc` | `groupby` → flat `group` + `country`/`carrier` aux coords; select on aux | 🔲 | better — uniform, deletes the last MI linopy mints; **public API**, consumers migrate via `legacy`→`v1` (warn→raise) | pypsa-eur [`solve_network.py` L1064/L1080‑1095](https://github.com/PyPSA/pypsa-eur/blob/master/scripts/solve_network.py) (CCL) |
 
 No row needs a new linopy *capability* — the rewrites use ops linopy already has.
 Entry is one `reset_index`; **who** runs it — linopy (accept an MI as input sugar) or
@@ -74,6 +77,16 @@ flat+aux just works (#751); the rest are nicer or parity. Representation-wide, f
 is also **safer** (v1 *raises* on a conflicting aux coord via `enforce_aux_conflict`;
 MI only hides it, [#295](https://github.com/PyPSA/linopy/issues/295)) and **flexible**
 (level coords `drop_vars`/`rename` freely; an MI raises *"would corrupt the index"*).
+
+The **multi-key `groupby`** row is the one MI *linopy itself* mints and the one an
+*external* model consumes: PyPSA-Eur's `add_CCL_constraints` does
+`groupby(country×carrier).sum()` then `.intersection`/`.loc[MI]`/`.sel(group=index)`
+([`solve_network.py` L1064/L1080‑1095](https://github.com/PyPSA/pypsa-eur/blob/master/scripts/solve_network.py);
+`add_EQ`/`add_BAU` are single-key, no MI). Verified here both semantics. The fix is
+linopy-owned and *the same flat+aux change* — `groupby` returns a flat `group` dim +
+key aux coords — and rides the `legacy`/`v1` switch (mint+warn under `legacy`,
+flat+aux+raise under `v1`), so consumers move on their own schedule. The only open part
+is the **blast radius** (forks, plugins), unswept.
 
 **Boundary uses** — two MI usages need no in-linopy solution, failing the in-model test
 on opposite axes: `stochastic` is inside linopy but not an MI; `n.snapshots` is an MI
@@ -87,30 +100,6 @@ but not inside linopy.
 (`Variable.sel` can't MI-tuple-select → `InvalidIndexError`, why PyPSA drops to `.data`
 [#752](https://github.com/PyPSA/linopy/issues/752) §2; flat+aux makes it `where`/`isel`.
 Pinned by `test_variable_mi_tuple_sel_not_forwarded`.)
-
-## Second MI surface: multi-key `groupby`
-
-The matrix above is the snapshot MI — passed *in* by PyPSA, solved at the entry
-boundary. There is a **second** in-linopy MI, and it is **linopy's own**: a multi-key
-`groupby` mints a stacked `group` MultiIndex. Verified here under both semantics —
-`p.groupby(<country×carrier DataFrame>).sum()` → the `group` dim is a `pd.MultiIndex`,
-and `.sel(group=("DE","wind"))` works.
-
-PyPSA-Eur's `add_CCL_constraints` consumes it richly (not just `.sel`):
-`grouper = concat([country, carrier]); lhs = p_nom.groupby(grouper).sum()`
-([`solve_network.py` L1064](https://github.com/PyPSA/pypsa-eur/blob/master/scripts/solve_network.py)),
-then `minimum.indexes["group"].intersection(lhs.indexes["group"])` and
-`lhs.sel(group=index) >= minimum.loc[index]` (L1080‑1095). (`add_EQ`/`add_BAU` group by
-a *single* key — flat `group` dim, no MI.)
-
-It is the **same flat+aux change, owned by linopy**: `groupby` returns a flat `group`
-dim with `country`/`carrier` as aux coords — uniform with every other dim, deleting the
-last place linopy mints an MI (✅ desirable: safer / flexible / one representation; ⚪
-parity on capability). But unlike snapshot it is a **public-API** change with
-**external** consumers (PyPSA-Eur/-Earth/-DE), so the downstream `.sel(group=tuple)` /
-`.intersection` / `.loc[MI]` → aux-coord selection migration needs a **deprecation
-path**, and the full blast radius (forks, plugins) is **not yet scoped**. The harder of
-the two open items.
 
 ## The payoff
 
@@ -153,7 +142,7 @@ What adopting flat+aux actually decides — **recommendation** in the last colum
 | **Snapshot alignment** | tuple-identity · **positional** | positional — one canonical `n.snapshots` order, matching a plain datetime snapshot (§11). |
 | **Output** | reconstruct MI · **return flat** | flat — re-stack is the caller's cheap boundary step (`output` row, tested). |
 | **`n.snapshots`** *(PyPSA-side)* | keep MI · flatten | PyPSA's decoupled call; linopy works either way. _TBD._ |
-| **multi-key `groupby` output** | stacked `group` MI · **flat `group` + key aux coords** | flat+aux (uniform, deletes the last MI linopy mints) — but a **public-API** change; needs a deprecation path for external `.sel(group=…)` consumers. _Open; blast radius unscoped._ |
+| **multi-key `groupby` output** | stacked `group` MI · **flat `group` + key aux coords** | flat+aux (uniform, deletes the last MI linopy mints); external `.sel(group=…)` consumers migrate via the `legacy`/`v1` switch (warn → raise). _Open part: blast radius._ |
 
 ## Appendix
 
