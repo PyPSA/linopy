@@ -227,3 +227,37 @@ def test_period_boundary_lp_identical(tmp_path, boundary) -> None:
     assert lp("flat", boundary) != lp("flat", contrast[boundary])  # boundary is real
     if boundary == "cyclic":  # period-unaware roll diverges (masked away otherwise)
         assert lp("global", "cyclic") != lp("oracle", "cyclic")
+
+
+# --- snapshots param: the MI PyPSA parks inside a linopy object --------------- #
+def test_snapshots_param_flat_rebuild() -> None:
+    """
+    Snapshots param: the snapshot index PyPSA stores on ``model.parameters`` need
+    not be an MI -- a flat `snapshot` + `period`/`timestep` aux vars rebuild it.
+
+    PyPSA parks `model.parameters.assign(snapshots=sns)` and reads it back with
+    `parameters.snapshots.to_index()` (optimize.py L689 / L905). Today that lands a
+    real `MultiIndex` *inside* the linopy object; flat+aux parks only flat
+    `snapshot` + level vars and rebuilds the identical index on demand.
+    """
+    mi = _mi()
+
+    # MI way (PyPSA today): the MI lives inside model.parameters, read back verbatim
+    m = Model()
+    m.parameters = m.parameters.assign(snapshots=mi)  # optimize.py L689
+    assert isinstance(m.parameters.indexes["snapshots"], pd.MultiIndex)
+    assert m.parameters.snapshots.to_index().equals(mi)  # optimize.py L905
+
+    # flat+aux way: park flat snapshot + level vars; no MI inside the object
+    m2 = Model()
+    flat = _flat()
+    m2.parameters = m2.parameters.assign(
+        period=flat["period"], timestep=flat["timestep"]
+    )
+    assert isinstance(m2.parameters.indexes["snapshot"], pd.RangeIndex)
+    assert "snapshots" not in m2.parameters  # no MI parked inside the linopy object
+    rebuilt = pd.MultiIndex.from_arrays(
+        [m2.parameters.period.values, m2.parameters.timestep.values],
+        names=["period", "timestep"],
+    )
+    assert rebuilt.equals(mi)  # same index, rebuilt from the aux vars
