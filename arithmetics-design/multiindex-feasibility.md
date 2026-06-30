@@ -8,11 +8,17 @@
 
 ## Verdict
 
-**Feasible — yes, with zero linopy changes.** linopy accepts an MI snapshot as
-*input sugar*, `reset_index` on entry, and goes **flat in / flat out** — never
-reconstructing it. PyPSA uses a MultiIndex on exactly one axis, `snapshot`
-`(period, timestep)`, and all seven of its in-linopy uses have a flat+aux form that
-builds the identical model, each tested under both semantics.
+**Feasible — and the change is mostly *subtraction*.** No new capability is
+required: the flat+aux model builds with today's linopy, and all seven in-linopy MI
+uses have a flat+aux form that builds the identical model, tested under both
+semantics. PyPSA uses a MultiIndex on exactly one axis, `snapshot`
+`(period, timestep)`, accepted as *input sugar*, `reset_index`'d on entry —
+**flat in / flat out**, never reconstructed.
+
+Adopting it as v1 is a **net simplification**: a few small things to get right
+(positional snapshot alignment; optionally auto-normalizing MI input), against a lot
+of first-class-MI machinery linopy gets to **delete** (see *What linopy can strip*
+below). So it is not "zero changes" — it is mostly deletions.
 
 **One open item, and it is PyPSA's, not linopy's:** whether `n.snapshots` stays a
 MultiIndex — a cheap boundary wrap PyPSA owns.
@@ -86,6 +92,35 @@ Beyond the per-op *nicer* facet, two are **representation-wide**:
   MI "avoids" the conflict only by locking levels into the index.
 - **flexible** — flat+aux level coords `drop_vars`/`rename`/`assign_coords` like any
   coord; on an MI the same raises *"would corrupt the index"*.
+
+## What linopy can strip
+
+Adopting flat+aux is a **net deletion** of first-class-MI machinery — roughly
+**~300 lines**, and concentrated, not diffuse. About **half is one cluster**: the
+`alignment.py` *level-projection* subsystem, whose only job is to make an operand
+indexed by a single MI *level* align against the full MI dim (levels behaving like
+pseudo-dimensions). Under flat+aux the levels simply *are* aux coords, so the whole
+subsystem is dead code.
+
+| strip | what it does today | ~lines |
+|---|---|---|
+| **`alignment.py` level-projection** — `_project_onto_multiindex_levels`, `_enforce_implicit_projections`, `_LevelProjection`, the `projections` plumbing through `broadcast_to_coords`, plus the MI branches in `_expand_missing_dims`/`validate_alignment` and `_as_multiindex` | align a single-level operand against a full MI dim | ~150 |
+| **netcdf MI (de)serialization** — `io.py` flatten-on-write + reconstruct (`{dim}_multiindex` attr); `common.py` MI level/code (de)serialize | flatten MI to store, rebuild MI on read | ~50 (keep a read-only shim for old `.nc`) |
+| **scattered MI guards/branches** in alignment & coords | skip-logic that only fires when a dim is an MI | remainder |
+
+**What stays** (so the claim is honest): `assign_multiindex_safe` and the internal
+`_term`/`_factor`/groupby stacking are *general* helpers over linopy's own helper
+indexes — unrelated to the snapshot MI. The `semantics.py` shared-dim reorder and
+§11 aux-coord-conflict logic not only stay but become **more central** — aux coords
+are the new home for the levels.
+
+**The "small things to get right"** are additive and minor: fix positional snapshot
+alignment (§11 — already how a plain datetime snapshot behaves) and shrink the
+MI-input path to *accept-then-`reset_index`* rather than store. A few lines added at
+the boundary; ~300 removed from the core.
+
+> _Strip inventory from a read-only code sweep (Claude Code) of the v1 working tree;
+> line counts are order-of-magnitude. Not yet executed — this scopes the deletion._
 
 ## Observed PyPSA MultiIndex usages — not linopy's to solve
 
