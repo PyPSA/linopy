@@ -40,6 +40,7 @@ f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 multiindex = pd.MultiIndex.from_product(
     [list("asdfhjkg"), list("asdfghj")], names=["level_0", "level_1"]
 )
+multiindex.name = "multi"
 g = m.add_variables(coords=[multiindex], name="g")
 
 # create linear expression for each variable
@@ -183,15 +184,15 @@ def test_print_options(obj: Variable | LinearExpression | Constraint) -> None:
     obj.print(display_max_rows=20)
 
 
-def test_print_labels() -> None:
-    m.variables.print_labels([1, 2, 3])
-    m.constraints.print_labels([1, 2, 3])
-    m.constraints.print_labels([1, 2, 3], display_max_terms=10)
+def test_format_labels() -> None:
+    assert m.variables.format_labels([1, 2, 3])
+    assert m.constraints.format_labels([1, 2, 3])
+    assert m.constraints.format_labels([1, 2, 3], display_max_terms=10)
 
 
 def test_label_position_too_high() -> None:
     with pytest.raises(ValueError):
-        m.variables.print_labels([1000])
+        m.variables.format_labels([1000])
 
 
 def test_model_repr_empty() -> None:

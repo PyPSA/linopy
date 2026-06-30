@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Self, TypeAlias, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -30,6 +30,7 @@ from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 try:
@@ -38,21 +39,22 @@ try:
     from xarray.computation.rolling import DatasetRolling
 except ImportError:
     import xarray.core.rolling
-    from xarray.core.rolling import DatasetRolling  # type: ignore
+    from xarray.core.rolling import DatasetRolling  # type: ignore[no-redef]
 
 from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
+from linopy.alignment import as_dataarray, broadcast_to_coords, fill_missing_coords
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
-    fill_missing_coords,
     filter_nulls_polars,
+    format_coord,
+    format_single_expression,
     forward_as_properties,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -62,8 +64,6 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
-    print_coord,
-    print_single_expression,
     to_dataframe,
     to_polars,
 )
@@ -81,6 +81,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.types import (
+    CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
@@ -90,33 +91,15 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import (
+        AnonymousScalarConstraint,
+        Constraint,
+    )
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
     from linopy.variables import ScalarVariable, Variable
 
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
-
-
-def _to_piecewise_constraint_descriptor(
-    lhs: Any, rhs: Any, operator: str
-) -> PiecewiseConstraintDescriptor | None:
-    """Build a piecewise descriptor for reversed RHS syntax if applicable."""
-    from linopy.piecewise import PiecewiseExpression
-
-    if not isinstance(rhs, PiecewiseExpression):
-        return None
-
-    if operator == "<=":
-        return rhs.__ge__(lhs)
-    if operator == ">=":
-        return rhs.__le__(lhs)
-    if operator == "==":
-        return rhs.__eq__(lhs)
-
-    msg = f"Unsupported operator '{operator}' for piecewise dispatch."
-    raise ValueError(msg)
 
 
 def exprwrap(
@@ -153,6 +136,67 @@ def _expr_unwrap(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_group(group: Any, data: Dataset) -> Any:
+    """
+    Normalize a groupby key.
+
+    Unwrap a single-element key list to the scalar key, and resolve a string
+    naming a coordinate to that coordinate -- so ``groupby("name")`` behaves
+    like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
+    DataFrame, DataArray, multi-key lists) are returned unchanged.
+    """
+    if isinstance(group, (list, tuple)) and len(group) == 1:
+        group = group[0]
+    if isinstance(group, str) and group in data.coords:
+        group = data[group]
+    return group
+
+
+def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
+    """
+    Gather a multi-key list of coordinate names into a value frame.
+
+    Return a DataFrame of the named coordinates when all keys are 1-D
+    coordinates sharing a single dimension -- so the list rides the fast
+    reindex path -- otherwise None.
+    """
+    is_name_list = (
+        isinstance(group, (list, tuple))
+        and len(group) > 1
+        and all(isinstance(g, str) and g in data.coords for g in group)
+    )
+    if not is_name_list:
+        return None
+    coord_dims = {data[g].dims for g in group}
+    if len(coord_dims) != 1 or len(next(iter(coord_dims))) != 1:
+        return None
+    names = list(group)
+    return data[names].to_dataframe()[names]
+
+
+def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
+    """
+    Unstack a stacked multi-key group dimension into one dimension per key.
+
+    Warn before materialising the grid when most cells would be fill values,
+    pointing to ``observed=True`` for a compact result.
+    """
+    mi = ds.indexes[dim].remove_unused_levels()
+    observed = len(mi)
+    grid = int(np.prod([len(level) for level in mi.levels]))
+    if grid > 2 * observed and grid - observed > 10_000:
+        warn(
+            f"Grouping a LinearExpression by {list(mi.names)} produces a dense "
+            f"{grid:,}-cell grid, but only {observed:,} of those combinations "
+            f"occur -- the {grid - observed:,} absent ones are materialised as "
+            f"fill values. Pass `observed=True` to keep the result compact over "
+            f"only the observed combinations.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return ds.unstack(dim, fill_value=LinearExpression._fill_value)
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -175,17 +219,25 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        if isinstance(self.group, pd.DataFrame):
+        data = self.data
+        group = _resolve_group(self.group, data)
+
+        if isinstance(group, pd.DataFrame):
             raise ValueError(
                 "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
             )
-        if isinstance(self.group, pd.Series):
-            group_name = self.group.name or "group"
-            group = DataArray(self.group, name=group_name)
-        else:
-            group = self.group  # type: ignore
+        if isinstance(group, pd.Series):
+            group = DataArray(group, name=group.name or "group")
 
-        return self.data.groupby(group=group, **self.kwargs)
+        # detach an attached free coordinate (never an indexed/level coord)
+        if (
+            isinstance(group, DataArray)
+            and group.name in set(data.coords) - set(data.dims)
+            and group.name not in data.xindexes
+        ):
+            data = data.drop_vars([group.name])
+
+        return data.groupby(group=group, **self.kwargs)
 
     def map(
         self,
@@ -217,7 +269,9 @@ class LinearExpressionGroupby:
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
 
-    def sum(self, use_fallback: bool = False, **kwargs: Any) -> LinearExpression:
+    def sum(
+        self, use_fallback: bool = False, observed: bool = False, **kwargs: Any
+    ) -> LinearExpression:
         """
         Sum the groupby object.
 
@@ -235,6 +289,13 @@ class LinearExpressionGroupby:
             Whether to use the fallback implementation, which is a sort of default
             xarray implementation. If set to False, the operation will be much
             faster but keyword arguments are ignored. Defaults to False.
+        observed : bool
+            Only applies when grouping by a list of coordinate names. If True,
+            keep the result stacked over the observed key combinations (a
+            ``MultiIndex`` ``group`` dimension) instead of unstacking into one
+            dimension per key, which materialises the dense cartesian grid.
+            Defaults to False, mirroring xarray. Not supported together with
+            `use_fallback`.
         **kwargs
             Arbitrary keyword arguments.
 
@@ -243,9 +304,22 @@ class LinearExpressionGroupby:
         LinearExpression
             The sum of the groupby object.
         """
+        if observed and use_fallback:
+            raise ValueError(
+                "`observed=True` is not supported with `use_fallback=True`."
+            )
+
+        group = _resolve_group(self.group, self.data)
+
+        # a list of coord names rides the fast path as a value frame
+        multikey_frame = (
+            None if use_fallback else _multikey_value_frame(group, self.data)
+        )
+        if multikey_frame is not None:
+            group = multikey_frame
+
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
-        if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
+        if isinstance(group, non_fallback_types) and not use_fallback:
             if isinstance(group, pd.DataFrame):
                 # dataframes do not have a name, so we need to set it
                 final_group_name = "group"
@@ -271,10 +345,12 @@ class LinearExpressionGroupby:
             arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
             new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            coords = self.data.indexes[group_dim]
-            names_to_drop = [coords.name]
-            if isinstance(coords, pd.MultiIndex):
-                names_to_drop += list(coords.names)
+            # collapsing group_dim invalidates every coordinate aligned to it
+            names_to_drop = [
+                name
+                for name, coord in self.data.coords.items()
+                if group_dim in coord.dims
+            ]
             ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
@@ -284,9 +360,11 @@ class LinearExpressionGroupby:
                 index.names = [str(col) for col in orig_group.columns]
                 index.name = GROUP_DIM
                 new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = xr.Dataset(ds.assign_coords(new_coords))
+                ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
+            if multikey_frame is not None and not observed:
+                ds = _unstack_multikey(ds, final_group_name)
             return LinearExpression(ds, self.model)
 
         def func(ds: Dataset) -> Dataset:
@@ -354,18 +432,19 @@ class BaseExpression(ABC):
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
+        elif isinstance(data, CONSTANT_TYPES):
             const = as_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
             supported_types = ", ".join(
-                map(lambda s: s.__qualname__, (*SUPPORTED_CONSTANT_TYPES, Dataset))
+                map(lambda s: s.__qualname__, (*CONSTANT_TYPES, Dataset))
             )
             raise ValueError(
                 f"data must be an instance of {supported_types}, got {type(data)}"
             )
 
+        data = cast(Dataset, data)
         if not set(data).issuperset({"coeffs", "vars"}):
             raise ValueError(
                 "data must contain the fields 'coeffs' and 'vars' or 'const'"
@@ -389,12 +468,12 @@ class BaseExpression(ABC):
             data = assign_multiindex_safe(data, const=data.const.astype(float))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
+        data = cast(Dataset, data)
         (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
         coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
         data = assign_multiindex_safe(data, **coeffs_vars_dict)
 
-        # transpose with new Dataset to really ensure correct order
-        data = Dataset(data.transpose(..., TERM_DIM))
+        data = data.transpose(..., TERM_DIM)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
@@ -405,7 +484,7 @@ class BaseExpression(ABC):
             raise ValueError("model must be an instance of linopy.Model")
 
         self._model = model
-        self._data = data
+        self._data = cast(Dataset, data)
 
     def __repr__(self) -> str:
         """
@@ -431,16 +510,16 @@ class BaseExpression(ABC):
                         self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
-                        expr = print_single_expression(
+                        expr = format_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
                             self.const.values[indices],
                             self.model,
                         )
 
-                        line = print_coord(coord) + f": {expr}"
+                        line = format_coord(coord) + f": {expr}"
                     else:
-                        line = print_coord(coord) + ": None"
+                        line = format_coord(coord) + ": None"
                     lines.append(line)
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
@@ -448,7 +527,7 @@ class BaseExpression(ABC):
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(
+            expr = format_single_expression(
                 self.coeffs.values, self.vars.values, self.const.item(), self.model
             )
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
@@ -480,40 +559,30 @@ class BaseExpression(ABC):
             print(self)
 
     @abstractmethod
-    def __add__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __add__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __radd__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __radd__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __sub__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __sub__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rsub__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __rsub__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __mul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __mul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __rmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __matmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __matmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
     def __pow__(self, other: int) -> QuadraticExpression: ...
 
-    def __neg__(self: GenericExpression) -> GenericExpression:
+    def __neg__(self) -> Self:
         """
         Get the negative of the expression.
         """
@@ -538,19 +607,19 @@ class BaseExpression(ABC):
         # merge on factor dimension only returns v1 * v2 + c1 * c2
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
-        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)  # type: ignore
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
             res = res + self.const * other.reset_const()
         if other.has_constant:
             res = res + self.reset_const() * other.const
-        return res
+        return cast(QuadraticExpression, res)
 
     def _align_constant(
-        self: GenericExpression,
+        self,
         other: DataArray,
         fill_value: float = 0,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -588,18 +657,20 @@ class BaseExpression(ABC):
                 self.const,
                 other,
                 join=join,
-                fill_value=fill_value,  # type: ignore[call-overload]
+                fill_value=fill_value,
             )
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         # NaN values in self.const or other are filled with 0 (additive identity)
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -615,12 +686,12 @@ class BaseExpression(ABC):
         return self.assign(const=self_const + da)
 
     def _apply_constant_op(
-        self: GenericExpression,
+        self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
-        join: str | None = None,
-    ) -> GenericExpression:
+        join: JoinOptions | None = None,
+    ) -> Self:
         """
         Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
 
@@ -628,7 +699,9 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -647,16 +720,16 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
-    def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __div__(self, other: SideLike) -> Self:
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
@@ -668,43 +741,16 @@ class BaseExpression(ABC):
         except TypeError:
             return NotImplemented
 
-    def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
 
-    @overload
-    def __le__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, rhs: SideLike) -> Constraint: ...
-
-    def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
-        if descriptor is not None:
-            return descriptor
+    def __le__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    @overload
-    def __ge__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, rhs: SideLike) -> Constraint: ...
-
-    def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
-        if descriptor is not None:
-            return descriptor
+    def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, rhs: SideLike) -> Constraint: ...
-
-    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
-        if descriptor is not None:
-            return descriptor
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -718,10 +764,10 @@ class BaseExpression(ABC):
         )
 
     def add(
-        self: GenericExpression,
+        self,
         other: SideLike,
-        join: str | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+        join: JoinOptions | None = None,
+    ) -> Self | QuadraticExpression:
         """
         Add an expression to others.
 
@@ -736,20 +782,20 @@ class BaseExpression(ABC):
         """
         if join is None:
             return self.__add__(other)
-        if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+        if isinstance(other, CONSTANT_TYPES):
             return self._add_constant(other, join=join)
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
+        return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
-        self: GenericExpression,
+        self,
         other: SideLike,
-        join: str | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+        join: JoinOptions | None = None,
+    ) -> Self | QuadraticExpression:
         """
         Subtract others from expression.
 
@@ -765,10 +811,10 @@ class BaseExpression(ABC):
         return self.add(-other, join=join)
 
     def mul(
-        self: GenericExpression,
+        self,
         other: SideLike,
-        join: str | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+        join: JoinOptions | None = None,
+    ) -> Self | QuadraticExpression:
         """
         Multiply the expr by a factor.
 
@@ -790,10 +836,10 @@ class BaseExpression(ABC):
         return self._multiply_by_constant(other, join=join)
 
     def div(
-        self: GenericExpression,
+        self,
         other: VariableLike | ConstantLike,
-        join: str | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+        join: JoinOptions | None = None,
+    ) -> Self | QuadraticExpression:
         """
         Divide the expr by a factor.
 
@@ -817,9 +863,9 @@ class BaseExpression(ABC):
         return self._divide_by_constant(other, join=join)
 
     def le(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Less than or equal constraint.
@@ -836,9 +882,9 @@ class BaseExpression(ABC):
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
     def ge(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Greater than or equal constraint.
@@ -855,9 +901,9 @@ class BaseExpression(ABC):
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
     def eq(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Equality constraint.
@@ -879,17 +925,13 @@ class BaseExpression(ABC):
         """
         return self.__pow__(other)
 
-    def dot(
-        self: GenericExpression, other: ndarray
-    ) -> GenericExpression | QuadraticExpression:
+    def dot(self, other: ndarray) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
 
-    def __getitem__(
-        self: GenericExpression, selector: int | tuple[slice, list[int]] | slice
-    ) -> GenericExpression:
+    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
         """
         Get selection from the expression.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -968,6 +1010,7 @@ class BaseExpression(ABC):
 
     @property
     def vars(self) -> DataArray:
+        """Variable labels referenced by each term of the expression."""
         return self.data.vars
 
     @vars.setter
@@ -976,6 +1019,7 @@ class BaseExpression(ABC):
 
     @property
     def coeffs(self) -> DataArray:
+        """Coefficient applied to each term of the expression."""
         return self.data.coeffs
 
     @coeffs.setter
@@ -984,6 +1028,7 @@ class BaseExpression(ABC):
 
     @property
     def const(self) -> DataArray:
+        """Constant offset added to the expression."""
         return self.data.const
 
     @const.setter
@@ -1005,10 +1050,11 @@ class BaseExpression(ABC):
         Replace variable labels by solution values.
         """
         m = self.model
-        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        M = m.matrices
+        sol = pd.Series(M.sol, M.vlabels)
         sol[-1] = np.nan
         idx = np.ravel(self.vars)
-        values = sol[idx].to_numpy().reshape(self.vars.shape)
+        values = np.asarray(sol[idx]).reshape(self.vars.shape)
         return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
 
     @property
@@ -1024,11 +1070,11 @@ class BaseExpression(ABC):
         return sol.rename("solution")
 
     def sum(
-        self: GenericExpression,
+        self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -1113,7 +1159,7 @@ class BaseExpression(ABC):
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         """
         Convert a linear expression to a constraint.
@@ -1143,8 +1189,10 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+        if isinstance(rhs, CONSTANT_TYPES):
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, dims=self.coord_dims, strict=False
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1176,7 +1224,7 @@ class BaseExpression(ABC):
         )
         return constraints.Constraint(data, model=self.model)
 
-    def reset_const(self: GenericExpression) -> GenericExpression:
+    def reset_const(self) -> Self:
         """
         Reset the constant of the linear expression to zero.
         """
@@ -1194,7 +1242,7 @@ class BaseExpression(ABC):
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
     def where(
-        self: GenericExpression,
+        self,
         cond: DataArray,
         other: LinearExpression
         | int
@@ -1202,7 +1250,7 @@ class BaseExpression(ABC):
         | dict[str, float | int | DataArray]
         | None = None,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Filter variables based on a condition.
 
@@ -1246,14 +1294,14 @@ class BaseExpression(ABC):
         return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
 
     def fillna(
-        self: GenericExpression,
+        self,
         value: int
         | float
         | DataArray
         | Dataset
         | LinearExpression
         | dict[str, float | int | DataArray],
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Fill missing values with a given value.
 
@@ -1277,7 +1325,7 @@ class BaseExpression(ABC):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
 
-    def diff(self: GenericExpression, dim: str, n: int = 1) -> GenericExpression:
+    def diff(self, dim: str, n: int = 1) -> Self:
         """
         Calculate the n-th order discrete difference along given axis.
 
@@ -1373,6 +1421,57 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
+    def has_terms(self) -> DataArray:
+        """
+        Get a boolean array which is true at slots with at least one live term.
+
+        A term is live when it references a variable (``vars != -1``). Slots
+        without any live term arise from outer joins in
+        :func:`merge <linopy.expressions.merge>`, from reindexing past the
+        original coordinates, or from masking. In contrast to
+        :meth:`isnull`, the constant is ignored: a slot carrying only a
+        constant has no terms.
+
+        Returns
+        -------
+        xr.DataArray
+
+        Examples
+        --------
+        Mask out constraint rows whose left-hand side has no terms:
+
+        >>> import linopy
+        >>> import pandas as pd
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+        >>> lhs = (1 * x).reindex(i=pd.RangeIndex(5, name="i"))
+        >>> lhs.has_terms.values
+        array([ True,  True,  True, False, False])
+        """
+        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
+        return (self.vars != -1).any(helper_dims).rename("has_terms")
+
+    @property
+    def variable_names(self) -> set[str]:
+        """
+        Get the names of the unique variables present in the expression.
+        """
+        if self.nterm == 0:
+            return set()
+
+        # Collect all unique labels from the expression (excluding -1)
+        all_labels = self.vars.values.ravel()
+        unique_labels = np.unique(all_labels[all_labels != -1])
+
+        if len(unique_labels) == 0:
+            return set()
+
+        # Batch lookup variable names for all labels
+        positions = self.model.variables.get_label_position(unique_labels)
+
+        return {p[0] for p in positions if p[0] is not None}
+
+    @property
     def shape(self) -> tuple[int, ...]:
         """
         Get the total shape of the linear expression.
@@ -1398,7 +1497,7 @@ class BaseExpression(ABC):
         """
         return EmptyDeprecationWrapper(not self.size)
 
-    def densify_terms(self: GenericExpression) -> GenericExpression:
+    def densify_terms(self) -> Self:
         """
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
@@ -1429,7 +1528,7 @@ class BaseExpression(ABC):
 
         return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
 
-    def sanitize(self: GenericExpression) -> GenericExpression:
+    def sanitize(self) -> Self:
         """
         Sanitize LinearExpression by ensuring int dtype for variables.
 
@@ -1606,7 +1705,7 @@ class LinearExpression(BaseExpression):
             return other.__add__(self)
 
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -1727,7 +1826,7 @@ class LinearExpression(BaseExpression):
         """
         ds = self.data
 
-        def mask_func(data: pd.DataFrame) -> pd.Series:
+        def mask_func(data: dict) -> pd.Series:
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
             return mask
 
@@ -1886,7 +1985,7 @@ class LinearExpression(BaseExpression):
         cls,
         model: Model,
         rule: Callable,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -2004,7 +2103,7 @@ class LinearExpression(BaseExpression):
         ) -> LinearExpression:
             nonlocal model
 
-            if isinstance(t, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(t, CONSTANT_TYPES):
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 expr = LinearExpression(t, model)
@@ -2023,7 +2122,7 @@ class LinearExpression(BaseExpression):
                         )
                     expr = v.to_linexpr(c)
                 elif isinstance(v, variables.Variable):
-                    if not isinstance(c, SUPPORTED_CONSTANT_TYPES):
+                    if not isinstance(c, CONSTANT_TYPES):
                         raise TypeError(
                             "Expected constant as coefficient of variable (first element of tuple)."
                         )
@@ -2100,7 +2199,7 @@ class QuadraticExpression(BaseExpression):
             raise ValueError(f"Size of dimension {FACTOR_DIM} must be 2.")
 
         # transpose data to have _term as last dimension and _factor as second last
-        data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
+        data = data.transpose(..., FACTOR_DIM, TERM_DIM)
         self._data = data
 
     @property
@@ -2140,7 +2239,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -2210,7 +2309,7 @@ class QuadraticExpression(BaseExpression):
         return sol.rename("solution")
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
@@ -2226,7 +2325,7 @@ class QuadraticExpression(BaseExpression):
         ).to_dataset(FACTOR_DIM)
         ds = self.data.drop_vars("vars").assign(vars)
 
-        def mask_func(data: pd.DataFrame) -> pd.Series:
+        def mask_func(data: dict) -> pd.Series:
             mask = ((data["vars1"] != -1) | (data["vars2"] != -1)) & (
                 data["coeffs"] != 0
             )
@@ -2311,7 +2410,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.as_dataarray`.
+        Keyword arguments passed to `linopy.alignment.broadcast_to_coords`.
 
     Returns
     -------
@@ -2328,24 +2427,45 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
 
 
+Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
+
+
+@overload
 def merge(
-    exprs: Sequence[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
-    *add_exprs: tuple[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
-    dim: str = TERM_DIM,
-    cls: type[GenericExpression] = None,  # type: ignore
-    join: str | None = None,
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
+    dim: str = ...,
+    cls: type[GenericExpression],
+    join: JoinOptions | None = None,
     **kwargs: Any,
-) -> GenericExpression:
+) -> GenericExpression: ...
+
+
+@overload
+def merge(
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
+    dim: str = ...,
+    cls: None = ...,
+    join: JoinOptions | None = None,
+    **kwargs: Any,
+) -> BaseExpression: ...
+
+
+def merge(
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
+    dim: str = TERM_DIM,
+    cls: type[BaseExpression] | None = None,
+    join: JoinOptions | None = None,
+    **kwargs: Any,
+) -> BaseExpression:
     """
     Merge multiple expression together.
 
@@ -2376,34 +2496,38 @@ def merge(
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if not isinstance(exprs, list) and len(add_exprs):
+    if not isinstance(exprs, Sequence):
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
         )
-        exprs = [exprs] + list(add_exprs)  # type: ignore
+        exprs = [exprs] + list(add_exprs)
 
-    has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
-    has_linear_expression = any(type(e) is LinearExpression for e in exprs)
+    has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
+    has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
         cls = QuadraticExpression if has_quad_expression else LinearExpression
 
-    if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
+    if (
+        issubclass(cls, QuadraticExpression)
+        and dim == TERM_DIM
+        and has_linear_expression
+    ):
         raise ValueError(
             "Cannot merge linear and quadratic expressions along term dimension."
             "Convert to QuadraticExpression first."
         )
 
-    if has_quad_expression and cls is not QuadraticExpression:
+    if has_quad_expression and not issubclass(cls, QuadraticExpression):
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
-    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
+    linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
 
     if join is not None:
         override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
+    elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
@@ -2419,9 +2543,9 @@ def merge(
             "coords": "minimal",
             "compat": "override",
         }
-        if cls == LinearExpression:
+        if issubclass(cls, LinearExpression):
             kwargs["fill_value"] = FILL_VALUE
-        elif cls == variables.Variable:
+        elif issubclass(cls, variables.Variable):
             kwargs["fill_value"] = variables.FILL_VALUE
 
         if join is not None:
@@ -2472,7 +2596,7 @@ class ScalarLinearExpression:
         self._model = model
 
     def __repr__(self) -> str:
-        expr_string = print_single_expression(
+        expr_string = format_single_expression(
             np.array(self.coeffs), np.array(self.vars), 0, self.model
         )
         return f"ScalarLinearExpression: {expr_string}"
@@ -2566,10 +2690,6 @@ class ScalarLinearExpression:
         return self.__div__(other)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, "<=")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
@@ -2578,10 +2698,6 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, ">=")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
@@ -2592,10 +2708,6 @@ class ScalarLinearExpression:
     def __eq__(  # type: ignore[override]
         self, other: int | float
     ) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, "==")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
@@ -2619,18 +2731,6 @@ class ScalarLinearExpression:
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
         return LinearExpression(ds, self.model)
 
-
-SUPPORTED_CONSTANT_TYPES = (
-    np.number,
-    np.bool_,
-    int,
-    float,
-    DataArray,
-    pd.Series,
-    pd.DataFrame,
-    np.ndarray,
-    pl.Series,
-)
 
 SUPPORTED_EXPRESSION_TYPES = (
     BaseExpression,

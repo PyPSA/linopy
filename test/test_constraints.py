@@ -37,11 +37,9 @@ def test_constraint_assignment() -> None:
 
     assert m.constraints.labels.con0.shape == (10, 10)
     assert np.issubdtype(m.constraints.labels.con0.dtype, np.integer)
-    assert m.constraints.coeffs.con0.dtype in (int, float)
-    assert np.issubdtype(m.constraints.vars.con0.dtype, np.integer) or np.issubdtype(
-        m.constraints.vars.con0.dtype, np.floating
-    )
-    assert m.constraints.rhs.con0.dtype in (int, float)
+    assert np.issubdtype(m.constraints.coeffs.con0.dtype, np.number)
+    assert np.issubdtype(m.constraints.vars.con0.dtype, np.number)
+    assert np.issubdtype(m.constraints.rhs.con0.dtype, np.number)
 
     assert_conequal(m.constraints.con0, con0)
 
@@ -93,11 +91,9 @@ def test_anonymous_constraint_assignment() -> None:
 
     assert m.constraints.labels.con0.shape == (10, 10)
     assert np.issubdtype(m.constraints.labels.con0.dtype, np.integer)
-    assert m.constraints.coeffs.con0.dtype in (int, float)
-    assert np.issubdtype(m.constraints.vars.con0.dtype, np.integer) or np.issubdtype(
-        m.constraints.vars.con0.dtype, np.floating
-    )
-    assert m.constraints.rhs.con0.dtype in (int, float)
+    assert np.issubdtype(m.constraints.coeffs.con0.dtype, np.number)
+    assert np.issubdtype(m.constraints.vars.con0.dtype, np.number)
+    assert np.issubdtype(m.constraints.rhs.con0.dtype, np.number)
 
 
 def test_constraint_assignment_with_tuples() -> None:
@@ -262,20 +258,29 @@ def test_masked_constraints_broadcast() -> None:
     assert (m.constraints.labels.bc2[:, 0:5] != -1).all()
     assert (m.constraints.labels.bc2[:, 5:10] == -1).all()
 
+    # Pandas Series with named index missing a dim is broadcast to data.coords.
+    mask_pd = pd.Series(
+        [True, False, True] + [False] * 7, index=pd.RangeIndex(10, name="dim_0")
+    )
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc_pd", mask=mask_pd)
+    assert (m.constraints.labels.bc_pd[[0, 2], :] != -1).all()
+    assert (m.constraints.labels.bc_pd[[1, 3, 4, 5, 6, 7, 8, 9], :] == -1).all()
+
+    # Mask with sparse coords (subset of data's coords) now raises instead of
+    # emitting a FutureWarning — the rule from the bounds path applies here too.
     mask3 = xr.DataArray(
         [True, True, False, False, False],
         dims=["dim_0"],
         coords={"dim_0": range(5)},
     )
-    with pytest.warns(FutureWarning, match="Missing values will be filled"):
+    with pytest.raises(
+        ValueError, match=r"mask: coordinate values for dimension 'dim_0'"
+    ):
         m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc3", mask=mask3)
-    assert (m.constraints.labels.bc3[0:2, :] != -1).all()
-    assert (m.constraints.labels.bc3[2:5, :] == -1).all()
-    assert (m.constraints.labels.bc3[5:10, :] == -1).all()
 
     # Mask with extra dimension not in data should raise
     mask4 = xr.DataArray([True, False], dims=["extra_dim"])
-    with pytest.raises(AssertionError, match="not a subset"):
+    with pytest.raises(ValueError, match=r"mask has dimension\(s\) \['extra_dim'\]"):
         m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc4", mask=mask4)
 
 

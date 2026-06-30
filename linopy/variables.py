@@ -27,26 +27,27 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
-    as_dataarray,
+    VariableLabelIndex,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
+    format_single_variable,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    print_coord,
-    print_single_variable,
-    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -57,9 +58,11 @@ from linopy.constants import (
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    STASHED_ATTRS,
+    STASHED_LOWER,
+    STASHED_UPPER,
     TERM_DIM,
 )
-from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -78,7 +81,6 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +328,9 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = broadcast_to_coords(
+            coefficient, coords=self.coords, dims=self.dims, strict=False
+        )
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
@@ -357,9 +361,9 @@ class Variable:
                     ]
                     label = self.labels.values[indices]
                     line = (
-                        print_coord(coord)
+                        format_coord(coord)
                         + ": "
-                        + print_single_variable(self.model, label)
+                        + format_single_variable(self.model, label)
                     )
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
@@ -374,7 +378,7 @@ class Variable:
             )
         else:
             lines.append(
-                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{format_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -536,31 +540,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    @overload
-    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, other: SideLike) -> Constraint: ...
-
-    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    @overload
-    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, other: SideLike) -> Constraint: ...
-
-    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, other: SideLike) -> Constraint: ...
-
-    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -577,7 +563,7 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -594,7 +580,7 @@ class Variable:
         return self.to_linexpr().add(other, join=join)
 
     def sub(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -611,7 +597,7 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -628,7 +614,7 @@ class Variable:
         return self.to_linexpr().mul(other, join=join)
 
     def div(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -644,7 +630,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
-    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -659,7 +645,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -674,7 +660,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 
@@ -850,6 +836,8 @@ class Variable:
             return "Integer Variable"
         elif self.attrs["binary"]:
             return "Binary Variable"
+        elif self.attrs.get("semi_continuous"):
+            return "Semi-continuous Variable"
         else:
             return "Continuous Variable"
 
@@ -906,18 +894,18 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
-        Set the upper bounds of the variables.
-
-        The function raises an error in case no model is set as a
-        reference.
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
         """
-        value = DataArray(value).broadcast_like(self.upper)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, upper=value)
+        warn(
+            "Variable.upper setter is deprecated and will be removed in a "
+            "future release; use Variable.update(upper=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(upper=value)
 
     @property
     def lower(self) -> DataArray:
@@ -930,18 +918,100 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
-        Set the lower bounds of the variables.
-
-        The function raises an error in case no model is set as a
-        reference.
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
         """
-        value = DataArray(value).broadcast_like(self.lower)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, lower=value)
+        warn(
+            "Variable.lower setter is deprecated and will be removed in a "
+            "future release; use Variable.update(lower=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(lower=value)
+
+    def update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> Variable:
+        """
+        Update variable bounds in place.
+
+        Canonical mutation API. Validation and coord alignment live here.
+        Single-attribute setters (`var.lower = …`) forward to this method.
+
+        Parameters
+        ----------
+        lower : ConstantLike, optional
+            New lower bound. Accepts any constant — scalars, numpy
+            arrays, pandas Series / DataFrame, xarray DataArray (e.g.
+            time-varying bounds). Aligned via xarray broadcast against
+            the variable's existing shape; new dims are rejected.
+            Decision variables / linear expressions are not accepted.
+        upper : ConstantLike, optional
+            New upper bound. Same.
+
+        Returns
+        -------
+        Variable
+            ``self`` for chaining.
+
+        Raises
+        ------
+        TypeError
+            If either bound is a Variable / Expression (bounds must be
+            numeric, not symbolic).
+        ValueError
+            If the new bound introduces dimensions not in the variable's
+            coords, or if the resulting ``lower > upper`` anywhere.
+        """
+        if lower is None and upper is None:
+            return self
+
+        updates = self._validate_update(lower=lower, upper=upper)
+        self._data = assign_multiindex_safe(self.data, **updates)
+        return self
+
+    def _validate_update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> dict[str, DataArray]:
+        """
+        Validate, broadcast, and cross-check update inputs.
+
+        Returns the broadcasted DataArrays ready for assignment. Raises
+        before any mutation if any input is wrong.
+        """
+        updates: dict[str, DataArray] = {}
+        own_dims = self.model.variables[self.name].dims
+        for name, val, ref in (
+            ("lower", lower, self.lower),
+            ("upper", upper, self.upper),
+        ):
+            if val is None:
+                continue
+            if not isinstance(val, ConstantLike):
+                raise TypeError(
+                    f"Variable.update({name}=...) must be a constant; "
+                    f"got {type(val).__name__}."
+                )
+            new_val = DataArray(val).broadcast_like(ref)
+            if not set(new_val.dims).issubset(own_dims):
+                raise ValueError("Cannot assign new dimensions to existing variable.")
+            updates[name] = new_val
+
+        final_lower = updates.get("lower", self.lower)
+        final_upper = updates.get("upper", self.upper)
+        if bool((final_lower > final_upper).any()):
+            raise ValueError(
+                "Variable.update would leave lower > upper at one or more coordinates."
+            )
+        return updates
 
     @property
     @has_optimized_model
@@ -991,9 +1061,11 @@ class Variable:
         -------
         xr.DataArray
         """
+        from linopy.solver_capabilities import SolverFeature, solver_supports
+
         solver_model = self.model.solver_model
         if not solver_supports(
-            self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+            self.model.solver_name or "", SolverFeature.SOLVER_ATTRIBUTE_ACCESS
         ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."
@@ -1024,7 +1096,7 @@ class Variable:
         -------
         df : pandas.DataFrame
         """
-        ds = self.data
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
 
         def mask_func(data: pd.DataFrame) -> pd.Series:
             return data["labels"] != -1
@@ -1044,7 +1116,8 @@ class Variable:
         -------
         pl.DataFrame
         """
-        df = to_polars(self.data)
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
+        df = to_polars(ds)
         df = filter_nulls_polars(df)
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
@@ -1150,6 +1223,9 @@ class Variable:
             raise ValueError(
                 f"other must be a Variable, ScalarVariable, dict or Dataset, got {type(other)}"
             )
+        if isinstance(_other, dict):
+            fill: dict[str, float] = {str(k): np.nan for k in self.data}
+            _other = {**fill, **_other}
         return self.__class__(
             self.data.where(cond, _other, **kwargs), self.model, self.name
         )
@@ -1298,6 +1374,163 @@ class Variable:
 
     iterate_slices = iterate_slices
 
+    def relax(self) -> None:
+        """
+        Relax the integrality of this variable.
+
+        Converts binary or integer variables to continuous. The original type
+        is stored in the model's ``_relaxed_registry`` so that
+        :meth:`unrelax` can restore it.
+
+        Semi-continuous variables are not supported and will raise a
+        ``NotImplementedError``.
+
+        For binary variables, the existing [0, 1] bounds are preserved,
+        which is the correct LP relaxation. For integer variables, the
+        existing bounds are preserved as-is.
+
+        If the variable is already continuous, this method is a no-op.
+        """
+        attrs = self.attrs
+        if attrs.get("semi_continuous"):
+            msg = (
+                f"Relaxation of semi-continuous variable '{self.name}' is not "
+                "supported. The LP relaxation of a semi-continuous variable "
+                "requires changing bounds, which is not handled by relax()."
+            )
+            raise NotImplementedError(msg)
+
+        for attr in ("binary", "integer"):
+            if attrs.get(attr):
+                self.model._relaxed_registry[self.name] = attr
+                attrs[attr] = False
+                return
+
+    def unrelax(self) -> None:
+        """
+        Restore the original integrality type of a relaxed variable.
+
+        Reverses the effect of :meth:`relax`. If the variable was not
+        previously relaxed, this is a no-op.
+        """
+        registry = self.model._relaxed_registry
+        original_type = registry.pop(self.name, None)
+        if original_type is not None:
+            self.attrs[original_type] = True
+
+    @property
+    def relaxed(self) -> bool:
+        """
+        Return whether the variable is currently relaxed.
+        """
+        return self.name in self.model._relaxed_registry
+
+    def fix(
+        self,
+        value: ConstantLike | None = None,
+        decimals: int = 8,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix the variable to a given value by collapsing its bounds.
+
+        Sets ``lower = upper = value``.
+
+        If no value is given, the current solution value is used.
+
+        A fix value outside the variable's current bounds emits a warning, but
+        does not cause infeasibilities (the bounds are overridden). Fixing a
+        binary variable to anything other than 0 or 1 raises.
+
+        Parameters
+        ----------
+        value : float/array_like, optional
+            Value to fix the variable to. If None, the current solution is used.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+            Integer and binary variables are always rounded to 0 decimal places.
+            Default is 8.
+        overwrite : bool, optional
+            If True (default), re-fix a variable that is already fixed to the
+            new value (the originally stashed bounds are kept). If False, raise
+            an error if the variable is already fixed.
+        """
+        if value is None:
+            try:
+                value = self.solution
+            except AttributeError:
+                msg = (
+                    f"Cannot fix variable '{self.name}': no solution value "
+                    "available. Solve the model first or provide an explicit "
+                    "value."
+                )
+                raise ValueError(msg) from None
+
+        is_fixed = self.fixed
+        is_binary = self.attrs["binary"]
+        is_integer = self.attrs["integer"]
+
+        if is_fixed and not overwrite:
+            msg = (
+                f"Variable '{self.name}' is already fixed. Use "
+                "overwrite=True to replace the existing fix value."
+            )
+            raise ValueError(msg)
+
+        value = broadcast_to_coords(
+            value, self.coords, label=f"fix() for variable '{self.name}'"
+        )
+
+        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+            msg = (
+                f"Cannot fix binary variable '{self.name}' to a value "
+                "other than 0 or 1."
+            )
+            raise ValueError(msg)
+
+        if is_integer or is_binary:
+            value = value.round(0)
+        else:
+            value = value.round(decimals)
+
+        if is_fixed:
+            lower, upper = self.data[STASHED_LOWER], self.data[STASHED_UPPER]
+        else:
+            lower, upper = self.data.lower, self.data.upper
+
+        if not is_binary and ((value < lower).any() or (value > upper).any()):
+            warn(
+                f"Fix values for variable '{self.name}' lie outside its current "
+                "bounds; the bounds are overridden by the fix value.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if not is_fixed:
+            self._data = assign_multiindex_safe(
+                self.data,
+                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
+            )
+
+        self.update(lower=value, upper=value)
+
+    def unfix(self) -> None:
+        """
+        Unfix the variable, restoring the bounds it had before :meth:`fix`.
+        """
+        if not self.fixed:
+            return
+
+        self.update(lower=self.data[STASHED_LOWER], upper=self.data[STASHED_UPPER])
+        self._data = self.data.drop_vars(STASHED_ATTRS)
+
+    @property
+    def fixed(self) -> bool:
+        """
+        Return whether the variable is currently fixed.
+        """
+        return all(attr in self.data for attr in STASHED_ATTRS)
+
 
 class AtIndexer:
     __slots__ = ("object",)
@@ -1330,6 +1563,7 @@ class Variables:
     data: dict[str, Variable]
     model: Model
     _label_position_index: LabelPositionIndex | None = None
+    _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1377,15 +1611,14 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Variables"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format variable items, optionally excluding names in a group."""
+        r = ""
+        count = 0
         for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
             coords = (
                 " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
                 if ds.coords
@@ -1398,8 +1631,18 @@ class Variables:
             if ds.attrs.get("semi_continuous", False):
                 coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
-        if not len(list(self)):
+        if count == 0:
             r += "<empty>\n"
+        return r
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the variables container.
+        """
+        r = "linopy.model.Variables"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
         return r
 
     def __len__(self) -> int:
@@ -1439,6 +1682,15 @@ class Variables:
         """Invalidate the label position index cache."""
         if self._label_position_index is not None:
             self._label_position_index.invalidate()
+        if self._variable_label_index is not None:
+            self._variable_label_index.invalidate()
+
+    @property
+    def label_index(self) -> VariableLabelIndex:
+        """Index for O(1) label->position mapping and compact vlabels array."""
+        if self._variable_label_index is None:
+            self._variable_label_index = VariableLabelIndex(self)
+        return self._variable_label_index
 
     @property
     def attrs(self) -> dict[Any, Any]:
@@ -1572,6 +1824,81 @@ class Variables:
             self.model,
         )
 
+    def fix(
+        self,
+        value: int | float | None = None,
+        decimals: int = 8,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix all variables in this container to their solution or a scalar value.
+
+        Delegates to each variable's ``fix()`` method. See
+        :meth:`Variable.fix` for details.
+
+        Parameters
+        ----------
+        value : int/float, optional
+            Scalar value to fix all variables to. Only scalar values are
+            accepted to avoid shape mismatches across differently-shaped
+            variables. If None, each variable is fixed to its current solution.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+        overwrite : bool, optional
+            If True, re-fix variables that are already fixed.
+        """
+        for var in self.data.values():
+            var.fix(value=value, decimals=decimals, overwrite=overwrite)
+
+    def unfix(self) -> None:
+        """
+        Unfix all variables in this container.
+
+        Delegates to each variable's ``unfix()`` method.
+        """
+        for var in self.data.values():
+            var.unfix()
+
+    @property
+    def fixed(self) -> Variables:
+        """
+        Get all currently fixed variables.
+        """
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].fixed},
+            self.model,
+        )
+
+    def relax(self) -> None:
+        """
+        Relax integrality of all integer/binary variables in this container.
+
+        Delegates to each variable's :meth:`Variable.relax` method.
+        Semi-continuous variables will raise ``NotImplementedError``.
+        """
+        for var in self.data.values():
+            var.relax()
+
+    def unrelax(self) -> None:
+        """
+        Restore integrality of all previously relaxed variables in this
+        container.
+
+        Delegates to each variable's :meth:`Variable.unrelax` method.
+        """
+        for var in self.data.values():
+            var.unrelax()
+
+    @property
+    def relaxed(self) -> Variables:
+        """
+        Get all currently relaxed variables.
+        """
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].relaxed},
+            self.model,
+        )
+
     @property
     def solution(self) -> Dataset:
         """
@@ -1664,17 +1991,36 @@ class Variables:
             self._label_position_index = LabelPositionIndex(self)
         return self._label_position_index.find_single_with_index(label)
 
-    def print_labels(self, values: list[int]) -> None:
+    def format_labels(self, values: list[int]) -> str:
         """
-        Print a selection of labels of the variables.
+        Get a string representation of a selection of variable labels.
 
         Parameters
         ----------
         values : list, array-like
-            One dimensional array of constraint labels.
+            One dimensional array of variable labels.
+
+        Returns
+        -------
+        str
+            String representation of the selected variables.
         """
-        res = [print_single_variable(self.model, v) for v in values]
-        print("\n".join(res))
+        res = [format_single_variable(self.model, v) for v in values]
+        return "\n".join(res)
+
+    def print_labels(self, values: list[int]) -> None:
+        """
+        Print a selection of labels of the variables.
+
+        .. deprecated::
+            Use :meth:`format_labels` instead.
+        """
+        warn(
+            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1746,7 +2092,7 @@ class ScalarVariable:
         if self.label == -1:
             return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
-        coord_string = print_coord(coord)
+        coord_string = format_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
 
     @property

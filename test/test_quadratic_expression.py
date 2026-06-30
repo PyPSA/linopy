@@ -38,7 +38,7 @@ def test_quadratic_expression_from_variables_multiplication(
 ) -> None:
     quad_expr = x * y
     assert isinstance(quad_expr, QuadraticExpression)
-    assert quad_expr.data.sizes[FACTOR_DIM] == 2
+    assert quad_expr.vars.sizes[FACTOR_DIM] == 2
 
 
 def test_adding_quadratic_expressions(x: Variable) -> None:
@@ -52,7 +52,7 @@ def test_quadratic_expression_from_variables_power(x: Variable) -> None:
     power_expr = x**2
     target: QuadraticExpression = x * x  # type: ignore
     assert isinstance(power_expr, QuadraticExpression)
-    assert power_expr.data.sizes[FACTOR_DIM] == 2
+    assert power_expr.vars.sizes[FACTOR_DIM] == 2
     assert_quadequal(power_expr, target)
     assert_quadequal(x.pow(2), target)
 
@@ -63,7 +63,7 @@ def test_quadratic_expression_from_linexpr_multiplication(
     mult_expr = (10 * x + y) * y
     target: QuadraticExpression = 10 * x * y + y * y  # type: ignore
     assert isinstance(mult_expr, QuadraticExpression)
-    assert mult_expr.data.sizes[FACTOR_DIM] == 2
+    assert mult_expr.vars.sizes[FACTOR_DIM] == 2
     assert mult_expr.nterm == 2
     assert_quadequal(mult_expr, target)
 
@@ -71,7 +71,7 @@ def test_quadratic_expression_from_linexpr_multiplication(
 def test_quadratic_expression_from_linexpr_power(x: Variable) -> None:
     expr = (10 * x) ** 2
     assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.vars.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 1
 
 
@@ -79,7 +79,7 @@ def test_quadratic_expression_from_linexpr_with_constant_power(x: Variable) -> N
     expr = (10 * x + 5) ** 2
     target: QuadraticExpression = 100 * x * x + 50 * x + 50 * x + 25  # type: ignore
     assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.vars.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
     assert_quadequal(expr, target)
 
@@ -90,7 +90,7 @@ def test_quadratic_expression_from_linexpr_with_constant_multiplation(
     expr: QuadraticExpression = (10 * x + 5) * (y + 5)  # type: ignore
     target: QuadraticExpression = 10 * x * y + 5 * y + 50 * x + 25  # type: ignore
     assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.vars.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
     assert_quadequal(expr, target)
 
@@ -133,7 +133,7 @@ def test_matmul_with_const(x: Variable) -> None:
     expr2 = expr @ const
     assert isinstance(expr2, QuadraticExpression)
     assert expr2.nterm == 2
-    assert expr2.data.sizes[FACTOR_DIM] == 2
+    assert expr2.vars.sizes[FACTOR_DIM] == 2
 
 
 def test_quadratic_expression_dot_and_matmul(x: Variable, y: Variable) -> None:
@@ -225,7 +225,7 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
 def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
     expr: QuadraticExpression = x * y  # type: ignore
     with pytest.warns(DeprecationWarning):
-        merge(expr, expr)  # type: ignore
+        merge(expr, expr)
 
 
 def test_merge_linear_expression_and_quadratic_expression(
@@ -238,11 +238,11 @@ def test_merge_linear_expression_and_quadratic_expression(
     with pytest.raises(ValueError):
         merge([linexpr, quadexpr], cls=QuadraticExpression)
 
-    new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])  # type: ignore
+    new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])
     assert isinstance(new_quad_ex, QuadraticExpression)
 
     with pytest.warns(DeprecationWarning):
-        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore
+        merge(quadexpr, quadexpr, cls=QuadraticExpression)
 
     quadexpr_2 = linexpr.to_quadexpr()
     merged_expr = merge([quadexpr_2, quadexpr], cls=QuadraticExpression)
@@ -360,3 +360,11 @@ def test_power_of_three(x: Variable) -> None:
         x**3
     with pytest.raises(TypeError):
         (x * x) * (x * x)
+
+
+def test_variable_names(x: Variable, y: Variable) -> None:
+    expr = 2 * (x * x) + 3 * y + 1
+    assert expr.variable_names == {"x", "y"}
+
+    expr = 2 * (x * x) + 1
+    assert expr.variable_names == {"x"}

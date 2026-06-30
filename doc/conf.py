@@ -18,8 +18,8 @@ import linopy
 # -- Project information -----------------------------------------------------
 
 project = "linopy"
-copyright = "2021, Fabian Hofmann"
-author = "Fabian Hofmann"
+copyright = "2021-2026, Fabian Hofmann, Felix Bumann"
+author = "Fabian Hofmann, Felix Bumann"
 
 # The full version, including alpha/beta/rc tags
 version = linopy.__version__
@@ -72,6 +72,16 @@ source_suffix = {
 autosummary_generate = True
 autodoc_typehints = "none"
 
+# Intersphinx — resolve :class:`xarray.DataArray`, :func:`numpy.ndarray`, etc.
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "pandas": ("https://pandas.pydata.org/docs", None),
+    "xarray": ("https://docs.xarray.dev/en/stable", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
+    "dask": ("https://docs.dask.org/en/stable", None),
+}
+
 # Napoleon configurations
 
 napoleon_google_docstring = False
@@ -91,15 +101,12 @@ nbsphinx_prolog = """
 
 """
 
-nbsphinx_allow_errors = True
+nbsphinx_allow_errors = False
 nbsphinx_execute = "auto"
 nbsphinx_execute_arguments = [
     "--InlineBackend.figure_formats={'svg', 'pdf'}",
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
-
-# Exclude notebooks that require credentials or special setup
-nbsphinx_execute_never = ["**/solve-on-oetc*"]
 
 # -- Options for HTML output -------------------------------------------------
 

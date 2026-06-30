@@ -24,7 +24,7 @@ To install it, you have to have the `CUDA Toolkit <https://developer.nvidia.com/
     # Follow instructions at: https://developer.nvidia.com/cuda-downloads
 
     # Install cuPDLPx
-    pip install cupdlpx>=0.1.2
+    uv pip install "cupdlpx>=0.1.2"
 
 **Features:**
 

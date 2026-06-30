@@ -1,0 +1,28 @@
+"""Basic benchmark model: 2*N^2 variables and constraints (continuous LP)."""
+
+from __future__ import annotations
+
+import linopy
+from benchmarks.registry import BenchSpec, register
+
+SIZES = (10, 250)
+
+
+def build_basic(n: int) -> linopy.Model:
+    """Build a basic N*N model with 2*N^2 vars and 2*N^2 constraints."""
+    m = linopy.Model()
+    x = m.add_variables(coords=[range(n), range(n)], dims=["i", "j"], name="x")
+    y = m.add_variables(coords=[range(n), range(n)], dims=["i", "j"], name="y")
+    m.add_constraints(x + y <= 10, name="upper")
+    m.add_constraints(x - y >= -5, name="lower")
+    m.add_objective(x.sum() + 2 * y.sum())
+    return m
+
+
+SPEC = register(
+    BenchSpec(
+        name="basic",
+        build=build_basic,
+        sweep=SIZES,
+    )
+)

@@ -1,7 +1,7 @@
 .. _benchmark:
 
-Benchmarks
-==========
+Performance comparison
+======================
 
 
 Linopy's performance scales well with the problem size. Its overall speed is comparable with the famous `JuMP <https://jump.dev/>`_ package written in `Julia <https://julialang.org/>`_. It even outperforms `JuMP` in total memory efficiency when it comes to large models. Compared to `Pyomo <https://pyomo.org>`_, the common optimization package in python, one can expect
@@ -13,9 +13,9 @@ for large problems. The following figure shows the memory usage and speed for so
 
 .. math::
 
-    & \min \;\; \sum_{i,j} 2 x_{i,j} \; y_{i,j} \\
+    & \min \;\; \sum_{i,j} 2 x_{i,j} + y_{i,j} \\
     s.t. & \\
-    & x_{i,j} - y_{i,j} \; \ge \; i \qquad \forall \; i,j \in \{1,...,N\} \\
+    & x_{i,j} - y_{i,j} \; \ge \; i-1 \qquad \forall \; i,j \in \{1,...,N\} \\
     & x_{i,j} + y_{i,j} \; \ge \; 0 \qquad \forall \; i,j \in \{1,...,N\}
 
 

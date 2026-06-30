@@ -10,408 +10,18 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from xarray import DataArray
-from xarray.testing.assertions import assert_equal
 
-from linopy import LinearExpression, Model, Variable
+from linopy import Model
 from linopy.common import (
-    align,
-    as_dataarray,
     assign_multiindex_safe,
     best_int,
+    coords_from_dataset,
+    coords_to_dataset_vars,
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
 )
-from linopy.testing import assert_linequal, assert_varequal
-
-
-def test_as_dataarray_with_series_dims_default() -> None:
-    target_dim = "dim_0"
-    target_index = [0, 1, 2]
-    s = pd.Series([1, 2, 3])
-    da = as_dataarray(s)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_dims_set() -> None:
-    target_dim = "dim1"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    dims = [target_dim]
-    da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_dims_given() -> None:
-    target_dim = "dim1"
-    target_index = ["a", "b", "c"]
-    index = pd.Index(target_index, name=target_dim)
-    s = pd.Series([1, 2, 3], index=index)
-    dims: list[str] = []
-    da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_dims_priority() -> None:
-    """The dimension name from the pandas object should have priority."""
-    target_dim = "dim1"
-    target_index = ["a", "b", "c"]
-    index = pd.Index(target_index, name=target_dim)
-    s = pd.Series([1, 2, 3], index=index)
-    dims = ["other"]
-    da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_dims_subset() -> None:
-    target_dim = "dim_0"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    dims: list[str] = []
-    da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_dims_superset() -> None:
-    target_dim = "dim_a"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    dims = [target_dim, "other"]
-    da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_aligned_coords() -> None:
-    """This should not give out a warning even though coords are given."""
-    target_dim = "dim_0"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    da = as_dataarray(s, coords=[target_index])
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-    da = as_dataarray(s, coords={target_dim: target_index})
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_pl_series_dims_default() -> None:
-    target_dim = "dim_0"
-    target_index = [0, 1, 2]
-    s = pl.Series([1, 2, 3])
-    da = as_dataarray(s)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_dataframe_dims_default() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_index = [0, 1]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    da = as_dataarray(df)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_dims_set() -> None:
-    target_dims = ("dim1", "dim2")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    da = as_dataarray(df, dims=target_dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_dims_given() -> None:
-    target_dims = ("dim1", "dim2")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    index = pd.Index(target_index, name=target_dims[0])
-    columns = pd.Index(target_columns, name=target_dims[1])
-    df = pd.DataFrame([[1, 2], [3, 4]], index=index, columns=columns)
-    dims: list[str] = []
-    da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_dims_priority() -> None:
-    """The dimension name from the pandas object should have priority."""
-    target_dims = ("dim1", "dim2")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    index = pd.Index(target_index, name=target_dims[0])
-    columns = pd.Index(target_columns, name=target_dims[1])
-    df = pd.DataFrame([[1, 2], [3, 4]], index=index, columns=columns)
-    dims = ["other"]
-    da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_dims_subset() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    dims: list[str] = []
-    da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_dims_superset() -> None:
-    target_dims = ("dim_a", "dim_b")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    dims = [*target_dims, "other"]
-    da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_aligned_coords() -> None:
-    """This should not give out a warning even though coords are given."""
-    target_dims = ("dim_0", "dim_1")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    da = as_dataarray(df, coords=[target_index, target_columns])
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-    coords = dict(zip(target_dims, [target_index, target_columns]))
-    da = as_dataarray(df, coords=coords)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_with_ndarray_no_coords_no_dims() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_coords = [[0, 1], [0, 1]]
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == target_coords[i]
-
-
-def test_as_dataarray_with_ndarray_coords_list_no_dims() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_coords = [["a", "b"], ["A", "B"]]
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == target_coords[i]
-
-
-def test_as_dataarray_with_ndarray_coords_indexes_no_dims() -> None:
-    target_dims = ("dim1", "dim2")
-    target_coords = [
-        pd.Index(["a", "b"], name="dim1"),
-        pd.Index(["A", "B"], name="dim2"),
-    ]
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == list(target_coords[i])
-
-
-def test_as_dataarray_with_ndarray_coords_dict_set_no_dims() -> None:
-    """If no dims are given and coords are a dict, the keys of the dict should be used as dims."""
-    target_dims = ("dim_0", "dim_2")
-    target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for dim in target_dims:
-        assert list(da.coords[dim]) == target_coords[dim]
-
-
-def test_as_dataarray_with_ndarray_coords_list_dims() -> None:
-    target_dims = ("dim1", "dim2")
-    target_coords = [["a", "b"], ["A", "B"]]
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == target_coords[i]
-
-
-def test_as_dataarray_with_ndarray_coords_list_dims_superset() -> None:
-    target_dims = ("dim1", "dim2")
-    target_coords = [["a", "b"], ["A", "B"]]
-    arr = np.array([[1, 2], [3, 4]])
-    dims = [*target_dims, "dim3"]
-    da = as_dataarray(arr, coords=target_coords, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == target_coords[i]
-
-
-def test_as_dataarray_with_ndarray_coords_list_dims_subset() -> None:
-    target_dims = ("dim0", "dim_1")
-    target_coords = [["a", "b"], ["A", "B"]]
-    arr = np.array([[1, 2], [3, 4]])
-    dims = ["dim0"]
-    da = as_dataarray(arr, coords=target_coords, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == target_coords[i]
-
-
-def test_as_dataarray_with_ndarray_coords_indexes_dims_aligned() -> None:
-    target_dims = ("dim1", "dim2")
-    target_coords = [
-        pd.Index(["a", "b"], name="dim1"),
-        pd.Index(["A", "B"], name="dim2"),
-    ]
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for i, dim in enumerate(target_dims):
-        assert list(da.coords[dim]) == list(target_coords[i])
-
-
-def test_as_dataarray_with_ndarray_coords_indexes_dims_not_aligned() -> None:
-    target_dims = ("dim3", "dim4")
-    target_coords = [
-        pd.Index(["a", "b"], name="dim1"),
-        pd.Index(["A", "B"], name="dim2"),
-    ]
-    arr = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError):
-        as_dataarray(arr, coords=target_coords, dims=target_dims)
-
-
-def test_as_dataarray_with_ndarray_coords_dict_dims_aligned() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_coords = {"dim_0": ["a", "b"], "dim_1": ["A", "B"]}
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    for dim in target_dims:
-        assert list(da.coords[dim]) == target_coords[dim]
-
-
-def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
-    arr = np.array([[1, 2], [3, 4]])
-    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
-    assert da.dims == target_dims
-    assert list(da.coords["dim_0"].values) == ["a", "b"]
-    assert "dim_2" not in da.coords
-
-
-def test_as_dataarray_with_number() -> None:
-    num = 1
-    da = as_dataarray(num, dims=["dim1"], coords=[["a"]])
-    assert isinstance(da, DataArray)
-    assert da.dims == ("dim1",)
-    assert list(da.coords["dim1"].values) == ["a"]
-
-
-def test_as_dataarray_with_np_number() -> None:
-    num = np.float64(1)
-    da = as_dataarray(num, dims=["dim1"], coords=[["a"]])
-    assert isinstance(da, DataArray)
-    assert da.dims == ("dim1",)
-    assert list(da.coords["dim1"].values) == ["a"]
-
-
-def test_as_dataarray_with_number_default_dims_coords() -> None:
-    num = 1
-    da = as_dataarray(num)
-    assert isinstance(da, DataArray)
-    assert da.dims == ()
-    assert da.coords == {}
-
-
-def test_as_dataarray_with_number_and_coords() -> None:
-    num = 1
-    da = as_dataarray(num, coords=[pd.RangeIndex(10, name="a")])
-    assert isinstance(da, DataArray)
-    assert da.dims == ("a",)
-    assert list(da.coords["a"].values) == list(range(10))
-
-
-def test_as_dataarray_with_dataarray() -> None:
-    da_in = DataArray(
-        data=[[1, 2], [3, 4]],
-        dims=["dim1", "dim2"],
-        coords={"dim1": ["a", "b"], "dim2": ["A", "B"]},
-    )
-    da_out = as_dataarray(da_in, dims=["dim1", "dim2"], coords=[["a", "b"], ["A", "B"]])
-    assert isinstance(da_out, DataArray)
-    assert da_out.dims == da_in.dims
-    assert list(da_out.coords["dim1"].values) == list(da_in.coords["dim1"].values)
-    assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
-
-
-def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
-    da_in = DataArray(
-        data=[[1, 2], [3, 4]],
-        dims=["dim1", "dim2"],
-        coords={"dim1": ["a", "b"], "dim2": ["A", "B"]},
-    )
-    da_out = as_dataarray(da_in)
-    assert isinstance(da_out, DataArray)
-    assert da_out.dims == da_in.dims
-    assert list(da_out.coords["dim1"].values) == list(da_in.coords["dim1"].values)
-    assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
-
-
-def test_as_dataarray_with_unsupported_type() -> None:
-    with pytest.raises(TypeError):
-        as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
 
 
 def test_best_int() -> None:
@@ -462,6 +72,25 @@ def test_assign_multiindex_safe() -> None:
     assert "value" in result
     assert result["humidity"].equals(data)
     assert result["pressure"].equals(data)
+
+
+def test_coords_dataset_vars_roundtrip_multiindex() -> None:
+    """MultiIndex and plain coords survive serialization to Dataset vars and back."""
+    mi = pd.MultiIndex.from_product(
+        [[2020, 2030], ["t1", "t2"]], names=("period", "timestep")
+    )
+    mi.name = "snapshot"
+    plain = pd.Index([1, 2, 3], name="simple")
+
+    ds = xr.Dataset(coords_to_dataset_vars([mi, plain]))
+    restored = coords_from_dataset(ds, ["snapshot", "simple"])
+
+    assert isinstance(restored[0], pd.MultiIndex)
+    assert restored[0].equals(mi)
+    assert list(restored[0].names) == ["period", "timestep"]
+    assert restored[0].name == "snapshot"
+    assert restored[1].equals(plain)
+    assert restored[1].name == "simple"
 
 
 def test_iterate_slices_basic() -> None:
@@ -647,49 +276,6 @@ def test_get_dims_with_index_levels() -> None:
     # Test case 5: Empty dataset
     ds5 = xr.Dataset()
     assert get_dims_with_index_levels(ds5) == []
-
-
-def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
-    alpha = xr.DataArray([1, 2], [[1, 2]])
-    beta = xr.DataArray(
-        [1, 2, 3],
-        [
-            (
-                "dim_3",
-                pd.MultiIndex.from_tuples(
-                    [(1, "b"), (2, "b"), (1, "c")], names=["level1", "level2"]
-                ),
-            )
-        ],
-    )
-
-    # inner join
-    x_obs, alpha_obs = align(x, alpha)
-    assert isinstance(x_obs, Variable)
-    assert x_obs.shape == alpha_obs.shape == (1,)
-    assert_varequal(x_obs, x.loc[[1]])
-
-    # left-join
-    x_obs, alpha_obs = align(x, alpha, join="left")
-    assert x_obs.shape == alpha_obs.shape == (2,)
-    assert isinstance(x_obs, Variable)
-    assert_varequal(x_obs, x)
-    assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
-
-    # multiindex
-    beta_obs, u_obs = align(beta, u)
-    assert u_obs.shape == beta_obs.shape == (2,)
-    assert isinstance(u_obs, Variable)
-    assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
-    assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
-
-    # with linear expression
-    expr = 20 * x
-    x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
-    assert x_obs.shape == alpha_obs.shape == (1,)
-    assert expr_obs.shape == (1, 1)  # _term dim
-    assert isinstance(expr_obs, LinearExpression)
-    assert_linequal(expr_obs, expr.loc[[1]])
 
 
 def test_is_constant() -> None:

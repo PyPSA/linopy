@@ -15,6 +15,8 @@ _VALID_LABEL_DTYPES = {np.int32, np.int64}
 
 
 class OptionSettings:
+    """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
+
     def __init__(self, **kwargs: Any) -> None:
         self._defaults = kwargs
         self._current_values = kwargs.copy()
@@ -65,4 +67,8 @@ class OptionSettings:
         return f"OptionSettings:\n {settings}"
 
 
-options = OptionSettings(display_max_rows=14, display_max_terms=6, label_dtype=np.int32)
+options = OptionSettings(
+    display_max_rows=14,
+    display_max_terms=6,
+    label_dtype=np.int32,
+)

@@ -232,10 +232,12 @@ class Objective:
 
     @property
     def is_linear(self) -> bool:
+        """Whether the objective expression is linear."""
         return type(self.expression) is expressions.LinearExpression
 
     @property
     def is_quadratic(self) -> bool:
+        """Whether the objective expression is quadratic."""
         return type(self.expression) is expressions.QuadraticExpression
 
     def to_matrix(self, *args: Any, **kwargs: Any) -> csc_matrix:

@@ -18,7 +18,7 @@ jobs:
     name: Build and verify package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Needed for setuptools_scm
       - uses: hynek/build-and-inspect-python-package@v2
@@ -42,7 +42,7 @@ jobs:
         - windows-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
@@ -82,7 +82,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev,solvers]"
+        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc]"
 
     - name: Test with pytest
       env:
@@ -92,7 +92,7 @@ jobs:
 
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
