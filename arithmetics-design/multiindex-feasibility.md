@@ -9,11 +9,11 @@
 ## Verdict
 
 **Feasible, and PyPSA stays stable.** Can linopy be simplified without destabilising
-PyPSA, its primary consumer? Yes. linopy goes **flat in, flat out**: an MI `snapshot`
-`(period, timestep)` is accepted only as input sugar (`reset_index`'d on entry), the
-model is flat throughout, and the solution comes back flat. PyPSA re-applies its own
-`n.snapshots` index when mapping that solution onto components — as `assign_solution`
-already does — so PyPSA's *results* stay MI-indexed exactly as today. MI is **boundary
+PyPSA, its primary consumer? Yes. linopy goes **flat in, flat out**: the model is flat
+throughout and the solution comes back flat. An MI `snapshot` `(period, timestep)` is
+flattened on entry (`reset_index`); PyPSA re-applies its own `n.snapshots` index when
+mapping that solution onto components — as `assign_solution` already does — so PyPSA's
+*results* stay MI-indexed exactly as today. MI is **boundary
 sugar PyPSA owns**, never inside linopy's model. All **seven ways PyPSA puts that MI
 into linopy's model** have a flat+aux form building the *identical* model, tested under
 both semantics. The change is mostly **subtraction**:
@@ -25,9 +25,10 @@ both semantics. The change is mostly **subtraction**:
 - **unblocks work** — the MI-level groupby broken upstream (xarray#6836) works flat
   (#751); the MI coupling forcing PyPSA into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)) goes.
 
-Small additive work: positional snapshot alignment; shrink MI-input to
-accept-then-`reset_index`. **One open item, PyPSA's own decoupled call:** whether
-`n.snapshots` stays an MI (a cheap boundary wrap) — linopy works either way.
+The choices this forces are tabled in *Design decisions* — most settled pending
+adoption. The substantive open one, and the only one not linopy's, is PyPSA's
+**`n.snapshots`**: keep the MI (a cheap boundary wrap) or flatten — linopy works either
+way.
 
 *Proof set, not universal: PyPSA is the one consumer audited. But after `reset_index`
 (general to any MI) everything is ordinary xarray, so the only MI-specific capability
@@ -95,6 +96,18 @@ levels.
 > _Strip from a read-only sweep of the v1 tree; counts order-of-magnitude, not yet
 > executed._
 
+## Design decisions
+
+What adopting flat+aux actually decides — **recommendation** in the last column.
+
+| decision | options | recommendation |
+|---|---|---|
+| **Internal model** | first-class MI · **flat dim + aux coords** | flat+aux — feasible, tested, mostly subtraction. **[provisional]** |
+| **MI on input** | reject · accept-with-warning · ~~silent accept~~ | silent flatten is **ruled out** (MI-in/flat-out surprises): reject, or accept *and warn*. _Undecided._ |
+| **Snapshot alignment** | tuple-identity · **positional** | positional — one canonical `n.snapshots` order, matching a plain datetime snapshot (§11). |
+| **Output** | reconstruct MI · **return flat** | flat — re-stack is the caller's cheap boundary step (`output` row, tested). |
+| **`n.snapshots`** *(PyPSA-side)* | keep MI · flatten | PyPSA's decoupled call; linopy works either way. _TBD._ |
+
 ## Appendix
 
 ### `reset_index` is the whole transform
@@ -137,16 +150,3 @@ linopy internals** (`.data`, `_term`, `FILL_VALUE`) — *not* MI per se. But sev
 multi-index difficulties"*, xarray#6836). #751 fixed it, so flat+aux **deletes** those
 reaches; they `.sel` the *stored* MI mid-build, so they migrate regardless of how PyPSA
 presents output.
-
-### Decision record (fill once `n.snapshots` closes)
-
-- **linopy drops MI from its model** — flat dim + aux coords throughout, `reset_index`
-  on entry, never reconstruct (flat in, flat out). Safe now: cheap, canonical,
-  version-safe. **[provisional]**
-- **MI on input — sugar or rejected?** Accept `coords=[mi]` and auto-`reset_index`
-  (backwards-compatible; a thin input shim survives) *vs* reject MI so callers flatten
-  first (purest; breaks existing MI-passing callers). _Recommend accept-as-sugar, with
-  an optional deprecation path to flat-only._
-- **Output returns flat** — the re-stack is a cheap boundary conversion PyPSA owns
-  (`output` row, tested).
-- **`n.snapshots`** — PyPSA's decoupled choice: keep MI or flatten. _TBD, PyPSA-side._
