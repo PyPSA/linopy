@@ -11,8 +11,8 @@
 **Feasible, and PyPSA stays stable.** The maintainer's question is whether linopy
 can be simplified *without destabilising PyPSA*, its primary consumer — and it can.
 The flat+aux model builds with today's linopy (no new capability), and every one of
-the seven in-linopy MI uses has a flat+aux form that builds the **identical** model,
-tested under both `legacy` and `v1`. PyPSA's interface does not move: it hands linopy
+the **seven MI uses PyPSA makes of linopy's model** has a flat+aux form that builds
+the **identical** model, tested under both `legacy` and `v1`. PyPSA's interface does not move: it hands linopy
 an MI snapshot and gets MI-indexed results back exactly as today. MI becomes
 **boundary sugar** — `reset_index` on the way in, re-stack on the way out — so
 nothing PyPSA relies on breaks.
@@ -36,8 +36,14 @@ The small additive work (positional snapshot alignment; shrink the MI-input path
 **One open item, and it is PyPSA's own, decoupled call:** whether `n.snapshots` stays
 a MultiIndex — a cheap boundary wrap. linopy works either way.
 
-Everything below is evidence: the **matrix** of the seven in-linopy ops (settled,
-tested now), then the two **PyPSA-side usages** (the transition, PyPSA-owned).
+Everything below is evidence. The cases are **PyPSA's observed MI uses of linopy**,
+split by whether they enter linopy's model — the **matrix** (seven in-model uses,
+each with a tested flat+aux equivalent), then the two **boundary usages** (PyPSA-side).
+They are a proof set, not a proof of universality: PyPSA is the one consumer we
+audited. But the argument generalises — once `reset_index` runs (general to *any* MI)
+the data is ordinary xarray that linopy already handles on any dim, so the only
+MI-specific capability lost for *any* user is `.sel` by level *tuple* (→ `where`). We
+assume no linopy user needs that as such; counterexamples welcome.
 
 ## Scope: one axis, `snapshot`
 
@@ -71,9 +77,10 @@ at least as good?
 - **feasible** (glyph): ✅ tested · 🔲 achievable, untested · ❌ no
 - **desirable** (word): better · parity · worse
 
-All seven rows are the one `snapshot` MI inside linopy, and **all ✅** — tested under
-both `legacy` and `v1`, with the build-time rewrites also shown to compose into an
-identical LP (`test_per_period_lp_equivalent`). PyPSA links pinned at **v1.2.4**
+All seven rows are PyPSA's uses of the one `snapshot` MI inside linopy's model, and
+**all ✅** — tested under both `legacy` and `v1`, with the build-time rewrites also
+shown to compose into an identical LP (`test_per_period_lp_equivalent`). PyPSA links
+pinned at **v1.2.4**
 ([`fb425cb`](https://github.com/PyPSA/PyPSA/tree/v1.2.4)).
 
 | op | MI form | flat+aux form | feasible | desirable | PyPSA call site @ v1.2.4 |
