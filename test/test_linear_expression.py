@@ -1459,16 +1459,25 @@ class TestMultiKeyFastPath:
         assert (cell.vars == -1).all()
         assert cell.coeffs.isnull().all()
 
+    @pytest.mark.legacy
     def test_dataframe_grouper_stays_compact(self) -> None:
-        # the DataFrame grouper keeps the stacked observed-only group dim
+        # legacy: the DataFrame grouper keeps the stacked observed-only group MI
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
-
-        grouped = expr.groupby(df).sum()
-
-        assert "group" in grouped.dims
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(df).sum()
         assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
         assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    @pytest.mark.v1
+    def test_dataframe_grouper_stays_compact_v1(self) -> None:
+        # v1: flat `group` dim + period/season aux coords, still observed-only
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+        grouped = expr.groupby(df).sum()
+        assert not isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.data.coords)
+        assert grouped.sizes["group"] == 3
 
     def test_blowup_warns_when_sparse(self) -> None:
         # 200 observed combos, 200x200 grid -> nudge toward observed=True
@@ -1767,89 +1776,125 @@ def test_linear_expression_groupby_with_series_on_multiindex(
     assert grouped.nterm == len_grouped_dim
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe(v: Variable) -> None:
     expr = 1 * v
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_v1(v: Variable) -> None:
+    """v1: a frame grouper yields a flat `group` dim with the keys as aux coords."""
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    with pytest.raises(ValueError):
+        expr.groupby(groups).sum(use_fallback=True)
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.legacy
 def test_linear_expression_groupby_with_dataframe_with_same_group_name(
-    v: Variable, use_fallback: bool
+    v: Variable,
 ) -> None:
-    """
-    Test that the group by works with a dataframe whose column name is the same as
-    the dimension to group.
-    """
+    """A frame grouper whose column name equals the grouped dimension."""
     expr = 1 * v
     groups = pd.DataFrame(
         {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
         index=v.indexes["dim_2"],
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe_on_multiindex(
-    u: Variable, use_fallback: bool
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_with_same_group_name_v1(
+    v: Variable,
 ) -> None:
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
+        index=v.indexes["dim_2"],
+    )
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data["dim_2"].values, grouped.data["b"].values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> None:
     expr = 1 * u
-    len_grouped_dim = len(u.data["dim_3"])
-    groups = pd.DataFrame({"a": [1] * len_grouped_dim}, index=u.indexes["dim_3"])
-
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    assert "group" in grouped.dims
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    with pytest.raises(ValueError):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
     assert isinstance(grouped.indexes["group"], pd.MultiIndex)
-    assert grouped.nterm == len_grouped_dim
+    assert grouped.nterm == n
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataarray(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_on_multiindex_v1(u: Variable) -> None:
+    expr = 1 * u
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.a.values) == {1}
+    assert grouped.nterm == n
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataarray(v: Variable) -> None:
     expr = 1 * v
     df = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
     groups = xr.DataArray(df)
-
     # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
-    if use_fallback:
-        with pytest.raises((KeyError, IndexError)):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
+    with pytest.raises((KeyError, IndexError)):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(pd.MultiIndex.from_frame(df).values)
+    assert grouped.nterm == 3
 
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(df)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataarray_v1(v: Variable) -> None:
+    expr = 1 * v
+    df = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(xr.DataArray(df)).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(df).values)
     assert grouped.nterm == 3
 
 

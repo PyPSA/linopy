@@ -217,6 +217,21 @@ def _legacy_masked_variable_message(name: str) -> str:
     )
 
 
+def _legacy_group_multiindex_message(level_names: list[str]) -> str:
+    """A multi-key groupby returns a stacked ``group`` MultiIndex under legacy."""
+    levels = ", ".join(repr(n) for n in level_names)
+    return (
+        f"A groupby with a frame grouper returned a stacked `group` MultiIndex over"
+        f" ({levels})."
+        " Under legacy the `group` dim is that MultiIndex, so `.sel(group=(...))` by"
+        " tuple works. Under v1 the `group` dim is flat with those keys as ordinary"
+        f" aux coords instead — select via `.groupby`/`.where` on {levels}, not a"
+        " level tuple."
+        f"\n  Resolve:   replace `.sel(group=(...))` with selection on the"
+        f" {levels} aux coord(s)." + _OPT_IN_HINT
+    )
+
+
 _LINOPY_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
