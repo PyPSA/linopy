@@ -51,7 +51,10 @@ also compose into an identical LP, `test_per_period_lp_equivalent`). Glyph =
 | **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | ✅ | better — cheap boundary conversion (PyPSA's choice) | — |
 | **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | ✅ | better — removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
 
-No row needs a linopy change (`entry` is a user-side `reset_index`). `level groupby`
+No row needs a new linopy *capability* — the rewrites use ops linopy already has.
+Entry is one `reset_index`; **who** runs it — linopy (accept an MI as input sugar) or
+the caller (require flat input) — is a boundary policy decided in the *Decision
+record*, not a capability gap. `level groupby`
 is the one *necessary* row — an MI level can't be grouped (broken upstream,
 xarray#6836; the dense-`_term` cost is representation-agnostic, not the differentiator),
 flat+aux just works (#751); the rest are nicer or parity. Representation-wide, flat+aux
@@ -137,8 +140,13 @@ presents output.
 
 ### Decision record (fill once `n.snapshots` closes)
 
-- **linopy drops MI from its model** — accept as input sugar, `reset_index` on entry,
-  never reconstruct. Safe now: cheap, canonical, version-safe. **[provisional]**
+- **linopy drops MI from its model** — flat dim + aux coords throughout, `reset_index`
+  on entry, never reconstruct (flat in, flat out). Safe now: cheap, canonical,
+  version-safe. **[provisional]**
+- **MI on input — sugar or rejected?** Accept `coords=[mi]` and auto-`reset_index`
+  (backwards-compatible; a thin input shim survives) *vs* reject MI so callers flatten
+  first (purest; breaks existing MI-passing callers). _Recommend accept-as-sugar, with
+  an optional deprecation path to flat-only._
 - **Output returns flat** — the re-stack is a cheap boundary conversion PyPSA owns
   (`output` row, tested).
 - **`n.snapshots`** — PyPSA's decoupled choice: keep MI or flatten. _TBD, PyPSA-side._
