@@ -23,7 +23,8 @@ both semantics. The change is mostly **subtraction**:
 - **xarray-native internals** — linopy stops knowing `pd.MultiIndex` exists or covering
   its quirks: the `isinstance(MI)` guards, the **39-site** *"would corrupt the index"*
   workaround (#303), the ~40 quirk-comments, the 169 lines of MI edge-case tests — a
-  whole defensive surface gone. The model is just dims + ordinary aux coords.
+  whole defensive surface gone, along with the latent risk of the MI edge cases it
+  never fully covered. The model is just dims + ordinary aux coords.
 - **unblocks work** — the MI-level groupby broken upstream (xarray#6836) works flat
   (#751); the MI coupling forcing PyPSA into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)) goes.
 
@@ -34,7 +35,8 @@ way.
 
 *Proof set, not universal: PyPSA is the one consumer audited. But after `reset_index`
 (general to any MI) everything is ordinary xarray, so the only MI-specific capability
-lost for any user is `.sel` by level tuple (→ `where`). Counterexamples welcome.*
+lost for any user is `.sel` by level tuple (→ `where`) — and MI snapshots are not a
+feature linopy promotes, so few lean on them. Counterexamples welcome.*
 
 ## The evidence
 
@@ -94,8 +96,10 @@ once levels are aux coords):
 
 The *diffuse* layer is the **cognitive tax** that doesn't show up as deletable lines:
 ~40 quirk-comments explaining MI *"difficulties"*, and **169 lines of MI edge-case
-tests across 10 files** — all moot once a snapshot is a flat dim. (This is why the
-first sweep undercounted: it scored deletable clusters and conservatively kept
+tests across 10 files** — all moot once a snapshot is a flat dim. And that surface
+almost certainly doesn't cover MI's *full* edge behaviour (the #303 corruption is one
+gap that already bit), so every uncovered MI corner is **latent risk** flat+aux simply
+retires. (This is why the first sweep undercounted: it scored deletable clusters and conservatively kept
 `assign_multiindex_safe` — but with the snapshot MI gone it is the sole consumer of
 the #303 workaround, so it goes too.)
 
