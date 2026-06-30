@@ -20,9 +20,12 @@ Adopting it as v1 is not "zero changes", but it pays off on four axes:
 - **Simpler implementation** — deletes ~300 lines of first-class-MI machinery, half
   of it one cluster (the `alignment.py` level-projection subsystem); see *What linopy
   can strip*.
-- **Simpler mental model** — one flat `snapshot` dim with `period`/`timestep` as
-  ordinary aux coords; no "levels behaving like dimensions" to reason about.
-  `reset_index` *is* the whole transform.
+- **Simpler mental model — linopy's own.** linopy stops having to know
+  `pd.MultiIndex` exists at all: no MI quirks to cover (level alignment, *"would
+  corrupt the index"* guards, reconstruction), no levels masquerading as dimensions.
+  Its model becomes purely **xarray-native** — plain dims + ordinary aux coords,
+  exactly what linopy is already built on. MI lives only at the boundary as
+  input/output sugar, never inside linopy.
 - **Enables features** — the MI-level groupby that's broken upstream (xarray#6836)
   just works on a flat dim (#751); aux coords compose with `groupby`/`where`/
   `drop_vars` where an MI can't; and it removes the MI coupling that forces PyPSA to
