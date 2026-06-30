@@ -21,7 +21,9 @@ both semantics. The change is mostly **subtraction**:
 - **less to maintain** — ~300 lines of first-class-MI machinery deleted, half one
   cluster (see *The payoff*).
 - **xarray-native internals** — linopy stops knowing `pd.MultiIndex` exists or covering
-  its quirks; the model is just dims + ordinary aux coords.
+  its quirks: the `isinstance(MI)` guards, the **39-site** *"would corrupt the index"*
+  workaround (#303), the ~40 quirk-comments, the 169 lines of MI edge-case tests — a
+  whole defensive surface gone. The model is just dims + ordinary aux coords.
 - **unblocks work** — the MI-level groupby broken upstream (xarray#6836) works flat
   (#751); the MI coupling forcing PyPSA into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)) goes.
 
@@ -78,20 +80,28 @@ Pinned by `test_variable_mi_tuple_sel_not_forwarded`.)
 
 ## The payoff
 
-Adopting flat+aux **deletes** ~300 lines of first-class-MI machinery — concentrated,
-not diffuse: ~half is the `alignment.py` *level-projection* subsystem, whose only job
-is to make a single MI level align like a dimension (dead once levels are aux coords).
+Adopting flat+aux deletes first-class-MI machinery on **two layers**. The
+*concentrated* one is ~300 lines — ~half the `alignment.py` *level-projection*
+subsystem, whose only job is to make a single MI level align like a dimension (dead
+once levels are aux coords):
 
-| strip | what it does today | ~lines |
+| strip | what it does today | scale |
 |---|---|---|
-| **`alignment.py` level-projection** — `_project_onto_multiindex_levels`, `_enforce_implicit_projections`, `_LevelProjection`, the `projections` plumbing through `broadcast_to_coords`, plus the MI branches in `_expand_missing_dims`/`validate_alignment` and `_as_multiindex` | align a single-level operand against a full MI dim | ~150 |
-| **netcdf MI (de)serialization** — `io.py` flatten-on-write + reconstruct (`{dim}_multiindex` attr); `common.py` MI level/code (de)serialize | flatten MI to store, rebuild MI on read | ~50 (keep a read-only shim for old `.nc`) |
-| **scattered MI guards/branches** in alignment & coords | skip-logic that only fires when a dim is an MI | remainder |
+| **`alignment.py` level-projection** — `_project_onto_multiindex_levels`, `_enforce_implicit_projections`, `_LevelProjection`, the `projections` plumbing through `broadcast_to_coords`, plus the MI branches in `_expand_missing_dims`/`validate_alignment` and `_as_multiindex` | align a single-level operand against a full MI dim | ~150 lines |
+| **netcdf MI (de)serialization** — `io.py` flatten-on-write + reconstruct (`{dim}_multiindex` attr); `common.py` MI level/code (de)serialize | flatten MI to store, rebuild MI on read | ~50 lines (+ read-only shim for old `.nc`) |
+| **`assign_multiindex_safe`** (#303) — the corruption workaround | rebuild Datasets to dodge the *"would corrupt the index"* warning on assign — which fires *only* for the snapshot MI (internal stacks are `create_index=False`, so no other MI exists) | **39 call sites** → plain `.assign()` |
+| **scattered guards / level-ops** in alignment & coords | skip-logic that only fires when a dim is an MI | 6 `isinstance(MI)` + 17 |
 
-Stays: `assign_multiindex_safe` and internal `_term`/`_factor`/groupby stacking
-(general helpers over linopy's own indexes, unrelated to snapshot-MI), and the §11
-aux-conflict logic — which gets *more* central, aux coords being the new home for the
-levels.
+The *diffuse* layer is the **cognitive tax** that doesn't show up as deletable lines:
+~40 quirk-comments explaining MI *"difficulties"*, and **169 lines of MI edge-case
+tests across 10 files** — all moot once a snapshot is a flat dim. (This is why the
+first sweep undercounted: it scored deletable clusters and conservatively kept
+`assign_multiindex_safe` — but with the snapshot MI gone it is the sole consumer of
+the #303 workaround, so it goes too.)
+
+Stays: the internal `_term`/`_factor`/groupby stacking (`create_index=False`, not MIs)
+and the §11 aux-conflict logic — which gets *more* central, aux coords being the new
+home for the levels.
 
 > _Strip from a read-only sweep of the v1 tree; counts order-of-magnitude, not yet
 > executed._
