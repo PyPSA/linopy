@@ -15,10 +15,24 @@ semantics. PyPSA uses a MultiIndex on exactly one axis, `snapshot`
 `(period, timestep)`, accepted as *input sugar*, `reset_index`'d on entry —
 **flat in / flat out**, never reconstructed.
 
-Adopting it as v1 is a **net simplification**: a few small things to get right
-(positional snapshot alignment; optionally auto-normalizing MI input), against a lot
-of first-class-MI machinery linopy gets to **delete** (see *What linopy can strip*
-below). So it is not "zero changes" — it is mostly deletions.
+Adopting it as v1 is not "zero changes", but it pays off on four axes:
+
+- **Simpler implementation** — deletes ~300 lines of first-class-MI machinery, half
+  of it one cluster (the `alignment.py` level-projection subsystem); see *What linopy
+  can strip*.
+- **Simpler mental model** — one flat `snapshot` dim with `period`/`timestep` as
+  ordinary aux coords; no "levels behaving like dimensions" to reason about.
+  `reset_index` *is* the whole transform.
+- **Enables features** — the MI-level groupby that's broken upstream (xarray#6836)
+  just works on a flat dim (#751); aux coords compose with `groupby`/`where`/
+  `drop_vars` where an MI can't; and it removes the MI coupling that forces PyPSA to
+  reach into linopy internals ([#752](https://github.com/PyPSA/linopy/issues/752)).
+- **No UX cost** — MI is still accepted as input and re-stacked on output if the
+  caller wants; the only thing lost is `.sel` by level *tuple*, replaced by
+  `where(period==…)`.
+
+The few small additive things to get right (positional snapshot alignment; shrink the
+MI-input path to *accept-then-`reset_index`*) are minor against that.
 
 **One open item, and it is PyPSA's, not linopy's:** whether `n.snapshots` stays a
 MultiIndex — a cheap boundary wrap PyPSA owns.
