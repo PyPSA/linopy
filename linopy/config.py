@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
+_VALID_LABEL_DTYPES = {np.int32, np.int64}
+
 
 class OptionSettings:
     """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
@@ -30,6 +34,10 @@ class OptionSettings:
         for k, v in kwargs.items():
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
+            if k == "label_dtype" and v not in _VALID_LABEL_DTYPES:
+                raise ValueError(
+                    f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {v}"
+                )
             self._current_values[k] = v
 
     def get_value(self, name: str) -> Any:
@@ -62,4 +70,5 @@ class OptionSettings:
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
+    label_dtype=np.int32,
 )

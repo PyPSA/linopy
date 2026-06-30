@@ -748,7 +748,7 @@ class CSRConstraint(ConstraintBase):
         # Map active row i -> flat position in full shape via con_labels
         active_positions = self.active_positions
         coeffs_2d = np.zeros((full_size, nterm), dtype=csr.dtype)
-        vars_2d = np.full((full_size, nterm), -1, dtype=np.int64)
+        vars_2d = np.full((full_size, nterm), -1, dtype=options["label_dtype"])
         if csr.nnz > 0:
             row_indices = np.repeat(active_positions, counts)
             term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
@@ -772,7 +772,7 @@ class CSRConstraint(ConstraintBase):
         )
         ds = Dataset({"coeffs": coeffs_da, "vars": vars_da})
         if self._cindex is not None:
-            labels_flat = np.full(full_size, -1, dtype=np.int64)
+            labels_flat = np.full(full_size, -1, dtype=options["label_dtype"])
             labels_flat[active_positions] = self._con_labels
             ds = assign_multiindex_safe(
                 ds,
@@ -2181,7 +2181,10 @@ class Constraints:
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
         df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 
