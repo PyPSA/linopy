@@ -14,7 +14,8 @@ Inside the linopy model, PyPSA uses a `pd.MultiIndex` in **exactly one place —
 through the whole lifecycle: in at `entry`, through the per-period ops, *out* at
 `output` (the `solution`/`dual` carry the `snapshot` dim, so they are MI-indexed
 too), and parked on `snapshots param`. Two things that merely *look* MultiIndex-ish
-are not an in-model index — they carry the ⊥ tag below:
+are not an in-model index — they are observed PyPSA usages, handled PyPSA-side, in
+their own table after the matrix:
 
 - **`stochastic` `(scenario, name)`** — `scenario` and `name` are separate N-D dims
   inside linopy; the MI is only an `xarray.stack` at the pandas output
@@ -61,10 +62,9 @@ The 🟢 rows are tracked in `test/test_mi_feasibility.py` (which also solves a 
 LP both ways, `test_per_period_lp_equivalent`, so the per-op rewrites are shown to
 compose); PyPSA links are pinned at **v1.2.4** (commit [`fb425cb`](https://github.com/PyPSA/PyPSA/tree/v1.2.4)).
 
-**⊥** marks the two rows that are *not* an in-linopy MultiIndex: `stochastic` (N-D
-dims, no MI in the model) and `n.snapshots` (PyPSA's public-API index, never handed
-to linopy). The other seven rows are the one `snapshot` `(period, timestep)` MI as
-it lives inside linopy — in at `entry`, through the ops, out at `output`.
+All seven rows are the one `snapshot` `(period, timestep)` MI as it lives inside
+linopy — in at `entry`, through the ops, out at `output`, parked on `snapshots
+param` — and all are 🟢 (tested under both semantics).
 
 | op | MI form | flat+aux form | feasible | desirable | PyPSA call site @ v1.2.4 |
 |---|---|---|---|---|---|
@@ -75,8 +75,6 @@ it lives inside linopy — in at `entry`, through the ops, out at `output`.
 | **storage SOC** | `.data.sel().roll` + `FILL_VALUE` rebuild; `_period_start_mask` (shared w/ ramps) | previous-SOC via `groupby("period").roll`, then period-start: wrap (cyclic) · `.where` drops the term (non-cyclic) · `mask=` drops the row (ramp) | 🟢 | 🟢 deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908); boundary mask [`common.py` L22](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L22) → also ramps [`constraints.py` L838](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L838) |
 | **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | 🟢 | 🟢 cheap boundary conversion (PyPSA's choice) | — |
 | **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | 🟢 | 🟢 removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
-| **stochastic** ⊥ *not an MI* | `scenario` is a clean dim *into* linopy; `(scenario, name)` MI only on the pandas round-trip | `scenario` dim unchanged; round-trip rebuild like `output` | 🔵 | ⚪ *not* an in-model MI — `scenario`/`name` are separate dims (N-D); the `(scenario, name)` MI is only `.stack`→pandas at output. Nothing to decompose; already the flat+aux target form, PyPSA's MI here is output-cosmetic | `(scenario,name)` *pandas cols* [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); feature [PyPSA#1154](https://github.com/PyPSA/PyPSA/pull/1154), [#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants *more*; output `.stack(scenario,name)` [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64) |
-| **n.snapshots** ⊥ *PyPSA API* | `pd.MultiIndex` public API | flat dim + level coords | 🔵 | 🔴 PyPSA API migration | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
 
 **No row needs a linopy change to be feasible.** The `entry` conversion is a
 user-side `reset_index` with today's linopy; linopy auto-accepting `coords=[mi]`
@@ -111,15 +109,20 @@ conclusion for linopy is clean: **accept MI as input sugar, decompose on entry
 (`reset_index`), and never reconstruct — flat in, flat out. linopy drops
 MultiIndex from its mental model entirely.**
 
-The remaining cost is **not inside linopy**, and it is essentially **one** thing:
-whether PyPSA keeps `n.snapshots` as MI — a cheap boundary wrap it can do on its
-own side, decoupled from this decision. The **stochastic / Monte-Carlo direction**
-(`stochastic` row) turns out *not* to be a second in-model MI at all: `scenario`
-and `name` are separate N-D dims inside linopy, and the `(scenario, name)` MI is
-only an `xarray.stack` at the pandas output. So there is nothing to decompose —
-it is already the flat+aux form. The one thing to watch is whether future
-Monte-Carlo work ([#1484](https://github.com/PyPSA/PyPSA/issues/1484)) introduces an
-*in-model* stacked index rather than more dims; nothing in v1.2.4 does.
+## Observed PyPSA MultiIndex usages — not linopy's to solve
+
+Two further MultiIndex usages show up in PyPSA but **do not need solving inside
+linopy** — they're cheap for PyPSA to handle at its own boundary. Each fails the
+*in-linopy MI* test, on **opposite** axes: `stochastic` is inside linopy but isn't
+an MI; `n.snapshots` is an MI but isn't inside linopy.
+
+| PyPSA MI usage | inside linopy? | an MI? | why linopy needn't solve it | call site @ v1.2.4 |
+|---|---|---|---|---|
+| **stochastic** `(scenario, name)` | **yes** — `scenario` is a real dim (N-D) | **no** — only an `xarray.stack` at the pandas output | already the flat+aux shape in the model; the MI is output-cosmetic, rebuilt at the boundary like `output`. Watch only whether [#1484](https://github.com/PyPSA/PyPSA/issues/1484) ever makes it an *in-model* stacked index (v1.2.4 does not) | `(scenario,name)` pandas cols [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); output `.stack` [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64); [#1154](https://github.com/PyPSA/PyPSA/pull/1154) |
+| **n.snapshots** | **no** — a PyPSA `Network` attribute | **yes** — but the MI lives in PyPSA | linopy only `reindex_like`s against it; the MI never enters the model. Keep MI (wrap at its boundary) or flatten — PyPSA's call, decoupled from this decision | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
+
+So the remaining cost is **not inside linopy**, and it is essentially **one** thing:
+whether PyPSA keeps `n.snapshots` as MI — a cheap boundary wrap on its own side.
 
 **Side finding (not a row):** `Variable.sel` can't MI-tuple-select
 (`x.sel(snapshot=(p, slice))` → `InvalidIndexError`), which is why PyPSA drops to
@@ -127,9 +130,9 @@ Monte-Carlo work ([#1484](https://github.com/PyPSA/PyPSA/issues/1484)) introduce
 becomes `where(period == p)` / `isel`, removing the internals reach. Pinned by
 `test_variable_mi_tuple_sel_not_forwarded`.
 
-The 🟢 rows answer the **steady-state (linopy)** question; the 🔵
-rows are **PyPSA-owned** and answer the **transition** question — verified by
-solution-equivalence on real networks (multi-period, stochastic, Monte-Carlo)
+The matrix (all 🟢) answers the **steady-state (linopy)** question — tested under
+both semantics. The **transition** is PyPSA-side: the two usages in the table
+above, verified by solution-equivalence on real networks (multi-period, stochastic)
 plus scoping the public `n.snapshots` change.
 
 ## What `reset_index` changes (and doesn't)
