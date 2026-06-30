@@ -1958,6 +1958,18 @@ def test_linear_expression_groupby_with_nan_groups(v: Variable) -> None:
         expr.groupby(groups).sum()
 
 
+def test_linear_expression_groupby_empty_groups() -> None:
+    """An empty group dimension scatters into an empty, well-formed result."""
+    m = Model()
+    idx = pd.RangeIndex(0, name="elem")
+    x = m.add_variables(coords=[idx], name="x")
+    groups = pd.Series([], index=idx, name="g", dtype=int)
+
+    grouped = (1 * x).groupby(groups).sum()
+    assert grouped.nterm == 0
+    assert dict(grouped.data.sizes) == {"g": 0, "_term": 0}
+
+
 @pytest.mark.parametrize(
     "case",
     [

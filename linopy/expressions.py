@@ -344,8 +344,6 @@ class LinearExpressionGroupby:
             if self._can_sum_by_scatter(group):
                 ds = self._sum_by_scatter(group)
             else:
-                # chunked (e.g. dask-backed) data or exotic coordinates on the
-                # grouped dimension: use xarray's unstack machinery
                 ds = self._sum_by_unstack(group)
 
             if int_map is not None:
@@ -404,8 +402,9 @@ class LinearExpressionGroupby:
 
         Only the term and constant values are computed with numpy; the result
         structure (dimensions, coordinates and their order) is assembled by
-        xarray. :meth:`_can_sum_by_scatter` decides whether the data is simple
-        enough for this kernel.
+        xarray itself and thereby matches the result of unstacking the group
+        dimension. :meth:`_can_sum_by_scatter` decides whether the data is
+        simple enough for this kernel.
         """
         data = self.data
         group_dim = group.index.name
@@ -453,9 +452,6 @@ class LinearExpressionGroupby:
         const = np.zeros((n_groups, *const_values.shape[1:]), dtype=const_values.dtype)
         np.add.at(const, codes, np.where(np.isnan(const_values), 0, const_values))
 
-        # only the values above are computed with numpy, the result structure
-        # (dimensions, coordinates and their order) is assembled by xarray
-        # itself and thereby matches a result of unstacking the group dimension
         structure = data.drop_vars(["coeffs", "vars", "const"])
         structure = structure.drop_dims(group_dim)
         structure = structure.expand_dims({GROUP_DIM: unique_groups})
