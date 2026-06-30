@@ -9,11 +9,14 @@
 ## Verdict
 
 **Feasible, and PyPSA stays stable.** Can linopy be simplified without destabilising
-PyPSA, its primary consumer? Yes. PyPSA's interface does not move — it hands linopy an
-MI `snapshot` `(period, timestep)` and gets MI-indexed results back; MI is **boundary
-sugar** (`reset_index` in, re-stack out), never inside the model. All **seven ways
-PyPSA puts that MI into linopy's model** have a flat+aux form building the *identical*
-model, tested under both semantics. The change is mostly **subtraction**:
+PyPSA, its primary consumer? Yes. linopy goes **flat in, flat out**: an MI `snapshot`
+`(period, timestep)` is accepted only as input sugar (`reset_index`'d on entry), the
+model is flat throughout, and the solution comes back flat. PyPSA re-applies its own
+`n.snapshots` index when mapping that solution onto components — as `assign_solution`
+already does — so PyPSA's *results* stay MI-indexed exactly as today. MI is **boundary
+sugar PyPSA owns**, never inside linopy's model. All **seven ways PyPSA puts that MI
+into linopy's model** have a flat+aux form building the *identical* model, tested under
+both semantics. The change is mostly **subtraction**:
 
 - **less to maintain** — ~300 lines of first-class-MI machinery deleted, half one
   cluster (see *The payoff*).
