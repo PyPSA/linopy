@@ -10,17 +10,17 @@
 ## Where MultiIndex is used in PyPSA
 
 Inside the linopy model, PyPSA uses a `pd.MultiIndex` in **exactly one place — the
-`snapshot` dimension** (multi-period `(period, timestep)`). Everything else that
-looks MultiIndex-ish is *not* an in-model index — which is why only those rows below
-carry a ⊥ tag:
+`snapshot` dimension** (multi-period `(period, timestep)`). It rides that one axis
+through the whole lifecycle: in at `entry`, through the per-period ops, *out* at
+`output` (the `solution`/`dual` carry the `snapshot` dim, so they are MI-indexed
+too), and parked on `snapshots param`. Two things that merely *look* MultiIndex-ish
+are not an in-model index — they carry the ⊥ tag below:
 
 - **`stochastic` `(scenario, name)`** — `scenario` and `name` are separate N-D dims
   inside linopy; the MI is only an `xarray.stack` at the pandas output
   (`components/array.py` @ v1.2.4).
 - **`n.snapshots`** — a real MI, but in PyPSA's *public API*, never handed to linopy
   as a model index.
-- **`output` / `dual`** — MI appears only on the returned pandas object, rebuilt at
-  the boundary by the caller.
 
 So the whole linopy-side question is **one axis, `snapshot`**.
 
@@ -61,10 +61,10 @@ The 🟢 rows are tracked in `test/test_mi_feasibility.py` (which also solves a 
 LP both ways, `test_per_period_lp_equivalent`, so the per-op rewrites are shown to
 compose); PyPSA links are pinned at **v1.2.4** (commit [`fb425cb`](https://github.com/PyPSA/PyPSA/tree/v1.2.4)).
 
-**⊥** marks a row that is *not* an in-linopy MultiIndex: the MI lives only at the
-PyPSA/pandas boundary, or — for `stochastic` — nowhere in the model. The six
-unmarked rows are the linopy decision proper (the snapshot `(period, timestep)` MI
-that actually sits inside linopy variables); the ⊥ rows are PyPSA-side or no-op.
+**⊥** marks the two rows that are *not* an in-linopy MultiIndex: `stochastic` (N-D
+dims, no MI in the model) and `n.snapshots` (PyPSA's public-API index, never handed
+to linopy). The other seven rows are the one `snapshot` `(period, timestep)` MI as
+it lives inside linopy — in at `entry`, through the ops, out at `output`.
 
 | op | MI form | flat+aux form | feasible | desirable | PyPSA call site @ v1.2.4 |
 |---|---|---|---|---|---|
@@ -74,7 +74,7 @@ that actually sits inside linopy variables); the ⊥ rows are PyPSA-side or no-o
 | **level groupby** | `groupby(MI level)` ❌ broken ([xarray#6836](https://github.com/pydata/xarray/issues/6836)) | `groupby("period").sum()` | 🟢 (#751) | 🟢 not just *nicer* — MI is *broken*, not merely workaround-y; flat+aux groups by the aux coord and just works (#751) | — |
 | **storage SOC** | `.data.sel().roll` + `FILL_VALUE` rebuild; `_period_start_mask` (shared w/ ramps) | previous-SOC via `groupby("period").roll`, then period-start: wrap (cyclic) · `.where` drops the term (non-cyclic) · `mask=` drops the row (ramp) | 🟢 | 🟢 deletes `FILL_VALUE` hack | [roll L1694](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1694), [fill L1735‑1737](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1735-L1737), [store-energy L1875‑1908](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1875-L1908); boundary mask [`common.py` L22](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L22) → also ramps [`constraints.py` L838](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L838) |
 | **stochastic** ⊥ *not an MI* | `scenario` is a clean dim *into* linopy; `(scenario, name)` MI only on the pandas round-trip | `scenario` dim unchanged; round-trip rebuild like `output` | 🔵 | ⚪ *not* an in-model MI — `scenario`/`name` are separate dims (N-D); the `(scenario, name)` MI is only `.stack`→pandas at output. Nothing to decompose; already the flat+aux target form, PyPSA's MI here is output-cosmetic | `(scenario,name)` *pandas cols* [`common.py` L78‑80](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/common.py#L78-L80); per-scenario loop [`optimize.py` L225‑229](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L225-L229); [`isel(scenario=0)` L1092‑1094](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/constraints.py#L1092-L1094); feature [PyPSA#1154](https://github.com/PyPSA/PyPSA/pull/1154), [#1484](https://github.com/PyPSA/PyPSA/issues/1484) wants *more*; output `.stack(scenario,name)` [`array.py` L55‑64](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/components/array.py#L55-L64) |
-| **output** ⊥ *boundary* | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | 🟢 | 🟢 cheap boundary conversion (PyPSA's choice) | — |
+| **output** | `solution`/`dual` MI-indexed | flat solution; caller re-stacks (or not) | 🟢 | 🟢 cheap boundary conversion (PyPSA's choice) | — |
 | **snapshots param** | MI parked on `model.parameters`, rebuilt via `.to_index()` | flat param; `assign_solution` rebuilds `period`/`timestep` from aux | 🔵 | 🟢 removes the MI living *inside* a linopy object | store [`optimize.py` L689](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L689); rebuild [L905](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L905)/[L1114](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/optimize.py#L1114) |
 | **n.snapshots** ⊥ *PyPSA API* | `pd.MultiIndex` public API | flat dim + level coords | 🔵 | 🔴 PyPSA API migration | [`global_constraints.py` L267](https://github.com/PyPSA/PyPSA/blob/v1.2.4/pypsa/optimization/global_constraints.py#L267) (`reindex_like(lhs.data)`) |
 
