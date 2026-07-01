@@ -24,7 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
-from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -42,11 +41,32 @@ except ImportError:
     # Added in xarray 2025.6.0; it subclasses ValueError on newer versions.
     CoordinateValidationError = ValueError  # type: ignore[assignment, misc]
 
-from linopy.constants import (
-    HELPER_DIMS,
-    EvolvingAPIWarning,
-)
-from linopy.types import CoordsLike, DimsLike
+from linopy.constants import HELPER_DIMS
+from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
+
+
+def as_constant(other: Any) -> Any:
+    """
+    Normalize a degenerate operand for arithmetic on entry.
+
+    Two normalizations let the operators treat every numeric operand the
+    same way downstream:
+
+    - a Python ``list`` carries array data but no numeric operators
+      (``-[1, 2]`` is a ``TypeError``, ``[1, 2] * x`` repeats the list), so
+      it becomes a numpy array;
+    - a 0-d numpy array (``np.array(1)``) is unwrapped to a Python scalar so
+      it takes the scalar fast-path instead of size-pairing.
+
+    Everything else passes through unchanged — typed constants, DataArrays,
+    Variables, and Expressions all already behave.
+    """
+    if isinstance(other, list):
+        other = np.asarray(other)
+    if isinstance(other, np.ndarray) and other.ndim == 0:
+        return other.item()
+    return other
+
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression, QuadraticExpression
@@ -390,10 +410,13 @@ def as_dataarray(
         if isinstance(arr, np.number):
             arr = float(arr)
         if dims is None:
+            # A scalar broadcasts over the coords' dims, but never over a
+            # helper dim (e.g. ``_term``) — those are storage book-keeping,
+            # not user axes.
             if isinstance(coords, Coordinates):
-                dims = coords.dims
+                dims = [d for d in coords.dims if d not in HELPER_DIMS]
             elif is_dict_like(coords) and np.ndim(arr) == 0:
-                dims = list(coords.keys())
+                dims = [d for d in coords.keys() if d not in HELPER_DIMS]
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
@@ -512,18 +535,24 @@ def _project_onto_multiindex_levels(
     return arr, projections
 
 
-def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
+def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
     """
-    Deprecation warnings for implicit MultiIndex-level projections.
+    Semantics policy for implicit MultiIndex-level projections.
 
-    The same check in every mode (scenario B of the #732 / #737 discussion):
-    implicit projection is deprecated and raises under the v1 convention. The
-    strict path raises on coverage gaps before reaching here, so only partial
-    levels warn there; the non-strict path warns for both.
+    Implicit projection is legacy-only behavior (scenario B of the #732 /
+    #737 discussion): under legacy semantics it emits a deprecation warning
+    (#738: via ``warn_legacy``); under the v1 convention it raises — a dim
+    naming a level of a stacked MultiIndex dim is a shared-dim / aux-coord
+    concern (sections 8 and 11), and the projection must be written
+    explicitly by the caller.
 
-    TODO(#738): migrate to ``warn_legacy()`` / ``LinopySemanticsWarning``
-    once the v1 semantics infrastructure (#717) lands.
+    The strict path raises on coverage gaps before reaching here, so only
+    partial levels arrive there; the non-strict path sees both.
     """
+    # Deferred import: linopy.semantics imports xarray/pandas machinery that
+    # in turn may import this module's consumers; keep the seam lazy.
+    from linopy.semantics import is_v1, warn_legacy
+
     for p in projections:
         if p.is_partial or p.has_gap:
             kind = (
@@ -532,15 +561,250 @@ def _warn_implicit_projections(projections: list[_LevelProjection]) -> None:
                 else f"filling uncovered level combinations with NaN "
                 f"(from level(s) {p.levels})"
             )
-            warn(
+            if is_v1():
+                raise ValueError(
+                    f"multiindex-projection: implicitly {kind} onto MultiIndex "
+                    f"dimension {p.dim!r} is not supported under the v1 "
+                    f"convention (sections 8 and 11). Project the input onto "
+                    f"the dimension explicitly, e.g. select with the "
+                    f"dimension's level values."
+                )
+            warn_legacy(
                 f"multiindex-projection: implicitly {kind} onto MultiIndex "
                 f"dimension {p.dim!r}. This is deprecated and will raise under "
                 f"the v1 convention; project the input onto the dimension "
                 f"explicitly (select with the dimension's level values) to "
-                f"keep current behavior.",
-                EvolvingAPIWarning,
-                stacklevel=3,
+                f"keep current behavior."
             )
+
+
+def _pair_axes_by_size(
+    shape: tuple[int, ...], sizes: dict[Hashable, int]
+) -> tuple[list[Hashable] | None, str | None]:
+    """
+    Pair each axis of an unlabeled array with the operand dim of matching size.
+
+    The pairing must be determined by the sizes alone (v1 convention,
+    coordinate-alignment intro): every axis size must match exactly one
+    operand dim, and no two axes may share a size. Returns
+    ``(dims, None)`` on success or ``(None, problem)`` where ``problem``
+    describes why the pairing is impossible or ambiguous.
+    """
+    by_size: dict[int, list[Hashable]] = {}
+    for d, n in sizes.items():
+        by_size.setdefault(n, []).append(d)
+
+    axes_per_size: dict[int, int] = {}
+    for s in shape:
+        axes_per_size[s] = axes_per_size.get(s, 0) + 1
+
+    for s, n_axes in axes_per_size.items():
+        candidates = by_size.get(s, [])
+        if len(candidates) < n_axes:
+            return None, (
+                f"no unambiguous dimension match for an axis of length {s}: "
+                f"the operand has dimensions {dict(sizes)}."
+            )
+        if len(candidates) > 1 or n_axes > 1:
+            return None, (
+                f"axis of length {s} could pair with any of "
+                f"{sorted(candidates, key=str)} — sizes alone cannot decide."
+            )
+
+    return [by_size[s][0] for s in shape], None
+
+
+def _dims_for_unlabeled_operand(
+    shape: tuple[int, ...], expected: dict[Hashable, Any]
+) -> list[Hashable]:
+    """
+    Choose dim names for an unlabeled (numpy / list / polars) input.
+
+    Used everywhere an unlabeled array meets a known set of dims — bounds
+    and masks in ``add_variables`` / ``add_constraints``, and arithmetic
+    operands (#736).
+
+    v1 (convention, coordinate-alignment intro): axes pair with the dims by
+    size; ambiguity or a missing match raises, with wrap-in-a-DataArray as
+    the documented resolution. Legacy: axes pair with the leading dims
+    positionally; a deprecation warning fires whenever the v1 pairing would
+    differ from or reject the positional one.
+    """
+    from linopy.semantics import is_v1, warn_legacy
+
+    # A 0-d operand has no axes to pair — it broadcasts over every dim, so it
+    # carries no dim names (matching a bare scalar).
+    if len(shape) == 0:
+        return []
+
+    # Helper dims (e.g. ``_term``) are storage book-keeping, never user axes,
+    # so they are not pairing candidates.
+    candidates = {d: v for d, v in expected.items() if d not in HELPER_DIMS}
+    sizes = {d: len(_as_index(v)) for d, v in candidates.items()}
+    paired, problem = _pair_axes_by_size(shape, sizes)
+    positional = list(candidates)[: len(shape)]
+
+    if is_v1():
+        if problem is not None:
+            raise ValueError(
+                f"Cannot pair an unlabeled array of shape {tuple(shape)} with "
+                f"the operand's dimensions: {problem} Wrap the array in an "
+                f"xarray.DataArray with explicit dims to name its axes."
+            )
+        assert paired is not None
+        return paired
+
+    # LEGACY: remove at 1.0 — positional pairing plus the transition warning.
+    if problem is not None:
+        warn_legacy(
+            f"An unlabeled array of shape {tuple(shape)} was paired with the "
+            f"operand's leading dimension(s) {positional} by position. Under "
+            f"the v1 convention this raises: {problem} Wrap the array in an "
+            f"xarray.DataArray with explicit dims to keep it working."
+        )
+    elif paired != positional:
+        warn_legacy(
+            f"An unlabeled array of shape {tuple(shape)} was paired with the "
+            f"operand's leading dimension(s) {positional} by position. Under "
+            f"the v1 convention it pairs by size instead — with {paired} — "
+            f"which gives a different result. Wrap the array in an "
+            f"xarray.DataArray with explicit dims to make the pairing explicit."
+        )
+    return positional
+
+
+def _matmul_operand_to_dataarray(
+    other: Any, coords: Coordinates, coord_dims: tuple[Hashable, ...]
+) -> DataArray:
+    """
+    Convert a non-expression ``@`` operand, pairing unlabeled axes by size.
+
+    Shared by ``LinearExpression.__matmul__`` and
+    ``QuadraticExpression.__matmul__``: :func:`_dims_for_positional_input`
+    decides which dims the contraction collapses (#736) — by size under v1,
+    positionally with a warning under legacy. Unlike the broadcast pipeline
+    this only converts (no reindex / expand / transpose).
+    """
+    expected = {d: coords[d] for d in coord_dims}
+    dims = _dims_for_positional_input(other, expected, None)
+    return as_dataarray(other, coords=coords, dims=dims)
+
+
+def _dims_for_positional_input(
+    arr: Any, expected: dict[Hashable, Any], dims: DimsLike | None
+) -> DimsLike | None:
+    """
+    Resolve the dim names a non-DataArray input's axes adopt.
+
+    An explicit ``dims`` is honored as given. Otherwise an unlabeled
+    array (numpy / list / polars) pairs its axes with ``expected`` by
+    size (#736); any other input falls back to the coords dims, minus
+    helper dims like ``_term`` which are never user axes.
+    """
+    if dims is not None:
+        return dims
+    if isinstance(arr, UNLABELED_TYPES) and np.ndim(arr) >= 1:
+        return _dims_for_unlabeled_operand(np.shape(arr), expected)
+    return [d for d in expected if d not in HELPER_DIMS]
+
+
+def _label_input(
+    arr: Any, expected: dict[Hashable, Any], dims: DimsLike | None, **kwargs: Any
+) -> DataArray:
+    """
+    Convert a non-DataArray input to a DataArray labelled against ``expected``.
+
+    The converter is handed ``expected`` (the normalized name→values dict),
+    not the raw sequence-form coords, so it selects coords by name — a
+    sequence would zip dims to coords by position, which is wrong once
+    size-pairing has chosen a non-leading dim.
+    """
+    dims = _dims_for_positional_input(arr, expected, dims)
+    arr = as_dataarray(arr, expected, dims=dims, **kwargs)
+    # Re-assign non-MultiIndex coords from ``expected`` (a MultiIndex coord
+    # re-assignment emits a FutureWarning and the conversion already used it).
+    return arr.assign_coords(
+        {
+            d: expected[d]
+            for d in arr.dims
+            if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
+        }
+    )
+
+
+def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
+    """
+    Reindex shared dims whose values match ``expected`` in a different order.
+
+    Disagreeing value *sets* are left for downstream xarray alignment;
+    only a pure reordering of the same values is conformed here.
+    """
+    for dim, coord_values in expected.items():
+        if dim not in arr.dims or isinstance(arr.indexes.get(dim), pd.MultiIndex):
+            continue
+        expected_idx = _as_index(coord_values)
+        actual_idx = arr.coords[dim].to_index()
+        if actual_idx.equals(expected_idx):
+            continue
+        if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
+            expected_idx
+        ):
+            arr = arr.reindex({dim: expected_idx})
+    return arr
+
+
+def _expand_missing_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
+    """
+    Broadcast ``arr`` over ``expected`` dims it does not yet carry.
+
+    A MultiIndex-backed dim is broadcast against a proper ``Coordinates``
+    template: plain ``expand_dims`` would drop its level coords and leave a
+    degenerate flat index that fails to align downstream. The exception is
+    when ``arr`` already carries one of the MultiIndex's level names —
+    broadcasting would then raise on the conflicting index, so fall back to
+    ``expand_dims``.
+    """
+    expand = {k: v for k, v in expected.items() if k not in arr.dims}
+    if not expand:
+        return arr
+    plain = {}
+    for dim, coord_values in expand.items():
+        mi = _as_multiindex(coord_values)
+        if mi is None or set(mi.names) & (set(arr.coords) | set(arr.dims)):
+            plain[dim] = coord_values
+            continue
+        template = DataArray(
+            np.zeros(len(mi)),
+            coords=Coordinates.from_pandas_multiindex(mi, dim),
+            dims=[dim],
+        )
+        arr, _ = broadcast(arr, template)
+    if plain:
+        arr = arr.expand_dims(plain)
+    return arr
+
+
+def _order_like_coords(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
+    """
+    Transpose ``arr`` to ``coords`` dim order, then match coord iteration order.
+
+    The reconstruction makes a Dataset built from ``arr`` pick up its dim
+    order from coord insertion, not just the transpose.
+    """
+    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
+        d for d in arr.dims if d not in expected
+    )
+    arr = arr.transpose(*target_dims)
+    coord_order = [c for c in target_dims if c in arr.coords] + [
+        c for c in arr.coords if c not in target_dims
+    ]
+    if list(arr.coords) != coord_order:
+        arr = DataArray(
+            arr.variable,
+            coords={c: arr.coords[c] for c in coord_order},
+            name=arr.name,
+        )
+    return arr
 
 
 def _broadcast_to_coords(
@@ -555,7 +819,8 @@ def _broadcast_to_coords(
     Returns the broadcast DataArray together with the MultiIndex-level
     projections performed along the way, so the public entry points can
     apply their own policy (warn or raise) to partial projections and
-    coverage gaps.
+    coverage gaps. Unlabeled inputs pair their axes with the coords dims by
+    size (#736); see :func:`_label_input`.
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
@@ -570,88 +835,12 @@ def _broadcast_to_coords(
             arr = converted
 
     if not isinstance(arr, DataArray):
-        # numpy/polars/unnamed-pandas inputs are positional — their only
-        # meaningful information is the values; any axis labels are
-        # auto-generated. Default dims to coords' keys so the conversion
-        # labels axes correctly (instead of dim_0/dim_1), then re-assign
-        # coords from expected so positional inputs align to coords by
-        # position. A shape mismatch surfaces here as a clear xarray
-        # "conflicting sizes" error rather than a confusing
-        # "coordinates do not match" further down.
-        if dims is None:
-            dims = list(expected)
-        arr = as_dataarray(arr, coords, dims=dims, **kwargs)
-        # Skip MultiIndex dims — re-assigning a PandasMultiIndex coord emits
-        # a FutureWarning and isn't needed (the conversion already used it).
-        arr = arr.assign_coords(
-            {
-                d: expected[d]
-                for d in arr.dims
-                if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
-            }
-        )
+        arr = _label_input(arr, expected, dims, **kwargs)
 
     arr, projections = _project_onto_multiindex_levels(arr, expected)
-
-    for dim, coord_values in expected.items():
-        if dim not in arr.dims:
-            continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
-            continue
-        expected_idx = _as_index(coord_values)
-        actual_idx = arr.coords[dim].to_index()
-        if actual_idx.equals(expected_idx):
-            continue
-        # Same values, different order → reindex to match expected order.
-        # Different value sets are left alone for downstream xarray alignment.
-        if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
-            expected_idx
-        ):
-            arr = arr.reindex({dim: expected_idx})
-
-    # expand_dims prepends new dimensions and their coordinate variables;
-    # the subsequent transpose restores coords order. Both are no-ops when
-    # the array already matches. Reconstruct so the DataArray's coords
-    # iteration order also follows coords (a Dataset built from this picks
-    # up its dim order from coord insertion).
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if expand:
-        # expand_dims drops the level coords of a MultiIndex-backed dim,
-        # leaving a degenerate flat index that fails to align downstream.
-        # Broadcast against a proper Coordinates template instead.
-        plain = {}
-        for dim, coord_values in expand.items():
-            mi = _as_multiindex(coord_values)
-            # Fall back to expand_dims when arr already carries one of the
-            # MultiIndex's level names as its own coord: broadcasting against
-            # the level coords would raise on the conflicting index.
-            if mi is None or set(mi.names) & (set(arr.coords) | set(arr.dims)):
-                plain[dim] = coord_values
-                continue
-            template = DataArray(
-                np.zeros(len(mi)),
-                coords=Coordinates.from_pandas_multiindex(mi, dim),
-                dims=[dim],
-            )
-            arr, _ = broadcast(arr, template)
-        if plain:
-            arr = arr.expand_dims(plain)
-
-    target_dims = tuple(d for d in expected if d in arr.dims) + tuple(
-        d for d in arr.dims if d not in expected
-    )
-    arr = arr.transpose(*target_dims)
-
-    coord_order = [c for c in target_dims if c in arr.coords] + [
-        c for c in arr.coords if c not in target_dims
-    ]
-    if list(arr.coords) != coord_order:
-        arr = DataArray(
-            arr.variable,
-            coords={c: arr.coords[c] for c in coord_order},
-            name=arr.name,
-        )
-
+    arr = _reindex_reordered_dims(arr, expected)
+    arr = _expand_missing_dims(arr, expected)
+    arr = _order_like_coords(arr, expected)
     return arr, projections
 
 
@@ -709,9 +898,9 @@ def broadcast_to_coords(
     index names, e.g. ``period`` / ``timestep``) and *level combinations*
     (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
     indexed by levels instead of the dim itself are implicitly projected
-    onto the dim's level combinations. These projections are deprecated in
-    both modes and emit an :class:`~linopy.EvolvingAPIWarning`; the v1
-    convention will require them to be explicit. Two cases:
+    onto the dim's level combinations. These projections are legacy-only:
+    under legacy semantics they emit a :class:`~linopy.LinopySemanticsWarning`
+    deprecation; under the v1 convention they raise. Two cases:
 
     - input misses a whole level → broadcasts across it; warns in both modes.
     - input gives some level combinations no value (a *coverage gap*) →
@@ -743,7 +932,7 @@ def broadcast_to_coords(
     """
     if not strict:
         da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
-        _warn_implicit_projections(projections)
+        _enforce_implicit_projections(projections)
         return da
 
     if label is None:
@@ -771,7 +960,7 @@ def broadcast_to_coords(
                 f"{p.dim!r}: {preview}. The input is indexed by level(s) "
                 f"{p.levels} and must cover every combination."
             )
-    _warn_implicit_projections(projections)
+    _enforce_implicit_projections(projections)
     validate_alignment(da, coords, dims=dims, label=label)
     return da
 

@@ -28,7 +28,7 @@ import xarray as xr
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import EvolvingAPIWarning, LinearExpression, Model, Variable
+from linopy import LinearExpression, LinopySemanticsWarning, Model, Variable
 from linopy.alignment import (
     _coords_to_dict,
     align,
@@ -649,6 +649,25 @@ class TestBroadcastToCoords:
         assert list(da.coords["dim_0"].values) == ["a", "b"]
         assert list(da.coords["dim_2"].values) == ["A", "B"]
 
+    @pytest.mark.v1
+    def test_explicit_dims_bypass_size_pairing(self) -> None:
+        """
+        An explicit ``dims`` is honored positionally, like xarray — even when
+        size-pairing would otherwise be ambiguous (both coords dims size 4).
+        Pins the "infer order only when the user didn't name it" rule.
+        """
+        coords = {"a": [0, 1, 2, 3], "b": [4, 5, 6, 7]}  # both size 4
+
+        # No dims → size-pairing can't decide → raises.
+        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+            broadcast_to_coords(np.arange(4), coords=coords, strict=False)
+
+        # Explicit dims=['a'] → the axis is labeled 'a' positionally, no
+        # pairing, no raise (matches xarray's positional dims assignment).
+        da = broadcast_to_coords(np.arange(4), coords=coords, dims=["a"], strict=False)
+        assert set(da.dims) == {"a", "b"}
+        assert (da.sel(b=4).values == np.arange(4)).all()
+
 
 # ---------------------------------------------------------------------------
 # Implicit MultiIndex-level projection — the legacy/v1 fork point
@@ -659,12 +678,13 @@ class TestBroadcastToCoordsMultiIndexProjection:
     """
     Inputs indexed by levels of a stacked MultiIndex dim are projected onto it.
 
-    Implicit projection is deprecated (scenario B, #732/#737): it warns under
-    both modes today and will raise under the v1 convention. Coverage gaps
-    raise under strict mode. When #717 lands, the deprecation tests here fork
-    into legacy (warn) and v1 (raise) variants.
+    Implicit projection is legacy-only (scenario B, #732/#737): under legacy
+    semantics it warns (LinopySemanticsWarning); under the v1 convention it
+    raises (sections 8 and 11). Coverage gaps raise under strict mode in both.
+    Tests fork accordingly: @pytest.mark.legacy (warn) / @pytest.mark.v1 (raise).
     """
 
+    @pytest.mark.legacy
     def test_broadcasts_single_level(
         self, mi_coords: xr.Coordinates, by_level1: DataArray
     ) -> None:
@@ -675,7 +695,7 @@ class TestBroadcastToCoordsMultiIndexProjection:
         'snapshot' MultiIndex by a weighting indexed only by 'period'. Each level
         combination of the MultiIndex must pick up its level's value.
         """
-        with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
             da = broadcast_to_coords(
                 by_level1, coords=mi_coords, dims=["dim_3"], strict=False
             )
@@ -687,6 +707,17 @@ class TestBroadcastToCoordsMultiIndexProjection:
         assert da.sel(dim_3=(2, "a")).item() == 20.0
         assert da.sel(dim_3=(2, "b")).item() == 20.0
 
+    @pytest.mark.v1
+    def test_broadcasts_single_level_raises_v1(
+        self, mi_coords: xr.Coordinates, by_level1: DataArray
+    ) -> None:
+        """v1: the implicit level projection must be written explicitly."""
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(
+                by_level1, coords=mi_coords, dims=["dim_3"], strict=False
+            )
+
+    @pytest.mark.legacy
     def test_stacks_full_levels(self, mi_coords: xr.Coordinates) -> None:
         """
         A constant indexed by all MI level names stacks element-wise into the MI dim.
@@ -702,7 +733,7 @@ class TestBroadcastToCoordsMultiIndexProjection:
         weights = pd.Series([10.0, 20.0], index=subset)
 
         with pytest.warns(
-            EvolvingAPIWarning, match=r"filling uncovered level combinations"
+            LinopySemanticsWarning, match=r"filling uncovered level combinations"
         ):
             da = broadcast_to_coords(
                 weights, coords=mi_coords, dims=["dim_3"], strict=False
@@ -715,6 +746,17 @@ class TestBroadcastToCoordsMultiIndexProjection:
         assert np.isnan(da.sel(dim_3=(1, "b")).item())
         assert np.isnan(da.sel(dim_3=(2, "a")).item())
 
+    @pytest.mark.v1
+    def test_stacks_full_levels_raises_v1(self, mi_coords: xr.Coordinates) -> None:
+        """v1: implicit NaN-fill of uncovered combinations must be explicit."""
+        subset = pd.MultiIndex.from_tuples(
+            [(1, "a"), (2, "b")], names=["level1", "level2"]
+        )
+        weights = pd.Series([10.0, 20.0], index=subset)
+
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
+
     def test_full_coverage_is_silent(
         self, mi_coords: xr.Coordinates, mi_index: pd.MultiIndex
     ) -> None:
@@ -723,12 +765,12 @@ class TestBroadcastToCoordsMultiIndexProjection:
 
         Aligning an input that reconstructs the whole MultiIndex onto its dim is
         equivalent to the input already carrying that dim (future §11), so it must
-        not emit the EvolvingAPIWarning the partial/gap projections do.
+        not warn or raise the way partial/gap projections do.
         """
         full = pd.Series([1.0, 2.0, 3.0, 4.0], index=mi_index)
 
         with warnings.catch_warnings():
-            warnings.simplefilter("error", EvolvingAPIWarning)
+            warnings.simplefilter("error", LinopySemanticsWarning)
             da = broadcast_to_coords(
                 full, coords=mi_coords, dims=["dim_3"], strict=False
             )
@@ -794,18 +836,30 @@ class TestBroadcastToCoordsMultiIndexProjection:
 
         assert set(da.dims) == {"time", "foo", "bar"}
 
+    @pytest.mark.legacy
     def test_partially_named_mi_levels(self) -> None:
         """A None level name in the MultiIndex is skipped during projection."""
         mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", None))
         mi.name = "dim_3"
         by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-        with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
             da = broadcast_to_coords(by_level1, coords={"dim_3": mi}, strict=False)
 
         assert da.dims == ("dim_3",)
         assert da.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
+    @pytest.mark.v1
+    def test_partially_named_mi_levels_raises_v1(self) -> None:
+        """v1: projection onto a partially named MultiIndex raises like any other."""
+        mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", None))
+        mi.name = "dim_3"
+        by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(by_level1, coords={"dim_3": mi}, strict=False)
+
+    @pytest.mark.legacy
     def test_gap_detection_with_extra_dims(self, mi_coords: xr.Coordinates) -> None:
         """Gaps are detected per level combination even when the input has extra dims."""
         arr = DataArray(
@@ -815,13 +869,27 @@ class TestBroadcastToCoordsMultiIndexProjection:
         )
 
         with pytest.warns(
-            EvolvingAPIWarning, match=r"filling uncovered level combinations"
+            LinopySemanticsWarning, match=r"filling uncovered level combinations"
         ):
             da = broadcast_to_coords(
                 arr, coords=mi_coords, dims=["dim_3"], strict=False
             )
 
         assert set(da.dims) == {"dim_3", "extra"}
+
+    @pytest.mark.v1
+    def test_gap_detection_with_extra_dims_raises_v1(
+        self, mi_coords: xr.Coordinates
+    ) -> None:
+        """v1: gap-producing projections raise regardless of extra dims."""
+        arr = DataArray(
+            [[[1.0, np.nan], [2.0, 2.0]], [[3.0, 3.0], [4.0, 4.0]]],
+            dims=["level1", "level2", "extra"],
+            coords={"level1": [1, 2], "level2": ["a", "b"], "extra": [0, 1]},
+        )
+
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(arr, coords=mi_coords, dims=["dim_3"], strict=False)
 
     def test_strict_gap_error_truncates_long_missing_list(self) -> None:
         """More than 5 missing combinations are truncated in the error message."""
@@ -843,6 +911,7 @@ class TestBroadcastToCoordsMultiIndexProjection:
 
     # --- strict-mode policy on MI projections (deprecation / gaps) ---
 
+    @pytest.mark.legacy
     def test_strict_partial_level_warns(
         self, mi_coords: xr.Coordinates, by_level1: DataArray
     ) -> None:
@@ -850,10 +919,10 @@ class TestBroadcastToCoordsMultiIndexProjection:
         Per-level bounds broadcast across the MI dim, with the deprecation warning.
 
         Scenario B (#732 / #737 discussion): implicit MI-level projection is
-        deprecated everywhere, including the strict (bounds/mask) path, and will
-        raise under the v1 convention.
+        deprecated everywhere, including the strict (bounds/mask) path, and
+        raises under the v1 convention.
         """
-        with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+        with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
             da = broadcast_to_coords(
                 by_level1, mi_coords, dims=["dim_3"], label="lower bound"
             )
@@ -861,6 +930,17 @@ class TestBroadcastToCoordsMultiIndexProjection:
         assert da.sel(dim_3=(1, "b")).item() == 10.0
         assert da.sel(dim_3=(2, "a")).item() == 20.0
 
+    @pytest.mark.v1
+    def test_strict_partial_level_raises_v1(
+        self, mi_coords: xr.Coordinates, by_level1: DataArray
+    ) -> None:
+        """v1: per-level bounds must be projected onto the dim explicitly."""
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(
+                by_level1, mi_coords, dims=["dim_3"], label="lower bound"
+            )
+
+    @pytest.mark.legacy
     def test_strict_rejects_coverage_gap(self, mi_coords: xr.Coordinates) -> None:
         """A coverage gap warns on the broadcast rung but raises on the strict rung."""
         subset = pd.MultiIndex.from_tuples(
@@ -869,10 +949,26 @@ class TestBroadcastToCoordsMultiIndexProjection:
         weights = pd.Series([10.0, 20.0], index=subset)
 
         with pytest.warns(
-            EvolvingAPIWarning, match=r"filling uncovered level combinations"
+            LinopySemanticsWarning, match=r"filling uncovered level combinations"
         ):
             broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
 
+        with pytest.raises(ValueError, match=r"no value for .* level combination"):
+            broadcast_to_coords(weights, mi_coords, dims=["dim_3"], label="lower bound")
+
+    @pytest.mark.v1
+    def test_strict_rejects_coverage_gap_v1(self, mi_coords: xr.Coordinates) -> None:
+        """v1: a coverage gap raises on both rungs (different errors, same outcome)."""
+        subset = pd.MultiIndex.from_tuples(
+            [(1, "a"), (2, "b")], names=["level1", "level2"]
+        )
+        weights = pd.Series([10.0, 20.0], index=subset)
+
+        # Broadcast rung: the implicit projection itself is rejected.
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
+
+        # Strict rung: the coverage gap is rejected before the projection policy.
         with pytest.raises(ValueError, match=r"no value for .* level combination"):
             broadcast_to_coords(weights, mi_coords, dims=["dim_3"], label="lower bound")
 

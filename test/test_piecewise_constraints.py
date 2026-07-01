@@ -1406,7 +1406,13 @@ class TestBroadcasting:
 # ===========================================================================
 
 
+@pytest.mark.legacy
 class TestNaNMasking:
+    """
+    NaN-as-masking patterns — legacy-only; v1 requires explicit ``mask=``
+    or ``.where()`` (see convention.md §4, §5).
+    """
+
     def test_nan_masks_lambda_labels(self) -> None:
         """NaN in y_points produces masked labels in SOS2 formulation."""
         m = Model()
@@ -2056,8 +2062,13 @@ class TestValidationEdgeCases:
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
 
+    @pytest.mark.legacy
     def test_incremental_with_nan_mask(self) -> None:
-        """Incremental method with trailing NaN creates masked delta vars."""
+        """
+        Incremental method with trailing NaN creates masked delta vars.
+
+        Legacy-only: NaN-as-mask in user input (see convention.md §5).
+        """
         m = Model()
         gens = pd.Index(["a", "b"], name="gen")
         x = m.add_variables(coords=[gens], name="x")
@@ -2334,6 +2345,7 @@ class TestSignParameter:
         assert f_asc.method != "lp"
         assert f_desc.method != "lp"
 
+    @pytest.mark.legacy
     def test_lp_per_entity_nan_padding(
         self, nan_padded_pwl_model: Callable[[Method], Model]
     ) -> None:
@@ -2341,12 +2353,15 @@ class TestSignParameter:
         Per-entity NaN-padded breakpoints with method='lp': padded
         segments must be masked out so they don't create spurious
         ``y ≤ 0`` constraints (bug-2 regression).
+
+        Legacy-only: NaN-as-mask in user input (see convention.md §5).
         """
         m = nan_padded_pwl_model("lp")
         m.solve()
         # f_b(10) on chord (5,10)→(15,15) is 12.5
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
+    @pytest.mark.legacy
     @pytest.mark.skipif(not _SOS_PATHS, reason="No SOS-capable solver installed")
     @pytest.mark.parametrize(("solver", "io_api"), _SOS_PATHS)
     def test_sos2_per_entity_nan_padding(
@@ -2528,9 +2543,14 @@ class TestSignParameter:
         status, _ = m.solve()
         assert status != "ok"
 
+    @pytest.mark.legacy
     @pytest.mark.skipif(not _any_solvers, reason="no solver available")
     def test_lp_domain_uses_paired_valid_breakpoints(self) -> None:
-        """A trailing NaN in y must also shrink the LP x-domain."""
+        """
+        A trailing NaN in y must also shrink the LP x-domain.
+
+        Legacy-only: NaN-as-mask in user input (see convention.md §5).
+        """
         m = Model()
         x = m.add_variables(lower=0, upper=2, name="x")
         y = m.add_variables(lower=0, upper=10, name="y")

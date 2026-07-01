@@ -19,8 +19,8 @@ from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import (
-    EvolvingAPIWarning,
     LinearExpression,
+    LinopySemanticsWarning,
     Model,
     QuadraticExpression,
     Variable,
@@ -296,6 +296,7 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+@pytest.mark.legacy
 def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     Expression over a MultiIndex dim times a single-level constant.
@@ -307,7 +308,7 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+    with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
         expr = (1 * u) * by_level1
 
     coeffs = expr.coeffs.squeeze("_term")
@@ -315,6 +316,15 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
     assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
     assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
+@pytest.mark.v1
+def test_multiply_expression_by_mi_level_constant_raises_v1(u: Variable) -> None:
+    """v1: the implicit level projection in arithmetic must be explicit."""
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+
+    with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        (1 * u) * by_level1
 
 
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
@@ -417,9 +427,12 @@ def test_linear_expression_substraction(
     assert res.data.notnull().all().to_array().all()
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -439,9 +452,12 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum_with_const(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
 
@@ -608,7 +624,17 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
+@pytest.mark.legacy
 class TestCoordinateAlignment:
+    """
+    Documents legacy positional/left-join alignment and silent NaN fill.
+
+    The whole block is legacy-only: v1 raises on these cases (see
+    `test_legacy_violations.py` and convention.md §5/§8). Once later slices
+    flesh out v1's equivalent coverage, individual tests here can be
+    reclassified or removed.
+    """
+
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "da":
@@ -2033,15 +2059,18 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
-    expr1 = z.sel(dim_0=0).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    # ``drop=True`` so the scalar ``dim_0`` coord doesn't survive each .sel
+    # and trip §11's aux-coord-conflict check (the two picks pin dim_0=0
+    # vs dim_0=1).
+    expr1 = z.sel(dim_0=0, drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
-    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1), drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
@@ -2269,15 +2298,6 @@ def test_variable_names() -> None:
     assert expr.nterm == 2
     assert expr.variable_names == {"a", "b"}
 
-    mask = xr.DataArray(False, coords=[time])
-    expr = a + (b * 1).where(mask)
-    assert expr.nterm == 2
-    assert expr.variable_names == {"a"}
-
-    expr = (b * 1).where(mask)
-    assert expr.nterm == 1
-    assert expr.variable_names == set()
-
     expr = LinearExpression.from_constant(model=m, constant=5)
     assert expr.nterm == 0
     assert expr.variable_names == set()
@@ -2289,6 +2309,39 @@ def test_variable_names() -> None:
     # Repeated variable across terms (a + a)
     expr = a + a
     assert expr.variable_names == {"a"}
+
+
+@pytest.mark.legacy
+def test_variable_names_masked_addend_legacy() -> None:
+    # Legacy: a fully masked addend's terms turn dead; the live variable remains.
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+    mask = xr.DataArray(False, coords=[time])
+
+    expr = a + (b * 1).where(mask)
+    assert expr.nterm == 2
+    assert expr.variable_names == {"a"}
+
+    expr = (b * 1).where(mask)
+    assert expr.nterm == 1
+    assert expr.variable_names == set()
+
+
+@pytest.mark.v1
+def test_variable_names_masked_addend_v1() -> None:
+    # v1 (section 6): absence propagates — a sum with a fully masked addend
+    # has no live terms anywhere.
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+    mask = xr.DataArray(False, coords=[time])
+
+    expr = a + (b * 1).where(mask)
+    assert expr.variable_names == set()
+    assert expr.isnull().all()
 
 
 def test_nterm() -> None:
@@ -2309,8 +2362,33 @@ def test_nterm() -> None:
     expr = a + b.where(all_false)
     assert expr.nterm == 2
 
-    expr = expr.simplify()
+
+@pytest.mark.legacy
+def test_nterm_simplify_collapses_fully_masked_addend() -> None:
+    # Legacy: a fully masked addend contributes dead terms that simplify() drops.
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    all_false = xr.DataArray(False, coords=[time])
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+
+    expr = (a + b.where(all_false)).simplify()
     assert expr.nterm == 1
+
+
+@pytest.mark.v1
+def test_nterm_simplify_absent_expression_has_no_terms() -> None:
+    # v1 (section 6): absence propagates — a fully masked addend absorbs the
+    # whole sum, so nothing is left to simplify.
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    all_false = xr.DataArray(False, coords=[time])
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+
+    expr = (a + b.where(all_false)).simplify()
+    assert expr.nterm == 0
+    assert expr.isnull().all()
 
 
 class TestJoinParameter:
@@ -2335,9 +2413,12 @@ class TestJoinParameter:
         return m2.variables["c"]
 
     class TestAddition:
+        @pytest.mark.legacy
         def test_add_join_none_preserves_default(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a and b have different coords on dim ``i``;
+            # under v1 both arithmetic forms raise (see convention.md §8).
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
@@ -2596,9 +2677,11 @@ class TestJoinParameter:
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
     class TestQuadratic:
+        @pytest.mark.legacy
         def test_quadratic_add_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
@@ -2610,9 +2693,11 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.indexes["i"]) == [0, 1]
 
+        @pytest.mark.legacy
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")

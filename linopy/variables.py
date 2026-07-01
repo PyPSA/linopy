@@ -31,7 +31,7 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
-from linopy.alignment import broadcast_to_coords
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
@@ -62,6 +62,16 @@ from linopy.constants import (
     STASHED_LOWER,
     STASHED_UPPER,
     TERM_DIM,
+)
+from linopy.semantics import (
+    _legacy_coord_mismatch_message,
+    _legacy_masked_variable_message,
+    _shared_dim_mismatch_message,
+    check_user_nan,
+    enforce_aux_conflict,
+    first_mismatched_dim,
+    is_v1,
+    warn_legacy,
 )
 from linopy.types import (
     ConstantLike,
@@ -328,14 +338,51 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = broadcast_to_coords(
-            coefficient, coords=self.coords, dims=self.dims, strict=False
-        )
-        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
-        coefficient = coefficient.fillna(0)
+        # §8: check on the raw coefficient, before broadcast aligns it away.
+        if not np.isscalar(coefficient):
+            coeff_da = as_dataarray(coefficient)
+            enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
+            mismatch = first_mismatched_dim(self.labels, coeff_da)
+            if mismatch is not None:
+                if is_v1():
+                    raise ValueError(_shared_dim_mismatch_message(*mismatch))
+                warn_legacy(
+                    _legacy_coord_mismatch_message(
+                        "this operator's constant operand", *mismatch
+                    ),
+                    stacklevel=4,
+                )
+        coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
+        # §5: user-supplied NaN in the coefficient must raise (v1) / warn
+        # (legacy) — it's the multiplicative analogue of ``x + nan_data``
+        # and otherwise enters the expression silently. The default
+        # coefficient ``1`` carries no NaN, so the check is a no-op there.
+        if coefficient.isnull().any():
+            check_user_nan(op_kind="mul")
+        if is_v1():
+            # Under v1 the LinearExpression must carry absence (NaN at
+            # `labels == -1`) so §6 propagation through downstream
+            # arithmetic works.
+            coefficient = coefficient.reindex_like(self.labels, fill_value=np.nan)
+            absent = self.labels == -1
+            coefficient = coefficient.where(~absent)
+        else:
+            # LEGACY: warn if the variable carries absent slots — those
+            # silently contribute 0 here, but v1 will propagate the
+            # absence and produce a different result downstream. This is
+            # the origin of the most common legacy↔v1 divergence (masked
+            # variables in arithmetic) that no other warn-site catches.
+            has_absence = bool((self.labels == -1).any())
+            if has_absence:
+                warn_legacy(_legacy_masked_variable_message(self.name))
+            coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+            coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
+        if is_v1():
+            const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
+            ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
@@ -417,7 +464,6 @@ class Variable:
         try:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
-
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
@@ -1232,19 +1278,28 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
-    ) -> Variable:
+        fill_value: int
+        | float
+        | ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset,
+    ) -> Variable | expressions.LinearExpression:
         """
-        Fill missing values with a variable.
+        Fill missing (absent) slots.
 
-        This operation call ``xarray.DataArray.fillna`` but ensures preserving
-        the linopy.Variable type.
+        A numeric ``fill_value`` substitutes a *constant* for the absent
+        variable slots, so the result is a :class:`LinearExpression` (a
+        constant is not a variable). A Variable / ScalarVariable
+        ``fill_value`` keeps the result a Variable.
 
         Parameters
         ----------
-        fill_value : Variable/ScalarVariable
-            Variable to use for filling.
+        fill_value : numeric, Variable, or ScalarVariable
+            Value to fill the absent slots with.
         """
+        if isinstance(fill_value, int | float | np.integer | np.floating):
+            return self.to_linexpr().fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
@@ -1356,6 +1411,48 @@ class Variable:
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        **indexers_kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to a new set of coordinates.
+
+        New positions are marked absent (``labels = -1``,
+        ``lower = upper = NaN``); existing positions are preserved. This
+        is one of the named mechanisms in convention.md §4 for creating
+        absence.
+        """
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=self._fill_value, **indexers_kwargs),
+            self.model,
+            self.name,
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        **kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to another object's coordinates.
+
+        New positions are marked absent with the sentinel fill values
+        (see :meth:`reindex`).
+        """
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
+        return self.__class__(
+            self.data.reindex_like(ref, fill_value=self._fill_value, **kwargs),
+            self.model,
+            self.name,
+        )
+
     swap_dims = varwrap(Dataset.swap_dims)
 
     set_index = varwrap(Dataset.set_index)
@@ -1366,7 +1463,10 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
-    unstack = varwrap(Dataset.unstack)
+    # ``fill_value=_fill_value`` so missing (region, year) combinations end up
+    # as the absent-slot sentinel (labels=-1, lower=upper=NaN) instead of as
+    # NaN labels — §2 storage invariant + §4 absence-creation guarantee.
+    unstack = varwrap(Dataset.unstack, fill_value=_fill_value)
 
     iterate_slices = iterate_slices
 

@@ -925,18 +925,27 @@ class TestAddVariablesMultiIndexCoords:
         with pytest.raises(ValueError, match="MultiIndex.*does not match"):
             model.add_variables(upper=bound, coords=[midx], name="x")
 
+    @pytest.mark.legacy
     def test_single_level_bound_broadcasts(
         self, model: "Model", midx: pd.MultiIndex
     ) -> None:
         bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        # Implicit level projection is deprecated (scenario B) — warns until
-        # the v1 convention makes it an error.
+        # Implicit level projection is legacy-only (scenario B): warns under
+        # legacy semantics, raises under v1.
         with pytest.warns(
-            linopy.EvolvingAPIWarning, match=r"broadcasting level subset"
+            linopy.LinopySemanticsWarning, match=r"broadcasting level subset"
         ):
             var = model.add_variables(upper=bound, coords=[midx], name="x")
         assert var.dims == ("multi",)
         assert (var.data.upper == [5, 5, 6, 6]).all()
+
+    @pytest.mark.v1
+    def test_single_level_bound_raises_v1(
+        self, model: "Model", midx: pd.MultiIndex
+    ) -> None:
+        bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
+        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+            model.add_variables(upper=bound, coords=[midx], name="x")
 
     def test_incomplete_level_bound_raises(
         self, model: "Model", midx: pd.MultiIndex
