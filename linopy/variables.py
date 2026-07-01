@@ -31,7 +31,7 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
-from linopy.alignment import broadcast_to_coords
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
@@ -64,8 +64,12 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.semantics import (
+    _legacy_coord_mismatch_message,
     _legacy_masked_variable_message,
+    _shared_dim_mismatch_message,
     check_user_nan,
+    enforce_aux_conflict,
+    first_mismatched_dim,
     is_v1,
     warn_legacy,
 )
@@ -334,6 +338,20 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
+        # §8: check on the raw coefficient, before broadcast aligns it away.
+        if not np.isscalar(coefficient):
+            coeff_da = as_dataarray(coefficient)
+            enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
+            mismatch = first_mismatched_dim(self.labels, coeff_da)
+            if mismatch is not None:
+                if is_v1():
+                    raise ValueError(_shared_dim_mismatch_message(*mismatch))
+                warn_legacy(
+                    _legacy_coord_mismatch_message(
+                        "this operator's constant operand", *mismatch
+                    ),
+                    stacklevel=4,
+                )
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         # §5: user-supplied NaN in the coefficient must raise (v1) / warn
         # (legacy) — it's the multiplicative analogue of ``x + nan_data``
@@ -446,14 +464,7 @@ class Variable:
         try:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
-            # Scalars can take the fast path; for arrays / expressions go
-            # through the LinearExpression operator so semantics-aware
-            # alignment and NaN checks apply.
-            if np.isscalar(other):
-                if isinstance(other, float) and np.isnan(other):
-                    return self.to_linexpr() * other
-                return self.to_linexpr(other)
-            return self.to_linexpr() * other
+            return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
 
