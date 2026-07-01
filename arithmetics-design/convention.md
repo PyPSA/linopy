@@ -239,8 +239,9 @@ NaN propagation of §6 does not apply: they *skip* absent slots instead. `sum`
 (including `groupby.sum`) adds only the present terms, and the sum of none is
 the zero expression. The objective totals its terms the way `sum` does.
 
-Further reductions (`mean`, `resample`, `coarsen`) are not in linopy yet; when
-added ([#703]) they follow this same skip-absent rule.
+Further reductions (`mean`, `resample`, `coarsen`) are not in linopy yet; they
+are added under v1 only ([#703]) — as new operations with no legacy behaviour —
+and follow this same skip-absent rule.
 
 <!-- references -->
 [pyoframe]: https://github.com/Bravos-Power/pyoframe
