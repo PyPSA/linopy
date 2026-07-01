@@ -57,6 +57,10 @@ def model_with_dash_names() -> Model:
 
 @pytest.fixture
 def model_with_multiindex() -> Model:
+    from linopy.semantics import is_v1
+
+    if is_v1():
+        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
     m = Model()
 
     index = pd.MultiIndex.from_tuples(

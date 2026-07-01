@@ -625,23 +625,6 @@ def test_constraint_rhs_setter_projects_multiindex_level() -> None:
     assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
 
 
-@pytest.mark.v1
-def test_constraint_rhs_setter_mi_level_raises_v1() -> None:
-    """v1: an rhs indexed by an MI level must be projected explicitly."""
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
-    m = Model()
-    x = m.add_variables(coords=coords, name="x")
-    con = m.add_constraints(1 * x >= 0, name="con")
-
-    rhs_by_level = xr.DataArray(
-        [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
-    )
-    with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
-        con.rhs = rhs_by_level
-
-
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:
     # Test that assigning labels raises AttributeError (Constraint is frozen)
     with pytest.raises(AttributeError):

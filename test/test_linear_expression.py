@@ -1685,6 +1685,7 @@ class TestGroupbyByAttachedCoordinate:
             ("timestep", ["t1", "t2", "t3"], [[0, 3], [1, 4], [2, 5]]),
         ],
     )
+    @pytest.mark.legacy
     def test_multiindex_level(
         self, level: str, values: list, vars_: list, use_fallback: bool
     ) -> None:

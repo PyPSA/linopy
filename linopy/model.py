@@ -841,6 +841,9 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
+        from linopy.semantics import enforce_no_multiindex
+
+        enforce_no_multiindex(data, context=f"variable {name!r}")
         variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
@@ -1134,6 +1137,9 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
+        from linopy.semantics import enforce_no_multiindex
+
+        enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         if freeze is None:
             freeze = self.freeze_constraints
@@ -1203,6 +1209,9 @@ class Model:
 
         data = self._allocate_constraint_labels(data, name)
 
+        from linopy.semantics import enforce_no_multiindex
+
+        enforce_no_multiindex(data, context=f"constraint {name!r}")
         con = Constraint(data, name=name, model=self, skip_broadcast=True)
         freeze = self.freeze_constraints
         return self.constraints.add(con, freeze=freeze and not self.chunk)
