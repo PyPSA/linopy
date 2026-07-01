@@ -668,7 +668,12 @@ class BaseExpression(ABC):
         aligned : DataArray
             The aligned constant.
         needs_data_reindex : bool
-            Whether the expression's data needs reindexing.
+            Whether the expression's data needs reindexing. ``False`` whenever the
+            shared-dim indexes already agree — the ``override`` / ``left`` paths
+            and ``exact`` join once ``first_mismatched_dim`` confirms the match —
+            so the caller skips a full-dataset ``reindex_like`` deepcopy on the
+            hot multiply/add path. Only the label-changing joins (inner / outer /
+            right) return ``True``.
         """
         # §11: aux-coord conflict is independent of dim alignment — fires
         # on every join path. Gating it behind ``join is None`` (alongside
@@ -748,6 +753,7 @@ class BaseExpression(ABC):
             mismatch = first_mismatched_dim(self.const, other)
             if mismatch is not None:
                 raise ValueError(_shared_dim_mismatch_message(*mismatch))
+            return self.const, other, False
         self_const, aligned = xr.align(
             self.const,
             other,
