@@ -12,16 +12,12 @@ from collections.abc import Callable
 
 import pytest
 
-from benchmarks.ops import OpSpec, Profile, iter_op_params
+from benchmarks.ops import GRID, OpSpec, iter_ops
 
-_CASES = iter_op_params()
+_OPS = iter_ops()
 
 
-@pytest.mark.parametrize(
-    "op, profile",
-    _CASES,
-    ids=[f"{op.name}[{profile.key}]" for op, profile in _CASES],
-)
-def test_op(benchmark: Callable[..., object], op: OpSpec, profile: Profile) -> None:
-    operands = op.setup(profile)
+@pytest.mark.parametrize("op", _OPS, ids=[op.name for op in _OPS])
+def test_op(benchmark: Callable[..., object], op: OpSpec) -> None:
+    operands = op.setup(GRID)
     benchmark(op.op, *operands)

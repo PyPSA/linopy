@@ -8,15 +8,16 @@ than a whole build. That granularity attributes regressions to a specific path
 (a whole-build benchmark says "kvl got heavier"; an op benchmark says "expr+expr
 broadcast got heavier").
 
-Two axes beyond the op itself:
+One 3-D size profile (``3×4×1000``, ~12 K elements): multi-dim so it exercises
+broadcast/alignment across dims; ~MB-scale ops sit above the memory-measurement
+noise floor; the asymmetric shape catches dim-order/transpose bugs. CodSpeed
+records time *and* memory on every benchmark, so a second size isn't needed to
+separate the two signals.
 
-- **size profile** — ``small`` (1-D, 2000) is the cheap time/shape signal;
-  ``large`` (3-D, 3×4×1000) carries the memory signal and exercises multi-dim
-  broadcast/alignment. They differ in element count *and* dimensionality on
-  purpose; the asymmetric 3×4×1000 also catches dim-order/transpose bugs.
-- **alignment** — for binary labelled ops, ``match`` (identical coords, the fast
-  path) vs ``broadcast`` (an extra dim → §9 cross-product). Both are where the
-  alignment-path regressions live, so they're first-class, not incidental.
+The one axis beyond the op itself is **alignment** — for binary labelled ops,
+``match`` (identical coords, the fast path) vs ``broadcast`` (an extra dim → §9
+cross-product). That's where the alignment-path regressions live, so it's
+first-class, not incidental.
 """
 
 from __future__ import annotations
@@ -46,9 +47,7 @@ class Profile:
         return int(np.prod(self.shape))
 
 
-SMALL = Profile("small", ("d0",), (2000,))
-LARGE = Profile("large", ("d0", "d1", "d2"), (3, 4, 1000))
-PROFILES: tuple[Profile, ...] = (SMALL, LARGE)
+GRID = Profile("grid", ("d0", "d1", "d2"), (3, 4, 1000))
 
 # a broadcast operand always adds this one extra dim (kept small so the
 # cross-product stays cheap while still exercising the broadcast path)
@@ -104,6 +103,27 @@ def expr(profile: Profile) -> linopy.LinearExpression:
     return array(profile) * var(profile)
 
 
+def cond(profile: Profile) -> xr.DataArray:
+    """A boolean mask over the profile's dims (~half the slots)."""
+    return array(profile) > 0.0
+
+
+def masked_expr(profile: Profile) -> linopy.LinearExpression:
+    """An expression carrying absence (§4) — masked in place."""
+    return expr(profile).where(cond(profile))
+
+
+def grouped_expr(profile: Profile) -> linopy.LinearExpression:
+    """An expression with a coarse ``g`` group coord on the last dim (8 groups)."""
+    last, n = profile.dims[-1], profile.shape[-1]
+    g = xr.DataArray(
+        np.arange(n) * 8 // n,
+        dims=[last],
+        coords={last: pd.RangeIndex(n, name=last)},
+    )
+    return expr(profile).assign_coords(g=g)
+
+
 # --- op registry ------------------------------------------------------------
 
 
@@ -115,7 +135,6 @@ class OpSpec:
     group: str
     setup: Callable[[Profile], tuple]
     op: Callable[..., object]
-    profiles: tuple[str, ...] = ("small", "large")
 
 
 OP_REGISTRY: dict[str, OpSpec] = {}
@@ -126,17 +145,15 @@ def register_op(
     group: str,
     setup: Callable[[Profile], tuple],
     op: Callable[..., object],
-    profiles: tuple[str, ...] = ("small", "large"),
 ) -> None:
     if name in OP_REGISTRY:
         raise ValueError(f"op {name!r} already registered")
-    OP_REGISTRY[name] = OpSpec(name, group, setup, op, profiles)
+    OP_REGISTRY[name] = OpSpec(name, group, setup, op)
 
 
-def iter_op_params() -> list[tuple[OpSpec, Profile]]:
-    """``(op, profile)`` pairs — the pytest parametrize source."""
-    by_key = {p.key: p for p in PROFILES}
-    return [(op, by_key[key]) for op in OP_REGISTRY.values() for key in op.profiles]
+def iter_ops() -> list[OpSpec]:
+    """Every registered op — the pytest parametrize source."""
+    return list(OP_REGISTRY.values())
 
 
 # --- the operations ---------------------------------------------------------
@@ -245,7 +262,7 @@ register_op(
     lambda e, a: a * e,
 )
 
-# reductions (sum over d0, present in both profiles)
+# reductions
 register_op("var_sum_dim", "reduce", lambda p: (var(p),), lambda x: x.sum("d0"))
 register_op("expr_sum_dim", "reduce", lambda p: (expr(p),), lambda e: e.sum("d0"))
 register_op("expr_sum_all", "reduce", lambda p: (expr(p),), lambda e: e.sum())
@@ -257,4 +274,30 @@ register_op(
 )
 register_op(
     "con_eq_expr", "constraint", lambda p: (expr(p), expr(p)), lambda a, b: a == b
+)
+
+# absence / masking (§4–§7)
+register_op("expr_where", "mask", lambda p: (expr(p), cond(p)), lambda e, c: e.where(c))
+register_op("expr_fillna", "mask", lambda p: (masked_expr(p),), lambda e: e.fillna(0.0))
+register_op(
+    "expr_add_masked",
+    "mask",
+    lambda p: (expr(p), masked_expr(p)),
+    lambda a, b: a + b,
+)
+
+# groupby
+register_op(
+    "expr_groupby_sum",
+    "groupby",
+    lambda p: (grouped_expr(p),),
+    lambda e: e.groupby("g").sum(),
+)
+
+# N-way assembly (constraint building sums many terms)
+register_op(
+    "merge_sum",
+    "merge",
+    lambda p: tuple(expr(p) for _ in range(8)),
+    lambda *es: sum(es[1:], es[0]),
 )
