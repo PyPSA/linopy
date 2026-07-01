@@ -234,13 +234,13 @@ masking it.
 
 ### §13. Reductions skip absent slots
 
-Reductions — `sum`, `mean`, and the `groupby` / `resample` / `coarsen`
-aggregations — collapse a dimension rather than combining two operands, so the
-propagation of §6 does not apply: they *skip* absent slots instead. `sum` adds
-the present terms, and the sum of none is the zero expression. `mean` divides
-by the count of *present* slots, not all of them — dividing by all would treat
-an absent slot as a zero term, which §1 forbids. The objective totals its
-terms the way `sum` does.
+Reductions collapse a dimension rather than combining two operands, so the
+NaN propagation of §6 does not apply: they *skip* absent slots instead. `sum`
+(including `groupby.sum`) adds only the present terms, and the sum of none is
+the zero expression. The objective totals its terms the way `sum` does.
+
+Further reductions (`mean`, `resample`, `coarsen`) are not in linopy yet; when
+added ([#703]) they follow this same skip-absent rule.
 
 <!-- references -->
 [pyoframe]: https://github.com/Bravos-Power/pyoframe
@@ -248,6 +248,7 @@ terms the way `sum` does.
 [#737]: https://github.com/PyPSA/linopy/pull/737
 [#736]: https://github.com/PyPSA/linopy/issues/736
 [#714]: https://github.com/PyPSA/linopy/issues/714
+[#703]: https://github.com/PyPSA/linopy/issues/703
 [#713]: https://github.com/PyPSA/linopy/issues/713
 [#712]: https://github.com/PyPSA/linopy/issues/712
 [#711]: https://github.com/PyPSA/linopy/issues/711
