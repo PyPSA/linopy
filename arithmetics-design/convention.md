@@ -163,11 +163,16 @@ resolve it. Several primitives bring operands into agreement:
 - The named methods — `.add` `.sub` `.mul` `.div` `.le` `.ge` `.eq` — take a
   `join=` argument: `exact`, `inner`, `outer`, `left`, `right`, or `override`.
   `override` is the old positional behavior — still available, but now opt-in
-  and named rather than triggered by a size coincidence.
+  and named rather than triggered by a size coincidence. It still requires the
+  shared dimensions to match in size: a genuine size mismatch raises rather
+  than relabelling mismatched data, so reach for a label join (`inner` /
+  `outer` / `left` / `right`) when the sizes really differ.
 - `.reindex()` / `.reindex_like()` conform an operand to a target index
   (extending past the original creates absent positions — §4).
-- `.assign_coords()` relabels an operand outright (positional alignment, made
-  explicit).
+- `.assign_coords()` relabels an operand outright. Unlike `join="override"`,
+  which checks the shared dims match in size, this is an *unguarded* relabel:
+  it renames positions whether or not they correspond, so the "made explicit"
+  here is the caller's responsibility, not a safety check.
 - `linopy.align()` pre-aligns several operands at once.
 
 Because no operator silently drops coordinates, the associativity break
