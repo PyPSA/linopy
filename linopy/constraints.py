@@ -881,6 +881,39 @@ class CSRConstraint(ConstraintBase):
             )
         return csr
 
+    def _remap_columns(
+        self, old_vlabels: np.ndarray, new_label_index: VariableLabelIndex
+    ) -> None:
+        """
+        Rewrite cached CSR column positions after variables were removed.
+
+        The cached CSR stores absolute dense variable positions from freeze
+        time. Removing a variable renumbers the positions of every later
+        variable, so those cached positions go stale (wrong columns and wrong
+        width). ``old_vlabels`` gives the variable label at each column position
+        currently used by the CSR; ``new_label_index`` provides the post-removal
+        label -> position mapping. A frozen constraint that referenced a removed
+        variable has already been dropped, so every remaining column maps to a
+        valid new position.
+        """
+        csr = self._csr
+        n_active_vars = new_label_index.n_active_vars
+        if csr.nnz == 0:
+            self._csr = scipy.sparse.csr_array(
+                (csr.shape[0], n_active_vars), dtype=csr.dtype
+            )
+            return
+        new_positions = new_label_index.label_to_pos[old_vlabels[csr.indices]]
+        if (new_positions < 0).any():
+            raise ValueError(
+                "Frozen constraint references a removed variable while remapping "
+                "columns; this should not happen."
+            )
+        self._csr = scipy.sparse.csr_array(
+            (csr.data, new_positions, csr.indptr),
+            shape=(csr.shape[0], n_active_vars),
+        )
+
     def to_matrix(
         self, label_index: VariableLabelIndex | None = None
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:

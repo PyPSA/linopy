@@ -1281,7 +1281,22 @@ class Model:
             for k in to_remove:
                 self.constraints.remove(k)
 
+        # Frozen (CSR-backed) constraints cache absolute variable positions.
+        # Removing a variable renumbers the positions of every later variable,
+        # so capture the pre-removal ordering to remap the surviving frozen
+        # constraints once the variable is gone.
+        frozen_cons = [
+            c for _, c in self.constraints.items() if isinstance(c, CSRConstraint)
+        ]
+        old_vlabels = self.variables.label_index.vlabels.copy() if frozen_cons else None
+
         self.variables.remove(name)
+
+        if frozen_cons:
+            assert old_vlabels is not None  # captured whenever frozen_cons is non-empty
+            new_label_index = self.variables.label_index
+            for con in frozen_cons:
+                con._remap_columns(old_vlabels, new_label_index)
 
         self.objective = self.objective.sel(
             {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
