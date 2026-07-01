@@ -65,7 +65,7 @@ docs = [
     "docutils<0.21",
     "numpy<2",
     "gurobipy>=13.0.0",
-    "ipykernel==6.29.5",
+    "ipykernel==7.3.0",
     "matplotlib==3.11.0",
     "highspy>=1.7.1",
 ]
