@@ -875,8 +875,9 @@ class TestAddVariablesBoundsWithCoords:
             )
 
 
+@pytest.mark.legacy
 class TestAddVariablesMultiIndexCoords:
-    """MultiIndex-specific coord handling in add_variables."""
+    """MultiIndex-specific coord handling in add_variables (legacy; v1 rejects MI)."""
 
     @pytest.fixture
     def model(self) -> "Model":
@@ -939,14 +940,6 @@ class TestAddVariablesMultiIndexCoords:
         assert var.dims == ("multi",)
         assert (var.data.upper == [5, 5, 6, 6]).all()
 
-    @pytest.mark.v1
-    def test_single_level_bound_raises_v1(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
-            model.add_variables(upper=bound, coords=[midx], name="x")
-
     def test_incomplete_level_bound_raises(
         self, model: "Model", midx: pd.MultiIndex
     ) -> None:
@@ -954,3 +947,25 @@ class TestAddVariablesMultiIndexCoords:
         bound = pd.Series([1, 2], index=subset)
         with pytest.raises(ValueError, match="no value for .* level combination"):
             model.add_variables(upper=bound, coords=[midx], name="x")
+
+
+@pytest.mark.v1
+def test_add_variables_multiindex_rejected_v1() -> None:
+    """v1: an MI dim-coord is rejected at construction with a reset_index hint."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    mi.name = "multi"
+    with pytest.raises(ValueError, match=r"v1 convention does not support"):
+        Model().add_variables(lower=0, upper=1, coords=[mi], name="x")
+
+
+@pytest.mark.v1
+def test_add_constraint_and_objective_multiindex_rejected_v1() -> None:
+    """v1: an MI forced onto an expression is rejected at the constraint/objective."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    mi.name = "d"
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
+    with pytest.raises(ValueError, match=r"constraint .* v1 convention does not"):
+        m.add_constraints((1 * x).assign_coords(d=mi) >= 0, name="c")
+    with pytest.raises(ValueError, match=r"objective .* v1 convention does not"):
+        m.add_objective((1 * x).assign_coords(d=mi))

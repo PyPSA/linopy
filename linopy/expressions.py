@@ -91,6 +91,7 @@ from linopy.constants import (
 from linopy.semantics import (
     _legacy_coord_mismatch_message,
     _legacy_coord_reorder_message,
+    _legacy_group_multiindex_message,
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
@@ -378,10 +379,19 @@ class LinearExpressionGroupby:
 
             if int_map is not None:
                 index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
-                index.names = [str(col) for col in orig_group.columns]
+                level_names = [str(col) for col in orig_group.columns]
+                index.names = level_names
                 index.name = GROUP_DIM
-                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = ds.assign_coords(new_coords)
+                stacked_survives = multikey_frame is None or observed
+                if stacked_survives and is_v1():  # flat group dim + keys as aux coords
+                    ds = ds.assign_coords(
+                        {n: (GROUP_DIM, index.get_level_values(n)) for n in level_names}
+                    )
+                else:
+                    if multikey_frame is None:  # user-facing frame grouper
+                        warn_legacy(_legacy_group_multiindex_message(level_names))
+                    new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
+                    ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
             if multikey_frame is not None and not observed:
