@@ -243,6 +243,10 @@ class ConstraintBase(ABC):
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
 
+    @abstractmethod
+    def active_row_mask(self) -> np.ndarray:
+        """Boolean mask over raveled rows selecting active constraint rows."""
+
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
     ) -> Constraint:
@@ -955,6 +959,9 @@ class CSRConstraint(ConstraintBase):
     def active_labels(self) -> np.ndarray:
         return self._con_labels
 
+    def active_row_mask(self) -> np.ndarray:
+        return np.ones(self._csr.shape[0], dtype=bool)
+
     def sanitize_zeros(self) -> CSRConstraint:
         """
         Remove terms with zero or near-zero coefficients.
@@ -1531,9 +1538,8 @@ class Constraint(ConstraintBase):
         row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
         con_labels = labels_flat[row_mask]
         vars_final = vars_2d[row_mask]
-        valid_final = vars_final != -1
-
         coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
+        valid_final = (vars_final != -1) & (coeffs_final != 0)
         cols = label_to_pos[vars_final[valid_final]]
         data = coeffs_final[valid_final]
 
@@ -1566,7 +1572,8 @@ class Constraint(ConstraintBase):
         csr.sum_duplicates()
         return csr, con_labels
 
-    def active_labels(self) -> np.ndarray:
+    def active_row_mask(self) -> np.ndarray:
+        """Boolean mask over raveled rows: label set and at least one variable present."""
         labels_flat = self.labels.values.ravel()
         vars_vals = self.vars.values
         n_rows = len(labels_flat)
@@ -1575,8 +1582,10 @@ class Constraint(ConstraintBase):
             if n_rows > 0
             else vars_vals.reshape(0, max(1, vars_vals.size))
         )
-        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
-        return labels_flat[row_mask]
+        return (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+
+    def active_labels(self) -> np.ndarray:
+        return self.labels.values.ravel()[self.active_row_mask()]
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
