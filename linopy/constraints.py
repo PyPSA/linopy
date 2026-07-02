@@ -852,11 +852,73 @@ class CSRConstraint(ConstraintBase):
 
         return "\n".join(lines)
 
+    def _csr_for_index(
+        self, label_index: VariableLabelIndex | None
+    ) -> scipy.sparse.csr_array:
+        """
+        Return the cached CSR widened to the current active-variable count.
+
+        The CSR is cached at freeze time with as many columns as there were
+        active variables then. If variables were added afterwards (e.g. an
+        auxiliary variable introduced by a constraint added after this one was
+        frozen), the active-variable count has grown and the cached CSR is too
+        narrow to be stacked with constraints frozen later, so
+        ``Constraints.to_matrix`` fails with an axis-1 dimension mismatch.
+
+        Variable positions are assigned in encounter order and are stable under
+        additions, so widening the column dimension only appends empty trailing
+        columns and keeps every per-constraint block consistent with
+        ``label_index.n_active_vars``.
+        """
+        csr = self._csr
+        if label_index is None:
+            return csr
+        n_active_vars = label_index.n_active_vars
+        if csr.shape[1] < n_active_vars:
+            csr = scipy.sparse.csr_array(
+                (csr.data, csr.indices, csr.indptr),
+                shape=(csr.shape[0], n_active_vars),
+            )
+        return csr
+
+    def _remap_columns(
+        self, old_vlabels: np.ndarray, new_label_index: VariableLabelIndex
+    ) -> None:
+        """
+        Rewrite cached CSR column positions after variables were removed.
+
+        The cached CSR stores absolute dense variable positions from freeze
+        time. Removing a variable renumbers the positions of every later
+        variable, so those cached positions go stale (wrong columns and wrong
+        width). ``old_vlabels`` gives the variable label at each column position
+        currently used by the CSR; ``new_label_index`` provides the post-removal
+        label -> position mapping. A frozen constraint that referenced a removed
+        variable has already been dropped, so every remaining column maps to a
+        valid new position.
+        """
+        csr = self._csr
+        n_active_vars = new_label_index.n_active_vars
+        if csr.nnz == 0:
+            self._csr = scipy.sparse.csr_array(
+                (csr.shape[0], n_active_vars), dtype=csr.dtype
+            )
+            return
+        new_positions = new_label_index.label_to_pos[old_vlabels[csr.indices]]
+        if (new_positions < 0).any():
+            raise ValueError(
+                "Frozen constraint references a removed variable while remapping "
+                "columns; this should not happen."
+            )
+        self._csr = scipy.sparse.csr_array(
+            (csr.data, new_positions, csr.indptr),
+            shape=(csr.shape[0], n_active_vars),
+        )
+
     def to_matrix(
         self, label_index: VariableLabelIndex | None = None
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
         """Return the stored CSR matrix and con_labels."""
-        return self._csr, self._con_labels
+        return self._csr_for_index(label_index), self._con_labels
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset with raw CSR components for netcdf serialization."""
@@ -945,12 +1007,17 @@ class CSRConstraint(ConstraintBase):
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
-        """Return (csr, con_labels, b, sense) — all pre-stored, no recomputation."""
+        """
+        Return (csr, con_labels, b, sense) — pre-stored, widened if needed.
+
+        See ``_csr_for_index`` for why the cached CSR may need widening to the
+        current active-variable count before it can be stacked.
+        """
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
             sense = np.array([s[0] for s in self._sign])
-        return self._csr, self._con_labels, self._rhs, sense
+        return self._csr_for_index(label_index), self._con_labels, self._rhs, sense
 
     def active_labels(self) -> np.ndarray:
         return self._con_labels
