@@ -22,10 +22,20 @@ if TYPE_CHECKING:
 
 
 def _stack(csrs: list) -> scipy.sparse.csr_array | None:
-    """Vertically stack CSR blocks, or None when there are none."""
+    """
+    Vertically stack CSR blocks, or None when there are none.
+
+    Explicit zeros are dropped: expressions that broadcast against a dense
+    coordinate store one coefficient per pair, most of them zero, and a zero
+    coefficient never changes a constraint. Keeping them only inflates the
+    stored nnz handed to the solvers/writers (e.g. ``highspy.addRows`` scales
+    with stored nnz), so we prune them once, centrally, for every backend.
+    """
     if not csrs:
         return None
-    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+    stacked = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+    stacked.eliminate_zeros()
+    return stacked
 
 
 def _concat(arrays: list, dtype: type | None = None) -> ndarray:
