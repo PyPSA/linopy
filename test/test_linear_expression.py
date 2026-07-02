@@ -7,7 +7,10 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+import logging
 import warnings
+from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -1906,6 +1909,190 @@ def test_linear_expression_groupby_from_variable(v: Variable) -> None:
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.nterm == 10
+
+
+@pytest.fixture
+def scatter_ctx() -> SimpleNamespace:
+    """Shared 60-element building blocks for the scatter-vs-unstack case table."""
+    m = Model()
+    rng = np.random.default_rng(0)
+    idx = pd.RangeIndex(60, name="elem")
+    other = pd.Index(list("abc"), name="other")
+    p, q = pd.Index(list("pq"), name="p"), pd.Index([10, 20, 30], name="q")
+    a, b = pd.Index(range(12), name="a"), pd.Index(list("vwxyz"), name="b")
+
+    const = xr.DataArray(rng.normal(size=(3, 60)), coords=[other, idx])
+    y = m.add_variables(coords=[other, idx], name="y")
+    yab = m.add_variables(coords=[a, b], name="yab")
+    stacked = LinearExpression((2 * yab + 1 * yab).data.stack(elem=["a", "b"]), m)
+    skewed = pd.Series(rng.choice(8, 60, p=[0.5] + [0.5 / 7] * 7), index=idx, name="g")
+
+    return SimpleNamespace(
+        m=m,
+        x=m.add_variables(coords=[idx], name="x"),
+        y=y,
+        y3=m.add_variables(coords=[p, q, idx], name="y3"),
+        mx=m.add_variables(
+            coords=[idx], name="mx", mask=xr.DataArray(np.arange(60) % 4 != 0, [idx])
+        ),
+        my=m.add_variables(
+            coords=[other, idx],
+            name="my",
+            mask=xr.DataArray(rng.random((3, 60)) > 0.25, [other, idx]),
+        ),
+        const=const,
+        nan_const=const.where(rng.random((3, 60)) > 0.3),
+        nan_vec=np.where(np.arange(60) % 3, np.nan, 5.0),
+        y_aux=(2 * y + 1 * y).assign_coords(
+            carrier=("elem", rng.choice(list("PQ"), 60)),
+            tag=(("other", "elem"), rng.integers(0, 9, (3, 60))),
+        ),
+        stacked=stacked,
+        skewed=skewed,
+        one_group=pd.Series(1, index=idx, name="g"),
+        identity=pd.Series(np.arange(60), index=idx, name="g"),
+        mi_groups=skewed.set_axis(stacked.data.indexes["elem"]),
+    )
+
+
+# Each case maps a structure to (expr, groups) from `scatter_ctx`. The skewed
+# group puts ~half the elements in group 0 and spreads 1..7 over the rest.
+SCATTER_EQUALS_UNSTACK_CASES = {
+    "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
+    "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
+    "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
+    "masked_vars": lambda c: (1 * c.mx, c.skewed),
+    "quadratic": lambda c: (c.x * c.x + 2 * c.x, c.skewed),
+    "single_group": lambda c: (1 * c.x, c.one_group),
+    "identity_groups": lambda c: (1 * c.x, c.identity),
+    # combined structures exercising several features at once
+    "multidim_const_nan": lambda c: (
+        2 * c.y - 3 * c.y + 1 * c.y + c.nan_const,
+        c.skewed,
+    ),
+    "three_dims": lambda c: (4 * c.y3 + 1 * c.y3, c.skewed),
+    "quadratic_multidim_const": lambda c: (c.y * c.y + 2 * c.y + c.const, c.skewed),
+    "masked_multidim": lambda c: (5 * c.my - 2 * c.my, c.skewed),
+    # both collapse the grouped dim, dropping every coordinate tied to it
+    "aux_coords_on_group_dim": lambda c: (c.y_aux, c.skewed),
+    "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
+}
+
+
+class TestGroupbySumScatterKernel:
+    """
+    ``groupby(...).sum()`` takes a scatter fast path (``_sum_by_scatter``) for
+    numpy-backed expressions and falls back to the xarray unstack machinery
+    (``_sum_by_unstack``) for chunked data and exotic coordinates. These tests
+    pin the two kernels together and cover the structural edge cases.
+    """
+
+    @staticmethod
+    def _assert_kernels_identical(gb: Any, groups: pd.Series, m: Model) -> None:
+        """Force both kernels and assert they produce the same expression."""
+        scatter = LinearExpression(gb._sum_by_scatter(groups).rename(_group="g"), m)
+        unstack = LinearExpression(gb._sum_by_unstack(groups).rename(_group="g"), m)
+
+        assert scatter.data.coeffs.dims == unstack.data.coeffs.dims
+        assert scatter.data.const.dims == unstack.data.const.dims
+        assert list(scatter.data.coords) == list(unstack.data.coords)
+        for name in scatter.data.coords:
+            assert_equal(scatter.data[name], unstack.data[name])
+
+        np.testing.assert_array_equal(scatter.vars.values, unstack.vars.values)
+        np.testing.assert_array_equal(scatter.coeffs.values, unstack.coeffs.values)
+        # constants may differ only by floating-point summation order
+        np.testing.assert_allclose(
+            scatter.const.values, unstack.const.values, rtol=1e-12
+        )
+
+    def test_skewed_unsorted_groups(self, v: Variable) -> None:
+        """
+        The scatter-based fast path must match the xarray fallback for groups
+        that are unsorted, non-contiguous and of very different sizes.
+        """
+        expr = 2 * v + 5
+        # 'b' appears 14 times, 'c' 5 times, 'a' once, scattered over the dimension
+        labels = ["b"] * 4 + ["c", "a"] + ["b"] * 5 + ["c"] * 4 + ["b"] * 5
+        groups = pd.Series(labels, index=v.indexes["dim_2"], name="letter")
+
+        grouped = expr.groupby(groups).sum()
+        fallback = expr.groupby(groups.to_xarray()).sum(use_fallback=True)
+
+        assert list(grouped.data.letter) == ["a", "b", "c"]
+        # padded to the largest group times the number of terms of the input
+        assert grouped.nterm == 14 * expr.nterm
+        assert_linequal(grouped, fallback)
+
+        # every group carries exactly the variables of its members, rest is fill
+        for letter in ["a", "b", "c"]:
+            members = np.where(np.array(labels) == letter)[0]
+            vars_of_group = grouped.data.vars.sel(letter=letter).values
+            present = set(vars_of_group[vars_of_group >= 0])
+            assert present == set(v.labels.values[members])
+            assert (vars_of_group >= 0).sum() == len(members) * expr.nterm
+            assert grouped.const.sel(letter=letter).item() == 5 * len(members)
+
+    def test_chunked_uses_unstack(
+        self, v: Variable, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Chunked (dask-backed) expressions group via xarray's unstack path."""
+        pytest.importorskip("dask")
+        expr = 2 * v + 5
+        groups = pd.Series([1] * 12 + [2] * 8, index=v.indexes["dim_2"], name="group")
+
+        chunked = LinearExpression(expr.data.chunk({"dim_2": 5}), expr.model)
+        with caplog.at_level(logging.DEBUG, logger="linopy.expressions"):
+            grouped_chunked = chunked.groupby(groups).sum()
+        assert "falling back to the unstack kernel" in caplog.text
+
+        grouped = expr.groupby(groups).sum()
+        assert grouped_chunked.nterm == grouped.nterm
+        assert_linequal(
+            LinearExpression(grouped_chunked.data.compute(), expr.model), grouped
+        )
+
+    def test_nan_groups_raise(self, v: Variable) -> None:
+        expr = 1 * v
+        groups = pd.Series(
+            [1.0, np.nan] * 10, index=v.indexes["dim_2"], name="with_nans"
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            expr.groupby(groups).sum()
+
+    def test_empty_groups(self) -> None:
+        """An empty group dimension scatters into an empty, well-formed result."""
+        m = Model()
+        idx = pd.RangeIndex(0, name="elem")
+        x = m.add_variables(coords=[idx], name="x")
+        groups = pd.Series([], index=idx, name="g", dtype=int)
+
+        grouped = (1 * x).groupby(groups).sum()
+        assert grouped.nterm == 0
+        assert dict(grouped.data.sizes) == {"g": 0, "_term": 0}
+
+    @pytest.mark.parametrize(
+        "build",
+        SCATTER_EQUALS_UNSTACK_CASES.values(),
+        ids=SCATTER_EQUALS_UNSTACK_CASES.keys(),
+    )
+    def test_scatter_equals_unstack(
+        self,
+        build: Callable[[SimpleNamespace], tuple[LinearExpression, pd.Series]],
+        scatter_ctx: SimpleNamespace,
+    ) -> None:
+        """
+        Lock the two groupby-sum kernels together.
+
+        The fast path scatters terms into numpy arrays (``_sum_by_scatter``);
+        the unstack implementation (``_sum_by_unstack``) is kept for chunked
+        data. Both must stay interchangeable — if an xarray/pandas update
+        changes the unstack output or an edge case diverges, this fails. See
+        ``SCATTER_EQUALS_UNSTACK_CASES`` for the structures covered.
+        """
+        expr, groups = build(scatter_ctx)
+        gb = expr.groupby(groups)
+        self._assert_kernels_identical(gb, groups, scatter_ctx.m)
 
 
 def test_linear_expression_rolling(v: Variable) -> None:
