@@ -85,7 +85,7 @@ dev = [
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.
 benchmarks = [
-    "highspy==1.13.1",
+    "highspy==1.15.0",
     "netcdf4==1.7.4",
     "numpy==2.4.6",
     "scipy==1.17.1",
