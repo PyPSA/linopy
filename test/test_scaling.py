@@ -63,6 +63,35 @@ def test_quadratic_objective_scaling_in_matrix() -> None:
     )
 
 
+def test_indicator_constraint_scaling_in_matrix() -> None:
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
+    b = m.add_variables(binary=True, name="b")
+
+    rhs = xr.DataArray([20.0, 40.0], coords=[i])
+    scaling = xr.DataArray([2.0, 4.0], coords=[i])
+    con = m.add_indicator_constraints(
+        b,
+        1,
+        2 * x,
+        "<=",
+        rhs,
+        name="ic",
+        scaling=scaling,
+    )
+
+    np.testing.assert_allclose(con.scaling.values, [2.0, 4.0])
+    np.testing.assert_allclose(m.matrices.indicator_b, [10.0, 10.0])
+    np.testing.assert_allclose(
+        m.matrices.indicator_A.toarray(),
+        [
+            [2 / 10 / 2, 0.0, 0.0],
+            [0.0, 2 / 100 / 4, 0.0],
+        ],
+    )
+
+
 def test_assign_result_unscales_solution_objective_and_dual() -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")

@@ -108,10 +108,18 @@ class MatrixAccessor:
             if csr.shape[0] == 0:
                 return csr, b
             row_scaling = con_scaling_by_label[con_labels]
-            csr = csr.multiply(1 / row_scaling[:, np.newaxis])
+            # With solver variables y = Sx * x, constraints A x = b become
+            # Sc^-1 * A * Sx^-1 * y = Sc^-1 * b.
+            csr = cast(
+                scipy.sparse.csr_array,
+                csr.multiply(1 / row_scaling[:, np.newaxis]).tocsr(),
+            )
             if csr.shape[1] and len(self.var_scaling):
-                csr = csr.multiply(1 / self.var_scaling[np.newaxis, :])
-            return cast(scipy.sparse.csr_array, csr), b / row_scaling
+                csr = cast(
+                    scipy.sparse.csr_array,
+                    csr.multiply(1 / self.var_scaling[np.newaxis, :]).tocsr(),
+                )
+            return csr, b / row_scaling
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
@@ -180,10 +188,11 @@ class MatrixAccessor:
             return None
         q = expr.to_matrix()[self.vlabels][:, self.vlabels]
         if q.nnz:
+            # Quadratic coefficients get one inverse column scaling per factor.
             q = q.multiply(1 / self.var_scaling[:, np.newaxis])
             q = q.multiply(1 / self.var_scaling[np.newaxis, :])
             q = q / self._parent.objective.scaling
-        return q
+        return q.tocsc()
 
     @cached_property
     def sol(self) -> ndarray:

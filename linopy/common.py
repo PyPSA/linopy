@@ -102,7 +102,9 @@ def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
     """
     Validate and normalize a scaling array.
 
-    Scaling values are multiplicative numeric factors used during solver export.
+    Scaling values are positive numeric factors used during solver export. A
+    factor of ``s`` divides coefficients in the scaled solver problem by
+    ``s`` along the corresponding row, column, or objective expression.
     They must be finite and strictly positive.
     """
     scaling = scaling.astype(float)

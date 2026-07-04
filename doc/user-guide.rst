@@ -53,6 +53,16 @@ coefficients and the right-hand side by ``s``. For objectives,
 ``s``. Primal values, dual values, and objective values are transformed
 back to the original user units after solving.
 
+Equivalently, for constraint matrix ``A``, right-hand side ``b``,
+linear objective coefficients ``c``, variable scaling matrix ``Sx``,
+constraint scaling matrix ``Sc``, and scalar objective scaling ``so``,
+linopy exports ``y = Sx x`` and
+``A_solver = Sc^-1 A Sx^-1``, ``b_solver = Sc^-1 b``, and
+``c_solver = c Sx^-1 / so``. Quadratic objective coefficients receive
+the inverse variable scaling once for each variable factor. The
+objective scaling is a scalar applied to all objective coefficients,
+not a row-wise array.
+
 .. code-block:: python
 
    x = m.add_variables(lower=0, scaling=1e3, name="x")

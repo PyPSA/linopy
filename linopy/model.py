@@ -660,8 +660,10 @@ class Model:
         scaling : float/array_like, optional
             Positive finite scaling factor(s) used when exporting the model to
             a solver. Continuous and semi-continuous solver variables are
-            represented as ``scaling * variable``; binary and integer variables
-            keep their ordinary discrete solver columns. The default is 1.
+            represented as ``scaling * variable``, so coefficients in those
+            columns are divided by ``scaling`` and bounds are multiplied by it.
+            Binary and integer variables keep their ordinary discrete solver
+            columns. The default is 1.
         binary : bool
             Whether the new variable is a binary variable which are used for
             Mixed-Integer problems.
@@ -1173,6 +1175,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | None = None,
         name: str | None = None,
+        scaling: ConstantLike = 1,
     ) -> ConstraintBase:
         """
         Add indicator constraints to the model.
@@ -1200,6 +1203,10 @@ class Model:
             Right-hand side. Required when ``lhs`` is an expression.
         name : str, optional
             Name for the indicator constraint group.
+        scaling : float/array_like, optional
+            Positive finite scaling factor(s) for indicator rows. Solver-side
+            left-hand-side coefficients and right-hand-side values are divided
+            by this factor. The default is 1.
 
         Returns
         -------
@@ -1226,6 +1233,16 @@ class Model:
 
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+        row_coords = data.labels.coords
+        data = assign_multiindex_safe(
+            data,
+            scaling=validate_scaling(
+                broadcast_to_coords(
+                    scaling, row_coords, label="indicator constraint scaling"
+                ),
+                "indicator constraint scaling",
+            ),
+        )
 
         data = self._allocate_constraint_labels(data, name)
 

@@ -111,7 +111,7 @@ def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarra
 def _scale_objective_dataframe(
     df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
 ) -> pl.DataFrame:
-    """Apply solver-side variable and objective scaling to objective terms."""
+    """Divide objective coefficients by variable and objective scaling factors."""
     if df.is_empty():
         return df
 
@@ -130,7 +130,7 @@ def _scale_objective_dataframe(
 def _scale_bounds_dataframe(
     df: pl.DataFrame, variable_scaling: np.ndarray
 ) -> pl.DataFrame:
-    """Apply solver-side variable scaling to variable bounds."""
+    """Multiply bounds by solver-side variable scaling factors."""
     if df.is_empty():
         return df
     scales = _lookup_positive_labels(variable_scaling, df["labels"].to_numpy())
@@ -146,7 +146,7 @@ def _scale_constraint_dataframe(
     variable_scaling: np.ndarray,
     constraint_scaling: np.ndarray,
 ) -> pl.DataFrame:
-    """Apply solver-side variable and row scaling to constraint terms."""
+    """Divide constraint coefficients by column and row scaling factors."""
     if df.is_empty():
         return df
     row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
