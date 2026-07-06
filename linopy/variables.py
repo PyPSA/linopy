@@ -203,7 +203,8 @@ class Variable:
                 data, scaling=DataArray(1.0).broadcast_like(data.labels)
             )
         data = assign_multiindex_safe(
-            data, scaling=validate_scaling(data.scaling, f"scaling for variable '{name}'")
+            data,
+            scaling=validate_scaling(data.scaling, f"scaling for variable '{name}'"),
         )
         for attr in ("lower", "upper"):
             # convert to float, important for  operations like "shift"

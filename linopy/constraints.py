@@ -1196,9 +1196,7 @@ class Constraint(ConstraintBase):
             )
         data = assign_multiindex_safe(
             data,
-            scaling=validate_scaling(
-                data.scaling, f"scaling for constraint '{name}'"
-            ),
+            scaling=validate_scaling(data.scaling, f"scaling for constraint '{name}'"),
         )
 
         self._assigned = "labels" in data
