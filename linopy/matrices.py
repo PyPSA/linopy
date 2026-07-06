@@ -108,18 +108,18 @@ class MatrixAccessor:
             if csr.shape[0] == 0:
                 return csr, b
             row_scaling = con_scaling_by_label[con_labels]
-            # With solver variables y = Sx * x, constraints A x = b become
-            # Sc^-1 * A * Sx^-1 * y = Sc^-1 * b.
+            # With solver variables y = Scol * x, constraints A x = b become
+            # Srow * A * Scol^-1 * y = Srow * b.
             csr = cast(
                 scipy.sparse.csr_array,
-                csr.multiply(1 / row_scaling[:, np.newaxis]).tocsr(),
+                csr.multiply(row_scaling[:, np.newaxis]).tocsr(),
             )
             if csr.shape[1] and len(self.var_scaling):
                 csr = cast(
                     scipy.sparse.csr_array,
                     csr.multiply(1 / self.var_scaling[np.newaxis, :]).tocsr(),
                 )
-            return csr, b / row_scaling
+            return csr, b * row_scaling
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
@@ -175,7 +175,7 @@ class MatrixAccessor:
         mask = var_labels != -1
         positions = label_to_pos[var_labels[mask]]
         scaled_coeffs = coeffs[mask] / self.var_scaling[positions]
-        scaled_coeffs = scaled_coeffs / m.objective.scaling
+        scaled_coeffs = scaled_coeffs * m.objective.scaling
         np.add.at(result, positions, scaled_coeffs)
         return result
 
@@ -191,7 +191,7 @@ class MatrixAccessor:
             # Quadratic coefficients get one inverse column scaling per factor.
             q = q.multiply(1 / self.var_scaling[:, np.newaxis])
             q = q.multiply(1 / self.var_scaling[np.newaxis, :])
-            q = q / self._parent.objective.scaling
+            q = q * self._parent.objective.scaling
         return q.tocsc()
 
     @cached_property

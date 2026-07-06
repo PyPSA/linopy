@@ -37,15 +37,15 @@ def test_variable_constraint_and_objective_scaling_in_matrices() -> None:
 
     np.testing.assert_allclose(matrices.lb, [10.0, 200.0, 0.0])
     np.testing.assert_allclose(matrices.ub, [30.0, 400.0, 1.0])
-    np.testing.assert_allclose(matrices.b, [10.0, 10.0])
+    np.testing.assert_allclose(matrices.b, [40.0, 160.0])
     np.testing.assert_allclose(
         matrices.A.toarray(),
         [
-            [2 / 10 / 2, 0.0, 3 / 2],
-            [0.0, 2 / 100 / 4, 3 / 4],
+            [2 / 10 * 2, 0.0, 3 * 2],
+            [0.0, 2 / 100 * 4, 3 * 4],
         ],
     )
-    np.testing.assert_allclose(matrices.c, [5 / 10 / 10, 5 / 100 / 10, 7 / 10])
+    np.testing.assert_allclose(matrices.c, [5 / 10 * 10, 5 / 100 * 10, 7 * 10])
 
     assert float(b.scaling) == 50.0
 
@@ -59,7 +59,7 @@ def test_quadratic_objective_scaling_in_matrix() -> None:
 
     np.testing.assert_allclose(
         m.matrices.Q.toarray(),
-        np.diag([2 / 2 / 2 / 10, 2 / 4 / 4 / 10]),
+        np.diag([2 / 2 / 2 * 10, 2 / 4 / 4 * 10]),
     )
 
 
@@ -82,12 +82,12 @@ def test_indicator_constraint_scaling_in_matrix() -> None:
     )
 
     np.testing.assert_allclose(con.scaling.values, [2.0, 4.0])
-    np.testing.assert_allclose(m.matrices.indicator_b, [10.0, 10.0])
+    np.testing.assert_allclose(m.matrices.indicator_b, [40.0, 160.0])
     np.testing.assert_allclose(
         m.matrices.indicator_A.toarray(),
         [
-            [2 / 10 / 2, 0.0, 0.0],
-            [0.0, 2 / 100 / 4, 0.0],
+            [2 / 10 * 2, 0.0, 0.0],
+            [0.0, 2 / 100 * 4, 0.0],
         ],
     )
 
@@ -116,8 +116,8 @@ def test_assign_result_unscales_solution_objective_and_dual() -> None:
 
     np.testing.assert_allclose(x.solution.values, [2.0, 3.0])
     assert float(b.solution) == 1.0
-    assert m.objective.value == pytest.approx(123.0)
-    np.testing.assert_allclose(m.constraints["c"].dual.values, [20.0, 20.0])
+    assert m.objective.value == pytest.approx(1.23)
+    np.testing.assert_allclose(m.constraints["c"].dual.values, [0.8, 3.2])
 
 
 def test_scaling_is_preserved_in_netcdf(tmp_path) -> None:
@@ -146,8 +146,8 @@ def test_lp_export_uses_scaled_values(tmp_path) -> None:
     m.to_file(path, io_api="lp", progress=False)
     text = path.read_text()
 
-    assert "0.1 x0" in text
-    assert ">= 10.0" in text
+    assert "2.5 x0" in text
+    assert ">= 40.0" in text
     assert "<= +100.0" in text
 
 
@@ -173,7 +173,7 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     con.scaling = 2.0
 
     np.testing.assert_allclose(con.scaling.values, [2.0, 2.0])
-    np.testing.assert_allclose(m.matrices.b, [0.5, 0.5])
+    np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")

@@ -111,7 +111,7 @@ def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarra
 def _scale_objective_dataframe(
     df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
 ) -> pl.DataFrame:
-    """Divide objective coefficients by variable and objective scaling factors."""
+    """Apply column scaling and row-like objective scaling to objective terms."""
     if df.is_empty():
         return df
 
@@ -123,7 +123,7 @@ def _scale_objective_dataframe(
         scales = scale1 * scale2
 
     return df.with_columns(
-        (pl.col("coeffs") / pl.Series(scales) / objective_scaling).alias("coeffs")
+        (pl.col("coeffs") / pl.Series(scales) * objective_scaling).alias("coeffs")
     )
 
 
@@ -146,15 +146,15 @@ def _scale_constraint_dataframe(
     variable_scaling: np.ndarray,
     constraint_scaling: np.ndarray,
 ) -> pl.DataFrame:
-    """Divide constraint coefficients by column and row scaling factors."""
+    """Divide by column scaling and multiply by row scaling."""
     if df.is_empty():
         return df
     row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
     var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
     row_scale_series = pl.Series(row_scales)
     return df.with_columns(
-        (pl.col("coeffs") / pl.Series(var_scales) / row_scale_series).alias("coeffs"),
-        (pl.col("rhs") / row_scale_series).alias("rhs"),
+        (pl.col("coeffs") / pl.Series(var_scales) * row_scale_series).alias("coeffs"),
+        (pl.col("rhs") * row_scale_series).alias("rhs"),
     )
 
 
@@ -586,14 +586,14 @@ def indicator_constraints_to_file(
             for coeff, var_label, var_name in zip(
                 coeffs_flat[i][valid], vars_flat[i][valid], var_names
             ):
-                coeff = float(coeff) / variable_scaling[int(var_label)] / row_scale
+                coeff = float(coeff) / variable_scaling[int(var_label)] * row_scale
                 prefix = "+" if coeff >= 0 else ""
                 terms.append(f"{prefix}{coeff} {var_name}")
 
             lhs_str = " ".join(terms)
             line = (
                 f"ic{labels_flat[i]}: {bvar_name} = {int(binary_val_flat[i])} -> "
-                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i]) / row_scale}\n"
+                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i]) * row_scale}\n"
             )
             f.write(line.encode())
 
@@ -631,9 +631,7 @@ def constraints_to_file(
         con = regular[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
-            df = _scale_constraint_dataframe(
-                df, variable_scaling, constraint_scaling
-            )
+            df = _scale_constraint_dataframe(df, variable_scaling, constraint_scaling)
 
             if df.height == 0:
                 continue

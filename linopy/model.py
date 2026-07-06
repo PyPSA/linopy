@@ -1074,7 +1074,7 @@ class Model:
             ``Model.freeze_constraints`` setting (default False).
         scaling : float/array_like, optional
             Positive finite scaling factor(s) for constraint rows. Solver-side
-            left-hand-side coefficients and right-hand-side values are divided
+            left-hand-side coefficients and right-hand-side values are multiplied
             by this factor. The default is 1.
 
         Returns
@@ -1124,9 +1124,7 @@ class Model:
         data = assign_multiindex_safe(
             data,
             scaling=validate_scaling(
-                broadcast_to_coords(
-                    scaling, row_coords, label="constraint scaling"
-                ),
+                broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
                 "constraint scaling",
             ),
         )
@@ -1205,7 +1203,7 @@ class Model:
             Name for the indicator constraint group.
         scaling : float/array_like, optional
             Positive finite scaling factor(s) for indicator rows. Solver-side
-            left-hand-side coefficients and right-hand-side values are divided
+            left-hand-side coefficients and right-hand-side values are multiplied
             by this factor. The default is 1.
 
         Returns
@@ -1279,8 +1277,8 @@ class Model:
             Objective sense. The default is "min".
         scaling : float, optional
             Positive finite scaling factor for the objective. Solver-side
-            objective coefficients are divided by this factor and reported
-            objective values are multiplied back. The default is 1.
+            objective coefficients are multiplied by this factor and reported
+            objective values are divided back. The default is 1.
 
         Returns
         -------
@@ -2024,7 +2022,7 @@ class Model:
         result.info()
 
         if result.solution is not None:
-            self.objective._value = result.solution.objective * self.objective.scaling
+            self.objective._value = result.solution.objective / self.objective.scaling
 
         status_value = result.status.status.value
         termination_condition = result.status.termination_condition.value
@@ -2040,9 +2038,10 @@ class Model:
         primal = result.solution.primal
         for _, var in self.variables.items():
             start, end = var.range
-            values = primal[start:end].reshape(var.shape) / variable_solver_scaling(
-                var
-            ).values
+            values = (
+                primal[start:end].reshape(var.shape)
+                / variable_solver_scaling(var).values
+            )
             var.solution = xr.DataArray(values, var.coords)
 
         if len(result.solution.dual):
@@ -2054,12 +2053,10 @@ class Model:
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 values = (
                     dual[start:end].reshape(con.shape)
-                    * self.objective.scaling
-                    / con.scaling.values
+                    * con.scaling.values
+                    / self.objective.scaling
                 )
-                con.dual = xr.DataArray(
-                    values, coords, dims=con.coord_dims
-                )
+                con.dual = xr.DataArray(values, coords, dims=con.coord_dims)
 
         return status_value, termination_condition
 
