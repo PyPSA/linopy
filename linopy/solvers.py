@@ -1472,7 +1472,13 @@ class GLPK(Solver[None]):
         info_io = io.StringIO("".join(read_until_break(f))[:-2])
         info = pd.read_csv(info_io, sep=":", index_col=0, header=None)[1]
         condition = info.Status.lower().strip()
-        objective = float(re.sub(r"[^0-9\.\+\-e]+", "", info.Objective))
+        match = re.search(
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+            info.Objective,
+        )
+        if match is None:
+            raise ValueError(f"Could not parse objective value: {info.Objective!r}")
+        objective = float(match.group(0))
 
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
