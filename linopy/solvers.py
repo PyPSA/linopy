@@ -1367,6 +1367,27 @@ class CBC(Solver[None]):
 class GLPK(Solver[None]):
     """
     Solver subclass for the GLPK solver.
+    """
+
+    _OBJECTIVE_TOKEN: ClassVar[re.Pattern[str]] = re.compile(
+        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    )
+
+    @classmethod
+    def _parse_objective(cls, text: str) -> float:
+        """
+        Extract the objective value from a GLPK ``Objective:`` line.
+
+        GLPK reports the objective as ``<name> = <value> (MINimum)``. Anchoring
+        on the ``=`` drops the objective name before matching the first
+        float/scientific-notation token, so surrounding text can no longer
+        corrupt the parsed value.
+        """
+        _, _, tail = text.rpartition("=")
+        match = cls._OBJECTIVE_TOKEN.search(tail)
+        if match is None:
+            raise ValueError(f"Could not parse objective value: {text!r}")
+        return float(match.group(0))
 
     Attributes
     ----------
@@ -1472,13 +1493,7 @@ class GLPK(Solver[None]):
         info_io = io.StringIO("".join(read_until_break(f))[:-2])
         info = pd.read_csv(info_io, sep=":", index_col=0, header=None)[1]
         condition = info.Status.lower().strip()
-        match = re.search(
-            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
-            info.Objective,
-        )
-        if match is None:
-            raise ValueError(f"Could not parse objective value: {info.Objective!r}")
-        objective = float(match.group(0))
+        objective = self._parse_objective(info.Objective)
 
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
