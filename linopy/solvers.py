@@ -1374,16 +1374,16 @@ class GLPK(Solver[None]):
         options for the given solver
     """
 
-    _OBJECTIVE_TOKEN: ClassVar[re.Pattern[str]] = re.compile(
-        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
-    )
-
     display_name: ClassVar[str] = "GLPK"
     features: ClassVar[frozenset[SolverFeature]] = frozenset(
         {
             SolverFeature.INTEGER_VARIABLES,
             SolverFeature.READ_MODEL_FROM_FILE,
         }
+    )
+
+    _OBJECTIVE_TOKEN: ClassVar[re.Pattern[str]] = re.compile(
+        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
     )
 
     @classmethod
