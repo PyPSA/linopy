@@ -570,7 +570,6 @@ class TestAssignResultWiring:
         assert m.solver is None
 
 
-
 @pytest.mark.parametrize(
     "objective_text, expected",
     [
