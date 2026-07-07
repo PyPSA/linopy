@@ -21,7 +21,7 @@ from linopy.declarative import (
     mask_parser,
 )
 from linopy.declarative.schema import MATH_DEFS_T, ConfigModel, MathModel, _Equations
-
+from linopy.expressions import LinearExpression
 if TYPE_CHECKING:
     from linopy.model import Model
 TRUE_ARRAY = xr.DataArray(True)
@@ -294,10 +294,10 @@ class ParsedBackendEquation:
         model: Model,
         math: MathModel,
         *,
-        return_type: Literal["array"] = "array",
+        return_type: Literal["expr"] = "expr",
         references: set | None = None,
         mask: xr.DataArray = TRUE_ARRAY,
-    ) -> xr.DataArray: ...
+    ) -> LinearExpression: ...
 
     # Expecting string if requesting latex string.
     @overload
@@ -317,10 +317,10 @@ class ParsedBackendEquation:
         model: Model,
         math: MathModel,
         *,
-        return_type: Literal["array", "math_string"] = "array",
+        return_type: Literal["expr", "math_string"] = "expr",
         references: set | None = None,
         mask: xr.DataArray = TRUE_ARRAY,
-    ) -> xr.DataArray | str:
+    ) -> LinearExpression | str:
         """
         Evaluate a math string to produce an array backend objects or a LaTex math string.
 
@@ -416,7 +416,7 @@ class ParsedBackendComponent(ParsedBackendEquation):
     _ERR_STRING_ORDER: list[str] = ["expression_group", "id", "expr_or_mask"]
     PARSERS: dict[str, Callable] = {
         "constraints": expression_parser.generate_equation_parser,
-        "global_expressions": expression_parser.generate_arithmetic_parser,
+        "expressions": expression_parser.generate_arithmetic_parser,
         "postprocessed": expression_parser.generate_arithmetic_parser,
         "objectives": expression_parser.generate_arithmetic_parser,
         "piecewise_constraints": expression_parser.generate_arithmetic_parser,
@@ -426,7 +426,7 @@ class ParsedBackendComponent(ParsedBackendEquation):
         self,
         group: Literal[
             "variables",
-            "global_expressions",
+            "expressions",
             "constraints",
             "piecewise_constraints",
             "objectives",
@@ -443,7 +443,7 @@ class ParsedBackendComponent(ParsedBackendEquation):
         objects that can be passed onto a solver interface like Pyomo or Gurobipy.
 
         Args:
-            group (Literal["variables", "global_expressions", "constraints", "objectives"]):
+            group (Literal["variables", "expressions", "constraints", "objectives"]):
                 Optimisation problem component group to which the unparsed data belongs.
             name (str): Name of the optimisation problem component
             unparsed_data (T): Unparsed math formulation. Expected structure depends on

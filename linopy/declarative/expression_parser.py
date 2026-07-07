@@ -35,7 +35,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
-from typing import Any, Literal, overload
+from typing import Any, Literal, overload, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -44,15 +44,17 @@ import xarray as xr
 
 from linopy.declarative.eval_attrs import EvalAttrs
 from linopy.declarative.helper_functions import ParsingHelperFunction
-from linopy.expressions import LinearExpression
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.variables import Variable
 
 pp.ParserElement.enable_packrat()
 
 SUB_EXPRESSION_CLASSIFIER = "$"
 
-
-RETURN_T = Literal["array", "math_string"]
+EXPR_T = LinearExpression | QuadraticExpression
+EXPRVAR_T = TypeVar("EXPRVAR_T", LinearExpression, QuadraticExpression)
+ARRAY_T = TypeVar("ARRAY_T", LinearExpression, QuadraticExpression, xr.DataArray)
+RETURN_T = Literal["expr", "array", "math_string"]
 
 
 class EvalString(ABC):
@@ -62,7 +64,7 @@ class EvalString(ABC):
     eval_attrs: EvalAttrs
     instring: str
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         """Functionality for '==' operations."""
         return self.__repr__() == other
 
@@ -94,6 +96,12 @@ class EvalArrayOrMath(EvalString):
         The purpose of this is to be able to access the string/number value whether we query the array name or its data.
         """
 
+    def as_expr(self) -> xr.DataArray | list[xr.DataArray]:
+        """
+        Evaluate and return expression as a LinearExpression or QuadraticExpression.
+        """
+        return self.as_array()
+
     # Math strings evaluate to strings.
     @overload
     def eval(
@@ -108,7 +116,7 @@ class EvalArrayOrMath(EvalString):
 
     def eval(
         self, return_type: RETURN_T, eval_attrs: EvalAttrs
-    ) -> str | xr.DataArray | list[xr.DataArray]:
+    ) -> str | xr.DataArray | list[xr.DataArray] | EXPR_T:
         """
         Evaluate math string expression.
 
@@ -123,204 +131,83 @@ class EvalArrayOrMath(EvalString):
                 If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
         """
         self.eval_attrs = eval_attrs
-        evaluated: str | list[str | float] | xr.DataArray | list[xr.DataArray]
+        evaluated: str | list[str | float] | xr.DataArray | list[xr.DataArray] | EXPR_T
         if return_type == "array":
             evaluated = self.as_array()
         elif return_type == "math_string":
             evaluated = self.as_math_string()
+        elif return_type == "expr":
+            evaluated = self.as_expr()
+
         return evaluated
 
-
-class EvalToCallable(EvalString):
-    """Parent class for callable functionality."""
+class EvalArrayOrMathExpr(EvalString):
+    """Abstract class to evaluate expressions as either arrays or math strings."""
 
     @abstractmethod
-    def as_callable(self, return_type: RETURN_T) -> Callable:
-        """Callable processing."""
-        ...
+    def as_math_string(self) -> str:
+        """Evaluate and return expression as LaTeX."""
 
-    def eval(self, return_type: RETURN_T, eval_attrs: EvalAttrs) -> Callable:
+    @abstractmethod
+    def as_array(self) -> xr.DataArray | list[xr.DataArray]:
+        """
+        Evaluate and return expression as a DataArray or list.
+
+        If the evaluated expression returns a simple string or number,
+        this value will be assigned as both the `name` and the data of the returned DataArray.
+        The purpose of this is to be able to access the string/number value whether we query the array name or its data.
+        """
+
+    @abstractmethod
+    def as_expr(self) -> EXPR_T:
+        """
+        Evaluate and return expression as a LinearExpression or QuadraticExpression.
+        """
+
+    # Math strings evaluate to strings.
+    @overload
+    def eval(
+        self, return_type: Literal["math_string"], eval_attrs: EvalAttrs
+    ) -> str: ...
+
+    # Arrays evaluate to arrays
+    @overload
+    def eval(
+        self, return_type: Literal["array"], eval_attrs: EvalAttrs
+    ) -> xr.DataArray | list[xr.DataArray]: ...
+
+    def eval(
+        self, return_type: RETURN_T, eval_attrs: EvalAttrs
+    ) -> str | xr.DataArray | list[xr.DataArray] | EXPR_T:
         """
         Evaluate math string expression.
 
         Args:
-            return_type (str): Whether to return a math string or xarray DataArray.
+            return_type (Literal[math_string, input, array]):
+                Dictates how the expression should be evaluated (see `Returns` section).
             eval_attrs (EvalAttrs): Evaluation attributes.
 
         Returns:
-            Callable: returns helper function.
+            str | list[str | float] | xr.DataArray:
+                If `math_string` is desired, returns a valid LaTex math string.
+                If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
         """
         self.eval_attrs = eval_attrs
-        evaluated = self.as_callable(return_type)
-        return evaluated
-
-
-class EvalOperatorOperand(EvalArrayOrMath):
-    """Evaluation of math operands."""
-
-    LATEX_OPERATOR_LOOKUP: dict[str, str] = {
-        "**": "{val}^{{{operand}}}",
-        "*": r"{val} \times {operand}",
-        "/": r"\frac{{ {val} }}{{ {operand} }}",
-        "+": "{val} + {operand}",
-        "-": "{val} - {operand}",
-    }
-    SKIP_IF: list[str] = ["+", "-"]
-
-    def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
-        """
-        Process successfully parsed expressions with operands separated by an operator.
-
-        I.e.: OPERAND OPERATOR OPERAND OPERATOR OPERAND ...
-
-        Args:
-            instring (str): String that was parsed (used in error message).
-            loc (int):
-                Location in parsed string where parsing error was logged.
-                This is not used; we include it as pyparsing injects it alongside `instring` when setting the parse action.
-            tokens (pp.ParseResults):
-                Contains a list of the form [operand (pp.ParseResults), operator (str),
-                operand (pp.ParseResults), operator (str), ...].
-        """
-        self.value: pp.ParseResults = tokens[0]
-        self.values = tokens
-        self.instring = instring
-
-    def __repr__(self) -> str:
-        """Programming / official string representation."""
-        first_operand = self.value[0].__repr__()
-        operand_operator_pairs = " ".join(
-            op + " " + val.__repr__()
-            for op, val in self._operator_operands(self.value[1:])
-        )
-        arithmetic_string = f"({first_operand} {operand_operator_pairs})"
-        return arithmetic_string
-
-    def _operator_operands(
-        self, token_list: list
-    ) -> Iterator[tuple[str, pp.ParseResults]]:
-        """Generator to extract operators and operands in pairs."""
-        it = iter(token_list)
-        while 1:
-            try:
-                yield (next(it), next(it))
-            except StopIteration:
-                break
-
-    def _apply_mask(self, evaluated: xr.DataArray) -> xr.DataArray:
-        """Util function to apply mask arrays to non-latex strings."""
-        mask = self.eval_attrs.mask
-        try:
-            evaluated = evaluated.where(mask)
-        except AttributeError:
-            evaluated = evaluated.broadcast_like(mask).where(mask)
+        evaluated: str | list[str | float] | xr.DataArray | list[xr.DataArray] | EXPR_T
+        if return_type == "array":
+            evaluated = self.as_array()
+        elif return_type == "math_string":
+            evaluated = self.as_math_string()
+        elif return_type == "expr":
+            evaluated = self.as_expr()
 
         return evaluated
 
-    def _skip_component_on_conditional(self, component: str, operator_: str) -> bool:
-        """
-        Conditional to skip adding to math string if element evaluates to zero.
 
-        E.g., "0 + flow_cap" is better evaluated as simply "flow_cap".
-        """
-        return component == "0" and operator_ in self.SKIP_IF
-
-    @staticmethod
-    def _operate(
-        val: xr.DataArray, evaluated_operand: xr.DataArray, operator_: str
-    ) -> xr.DataArray:
-        """Apply evaluated operation on two DataArrays."""
-        match operator_:
-            case "**":
-                val = val**evaluated_operand
-            case "*":
-                val = val * evaluated_operand
-            case "/":
-                val = val / evaluated_operand
-            case "+":
-                val = val + evaluated_operand
-            case "-":
-                val = val - evaluated_operand
-        return val
-
-    def as_math_string(self) -> str:  # noqa: D102, override
-        val = self.value[0].eval("math_string", self.eval_attrs)
-
-        for operator_, operand in self._operator_operands(self.value[1:]):
-            evaluated_operand = operand.eval("math_string", self.eval_attrs)
-            # We ignore zeros that do nothing
-            if self._skip_component_on_conditional(evaluated_operand, operator_):
-                continue
-            if isinstance(self.value[0], type(self)):
-                val = "(" + val + ")"
-            if isinstance(operand, type(self)):
-                evaluated_operand = "(" + evaluated_operand + ")"
-            if self._skip_component_on_conditional(val, operator_):
-                val = evaluated_operand
-            else:
-                val = self.LATEX_OPERATOR_LOOKUP[operator_].format(
-                    val=val, operand=evaluated_operand
-                )
-        return val
-
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        val = self._apply_mask(self.value[0].eval("array", self.eval_attrs))
-
-        for operator_, operand in self._operator_operands(self.value[1:]):
-            evaluated_operand = self._apply_mask(operand.eval("array", self.eval_attrs))
-            val = self._operate(val, evaluated_operand, operator_)
-        return val
-
-
-class EvalSignOp(EvalArrayOrMath):
-    """Class for processing expressions with + or -."""
-
-    def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
-        """
-        Parse action to process successfully parsed expressions with a leading + or - sign.
-
-        Args:
-            instring (str): String that was parsed (used in error message).
-            loc (int):
-                Location in parsed string where parsing error was logged.
-                This is not used; we include it as pyparsing injects it alongside `instring` when setting the parse action.
-            tokens (pp.ParseResults):
-                Contains a list of the form [sign (str), operand (pp.ParseResults)].
-        """
-        self.sign, self.value = tokens[0]
-        self.values = tokens
-        self.instring = instring
-
-    def __repr__(self) -> str:
-        """Programming / official string representation."""
-        return str(f"({self.sign}){self.value.__repr__()}")
-
-    # string return
-    @overload
-    def _eval(self, return_type: Literal["math_string"]) -> str: ...
-
-    # array return
-    @overload
-    def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
-
-    def _eval(self, return_type: RETURN_T) -> xr.DataArray | str:
-        """Evaluate the element that will have the sign attached to it."""
-        return self.value.eval(return_type, self.eval_attrs)
-
-    def as_math_string(self) -> str:  # noqa: D102
-        return self.sign + self._eval("math_string")
-
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        evaluated = self._eval("array")
-        if self.sign == "-":
-            evaluated = -1 * evaluated
-        return evaluated
-
-
-class EvalComparisonOp(EvalArrayOrMath):
+class EvalComparisonOp(EvalString):
     """Class for processing comparison operations."""
 
-    OP_TRANSLATOR = {"<=": r" \leq ", ">=": r" \geq ", "==": " = "}
+    OP_TRANSLATOR = {"<=": r" \leq ", ">=": r" \geq ", "==": " = ", "=": " = "}
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
         """
@@ -365,10 +252,26 @@ class EvalComparisonOp(EvalArrayOrMath):
         lhs, rhs = self._eval("math_string")
         return lhs + self.OP_TRANSLATOR[self.op] + rhs
 
-    def as_array(
-        self,
-    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray]:  # noqa: D102, override:  # noqa: D102, override
+    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+        self.eval_attrs = replace(self.eval_attrs, apply_mask=False)
         lhs, rhs = self._eval("array")
+        match self.op:
+            case "<=":
+                comparison = lhs <= rhs
+            case ">=":
+                comparison = lhs >= rhs
+            case "<":
+                comparison = lhs < rhs
+            case ">":
+                comparison = lhs > rhs
+            case "==":
+                comparison = lhs == rhs
+        return xr.DataArray(comparison)
+
+    def as_expr(
+        self,
+    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray]:
+        lhs, rhs = self._eval("expr")
         mask = self.eval_attrs.mask
         for side, arr in {"left": lhs, "right": rhs}.items():
             extra_dims = set(arr.dims).difference(set(mask.dims) | {"_term"})
@@ -385,8 +288,257 @@ class EvalComparisonOp(EvalArrayOrMath):
         sign_masked = xr.DataArray(self.op).where(mask)
         return lhs_masked, sign_masked, rhs_masked
 
+    def eval(
+        self, return_type: RETURN_T, eval_attrs: EvalAttrs
+    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray] | str:
+        """
+        Evaluate math string expression.
 
-class EvalFunction(EvalArrayOrMath):
+        Args:
+            return_type (Literal[math_string, input, array]):
+                Dictates how the expression should be evaluated (see `Returns` section).
+            eval_attrs (EvalAttrs): Evaluation attributes.
+
+        Returns:
+            str | list[str | float] | xr.DataArray:
+                If `math_string` is desired, returns a valid LaTex math string.
+                If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
+        """
+        self.eval_attrs = eval_attrs
+        evaluated: str | tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray]
+        if return_type == "array":
+            evaluated = self.as_array()
+        elif return_type == "math_string":
+            evaluated = self.as_math_string()
+        elif return_type == "expr":
+            evaluated = self.as_expr()
+
+        return evaluated
+
+class EvalToCallable(EvalString):
+    """Parent class for callable functionality."""
+
+    @abstractmethod
+    def as_callable(self, return_type: RETURN_T) -> Callable:
+        """Callable processing."""
+        ...
+
+    def eval(self, return_type: RETURN_T, eval_attrs: EvalAttrs) -> Callable:
+        """
+        Evaluate math string expression.
+
+        Args:
+            return_type (str): Whether to return a math string or xarray DataArray.
+            eval_attrs (EvalAttrs): Evaluation attributes.
+
+        Returns:
+            Callable: returns helper function.
+        """
+        self.eval_attrs = eval_attrs
+        evaluated = self.as_callable(return_type)
+        return evaluated
+
+
+class EvalOperatorOperand(EvalArrayOrMathExpr):
+    """Evaluation of math operands."""
+
+    LATEX_OPERATOR_LOOKUP: dict[str, str] = {
+        "**": "{val}^{{{operand}}}",
+        "*": r"{val} \times {operand}",
+        "/": r"\frac{{ {val} }}{{ {operand} }}",
+        "+": "{val} + {operand}",
+        "-": "{val} - {operand}",
+    }
+    SKIP_IF: list[str] = ["+", "-"]
+
+    def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
+        """
+        Process successfully parsed expressions with operands separated by an operator.
+
+        I.e.: OPERAND OPERATOR OPERAND OPERATOR OPERAND ...
+
+        Args:
+            instring (str): String that was parsed (used in error message).
+            loc (int):
+                Location in parsed string where parsing error was logged.
+                This is not used; we include it as pyparsing injects it alongside `instring` when setting the parse action.
+            tokens (pp.ParseResults):
+                Contains a list of the form [operand (pp.ParseResults), operator (str),
+                operand (pp.ParseResults), operator (str), ...].
+        """
+        self.value: pp.ParseResults = tokens[0]
+        self.values = tokens
+        self.instring = instring
+
+    def __repr__(self) -> str:
+        """String representation."""
+        first_operand = self.value[0].__repr__()
+        operand_operator_pairs = " ".join(
+            op + " " + val.__repr__()
+            for op, val in self._operator_operands(self.value[1:])
+        )
+        arithmetic_string = f"({first_operand} {operand_operator_pairs})"
+        return arithmetic_string
+
+    def _operator_operands(
+        self, token_list: list
+    ) -> Iterator[tuple[str, pp.ParseResults]]:
+        """Generator to extract operators and operands in pairs."""
+        it = iter(token_list)
+        while 1:
+            try:
+                yield (next(it), next(it))
+            except StopIteration:
+                break
+
+    def _apply_mask(self, evaluated: ARRAY_T) -> ARRAY_T:
+        """Util function to apply mask arrays to non-latex strings."""
+        mask = self.eval_attrs.mask
+        try:
+            evaluated = evaluated.where(mask)
+        except AttributeError:
+            evaluated = evaluated.broadcast_like(mask).where(mask)
+
+        return evaluated
+
+    def _skip_component_on_conditional(self, component: str, operator_: str) -> bool:
+        """
+        Conditional to skip adding to math string if element evaluates to zero.
+
+        E.g., "0 + flow_cap" is better evaluated as simply "flow_cap".
+        """
+        return component == "0" and operator_ in self.SKIP_IF
+
+    @overload
+    @staticmethod
+    def _operate(
+        val: xr.DataArray, evaluated_operand: xr.DataArray, operator_: str
+    ) -> xr.DataArray: ...
+
+    @overload
+    @staticmethod
+    def _operate(
+        val: xr.DataArray, evaluated_operand: EXPRVAR_T, operator_: str
+    ) -> EXPRVAR_T: ...
+
+    @overload
+    @staticmethod
+    def _operate(
+        val: EXPRVAR_T, evaluated_operand: xr.DataArray, operator_: str
+    ) -> EXPRVAR_T: ...
+
+    @staticmethod
+    def _operate(
+        val: xr.DataArray | EXPRVAR_T, evaluated_operand: xr.DataArray | EXPRVAR_T, operator_: str
+    ) -> xr.DataArray | EXPRVAR_T:
+        """Apply evaluated operation on two DataArrays."""
+        match operator_:
+            case "**":
+                val = val**evaluated_operand
+            case "*":
+                val = val * evaluated_operand
+            case "/":
+                val = val / evaluated_operand
+            case "+":
+                val = val + evaluated_operand
+            case "-":
+                val = val - evaluated_operand
+        return val
+
+    def as_math_string(self) -> str:  # noqa: D102, override
+        val = self.value[0].eval("math_string", self.eval_attrs)
+
+        for operator_, operand in self._operator_operands(self.value[1:]):
+            evaluated_operand = operand.eval("math_string", self.eval_attrs)
+            # We ignore zeros that do nothing
+            if self._skip_component_on_conditional(evaluated_operand, operator_):
+                continue
+            if isinstance(self.value[0], type(self)):
+                val = "(" + val + ")"
+            if isinstance(operand, type(self)):
+                evaluated_operand = "(" + evaluated_operand + ")"
+            if self._skip_component_on_conditional(val, operator_):
+                val = evaluated_operand
+            else:
+                val = self.LATEX_OPERATOR_LOOKUP[operator_].format(
+                    val=val, operand=evaluated_operand
+                )
+        return val
+
+    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+        val = self._apply_mask(self.value[0].eval("array", self.eval_attrs))
+
+        for operator_, operand in self._operator_operands(self.value[1:]):
+            evaluated_operand = self._apply_mask(operand.eval("array", self.eval_attrs))
+            val = self._operate(val, evaluated_operand, operator_)
+        return val
+
+    def as_expr(self) -> EXPR_T:  # noqa: D102, override
+        val = self._apply_mask(self.value[0].eval("expr", self.eval_attrs))
+
+        for operator_, operand in self._operator_operands(self.value[1:]):
+            evaluated_operand = self._apply_mask(operand.eval("expr", self.eval_attrs))
+            val = self._operate(val, evaluated_operand, operator_)
+        return val
+
+
+
+class EvalSignOp(EvalArrayOrMathExpr):
+    """Class for processing expressions with + or -."""
+
+    def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
+        """
+        Parse action to process successfully parsed expressions with a leading + or - sign.
+
+        Args:
+            instring (str): String that was parsed (used in error message).
+            loc (int):
+                Location in parsed string where parsing error was logged.
+                This is not used; we include it as pyparsing injects it alongside `instring` when setting the parse action.
+            tokens (pp.ParseResults):
+                Contains a list of the form [sign (str), operand (pp.ParseResults)].
+        """
+        self.sign, self.value = tokens[0]
+        self.values = tokens
+        self.instring = instring
+
+    def __repr__(self) -> str:
+        """Programming / official string representation."""
+        return str(f"({self.sign}){self.value.__repr__()}")
+
+    # string return
+    @overload
+    def _eval(self, return_type: Literal["math_string"]) -> str: ...
+
+    # array return
+    @overload
+    def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
+
+    # expression return
+    @overload
+    def _eval(self, return_type: Literal["expr"]) -> EXPR_T: ...
+
+    def _eval(self, return_type: RETURN_T) -> xr.DataArray | EXPR_T | str:
+        """Evaluate the element that will have the sign attached to it."""
+        return self.value.eval(return_type, self.eval_attrs)
+
+    def as_math_string(self) -> str:  # noqa: D102
+        return self.sign + self._eval("math_string")
+
+    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+        evaluated = self._eval("array")
+        if self.sign == "-":
+            evaluated = -1 * evaluated
+        return evaluated
+
+    def as_expr(self) -> EXPR_T:  # noqa: D102, override
+        evaluated = self._eval("expr")
+        if self.sign == "-":
+            evaluated = -1 * evaluated
+        return evaluated
+
+
+class EvalFunction(EvalArrayOrMathExpr):
     """Class to process parsed functions."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -446,7 +598,7 @@ class EvalFunction(EvalArrayOrMath):
     @overload
     def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
 
-    def _eval(self, return_type: RETURN_T) -> str | xr.DataArray:
+    def _eval(self, return_type: RETURN_T) -> str | xr.DataArray | EXPR_T:
         """Pass evaluated arguments to evaluated helper function."""
         helper_function = self.func_name.eval(return_type, self.eval_attrs)
         if helper_function.ignore_mask:
@@ -468,6 +620,9 @@ class EvalFunction(EvalArrayOrMath):
 
     def as_array(self) -> xr.DataArray:  # noqa: D102, override
         return self._eval("array")
+
+    def as_expr(self) -> EXPR_T:  # noqa: D102, override
+        return self._eval("expr")
 
 
 class EvalHelperFuncName(EvalToCallable):
@@ -510,7 +665,7 @@ class EvalHelperFuncName(EvalToCallable):
             return helper_functions[self.name](return_type, self.eval_attrs)
 
 
-class EvalSlicedComponent(EvalArrayOrMath):
+class EvalSlicedComponent(EvalArrayOrMathExpr):
     """For processing of sliced parameters / decision variables."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -543,14 +698,14 @@ class EvalSlicedComponent(EvalArrayOrMath):
         return f"SLICED_{self.obj_name}[{slices}]"
 
     @staticmethod
-    def _replace_rule(index_slices):
+    def _replace_rule(index_slices: dict) -> Callable:
         """
         String parsing rule to catch and replace dimension names with the names + their slices.
 
         E.g., `techs` -> `techs=pv`.
         """
 
-        def __replace(term):
+        def __replace(term: pp.ParseResults) -> str:
             if len(term) == 1:
                 return term
             else:
@@ -570,7 +725,10 @@ class EvalSlicedComponent(EvalArrayOrMath):
     @overload
     def _eval(self, return_type: Literal["array"]) -> tuple[xr.DataArray, dict]: ...
 
-    def _eval(self, return_type: RETURN_T) -> tuple[str | xr.DataArray, dict]:
+    @overload
+    def _eval(self, return_type: Literal["expr"]) -> tuple[EXPR_T, dict]: ...
+
+    def _eval(self, return_type: RETURN_T) -> tuple[str | xr.DataArray | EXPR_T, dict]:
         """Evaluate the slice dim and vals of each slice element."""
         slices: dict[str, Any] = {
             k: xr.concat(slice_, dim=k)
@@ -601,6 +759,10 @@ class EvalSlicedComponent(EvalArrayOrMath):
 
     def as_array(self) -> xr.DataArray:  # noqa: D102, override
         evaluated, slices = self._eval("array")
+        return evaluated.sel(**slices)
+
+    def as_expr(self) -> EXPR_T:
+        evaluated, slices = self._eval("expr")
         return evaluated.sel(**slices)
 
 
@@ -652,7 +814,8 @@ class EvalIndexSlice(EvalArrayOrMath):
         return evaluated
 
 
-class EvalSubExpressions(EvalArrayOrMath):
+
+class EvalSubExpressions(EvalArrayOrMathExpr):
     """For processing sub-expressions."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -692,6 +855,10 @@ class EvalSubExpressions(EvalArrayOrMath):
 
     def as_array(self) -> xr.DataArray:  # noqa: D102, override
         return self._eval("array")
+
+    def as_expr(self) -> EXPR_T:
+        return self._eval("expr")
+
 
 
 class EvalNumber(EvalArrayOrMath):
@@ -766,7 +933,7 @@ class ListParser(EvalArrayOrMath):
         return values
 
 
-class EvalUnslicedComponent(EvalArrayOrMath):
+class EvalUnslicedComponent(EvalArrayOrMathExpr):
     """Evaluation of unsliced components."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -805,15 +972,16 @@ class EvalUnslicedComponent(EvalArrayOrMath):
         return data_var_string
 
     def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        if self.eval_attrs.math.find(self.name)._group in ["parameters", "lookups"]:
+        group = self.eval_attrs.math.find(self.name)._group
+        if group in ["parameters", "lookups"]:
             evaluated = self.eval_attrs.input_data[self.name]
-        elif self.eval_attrs.math.find(self.name)._group == "dimensions":
+        elif group == "dimensions":
             try:
                 evaluated = self.eval_attrs.input_data[self.name]
             except KeyError:
                 evaluated = xr.DataArray(np.nan)
         else:
-            evaluated = self.eval_attrs.model[self.name]
+            evaluated = getattr(self.eval_attrs.model, group)[self.name]
         if evaluated.isnull().any() and pd.notna(
             default := self.eval_attrs.math.find(self.name)["default"]
         ):
@@ -821,6 +989,29 @@ class EvalUnslicedComponent(EvalArrayOrMath):
 
         self.eval_attrs.references.add(self.name)
         return evaluated
+
+    def as_expr(self) -> xr.DataArray | EXPR_T:  # noqa: D102, override
+        group = self.eval_attrs.math.find(self.name)._group
+        if group in ["parameters", "lookups", "dimensions"]:
+            try:
+                evaluated = self.eval_attrs.input_data[self.name]
+            except KeyError:
+                evaluated = xr.DataArray(np.nan)
+        else:
+            try:
+                evaluated = getattr(self.eval_attrs.model, group)[self.name]
+            except KeyError:
+                evaluated = LinearExpression(xr.DataArray(np.nan), self.eval_attrs.model)
+        if evaluated.isnull().any() and pd.notna(
+            default := self.eval_attrs.math.find(self.name)["default"]
+        ):
+            if isinstance(evaluated, Variable):
+                evaluated = evaluated.to_linexpr()
+            evaluated = evaluated.fillna(default)
+
+        self.eval_attrs.references.add(self.name)
+        return evaluated
+
 
 
 class EvalGenericString(EvalArrayOrMath):
@@ -1148,7 +1339,7 @@ def equation_comparison_parser(arithmetic: pp.ParserElement) -> pp.ParserElement
         pp.ParserElement:
             Parser for strings of the form "LHS OPERATOR RHS".
     """
-    comparison_operators = pp.one_of(["<=", ">=", "=="])
+    comparison_operators = pp.one_of(["<=", ">=", "="])
     equation_comparison = arithmetic + comparison_operators + arithmetic
     equation_comparison.set_parse_action(EvalComparisonOp)
 
@@ -1254,7 +1445,7 @@ def generate_arithmetic_parser(valid_component_names: Iterable) -> pp.ParserElem
 
     Args:
         valid_component_names (Iterable):
-            Allowed names for optimisation problem components (parameters, decision variables, global_expressions),
+            Allowed names for optimisation problem components (parameters, decision variables, expressions),
             to allow the parser to separate these from generic strings.
 
     Returns:
@@ -1300,7 +1491,7 @@ def generate_equation_parser(valid_component_names: Iterable) -> pp.ParserElemen
 
     Args:
         valid_component_names (Iterable):
-            Allowed names for optimisation problem components (parameters, decision variables, global_expressions),
+            Allowed names for optimisation problem components (parameters, decision variables, expressions),
             to allow the parser to separate these from generic strings.
 
     Returns:

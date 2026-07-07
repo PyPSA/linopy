@@ -18,6 +18,7 @@ import pandas as pd
 import xarray as xr
 
 from linopy.declarative.eval_attrs import EvalAttrs
+from linopy.expressions import LinearExpression
 
 DTYPE_OPTIONS = {
     "string": str,
@@ -70,7 +71,7 @@ class ParsingHelperFunction(ABC):
         """
 
     @abstractmethod
-    def as_array(self, *args: Any, **kwargs: Any) -> xr.DataArray | Expression:
+    def as_array(self, *args: Any, **kwargs: Any) -> LinearExpression | xr.DataArray:
         """
         Method to apply the helper function to provide an n-dimensional array output.
 
@@ -89,6 +90,8 @@ class ParsingHelperFunction(ABC):
         if self._return_type == "math_string":
             return self.as_math_string(*args, **kwargs)
         elif self._return_type == "array":
+            return self.as_array(*args, **kwargs)
+        elif self._return_type == "expr":
             return self.as_array(*args, **kwargs)
 
     def __init_subclass__(cls) -> None:
@@ -769,19 +772,14 @@ class GroupSum(ParsingHelperFunction):
             ```
         """
         # We can't apply typical xarray rolling window functionality
-        grouped: dict[str | int, xr.DataArray] = {}
 
         grouping_dims = groupby.dims
         groups = array.stack(_stacked=grouping_dims).groupby(
-            groupby.stack(_stacked=grouping_dims)
+            groupby.rename(group_dim.name).stack(_stacked=grouping_dims)
         )
-        for group_name, array_subset in groups:
-            grouped[group_name] = array_subset.sum("_stacked", min_count=1, skipna=True)
 
-        array = xr.concat(
-            grouped.values(), dim=pd.Index(grouped.keys(), name=group_dim.name)
-        )
-        return array
+        grouped = groups.sum("_stacked")
+        return grouped
 
 
 class GroupDatetime(ParsingHelperFunction):

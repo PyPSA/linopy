@@ -12,6 +12,7 @@ from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validato
 from pydantic_core import PydanticCustomError
 
 LOGGER = logging.getLogger(__name__)
+LOGGER.setLevel(logging.INFO)
 # ==
 # Modified from https://github.com/pydantic/pydantic-core/pull/820#issuecomment-1670475909
 T = TypeVar("T", bound=Hashable | list)
@@ -21,7 +22,7 @@ COMPONENTS_T = Literal[
     "parameters",
     "lookups",
     "variables",
-    "global_expressions",
+    "expressions",
     "constraints",
     "piecewise_constraints",
     "objectives",
@@ -281,8 +282,6 @@ class ParameterDef(_MathComponent):
 
     default: float | int = float("nan")
     """The default value for the parameter, if not set in the data."""
-    resample_method: Literal["mean", "sum", "first"] = "first"
-    """If resampling is applied over any of the parameter's dimensions, the method to use to aggregate the data."""
     unit: str = ""
     """The unit of the parameter, e.g. 'kW', 'm', 'kg', 'energy', 'power', ..."""
 
@@ -301,15 +300,8 @@ class LookupDef(_MathComponent):
     """The default value for the lookup, if not set in the data."""
     dtype: Literal["float", "string", "bool", "datetime", "date"] = "string"
     """The lookup data type."""
-    resample_method: Literal["mean", "sum", "first"] = "first"
-    """If resampling is applied over any of the lookup's dimensions, the method to use to aggregate the data."""
     one_of: list | None = None
     """If given, the lookup values must be one of these items."""
-    pivot_values_to_dim: str | None = None
-    """If given, the lookup will be pivoted such that its values become the index of a new dimension and its new values are boolean, True where the index values match the old values.
-    For instance, if the lookup starts out indexed over `techs` with values of `[electricity, gas]` and `pivot_values_to_dim: carriers`,
-    then the lookup will be converted to a boolean array with the dimensions ['techs', 'carriers'].
-    """
 
     _group: ClassVar[COMPONENTS_T] = "lookups"
 
@@ -397,15 +389,15 @@ class PiecewiseConstraintDef(_MathIndexedComponent):
     _group: ClassVar[COMPONENTS_T] = "piecewise_constraints"
 
 
-class LinearExpressionDef(_MathIndexedComponent, _MathEquationComponent):
+class ExpressionDef(_MathIndexedComponent, _MathEquationComponent):
     """
-    Schema for named global expressions.
+    Schema for named expressions.
 
     Can be used to combine parameters and variables and then used in one or more
     expressions elsewhere in the math formulation (i.e., in constraints, objectives,
-    and other global expressions).
+    and other expressions).
 
-    NOTE: If expecting to use global expression `A` in global expression `B`, `A` must
+    NOTE: If expecting to use expression `A` in expression `B`, `A` must
     be defined above `B`.
     """
 
@@ -414,15 +406,15 @@ class LinearExpressionDef(_MathIndexedComponent, _MathEquationComponent):
     default: NumericVal = float("nan")
     """If set, will be the default value for the expression."""
     equations: _Equations = _Equations()
-    """Global expression math equations."""
+    """Expression math equations."""
     sub_expressions: _SubExpressions = _SubExpressions()
-    """Global expression named sub-expressions."""
+    """Expression named sub-expressions."""
     slices: _SubExpressions = _SubExpressions()
-    """Global expression named index slices."""
+    """Expression named index slices."""
     order: int = 0
-    """Order in which to apply this global expression relative to all others, if different to its definition order."""
+    """Order in which to apply this expression relative to all others, if different to its definition order."""
 
-    _group: ClassVar[COMPONENTS_T] = "global_expressions"
+    _group: ClassVar[COMPONENTS_T] = "expressions"
 
 
 class _Bounds(LinopyBaseModel):
@@ -499,11 +491,11 @@ class ObjectiveDef(_MathEquationComponent):
     _group: ClassVar[COMPONENTS_T] = "objectives"
 
 
-class PostprocessedExpressionDef(LinearExpressionDef):
+class PostprocessedExpressionDef(ExpressionDef):
     """
     Schema for postprocessed expressions.
 
-    Can be used to combine parameters, variables, and global expressions into a single expression solving the model.
+    Can be used to combine parameters, variables, and expressions into a single expression solving the model.
 
     NOTE: If expecting to use postprocessed array `A` in postprocessed array `B`, `A` must
     be defined above `B`.
@@ -549,10 +541,10 @@ class VariableDefs(LinopyDictModel):
     root: dict[AttrStr, VariableDef] = Field(default_factory=dict)
 
 
-class LinearExpressionDefs(LinopyDictModel):
-    """Linopy model global_expressions dictionary."""
+class ExpressionDefs(LinopyDictModel):
+    """Linopy model expressions dictionary."""
 
-    root: dict[AttrStr, LinearExpressionDef] = Field(default_factory=dict)
+    root: dict[AttrStr, ExpressionDef] = Field(default_factory=dict)
 
 
 class ConstraintDefs(LinopyDictModel):
@@ -604,8 +596,8 @@ class MathModel(LinopyBaseModel):
     """All lookups to include in the optimisation problem."""
     variables: VariableDefs = VariableDefs()
     """All decision variables to include in the optimisation problem."""
-    global_expressions: LinearExpressionDefs = LinearExpressionDefs()
-    """All global expressions that can be applied to the optimisation problem."""
+    expressions: ExpressionDefs = ExpressionDefs()
+    """All expressions that can be applied to the optimisation problem."""
     constraints: ConstraintDefs = ConstraintDefs()
     """All constraints to apply to the optimisation problem."""
     piecewise_constraints: PiecewiseConstraintDefs = PiecewiseConstraintDefs()
@@ -618,7 +610,7 @@ class MathModel(LinopyBaseModel):
     """Checks to apply before building the optimisation problem."""
 
     @model_validator(mode="after")
-    def unique_component_names(self):
+    def unique_component_names(self) -> Self:
         """Ensure all component names are unique."""
         groups = sorted(
             (
@@ -651,7 +643,7 @@ class MathModel(LinopyBaseModel):
         parsing_components = {
             "dimensions": ["dimensions"],
             "inputs": ["lookups", "parameters"],
-            "results": ["variables", "global_expressions"],
+            "results": ["variables", "expressions"],
         }
 
         def _names():
@@ -690,7 +682,7 @@ class MathModel(LinopyBaseModel):
 MATH_DEFS_T = (
     ConstraintDef
     | VariableDef
-    | LinearExpressionDef
+    | ExpressionDef
     | ObjectiveDef
     | PiecewiseConstraintDef
 )

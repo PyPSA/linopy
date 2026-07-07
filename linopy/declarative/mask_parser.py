@@ -330,7 +330,9 @@ class SubsetParser(expression_parser.EvalArrayOrMath):
 
     def as_array(self) -> xr.DataArray:  # noqa: D102, override
         subset = self._eval()
-        set_item_in_subset = self.set_name.eval("array", self.eval_attrs).isin(subset)
+        self.eval_attrs = replace(self.eval_attrs, apply_mask=False)
+        da = self.set_name.eval("array", replace(self.eval_attrs, apply_mask=False))
+        set_item_in_subset = da.isin(subset)
         return set_item_in_subset
 
 
@@ -483,7 +485,7 @@ def comparison_parser(
 
 
 def subset_parser(
-    data_var: pp.ParserElement, *subset_items: pp.ParserElement
+    data_vars: list[pp.ParserElement], *subset_items: pp.ParserElement
 ) -> pp.ParserElement:
     """
     Parsing grammar to process subsets.
@@ -503,7 +505,7 @@ def subset_parser(
         + pp.Suppress(pp.White(" ", min=1))
         + pp.Suppress("in")
         + pp.Suppress(pp.White(" ", min=1))
-        + data_var
+        + pp.MatchFirst(data_vars)
     )
     subset_expression.set_parse_action(SubsetParser)
 
@@ -568,7 +570,7 @@ def generate_mask_string_parser(
         number, unique_evaluatable_string, dimensions_parser
     )
     subset = subset_parser(
-        dimensions_parser, config_option, number, general_evaluatable_string
+        [dimensions_parser, inputs_parser], config_option, number, general_evaluatable_string
     )
 
     arithmetic = pp.Forward()

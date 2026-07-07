@@ -56,6 +56,7 @@ from linopy.constraints import (
     CSRConstraint,
 )
 from linopy.expressions import (
+    Expressions,
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
@@ -197,6 +198,7 @@ class Model:
 
     _solver: solvers.Solver | None
     _variables: Variables
+    _expressions: Expressions
     _constraints: Constraints
     _objective: Objective
     _parameters: Dataset
@@ -207,6 +209,7 @@ class Model:
     _xCounter: int
     _cCounter: int
     _varnameCounter: int
+    _exprnameCounter: int
     _connameCounter: int
     _pwlCounter: int
     _blocks: DataArray | None
@@ -218,6 +221,7 @@ class Model:
     __slots__ = (
         # containers
         "_variables",
+        "_expressions",
         "_constraints",
         "_objective",
         "_parameters",
@@ -230,6 +234,7 @@ class Model:
         "_xCounter",
         "_cCounter",
         "_varnameCounter",
+        "_exprnameCounter",
         "_connameCounter",
         "_pwlCounter",
         "_blocks",
@@ -290,6 +295,7 @@ class Model:
         linopy.Model
         """
         self._variables: Variables = Variables({}, model=self)
+        self._expressions: Expressions = Expressions({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
@@ -299,6 +305,7 @@ class Model:
         self._xCounter: int = 0
         self._cCounter: int = 0
         self._varnameCounter: int = 0
+        self._exprnameCounter: int = 0
         self._connameCounter: int = 0
         self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
@@ -357,6 +364,13 @@ class Model:
         Variables assigned to the model.
         """
         return self._variables
+
+    @property
+    def expressions(self) -> Expressions:
+        """
+        Expressions assigned to the model.
+        """
+        return self._expressions
 
     @property
     def constraints(self) -> Constraints:
@@ -563,6 +577,7 @@ class Model:
             "_xCounter",
             "_cCounter",
             "_varnameCounter",
+            "_exprnameCounter",
             "_connameCounter",
             "_pwlCounter",
             "force_dim_names",
@@ -581,11 +596,13 @@ class Model:
         var_names, con_names = _get_piecewise_groups(self)
         var_string = self.variables._format_items(exclude=var_names)
         con_string = self.constraints._format_items(exclude=con_names)
+        expr_string = self.expressions._format_items()
         model_string = f"Linopy {self.type} model"
 
         return (
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
+            f"Expressions:\n------------\n{expr_string}\n"
             f"Constraints:\n------------\n{con_string}"
             f"{pwl_repr_summary(self)}"
             f"\nStatus:\n-------\n{self.status}"
@@ -819,6 +836,81 @@ class Model:
         variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
+
+    def add_expressions(
+        self,
+        data: Variable
+        | LinearExpression | QuadraticExpression
+        | Sequence[tuple[ConstantLike, Variable | str]],
+        name: str | None = None,
+        mask: MaskLike | None = None,
+    ) -> LinearExpression | QuadraticExpression:
+        """
+        Assign a new, possibly multi-dimensional array of expressions to the
+        model.
+
+        Parameters
+        ----------
+        data : Variable, LinearExpression, QuadraticExpression, or Sequence of (constant, variable) tuples
+            The expression(s) to add. This can be a Variable or LinearExpression, a sequence of (constant, variable) tuples which will be summed up, or a callable that takes the model as input and returns either of the previous two.
+        coords : list/xarray.Coordinates, optional
+            The coords of the expression array.
+            The default is None.
+        name : str, optional
+            Reference name of the added expressions. The default None results in
+            a name like "expr1", "expr2" etc.
+        mask : array_like, optional
+            Boolean mask with False values for expressions which are skipped.
+            The shape of the mask has to match the shape the added expressions.
+            Default is None.
+
+        Raises
+        ------
+        ValueError
+            If neither lower bound and upper bound have coordinates, nor
+            `coords` are directly given.
+
+        Returns
+        -------
+        linopy.LinearExpression | linopy.QuadraticExpression
+            Expression which was added to the model.
+
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
+        >>> time = pd.RangeIndex(10, name="Time")
+        >>> x = m.add_variables(lower=0, coords=[time], name="x")
+        >>> expr = m.add_expressions(x + 1, name="expr")
+        """
+        if name is None:
+            name = f"expr{self._exprnameCounter}"
+            self._exprnameCounter += 1
+
+        if name in self.expressions:
+            raise ValueError(f"Expression '{name}' already assigned to model")
+
+        expr: LinearExpression | QuadraticExpression
+        if isinstance(data, Variable):
+            expr = data.to_linexpr()
+        elif isinstance(data, Sequence):
+            expr = self.linexpr(*data)
+        else:
+            expr = data
+        self.check_force_dim_names(expr.data)
+        self._check_valid_dim_names(expr.data)
+
+        if mask is not None:
+            mask = as_dataarray(mask, coords=expr.coords, dims=expr.dims).astype(bool)
+            expr = expr.where(mask)
+        if self.chunk:
+            expr = expr.chunk(self.chunk)
+
+        expr.attrs["name"] = name
+        self.expressions.add(expr)
+        return expr
 
     def add_sos_constraints(
         self,
