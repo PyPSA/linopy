@@ -545,6 +545,31 @@ Remote solving
    remote.RemoteHandler
 
 
+Benders decomposition via Plasmo.jl (experimental)
+===================================================
+
+``linopy.contrib.plasmo`` decomposes a model onto a `Plasmo.jl
+<https://github.com/plasmo-dev/Plasmo.jl>`_ ``OptiGraph`` and solves it with
+``PlasmoBenders.jl`` or a monolithic graph solve. Experimental, not covered by
+CI, and not part of linopy's stability guarantees -- see :doc:`plasmo-benders`
+for the full guide.
+
+.. autosummary::
+   :toctree: generated/
+
+   contrib.plasmo.PlasmoModel
+   contrib.plasmo.Partition
+   contrib.plasmo.Predicate
+   contrib.plasmo.has
+   contrib.plasmo.name
+   contrib.plasmo.group
+   contrib.plasmo.by_size
+   contrib.plasmo.flat
+   contrib.plasmo.optimize
+   contrib.plasmo.benders
+   contrib.plasmo.solve_benders
+
+
 Solver status and result types
 ==============================
 
