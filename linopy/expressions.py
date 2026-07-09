@@ -275,19 +275,19 @@ class LinearExpressionGroupby:
         Sum the groupby object.
 
         There are two options to perform the summation over groups.
-        The first and faster option uses an internal reindexing mechanism, which
-        however ignores keyword arguments. This will be used when passing a
-        pandas object or a DataArray as group, and setting `use_fallack`
-        to False (default).
-        The second uses a mapping of xarray groups which performs slower but
-        also takes into account the keyword arguments.
+        The first and faster option is linopy's own scatter-based kernel, used
+        when passing a pandas object or a DataArray as group and leaving
+        `use_fallback` at its default of False. It ignores ``**kwargs``.
+        The second falls back to xarray's own groupby, which is slower but
+        forwards ``**kwargs`` to the per-group reduction.
 
         Parameters
         ----------
         use_fallback : bool
-            Whether to use the fallback implementation, which is a sort of default
-            xarray implementation. If set to False, the operation will be much
-            faster but keyword arguments are ignored. Defaults to False.
+            If False (default), use linopy's fast scatter-based groupby-sum;
+            ``**kwargs`` are ignored. If True, group the expression with
+            xarray's ``Dataset.groupby`` and sum each group individually, which
+            is slower but honours ``**kwargs``.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -296,7 +296,8 @@ class LinearExpressionGroupby:
             Defaults to False, mirroring xarray. Not supported together with
             `use_fallback`.
         **kwargs
-            Arbitrary keyword arguments.
+            Only used when ``use_fallback=True``; forwarded to the xarray
+            groupby reduction. Ignored on the fast path.
 
         Returns
         -------
@@ -369,10 +370,6 @@ class LinearExpressionGroupby:
         term dimension has size ``max_group_size * nterm`` and smaller groups are
         padded with fill values. Only the result arrays are allocated, keeping
         peak memory at input + result.
-
-        The scatter runs inside :func:`xarray.apply_ufunc`, so it covers numpy
-        and chunked (dask) data alike: for dask the grouped dimension is gathered
-        into a single chunk and the scatter is applied lazily.
         """
         data = self.data
         group_dim = group.index.name
