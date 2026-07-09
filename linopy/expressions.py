@@ -268,7 +268,6 @@ class LinearExpressionGroupby:
     def map(
         self,
         func: Callable[..., Dataset],
-        shortcut: bool = False,
         args: tuple[()] = (),
         **kwargs: Any,
     ) -> LinearExpression:
@@ -279,8 +278,6 @@ class LinearExpressionGroupby:
         ----------
         func : callable
             The function to apply.
-        shortcut : bool, optional
-            Whether to use shortcut or not.
         args : tuple, optional
             The arguments to pass to the function.
         **kwargs
@@ -291,9 +288,7 @@ class LinearExpressionGroupby:
         LinearExpression
             The result of applying the function to the groupby object.
         """
-        return LinearExpression(
-            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
-        )
+        return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
 
     def sum(
         self, use_fallback: bool = False, observed: bool = False
@@ -369,7 +364,7 @@ class LinearExpressionGroupby:
             ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
             return ds
 
-        return self.map(func, shortcut=True)
+        return self.map(func)
 
     def _grouped_sum(self, group: pd.Series) -> Dataset:
         """
