@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import warnings
 from collections import Counter
-from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -1957,26 +1956,35 @@ def groupby_ctx() -> SimpleNamespace:
 
 # Each case maps a structure to (expr, groups) from `groupby_ctx`. The skewed
 # group puts ~half the elements in group 0 and spreads 1..7 over the rest.
-GROUPBY_SUM_CASES = {
+
+# Structures the xarray ``use_fallback=True`` path reproduces, so the scatter
+# kernel is validated by comparing against it directly.
+FALLBACK_SUM_CASES = {
     "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
     "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
     "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
     "masked_vars": lambda c: (1 * c.mx, c.skewed),
-    "quadratic": lambda c: (c.x * c.x + 2 * c.x, c.skewed),
     "single_group": lambda c: (1 * c.x, c.one_group),
     "identity_groups": lambda c: (1 * c.x, c.identity),
-    # combined structures exercising several features at once
     "multidim_const_nan": lambda c: (
         2 * c.y - 3 * c.y + 1 * c.y + c.nan_const,
         c.skewed,
     ),
     "three_dims": lambda c: (4 * c.y3 + 1 * c.y3, c.skewed),
-    "quadratic_multidim_const": lambda c: (c.y * c.y + 2 * c.y + c.const, c.skewed),
-    "masked_multidim": lambda c: (5 * c.my - 2 * c.my, c.skewed),
-    # both collapse the grouped dim, dropping every coordinate tied to it
-    "aux_coords_on_group_dim": lambda c: (c.y_aux, c.skewed),
     "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
+
+# Structures the fallback cannot reproduce -- it errors on the `_factor` axis of
+# quadratics, and diverges on masked multi-dim vars and coordinates tied to the
+# grouped dim -- so the scatter kernel is checked from first principles instead.
+FIRST_PRINCIPLES_SUM_CASES = {
+    "quadratic": lambda c: (c.x * c.x + 2 * c.x, c.skewed),
+    "quadratic_multidim_const": lambda c: (c.y * c.y + 2 * c.y + c.const, c.skewed),
+    "masked_multidim": lambda c: (5 * c.my - 2 * c.my, c.skewed),
+    "aux_coords_on_group_dim": lambda c: (c.y_aux, c.skewed),
+}
+
+GROUPBY_SUM_CASES = {**FALLBACK_SUM_CASES, **FIRST_PRINCIPLES_SUM_CASES}
 
 
 def _term_multisets(
@@ -2215,25 +2223,41 @@ class TestGroupbySumKernel:
         assert dict(grouped.data.sizes) == {"g": 0, "_term": 0}
 
     @pytest.mark.parametrize("backend", ["numpy", "dask"])
-    @pytest.mark.parametrize(
-        "build",
-        GROUPBY_SUM_CASES.values(),
-        ids=GROUPBY_SUM_CASES.keys(),
-    )
-    def test_grouped_sum_correct(
-        self,
-        build: Callable[[SimpleNamespace], tuple[LinearExpression, pd.Series]],
-        groupby_ctx: SimpleNamespace,
-        backend: str,
+    @pytest.mark.parametrize("case", FALLBACK_SUM_CASES)
+    def test_grouped_sum_matches_fallback(
+        self, groupby_ctx: SimpleNamespace, case: str, backend: str
     ) -> None:
         """
-        Each group's terms and constant must match its members, from first
-        principles, on both numpy and dask backends. See ``GROUPBY_SUM_CASES``
-        for the structures covered.
+        The scatter kernel must match the xarray ``use_fallback=True`` groupby,
+        on both numpy and dask backends. The fallback oracle always runs on
+        numpy; ``FIRST_PRINCIPLES_SUM_CASES`` holds the cases it cannot validate.
         """
         if backend == "dask":
             pytest.importorskip("dask")
-        expr, groups = build(groupby_ctx)
+        expr, groups = FALLBACK_SUM_CASES[case](groupby_ctx)
+        fallback = expr.groupby(groups).sum(use_fallback=True)
+        if backend == "dask":
+            expr = LinearExpression(
+                expr.data.chunk({groups.index.name: 17}), expr.model
+            )
+        scatter = expr.groupby(groups).sum()
+        if backend == "dask":
+            scatter = LinearExpression(scatter.data.compute(), expr.model)
+        assert_linequal(scatter, fallback)
+
+    @pytest.mark.parametrize("backend", ["numpy", "dask"])
+    @pytest.mark.parametrize("case", FIRST_PRINCIPLES_SUM_CASES)
+    def test_grouped_sum_from_first_principles(
+        self, groupby_ctx: SimpleNamespace, case: str, backend: str
+    ) -> None:
+        """
+        Verify the cases the fallback cannot validate (quadratic, masked
+        multi-dim, auxiliary coords): each group's terms and constant must match
+        its members, from first principles, on both numpy and dask backends.
+        """
+        if backend == "dask":
+            pytest.importorskip("dask")
+        expr, groups = FIRST_PRINCIPLES_SUM_CASES[case](groupby_ctx)
         _assert_grouped_sum_correct(expr, groups, chunked=backend == "dask")
 
 
