@@ -378,6 +378,11 @@ class LinearExpressionGroupby:
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
+        # the scatter's core dims must each sit in a single chunk; unknown dims
+        # (e.g. TERM_DIM on const) are silently ignored by Dataset.chunk
+        if data.chunks:
+            data = data.chunk({group_dim: -1, TERM_DIM: -1})
+
         codes, unique_groups = pd.factorize(group, sort=True)
         if (codes == -1).any():
             raise ValueError(
@@ -406,16 +411,10 @@ class LinearExpressionGroupby:
             np.add.at(out, codes, np.where(np.isnan(moved), 0, moved))
             return np.moveaxis(out, 0, -1)
 
-        def single_chunk(da: DataArray) -> DataArray:
-            # the scatter's core dims must each sit in one chunk
-            if da.chunks is None:
-                return da
-            return da.chunk({d: -1 for d in (group_dim, TERM_DIM) if d in da.dims})
-
         def scatter(da: DataArray, fill: Any) -> DataArray:
             return xr.apply_ufunc(
                 scatter_terms,
-                single_chunk(da),
+                da,
                 kwargs={"fill": fill},
                 input_core_dims=[[group_dim, TERM_DIM]],
                 output_core_dims=[[GROUP_DIM, TERM_DIM]],
@@ -429,7 +428,7 @@ class LinearExpressionGroupby:
 
         const = xr.apply_ufunc(
             group_sum,
-            single_chunk(data.const),
+            data.const,
             input_core_dims=[[group_dim]],
             output_core_dims=[[GROUP_DIM]],
             exclude_dims={group_dim},
