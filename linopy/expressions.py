@@ -196,6 +196,33 @@ def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
     return ds.unstack(dim, fill_value=LinearExpression._fill_value)
 
 
+def _encode_multikey_group(
+    frame: pd.DataFrame, index: pd.Index
+) -> tuple[pd.Series, tuple[dict, pd.Index]]:
+    """
+    Encode a multi-key group frame as a single integer-coded Series.
+
+    ``_grouped_sum`` groups by one key, so each row's tuple of key values is
+    mapped to an integer. The returned ``(int_map, columns)`` lets
+    :func:`_restore_multikey_index` rebuild the MultiIndex on the result.
+    """
+    index_name = frame.index.name
+    frame = frame.reindex(index)
+    frame.index.name = index_name
+    int_map = get_index_map(*frame.values.T)
+    coded = frame.apply(tuple, axis=1).map(int_map)
+    return coded, (int_map, frame.columns)
+
+
+def _restore_multikey_index(ds: Dataset, decode: tuple[dict, pd.Index]) -> Dataset:
+    """Rebuild the MultiIndex group dimension encoded by _encode_multikey_group."""
+    int_map, columns = decode
+    index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
+    index.names = [str(col) for col in columns]
+    index.name = GROUP_DIM
+    return ds.assign_coords(Coordinates.from_pandas_multiindex(index, GROUP_DIM))
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -303,44 +330,34 @@ class LinearExpressionGroupby:
 
         group = _resolve_group(self.group, self.data)
 
-        # a list of coord names rides the fast path as a value frame
         multikey_frame = (
             None if use_fallback else _multikey_value_frame(group, self.data)
         )
         if multikey_frame is not None:
             group = multikey_frame
 
-        non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
-        if isinstance(group, non_fallback_types) and not use_fallback:
-            if isinstance(group, pd.DataFrame):
-                # dataframes do not have a name, so we need to set it
-                final_group_name = "group"
-            else:
-                final_group_name = getattr(group, "name", "group") or "group"
+        fast_path_types = (pd.Series, pd.DataFrame, xr.DataArray)
+        if isinstance(group, fast_path_types) and not use_fallback:
+            final_group_name = (
+                "group"
+                if isinstance(group, pd.DataFrame)
+                else getattr(group, "name", "group") or "group"
+            )
 
             if isinstance(group, DataArray):
                 group = group.to_pandas()
 
-            int_map = None
+            multikey_decode = None
             if isinstance(group, pd.DataFrame):
-                index_name = group.index.name
-                group = group.reindex(self.data.indexes[group.index.name])
-                group.index.name = index_name  # ensure name for multiindex
-                int_map = get_index_map(*group.values.T)
-                orig_group = group
-                group = group.apply(tuple, axis=1).map(int_map)
+                group, multikey_decode = _encode_multikey_group(
+                    group, self.data.indexes[group.index.name]
+                )
 
-            # At this point, group is always a pandas Series
             assert isinstance(group, pd.Series)
-
             ds = self._grouped_sum(group)
 
-            if int_map is not None:
-                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
-                index.names = [str(col) for col in orig_group.columns]
-                index.name = GROUP_DIM
-                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = ds.assign_coords(new_coords)
+            if multikey_decode is not None:
+                ds = _restore_multikey_index(ds, multikey_decode)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
             if multikey_frame is not None and not observed:
@@ -367,10 +384,9 @@ class LinearExpressionGroupby:
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
-        # the scatter's core dims must each sit in a single chunk; unknown dims
-        # (e.g. TERM_DIM on const) are silently ignored by Dataset.chunk
+        scatter_core_dims = {group_dim: -1, TERM_DIM: -1}
         if data.chunks:
-            data = data.chunk({group_dim: -1, TERM_DIM: -1})
+            data = data.chunk(scatter_core_dims)
 
         codes, unique_groups = pd.factorize(group, sort=True)
         if (codes == -1).any():
@@ -381,26 +397,27 @@ class LinearExpressionGroupby:
 
         n_groups = len(unique_groups)
         max_size = int(np.bincount(codes, minlength=n_groups).max()) if n_groups else 0
-        # position of each element within its group (order of appearance)
-        positions = pd.Series(codes).groupby(codes).cumcount().to_numpy()
+        position_in_group = pd.Series(codes).groupby(codes).cumcount().to_numpy()
         nterm = data.sizes[TERM_DIM]
 
         def scatter_terms(values: np.ndarray, fill: Any) -> np.ndarray:
-            # (..., n_elem, nterm) -> (..., n_groups, nterm * max_size); each
-            # member's nterm block is kept together, padding at the block's end
-            rest = values.shape[:-2]
-            out = np.full((*rest, n_groups, nterm, max_size), fill, dtype=values.dtype)
-            out[..., codes, :, positions] = np.moveaxis(values, -2, 0)
-            return out.reshape((*rest, n_groups, nterm * max_size))
+            """Place each member's term block into its group's padded slot."""
+            leading = values.shape[:-2]
+            blocks = np.full(
+                (*leading, n_groups, nterm, max_size), fill, dtype=values.dtype
+            )
+            blocks[..., codes, :, position_in_group] = np.moveaxis(values, -2, 0)
+            return blocks.reshape((*leading, n_groups, nterm * max_size))
 
         def group_sum(values: np.ndarray) -> np.ndarray:
-            # (..., n_elem) -> (..., n_groups), summing within groups, skipping NaN
-            moved = np.moveaxis(values, -1, 0)
-            out = np.zeros((n_groups, *moved.shape[1:]), dtype=values.dtype)
-            np.add.at(out, codes, np.where(np.isnan(moved), 0, moved))
-            return np.moveaxis(out, 0, -1)
+            """Sum values within each group along the last axis, skipping NaNs."""
+            by_element = np.moveaxis(values, -1, 0)
+            summed = np.zeros((n_groups, *by_element.shape[1:]), dtype=values.dtype)
+            np.add.at(summed, codes, np.where(np.isnan(by_element), 0, by_element))
+            return np.moveaxis(summed, 0, -1)
 
         def scatter(da: DataArray, fill: Any) -> DataArray:
+            """Run the term scatter over the core dims, lazily for dask arrays."""
             return xr.apply_ufunc(
                 scatter_terms,
                 da,
