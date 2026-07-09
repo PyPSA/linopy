@@ -269,25 +269,20 @@ class LinearExpressionGroupby:
         )
 
     def sum(
-        self, use_fallback: bool = False, observed: bool = False, **kwargs: Any
+        self, use_fallback: bool = False, observed: bool = False
     ) -> LinearExpression:
         """
-        Sum the groupby object.
+        Sum the expression over each group.
 
-        There are two options to perform the summation over groups.
-        The first and faster option is linopy's own scatter-based kernel, used
-        when passing a pandas object or a DataArray as group and leaving
-        `use_fallback` at its default of False. It ignores ``**kwargs``.
-        The second falls back to xarray's own groupby, which is slower but
-        forwards ``**kwargs`` to the per-group reduction.
+        Replaces the grouped dimension with one entry per group, each holding
+        the sum of its members' terms.
 
         Parameters
         ----------
         use_fallback : bool
-            If False (default), use linopy's fast scatter-based groupby-sum;
-            ``**kwargs`` are ignored. If True, group the expression with
-            xarray's ``Dataset.groupby`` and sum each group individually, which
-            is slower but honours ``**kwargs``.
+            Fall back to the previous, slower groupby-sum implementation, kept
+            as an escape hatch. Leave at False unless the default misbehaves.
+            Defaults to False.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -295,14 +290,11 @@ class LinearExpressionGroupby:
             dimension per key, which materialises the dense cartesian grid.
             Defaults to False, mirroring xarray. Not supported together with
             `use_fallback`.
-        **kwargs
-            Only used when ``use_fallback=True``; forwarded to the xarray
-            groupby reduction. Ignored on the fast path.
 
         Returns
         -------
         LinearExpression
-            The sum of the groupby object.
+            The summed expression, with one entry per group.
         """
         if observed and use_fallback:
             raise ValueError(
@@ -360,7 +352,7 @@ class LinearExpressionGroupby:
             ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
             return ds
 
-        return self.map(func, **kwargs, shortcut=True)
+        return self.map(func, shortcut=True)
 
     def _grouped_sum(self, group: pd.Series) -> Dataset:
         """
