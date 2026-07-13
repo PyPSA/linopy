@@ -1122,7 +1122,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: str | None = None, **kwargs: Any) -> LinearExpression:
+    def sum(self, dim: DimsLike | None = None, **kwargs: Any) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
