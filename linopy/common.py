@@ -568,7 +568,9 @@ def get_dims_with_index_levels(
     if dims is None:
         dims = list(ds.dims)
     return [
-        f"{dim} ({', '.join(levels)})" if (levels := dim_level_names(ds, dim)) else str(dim)
+        f"{dim} ({', '.join(levels)})"
+        if (levels := dim_level_names(ds, dim))
+        else str(dim)
         for dim in dims
     ]
 
