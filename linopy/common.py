@@ -535,31 +535,78 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
     return formatted_lines
 
 
+def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
+    """
+    Auxiliary (non-dimension) coords aligned solely to ``dim`` — under v1 the
+    levels a flattened ``pd.MultiIndex`` leaves behind, its flat-dim mirror.
+    """
+    return [
+        str(name)
+        for name, coord in ds.coords.items()
+        if name != dim and coord.dims == (dim,)
+    ]
+
+
+def dim_level_names(ds: Dataset, dim: Hashable) -> list[str]:
+    """Level names of ``dim`` — a MultiIndex's own levels, else its aux coords."""
+    index = ds.indexes.get(dim)
+    if isinstance(index, pd.MultiIndex):
+        return [str(name) for name in index.names]
+    return index_level_coords(ds, dim)
+
+
 def get_dims_with_index_levels(
     ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
 
-    Example usage with a dataset that has:
-    - regular dimension 'time'
-    - multi-indexed dimension 'station' with levels ['country', 'city']
-    The output would be: ['time', 'station (country, city)']
+    A multi-indexed 'station' with levels ['country', 'city'] and a flat 'node'
+    with aux level coords ['region', 'tech'] both render as "dim (l0, l1)":
+    ['time', 'station (country, city)', 'node (region, tech)'].
     """
-    dims_with_levels = []
     if dims is None:
         dims = list(ds.dims)
+    return [
+        f"{dim} ({', '.join(levels)})" if (levels := dim_level_names(ds, dim)) else str(dim)
+        for dim in dims
+    ]
 
-    for dim in dims:
-        if isinstance(ds.indexes[dim], pd.MultiIndex):
-            # For multi-indexed dimensions, format as "dim (level0, level1, ...)"
-            names = ds.indexes[dim].names
-            dims_with_levels.append(f"{dim} ({', '.join(names)})")
+
+def label_coord(obj: Any, dims: Sequence[Hashable], index: Sequence[int]) -> dict:
+    """
+    Identifying coordinate for a single flat position, per dimension — a
+    decomposed MultiIndex identifies the same way a first-class one does:
+    several aux levels stack into a tuple, one level is its bare value.
+    """
+    coord = {}
+    for dim, i in zip(dims, index):
+        levels = index_level_coords(obj, dim)
+        if len(levels) > 1:
+            coord[dim] = tuple(obj.coords[level].values[i] for level in levels)
+        elif len(levels) == 1:
+            coord[dim] = obj.coords[levels[0]].values[i]
         else:
-            # For regular dimensions, just add the dimension name
-            dims_with_levels.append(str(dim))
+            coord[dim] = obj.indexes[dim][i]
+    return coord
 
-    return dims_with_levels
+
+def get_printout_labels(ds: Dataset, dims: Sequence[Hashable]) -> list[Any]:
+    """
+    Per-dim row-label sequences for a repr, indexable by dimension position —
+    the vectorised sibling of ``label_coord``: aux levels zipped into tuples,
+    one level as its bare values, else the bare dimension index.
+    """
+    labels: list[Any] = []
+    for dim in dims:
+        levels = index_level_coords(ds, dim)
+        if len(levels) > 1:
+            labels.append(list(zip(*(ds[level].values for level in levels))))
+        elif len(levels) == 1:
+            labels.append(ds[levels[0]].values)
+        else:
+            labels.append(ds.indexes[dim])
+    return labels
 
 
 class LabelPositionIndex:
@@ -632,7 +679,7 @@ class LabelPositionIndex:
 
         labels = val.labels
         index = np.unravel_index(value - start, labels.shape)
-        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        coord = label_coord(labels, labels.dims, index)
         return name, coord
 
     def find_single_with_index(
@@ -669,7 +716,7 @@ class LabelPositionIndex:
 
         labels = val.labels
         index = np.unravel_index(value - start, labels.shape)
-        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        coord = label_coord(labels, labels.dims, index)
         return name, coord, index
 
 
@@ -698,11 +745,7 @@ def _get_label_position_linear(
             if value >= start and value < stop:
                 index = np.unravel_index(value - start, labels.shape)
 
-                # Extract the coordinates from the indices
-                coord = {
-                    dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
-                }
-                # Add the name of the DataArray and the coordinates to the result list
+                coord = label_coord(labels, labels.dims, index)
                 return name, coord
         raise ValueError(f"Label {value} is not existent in the model.")
 

@@ -18,8 +18,10 @@ from linopy.common import (
     coords_from_dataset,
     coords_to_dataset_vars,
     get_dims_with_index_levels,
+    get_printout_labels,
     is_constant,
     iterate_slices,
+    label_coord,
     maybe_group_terms_polars,
 )
 
@@ -276,6 +278,35 @@ def test_get_dims_with_index_levels() -> None:
     # Test case 5: Empty dataset
     ds5 = xr.Dataset()
     assert get_dims_with_index_levels(ds5) == []
+
+    # Case 6: flat dim carrying a decomposed MultiIndex as aux level coords
+    mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
+    ds6 = xr.DataArray(np.zeros(4), coords=[mi], dims=["node"]).reset_index("node")
+    assert get_dims_with_index_levels(ds6) == ["node (region, tech)"]
+
+
+def test_get_printout_labels() -> None:
+    time = pd.date_range("2024-01-01", periods=3)
+    plain = xr.Dataset(coords={"time": time})
+    assert list(get_printout_labels(plain, ["time"])[0]) == list(time)
+
+    mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
+    flat = xr.DataArray(np.zeros(4), coords=[mi], dims=["node"]).reset_index("node")
+    multi = get_printout_labels(flat, ["node"])[0]
+    assert multi == [("a", 1), ("a", 2), ("b", 1), ("b", 2)]
+
+    single = flat.drop_vars("tech")
+    assert list(get_printout_labels(single, ["node"])[0]) == ["a", "a", "b", "b"]
+
+
+def test_label_coord() -> None:
+    mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
+    flat = xr.DataArray(np.zeros(4), coords=[mi], dims=["node"]).reset_index("node")
+    assert label_coord(flat, ["node"], [2]) == {"node": ("b", 1)}
+    assert label_coord(flat.drop_vars("tech"), ["node"], [2]) == {"node": "b"}
+
+    plain = xr.DataArray(np.zeros(3), coords=[pd.Index([10, 20, 30], name="t")])
+    assert label_coord(plain, ["t"], [1]) == {"t": 20}
 
 
 def test_is_constant() -> None:

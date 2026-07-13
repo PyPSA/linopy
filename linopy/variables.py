@@ -46,6 +46,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
+    get_printout_labels,
     has_optimized_model,
     iterate_slices,
     save_join,
@@ -381,13 +382,12 @@ class Variable:
         lines = []
 
         if dims:
+            row_labels = get_printout_labels(self.data, dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord = [
-                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
-                    ]
+                    coord = [row_labels[i][ind] for i, ind in enumerate(indices)]
                     label = self.labels.values[indices]
                     line = (
                         format_coord(coord)

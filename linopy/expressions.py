@@ -65,6 +65,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_index_map,
+    get_printout_labels,
     group_terms_polars,
     has_optimized_model,
     is_constant,
@@ -531,13 +532,12 @@ class BaseExpression(ABC):
         header_string = self.type
 
         if size > 1 or ndim > 0:
+            row_labels = get_printout_labels(self.data, dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord = [
-                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
-                    ]
+                    coord = [row_labels[i][ind] for i, ind in enumerate(indices)]
                     if self.mask is None or self.mask.values[indices]:
                         expr = format_single_expression(
                             self.coeffs.values[indices],
