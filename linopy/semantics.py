@@ -217,6 +217,39 @@ def _legacy_masked_variable_message(name: str) -> str:
     )
 
 
+def _legacy_group_multiindex_message(level_names: list[str]) -> str:
+    """A multi-key groupby returns a stacked ``group`` MultiIndex under legacy."""
+    levels = ", ".join(repr(n) for n in level_names)
+    return (
+        f"A groupby with a frame grouper returned a stacked `group` MultiIndex over"
+        f" ({levels})."
+        " Under legacy the `group` dim is that MultiIndex, so `.sel(group=(...))` by"
+        " tuple works. Under v1 the `group` dim is flat with those keys as ordinary"
+        f" aux coords instead — select via `.groupby`/`.where` on {levels}, not a"
+        " level tuple."
+        f"\n  Resolve:   replace `.sel(group=(...))` with selection on the"
+        f" {levels} aux coord(s)." + _OPT_IN_HINT
+    )
+
+
+def _v1_multiindex_message(dim: str, context: str) -> str:
+    """A pandas MultiIndex dim-coord, rejected under v1."""
+    return (
+        f"{context} uses dimension {dim!r}, a `pd.MultiIndex`, which the v1 convention"
+        f" does not support. Decompose it to a flat dim with the levels as auxiliary"
+        f" coords first — e.g. `reset_index({dim!r})`."
+    )
+
+
+def _legacy_multiindex_message(dim: str, context: str) -> str:
+    """A pandas MultiIndex dim-coord, kept under legacy and rejected under v1."""
+    return (
+        f"{context} uses dimension {dim!r}, a `pd.MultiIndex`. Legacy keeps it as a"
+        f" first-class index; v1 rejects it — decompose it to a flat dim + level aux"
+        f" coords with `reset_index({dim!r})`." + _OPT_IN_HINT
+    )
+
+
 _LINOPY_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -286,6 +319,23 @@ def enforce_aux_conflict(datasets: Sequence[Any], *, stacklevel: int = 5) -> Non
     if is_v1():
         raise ValueError(_aux_conflict_message(*conflict))
     warn_legacy(_legacy_aux_conflict_message(*conflict), stacklevel=stacklevel)
+
+
+def enforce_no_multiindex(
+    obj: Any, *, context: str = "input", stacklevel: int = 4
+) -> None:
+    """Reject (v1) / deprecate (legacy) any MultiIndex dimension on ``obj``."""
+    indexes = getattr(obj, "indexes", None)
+    if not indexes:
+        return
+    for dim, idx in indexes.items():
+        if isinstance(idx, pd.MultiIndex):
+            if is_v1():
+                raise ValueError(_v1_multiindex_message(str(dim), context))
+            warn_legacy(
+                _legacy_multiindex_message(str(dim), context), stacklevel=stacklevel
+            )
+            return
 
 
 def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
