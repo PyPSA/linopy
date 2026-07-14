@@ -1948,6 +1948,15 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         self.env = resolved
         return resolved
 
+    def _register_solver_model(self, m: gurobipy.Model) -> gurobipy.Model:
+        """
+        Register the gurobipy model on the env stack so ``close()`` disposes
+        it before the env — required for the license to be released even while
+        user code still holds a ``solver_model`` reference.
+        """
+        assert self._env_stack is not None
+        return self._env_stack.enter_context(m)
+
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
@@ -1964,7 +1973,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
-        self.solver_model = m
+        self.solver_model = self._register_solver_model(m)
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
@@ -2159,7 +2168,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         env_ = self._resolve_env(env)
         m = gurobipy.read(problem_fn_, env=env_)
-        self.solver_model = m
+        self.solver_model = self._register_solver_model(m)
         self.io_api = io_api
 
         return self._solve(

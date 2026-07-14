@@ -39,6 +39,7 @@ Upcoming Version
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
 * ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail.
+* ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (https://github.com/PyPSA/linopy/issues/459)
 
 Version 0.8.0
 -------------

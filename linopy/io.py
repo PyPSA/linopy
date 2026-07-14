@@ -757,7 +757,14 @@ def to_gurobipy(
         set_names=set_names,
         env=env,
     )
-    return solver.solver_model
+    gm = solver.solver_model
+    # the caller owns the returned model: detach it (and its env) from the
+    # solver so teardown does not dispose it; gurobipy frees the underlying
+    # env once the caller drops the model
+    if solver._env_stack is not None:
+        solver._env_stack.pop_all()
+    solver.close()
+    return gm
 
 
 def to_highspy(

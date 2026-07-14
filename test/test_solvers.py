@@ -214,6 +214,28 @@ def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     assert solver_instance.env is None
 
 
+@pytest.mark.skipif(
+    "gurobi" not in set(solvers.licensed_solvers), reason="Gurobi is not installed"
+)
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_gurobi_close_disposes_held_solver_model(
+    simple_model: Model, io_api: str
+) -> None:
+    import gurobipy
+
+    simple_model.solve("gurobi", io_api=io_api)
+    held = simple_model.solver_model
+    assert isinstance(held.NumVars, int)
+
+    simple_model.solver = None
+
+    # the gurobipy model must be disposed even while `held` keeps it alive:
+    # a merely dereferenced model keeps the underlying env — and with it the
+    # license — acquired until garbage collection
+    with pytest.raises(gurobipy.GurobiError, match="freed"):
+        _ = held.NumVars
+
+
 free_mps_problem = """NAME               sample_mip
 ROWS
  N  obj
