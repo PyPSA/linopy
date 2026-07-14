@@ -80,6 +80,21 @@ def test_widen_applies_to_expressions() -> None:
     assert (2 * x + 1).vars.dtype == np.int64
 
 
+def test_label_dtype_init_arg() -> None:
+    m = Model(label_dtype=np.int64)
+    assert m.label_dtype == np.int64
+    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    assert x.labels.dtype == np.int64
+    assert (2 * x + 1).vars.dtype == np.int64
+    # the global option is untouched
+    assert options["label_dtype"] == np.int32
+
+
+def test_label_dtype_init_arg_rejects_invalid() -> None:
+    with pytest.raises(ValueError, match="label_dtype must be one of"):
+        Model(label_dtype=np.float64)  # type: ignore[arg-type]
+
+
 def test_label_dtype_is_model_snapshot() -> None:
     with options:
         options["label_dtype"] = np.int64

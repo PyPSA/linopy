@@ -35,7 +35,7 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
-from linopy.config import options
+from linopy.config import _VALID_LABEL_DTYPES, options
 from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -191,6 +191,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
+        label_dtype: type[np.signedinteger] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -220,12 +221,25 @@ class Model:
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
+        label_dtype : np.int32 or np.int64, optional
+            Integer dtype used for the model's variable and constraint labels.
+            ``np.int32`` halves label memory but caps a model at ~2.1 billion
+            labels; the model widens itself to ``np.int64`` automatically when
+            that limit is hit. Pass ``np.int64`` upfront for very large models
+            to avoid the mid-build upcast. The default None takes
+            ``linopy.options["label_dtype"]`` (``np.int32``).
 
         Returns
         -------
         linopy.Model
         """
-        self._label_dtype: type[np.signedinteger] = options["label_dtype"]
+        if label_dtype is None:
+            label_dtype = options["label_dtype"]
+        elif label_dtype not in _VALID_LABEL_DTYPES:
+            raise ValueError(
+                f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {label_dtype}"
+            )
+        self._label_dtype: type[np.signedinteger] = label_dtype
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
@@ -503,8 +517,9 @@ class Model:
         """
         Integer dtype used for this model's variable and constraint labels.
 
-        Snapshot of ``linopy.options["label_dtype"]`` taken at model creation,
-        automatically widened to ``int64`` once the labels outgrow int32.
+        Set via the ``label_dtype`` argument of ``Model()`` (defaulting to
+        ``linopy.options["label_dtype"]``), and automatically widened to
+        ``int64`` once the labels outgrow int32.
         """
         return self._label_dtype
 
@@ -515,9 +530,9 @@ class Model:
         self._label_dtype = np.int64
         warnings.warn(
             "The model exceeded the int32 label limit (~2.1 billion labels); "
-            "its label dtype was widened to int64. Set "
-            "linopy.options['label_dtype'] = np.int64 before building large "
-            "models to avoid the mid-build upcast.",
+            "its label dtype was widened to int64. Pass label_dtype=np.int64 "
+            "to Model() when building large models to avoid the mid-build "
+            "upcast.",
             UserWarning,
             stacklevel=3,
         )
