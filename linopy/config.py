@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 LEGACY_SEMANTICS = "legacy"
 V1_SEMANTICS = "v1"
 VALID_SEMANTICS = {LEGACY_SEMANTICS, V1_SEMANTICS}
@@ -30,6 +32,9 @@ class LinopySemanticsWarning(FutureWarning):
     shown to end users by default; the legacy-to-v1 transition changes
     results, not just an API surface.
     """
+
+
+_VALID_LABEL_DTYPES = {np.int32, np.int64}
 
 
 class OptionSettings:
@@ -56,6 +61,10 @@ class OptionSettings:
                 raise ValueError(
                     f"Invalid semantics: {v!r}. "
                     f"Must be one of {sorted(VALID_SEMANTICS)}."
+                )
+            if k == "label_dtype" and v not in _VALID_LABEL_DTYPES:
+                raise ValueError(
+                    f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {v}"
                 )
             self._current_values[k] = v
 
@@ -90,4 +99,5 @@ options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
     semantics=LEGACY_SEMANTICS,
+    label_dtype=np.int32,
 )

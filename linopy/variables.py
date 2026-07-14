@@ -1168,7 +1168,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: str | None = None, **kwargs: Any) -> LinearExpression:
+    def sum(self, dim: DimsLike | None = None, **kwargs: Any) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -1327,7 +1327,9 @@ class Variable:
             .map(DataArray.ffill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign_multiindex_safe(labels=data.labels.astype(int))
+        return self.assign_multiindex_safe(
+            labels=data.labels.astype(options["label_dtype"])
+        )
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
         """
@@ -1354,7 +1356,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign(labels=data.labels.astype(int))
+        return self.assign(labels=data.labels.astype(options["label_dtype"]))
 
     def sanitize(self) -> Variable:
         """
@@ -1365,7 +1367,9 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            return self.assign(labels=self.labels.fillna(-1).astype(int))
+            return self.assign(
+                labels=self.labels.fillna(-1).astype(options["label_dtype"])
+            )
         return self
 
     def equals(self, other: Variable) -> bool:
@@ -2132,7 +2136,10 @@ class Variables:
         """
         df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 
