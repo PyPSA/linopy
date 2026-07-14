@@ -188,7 +188,6 @@ class MatrixAccessor:
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         m = self._parent
-        label_index = m.variables.label_index
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
@@ -202,9 +201,7 @@ class MatrixAccessor:
                 else:
                     dual_list.append(np.full(len(c._con_labels), np.nan))
             else:
-                csr, _ = c.to_matrix(label_index)
-                nonempty = np.diff(csr.indptr).astype(bool)
-                active_rows = np.flatnonzero(nonempty)
+                active_rows = np.flatnonzero(c.active_row_mask())
                 if "dual" in c.data:
                     dual_list.append(c.dual.values.ravel()[active_rows])
                     has_dual = True
