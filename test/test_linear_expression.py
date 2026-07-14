@@ -487,6 +487,30 @@ def test_linear_expression_sum_drop_zeros(z: Variable) -> None:
     assert res.nterm == 2
 
 
+def test_linear_expression_sum_drops_aux_coord_on_summed_dim() -> None:
+    # an auxiliary coordinate on a summed dimension must not leak onto the
+    # helper term dimension, see https://github.com/PyPSA/linopy/issues/295
+    m = Model()
+    v = m.add_variables(coords=[[1, 2, 3]], dims=["A"], name="v")
+    v = v.assign_coords({"B": ("A", [311, 311, 322])})
+
+    summed = (1 * v).sum("A")
+    assert "B" not in summed.coords
+    con = summed >= xr.DataArray(10)  # previously CoordinateValidationError
+    assert "B" not in con.coords
+
+    assert "B" not in (1 * v).sum().coords
+
+
+def test_linear_expression_sum_keeps_aux_coord_on_other_dim() -> None:
+    m = Model()
+    v = m.add_variables(coords=[[1, 2], [1, 2]], dims=["A", "k"], name="v")
+    v = v.assign_coords({"B": ("k", ["x", "y"])})
+    summed = (1 * v).sum("A")
+    assert "B" in summed.coords
+    assert summed.coords["B"].dims == ("k",)
+
+
 def test_linear_expression_sum_warn_using_dims(z: Variable) -> None:
     with pytest.warns(DeprecationWarning):
         (1 * z).sum(dims="dim_0")
