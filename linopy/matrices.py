@@ -22,10 +22,20 @@ if TYPE_CHECKING:
 
 
 def _stack(csrs: list) -> scipy.sparse.csr_array | None:
-    """Vertically stack CSR blocks, or None when there are none."""
+    """
+    Vertically stack CSR blocks, or None when there are none.
+
+    Explicit zeros are dropped: expressions that broadcast against a dense
+    coordinate store one coefficient per pair, most of them zero, and a zero
+    coefficient never changes a constraint. Keeping them only inflates the
+    stored nnz handed to the solvers/writers (e.g. ``highspy.addRows`` scales
+    with stored nnz), so we prune them once, centrally, for every backend.
+    """
     if not csrs:
         return None
-    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+    stacked = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+    stacked.eliminate_zeros()
+    return stacked
 
 
 def _concat(arrays: list, dtype: type | None = None) -> ndarray:
@@ -178,7 +188,6 @@ class MatrixAccessor:
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         m = self._parent
-        label_index = m.variables.label_index
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
@@ -192,9 +201,7 @@ class MatrixAccessor:
                 else:
                     dual_list.append(np.full(len(c._con_labels), np.nan))
             else:
-                csr, _ = c.to_matrix(label_index)
-                nonempty = np.diff(csr.indptr).astype(bool)
-                active_rows = np.flatnonzero(nonempty)
+                active_rows = np.flatnonzero(c.active_row_mask())
                 if "dual" in c.data:
                     dual_list.append(c.dual.values.ravel()[active_rows])
                     has_dual = True

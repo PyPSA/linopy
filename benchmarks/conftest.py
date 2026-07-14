@@ -20,6 +20,7 @@ CODSPEED_MODULES = (
     "test_build",
     "test_to_lp",
     "test_to_solver",
+    "test_ops",
 )
 
 

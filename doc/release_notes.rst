@@ -19,8 +19,13 @@ Upcoming Version
 
 *Other*
 
+* Default internal integer labels to ``int32`` (configurable via ``linopy.options["label_dtype"]``, set to ``np.int64`` for the old behavior), cutting memory ~25% and speeding up model build 10-35%. Raises ``ValueError`` if labels exceed the int32 maximum.
 * ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
 * ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
+
+**Performance**
+
+* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x.
 
 **Deprecations**
 
@@ -29,6 +34,7 @@ Upcoming Version
 
 **Bug fixes**
 
+* Fix GLPK objective parsing. (https://github.com/PyPSA/linopy/pull/818)
 * LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
