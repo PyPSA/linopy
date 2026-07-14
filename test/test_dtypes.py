@@ -75,6 +75,25 @@ def test_auto_widen_is_sticky(restore_label_dtype) -> None:
     assert options["label_dtype"] == np.int64
 
 
+def test_auto_widen_survives_netcdf(restore_label_dtype, tmp_path) -> None:
+    from linopy import read_netcdf
+
+    m = Model()
+    m._xCounter = np.iinfo(np.int32).max - 1
+    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    m.add_constraints(x >= 0, name="c")
+    path = tmp_path / "widened.nc"
+    m.to_netcdf(path)
+
+    options._defaults["label_dtype"] = np.int32
+    options["label_dtype"] = np.int32
+    loaded = read_netcdf(path)
+
+    assert options["label_dtype"] == np.int64
+    assert loaded.variables["x"].labels.dtype == np.int64
+    assert (2 * loaded.variables["x"]).vars.dtype == np.int64
+
+
 def test_label_dtype_option_int64() -> None:
     with options:
         options["label_dtype"] = np.int64
