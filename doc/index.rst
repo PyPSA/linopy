@@ -120,6 +120,8 @@ This package is published under MIT license.
    :caption: Examples
 
    transport-tutorial
+   energy-resource-build
+   sudoku
    migrating-from-pyomo
 
 .. toctree::
