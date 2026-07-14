@@ -2005,9 +2005,8 @@ def groupby_ctx() -> SimpleNamespace:
             coords=[idx], name="mx", mask=xr.DataArray(np.arange(60) % 4 != 0, [idx])
         ),
         const=const,
-        nan_const=const.where(rng.random((3, 60)) > 0.3),
         nan_vec=np.where(np.arange(60) % 3, np.nan, 5.0),
-        cond=xr.DataArray(np.arange(60) % 3 == 0, coords=[idx]),
+        cond2d=xr.DataArray(rng.random((3, 60)) > 0.3, coords=[other, idx]),
         stacked=stacked,
         skewed=skewed,
         one_group=pd.Series(1, index=idx, name="g"),
@@ -2018,13 +2017,16 @@ def groupby_ctx() -> SimpleNamespace:
 
 # (expr, groups) builders keyed by structure; `c` is the groupby_ctx fixture.
 # Cases the old use_fallback=True engine also reproduces, valid under both
-# semantics. ``where_absent`` feeds NaN constants (with their variables
-# dropped) into the kernel through ``.where`` — the construction v1 sanctions
+# semantics. ``where_absent`` scatters NaN constants (with their variables
+# dropped) over a 2-D const through ``.where`` — the construction v1 sanctions
 # for intended absence — so the kernel's NaN-skip path stays covered there.
 FALLBACK_SUM_CASES = {
     "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
     "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
-    "where_absent": lambda c: ((1 * c.x + 5.0).where(c.cond), c.skewed),
+    "where_absent": lambda c: (
+        (2 * c.y - 3 * c.y + 1 * c.y + c.const).where(c.cond2d),
+        c.skewed,
+    ),
     "masked_vars": lambda c: (1 * c.mx, c.skewed),
     "single_group": lambda c: (1 * c.x, c.one_group),
     "identity_groups": lambda c: (1 * c.x, c.identity),
@@ -2032,16 +2034,11 @@ FALLBACK_SUM_CASES = {
     "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
 
-# Legacy-only: these build NaN constants directly in arithmetic, which legacy
-# silently fills as 0 while v1 rejects it with ValueError — so the expressions
-# cannot even be constructed under v1. They pin the legacy NaN-fill behaviour
-# flowing through the kernel with live variables next to NaN constants.
+# Legacy-only: builds a NaN constant next to live variables directly in
+# arithmetic, which legacy silently fills as 0 while v1 rejects it with
+# ValueError at construction — a layout no v1 construction can produce.
 LEGACY_FALLBACK_SUM_CASES = {
     "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
-    "multidim_const_nan": lambda c: (
-        2 * c.y - 3 * c.y + 1 * c.y + c.nan_const,
-        c.skewed,
-    ),
 }
 
 ALL_FALLBACK_SUM_CASES = {**FALLBACK_SUM_CASES, **LEGACY_FALLBACK_SUM_CASES}
