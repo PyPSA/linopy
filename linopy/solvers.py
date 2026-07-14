@@ -25,7 +25,7 @@ from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Self, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -683,7 +683,7 @@ class Solver(ABC, Generic[EnvType]):
         options: dict[str, Any] | None = None,
         track_updates: bool = False,
         **build_kwargs: Any,
-    ) -> Solver:
+    ) -> Self:
         """Instantiate and build the solver against ``model``."""
         instance = cls(
             model=model,
