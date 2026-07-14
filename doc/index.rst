@@ -23,7 +23,7 @@ Main features
 `xarray <https://github.com/pydata/xarray>`__ which allows for many
 flexible data-handling features:
 
--  Define (arrays of) contnuous or binary variables with
+-  Define (arrays of) continuous or binary variables with
    **coordinates**, e.g. time, consumers, etc.
 -  Apply **arithmetic operations** on the variables like adding,
    subtracting, multiplying with all the **broadcasting** potentials of
@@ -37,17 +37,19 @@ flexible data-handling features:
 -  Use **lazy operations** for large linear programs with
    `dask <https://dask.org/>`__
 -  Choose from **different commercial and non-commercial solvers**
--  Fast **import and export** a linear model using xarray’s netcdf IO
+-  Fast **import and export** a linear model using xarray's netcdf IO
+-  Support for **GPU-accelerated solving** for large-scale problems
 -  Support of various solvers
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
-   - `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
+   - `HiGHS <https://highs.dev/>`__
    - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
-   - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
+   - `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
    - `MOSEK <https://www.mosek.com/>`__
    - `COPT <https://www.shanshu.ai/copt>`__
+   - `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ (GPU-accelerated)
 
 
 
@@ -79,7 +81,7 @@ A BibTeX entry for LaTeX users is
 License
 -------
 
-Copyright 2021-2023 Fabian Hofmann
+Copyright 2021-2026 Fabian Hofmann, Felix Bumann
 
 This package is published under MIT license.
 
@@ -109,19 +111,47 @@ This package is published under MIT license.
    creating-variables
    creating-expressions
    creating-constraints
+   coordinate-alignment
    manipulating-models
-   testing-framework
-   transport-tutorial
-   infeasible-model
-   solve-on-remote
-   migrating-from-pyomo
-   gurobi-double-logging
-
 
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Benchmarking
+   :caption: Examples
+
+   transport-tutorial
+   migrating-from-pyomo
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Advanced Features
+
+   sos-constraints
+   piecewise-linear-constraints
+   testing-framework
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Solving
+
+   solve-on-remote
+   solve-on-oetc
+   gpu-acceleration
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Troubleshooting
+
+   infeasible-model
+   gurobi-double-logging
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Comparisons
 
    benchmark
    syntax
@@ -129,7 +159,7 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: References
+   :caption: Reference
 
    api
    release_notes

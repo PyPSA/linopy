@@ -1,20 +1,20 @@
-import sys
+from __future__ import annotations
+
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, TypeAlias, Union, get_args
 
 import numpy
-import numpy.typing
-from pandas import DataFrame, Series
+import polars as pl
+from pandas import DataFrame, Index, Series
 from xarray import DataArray
-
-if sys.version_info >= (3, 10):
-    from types import EllipsisType, NotImplementedType
-else:
-    EllipsisType = type(Ellipsis)
-    NotImplementedType = type(NotImplemented)
+from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import (
+        AnonymousScalarConstraint,
+        ConstraintBase,
+    )
     from linopy.expressions import (
         LinearExpression,
         QuadraticExpression,
@@ -22,15 +22,32 @@ if TYPE_CHECKING:
     )
     from linopy.variables import ScalarVariable, Variable
 
-ConstantLike = Union[int, float, numpy.ndarray, DataArray, Series, DataFrame]
-SignLike = Union[str, numpy.ndarray, DataArray, Series, DataFrame]
-VariableLike = Union["ScalarVariable", "Variable"]
-ExpressionLike = Union[
+CoordsLike: TypeAlias = (
+    Sequence[Sequence | Index] | Mapping | DataArrayCoordinates | DatasetCoordinates
+)
+DimsLike: TypeAlias = str | Iterable[Hashable]
+
+ConstantLike: TypeAlias = (
+    int
+    | float
+    | numpy.floating
+    | numpy.integer
+    | numpy.ndarray
+    | DataArray
+    | Series
+    | DataFrame
+    | pl.Series
+)
+CONSTANT_TYPES: tuple[type, ...] = get_args(ConstantLike)
+SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
+MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
+PathLike: TypeAlias = str | Path
+
+# These reference types only available under TYPE_CHECKING, so use Union with strings
+VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
+ExpressionLike: TypeAlias = Union[
     "ScalarLinearExpression", "LinearExpression", "QuadraticExpression"
 ]
-ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
-MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]
-SideLike = Union[ConstantLike, VariableLike, ExpressionLike]
-
-
-PathLike = Union[str, Path]
+ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
+LinExprLike = Union["Variable", "LinearExpression"]
+SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007

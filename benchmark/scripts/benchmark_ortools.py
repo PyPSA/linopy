@@ -15,8 +15,8 @@ def model(n, solver):
     y = {}
     for i in range(n):
         for j in range(n):
-            x[i, j] = solver.NumVar(lb=None, ub=None, name="x_%d_%d" % (i, j))
-            y[i, j] = solver.NumVar(lb=None, ub=None, name="y_%d_%d" % (i, j))
+            x[i, j] = solver.NumVar(lb=None, ub=None, name=f"x_{i}_{j}")
+            y[i, j] = solver.NumVar(lb=None, ub=None, name=f"y_{i}_{j}")
 
     # Create constraints
     for i in range(n):
@@ -44,7 +44,7 @@ def knapsack_model(n, solver):
     weight = rng.integers(1, 100, size=n)
     value = rng.integers(1, 100, size=n)
 
-    x = {i: solver.BoolVar("x_%d" % i) for i in range(n)}
+    x = {i: solver.BoolVar(f"x_{i}") for i in range(n)}
     # Create constraints
     solver.Add(solver.Sum([weight[i] * x[i] for i in range(n)]) <= 200)
 

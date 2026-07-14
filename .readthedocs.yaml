@@ -1,5 +1,6 @@
 version: 2
-
+sphinx:
+  configuration: doc/conf.py
 build:
   os: ubuntu-24.04
   tools:
@@ -7,7 +8,6 @@ build:
   jobs:
     pre_system_dependencies:
     - git fetch --unshallow # Needed to get version tags
-
 python:
   install:
     - method: pip

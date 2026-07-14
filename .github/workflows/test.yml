@@ -18,7 +18,7 @@ jobs:
     name: Build and verify package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Needed for setuptools_scm
       - uses: hynek/build-and-inspect-python-package@v2
@@ -42,12 +42,12 @@ jobs:
         - windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
     - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -64,7 +64,7 @@ jobs:
 
     - name: Set up windows package manager
       if: matrix.os == 'windows-latest'
-      uses: crazy-max/ghaction-chocolatey@v3
+      uses: crazy-max/ghaction-chocolatey@v4
       with:
           args: -h
 
@@ -74,7 +74,7 @@ jobs:
         choco install glpk
 
     - name: Download package
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: Packages
         path: dist
@@ -82,7 +82,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev,solvers]"
+        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc]"
 
     - name: Test with pytest
       env:
@@ -92,7 +92,7 @@ jobs:
 
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -102,17 +102,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
     - name: Set up Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: 3.12
 
     - name: Download package
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: Packages
         path: dist

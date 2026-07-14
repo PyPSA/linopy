@@ -6,11 +6,20 @@ Created on Sun Feb 13 21:34:55 2022.
 """
 
 import logging
+import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from linopy.io import read_netcdf
+from linopy.sos_reformulation import (
+    sos_reformulation_context,
+    suppress_serialization_warning,
+)
+
+if TYPE_CHECKING:
+    from linopy.model import Model
 
 paramiko_present = True
 try:
@@ -113,8 +122,8 @@ class RemoteHandler:
 
     hostname: str
     port: int = 22
-    username: Union[str, None] = None
-    password: Union[str, None] = None
+    username: str | None = None
+    password: str | None = None
     client: Union["paramiko.SSHClient", None] = None
 
     python_script: Callable = command.format
@@ -124,7 +133,7 @@ class RemoteHandler:
     model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert paramiko_present, "The required paramiko package is not installed."
 
         if self.client is None:
@@ -142,17 +151,17 @@ class RemoteHandler:
         logger.info("Open an SFTP session on the SSH server")
         self.sftp_client = self.client.open_sftp()
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.client is not None:
             self.client.close()
 
-    def write_python_file_on_remote(self, **solve_kwargs):
+    def write_python_file_on_remote(self, **solve_kwargs: Any) -> None:
         """
         Write the python file of the RemoteHandler on the remote machine under
         `self.python_file`.
         """
         logger.info(f"Saving python script at {self.python_file} on remote")
-        script_kwargs = dict(
+        script_kwargs: dict[str, str] = dict(
             model_unsolved_file=self.model_unsolved_file,
             solve_kwargs=f"**{solve_kwargs}",
             model_solved_file=self.model_solved_file,
@@ -160,23 +169,24 @@ class RemoteHandler:
         with self.sftp_client.open(self.python_file, "w") as fn:
             fn.write(self.python_script(**script_kwargs))
 
-    def write_model_on_remote(self, model):
+    def write_model_on_remote(self, model: "Model") -> None:
         """
         Write a model on the remote machine under `self.model_unsolved_file`.
         """
         logger.info(f"Saving unsolved model at {self.model_unsolved_file} on remote")
-        with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-            model.to_netcdf(fn.name)
-            self.sftp_client.put(fn.name, self.model_unsolved_file)
+        with tempfile.TemporaryDirectory(prefix="linopy") as tmpdir:
+            local_path = os.path.join(tmpdir, "model.nc")
+            model.to_netcdf(local_path)
+            self.sftp_client.put(local_path, self.model_unsolved_file)
 
-    def execute(self, cmd):
+    def execute(self, cmd: str) -> None:
         """
         Execute a shell command on the remote machine.
         """
         cmd = cmd.strip("\n")
         self.stdin.write(cmd + "\n")
-        finish = "End of stdout. Exit Status"
-        echo_cmd = f"echo {finish} $?"
+        finish: str = "End of stdout. Exit Status"
+        echo_cmd: str = f"echo {finish} $?"
         self.stdin.write(echo_cmd + "\n")
         self.stdin.flush()
 
@@ -196,43 +206,53 @@ class RemoteHandler:
         if exit_status:
             raise OSError("Execution on remote raised an error, see above.")
 
-    def solve_on_remote(self, model, **kwargs):
+    def solve_on_remote(
+        self,
+        model: "Model",
+        *,
+        reformulate_sos: bool | Literal["auto"] = False,
+        **kwargs: Any,
+    ) -> "Model":
         """
         Solve a linopy model on the remote machine.
 
-        This function
-
-            1. saves the model to a file on the local machine.
-            2. copies that file to the remote machine.
-            3. loads, solves and writes out the model, all on the remote machine.
-            4. copies the solved model to the local machine.
-            5. loads and returns the solved model.
+        Reformulates SOS constraints locally before serialization when
+        requested, so the worker just solves a plain MILP and the SOS
+        lifecycle stays on the caller's model.
 
         Parameters
         ----------
         model : linopy.model.Model
+        reformulate_sos : bool | "auto", optional
+            Forwarded to ``Model._resolve_sos_reformulation`` to decide
+            whether to apply SOS reformulation locally before transfer.
         **kwargs :
-            Keyword arguments passed to `linopy.model.Model.solve`.
+            Keyword arguments passed to `linopy.model.Model.solve` on the
+            remote worker.
 
         Returns
         -------
         linopy.model.Model
             Solved model.
         """
-        self.write_python_file_on_remote(**kwargs)
-        self.write_model_on_remote(model)
+        solver_name = kwargs.get("solver_name")
+        with sos_reformulation_context(model, solver_name, reformulate_sos) as applied:
+            self.write_python_file_on_remote(**kwargs)
+            with suppress_serialization_warning(active=applied):
+                self.write_model_on_remote(model)
 
-        command = f"{self.python_executable} {self.python_file}"
+            command = f"{self.python_executable} {self.python_file}"
 
-        logger.info("Solving model on remote.")
-        self.execute(command)
+            logger.info("Solving model on remote.")
+            self.execute(command)
 
-        logger.info("Retrieve solved model from remote.")
-        with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-            self.sftp_client.get(self.model_solved_file, fn.name)
-            solved = read_netcdf(fn.name)
+            logger.info("Retrieve solved model from remote.")
+            with tempfile.TemporaryDirectory(prefix="linopy") as tmpdir:
+                local_path = os.path.join(tmpdir, "model.nc")
+                self.sftp_client.get(self.model_solved_file, local_path)
+                solved = read_netcdf(local_path)
 
-        self.sftp_client.remove(self.python_file)
-        self.sftp_client.remove(self.model_solved_file)
+            self.sftp_client.remove(self.python_file)
+            self.sftp_client.remove(self.model_solved_file)
 
-        return solved
+            return solved
