@@ -14,6 +14,13 @@ import numpy as np
 _VALID_LABEL_DTYPES = {np.int32, np.int64}
 
 
+def validate_label_dtype(value: Any) -> None:
+    if value not in _VALID_LABEL_DTYPES:
+        raise ValueError(
+            f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {value}"
+        )
+
+
 class OptionSettings:
     """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
 
@@ -34,10 +41,8 @@ class OptionSettings:
         for k, v in kwargs.items():
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
-            if k == "label_dtype" and v not in _VALID_LABEL_DTYPES:
-                raise ValueError(
-                    f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {v}"
-                )
+            if k == "label_dtype":
+                validate_label_dtype(v)
             self._current_values[k] = v
 
     def get_value(self, name: str) -> Any:

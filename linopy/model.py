@@ -35,7 +35,7 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
-from linopy.config import _VALID_LABEL_DTYPES, options
+from linopy.config import options, validate_label_dtype
 from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -235,10 +235,8 @@ class Model:
         """
         if label_dtype is None:
             label_dtype = options["label_dtype"]
-        elif label_dtype not in _VALID_LABEL_DTYPES:
-            raise ValueError(
-                f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {label_dtype}"
-            )
+        else:
+            validate_label_dtype(label_dtype)
         self._label_dtype: type[np.signedinteger] = label_dtype
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
@@ -534,8 +532,14 @@ class Model:
             "to Model() when building large models to avoid the mid-build "
             "upcast.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
+
+    def _allocate_labels(self, start: int, end: int) -> np.ndarray:
+        """Return the label range ``[start, end)``, widening the dtype on overflow."""
+        if end > np.iinfo(self._label_dtype).max:
+            self._widen_label_dtype()
+        return np.arange(start, end, dtype=self._label_dtype)
 
     @property
     def dataset_attrs(self) -> list[str]:
@@ -867,9 +871,7 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        if end > np.iinfo(self._label_dtype).max:
-            self._widen_label_dtype()
-        data.labels.values = np.arange(start, end, dtype=self._label_dtype).reshape(
+        data.labels.values = self._allocate_labels(start, end).reshape(
             data.labels.shape
         )
         self._xCounter += data.labels.size
@@ -1016,9 +1018,7 @@ class Model:
         """Assign label ranges from the constraint counter and apply an optional mask."""
         start = self._cCounter
         end = start + data.labels.size
-        if end > np.iinfo(self._label_dtype).max:
-            self._widen_label_dtype()
-        data.labels.values = np.arange(start, end, dtype=self._label_dtype).reshape(
+        data.labels.values = self._allocate_labels(start, end).reshape(
             data.labels.shape
         )
         self._cCounter += data.labels.size

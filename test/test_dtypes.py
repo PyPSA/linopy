@@ -1,5 +1,6 @@
 """Tests for int32 default label dtype."""
 
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -126,8 +127,6 @@ def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
 
 
 def test_auto_widen_survives_pickle() -> None:
-    import pickle
-
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
     with pytest.warns(UserWarning, match="widened to int64"):
