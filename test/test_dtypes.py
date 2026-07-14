@@ -1,5 +1,8 @@
 """Tests for int32 default label dtype."""
 
+from collections.abc import Generator
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -46,13 +49,13 @@ def test_solve_with_int32_labels() -> None:
 
 
 @pytest.fixture
-def restore_label_dtype():
+def restore_label_dtype() -> Generator[None, None, None]:
     yield
     options._defaults["label_dtype"] = np.int32
     options["label_dtype"] = np.int32
 
 
-def test_auto_widen_variables(restore_label_dtype) -> None:
+def test_auto_widen_variables(restore_label_dtype: None) -> None:
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
     with pytest.warns(UserWarning, match="Auto-widened"):
@@ -61,7 +64,7 @@ def test_auto_widen_variables(restore_label_dtype) -> None:
     assert options["label_dtype"] == np.int64
 
 
-def test_auto_widen_constraints(restore_label_dtype) -> None:
+def test_auto_widen_constraints(restore_label_dtype: None) -> None:
     m = Model()
     x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     m._cCounter = np.iinfo(np.int32).max - 1
@@ -70,13 +73,13 @@ def test_auto_widen_constraints(restore_label_dtype) -> None:
     assert options["label_dtype"] == np.int64
 
 
-def test_auto_widen_is_sticky(restore_label_dtype) -> None:
+def test_auto_widen_is_sticky(restore_label_dtype: None) -> None:
     options.widen_label_dtype()
     options.reset()
     assert options["label_dtype"] == np.int64
 
 
-def test_auto_widen_survives_netcdf(restore_label_dtype, tmp_path) -> None:
+def test_auto_widen_survives_netcdf(restore_label_dtype: None, tmp_path: Path) -> None:
     from linopy import read_netcdf
 
     m = Model()
