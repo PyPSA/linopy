@@ -268,6 +268,7 @@ class LinearExpressionGroupby:
     def map(
         self,
         func: Callable[..., Dataset],
+        shortcut: bool | None = None,
         args: tuple[()] = (),
         **kwargs: Any,
     ) -> LinearExpression:
@@ -278,6 +279,8 @@ class LinearExpressionGroupby:
         ----------
         func : callable
             The function to apply.
+        shortcut : bool, optional
+            Deprecated and ignored. Will be removed in linopy v1.
         args : tuple, optional
             The arguments to pass to the function.
         **kwargs
@@ -288,6 +291,12 @@ class LinearExpressionGroupby:
         LinearExpression
             The result of applying the function to the groupby object.
         """
+        if shortcut is not None:
+            warn(
+                "The `shortcut` argument is deprecated, no longer has any effect "
+                "and will be removed in linopy v1.",
+                FutureWarning,
+            )
         return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
 
     def sum(
