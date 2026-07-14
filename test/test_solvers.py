@@ -570,6 +570,41 @@ class TestAssignResultWiring:
         assert m.solver is None
 
 
+@pytest.mark.parametrize(
+    "objective_text, expected",
+    [
+        (" obj = 1234.56 (MINimum)", 1234.56),
+        (" obj = 0 (MINimum)", 0.0),
+        (" obj = -3.5 (MAXimum)", -3.5),
+        (" obj = +42 (MINimum)", 42.0),
+        (" obj = .5 (MINimum)", 0.5),
+        (" obj = 1.5e+06 (MAXimum)", 1.5e6),
+        (" obj = -2E-3 (MINimum)", -2e-3),
+        (" net_present_value = 1234.5 (MINimum)", 1234.5),
+        (" obj1 = 1234.56 (MINimum)", 1234.56),
+        (" c2e = -7.5e2 (MAXimum)", -750.0),
+        ("  3.5 (MINimum)", 3.5),
+        ("  -1.5e3 (MAXimum)", -1500.0),
+        ("  0 (MINimum)", 0.0),
+    ],
+)
+def test_parse_glpk_objective(objective_text: str, expected: float) -> None:
+    assert solvers.GLPK._parse_objective(objective_text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "objective_text",
+    [
+        " obj = (MINimum)",
+        " unbounded",
+        "",
+    ],
+)
+def test_parse_glpk_objective_no_value_raises(objective_text: str) -> None:
+    with pytest.raises(ValueError, match="Could not parse objective value"):
+        solvers.GLPK._parse_objective(objective_text)
+
+
 mosek_installed = pytest.importorskip("mosek", reason="Mosek is not installed")
 
 
