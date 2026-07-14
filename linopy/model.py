@@ -825,12 +825,8 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        label_dtype = options["label_dtype"]
-        if end > np.iinfo(label_dtype).max:
-            raise ValueError(
-                f"Number of labels ({end}) exceeds the maximum value for "
-                f"{label_dtype.__name__} ({np.iinfo(label_dtype).max})."
-            )
+        if end > np.iinfo(options["label_dtype"]).max:
+            options.widen_label_dtype()
         data.labels.values = np.arange(
             start, end, dtype=options["label_dtype"]
         ).reshape(data.labels.shape)
@@ -978,15 +974,11 @@ class Model:
         """Assign label ranges from the constraint counter and apply an optional mask."""
         start = self._cCounter
         end = start + data.labels.size
-        label_dtype = options["label_dtype"]
-        if end > np.iinfo(label_dtype).max:
-            raise ValueError(
-                f"Number of labels ({end}) exceeds the maximum value for "
-                f"{label_dtype.__name__} ({np.iinfo(label_dtype).max})."
-            )
-        data.labels.values = np.arange(start, end, dtype=label_dtype).reshape(
-            data.labels.shape
-        )
+        if end > np.iinfo(options["label_dtype"]).max:
+            options.widen_label_dtype()
+        data.labels.values = np.arange(
+            start, end, dtype=options["label_dtype"]
+        ).reshape(data.labels.shape)
         self._cCounter += data.labels.size
         if mask is not None:
             data.labels.values = np.where(mask.values, data.labels.values, -1)

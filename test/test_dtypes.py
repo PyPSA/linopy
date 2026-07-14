@@ -45,19 +45,34 @@ def test_solve_with_int32_labels() -> None:
     assert m.objective.value == pytest.approx(25.0)
 
 
-def test_overflow_guard_variables() -> None:
+@pytest.fixture
+def restore_label_dtype():
+    yield
+    options._defaults["label_dtype"] = np.int32
+    options["label_dtype"] = np.int32
+
+
+def test_auto_widen_variables(restore_label_dtype) -> None:
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
-    with pytest.raises(ValueError, match="exceeds the maximum"):
-        m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    assert x.labels.dtype == np.int64
+    assert options["label_dtype"] == np.int64
 
 
-def test_overflow_guard_constraints() -> None:
+def test_auto_widen_constraints(restore_label_dtype) -> None:
     m = Model()
     x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     m._cCounter = np.iinfo(np.int32).max - 1
-    with pytest.raises(ValueError, match="exceeds the maximum"):
-        m.add_constraints(x >= 0, name="c")
+    m.add_constraints(x >= 0, name="c")
+    assert m.constraints["c"].labels.dtype == np.int64
+    assert options["label_dtype"] == np.int64
+
+
+def test_auto_widen_is_sticky(restore_label_dtype) -> None:
+    options.widen_label_dtype()
+    options.reset()
+    assert options["label_dtype"] == np.int64
 
 
 def test_label_dtype_option_int64() -> None:

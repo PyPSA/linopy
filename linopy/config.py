@@ -46,6 +46,11 @@ class OptionSettings:
         else:
             raise KeyError(f"{name} is not a valid setting.")
 
+    def widen_label_dtype(self) -> None:
+        """Permanently widen ``label_dtype`` to ``int64`` (monotonic, survives ``reset``)."""
+        self._defaults["label_dtype"] = np.int64
+        self._current_values["label_dtype"] = np.int64
+
     def reset(self) -> None:
         self._current_values = self._defaults.copy()
 
