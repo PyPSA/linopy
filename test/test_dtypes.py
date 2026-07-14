@@ -55,7 +55,8 @@ def restore_label_dtype():
 def test_auto_widen_variables(restore_label_dtype) -> None:
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
-    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    with pytest.warns(UserWarning, match="Auto-widened"):
+        x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
     assert options["label_dtype"] == np.int64
 
@@ -87,7 +88,8 @@ def test_auto_widen_survives_netcdf(restore_label_dtype, tmp_path) -> None:
 
     options._defaults["label_dtype"] = np.int32
     options["label_dtype"] = np.int32
-    loaded = read_netcdf(path)
+    with pytest.warns(UserWarning, match="Auto-widened"):
+        loaded = read_netcdf(path)
 
     assert options["label_dtype"] == np.int64
     assert loaded.variables["x"].labels.dtype == np.int64
