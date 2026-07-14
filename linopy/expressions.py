@@ -388,9 +388,9 @@ class LinearExpressionGroupby:
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
-        scatter_core_dims = {group_dim: -1, TERM_DIM: -1}
+        _scatter_core_dims = {group_dim: -1, TERM_DIM: -1}
         if data.chunks:
-            data = data.chunk(scatter_core_dims)
+            data = data.chunk(_scatter_core_dims)
 
         codes, unique_groups = pd.factorize(group, sort=True)
         if (codes == -1).any():
