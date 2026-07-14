@@ -26,7 +26,6 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import to_polars
-from linopy.config import options
 from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
@@ -1121,7 +1120,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             setattr(m, k, ds.attrs[k])
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
-        options.widen_label_dtype()
+        m._label_dtype = np.int64
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])

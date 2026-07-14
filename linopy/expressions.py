@@ -510,6 +510,9 @@ class BaseExpression(ABC):
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
+        if not isinstance(model, Model):
+            raise ValueError("model must be an instance of linopy.Model")
+
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
@@ -533,7 +536,7 @@ class BaseExpression(ABC):
 
         if np.issubdtype(data.vars, np.floating):
             data = assign_multiindex_safe(
-                data, vars=data.vars.fillna(-1).astype(options["label_dtype"])
+                data, vars=data.vars.fillna(-1).astype(model._label_dtype)
             )
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
@@ -560,9 +563,6 @@ class BaseExpression(ABC):
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
-
-        if not isinstance(model, Model):
-            raise ValueError("model must be an instance of linopy.Model")
 
         self._model = model
         self._data = cast(Dataset, data)
@@ -1618,7 +1618,9 @@ class BaseExpression(ABC):
         linopy.LinearExpression
         """
         if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(vars=self.vars.fillna(-1).astype(options["label_dtype"]))
+            return self.assign(
+                vars=self.vars.fillna(-1).astype(self.model._label_dtype)
+            )
 
         return self
 
@@ -2022,12 +2024,12 @@ class LinearExpression(BaseExpression):
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
         # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._label_dtype)
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
 
         # Extract vars and coeffs from the combined result
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._label_dtype)
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data

@@ -1,6 +1,5 @@
 """Tests for int32 default label dtype."""
 
-from collections.abc import Generator
 from pathlib import Path
 
 import numpy as np
@@ -48,54 +47,81 @@ def test_solve_with_int32_labels() -> None:
     assert m.objective.value == pytest.approx(25.0)
 
 
-@pytest.fixture
-def restore_label_dtype() -> Generator[None, None, None]:
-    yield
-    options._defaults["label_dtype"] = np.int32
-    options["label_dtype"] = np.int32
-
-
-def test_auto_widen_variables(restore_label_dtype: None) -> None:
+def test_auto_widen_variables() -> None:
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
-    with pytest.warns(UserWarning, match="Auto-widened"):
+    with pytest.warns(UserWarning, match="widened to int64"):
         x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
-    assert options["label_dtype"] == np.int64
+    assert m.label_dtype == np.int64
+    # the widening is per-model: the global option and other models are untouched
+    assert options["label_dtype"] == np.int32
+    other = Model()
+    y = other.add_variables(lower=0, upper=1, coords=[range(5)], name="y")
+    assert y.labels.dtype == np.int32
 
 
-def test_auto_widen_constraints(restore_label_dtype: None) -> None:
+def test_auto_widen_constraints() -> None:
     m = Model()
     x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     m._cCounter = np.iinfo(np.int32).max - 1
-    m.add_constraints(x >= 0, name="c")
+    with pytest.warns(UserWarning, match="widened to int64"):
+        m.add_constraints(x >= 0, name="c")
     assert m.constraints["c"].labels.dtype == np.int64
-    assert options["label_dtype"] == np.int64
+    assert m.label_dtype == np.int64
+    assert options["label_dtype"] == np.int32
 
 
-def test_auto_widen_is_sticky(restore_label_dtype: None) -> None:
-    options.widen_label_dtype()
-    options.reset()
-    assert options["label_dtype"] == np.int64
+def test_widen_applies_to_expressions() -> None:
+    m = Model()
+    m._xCounter = np.iinfo(np.int32).max - 1
+    with pytest.warns(UserWarning, match="widened to int64"):
+        x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    assert (2 * x + 1).vars.dtype == np.int64
 
 
-def test_auto_widen_survives_netcdf(restore_label_dtype: None, tmp_path: Path) -> None:
+def test_label_dtype_is_model_snapshot() -> None:
+    with options:
+        options["label_dtype"] = np.int64
+        m = Model()
+    # resetting the option does not narrow an existing model
+    assert options["label_dtype"] == np.int32
+    assert m.label_dtype == np.int64
+    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    assert x.labels.dtype == np.int64
+
+
+def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
     from linopy import read_netcdf
 
     m = Model()
     m._xCounter = np.iinfo(np.int32).max - 1
-    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    with pytest.warns(UserWarning, match="widened to int64"):
+        x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     m.add_constraints(x >= 0, name="c")
     path = tmp_path / "widened.nc"
     m.to_netcdf(path)
 
-    options._defaults["label_dtype"] = np.int32
-    options["label_dtype"] = np.int32
-    with pytest.warns(UserWarning, match="Auto-widened"):
-        loaded = read_netcdf(path)
+    loaded = read_netcdf(path)
 
-    assert options["label_dtype"] == np.int64
+    assert loaded.label_dtype == np.int64
+    assert options["label_dtype"] == np.int32
     assert loaded.variables["x"].labels.dtype == np.int64
+    assert (2 * loaded.variables["x"]).vars.dtype == np.int64
+
+
+def test_auto_widen_survives_pickle() -> None:
+    import pickle
+
+    m = Model()
+    m._xCounter = np.iinfo(np.int32).max - 1
+    with pytest.warns(UserWarning, match="widened to int64"):
+        x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
+    m.add_constraints(x >= 0, name="c")
+
+    loaded = pickle.loads(pickle.dumps(m))
+
+    assert loaded.label_dtype == np.int64
     assert (2 * loaded.variables["x"]).vars.dtype == np.int64
 
 

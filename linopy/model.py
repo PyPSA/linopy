@@ -140,6 +140,7 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
+    _label_dtype: type[np.signedinteger]
     _varnameCounter: int
     _connameCounter: int
     _pwlCounter: int
@@ -163,6 +164,7 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
+        "_label_dtype",
         "_varnameCounter",
         "_connameCounter",
         "_pwlCounter",
@@ -223,6 +225,7 @@ class Model:
         -------
         linopy.Model
         """
+        self._label_dtype: type[np.signedinteger] = options["label_dtype"]
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
@@ -494,6 +497,30 @@ class Model:
         if not isinstance(value, str | Path):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
+
+    @property
+    def label_dtype(self) -> type[np.signedinteger]:
+        """
+        Integer dtype used for this model's variable and constraint labels.
+
+        Snapshot of ``linopy.options["label_dtype"]`` taken at model creation,
+        automatically widened to ``int64`` once the labels outgrow int32.
+        """
+        return self._label_dtype
+
+    def _widen_label_dtype(self) -> None:
+        """Widen this model's label dtype to ``int64`` (monotonic, never narrows)."""
+        if self._label_dtype == np.int64:
+            return
+        self._label_dtype = np.int64
+        warnings.warn(
+            "The model exceeded the int32 label limit (~2.1 billion labels); "
+            "its label dtype was widened to int64. Set "
+            "linopy.options['label_dtype'] = np.int64 before building large "
+            "models to avoid the mid-build upcast.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     @property
     def dataset_attrs(self) -> list[str]:
@@ -825,11 +852,11 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        if end > np.iinfo(options["label_dtype"]).max:
-            options.widen_label_dtype()
-        data.labels.values = np.arange(
-            start, end, dtype=options["label_dtype"]
-        ).reshape(data.labels.shape)
+        if end > np.iinfo(self._label_dtype).max:
+            self._widen_label_dtype()
+        data.labels.values = np.arange(start, end, dtype=self._label_dtype).reshape(
+            data.labels.shape
+        )
         self._xCounter += data.labels.size
 
         if mask is not None:
@@ -974,11 +1001,11 @@ class Model:
         """Assign label ranges from the constraint counter and apply an optional mask."""
         start = self._cCounter
         end = start + data.labels.size
-        if end > np.iinfo(options["label_dtype"]).max:
-            options.widen_label_dtype()
-        data.labels.values = np.arange(
-            start, end, dtype=options["label_dtype"]
-        ).reshape(data.labels.shape)
+        if end > np.iinfo(self._label_dtype).max:
+            self._widen_label_dtype()
+        data.labels.values = np.arange(start, end, dtype=self._label_dtype).reshape(
+            data.labels.shape
+        )
         self._cCounter += data.labels.size
         if mask is not None:
             data.labels.values = np.where(mask.values, data.labels.values, -1)

@@ -7,7 +7,6 @@ Created on Fri Jan 13 12:57:45 2023.
 
 from __future__ import annotations
 
-import warnings
 from typing import Any
 
 import numpy as np
@@ -46,22 +45,6 @@ class OptionSettings:
             return self._current_values[name]
         else:
             raise KeyError(f"{name} is not a valid setting.")
-
-    def widen_label_dtype(self) -> None:
-        """Permanently widen ``label_dtype`` to ``int64`` (monotonic, survives ``reset``)."""
-        transitioned = self._current_values["label_dtype"] != np.int64
-        self._defaults["label_dtype"] = np.int64
-        self._current_values["label_dtype"] = np.int64
-        if transitioned:
-            warnings.warn(
-                "Auto-widened the internal label dtype to int64: the model "
-                "exceeded the int32 label limit (~2.1 billion). Set "
-                "linopy.options['label_dtype'] = np.int64 explicitly when large "
-                "models are expected -- it avoids the mid-build upcast and is "
-                "faster and lighter on memory.",
-                UserWarning,
-                stacklevel=2,
-            )
 
     def reset(self) -> None:
         self._current_values = self._defaults.copy()
