@@ -1824,11 +1824,12 @@ class Model:
         -----
         After solving, the solver stays attached as ``model.solver`` for
         post-solve introspection (``model.solver_model``,
-        ``compute_infeasibilities()``). For solvers with limited licenses
-        (e.g. Gurobi) this means the license remains acquired until the
-        solver is released: call ``model.solver.close()`` (or assign
-        ``model.solver = None``) to free it explicitly. It is also released
-        on the next ``solve()`` call and when the model is garbage-collected.
+        ``compute_infeasibilities()``) and reuse, e.g. persistent in-place
+        re-solves. For solvers with limited licenses (e.g. Gurobi) this
+        means the license remains acquired until the solver is released:
+        call ``model.solver.close()`` (or assign ``model.solver = None``)
+        to free it explicitly. It is also released on the next ``solve()``
+        call and when the model is garbage-collected.
         """
         if mock_solve:
             return self._mock_solve(

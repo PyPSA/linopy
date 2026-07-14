@@ -221,6 +221,11 @@ def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
 def test_gurobi_close_disposes_held_solver_model(
     simple_model: Model, io_api: str
 ) -> None:
+    """
+    close() must dispose the gurobipy model even while a reference to it is
+    held: a merely dereferenced model keeps the underlying env — and with it
+    the license — acquired until garbage collection.
+    """
     import gurobipy
 
     simple_model.solve("gurobi", io_api=io_api)
@@ -229,9 +234,6 @@ def test_gurobi_close_disposes_held_solver_model(
 
     simple_model.solver = None
 
-    # the gurobipy model must be disposed even while `held` keeps it alive:
-    # a merely dereferenced model keeps the underlying env — and with it the
-    # license — acquired until garbage collection
     with pytest.raises(gurobipy.GurobiError, match="freed"):
         _ = held.NumVars
 

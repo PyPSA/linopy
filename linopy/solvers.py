@@ -1957,6 +1957,18 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         assert self._env_stack is not None
         return self._env_stack.enter_context(m)
 
+    def _detach_solver_model(self) -> gurobipy.Model:
+        """
+        Hand ownership of the gurobipy model to the caller: unregister it from
+        the solver's teardown so ``close()`` does not dispose it. gurobipy
+        frees the underlying env once the caller drops the model.
+        """
+        m = self.solver_model
+        if self._env_stack is not None:
+            self._env_stack.pop_all()
+        self.close()
+        return m
+
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
