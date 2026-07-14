@@ -522,7 +522,6 @@ Solvers
    :toctree: generated/
 
    solvers.available_solvers
-   solvers.Solver
    solvers.CBC
    solvers.COPT
    solvers.Cplex

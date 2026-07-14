@@ -1113,12 +1113,10 @@ class Solver(ABC, Generic[EnvType]):
 
     def close(self) -> None:
         """
-        Release the native solver state.
+        Dispose the native solver model and env, releasing any held license.
 
-        Disposes the native solver model and any solver environment created
-        by this instance, releasing the resources tied to them — including
-        the solver license, where the solver holds one. A user-supplied
-        environment is left untouched.
+        Only resources created by this instance are disposed; a
+        user-supplied environment is left untouched.
 
         Idempotent, and called automatically when a new ``solve()`` replaces
         this solver, when ``model.solver`` is reassigned (e.g. to ``None``),
