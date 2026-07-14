@@ -2001,7 +2001,7 @@ class TestGroupbySumKernel:
         grouped = expr.groupby(groups).sum()
         fallback = expr.groupby(groups.to_xarray()).sum(use_fallback=True)
 
-        assert list(grouped.data.letter) == ["a", "b", "c"]
+        assert list(grouped.coords["letter"].values) == ["a", "b", "c"]
         # padded to the largest group times the number of terms of the input
         assert grouped.nterm == 14 * expr.nterm
         assert_linequal(grouped, fallback)
@@ -2009,7 +2009,7 @@ class TestGroupbySumKernel:
         # every group carries exactly the variables of its members, rest is fill
         for letter in ["a", "b", "c"]:
             members = np.where(np.array(labels) == letter)[0]
-            vars_of_group = grouped.data.vars.sel(letter=letter).values
+            vars_of_group = grouped.vars.sel(letter=letter).values
             present = set(vars_of_group[vars_of_group >= 0])
             assert present == set(v.labels.values[members])
             assert (vars_of_group >= 0).sum() == len(members) * expr.nterm
@@ -2020,22 +2020,20 @@ class TestGroupbySumKernel:
         """
         The kernel handles chunked (dask) data, staying lazy until computed. It
         gathers both the grouped and term dimensions into single chunks, so a
-        split ``_term`` (a core dim of the scatter) is handled too.
+        split ``_term`` (a core dim of the scatter) is handled too -- a case the
+        group-dim chunking in ``_grouped_sum_on_backend`` does not exercise.
         """
         pytest.importorskip("dask")
         expr = 2 * v + 3 * v + 5  # nterm 2, so `_term` can be split
         groups = pd.Series([1] * 12 + [2] * 8, index=v.indexes["dim_2"], name="group")
 
-        chunked = LinearExpression(expr.data.chunk(chunks), expr.model)
-        grouped_chunked = chunked.groupby(groups).sum()
-        # the result stays a lazy dask graph until explicitly computed
-        assert grouped_chunked.data.vars.chunks is not None
+        grouped_chunked = expr.chunk(chunks).groupby(groups).sum()
+        # the result stays a lazy dask graph until its values are read
+        assert grouped_chunked.vars.chunks is not None
 
         grouped = expr.groupby(groups).sum()
         assert grouped_chunked.nterm == grouped.nterm
-        assert_linequal(
-            LinearExpression(grouped_chunked.data.compute(), expr.model), grouped
-        )
+        assert_linequal(grouped_chunked, grouped)
 
     def test_nan_groups_raise(self, v: Variable) -> None:
         expr = 1 * v
@@ -2059,15 +2057,15 @@ class TestGroupbySumKernel:
         grouped = (2 * x + 5).groupby(groups).sum()
         lab = x.labels.values
 
-        assert grouped.data.vars.dims == ("g", "_term")
-        assert list(grouped.data.g.values) == [0, 1]
+        assert grouped.vars.dims == ("g", "_term")
+        assert list(grouped.coords["g"].values) == [0, 1]
         assert grouped.nterm == 3  # max group size (3) * input nterm (1)
         # group 0 holds members 0, 1, 3 in order; group 1 holds member 2 then fill
         np.testing.assert_array_equal(
-            grouped.data.vars.values, [[lab[0], lab[1], lab[3]], [lab[2], -1, -1]]
+            grouped.vars.values, [[lab[0], lab[1], lab[3]], [lab[2], -1, -1]]
         )
         np.testing.assert_array_equal(
-            grouped.data.coeffs.values, [[2.0, 2.0, 2.0], [2.0, np.nan, np.nan]]
+            grouped.coeffs.values, [[2.0, 2.0, 2.0], [2.0, np.nan, np.nan]]
         )
         np.testing.assert_array_equal(grouped.const.values, [15.0, 5.0])
 
@@ -2085,10 +2083,10 @@ class TestGroupbySumKernel:
         grouped = (2 * y + 3 * y + 1).groupby(groups).sum()
         lab = y.labels.values  # (other, elem)
 
-        assert set(grouped.data.vars.dims) == {"g", "other", "_term"}
+        assert set(grouped.vars.dims) == {"g", "other", "_term"}
         # the non-grouped coord survives; the group coord holds the sorted keys
-        assert list(grouped.data.other.values) == ["a", "b"]
-        assert list(grouped.data.g.values) == [0, 1]
+        assert list(grouped.coords["other"].values) == ["a", "b"]
+        assert list(grouped.coords["g"].values) == [0, 1]
         assert grouped.nterm == 6  # max group size (3) * input nterm (2)
         # group 0 holds members 0, 1, 3 in order; group 1 holds member 2 then fill
         m0 = [0, 1, 3]
@@ -2097,15 +2095,15 @@ class TestGroupbySumKernel:
             [[lab[o, 2], -1, -1] * 2 for o in (0, 1)],
         ]
         np.testing.assert_array_equal(
-            grouped.data.vars.transpose("g", "other", "_term").values, exp_vars
+            grouped.vars.transpose("g", "other", "_term").values, exp_vars
         )
         term, pad = [2.0, 2, 2, 3, 3, 3], [2.0, np.nan, np.nan, 3, np.nan, np.nan]
         np.testing.assert_array_equal(
-            grouped.data.coeffs.transpose("g", "other", "_term").values,
+            grouped.coeffs.transpose("g", "other", "_term").values,
             [[term, term], [pad, pad]],
         )
         np.testing.assert_array_equal(
-            grouped.data.const.transpose("g", "other").values, [[3.0, 3], [1, 1]]
+            grouped.const.transpose("g", "other").values, [[3.0, 3], [1, 1]]
         )
 
     def test_exact_padded_layout_quadratic(self) -> None:
@@ -2122,7 +2120,7 @@ class TestGroupbySumKernel:
         grouped = (x * y).groupby(groups).sum()
         lx, ly = x.labels.values, y.labels.values
 
-        assert set(grouped.data.vars.dims) == {"g", "_factor", "_term"}
+        assert set(grouped.vars.dims) == {"g", "_factor", "_term"}
         assert grouped.nterm == 3
         # factor 0 carries x, factor 1 carries y; members 0, 1, 3 then fill
         m0 = [0, 1, 3]
@@ -2131,10 +2129,10 @@ class TestGroupbySumKernel:
             [[lx[2], -1, -1], [ly[2], -1, -1]],
         ]
         np.testing.assert_array_equal(
-            grouped.data.vars.transpose("g", "_factor", "_term").values, exp_vars
+            grouped.vars.transpose("g", "_factor", "_term").values, exp_vars
         )
         np.testing.assert_array_equal(
-            grouped.data.coeffs.transpose("g", "_term").values,
+            grouped.coeffs.transpose("g", "_term").values,
             [[1.0, 1, 1], [1, np.nan, np.nan]],
         )
 
@@ -2147,7 +2145,7 @@ class TestGroupbySumKernel:
 
         grouped = (1 * x).groupby(groups).sum()
         assert grouped.nterm == 0
-        assert dict(grouped.data.sizes) == {"g": 0, "_term": 0}
+        assert dict(grouped.sizes) == {"g": 0, "_term": 0}
 
     @pytest.mark.parametrize("backend", ["numpy", "dask"])
     @pytest.mark.parametrize("case", FALLBACK_SUM_CASES)
