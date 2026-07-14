@@ -35,7 +35,6 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
-from linopy.config import options, validate_label_dtype
 from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -191,7 +190,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
-        label_dtype: type[np.signedinteger] | None = None,
+        label_dtype: type[np.signedinteger] = np.int32,
     ) -> None:
         """
         Initialize the linopy model.
@@ -223,20 +222,19 @@ class Model:
             constraint names by default. The default is True.
         label_dtype : np.int32 or np.int64, optional
             Integer dtype used for the model's variable and constraint labels.
-            ``np.int32`` halves label memory but caps a model at ~2.1 billion
-            labels; the model widens itself to ``np.int64`` automatically when
-            that limit is hit. Pass ``np.int64`` upfront for very large models
-            to avoid the mid-build upcast. The default None takes
-            ``linopy.options["label_dtype"]`` (``np.int32``).
+            The default ``np.int32`` halves label memory but caps a model at
+            ~2.1 billion labels; the model widens itself to ``np.int64``
+            automatically when that limit is hit. Pass ``np.int64`` upfront
+            for very large models to avoid the mid-build upcast.
 
         Returns
         -------
         linopy.Model
         """
-        if label_dtype is None:
-            label_dtype = options["label_dtype"]
-        else:
-            validate_label_dtype(label_dtype)
+        if label_dtype not in (np.int32, np.int64):
+            raise ValueError(
+                f"label_dtype must be np.int32 or np.int64, got {label_dtype}"
+            )
         self._label_dtype: type[np.signedinteger] = label_dtype
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
@@ -515,9 +513,8 @@ class Model:
         """
         Integer dtype used for this model's variable and constraint labels.
 
-        Set via the ``label_dtype`` argument of ``Model()`` (defaulting to
-        ``linopy.options["label_dtype"]``), and automatically widened to
-        ``int64`` once the labels outgrow int32.
+        Set via the ``label_dtype`` argument of ``Model()`` and automatically
+        widened to ``int64`` once the labels outgrow int32.
         """
         return self._label_dtype
 

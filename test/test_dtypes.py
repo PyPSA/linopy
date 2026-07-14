@@ -7,11 +7,10 @@ import numpy as np
 import pytest
 
 from linopy import Model
-from linopy.config import options
 
 
 def test_default_label_dtype_is_int32() -> None:
-    assert options["label_dtype"] == np.int32
+    assert Model().label_dtype == np.int32
 
 
 def test_variable_labels_are_int32() -> None:
@@ -55,8 +54,7 @@ def test_auto_widen_variables() -> None:
         x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
     assert m.label_dtype == np.int64
-    # the widening is per-model: the global option and other models are untouched
-    assert options["label_dtype"] == np.int32
+    # the widening is per-model: other models are untouched
     other = Model()
     y = other.add_variables(lower=0, upper=1, coords=[range(5)], name="y")
     assert y.labels.dtype == np.int32
@@ -70,7 +68,6 @@ def test_auto_widen_constraints() -> None:
         m.add_constraints(x >= 0, name="c")
     assert m.constraints["c"].labels.dtype == np.int64
     assert m.label_dtype == np.int64
-    assert options["label_dtype"] == np.int32
 
 
 def test_widen_applies_to_expressions() -> None:
@@ -87,24 +84,11 @@ def test_label_dtype_init_arg() -> None:
     x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
     assert (2 * x + 1).vars.dtype == np.int64
-    # the global option is untouched
-    assert options["label_dtype"] == np.int32
 
 
 def test_label_dtype_init_arg_rejects_invalid() -> None:
-    with pytest.raises(ValueError, match="label_dtype must be one of"):
+    with pytest.raises(ValueError, match="label_dtype must be"):
         Model(label_dtype=np.float64)  # type: ignore[arg-type]
-
-
-def test_label_dtype_is_model_snapshot() -> None:
-    with options:
-        options["label_dtype"] = np.int64
-        m = Model()
-    # resetting the option does not narrow an existing model
-    assert options["label_dtype"] == np.int32
-    assert m.label_dtype == np.int64
-    x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
-    assert x.labels.dtype == np.int64
 
 
 def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
@@ -121,7 +105,6 @@ def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
     loaded = read_netcdf(path)
 
     assert loaded.label_dtype == np.int64
-    assert options["label_dtype"] == np.int32
     assert loaded.variables["x"].labels.dtype == np.int64
     assert (2 * loaded.variables["x"]).vars.dtype == np.int64
 
@@ -137,18 +120,3 @@ def test_auto_widen_survives_pickle() -> None:
 
     assert loaded.label_dtype == np.int64
     assert (2 * loaded.variables["x"]).vars.dtype == np.int64
-
-
-def test_label_dtype_option_int64() -> None:
-    with options:
-        options["label_dtype"] = np.int64
-        m = Model()
-        x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
-        assert x.labels.dtype == np.int64
-        expr = 2 * x + 1
-        assert expr.vars.dtype == np.int64
-
-
-def test_label_dtype_rejects_invalid() -> None:
-    with pytest.raises(ValueError, match="label_dtype must be one of"):
-        options["label_dtype"] = np.float64
