@@ -8,7 +8,6 @@ Created on Wed Mar 17 17:06:36 2021.
 from __future__ import annotations
 
 import warnings
-from collections import Counter
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,7 +27,7 @@ from linopy import (
     Variable,
     merge,
 )
-from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
+from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
@@ -1921,7 +1920,6 @@ def groupby_ctx() -> SimpleNamespace:
     a, b = pd.Index(range(12), name="a"), pd.Index(list("vwxyz"), name="b")
 
     const = xr.DataArray(rng.normal(size=(3, 60)), coords=[other, idx])
-    y = m.add_variables(coords=[other, idx], name="y")
     yab = m.add_variables(coords=[a, b], name="yab")
     stacked = LinearExpression((2 * yab + 1 * yab).data.stack(elem=["a", "b"]), m)
     skewed = pd.Series(rng.choice(8, 60, p=[0.5] + [0.5 / 7] * 7), index=idx, name="g")
@@ -1929,23 +1927,14 @@ def groupby_ctx() -> SimpleNamespace:
     return SimpleNamespace(
         m=m,
         x=m.add_variables(coords=[idx], name="x"),
-        y=y,
+        y=m.add_variables(coords=[other, idx], name="y"),
         y3=m.add_variables(coords=[p, q, idx], name="y3"),
         mx=m.add_variables(
             coords=[idx], name="mx", mask=xr.DataArray(np.arange(60) % 4 != 0, [idx])
         ),
-        my=m.add_variables(
-            coords=[other, idx],
-            name="my",
-            mask=xr.DataArray(rng.random((3, 60)) > 0.25, [other, idx]),
-        ),
         const=const,
         nan_const=const.where(rng.random((3, 60)) > 0.3),
         nan_vec=np.where(np.arange(60) % 3, np.nan, 5.0),
-        y_aux=(2 * y + 1 * y).assign_coords(
-            carrier=("elem", rng.choice(list("PQ"), 60)),
-            tag=(("other", "elem"), rng.integers(0, 9, (3, 60))),
-        ),
         stacked=stacked,
         skewed=skewed,
         one_group=pd.Series(1, index=idx, name="g"),
@@ -1971,90 +1960,32 @@ FALLBACK_SUM_CASES = {
     "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
 
-# Cases the fallback cannot reproduce (errors on quadratics' _factor axis;
-# diverges on masked multi-dim vars and grouped-dim coords).
-FALLBACK_UNSUPPORTED_SUM_CASES = {
-    "quadratic": lambda c: (c.x * c.x + 2 * c.x, c.skewed),
-    "quadratic_multidim_const": lambda c: (c.y * c.y + 2 * c.y + c.const, c.skewed),
-    "masked_multidim": lambda c: (5 * c.my - 2 * c.my, c.skewed),
-    "aux_coords_on_group_dim": lambda c: (c.y_aux, c.skewed),
-}
 
-GROUPBY_SUM_CASES = {**FALLBACK_SUM_CASES, **FALLBACK_UNSUPPORTED_SUM_CASES}
-
-
-def _term_multisets(
-    ds: xr.Dataset, row_dim: str, labels: list, loop_dims: list
-) -> dict:
+def _grouped_sum_on_backend(
+    expr: LinearExpression, groups: pd.Series, backend: str
+) -> LinearExpression:
     """
-    Map ``(group label, slice over loop dims)`` to a multiset of live terms.
+    Group-sum ``expr`` on the numpy or the lazy (dask) kernel via the public API.
 
-    A term is a coefficient paired with its sorted variable labels (one label for
-    a linear term, two for a quadratic factor pair); fill terms (all labels -1)
-    are skipped. Rows sharing a group label are merged, so the same helper
-    summarises the per-element input and the per-group result.
+    For dask the input is chunked with :meth:`LinearExpression.chunk`; the grouped
+    result stays lazy until the tests read ``.vars``/``.coeffs``/``.const`` values.
     """
-    coeffs = ds.coeffs.transpose(row_dim, *loop_dims, TERM_DIM).values
-    var_dims = [row_dim, *loop_dims, TERM_DIM]
-    if FACTOR_DIM in ds.vars.dims:
-        var_dims.append(FACTOR_DIM)
-    vars_ = ds.vars.transpose(*var_dims).values
-    if FACTOR_DIM not in ds.vars.dims:
-        vars_ = vars_[..., None]
-
-    terms: dict = {}
-    for r in range(coeffs.shape[0]):
-        for loop in np.ndindex(*coeffs.shape[1:-1]):
-            bucket = terms.setdefault((labels[r], loop), Counter())
-            cs, vs = coeffs[(r, *loop)], vars_[(r, *loop)]
-            for t in range(cs.shape[0]):
-                factors = tuple(sorted(int(f) for f in vs[t]))
-                if all(f == -1 for f in factors):
-                    continue
-                bucket[(round(float(cs[t]), 9), factors)] += 1
-    return terms
-
-
-def _assert_grouped_sum_correct(
-    expr: LinearExpression, groups: pd.Series, *, chunked: bool = False
-) -> None:
-    """
-    Verify ``groupby(...).sum()`` from first principles, without a reference
-    implementation.
-
-    For every group and every slice over the non-grouped dimensions, the result's
-    live terms must be exactly the multiset of its members' terms, and its
-    constant the members' NaN-skipping sum. With ``chunked=True`` the same check
-    runs against dask-backed input, exercising the lazy kernel.
-    """
-    group_dim = groups.index.name
-    gname = groups.name
-    if chunked:
-        expr = LinearExpression(expr.data.chunk({group_dim: 17}), expr.model)
-    in_ds = expr.data
-    out_ds = expr.groupby(groups).sum().data
-    loop_dims = [d for d in in_ds.coeffs.dims if d not in (group_dim, TERM_DIM)]
-
-    expected = _term_multisets(in_ds, group_dim, list(groups.values), loop_dims)
-    actual = _term_multisets(out_ds, gname, list(out_ds[gname].values), loop_dims)
-    assert actual == expected
-
-    const_loop = [d for d in in_ds.const.dims if d != group_dim]
-    in_const = np.nan_to_num(in_ds.const.transpose(group_dim, *const_loop).values)
-    out_const = out_ds.const.transpose(gname, *const_loop).values
-    member_of = np.asarray(groups.values)
-    for i, g in enumerate(out_ds[gname].values):
-        np.testing.assert_allclose(
-            in_const[member_of == g].sum(0), out_const[i], rtol=1e-9, atol=1e-12
-        )
+    if backend == "dask":
+        pytest.importorskip("dask")
+        expr = expr.chunk({groups.index.name: 2})
+    grouped = expr.groupby(groups).sum()
+    if backend == "dask":
+        assert grouped.vars.chunks is not None  # stayed lazy until values are read
+    return grouped
 
 
 class TestGroupbySumKernel:
     """
     ``groupby(...).sum()`` builds the padded result with a single
     :func:`xarray.apply_ufunc` kernel (``_grouped_sum``) over numpy and chunked
-    (dask) data. These tests verify that kernel from first principles and cover
-    the structural edge cases.
+    (dask) data. The cases the old engine also reproduces are guarded against
+    ``use_fallback=True``; the ones it cannot (quadratics, masked multi-dim vars,
+    coords on the grouped dim) get concrete, hand-pinned layout tests.
     """
 
     def test_skewed_unsorted_groups(self, v: Variable) -> None:
@@ -2226,36 +2157,126 @@ class TestGroupbySumKernel:
         """
         Equivalence guard: on the cases the old engine reproduces, the scatter
         kernel must match ``use_fallback=True``, on both numpy and dask backends.
-        The fallback oracle always runs on numpy. Correctness itself is covered
-        by ``test_grouped_sum_from_first_principles``.
+        The fallback oracle always runs on numpy.
         """
-        if backend == "dask":
-            pytest.importorskip("dask")
         expr, groups = FALLBACK_SUM_CASES[case](groupby_ctx)
         fallback = expr.groupby(groups).sum(use_fallback=True)
-        if backend == "dask":
-            expr = LinearExpression(
-                expr.data.chunk({groups.index.name: 17}), expr.model
-            )
-        scatter = expr.groupby(groups).sum()
-        if backend == "dask":
-            scatter = LinearExpression(scatter.data.compute(), expr.model)
+        scatter = _grouped_sum_on_backend(expr, groups, backend)
         assert_linequal(scatter, fallback)
 
     @pytest.mark.parametrize("backend", ["numpy", "dask"])
-    @pytest.mark.parametrize("case", GROUPBY_SUM_CASES)
-    def test_grouped_sum_from_first_principles(
-        self, groupby_ctx: SimpleNamespace, case: str, backend: str
-    ) -> None:
+    def test_masked_multidim_drops_masked_members(self, backend: str) -> None:
         """
-        The authoritative correctness check, over every case: each group's terms
-        and constant must match its members, verified from first principles with
-        no reference implementation, on both numpy and dask backends.
+        A masked member drops out of its group (its variable never appears),
+        while live members scatter as usual, across unsorted, non-contiguous
+        groups. The fallback diverges here, so the expected live-variable sets
+        are pinned by hand; runs on numpy and the lazy (dask) kernel.
         """
-        if backend == "dask":
-            pytest.importorskip("dask")
-        expr, groups = GROUPBY_SUM_CASES[case](groupby_ctx)
-        _assert_grouped_sum_correct(expr, groups, chunked=backend == "dask")
+        m = Model()
+        other = pd.Index(["a", "b"], name="other")
+        idx = pd.RangeIndex(5, name="elem")
+        # mask out (a, elem 2), (b, elem 0) and (b, elem 4)
+        mask = xr.DataArray(
+            [[True, True, False, True, True], [False, True, True, True, False]],
+            coords=[other, idx],
+        )
+        my = m.add_variables(coords=[other, idx], name="my", mask=mask)
+        # unsorted, non-contiguous groups: g0 = {1, 3}, g1 = {0, 2, 4}
+        groups = pd.Series([1, 0, 1, 0, 1], index=idx, name="g")
+        lab = my.labels.values  # (other, elem), masked positions are -1
+
+        grouped = _grouped_sum_on_backend(5 * my - 2 * my, groups, backend)
+        assert list(grouped.coords["g"].values) == [0, 1]
+
+        vars_ = grouped.vars.transpose("g", "other", "_term")
+
+        def live(g: int, o: str) -> set:
+            v = vars_.sel(g=g, other=o).values
+            return set(v[v >= 0].tolist())
+
+        # masked members contribute no variable to their group's block
+        assert live(0, "a") == {lab[0, 1], lab[0, 3]}
+        assert live(0, "b") == {lab[1, 1], lab[1, 3]}
+        assert live(1, "a") == {lab[0, 0], lab[0, 4]}  # elem 2 masked out
+        assert live(1, "b") == {lab[1, 2]}  # elems 0 and 4 masked out
+        # ``5*my - 2*my`` gives every live member one 5-term and one -2-term
+        live_coeffs = grouped.coeffs.where(grouped.vars >= 0).values
+        live_coeffs = live_coeffs[~np.isnan(live_coeffs)]
+        assert (
+            (live_coeffs == 5.0).sum()
+            == (live_coeffs == -2.0).sum()
+            == (live_coeffs.size // 2)
+        )
+
+    @pytest.mark.parametrize("backend", ["numpy", "dask"])
+    def test_aux_coords_on_group_dim_dropped(self, backend: str) -> None:
+        """
+        Non-dimension coordinates aligned to the grouped dimension are dropped
+        (they no longer have a meaning once members are collapsed), while coords
+        on the surviving dimensions are kept. The fallback diverges here; runs on
+        numpy and the lazy (dask) kernel.
+        """
+        m = Model()
+        other = pd.Index(["a", "b"], name="other")
+        idx = pd.RangeIndex(4, name="elem")
+        y = m.add_variables(coords=[other, idx], name="y")
+        expr = (2 * y + 1 * y).assign_coords(
+            carrier=("elem", ["P", "Q", "P", "P"]),  # on the grouped dim -> dropped
+            tag=(("other", "elem"), [[10, 11, 12, 13], [20, 21, 22, 23]]),  # dropped
+        )
+        groups = pd.Series([0, 0, 1, 0], index=idx, name="g")
+        lab = y.labels.values  # (other, elem)
+
+        grouped = _grouped_sum_on_backend(expr, groups, backend)
+        assert "carrier" not in grouped.coords
+        assert "tag" not in grouped.coords
+        assert "other" in grouped.coords  # the surviving dim is untouched
+        assert list(grouped.coords["g"].values) == [0, 1]
+
+        # group 0 holds members 0, 1, 3 in order; group 1 holds member 2 then fill
+        m0 = [0, 1, 3]
+        exp_vars = [
+            [list(lab[o, m0]) * 2 for o in (0, 1)],
+            [[lab[o, 2], -1, -1] * 2 for o in (0, 1)],
+        ]
+        np.testing.assert_array_equal(
+            grouped.vars.transpose("g", "other", "_term").values, exp_vars
+        )
+
+    @pytest.mark.parametrize("backend", ["numpy", "dask"])
+    def test_exact_padded_layout_quadratic_with_const(self, backend: str) -> None:
+        """
+        Pin a mixed quadratic + linear + constant layout: the ``_factor`` axis
+        carries ``-1`` for the linear term's missing second factor, padding fills
+        the short group, and the per-group constant is the members' sum. Runs on
+        numpy and the lazy (dask) kernel.
+        """
+        m = Model()
+        idx = pd.RangeIndex(4, name="elem")
+        x = m.add_variables(coords=[idx], name="x")
+        y = m.add_variables(coords=[idx], name="y")
+        groups = pd.Series([0, 0, 1, 0], index=idx, name="g")
+        lx, ly = x.labels.values, y.labels.values
+
+        grouped = _grouped_sum_on_backend(x * y + 2 * x + 7, groups, backend)
+        assert set(grouped.vars.dims) == {"g", "_factor", "_term"}
+        assert grouped.nterm == 6  # max group size (3) * input nterm (2)
+
+        # group 0 holds members 0, 1, 3; group 1 holds member 2 then fill. Term
+        # block 0 is the quadratic x*y, block 1 the linear 2*x (2nd factor -1)
+        m0 = [0, 1, 3]
+        exp_vars = [
+            [[*lx[m0], *lx[m0]], [*ly[m0], -1, -1, -1]],
+            [[lx[2], -1, -1, lx[2], -1, -1], [ly[2], -1, -1, -1, -1, -1]],
+        ]
+        np.testing.assert_array_equal(
+            grouped.vars.transpose("g", "_factor", "_term").values, exp_vars
+        )
+        np.testing.assert_array_equal(
+            grouped.coeffs.transpose("g", "_term").values,
+            [[1.0, 1, 1, 2, 2, 2], [1, np.nan, np.nan, 2, np.nan, np.nan]],
+        )
+        np.testing.assert_array_equal(grouped.const.values, [21.0, 7.0])
 
 
 def test_linear_expression_rolling(v: Variable) -> None:
