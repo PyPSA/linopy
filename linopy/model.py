@@ -112,8 +112,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Keys of the per-model :attr:`Model.dtypes` mapping. Extend the ``Literal``
-#: as more configurable dtypes are exposed on the model.
 DtypeKey = Literal["labels"]
 
 
