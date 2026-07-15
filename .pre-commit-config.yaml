@@ -9,7 +9,7 @@ repos:
     -   id: trailing-whitespace
     -   id: check-merge-conflict
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.9
+    rev: v0.15.20
     hooks:
     -   id: ruff
         args: [--fix]
@@ -30,10 +30,13 @@ repos:
     rev: v2.4.2
     hooks:
     -   id: codespell
+        args: ['--ignore-words-list=coo']
         types_or: [python, rst, markdown]
         files: ^(linopy|doc)/
--   repo: https://github.com/aflc/pre-commit-jupyter
-    rev: v1.2.1
+-   repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
     hooks:
-    -   id: jupyter-notebook-cleanup
+    -   id: nbstripout
+        args:
+          - --extra-keys=cell.metadata.ExecuteTime cell.metadata.execution
         exclude: examples/solve-on-remote.ipynb

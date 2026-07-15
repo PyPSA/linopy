@@ -31,11 +31,11 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -48,7 +48,6 @@ from linopy.common import (
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -56,10 +55,12 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
-    FIX_CONSTRAINT_PREFIX,
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    STASHED_ATTRS,
+    STASHED_LOWER,
+    STASHED_UPPER,
     TERM_DIM,
 )
 from linopy.types import (
@@ -327,7 +328,9 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = broadcast_to_coords(
+            coefficient, coords=self.coords, dims=self.dims, strict=False
+        )
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
@@ -891,18 +894,18 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
-        Set the upper bounds of the variables.
-
-        The function raises an error in case no model is set as a
-        reference.
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
         """
-        value = DataArray(value).broadcast_like(self.upper)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, upper=value)
+        warn(
+            "Variable.upper setter is deprecated and will be removed in a "
+            "future release; use Variable.update(upper=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(upper=value)
 
     @property
     def lower(self) -> DataArray:
@@ -915,18 +918,100 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
-        Set the lower bounds of the variables.
-
-        The function raises an error in case no model is set as a
-        reference.
+        Syntactic sugar for :meth:`Variable.update`. Do not add logic
+        here; mutate via ``update`` so the contract stays single-sourced.
         """
-        value = DataArray(value).broadcast_like(self.lower)
-        if not set(value.dims).issubset(self.model.variables[self.name].dims):
-            raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = assign_multiindex_safe(self.data, lower=value)
+        warn(
+            "Variable.lower setter is deprecated and will be removed in a "
+            "future release; use Variable.update(lower=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(lower=value)
+
+    def update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> Variable:
+        """
+        Update variable bounds in place.
+
+        Canonical mutation API. Validation and coord alignment live here.
+        Single-attribute setters (`var.lower = …`) forward to this method.
+
+        Parameters
+        ----------
+        lower : ConstantLike, optional
+            New lower bound. Accepts any constant — scalars, numpy
+            arrays, pandas Series / DataFrame, xarray DataArray (e.g.
+            time-varying bounds). Aligned via xarray broadcast against
+            the variable's existing shape; new dims are rejected.
+            Decision variables / linear expressions are not accepted.
+        upper : ConstantLike, optional
+            New upper bound. Same.
+
+        Returns
+        -------
+        Variable
+            ``self`` for chaining.
+
+        Raises
+        ------
+        TypeError
+            If either bound is a Variable / Expression (bounds must be
+            numeric, not symbolic).
+        ValueError
+            If the new bound introduces dimensions not in the variable's
+            coords, or if the resulting ``lower > upper`` anywhere.
+        """
+        if lower is None and upper is None:
+            return self
+
+        updates = self._validate_update(lower=lower, upper=upper)
+        self._data = assign_multiindex_safe(self.data, **updates)
+        return self
+
+    def _validate_update(
+        self,
+        *,
+        lower: ConstantLike | None = None,
+        upper: ConstantLike | None = None,
+    ) -> dict[str, DataArray]:
+        """
+        Validate, broadcast, and cross-check update inputs.
+
+        Returns the broadcasted DataArrays ready for assignment. Raises
+        before any mutation if any input is wrong.
+        """
+        updates: dict[str, DataArray] = {}
+        own_dims = self.model.variables[self.name].dims
+        for name, val, ref in (
+            ("lower", lower, self.lower),
+            ("upper", upper, self.upper),
+        ):
+            if val is None:
+                continue
+            if not isinstance(val, ConstantLike):
+                raise TypeError(
+                    f"Variable.update({name}=...) must be a constant; "
+                    f"got {type(val).__name__}."
+                )
+            new_val = DataArray(val).broadcast_like(ref)
+            if not set(new_val.dims).issubset(own_dims):
+                raise ValueError("Cannot assign new dimensions to existing variable.")
+            updates[name] = new_val
+
+        final_lower = updates.get("lower", self.lower)
+        final_upper = updates.get("upper", self.upper)
+        if bool((final_lower > final_upper).any()):
+            raise ValueError(
+                "Variable.update would leave lower > upper at one or more coordinates."
+            )
+        return updates
 
     @property
     @has_optimized_model
@@ -1011,7 +1096,7 @@ class Variable:
         -------
         df : pandas.DataFrame
         """
-        ds = self.data
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
 
         def mask_func(data: pd.DataFrame) -> pd.Series:
             return data["labels"] != -1
@@ -1031,12 +1116,13 @@ class Variable:
         -------
         pl.DataFrame
         """
-        df = to_polars(self.data)
+        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
+        df = to_polars(ds)
         df = filter_nulls_polars(df)
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: str | None = None, **kwargs: Any) -> LinearExpression:
+    def sum(self, dim: DimsLike | None = None, **kwargs: Any) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -1137,6 +1223,9 @@ class Variable:
             raise ValueError(
                 f"other must be a Variable, ScalarVariable, dict or Dataset, got {type(other)}"
             )
+        if isinstance(_other, dict):
+            fill: dict[str, float] = {str(k): np.nan for k in self.data}
+            _other = {**fill, **_other}
         return self.__class__(
             self.data.where(cond, _other, **kwargs), self.model, self.name
         )
@@ -1183,7 +1272,9 @@ class Variable:
             .map(DataArray.ffill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign_multiindex_safe(labels=data.labels.astype(int))
+        return self.assign_multiindex_safe(
+            labels=data.labels.astype(options["label_dtype"])
+        )
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
         """
@@ -1210,7 +1301,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign(labels=data.labels.astype(int))
+        return self.assign(labels=data.labels.astype(options["label_dtype"]))
 
     def sanitize(self) -> Variable:
         """
@@ -1221,7 +1312,9 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            return self.assign(labels=self.labels.fillna(-1).astype(int))
+            return self.assign(
+                labels=self.labels.fillna(-1).astype(options["label_dtype"])
+            )
         return self
 
     def equals(self, other: Variable) -> bool:
@@ -1339,9 +1432,15 @@ class Variable:
         overwrite: bool = True,
     ) -> None:
         """
-        Fix the variable to a given value by adding an equality constraint.
+        Fix the variable to a given value by collapsing its bounds.
+
+        Sets ``lower = upper = value``.
 
         If no value is given, the current solution value is used.
+
+        A fix value outside the variable's current bounds emits a warning, but
+        does not cause infeasibilities (the bounds are overridden). Fixing a
+        binary variable to anything other than 0 or 1 raises.
 
         Parameters
         ----------
@@ -1352,8 +1451,9 @@ class Variable:
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
         overwrite : bool, optional
-            If True (default), overwrite an existing fix constraint for this
-            variable. If False, raise an error if the variable is already fixed.
+            If True (default), re-fix a variable that is already fixed to the
+            new value (the originally stashed bounds are kept). If False, raise
+            an error if the variable is already fixed.
         """
         if value is None:
             try:
@@ -1366,48 +1466,70 @@ class Variable:
                 )
                 raise ValueError(msg) from None
 
-        value = as_dataarray(value).broadcast_like(self.labels)
+        is_fixed = self.fixed
+        is_binary = self.attrs["binary"]
+        is_integer = self.attrs["integer"]
 
-        if self.attrs.get("integer") or self.attrs.get("binary"):
+        if is_fixed and not overwrite:
+            msg = (
+                f"Variable '{self.name}' is already fixed. Use "
+                "overwrite=True to replace the existing fix value."
+            )
+            raise ValueError(msg)
+
+        value = broadcast_to_coords(
+            value, self.coords, label=f"fix() for variable '{self.name}'"
+        )
+
+        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+            msg = (
+                f"Cannot fix binary variable '{self.name}' to a value "
+                "other than 0 or 1."
+            )
+            raise ValueError(msg)
+
+        if is_integer or is_binary:
             value = value.round(0)
         else:
             value = value.round(decimals)
 
-        if (value < self.lower).any() or (value > self.upper).any():
-            msg = (
-                f"Fix values for variable '{self.name}' are outside the "
-                "variable bounds."
+        if is_fixed:
+            lower, upper = self.data[STASHED_LOWER], self.data[STASHED_UPPER]
+        else:
+            lower, upper = self.data.lower, self.data.upper
+
+        if not is_binary and ((value < lower).any() or (value > upper).any()):
+            warn(
+                f"Fix values for variable '{self.name}' lie outside its current "
+                "bounds; the bounds are overridden by the fix value.",
+                UserWarning,
+                stacklevel=2,
             )
-            raise ValueError(msg)
 
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if not is_fixed:
+            self._data = assign_multiindex_safe(
+                self.data,
+                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
+            )
 
-        if constraint_name in self.model.constraints:
-            if not overwrite:
-                msg = (
-                    f"Variable '{self.name}' is already fixed. Use "
-                    "overwrite=True to replace the existing fix constraint."
-                )
-                raise ValueError(msg)
-            self.model.remove_constraints(constraint_name)
-
-        self.model.add_constraints(self, "=", value, name=constraint_name)
+        self.update(lower=value, upper=value)
 
     def unfix(self) -> None:
         """
-        Remove the fix constraint for this variable.
+        Unfix the variable, restoring the bounds it had before :meth:`fix`.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        if constraint_name in self.model.constraints:
-            self.model.remove_constraints(constraint_name)
+        if not self.fixed:
+            return
+
+        self.update(lower=self.data[STASHED_LOWER], upper=self.data[STASHED_UPPER])
+        self._data = self.data.drop_vars(STASHED_ATTRS)
 
     @property
     def fixed(self) -> bool:
         """
         Return whether the variable is currently fixed.
         """
-        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
-        return constraint_name in self.model.constraints
+        return all(attr in self.data for attr in STASHED_ATTRS)
 
 
 class AtIndexer:
@@ -1723,7 +1845,7 @@ class Variables:
         decimals : int, optional
             Number of decimal places to round continuous variables to.
         overwrite : bool, optional
-            If True, overwrite existing fix constraints.
+            If True, re-fix variables that are already fixed.
         """
         for var in self.data.values():
             var.fix(value=value, decimals=decimals, overwrite=overwrite)
@@ -1914,7 +2036,10 @@ class Variables:
         """
         df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 

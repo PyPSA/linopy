@@ -43,6 +43,7 @@ flexible data-handling features:
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
    - `HiGHS <https://highs.dev/>`__
+   - `SCIP <https://www.scipopt.org/>`__
    - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
    - `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__

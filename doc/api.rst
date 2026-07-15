@@ -138,9 +138,14 @@ Attributes
 Modification
 ------------
 
+``Variable.update`` is the canonical mutation API. The legacy ``lower`` /
+``upper`` setters still forward to ``update`` but emit a
+``DeprecationWarning`` and will be removed in a future release.
+
 .. autosummary::
    :toctree: generated/
 
+   variables.Variable.update
    variables.Variable.fix
    variables.Variable.unfix
    variables.Variable.relax
@@ -250,6 +255,7 @@ Structure
    expressions.LinearExpression.coeffs
    expressions.LinearExpression.const
    expressions.LinearExpression.nterm
+   expressions.LinearExpression.has_terms
 
 Conversion
 ----------
@@ -290,6 +296,7 @@ Structure
    expressions.QuadraticExpression.coeffs
    expressions.QuadraticExpression.const
    expressions.QuadraticExpression.nterm
+   expressions.QuadraticExpression.has_terms
 
 Conversion
 ----------
@@ -331,6 +338,19 @@ Structure
    constraints.Constraint.rhs
    constraints.Constraint.coeffs
    constraints.Constraint.vars
+
+Modification
+------------
+
+``Constraint.update`` is the canonical mutation API. The legacy ``lhs`` /
+``sign`` / ``rhs`` / ``coeffs`` / ``vars`` setters still forward to
+``update`` but emit a ``DeprecationWarning`` and will be removed in a
+future release.
+
+.. autosummary::
+   :toctree: generated/
+
+   constraints.Constraint.update
 
 Post-solve access
 -----------------
