@@ -1068,7 +1068,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         if join is None:
             return self.__add__(other)
@@ -1096,7 +1098,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         return self.add(-other, join=join)
 
@@ -1115,7 +1119,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         if join is None:
             return self.__mul__(other)
@@ -1140,7 +1146,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         if join is None:
             return self.__div__(other)
@@ -1167,7 +1175,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
@@ -1186,7 +1196,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
@@ -1205,7 +1217,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
         """
         return self.to_constraint(EQUAL, rhs, join=join)
 
@@ -1466,7 +1480,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            semantics default: "exact" under v1 (order-independent — a pure
+            reorder aligns by label, only a differing label set raises), the
+            legacy positional behavior under legacy.
 
         Returns
         -------

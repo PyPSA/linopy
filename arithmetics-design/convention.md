@@ -162,7 +162,10 @@ resolve it. Several primitives bring operands into agreement:
   clearest fix.
 - The named methods — `.add` `.sub` `.mul` `.div` `.le` `.ge` `.eq` — take a
   `join=` argument: `exact`, `inner`, `outer`, `left`, `right`, or `override`.
-  `override` is the old positional behavior — still available, but now opt-in
+  The default (calling the operator, or `join=None`) is the v1 default itself,
+  `exact` — so passing `join="exact"` is the explicit spelling of the default,
+  not a stricter mode. `override` is the old positional behavior — still
+  available, but now opt-in
   and named rather than triggered by a size coincidence. It still requires the
   shared dimensions to match in size: a genuine size mismatch raises rather
   than relabelling mismatched data, so reach for a label join (`inner` /
