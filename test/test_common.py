@@ -281,7 +281,11 @@ def test_get_dims_with_index_levels() -> None:
 
     # Case 6: flat dim carrying a decomposed MultiIndex as aux level coords
     mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
-    ds6 = xr.DataArray(np.zeros(4), coords=[mi], dims=["node"]).reset_index("node")
+    ds6 = (
+        xr.DataArray(np.zeros(4), coords=[mi], dims=["node"])
+        .reset_index("node")
+        .to_dataset(name="v")
+    )
     assert get_dims_with_index_levels(ds6) == ["node (region, tech)"]
 
 
@@ -291,7 +295,11 @@ def test_get_printout_labels() -> None:
     assert list(get_printout_labels(plain, ["time"])[0]) == list(time)
 
     mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
-    flat = xr.DataArray(np.zeros(4), coords=[mi], dims=["node"]).reset_index("node")
+    flat = (
+        xr.DataArray(np.zeros(4), coords=[mi], dims=["node"])
+        .reset_index("node")
+        .to_dataset(name="v")
+    )
     multi = get_printout_labels(flat, ["node"])[0]
     assert multi == [("a", 1), ("a", 2), ("b", 1), ("b", 2)]
 

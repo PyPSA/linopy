@@ -13,12 +13,15 @@ artifact: ``arithmetics-design/multiindex-feasibility.md``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, available_solvers
+from linopy import Model, Variable, available_solvers
 from linopy.testing import assert_linequal
 
 PERIODS = [2020, 2030]
@@ -100,27 +103,35 @@ def test_variable_mi_tuple_sel_not_forwarded() -> None:
 
 
 # --- model equivalence (linopy level, solved) ------------------------------- #
-def _solve(snapshot, add_demand) -> tuple[float, np.ndarray]:
+def _solve(
+    snapshot: pd.Index, add_demand: Callable[[Model, Variable], None]
+) -> tuple[float, np.ndarray]:
     """min-cost x s.t. per-period demand; constraints built by ``add_demand``."""
     m = Model()
     x = m.add_variables(lower=0, upper=4.0, coords=[snapshot], name="x")
     add_demand(m, x)
     m.add_objective((np.arange(1.0, N + 1.0) * x).sum())
     m.solve(solver_name="highs", output_flag=False)
-    return float(m.objective.value), np.sort(m.solution["x"].values)
+    value = m.objective.value
+    assert value is not None
+    return float(value), np.sort(m.solution["x"].values)
 
 
 @needs_highs
 def test_per_period_lp_equivalent() -> None:
     """Same per-period-demand LP, MI vs flat+aux -> identical optimum."""
 
-    def mi_demand(m, x):  # select by position -- MI tuple-sel is not forwarded
+    def mi_demand(
+        m: Model, x: Variable
+    ) -> None:  # select by position -- MI tuple-sel is not forwarded
         for p, d in DEMAND.items():
             m.add_constraints(
                 x.isel(snapshot=np.flatnonzero(PERIOD_OF == p)).sum() >= d
             )
 
-    def flat_demand(m, x):  # the level rides as an aux coord -> groupby
+    def flat_demand(
+        m: Model, x: Variable
+    ) -> None:  # level rides as aux coord -> groupby
         e = (1.0 * x).assign_coords(period=_flat()["period"])
         rhs = xr.DataArray(
             list(DEMAND.values()), dims="period", coords={"period": PERIODS}
@@ -162,7 +173,7 @@ def test_output_restacks_to_mi() -> None:
 
 # --- period-start boundary: the per-period roll composed into a constraint ---- #
 @pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic", "ramp"])
-def test_period_boundary_lp_identical(tmp_path, boundary) -> None:
+def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
     """
     Per-period roll, composed into a constraint: flat+aux builds the byte-identical
     LP to an explicit per-period roll, for every period boundary PyPSA spells.
