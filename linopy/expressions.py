@@ -215,19 +215,55 @@ def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
     return ds.unstack(dim, fill_value=LinearExpression._fill_value)
 
 
+def _check_grouper_alignment(group: Any, data: Dataset) -> None:
+    """
+    Ensure an indexed grouper's labels match the data along each shared dim.
+
+    The fast path matches a ``pd.Series``, ``pd.DataFrame`` or ``DataArray``
+    grouper to the expression by position, so a grouper whose coordinates are
+    reordered -- or a different set entirely -- relative to the expression would
+    silently regroup. linopy does not reindex the grouper: it checks that the
+    labels match and raises otherwise, leaving the caller to align the grouper
+    explicitly. A grouper without an index along a dimension has nothing to align
+    by and keeps the positional match.
+    """
+    shared: list[tuple[Hashable, pd.Index]]
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        shared = [(group.index.name, group.index)]
+    elif isinstance(group, DataArray):
+        shared = [
+            (dim, group.get_index(dim)) for dim in group.dims if dim in group.indexes
+        ]
+    else:
+        return
+    for dim, index in shared:
+        if dim not in data.indexes or index.equals(data.indexes[dim]):
+            continue
+        detail = (
+            "the same labels in a different order"
+            if set(index) == set(data.indexes[dim])
+            else "a different set of labels"
+        )
+        raise ValueError(
+            f"the grouper's labels along dimension {dim!r} do not match the "
+            f"expression's coordinates ({detail}). linopy matches groupers by "
+            f"position and does not reindex; reorder the grouper to the "
+            f"expression's {dim!r} coordinates before grouping."
+        )
+
+
 def _encode_multikey_group(
-    frame: pd.DataFrame, index: pd.Index
+    frame: pd.DataFrame,
 ) -> tuple[pd.Series, tuple[dict, pd.Index]]:
     """
     Encode a multi-key group frame as a single integer-coded Series.
 
     ``_grouped_sum`` groups by one key, so each row's tuple of key values is
-    mapped to an integer. The returned ``(int_map, columns)`` lets
-    :func:`_restore_multikey_index` rebuild the MultiIndex on the result.
+    mapped to an integer. The frame is already aligned to the data (see
+    :func:`_check_grouper_alignment`), so no reindexing is needed. The returned
+    ``(int_map, columns)`` lets :func:`_restore_multikey_index` rebuild the
+    MultiIndex on the result.
     """
-    index_name = frame.index.name
-    frame = frame.reindex(index)
-    frame.index.name = index_name
     int_map = get_index_map(*frame.values.T)
     coded = frame.apply(tuple, axis=1).map(int_map)
     return coded, (int_map, frame.columns)
@@ -352,6 +388,7 @@ class LinearExpressionGroupby:
             )
 
         group = _resolve_group(self.group, self.data)
+        _check_grouper_alignment(group, self.data)
 
         multikey_frame = (
             None if use_fallback else _multikey_value_frame(group, self.data)
@@ -381,9 +418,7 @@ class LinearExpressionGroupby:
 
             multikey_decode = None
             if isinstance(group, pd.DataFrame):
-                group, multikey_decode = _encode_multikey_group(
-                    group, self.data.indexes[group.index.name]
-                )
+                group, multikey_decode = _encode_multikey_group(group)
 
             assert isinstance(group, pd.Series)
             ds = self._grouped_sum(group, data)
