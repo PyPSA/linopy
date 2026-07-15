@@ -243,15 +243,12 @@ class Model:
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
         dtypes : mapping, optional
-            Integer dtypes used for the model's data, as a mapping of field
-            name to numpy dtype, exposed read-only as ``Model.dtypes``.
-            Currently the only supported field is ``"labels"`` (the variable
-            and constraint labels), e.g. ``Model(dtypes={"labels": np.int64})``.
-            The default label dtype ``np.int32`` halves label memory but caps a
-            model at ~2.1 billion labels; the model widens itself to
-            ``np.int64`` automatically when that limit is hit. Pass
-            ``np.int64`` upfront for very large models to avoid the mid-build
-            upcast.
+            Integer dtypes for the model's data, exposed read-only as
+            ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
+            ``Model(dtypes={"labels": np.int64})``. The default ``np.int32``
+            halves label memory but caps the model at ~2.1 billion labels,
+            after which it widens to ``np.int64`` automatically; pass
+            ``np.int64`` upfront to avoid that mid-build upcast.
 
         Returns
         -------
@@ -535,12 +532,11 @@ class Model:
     @property
     def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
         """
-        Integer dtypes used for this model's data, as a read-only mapping.
+        Read-only mapping of the model's integer dtypes.
 
-        Currently exposes a single field, ``"labels"`` -- the dtype of the
-        model's variable and constraint labels. Set via the ``dtypes`` argument
-        of ``Model()`` and, for ``"labels"``, widened to ``int64`` automatically
-        once the labels outgrow int32. More fields may be added in the future.
+        Currently holds only ``"labels"``, the dtype of the variable and
+        constraint labels, which widens to ``int64`` automatically once the
+        labels outgrow int32.
         """
         return MappingProxyType(self._dtypes)
 

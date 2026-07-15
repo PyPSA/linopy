@@ -19,7 +19,7 @@ Upcoming Version
 
 *Other*
 
-* Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast. The per-model dtypes are exposed read-only via ``Model.dtypes``.
+* Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).
 * ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
 * ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
 
