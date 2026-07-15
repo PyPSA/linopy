@@ -187,6 +187,25 @@ class Model:
         "__weakref__",
     )
 
+    @staticmethod
+    def _resolve_dtypes(
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None,
+    ) -> dict[DtypeKey, type[np.signedinteger]]:
+        """Validate the ``dtypes`` argument and merge it onto the defaults."""
+        resolved: dict[DtypeKey, type[np.signedinteger]] = {"labels": np.int32}
+        for key, dtype in (dtypes or {}).items():
+            if key not in get_args(DtypeKey):
+                raise ValueError(
+                    f"dtypes only supports the keys {list(get_args(DtypeKey))}, "
+                    f"got unknown key {key!r}"
+                )
+            if dtype not in (np.int32, np.int64):
+                raise ValueError(
+                    f"dtypes[{key!r}] must be np.int32 or np.int64, got {dtype}"
+                )
+            resolved[key] = dtype
+        return resolved
+
     def __init__(
         self,
         solver_dir: str | None = None,
@@ -240,19 +259,9 @@ class Model:
         -------
         linopy.Model
         """
-        dtypes = dict(dtypes) if dtypes is not None else {}
-        unknown = set(dtypes) - set(get_args(DtypeKey))
-        if unknown:
-            raise ValueError(
-                f"dtypes only supports the keys {list(get_args(DtypeKey))}, got "
-                f"unknown {sorted(unknown)}"
-            )
-        label_dtype = dtypes.get("labels", np.int32)
-        if label_dtype not in (np.int32, np.int64):
-            raise ValueError(
-                f"dtypes['labels'] must be np.int32 or np.int64, got {label_dtype}"
-            )
-        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = {"labels": label_dtype}
+        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
+            dtypes
+        )
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
