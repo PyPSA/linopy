@@ -757,7 +757,7 @@ def to_gurobipy(
         set_names=set_names,
         env=env,
     )
-    return solver.solver_model
+    return solver._detach_solver_model()
 
 
 def to_highspy(
