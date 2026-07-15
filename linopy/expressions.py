@@ -767,7 +767,8 @@ class BaseExpression(ABC):
             Fill value for missing coordinates.
         join : str, optional
             Alignment method. If None, the default is determined by
-            ``options["semantics"]`` — ``"exact"`` under ``v1``, the
+            ``options["semantics"]`` — under ``v1`` shared dimensions must
+            carry the same label set (a pure reorder aligns by label), the
             legacy size-aware behavior under ``legacy``.
 
         Returns
@@ -1067,10 +1068,10 @@ class BaseExpression(ABC):
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__add__(other)
@@ -1097,10 +1098,10 @@ class BaseExpression(ABC):
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.add(-other, join=join)
 
@@ -1118,10 +1119,10 @@ class BaseExpression(ABC):
             The factor to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__mul__(other)
@@ -1145,10 +1146,10 @@ class BaseExpression(ABC):
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__div__(other)
@@ -1174,10 +1175,10 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
@@ -1195,10 +1196,10 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
@@ -1216,10 +1217,10 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_constraint(EQUAL, rhs, join=join)
 
@@ -1479,10 +1480,10 @@ class BaseExpression(ABC):
             raise a ValueError. NaN entries in the RHS mean "no constraint".
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            semantics default: "exact" under v1 (order-independent — a pure
-            reorder aligns by label, only a differing label set raises), the
-            legacy positional behavior under legacy.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
 
         Returns
         -------

@@ -625,8 +625,10 @@ class Variable:
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().add(other, join=join)
 
@@ -642,8 +644,10 @@ class Variable:
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().sub(other, join=join)
 
@@ -659,8 +663,10 @@ class Variable:
             The coefficient to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().mul(other, join=join)
 
@@ -676,8 +682,10 @@ class Variable:
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().div(other, join=join)
 
@@ -691,8 +699,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().le(rhs, join=join)
 
@@ -706,8 +716,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().ge(rhs, join=join)
 
@@ -721,8 +733,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry the
+            same label set — a pure reorder aligns by label, a differing set
+            raises; under legacy, positional alignment.
         """
         return self.to_linexpr().eq(rhs, join=join)
 
