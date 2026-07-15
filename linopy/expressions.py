@@ -74,6 +74,7 @@ from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
     GROUP_DIM,
+    GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
     STACKED_TERM_DIM,
@@ -171,6 +172,24 @@ def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
         return None
     names = list(group)
     return data[names].to_dataframe()[names]
+
+
+def _flatten_multidim_group(
+    group: DataArray, data: Dataset
+) -> tuple[pd.Series, Dataset]:
+    """
+    Flatten an N-D DataArray grouper into a 1-D key over a stacked dimension.
+
+    A multi-dimensional grouper defines its groups jointly over all its dims, so
+    the data is stacked over those dims and the grouper's values are raveled into
+    a Series aligned with the stacked axis. This lets the fast path reduce over
+    every grouper dim at once instead of leaking the extra dims into the result.
+    """
+    group_dims = list(group.dims)
+    data = data.stack({GROUP_STACK_DIM: group_dims}, create_index=False)
+    series = pd.Series(group.transpose(*group_dims).values.reshape(-1), name=group.name)
+    series.index.name = GROUP_STACK_DIM
+    return series, data
 
 
 def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
@@ -340,6 +359,15 @@ class LinearExpressionGroupby:
         if multikey_frame is not None:
             group = multikey_frame
 
+        data = self.data
+        is_multidim_grouper = (
+            isinstance(group, DataArray)
+            and group.ndim > 1
+            and set(group.dims) <= set(data.dims)
+        )
+        if is_multidim_grouper and not use_fallback:
+            group, data = _flatten_multidim_group(group, data)
+
         fast_path_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(group, fast_path_types) and not use_fallback:
             final_group_name = (
@@ -358,7 +386,7 @@ class LinearExpressionGroupby:
                 )
 
             assert isinstance(group, pd.Series)
-            ds = self._grouped_sum(group)
+            ds = self._grouped_sum(group, data)
 
             if multikey_decode is not None:
                 ds = _restore_multikey_index(ds, multikey_decode)
@@ -375,7 +403,7 @@ class LinearExpressionGroupby:
 
         return self.map(func)
 
-    def _grouped_sum(self, group: pd.Series) -> Dataset:
+    def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """
         Sum groups by scattering all terms directly into the final padded arrays.
 
@@ -384,7 +412,7 @@ class LinearExpressionGroupby:
         padded with fill values. Only the result arrays are allocated, keeping
         peak memory at input + result.
         """
-        data = self.data
+        data = self.data if data is None else data
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
@@ -510,6 +538,9 @@ class BaseExpression(ABC):
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
+        if not isinstance(model, Model):
+            raise ValueError("model must be an instance of linopy.Model")
+
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
@@ -533,7 +564,7 @@ class BaseExpression(ABC):
 
         if np.issubdtype(data.vars, np.floating):
             data = assign_multiindex_safe(
-                data, vars=data.vars.fillna(-1).astype(options["label_dtype"])
+                data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
@@ -560,9 +591,6 @@ class BaseExpression(ABC):
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
-
-        if not isinstance(model, Model):
-            raise ValueError("model must be an instance of linopy.Model")
 
         self._model = model
         self._data = cast(Dataset, data)
@@ -1618,7 +1646,9 @@ class BaseExpression(ABC):
         linopy.LinearExpression
         """
         if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(vars=self.vars.fillna(-1).astype(options["label_dtype"]))
+            return self.assign(
+                vars=self.vars.fillna(-1).astype(self.model._dtypes["labels"])
+            )
 
         return self
 
@@ -2022,12 +2052,12 @@ class LinearExpression(BaseExpression):
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
         # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
 
         # Extract vars and coeffs from the combined result
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data
