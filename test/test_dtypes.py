@@ -92,7 +92,7 @@ def test_label_dtype_init_arg_rejects_invalid() -> None:
 
 
 def test_dtypes_init_arg_rejects_unknown_key() -> None:
-    with pytest.raises(ValueError, match="only supports the key 'labels'"):
+    with pytest.raises(ValueError, match="only supports the keys"):
         Model(dtypes={"coeffs": np.int64})  # type: ignore[dict-item]
 
 

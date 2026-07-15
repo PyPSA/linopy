@@ -1120,7 +1120,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             setattr(m, k, ds.attrs[k])
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
-        m._label_dtype = np.int64
+        m._dtypes["labels"] = np.int64
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])

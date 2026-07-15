@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -112,6 +112,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Keys of the per-model :attr:`Model.dtypes` mapping. Extend the ``Literal``
+#: as more configurable dtypes are exposed on the model.
+DtypeKey = Literal["labels"]
+
 
 class Model:
     """
@@ -140,7 +144,7 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
-    _label_dtype: type[np.signedinteger]
+    _dtypes: dict[DtypeKey, type[np.signedinteger]]
     _varnameCounter: int
     _connameCounter: int
     _pwlCounter: int
@@ -164,7 +168,7 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
-        "_label_dtype",
+        "_dtypes",
         "_varnameCounter",
         "_connameCounter",
         "_pwlCounter",
@@ -191,7 +195,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
-        dtypes: Mapping[str, type[np.signedinteger]] | None = None,
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -237,17 +241,18 @@ class Model:
         linopy.Model
         """
         dtypes = dict(dtypes) if dtypes is not None else {}
-        unknown = set(dtypes) - {"labels"}
+        unknown = set(dtypes) - set(get_args(DtypeKey))
         if unknown:
             raise ValueError(
-                f"dtypes only supports the key 'labels', got unknown {sorted(unknown)}"
+                f"dtypes only supports the keys {list(get_args(DtypeKey))}, got "
+                f"unknown {sorted(unknown)}"
             )
         label_dtype = dtypes.get("labels", np.int32)
         if label_dtype not in (np.int32, np.int64):
             raise ValueError(
                 f"dtypes['labels'] must be np.int32 or np.int64, got {label_dtype}"
             )
-        self._label_dtype: type[np.signedinteger] = label_dtype
+        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = {"labels": label_dtype}
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
@@ -521,7 +526,7 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def dtypes(self) -> Mapping[str, type[np.signedinteger]]:
+    def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
         """
         Integer dtypes used for this model's data, as a read-only mapping.
 
@@ -530,13 +535,13 @@ class Model:
         of ``Model()`` and, for ``"labels"``, widened to ``int64`` automatically
         once the labels outgrow int32. More fields may be added in the future.
         """
-        return MappingProxyType({"labels": self._label_dtype})
+        return MappingProxyType(self._dtypes)
 
     def _widen_label_dtype(self) -> None:
         """Widen this model's label dtype to ``int64`` (monotonic, never narrows)."""
-        if self._label_dtype == np.int64:
+        if self._dtypes["labels"] == np.int64:
             return
-        self._label_dtype = np.int64
+        self._dtypes["labels"] = np.int64
         warnings.warn(
             "The model exceeded the int32 label limit (~2.1 billion labels); "
             "its label dtype was widened to int64. Pass "
@@ -548,9 +553,9 @@ class Model:
 
     def _allocate_labels(self, start: int, end: int) -> np.ndarray:
         """Return the label range ``[start, end)``, widening the dtype on overflow."""
-        if end > np.iinfo(self._label_dtype).max:
+        if end > np.iinfo(self._dtypes["labels"]).max:
             self._widen_label_dtype()
-        return np.arange(start, end, dtype=self._label_dtype)
+        return np.arange(start, end, dtype=self._dtypes["labels"])
 
     @property
     def dataset_attrs(self) -> list[str]:
