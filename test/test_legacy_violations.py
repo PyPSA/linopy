@@ -854,6 +854,26 @@ class TestExactAlignmentMerge:
         labels = {int(v) for v in result.vars.sel(e="x").values.ravel() if v >= 0}
         assert labels == {int(x.labels.sel(e="x")), int(y.labels.sel(e="x"))}
 
+    @pytest.mark.v1
+    def test_coeff_times_var_reordered_aligns(self, m: Model) -> None:
+        # §8: a reordered coefficient aligns by label like +/-/merge; the
+        # multiply path no longer raises where the others reindex.
+        ea = pd.Index(["costs", "penalty"], name="e")
+        er = pd.Index(["penalty", "costs"], name="e")
+        x = m.add_variables(coords=[ea], name="x")
+        expr = pd.Series([10.0, 20.0], index=er) * x  # penalty=10, costs=20
+        assert float(expr.coeffs.sel(e="costs").squeeze()) == 20.0
+        assert float(expr.coeffs.sel(e="penalty").squeeze()) == 10.0
+
+    @pytest.mark.v1
+    def test_coeff_times_var_label_set_mismatch_raises(self, m: Model) -> None:
+        # A differing label *set* (not a pure reorder) still raises under v1.
+        ea = pd.Index(["costs", "penalty"], name="e")
+        bad = pd.Index(["costs", "revenue"], name="e")
+        x = m.add_variables(coords=[ea], name="x")
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+            _ = pd.Series([1.0, 2.0], index=bad) * x
+
     @pytest.mark.legacy
     def test_reordered_merge_positional_legacy(self, m: Model) -> None:
         ea = pd.Index(["costs", "penalty"], name="e")

@@ -343,10 +343,16 @@ def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
     return first_mismatched_dim(a, b) is not None
 
 
-def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | None:
+def first_mismatched_dim(
+    a: DataArray, b: DataArray, *, reorder_ok: bool = False
+) -> tuple[str, Any, Any] | None:
     """
     Return ``(dim, a_labels, b_labels)`` for the first shared dim that
     disagrees on coordinate labels OR size, or ``None`` if all agree.
+
+    With ``reorder_ok=True`` a *pure reorder* — the same label set in a
+    different order (same length) — is not a disagreement, matching §8:
+    reorders align by label and only a differing label *set* raises.
 
     Uses ``indexes[dim]`` (the bare pandas Index) rather than
     ``coords[dim]`` — a coord DataArray's ``equals`` compares attached
@@ -355,8 +361,12 @@ def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | N
     """
     for dim in set(a.dims) & set(b.dims):
         if dim in a.indexes and dim in b.indexes:
-            if not a.indexes[dim].equals(b.indexes[dim]):
-                return str(dim), a.indexes[dim].values, b.indexes[dim].values
+            ai, bi = a.indexes[dim], b.indexes[dim]
+            if ai.equals(bi):
+                continue
+            if reorder_ok and len(ai) == len(bi) and set(ai) == set(bi):
+                continue
+            return str(dim), ai.values, bi.values
         elif a.sizes[dim] != b.sizes[dim]:
             return str(dim), None, None
     return None

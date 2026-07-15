@@ -340,19 +340,24 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         # §8: check on the raw coefficient, before broadcast aligns it away.
+        # A pure reorder aligns by label like every other operator (the
+        # broadcast + reindex_like below); only a differing label set raises.
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
-            mismatch = first_mismatched_dim(self.labels, coeff_da)
-            if mismatch is not None:
-                if is_v1():
+            if is_v1():
+                mismatch = first_mismatched_dim(self.labels, coeff_da, reorder_ok=True)
+                if mismatch is not None:
                     raise ValueError(_shared_dim_mismatch_message(*mismatch))
-                warn_legacy(
-                    _legacy_coord_mismatch_message(
-                        "this operator's constant operand", *mismatch
-                    ),
-                    stacklevel=4,
-                )
+            else:
+                mismatch = first_mismatched_dim(self.labels, coeff_da)
+                if mismatch is not None:
+                    warn_legacy(
+                        _legacy_coord_mismatch_message(
+                            "this operator's constant operand", *mismatch
+                        ),
+                        stacklevel=4,
+                    )
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         # §5: user-supplied NaN in the coefficient must raise (v1) / warn
         # (legacy) — it's the multiplicative analogue of ``x + nan_data``
