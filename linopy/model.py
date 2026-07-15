@@ -13,6 +13,7 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, overload
 from warnings import warn
 
@@ -190,7 +191,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
-        label_dtype: type[np.signedinteger] = np.int32,
+        dtypes: Mapping[str, type[np.signedinteger]] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -220,20 +221,31 @@ class Model:
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
-        label_dtype : np.int32 or np.int64, optional
-            Integer dtype used for the model's variable and constraint labels.
-            The default ``np.int32`` halves label memory but caps a model at
-            ~2.1 billion labels; the model widens itself to ``np.int64``
-            automatically when that limit is hit. Pass ``np.int64`` upfront
-            for very large models to avoid the mid-build upcast.
+        dtypes : mapping, optional
+            Integer dtypes used for the model's data, as a mapping of field
+            name to numpy dtype, exposed read-only as ``Model.dtypes``.
+            Currently the only supported field is ``"labels"`` (the variable
+            and constraint labels), e.g. ``Model(dtypes={"labels": np.int64})``.
+            The default label dtype ``np.int32`` halves label memory but caps a
+            model at ~2.1 billion labels; the model widens itself to
+            ``np.int64`` automatically when that limit is hit. Pass
+            ``np.int64`` upfront for very large models to avoid the mid-build
+            upcast.
 
         Returns
         -------
         linopy.Model
         """
+        dtypes = dict(dtypes) if dtypes is not None else {}
+        unknown = set(dtypes) - {"labels"}
+        if unknown:
+            raise ValueError(
+                f"dtypes only supports the key 'labels', got unknown {sorted(unknown)}"
+            )
+        label_dtype = dtypes.get("labels", np.int32)
         if label_dtype not in (np.int32, np.int64):
             raise ValueError(
-                f"label_dtype must be np.int32 or np.int64, got {label_dtype}"
+                f"dtypes['labels'] must be np.int32 or np.int64, got {label_dtype}"
             )
         self._label_dtype: type[np.signedinteger] = label_dtype
         self._variables: Variables = Variables({}, model=self)
@@ -509,14 +521,16 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def label_dtype(self) -> type[np.signedinteger]:
+    def dtypes(self) -> Mapping[str, type[np.signedinteger]]:
         """
-        Integer dtype used for this model's variable and constraint labels.
+        Integer dtypes used for this model's data, as a read-only mapping.
 
-        Set via the ``label_dtype`` argument of ``Model()`` and automatically
-        widened to ``int64`` once the labels outgrow int32.
+        Currently exposes a single field, ``"labels"`` -- the dtype of the
+        model's variable and constraint labels. Set via the ``dtypes`` argument
+        of ``Model()`` and, for ``"labels"``, widened to ``int64`` automatically
+        once the labels outgrow int32. More fields may be added in the future.
         """
-        return self._label_dtype
+        return MappingProxyType({"labels": self._label_dtype})
 
     def _widen_label_dtype(self) -> None:
         """Widen this model's label dtype to ``int64`` (monotonic, never narrows)."""
@@ -525,9 +539,9 @@ class Model:
         self._label_dtype = np.int64
         warnings.warn(
             "The model exceeded the int32 label limit (~2.1 billion labels); "
-            "its label dtype was widened to int64. Pass label_dtype=np.int64 "
-            "to Model() when building large models to avoid the mid-build "
-            "upcast.",
+            "its label dtype was widened to int64. Pass "
+            'dtypes={"labels": np.int64} to Model() when building large models '
+            "to avoid the mid-build upcast.",
             UserWarning,
             stacklevel=4,
         )

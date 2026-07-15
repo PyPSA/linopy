@@ -10,7 +10,7 @@ from linopy import Model
 
 
 def test_default_label_dtype_is_int32() -> None:
-    assert Model().label_dtype == np.int32
+    assert Model().dtypes["labels"] == np.int32
 
 
 def test_variable_labels_are_int32() -> None:
@@ -53,7 +53,7 @@ def test_auto_widen_variables() -> None:
     with pytest.warns(UserWarning, match="widened to int64"):
         x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
-    assert m.label_dtype == np.int64
+    assert m.dtypes["labels"] == np.int64
     # the widening is per-model: other models are untouched
     other = Model()
     y = other.add_variables(lower=0, upper=1, coords=[range(5)], name="y")
@@ -67,7 +67,7 @@ def test_auto_widen_constraints() -> None:
     with pytest.warns(UserWarning, match="widened to int64"):
         m.add_constraints(x >= 0, name="c")
     assert m.constraints["c"].labels.dtype == np.int64
-    assert m.label_dtype == np.int64
+    assert m.dtypes["labels"] == np.int64
 
 
 def test_widen_applies_to_expressions() -> None:
@@ -79,16 +79,28 @@ def test_widen_applies_to_expressions() -> None:
 
 
 def test_label_dtype_init_arg() -> None:
-    m = Model(label_dtype=np.int64)
-    assert m.label_dtype == np.int64
+    m = Model(dtypes={"labels": np.int64})
+    assert m.dtypes["labels"] == np.int64
     x = m.add_variables(lower=0, upper=1, coords=[range(5)], name="x")
     assert x.labels.dtype == np.int64
     assert (2 * x + 1).vars.dtype == np.int64
 
 
 def test_label_dtype_init_arg_rejects_invalid() -> None:
-    with pytest.raises(ValueError, match="label_dtype must be"):
-        Model(label_dtype=np.float64)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="dtypes\\['labels'\\] must be"):
+        Model(dtypes={"labels": np.float64})  # type: ignore[dict-item]
+
+
+def test_dtypes_init_arg_rejects_unknown_key() -> None:
+    with pytest.raises(ValueError, match="only supports the key 'labels'"):
+        Model(dtypes={"coeffs": np.int64})  # type: ignore[dict-item]
+
+
+def test_dtypes_is_read_only_mapping() -> None:
+    dtypes = Model().dtypes
+    assert set(dtypes) == {"labels"}
+    with pytest.raises(TypeError):
+        dtypes["labels"] = np.int64  # type: ignore[index]
 
 
 def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
@@ -104,7 +116,7 @@ def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
 
     loaded = read_netcdf(path)
 
-    assert loaded.label_dtype == np.int64
+    assert loaded.dtypes["labels"] == np.int64
     assert loaded.variables["x"].labels.dtype == np.int64
     assert (2 * loaded.variables["x"]).vars.dtype == np.int64
 
@@ -118,5 +130,5 @@ def test_auto_widen_survives_pickle() -> None:
 
     loaded = pickle.loads(pickle.dumps(m))
 
-    assert loaded.label_dtype == np.int64
+    assert loaded.dtypes["labels"] == np.int64
     assert (2 * loaded.variables["x"]).vars.dtype == np.int64
