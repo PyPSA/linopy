@@ -2870,14 +2870,15 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
-    # §8: v1 aligns a reorder by label and raises a dim mismatch (before the
-    # §11 aux check, else a MultiIndex mismatch reads as a level-coord
-    # conflict). Legacy keeps positional alignment and only warns.
+    # §8: v1 raises on a set-mismatch or reorder, legacy warns. Runs before the
+    # §11 aux check so a MultiIndex mismatch isn't read as a coord conflict.
     if join is None:
         data, mismatch, reorder = conform_merge_dims(data, concat_dim=dim)
         if is_v1():
             if mismatch is not None:
                 raise ValueError(_shared_dim_mismatch_message(*mismatch))
+            if reorder is not None:
+                raise ValueError(_shared_dim_mismatch_message(*reorder))
         elif mismatch is not None:  # LEGACY: remove at 1.0
             warn_legacy(
                 _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)

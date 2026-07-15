@@ -803,29 +803,25 @@ class TestExactAlignmentMerge:
         assert set(result.coord_dims) == {"time", "scenario"}
 
     @pytest.mark.v1
-    def test_var_plus_var_reordered_labels_align(self, m: Model) -> None:
+    def test_var_plus_var_reordered_labels_raises(self, m: Model) -> None:
+        # §8 exact: same labels in a different order is a mismatch, not a
+        # silent reindex — the reorder must be resolved explicitly.
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
-        result = (1 * a) + (1 * b)
-        assert list(result.indexes["e"]) == ["costs", "penalty"]
-        # The index alone is identical under legacy — assert the variable
-        # *pairing*: §8 sums a["costs"] with b["costs"], NOT b's leading
-        # (positional) entry b["penalty"].
-        costs = {int(v) for v in result.vars.sel(e="costs").values}
-        assert costs == {int(a.labels.sel(e="costs")), int(b.labels.sel(e="costs"))}
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            (1 * a) + (1 * b)
 
     @pytest.mark.v1
-    def test_reordered_constants_pair_by_label_not_position(self, m: Model) -> None:
+    def test_reordered_constants_raise(self, m: Model) -> None:
         ea = pd.Index(["costs", "penalty"], name="e")
         eb = pd.Index(["penalty", "costs"], name="e")
         a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
         b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
-        result = a + b
-        assert float(result.const.sel(e="costs")) == 102.0
-        assert float(result.const.sel(e="penalty")) == 201.0
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            a + b
 
     @pytest.mark.v1
-    def test_multi_operand_merge_reordered_pairs_by_label(self, m: Model) -> None:
+    def test_multi_operand_merge_reordered_raises(self, m: Model) -> None:
         ea = pd.Index(["x", "y", "z"], name="e")
         er = pd.Index(["z", "y", "x"], name="e")
         a = m.add_variables(coords=[ea], name="a") + pd.Series(
@@ -837,22 +833,30 @@ class TestExactAlignmentMerge:
         c = m.add_variables(coords=[ea], name="c") + pd.Series(
             [100, 200, 300.0], index=ea
         )
-        result = merge([a, b, c], cls=type(a))
-        assert float(result.const.sel(e="x")) == 131.0
-        assert float(result.const.sel(e="z")) == 313.0
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            merge([a, b, c], cls=type(a))
 
     @pytest.mark.v1
-    def test_quadratic_merge_reordered_aligns(self, m: Model) -> None:
+    def test_quadratic_merge_reordered_raises(self, m: Model) -> None:
         ea = pd.Index(["x", "y", "z"], name="e")
         er = pd.Index(["z", "y", "x"], name="e")
         x = m.add_variables(coords=[ea], name="x")
         y = m.add_variables(coords=[er], name="y")
-        result = (x * x) + (y * y)
-        assert list(result.indexes["e"]) == ["x", "y", "z"]
-        # by-label: the "x" slot holds x["x"]**2 and y["x"]**2, so the only
-        # variable labels there are x["x"] and y["x"] — not y's leading y["z"].
-        labels = {int(v) for v in result.vars.sel(e="x").values.ravel() if v >= 0}
-        assert labels == {int(x.labels.sel(e="x")), int(y.labels.sel(e="x"))}
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            (x * x) + (y * y)
+
+    @pytest.mark.v1
+    def test_reordered_escape_hatches_work(self, m: Model) -> None:
+        # §10: a reorder is resolved explicitly — via an aligning named join,
+        # or by selecting one side back into the other's order.
+        ea = pd.Index(["costs", "penalty"], name="e")
+        eb = pd.Index(["penalty", "costs"], name="e")
+        a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
+        b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
+        via_join = a.add(b, join="outer")
+        assert float(via_join.const.sel(e="costs")) == 102.0
+        via_sel = a + b.sel(e=a.indexes["e"])
+        assert float(via_sel.const.sel(e="costs")) == 102.0
 
     @pytest.mark.legacy
     def test_reordered_merge_positional_legacy(self, m: Model) -> None:
@@ -1844,14 +1848,16 @@ class TestAuxCoordConflict:
             v + w
 
     @pytest.mark.v1
-    def test_aux_conflict_survives_reordered_dim(self, m: Model) -> None:
+    def test_reordered_dim_raises_before_aux_check(self, m: Model) -> None:
+        # §8 runs before the §11 aux check: the reordered dim raises a
+        # "Coordinate mismatch"; the aux conflict it also carries is never reached.
         v = m.add_variables(
             lower=0, coords=[pd.Index(["x", "y", "z"], name="A")], name="v"
         ).assign_coords(B=("A", [1, 2, 3]))
         w = m.add_variables(
             lower=0, coords=[pd.Index(["z", "y", "x"], name="A")], name="w"
         ).assign_coords(B=("A", [1, 2, 3]))
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
             v + w
 
     @pytest.mark.v1
