@@ -354,16 +354,17 @@ def fill_missing_coords(
         Whether to fill in integer coordinates for helper dimensions, by default False.
 
     """
-    ds = ds.copy()
     if not isinstance(ds, Dataset | DataArray):
         raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
 
     skip_dims = [] if fill_helper_dims else HELPER_DIMS
+    missing = [d for d in ds.dims if d not in ds.coords and d not in skip_dims]
+    if not missing:
+        return ds
 
-    # Fill in missing integer coordinates
-    for dim in ds.dims:
-        if dim not in ds.coords and dim not in skip_dims:
-            ds.coords[dim] = arange(ds.sizes[dim])
+    ds = ds.copy()
+    for dim in missing:
+        ds.coords[dim] = arange(ds.sizes[dim])
 
     return ds
 
