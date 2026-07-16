@@ -27,6 +27,8 @@ from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
 from linopy.constants import (
+    CODE_TO_SIGN,
+    SIGN_TO_CODE,
     SIGNS,
     SIGNS_alternative,
     SIGNS_pretty,
@@ -95,6 +97,69 @@ def maybe_replace_signs(sign: DataArray) -> DataArray:
     """
     func = np.vectorize(maybe_replace_sign)
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
+
+
+def _encode_sign_codes(values: np.ndarray) -> np.ndarray:
+    """Map a numpy array of sign strings to int8 category codes."""
+    codes = np.full(values.shape, -1, dtype=np.int8)
+    for sign, code in SIGN_TO_CODE.items():
+        codes[values == sign] = code
+    for alt, canonical in sign_replace_dict.items():
+        codes[values == alt] = SIGN_TO_CODE[canonical]
+    if (codes == -1).any():
+        invalid = np.unique(values[codes == -1]).tolist()
+        raise ValueError(
+            f"Invalid constraint sign(s) {invalid}; "
+            f"expected one of {sorted(SIGN_TO_CODE)}."
+        )
+    return codes
+
+
+def _decode_sign_codes(codes: np.ndarray) -> np.ndarray:
+    """Map int8 category codes back to canonical sign strings."""
+    return CODE_TO_SIGN[codes]
+
+
+def encode_signs(sign: DataArray, dtype: DTypeLike = np.int8) -> DataArray:
+    """
+    Encode canonical sign strings as compact int8 category codes.
+
+    ``dtype`` selects the storage format: ``np.int8`` (default) stores 1-byte
+    category codes, ``np.str_`` keeps the legacy ``<U2`` string storage. The
+    call is idempotent — already-encoded int8 input is returned unchanged — so
+    it is cheap to re-run on every constraint construction. Signs are expected
+    to be canonical already (see :func:`maybe_replace_signs`); the alternative
+    spellings are still accepted defensively.
+    """
+    already_int = np.issubdtype(sign.dtype, np.integer)
+    if dtype is np.str_:
+        return decode_signs(sign) if already_int else sign
+    if already_int:
+        return sign
+    if sign.dtype.kind not in ("U", "S"):
+        # Degenerate dtype (e.g. the float/NaN fill produced by Dataset.shift on
+        # the encoded array); leave it untouched rather than reject it.
+        return sign
+    return apply_ufunc(
+        _encode_sign_codes, sign, dask="parallelized", output_dtypes=[np.int8]
+    )
+
+
+def decode_signs(sign: DataArray) -> DataArray:
+    """
+    Decode int8 sign category codes to canonical string DataArrays.
+
+    String input (legacy ``<U2`` storage) is returned unchanged, so callers can
+    decode without first checking how the sign happens to be stored.
+    """
+    if not np.issubdtype(sign.dtype, np.integer):
+        return sign
+    return apply_ufunc(
+        _decode_sign_codes,
+        sign,
+        dask="parallelized",
+        output_dtypes=[CODE_TO_SIGN.dtype],
+    )
 
 
 def format_string_as_variable_name(name: Hashable) -> str:

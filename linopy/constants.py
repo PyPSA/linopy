@@ -37,6 +37,15 @@ sign_replace_dict: dict[str, str] = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
+# Compact int8 category codes for the constraint sign.
+#
+# The sign field takes only three canonical values, so it is stored internally
+# as 1-byte category codes instead of an 8-byte ``<U2`` unicode array — an 8x
+# reduction on an array that is as large as the variable-labels array. The
+# codes are a stable part of the netcdf/pickle format: never renumber them.
+SIGN_TO_CODE: dict[str, int] = {EQUAL: 0, LESS_EQUAL: 1, GREATER_EQUAL: 2}
+CODE_TO_SIGN: np.ndarray = np.array([EQUAL, LESS_EQUAL, GREATER_EQUAL], dtype="<U2")
+
 STASHED_LOWER = "_stashed_lower"
 STASHED_UPPER = "_stashed_upper"
 STASHED_ATTRS: list[str] = [STASHED_LOWER, STASHED_UPPER]

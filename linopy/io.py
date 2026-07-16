@@ -509,7 +509,7 @@ def indicator_constraints_to_file(
         ).flatten()
         coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
         vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
-        sign_flat = np.broadcast_to(ic_data.sign.values, labels_flat.shape).flatten()
+        sign_flat = np.broadcast_to(con.sign.values, labels_flat.shape).flatten()
         rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
 
         for i in range(len(labels_flat)):

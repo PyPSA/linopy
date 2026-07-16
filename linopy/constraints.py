@@ -42,6 +42,8 @@ from linopy.common import (
     check_has_nulls_polars,
     coords_from_dataset,
     coords_to_dataset_vars,
+    decode_signs,
+    encode_signs,
     filter_nulls_polars,
     format_coord,
     format_single_constraint,
@@ -65,6 +67,7 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SIGN_TO_CODE,
     TERM_DIM,
     PerformanceWarning,
     SIGNS_pretty,
@@ -441,6 +444,8 @@ class ConstraintBase(ABC):
             stacklevel=2,
         )
         ds = self.data
+        if "sign" in ds:
+            ds = ds.assign(sign=decode_signs(ds["sign"]))
 
         def mask_func(data: dict) -> pd.Series:
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
@@ -1171,6 +1176,14 @@ class Constraint(ConstraintBase):
         if not skip_broadcast:
             (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
+        # Store the sign as compact int8 category codes (decoded back to
+        # strings by the ``.sign`` accessor). Idempotent: a no-op when the
+        # sign is already in the model's configured storage dtype.
+        sign_da = data["sign"]
+        encoded_sign = encode_signs(sign_da, model._dtypes["sign"])
+        if encoded_sign is not sign_da:
+            data = assign_multiindex_safe(data, sign=encoded_sign)
+
         self._assigned = "labels" in data
         self._data = data
         self._model = model
@@ -1248,7 +1261,7 @@ class Constraint(ConstraintBase):
 
     @property
     def sign(self) -> DataArray:
-        return self.data.sign
+        return decode_signs(self.data.sign)
 
     @sign.setter
     def sign(self, value: SignLike) -> None:
@@ -1328,6 +1341,10 @@ class Constraint(ConstraintBase):
         Writes that touch the lhs structure (``coeffs``, ``vars``) flip
         ``_coef_dirty``. Other fields (``rhs``, ``sign``, …) leave it alone.
         """
+        if "sign" in fields:
+            fields["sign"] = encode_signs(
+                DataArray(fields["sign"]), self._model._dtypes["sign"]
+            )
         self._data = assign_multiindex_safe(self.data, **fields)
         if "coeffs" in fields or "vars" in fields:
             self._coef_dirty = True
@@ -1738,7 +1755,7 @@ class Constraint(ConstraintBase):
         labels_masked = labels_flat[mask]
         rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
 
-        sign_values = ds["sign"].values
+        sign_values = self.sign.values
         sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
         all_same_sign = len(sign_flat) > 0 and (
             sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
@@ -1776,13 +1793,32 @@ class Constraint(ConstraintBase):
     shift = conwrap(Dataset.shift)
     swap_dims = conwrap(Dataset.swap_dims)
     set_index = conwrap(Dataset.set_index)
-    reindex = conwrap(Dataset.reindex, fill_value=FILL_VALUE)
-    reindex_like = conwrap(Dataset.reindex_like, fill_value=FILL_VALUE)
     rename = conwrap(Dataset.rename)
     rename_dims = conwrap(Dataset.rename_dims)
     roll = conwrap(Dataset.roll)
     stack = conwrap(Dataset.stack)
     unstack = conwrap(Dataset.unstack)
+
+    def _reindex_fill_value(self) -> dict[str, Any]:
+        """``FILL_VALUE`` with the sign fill matched to the current storage dtype."""
+        sign_fill: str | int = (
+            EQUAL
+            if np.issubdtype(self.data["sign"].dtype, np.str_)
+            else SIGN_TO_CODE[EQUAL]
+        )
+        return {**FILL_VALUE, "sign": sign_fill}
+
+    def reindex(self, *args: Any, **kwargs: Any) -> Constraint:
+        """Wrapper for xarray ``Dataset.reindex`` for linopy.Constraint."""
+        kwargs.setdefault("fill_value", self._reindex_fill_value())
+        return self.__class__(self.data.reindex(*args, **kwargs), self.model, self.name)
+
+    def reindex_like(self, *args: Any, **kwargs: Any) -> Constraint:
+        """Wrapper for xarray ``Dataset.reindex_like`` for linopy.Constraint."""
+        kwargs.setdefault("fill_value", self._reindex_fill_value())
+        return self.__class__(
+            self.data.reindex_like(*args, **kwargs), self.model, self.name
+        )
 
 
 @dataclass(repr=False)

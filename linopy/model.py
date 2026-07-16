@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, get_args, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -32,6 +32,7 @@ from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     assign_multiindex_safe,
     best_int,
+    decode_signs,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -112,7 +113,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DtypeKey = Literal["labels"]
+DtypeKey = Literal["labels", "sign"]
+DtypeValue = type[np.signedinteger] | type[np.str_]
 
 
 class Model:
@@ -142,7 +144,7 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
-    _dtypes: dict[DtypeKey, type[np.signedinteger]]
+    _dtypes: dict[DtypeKey, DtypeValue]
     _varnameCounter: int
     _connameCounter: int
     _pwlCounter: int
@@ -187,20 +189,23 @@ class Model:
 
     @staticmethod
     def _resolve_dtypes(
-        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None,
-    ) -> dict[DtypeKey, type[np.signedinteger]]:
+        dtypes: Mapping[DtypeKey, DtypeValue] | None,
+    ) -> dict[DtypeKey, DtypeValue]:
         """Validate the ``dtypes`` argument and merge it onto the defaults."""
-        resolved: dict[DtypeKey, type[np.signedinteger]] = {"labels": np.int32}
+        resolved: dict[DtypeKey, DtypeValue] = {"labels": np.int32, "sign": np.int8}
+        allowed: dict[DtypeKey, tuple[DtypeValue, ...]] = {
+            "labels": (np.int32, np.int64),
+            "sign": (np.int8, np.str_),
+        }
         for key, dtype in (dtypes or {}).items():
             if key not in get_args(DtypeKey):
                 raise ValueError(
                     f"dtypes only supports the keys {list(get_args(DtypeKey))}, "
                     f"got unknown key {key!r}"
                 )
-            if dtype not in (np.int32, np.int64):
-                raise ValueError(
-                    f"dtypes[{key!r}] must be np.int32 or np.int64, got {dtype}"
-                )
+            if dtype not in allowed[key]:
+                names = " or ".join(f"np.{d.__name__}" for d in allowed[key])
+                raise ValueError(f"dtypes[{key!r}] must be {names}, got {dtype}")
             resolved[key] = dtype
         return resolved
 
@@ -212,7 +217,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
-        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
+        dtypes: Mapping[DtypeKey, DtypeValue] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -243,20 +248,28 @@ class Model:
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
         dtypes : mapping, optional
-            Integer dtypes for the model's data, exposed read-only as
-            ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
-            ``Model(dtypes={"labels": np.int64})``. The default ``np.int32``
-            halves label memory but caps the model at ~2.1 billion labels,
-            after which it widens to ``np.int64`` automatically; pass
-            ``np.int64`` upfront to avoid that mid-build upcast.
+            Storage dtypes for the model's data, exposed read-only as
+            ``Model.dtypes``. Two keys are supported:
+
+            * ``"labels"`` — the variable and constraint label dtype,
+              ``np.int32`` (default) or ``np.int64``. The default halves label
+              memory but caps the model at ~2.1 billion labels, after which it
+              widens to ``np.int64`` automatically; pass ``np.int64`` upfront to
+              avoid that mid-build upcast.
+            * ``"sign"`` — how the constraint sign is stored, ``np.int8``
+              (default, compact 1-byte category codes) or ``np.str_`` (legacy
+              ``<U2`` string storage). The compact form is an 8x reduction on
+              the sign array and is decoded back to strings at the public
+              ``constraint.sign`` boundary; ``np.str_`` exists mainly to A/B
+              measure the saving.
+
+            e.g. ``Model(dtypes={"labels": np.int64, "sign": np.str_})``.
 
         Returns
         -------
         linopy.Model
         """
-        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
-            dtypes
-        )
+        self._dtypes: dict[DtypeKey, DtypeValue] = self._resolve_dtypes(dtypes)
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
@@ -530,13 +543,14 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
+    def dtypes(self) -> Mapping[DtypeKey, DtypeValue]:
         """
-        Read-only mapping of the model's integer dtypes.
+        Read-only mapping of the model's storage dtypes.
 
-        Currently holds only ``"labels"``, the dtype of the variable and
-        constraint labels, which widens to ``int64`` automatically once the
-        labels outgrow int32.
+        Holds ``"labels"`` — the dtype of the variable and constraint labels,
+        which widens to ``int64`` automatically once the labels outgrow int32 —
+        and ``"sign"`` — how the constraint sign is stored (``np.int8``
+        category codes by default, ``np.str_`` for legacy ``<U2`` strings).
         """
         return MappingProxyType(self._dtypes)
 
@@ -556,9 +570,11 @@ class Model:
 
     def _allocate_labels(self, start: int, end: int) -> np.ndarray:
         """Return the label range ``[start, end)``, widening the dtype on overflow."""
-        if end > np.iinfo(self._dtypes["labels"]).max:
+        label_dtype = cast(type[np.signedinteger], self._dtypes["labels"])
+        if end > np.iinfo(label_dtype).max:
             self._widen_label_dtype()
-        return np.arange(start, end, dtype=self._dtypes["labels"])
+            label_dtype = cast(type[np.signedinteger], self._dtypes["labels"])
+        return np.arange(start, end, dtype=label_dtype)
 
     @property
     def dataset_attrs(self) -> list[str]:
@@ -1149,9 +1165,12 @@ class Model:
 
         data = self._constraint_data_from_lhs(lhs, sign, rhs, coords)
 
+        # ``data.sign`` is stored as int8 category codes; decode before the
+        # string comparison below.
+        data_sign = decode_signs(data.sign)
         invalid_infinity_values = (
-            (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
-        ) | ((data.sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
+            (data_sign == LESS_EQUAL) & (data.rhs == -np.inf)
+        ) | ((data_sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
         if invalid_infinity_values.any():
             raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 

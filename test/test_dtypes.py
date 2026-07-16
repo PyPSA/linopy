@@ -98,9 +98,96 @@ def test_dtypes_init_arg_rejects_unknown_key() -> None:
 
 def test_dtypes_is_read_only_mapping() -> None:
     dtypes = Model().dtypes
-    assert set(dtypes) == {"labels"}
+    assert set(dtypes) == {"labels", "sign"}
     with pytest.raises(TypeError):
         dtypes["labels"] = np.int64  # type: ignore[index]
+
+
+def test_default_sign_dtype_is_int8() -> None:
+    assert Model().dtypes["sign"] == np.int8
+
+
+def test_sign_stored_as_int8_but_read_as_strings() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
+    m.add_constraints(x <= 5, name="c")
+    con = m.constraints["c"]
+    # Stored compactly as int8 category codes ...
+    assert con.data["sign"].dtype == np.int8
+    # ... but decoded to canonical strings at the public boundary.
+    assert con.sign.dtype.kind == "U"
+    assert set(np.unique(con.sign.values)) == {"<="}
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        (lambda x: x <= 5, "<="),
+        (lambda x: x >= 1, ">="),
+        (lambda x: x == 3, "="),
+    ],
+)
+def test_all_three_senses_round_trip(build, expected) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
+    m.add_constraints(build(x), name="c")
+    con = m.constraints["c"]
+    assert con.data["sign"].dtype == np.int8
+    assert set(np.unique(con.sign.values)) == {expected}
+
+
+def test_sign_int8_is_eightfold_smaller() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=1, coords=[range(100_000)], name="x")
+    m.add_constraints(x <= 1, name="c")
+    compact = m.constraints["c"].data["sign"]
+    assert compact.dtype == np.int8
+    legacy_nbytes = m.constraints["c"].sign.astype("<U2").nbytes
+    assert compact.nbytes * 8 == legacy_nbytes
+
+
+def test_sign_dtype_str_reproduces_legacy_storage() -> None:
+    m = Model(dtypes={"sign": np.str_})
+    assert m.dtypes["sign"] == np.str_
+    x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
+    m.add_constraints(x <= 5, name="c")
+    con = m.constraints["c"]
+    assert con.data["sign"].dtype.kind == "U"
+    assert set(np.unique(con.sign.values)) == {"<="}
+
+
+def test_sign_dtype_init_arg_rejects_invalid() -> None:
+    with pytest.raises(ValueError, match="dtypes\\['sign'\\] must be"):
+        Model(dtypes={"sign": np.float64})  # type: ignore[dict-item]
+
+
+def test_sign_update_round_trips() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
+    m.add_constraints(x <= 5, name="c")
+    con = m.constraints["c"]
+    con.update(sign=">=")
+    assert con.data["sign"].dtype == np.int8
+    assert set(np.unique(con.sign.values)) == {">="}
+
+
+@pytest.mark.skipif(
+    not pytest.importorskip("highspy", reason="highspy not installed"),
+    reason="highspy not installed",
+)
+def test_mixed_senses_solve_correctly() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    y = m.add_variables(lower=0, upper=10, name="y")
+    m.add_constraints(x + y <= 15, name="c1")
+    m.add_constraints(x >= 2, name="c2")
+    m.add_constraints(y == 4, name="c3")
+    m.add_objective(x + 2 * y, sense="max")
+    m.solve("highs")
+    # x = 10, y = 4  ->  10 + 8 = 18
+    assert m.objective.value == pytest.approx(18.0)
+    assert m.solution["x"].item() == pytest.approx(10.0)
+    assert m.solution["y"].item() == pytest.approx(4.0)
 
 
 def test_auto_widen_survives_netcdf(tmp_path: Path) -> None:
