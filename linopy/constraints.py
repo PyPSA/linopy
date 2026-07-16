@@ -63,6 +63,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
+    CODE_TO_SIGN,
     EQUAL,
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -1755,8 +1756,14 @@ class Constraint(ConstraintBase):
         labels_masked = labels_flat[mask]
         rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
 
-        sign_values = self.sign.values
-        sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
+        # Keep the sign as its compact storage codes here and only turn them
+        # into the "=" / "<=" / ">=" strings at the last moment, so the export
+        # never materialises a full-size ``<U2`` array (which would wipe out the
+        # int8 storage saving; see #843). ``self.data["sign"]`` is int8 codes by
+        # default, or ``<U2`` strings under ``dtypes={"sign": np.str_}``.
+        sign_stored = self.data["sign"].values
+        sign_flat = np.broadcast_to(sign_stored, ds["labels"].shape).reshape(-1)
+        sign_enum = pl.Enum(["=", "<=", ">="])
         all_same_sign = len(sign_flat) > 0 and (
             sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
         )
@@ -1766,13 +1773,26 @@ class Constraint(ConstraintBase):
             "rhs": rhs_flat[mask],
         }
         if all_same_sign:
+            first = sign_flat[0]
+            first_str = (
+                CODE_TO_SIGN[first]
+                if np.issubdtype(sign_flat.dtype, np.integer)
+                else first
+            )
             short = pl.DataFrame(short_data).with_columns(
-                pl.lit(sign_flat[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+                pl.lit(first_str).cast(sign_enum).alias("sign")
             )
-        else:
+        elif np.issubdtype(sign_flat.dtype, np.integer):
             short_data["sign"] = pl.Series(
-                "sign", sign_flat[mask], dtype=pl.Enum(["=", "<=", ">="])
+                "sign", sign_flat[mask], dtype=pl.Int8
+            ).replace_strict(
+                list(range(len(CODE_TO_SIGN))),
+                CODE_TO_SIGN.tolist(),
+                return_dtype=sign_enum,
             )
+            short = pl.DataFrame(short_data)
+        else:
+            short_data["sign"] = pl.Series("sign", sign_flat[mask], dtype=sign_enum)
             short = pl.DataFrame(short_data)
 
         df = long.join(short, on="labels", how="inner")
