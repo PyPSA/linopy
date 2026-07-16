@@ -811,6 +811,8 @@ def _broadcast_to_coords(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    *,
+    reindex_reordered: bool = True,
     **kwargs: Any,
 ) -> tuple[DataArray, list[_LevelProjection]]:
     """
@@ -838,7 +840,8 @@ def _broadcast_to_coords(
         arr = _label_input(arr, expected, dims, **kwargs)
 
     arr, projections = _project_onto_multiindex_levels(arr, expected)
-    arr = _reindex_reordered_dims(arr, expected)
+    if reindex_reordered:  # False on the v1 arithmetic path, so a reorder hits §8 exact
+        arr = _reindex_reordered_dims(arr, expected)
     arr = _expand_missing_dims(arr, expected)
     arr = _order_like_coords(arr, expected)
     return arr, projections
@@ -930,8 +933,12 @@ def broadcast_to_coords(
     DataArray
         Broadcast against ``coords``.
     """
-    if not strict:
-        da, projections = _broadcast_to_coords(arr, coords, dims, **kwargs)
+    if not strict:  # arithmetic operands
+        from linopy.semantics import is_v1
+
+        da, projections = _broadcast_to_coords(
+            arr, coords, dims, reindex_reordered=not is_v1(), **kwargs
+        )
         _enforce_implicit_projections(projections)
         return da
 

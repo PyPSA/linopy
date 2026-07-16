@@ -382,13 +382,11 @@ def conform_merge_dims(
     the first operand's in a different order (same set, including a stacked
     MultiIndex's tuples) is a *reorder*; one whose label set differs is a
     *mismatch* — each reported as ``(dim, first_labels, other_labels)`` (first
-    found). Under v1, reorders are aligned to the first operand's order in the
-    returned data (via positional ``isel`` — ``reindex`` cannot reorder a
-    MultiIndex by tuple) and ``reorder`` is ``None``; the caller raises on
-    ``mismatch``. Under legacy, nothing is aligned and the caller warns:
-    ``reorder`` (v1 would align by label) or ``mismatch`` (v1 would raise).
-    Helper dims (``_term``, ``_factor``) and the concat dim are excluded; bare
-    dimension indexes are compared, so auxiliary coords stay §11's job.
+    found). Nothing is aligned in the returned data (§8: v1 treats a pure
+    reorder as a mismatch, exactly like `join="exact"`); the caller raises on
+    either under v1, and warns on either under legacy. Helper dims (``_term``,
+    ``_factor``) and the concat dim are excluded; bare dimension indexes are
+    compared, so auxiliary coords stay §11's job.
     """
     datasets = list(datasets)
     if len(datasets) < 2:
@@ -402,26 +400,21 @@ def conform_merge_dims(
     if not shared:
         return datasets, None, None
 
-    permute = is_v1()
-    out = [datasets[0]]
+    # §8: nothing is aligned — reorder and set-mismatch are only reported.
     mismatch: tuple[str, Any, Any] | None = None
     reorder: tuple[str, Any, Any] | None = None
     for i in range(1, len(datasets)):
-        plan: dict[Any, Any] = {}
         for d in shared:
             ref, idx = indexed[0][d], indexed[i][d]
             if ref.equals(idx):
                 continue
             positions = idx.get_indexer(ref) if len(idx) == len(ref) else None
             if positions is not None and (positions >= 0).all():
-                if permute:
-                    plan[d] = positions
-                elif reorder is None:
+                if reorder is None:
                     reorder = (str(d), ref.values, idx.values)
             elif mismatch is None:
                 mismatch = (str(d), ref.values, idx.values)
-        out.append(datasets[i].isel(plan) if plan else datasets[i])
-    return out, mismatch, reorder
+    return datasets, mismatch, reorder
 
 
 def conflicting_aux_coord(
