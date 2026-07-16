@@ -7,6 +7,18 @@ Upcoming Version
 **Features**
 
 
+*Strict "v1" arithmetic semantics (opt-in)*
+
+* A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
+
+  * shared dimensions align by label with ``join="exact"`` — a differing label set *or* a pure reorder (same labels, different order) raises instead of silently filling, dropping, or pairing by position. Resolve explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass an explicit ``join=`` to the named ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq`` methods.
+  * a ``NaN`` in a user-supplied constant raises, rather than being silently filled (with a value that used to differ per operator).
+  * *absence* — masked, reindexed, or shifted-in slots — is a first-class state that propagates through every operator, instead of collapsing to zero.
+  * conflicting auxiliary coordinates raise, instead of being silently dropped.
+  * a first-class ``pd.MultiIndex`` dimension is rejected in favour of a flat dimension with the levels as auxiliary coordinates.
+
+* Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in `the arithmetic convention <https://github.com/PyPSA/linopy/blob/master/arithmetics-design/convention.md>`_.
+
 *In-place solver updates (persistent re-solve)*
 
 * A built solver can now be re-solved against a mutated ``Model`` without a full rebuild. Construct with ``Solver.from_name(..., track_updates=True)`` and re-call ``solver.solve(model)`` after edits — the diff against the previous build is applied in place when the backend supports it, falling back to a rebuild otherwise. Supported on HiGHS, Gurobi, Xpress, and Mosek (``io_api="direct"``).
