@@ -8,8 +8,10 @@ tracks the concrete items per stage.
 
 The one open **design** decision — [#744] MultiIndex storage — is **resolved**:
 v1 disallows first-class `pd.MultiIndex` (a flat dim + auxiliary level coords),
-implemented in [#803]. No open arithmetic-rule questions remain; everything left
-is rollout + cleanup.
+implemented in [#803]. §8 alignment was subsequently tightened to full
+`join="exact"` — a pure reorder raises rather than reindexing ([#831]) — and
+grouper alignment made strict to match ([#827]). Everything left is rollout +
+cleanup.
 
 ## Stage 1 — release v1 (opt-in)
 
@@ -29,6 +31,14 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
   "no silent change" guarantee ([`goals.md`] transitioning goal #3): shipping v1
   with a gap would silently change any model that opts in. Includes #803's
   MultiIndex rejects and the multi-key-`groupby`-flat change as new fork sites.
+  The reorder→raise change ([#831]) added its own fork sites: reordered constant
+  operands now warn under legacy (they were silently reindexed) — done for
+  `+`/`-`/`*`/`/`/rhs; still verify no other reorder-reindex path stays silent.
+- [ ] **Land grouper strict alignment on the branch** — [#827]'s fix ([#830],
+  check-and-raise on a reordered/mismatched grouper) is on `master`; it reaches
+  #717 when master merges in. The **Groupers** rule in [`convention.md`] §13
+  documents the target; until #830 lands here the fast path still matches a
+  reordered grouper positionally.
 - [ ] Changelog note — v1 available via `options['semantics'] = 'v1'`; legacy
   remains the default; link [`convention.md`].
 
@@ -64,11 +74,17 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
   on it).
 - [x] **Legacy warnings live from the opt-in release** → yes; the transition
   surface is complete at stage 1, not deferred.
+- [x] **§8 is full `join="exact"`** → a pure reorder (same labels, different
+  order) raises, not reindexes ([#831]); the reindexing named joins still
+  resolve it. Groupers align strictly the same way ([#827]/[#830]).
 - [ ] **When v1 becomes the default** — pick the release; gated on the migration
   guide.
 
 <!-- references -->
 [#744]: https://github.com/PyPSA/linopy/issues/744
+[#827]: https://github.com/PyPSA/linopy/issues/827
+[#830]: https://github.com/PyPSA/linopy/pull/830
+[#831]: https://github.com/PyPSA/linopy/pull/831
 [#714]: https://github.com/PyPSA/linopy/issues/714
 [#717]: https://github.com/PyPSA/linopy/pull/717
 [#803]: https://github.com/PyPSA/linopy/pull/803

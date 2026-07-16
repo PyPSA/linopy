@@ -165,6 +165,18 @@ def _legacy_coord_reorder_message(context: str, dim: str, left: Any, right: Any)
     )
 
 
+def _legacy_const_reorder_message(dim: str, left: Any, right: Any) -> str:
+    """Same labels, different order — reindexed by label by legacy; v1 raises."""
+    return (
+        "Coordinate order mismatch in this operator's constant operand: the same"
+        " labels in a different order were reindexed by label by legacy. Under v1"
+        " this raises ValueError (§8)."
+        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
+        "\n  Resolve:   `.sel(...)` / `.reindex(...)` / `.sortby(...)` to align"
+        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+    )
+
+
 def _legacy_aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
     """
     Conflicting aux coord silently dropped by xarray under legacy.

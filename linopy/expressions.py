@@ -914,7 +914,9 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const + other)
-        da = broadcast_to_coords(other, coords=self.coords, strict=False)
+        da = broadcast_to_coords(
+            other, coords=self.coords, strict=False, warn_reorder=True
+        )
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
@@ -940,7 +942,9 @@ class BaseExpression(ABC):
             if isinstance(other, float) and np.isnan(other):
                 check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
-        da = broadcast_to_coords(other, coords=self.coords, strict=False)
+        da = broadcast_to_coords(
+            other, coords=self.coords, strict=False, warn_reorder=True
+        )
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
@@ -982,7 +986,9 @@ class BaseExpression(ABC):
         # §5: user NaN raised before we get here.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(other, coords=self.coords, strict=False)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, strict=False, warn_reorder=True
+        )
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -1013,7 +1019,9 @@ class BaseExpression(ABC):
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
         if isinstance(other, float) and np.isnan(other):
             check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(other, coords=self.coords, strict=False)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, strict=False, warn_reorder=True
+        )
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -1534,7 +1542,9 @@ class BaseExpression(ABC):
             # through ``sub`` into the RHS and reaches downstream
             # auto-mask handling as "no constraint at this row" (§12).
             if isinstance(rhs, CONSTANT_TYPES):
-                rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
+                rhs = broadcast_to_coords(
+                    rhs, coords=self.coords, strict=False, warn_reorder=True
+                )
                 extra_dims = set(rhs.dims) - set(self.coord_dims)
                 if extra_dims:
                     logger.warning(
@@ -1558,7 +1568,9 @@ class BaseExpression(ABC):
         # part of normal arithmetic, so we restore the original NaN mask
         # afterward).
         if isinstance(rhs, CONSTANT_TYPES):
-            rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, strict=False, warn_reorder=True
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
