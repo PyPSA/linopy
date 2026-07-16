@@ -88,7 +88,7 @@ def test_label_dtype_init_arg() -> None:
 
 def test_label_dtype_init_arg_rejects_invalid() -> None:
     with pytest.raises(ValueError, match="dtypes\\['labels'\\] must be"):
-        Model(dtypes={"labels": np.float64})  # type: ignore[dict-item]
+        Model(dtypes={"labels": np.float64})
 
 
 def test_dtypes_init_arg_rejects_unknown_key() -> None:
@@ -146,7 +146,7 @@ def test_values_dtype_init_arg_float64() -> None:
 
 def test_values_dtype_init_arg_rejects_invalid() -> None:
     with pytest.raises(ValueError, match="dtypes\\['values'\\] must be"):
-        Model(dtypes={"values": np.float16})  # type: ignore[dict-item]
+        Model(dtypes={"values": np.float16})
 
 
 @pytest.mark.skipif(
