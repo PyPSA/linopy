@@ -601,8 +601,9 @@ class BaseExpression(ABC):
             data = assign_multiindex_safe(
                 data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
-        if not np.issubdtype(data.coeffs, np.floating):
-            data["coeffs"].values = data.coeffs.values.astype(float)
+        values_dtype = model._dtypes["values"]
+        if data.coeffs.dtype != values_dtype:
+            data["coeffs"].values = data.coeffs.values.astype(values_dtype)
 
         data = fill_missing_coords(data)
 
@@ -610,9 +611,9 @@ class BaseExpression(ABC):
             raise ValueError("data must contain one dimension ending with '_term'")
 
         if "const" not in data:
-            data = data.assign(const=0.0)
-        elif not np.issubdtype(data.const, np.floating):
-            data = assign_multiindex_safe(data, const=data.const.astype(float))
+            data = data.assign(const=values_dtype(0))
+        elif data.const.dtype != values_dtype:
+            data = assign_multiindex_safe(data, const=data.const.astype(values_dtype))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         data = cast(Dataset, data)

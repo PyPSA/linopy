@@ -1166,6 +1166,10 @@ class Constraint(ConstraintBase):
             if attr not in data:
                 raise ValueError(f"missing '{attr}' in data")
 
+        values_dtype = model._dtypes["values"]
+        if data["rhs"].dtype != values_dtype:
+            data = assign_multiindex_safe(data, rhs=data["rhs"].astype(values_dtype))
+
         data = data.assign_attrs(name=name)
 
         if not skip_broadcast:
