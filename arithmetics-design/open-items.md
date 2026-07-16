@@ -46,7 +46,9 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
 
 ## Stage 2 — make v1 the default (legacy opt-out)
 
-- [ ] Write the **migration guide** ([`docs-plan.md`] is only an outline).
+- [x] Write the **migration guide** — `doc/migrating-to-v1.rst` (why v1, the
+  opt-in→default→1.0 rollout, the three audiences, the surface-warnings-then-fix
+  recipe, and a situation→v1→fix table). [`docs-plan.md`] was the outline.
 - [ ] Flip the `options['semantics']` default to v1.
 - [ ] Close [#714] once v1 ships as default.
 

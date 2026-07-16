@@ -113,6 +113,7 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
+   migrating-to-v1
    manipulating-models
 
 .. toctree::

@@ -1,5 +1,8 @@
 # Docs plan — user-facing migration guide
 
+**Done:** the guide now lives at `doc/migrating-to-v1.rst`. This file is kept
+as the outline it was written from.
+
 Early-stage outline for the v1 migration docs. Not the guide itself —
 the three pieces it needs to cover, written when someone picks it up.
 
