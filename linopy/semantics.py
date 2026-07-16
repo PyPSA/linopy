@@ -377,6 +377,24 @@ def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | N
     return None
 
 
+def reindex_like_if_needed(
+    arr: DataArray, ref: DataArray, fill_value: Any
+) -> DataArray:
+    """
+    ``arr.reindex_like(ref, fill_value=...)`` without the copy when already aligned.
+
+    ``broadcast_to_coords`` leaves an operand spanning ``ref``'s dims but with
+    fresh index objects (equal, not identical), so a plain ``reindex_like`` would
+    deep-copy the whole array to no effect on the exact-match hot path. Skip it
+    when every ``ref`` dim is present and ``first_mismatched_dim`` finds no
+    disagreement — the same shared-dim check the alignment rules use, so ``None``
+    means the reindex changes nothing.
+    """
+    if set(ref.dims) <= set(arr.dims) and first_mismatched_dim(ref, arr) is None:
+        return arr
+    return arr.reindex_like(ref, fill_value=fill_value)
+
+
 def conform_merge_dims(
     datasets: Sequence[Dataset], concat_dim: str
 ) -> tuple[list[Dataset], tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:

@@ -72,6 +72,7 @@ from linopy.semantics import (
     enforce_aux_conflict,
     first_mismatched_dim,
     is_v1,
+    reindex_like_if_needed,
     warn_legacy,
 )
 from linopy.types import (
@@ -368,7 +369,7 @@ class Variable:
             # arithmetic works. A dense variable has none, so the
             # mask/where/const collapse to no-ops (skipped below).
             has_absence = bool((self.labels == -1).any())
-            coefficient = coefficient.reindex_like(self.labels, fill_value=np.nan)
+            coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
             if has_absence:
                 absent = self.labels == -1
                 coefficient = coefficient.where(~absent)
@@ -381,7 +382,7 @@ class Variable:
             has_absence = bool((self.labels == -1).any())
             if has_absence:
                 warn_legacy(_legacy_masked_variable_message(self.name))
-            coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+            coefficient = reindex_like_if_needed(coefficient, self.labels, 0)
             coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
