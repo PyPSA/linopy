@@ -25,7 +25,7 @@ from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Self, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -683,7 +683,7 @@ class Solver(ABC, Generic[EnvType]):
         options: dict[str, Any] | None = None,
         track_updates: bool = False,
         **build_kwargs: Any,
-    ) -> Solver:
+    ) -> Self:
         """Instantiate and build the solver against ``model``."""
         instance = cls(
             model=model,
@@ -1112,6 +1112,18 @@ class Solver(ABC, Generic[EnvType]):
         raise NotImplementedError
 
     def close(self) -> None:
+        """
+        Dispose the native solver model and env, releasing any held license.
+
+        Only resources created by this instance are disposed; a
+        user-supplied environment is left untouched.
+
+        Idempotent, and called automatically when a new ``solve()`` replaces
+        this solver, when ``model.solver`` is reassigned (e.g. to ``None``),
+        and on garbage collection. After closing, post-solve introspection
+        (``solver_model``, ``compute_infeasibilities()``) and persistent
+        re-solves are no longer available.
+        """
         if self._env_stack is not None:
             self._env_stack.close()
         self.env = None
@@ -1948,6 +1960,27 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         self.env = resolved
         return resolved
 
+    def _register_solver_model(self, m: gurobipy.Model) -> gurobipy.Model:
+        """
+        Register the gurobipy model on the env stack so ``close()`` disposes
+        it before the env — required for the license to be released even while
+        user code still holds a ``solver_model`` reference.
+        """
+        assert self._env_stack is not None
+        return self._env_stack.enter_context(m)
+
+    def _detach_solver_model(self) -> gurobipy.Model:
+        """
+        Hand ownership of the gurobipy model to the caller: unregister it from
+        the solver's teardown so ``close()`` does not dispose it. gurobipy
+        frees the underlying env once the caller drops the model.
+        """
+        m = self.solver_model
+        if self._env_stack is not None:
+            self._env_stack.pop_all()
+        self.close()
+        return m
+
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
@@ -1964,7 +1997,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
-        self.solver_model = m
+        self.solver_model = self._register_solver_model(m)
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
@@ -2159,7 +2192,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         env_ = self._resolve_env(env)
         m = gurobipy.read(problem_fn_, env=env_)
-        self.solver_model = m
+        self.solver_model = self._register_solver_model(m)
         self.io_api = io_api
 
         return self._solve(
