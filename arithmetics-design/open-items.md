@@ -37,13 +37,12 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
   found one remaining silent site: `groupby([names]).sum(observed=True)` minted
   the `group` MultiIndex without warning (only DataFrame groupers warned) — now
   fixed. No other silent fork site found.
-- [ ] **Land grouper strict alignment on the branch** — [#827]'s fix ([#830],
-  check-and-raise on a reordered/mismatched grouper) is on `master`; it reaches
-  #717 when master merges in. The **Groupers** rule in [`convention.md`] §13
-  documents the target; until #830 lands here the fast path still matches a
-  reordered grouper positionally.
-- [ ] Changelog note — v1 available via `options['semantics'] = 'v1'`; legacy
-  remains the default; link [`convention.md`].
+- [x] **Land grouper strict alignment on the branch** — [#830]'s
+  check-and-raise on a reordered/mismatched grouper is merged in. The
+  **Groupers** rule in [`convention.md`] §13 documents the behaviour.
+- [x] Changelog note — v1 opt-in via `options['semantics'] = 'v1'` (legacy
+  remains the default), with the strict-alignment / absence / user-NaN /
+  aux-coord / MultiIndex summary and a link to [`convention.md`].
 
 ## Stage 2 — make v1 the default (legacy opt-out)
 
