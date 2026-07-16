@@ -133,6 +133,7 @@ This package is published under MIT license.
    sos-constraints
    piecewise-linear-constraints
    testing-framework
+   plasmo-benders
 
 .. toctree::
    :hidden:
