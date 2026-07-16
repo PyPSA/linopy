@@ -913,6 +913,44 @@ class TestExactAlignmentMerge:
         )
 
     @pytest.mark.legacy
+    def test_reordered_constant_warns_and_reindexes_legacy(
+        self, m: Model, unsilenced: None
+    ) -> None:
+        # The const path reindexes a reordered constant *by label* under legacy
+        # (unlike the positional merge path), so the result is unchanged — but v1
+        # raises on it, so legacy must warn about the divergence.
+        e = pd.Index(["costs", "penalty"], name="e")
+        er = pd.Index(["penalty", "costs"], name="e")
+        x = m.add_variables(coords=[e], name="x")
+        with pytest.warns(LinopySemanticsWarning) as record:
+            expr = 1 * x + pd.Series([1.0, 100.0], index=er)  # penalty=1, costs=100
+        # reindexed by label: the "costs" slot got 100, not the leading 1
+        assert float(expr.const.sel(e="costs")) == 100.0
+        msg = next(
+            str(w.message) for w in record if w.category is LinopySemanticsWarning
+        )
+        assert msg == (
+            "Coordinate order mismatch in this operator's constant operand: the "
+            "same labels in a different order were reindexed by label by legacy. "
+            "Under v1 this raises ValueError (§8)."
+            "\n  Dim:       'e': left=['costs', 'penalty'], "
+            "right=['penalty', 'costs']"
+            "\n  Resolve:   `.sel(...)` / `.reindex(...)` / `.sortby(...)` to align"
+            "\n             or pass an explicit `join=` argument."
+            "\n  Opt in:    linopy.options['semantics'] = 'v1'"
+            "\n  Silence:   warnings.filterwarnings('ignore', "
+            "category=LinopySemanticsWarning)"
+        )
+
+    @pytest.mark.v1
+    def test_reordered_constant_raises_v1(self, m: Model) -> None:
+        e = pd.Index(["costs", "penalty"], name="e")
+        er = pd.Index(["penalty", "costs"], name="e")
+        x = m.add_variables(coords=[e], name="x")
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+            _ = 1 * x + pd.Series([1.0, 100.0], index=er)
+
+    @pytest.mark.legacy
     def test_var_plus_var_reordered_pairs_positionally_legacy(self, m: Model) -> None:
         """
         Legacy preserves master's #550 behaviour: var+var with reordered

@@ -252,7 +252,20 @@ Further reductions (`mean`, `resample`, `coarsen`) are not in linopy yet; they
 are added under v1 only ([#703]) — as new operations with no legacy behaviour —
 and follow this same skip-absent rule.
 
+**Groupers.** A `groupby` grouper — a Series, DataArray, DataFrame, or the name
+of an attached coordinate — labels each position of the grouped dimension. It
+aligns to that dimension by §8: the grouper's index must carry the grouped
+dimension's labels, and a differing label *set* or the same labels in a
+different *order* raises. The grouper is never matched by position and never
+silently reindexed ([#827]). Under legacy the fast path matches positionally; v1
+validates and raises, whichever grouper type is used.
+
+A multi-key grouper (a list of coordinate names, or a DataFrame) groups by the
+tuple of keys. The result is a flat `group` dimension carrying the keys as
+auxiliary coordinates; the stacked `group` MultiIndex is legacy-only (§11).
+
 <!-- references -->
+[#827]: https://github.com/PyPSA/linopy/issues/827
 [#732]: https://github.com/PyPSA/linopy/pull/732
 [#737]: https://github.com/PyPSA/linopy/pull/737
 [#736]: https://github.com/PyPSA/linopy/issues/736

@@ -732,12 +732,16 @@ def _label_input(
     )
 
 
-def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
+def _reindex_reordered_dims(
+    arr: DataArray, expected: dict[Hashable, Any], warn: bool = False
+) -> DataArray:
     """
     Reindex shared dims whose values match ``expected`` in a different order.
 
     Disagreeing value *sets* are left for downstream xarray alignment;
-    only a pure reordering of the same values is conformed here.
+    only a pure reordering of the same values is conformed here. With
+    ``warn=True`` (the legacy arithmetic path) each conformed reorder emits a
+    ``LinopySemanticsWarning`` — v1 raises on it instead of reindexing.
     """
     for dim, coord_values in expected.items():
         if dim not in arr.dims or isinstance(arr.indexes.get(dim), pd.MultiIndex):
@@ -749,6 +753,18 @@ def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> Da
         if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
             expected_idx
         ):
+            if warn:
+                from linopy.semantics import (
+                    _legacy_const_reorder_message,
+                    warn_legacy,
+                )
+
+                warn_legacy(
+                    _legacy_const_reorder_message(
+                        str(dim), expected_idx.values, actual_idx.values
+                    ),
+                    stacklevel=6,
+                )
             arr = arr.reindex({dim: expected_idx})
     return arr
 
@@ -813,6 +829,7 @@ def _broadcast_to_coords(
     dims: DimsLike | None = None,
     *,
     reindex_reordered: bool = True,
+    warn_reorder: bool = False,
     **kwargs: Any,
 ) -> tuple[DataArray, list[_LevelProjection]]:
     """
@@ -841,7 +858,7 @@ def _broadcast_to_coords(
 
     arr, projections = _project_onto_multiindex_levels(arr, expected)
     if reindex_reordered:  # False on the v1 arithmetic path, so a reorder hits §8 exact
-        arr = _reindex_reordered_dims(arr, expected)
+        arr = _reindex_reordered_dims(arr, expected, warn=warn_reorder)
     arr = _expand_missing_dims(arr, expected)
     arr = _order_like_coords(arr, expected)
     return arr, projections
@@ -878,6 +895,7 @@ def broadcast_to_coords(
     *,
     strict: bool = True,
     label: str | None = None,
+    warn_reorder: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -937,7 +955,12 @@ def broadcast_to_coords(
         from linopy.semantics import is_v1
 
         da, projections = _broadcast_to_coords(
-            arr, coords, dims, reindex_reordered=not is_v1(), **kwargs
+            arr,
+            coords,
+            dims,
+            reindex_reordered=not is_v1(),
+            warn_reorder=warn_reorder,
+            **kwargs,
         )
         _enforce_implicit_projections(projections)
         return da
