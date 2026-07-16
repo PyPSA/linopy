@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
 LEGACY_SEMANTICS = "legacy"
 V1_SEMANTICS = "v1"
 VALID_SEMANTICS = {LEGACY_SEMANTICS, V1_SEMANTICS}
