@@ -33,7 +33,10 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
   MultiIndex rejects and the multi-key-`groupby`-flat change as new fork sites.
   The reorder→raise change ([#831]) added its own fork sites: reordered constant
   operands now warn under legacy (they were silently reindexed) — done for
-  `+`/`-`/`*`/`/`/rhs; still verify no other reorder-reindex path stays silent.
+  `+`/`-`/`*`/`/`/rhs. A full audit (probe every §'s legacy→v1 divergence)
+  found one remaining silent site: `groupby([names]).sum(observed=True)` minted
+  the `group` MultiIndex without warning (only DataFrame groupers warned) — now
+  fixed. No other silent fork site found.
 - [ ] **Land grouper strict alignment on the branch** — [#827]'s fix ([#830],
   check-and-raise on a reordered/mismatched grouper) is on `master`; it reaches
   #717 when master merges in. The **Groupers** rule in [`convention.md`] §13

@@ -26,6 +26,7 @@ from linopy import (
     QuadraticExpression,
     Variable,
     merge,
+    options,
 )
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
@@ -1480,6 +1481,42 @@ class TestMultiKeyFastPath:
         assert {"period", "season"} <= set(grouped.data.coords)
         assert grouped.sizes["group"] == 3
 
+    @pytest.mark.legacy
+    def test_namelist_observed_warns_legacy(self) -> None:
+        # `groupby([names]).sum(observed=True)` keeps the stacked `group` MI under
+        # legacy exactly like a DataFrame grouper — so it must warn too (v1 gives
+        # a flat dim, a silent divergence otherwise).
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+
+    @pytest.mark.v1
+    def test_namelist_observed_flat_v1(self) -> None:
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert not isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.data.coords)
+
+    @pytest.mark.legacy
+    def test_group_multiindex_reset_index_matches_v1(self) -> None:
+        # The warning tells legacy users `.reset_index('group')` yields the v1
+        # shape — pin that it produces exactly the v1 flat result (same expr, so
+        # variable labels line up).
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            legacy_mi = expr.groupby(["period", "season"]).sum(observed=True)
+        converted = legacy_mi.reset_index("group")
+        prev = options["semantics"]
+        try:
+            options["semantics"] = "v1"
+            v1_flat = expr.groupby(["period", "season"]).sum(observed=True)
+        finally:
+            options["semantics"] = prev
+        assert not isinstance(converted.data.indexes["group"], pd.MultiIndex)
+        assert_linequal(converted, v1_flat)
+
     def test_blowup_warns_when_sparse(self) -> None:
         # 200 observed combos, 200x200 grid -> nudge toward observed=True
         expr = self._expr(list(range(200)), list(range(200)))
@@ -1508,10 +1545,14 @@ class TestMultiKeyFastPath:
     def test_observed_silences_blowup_warning(self) -> None:
         expr = self._expr(list(range(200)), list(range(200)))
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        # ``observed=True`` silences the dense-grid blowup warning; under legacy
+        # it still emits the deprecated-`group`-MultiIndex warning, which is not
+        # what this test is about, so assert on the blowup warning specifically.
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
 
+        assert not any("dense" in str(w.message) for w in record)
         assert grouped.sizes["group"] == 200
 
     def test_observed_with_fallback_raises(self) -> None:
