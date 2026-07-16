@@ -163,9 +163,8 @@ resolve it. Several primitives bring operands into agreement:
   `options["semantics"]` setting — under v1 that is `exact`, so passing
   `join="exact"` is the explicit spelling of the v1 default, not a stricter
   mode. `override` is the old positional behavior — still available, but now
-  opt-in
-  and named rather than triggered by a size coincidence. It still requires the
-  shared dimensions to match in size: a genuine size mismatch raises rather
+  opt-in and named rather than triggered by a size coincidence. It still
+  requires the shared dimensions to match in size: a genuine size mismatch raises rather
   than relabelling mismatched data, so reach for a label join (`inner` /
   `outer` / `left` / `right`) when the sizes really differ.
 - `.reindex()` / `.reindex_like()` conform an operand to a target index

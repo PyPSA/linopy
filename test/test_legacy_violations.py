@@ -859,15 +859,13 @@ class TestExactAlignmentMerge:
         assert float(via_sel.const.sel(e="costs")) == 102.0
 
     @pytest.mark.v1
-    def test_coeff_times_var_reordered_aligns(self, m: Model) -> None:
-        # §8: a reordered coefficient aligns by label like +/-/merge; the
-        # multiply path no longer raises where the others reindex.
+    def test_coeff_times_var_reordered_raises(self, m: Model) -> None:
+        # §8 exact: a reordered coefficient raises like +/-/merge, not reindexed.
         ea = pd.Index(["costs", "penalty"], name="e")
         er = pd.Index(["penalty", "costs"], name="e")
         x = m.add_variables(coords=[ea], name="x")
-        expr = pd.Series([10.0, 20.0], index=er) * x  # penalty=10, costs=20
-        assert float(expr.coeffs.sel(e="costs").squeeze()) == 20.0
-        assert float(expr.coeffs.sel(e="penalty").squeeze()) == 10.0
+        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+            _ = pd.Series([10.0, 20.0], index=er) * x
 
     @pytest.mark.v1
     def test_coeff_times_var_label_set_mismatch_raises(self, m: Model) -> None:
@@ -902,7 +900,8 @@ class TestExactAlignmentMerge:
         assert msg == (
             "Coordinate order mismatch in merge along dim '_term' aligned "
             "positionally by legacy. Under v1 the same labels in a different "
-            "order align by label (a reindex), giving a different result."
+            "order raise ValueError (§8); reindex or sort one side to align "
+            "by label."
             "\n  Dim:       'e': left=['costs', 'penalty'], "
             "right=['penalty', 'costs']"
             "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
