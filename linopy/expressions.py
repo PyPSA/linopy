@@ -806,6 +806,18 @@ class BaseExpression(ABC):
             )
             return self_const, aligned, True
 
+    def _as_value_dtype(self, da: DataArray) -> DataArray:
+        """
+        Cast ``da`` to the model's configured value dtype.
+
+        Applied to the other operand of an elementwise op so that a float32
+        expression stays float32 throughout, rather than letting numpy upcast to
+        a large (broadcast) float64 intermediate that ``__init__`` only downcasts
+        again — a transient that would double the operation's peak memory.
+        """
+        values_dtype = self.model._dtypes["values"]
+        return da.astype(values_dtype) if da.dtype != values_dtype else da
+
     def _add_constant(
         self, other: ConstantLike, join: JoinOptions | None = None
     ) -> Self:
@@ -821,6 +833,7 @@ class BaseExpression(ABC):
         )
         da = da.fillna(0)
         self_const = self_const.fillna(0)
+        da = self._as_value_dtype(da)
         if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
@@ -852,6 +865,7 @@ class BaseExpression(ABC):
         )
         factor = factor.fillna(fill_value)
         self_const = self_const.fillna(0)
+        factor = self._as_value_dtype(factor)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
             coeffs = data.coeffs.fillna(0)
