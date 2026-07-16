@@ -296,7 +296,6 @@ def _restore_multikey_index(
     ds: Dataset,
     decode: tuple[dict, pd.Index],
     stacked_survives: bool,
-    user_facing: bool,
 ) -> Dataset:
     """
     Rebuild the multi-key group labels encoded by _encode_multikey_group.
@@ -304,8 +303,9 @@ def _restore_multikey_index(
     Under v1 semantics a stacked result that survives (``stacked_survives``)
     keeps a flat group dimension with the key values as auxiliary coordinates.
     Otherwise the keys become a MultiIndex — either because the caller unstacks
-    it right after, or under legacy semantics, where a ``user_facing`` frame
-    grouper additionally warns about the deprecated MultiIndex result.
+    it right after (``stacked_survives`` is False), or under legacy semantics,
+    where a *surviving* ``group`` MultiIndex additionally warns about the
+    deprecated result, whichever grouper minted it.
     """
     int_map, columns = decode
     index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
@@ -316,7 +316,7 @@ def _restore_multikey_index(
         return ds.assign_coords(
             {n: (GROUP_DIM, index.get_level_values(n)) for n in level_names}
         )
-    if user_facing:
+    if stacked_survives:  # legacy: the group MultiIndex survives into the result
         warn_legacy(_legacy_group_multiindex_message(level_names))
     return ds.assign_coords(Coordinates.from_pandas_multiindex(index, GROUP_DIM))
 
@@ -471,7 +471,6 @@ class LinearExpressionGroupby:
                     ds,
                     multikey_decode,
                     stacked_survives=multikey_frame is None or observed,
-                    user_facing=multikey_frame is None,
                 )
 
             ds = ds.rename({GROUP_DIM: final_group_name})
