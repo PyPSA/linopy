@@ -501,10 +501,12 @@ class CSRConstraint(ConstraintBase):
     Parameters
     ----------
     csr : scipy.sparse.csr_array
-        Shape (n_flat, model._xCounter). Each row is a flat position in the
-        constraint grid (including masked/empty rows).
+        Shape (n_active_rows, n_active_vars). Rows are the active
+        (non-masked) flat positions of the constraint grid; column indices
+        are dense positions in the model's active-variable ordering
+        (``label_index.vlabels``) as of ``vlabels``.
     rhs : np.ndarray
-        Shape (n_flat,). Right-hand-side values.
+        Shape (n_active_rows,). Right-hand-side values.
     sign : str or np.ndarray
         Constraint sign. Either a single str ('=', '<=', '>=') for uniform
         signs, or a per-row np.ndarray of sign strings for mixed signs.
@@ -517,11 +519,18 @@ class CSRConstraint(ConstraintBase):
     cindex : int or None
         Starting label assigned by the model. None if not yet assigned.
     dual : np.ndarray or None
-        Shape (n_flat,). Dual values after solving, or None.
+        Shape (n_active_rows,). Dual values after solving, or None.
+    vlabels : np.ndarray or None
+        The active-variable basis (``label_index.vlabels``) the CSR's column
+        indices refer to. None (default) means the model's current basis.
+        Whenever the model's basis changes afterwards (variables added or
+        removed), the CSR is lazily reconciled on access, see
+        ``_reconciled_csr``.
     """
 
     __slots__ = (
         "_csr",
+        "_vlabels",
         "_con_labels",
         "_rhs",
         "_sign",
@@ -547,8 +556,12 @@ class CSRConstraint(ConstraintBase):
         dual: np.ndarray | None = None,
         binvar_labels: np.ndarray | None = None,
         binval: int | np.ndarray | None = None,
+        vlabels: np.ndarray | None = None,
     ) -> None:
         self._csr = csr
+        self._vlabels = (
+            model.variables.label_index.vlabels if vlabels is None else vlabels
+        )
         self._con_labels = con_labels
         self._rhs = rhs
         self._sign = sign
@@ -740,7 +753,7 @@ class CSRConstraint(ConstraintBase):
         -------
         Dataset with variables ``labels``, ``coeffs``, ``vars``.
         """
-        csr = self._csr
+        csr = self._reconciled_csr()
         counts = np.diff(csr.indptr)
         shape = self.shape
         full_size = self.full_size
@@ -806,7 +819,8 @@ class CSRConstraint(ConstraintBase):
         dim_names = self.coord_names
         size = self.full_size
         # Map active rows (CSR is active-only) back to full flat positions
-        csr = self._csr
+        csr = self._reconciled_csr()
+        vlabels = self._model.variables.label_index.vlabels
         nterm = self.nterm
         active_positions = self.active_positions
         masked_entries = size - len(active_positions)
@@ -823,7 +837,8 @@ class CSRConstraint(ConstraintBase):
             start, end = int(csr.indptr[row]), int(csr.indptr[row + 1])
             vars_row = np.full(nterm, -1, dtype=np.int64)
             coeffs_row = np.zeros(nterm, dtype=csr.dtype)
-            vars_row[: end - start] = csr.indices[start:end]
+            # csr.indices are column positions into vlabels; decode to labels
+            vars_row[: end - start] = vlabels[csr.indices[start:end]]
             coeffs_row[: end - start] = csr.data[start:end]
             sign = self._sign if isinstance(self._sign, str) else self._sign[row]
             return f"{format_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
@@ -852,77 +867,90 @@ class CSRConstraint(ConstraintBase):
 
         return "\n".join(lines)
 
-    def _csr_for_index(
-        self, label_index: VariableLabelIndex | None
-    ) -> scipy.sparse.csr_array:
+    def _reconciled_csr(self) -> scipy.sparse.csr_array:
         """
-        Return the cached CSR widened to the current active-variable count.
+        Return the stored CSR reconciled to the current active-variable basis.
 
-        The CSR is cached at freeze time with as many columns as there were
-        active variables then. If variables were added afterwards (e.g. an
-        auxiliary variable introduced by a constraint added after this one was
-        frozen), the active-variable count has grown and the cached CSR is too
-        narrow to be stacked with constraints frozen later, so
-        ``Constraints.to_matrix`` fails with an axis-1 dimension mismatch.
+        The CSR's column indices are dense positions in the model's
+        active-variable ordering (``label_index.vlabels``) as of the last
+        reconciliation (initially: construction/freeze time). Any change to
+        the active-variable set afterwards changes that ordering, so every
+        consumer that interprets column indices must go through this method
+        first. Three cases:
 
-        Variable positions are assigned in encounter order and are stable under
-        additions, so widening the column dimension only appends empty trailing
-        columns and keeps every per-constraint block consistent with
-        ``label_index.n_active_vars``.
+        - The basis object is unchanged (the common case; ``label_index``
+          caches ``vlabels`` until variables are added or removed): return
+          the stored CSR as is, O(1).
+        - The stored basis is a prefix of the current one (variables were
+          only added): positions are stable, only the width grows. Metadata
+          change only, the index arrays are reused.
+        - Otherwise (variables were removed, possibly combined with
+          additions): remap each stored position through its variable label
+          to the new position. Surviving labels keep their relative order in
+          the new basis, so per-row indices remain sorted.
+
+        The reconciled CSR is stored back together with the current basis, so
+        subsequent accesses take the fast path. ``_csr`` is rebound, never
+        mutated in place (copy-on-write, see ``sanitize_zeros``); holding a
+        reference to the (shared) ``vlabels`` array is cheap because all
+        constraints reconciled against the same basis share one object.
         """
+        label_index = self._model.variables.label_index
+        new_vlabels = label_index.vlabels
+        old_vlabels = self._vlabels
+        if new_vlabels is old_vlabels:
+            return self._csr
+
         csr = self._csr
-        if label_index is None:
-            return csr
-        n_active_vars = label_index.n_active_vars
-        if csr.shape[1] < n_active_vars:
+        n_old = len(old_vlabels)
+        if len(new_vlabels) >= n_old and np.array_equal(
+            new_vlabels[:n_old], old_vlabels
+        ):
+            if csr.shape[1] != len(new_vlabels):
+                csr = scipy.sparse.csr_array(
+                    (csr.data, csr.indices, csr.indptr),
+                    shape=(csr.shape[0], len(new_vlabels)),
+                )
+        else:
+            referenced = old_vlabels[csr.indices]
+            new_positions = label_index.label_to_pos[referenced]
+            if (new_positions < 0).any():
+                missing = np.unique(referenced[new_positions < 0])
+                raise ValueError(
+                    f"Frozen constraint '{self._name}' references variables that "
+                    f"are no longer part of the model (labels {missing.tolist()}). "
+                    "Use `Model.remove_variables` to remove variables; it also "
+                    "removes the constraints referencing them."
+                )
             csr = scipy.sparse.csr_array(
-                (csr.data, csr.indices, csr.indptr),
-                shape=(csr.shape[0], n_active_vars),
+                (csr.data, new_positions, csr.indptr),
+                shape=(csr.shape[0], len(new_vlabels)),
             )
+        self._csr = csr
+        self._vlabels = new_vlabels
         return csr
-
-    def _remap_columns(
-        self, old_vlabels: np.ndarray, new_label_index: VariableLabelIndex
-    ) -> None:
-        """
-        Rewrite cached CSR column positions after variables were removed.
-
-        The cached CSR stores absolute dense variable positions from freeze
-        time. Removing a variable renumbers the positions of every later
-        variable, so those cached positions go stale (wrong columns and wrong
-        width). ``old_vlabels`` gives the variable label at each column position
-        currently used by the CSR; ``new_label_index`` provides the post-removal
-        label -> position mapping. A frozen constraint that referenced a removed
-        variable has already been dropped, so every remaining column maps to a
-        valid new position.
-        """
-        csr = self._csr
-        n_active_vars = new_label_index.n_active_vars
-        if csr.nnz == 0:
-            self._csr = scipy.sparse.csr_array(
-                (csr.shape[0], n_active_vars), dtype=csr.dtype
-            )
-            return
-        new_positions = new_label_index.label_to_pos[old_vlabels[csr.indices]]
-        if (new_positions < 0).any():
-            raise ValueError(
-                "Frozen constraint references a removed variable while remapping "
-                "columns; this should not happen."
-            )
-        self._csr = scipy.sparse.csr_array(
-            (csr.data, new_positions, csr.indptr),
-            shape=(csr.shape[0], n_active_vars),
-        )
 
     def to_matrix(
         self, label_index: VariableLabelIndex | None = None
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
-        """Return the stored CSR matrix and con_labels."""
-        return self._csr_for_index(label_index), self._con_labels
+        """
+        Return the stored CSR matrix and con_labels.
+
+        The ``label_index`` parameter exists for interface parity with
+        ``Constraint.to_matrix``; the basis is always the model's own
+        ``label_index`` (the same object callers pass in).
+        """
+        return self._reconciled_csr(), self._con_labels
 
     def to_netcdf_ds(self) -> Dataset:
-        """Return a Dataset with raw CSR components for netcdf serialization."""
-        csr = self._csr
+        """
+        Return a Dataset with raw CSR components for netcdf serialization.
+
+        The CSR is reconciled first, so the serialized column indices always
+        refer to the basis of the variables serialized alongside; loading
+        (``from_netcdf_ds``) then correctly adopts the load-time basis.
+        """
+        csr = self._reconciled_csr()
         data_vars: dict[str, DataArray] = {
             "indptr": DataArray(csr.indptr, dims=["_indptr"]),
             "indices": DataArray(csr.indices, dims=["_nnz"]),
@@ -999,25 +1027,19 @@ class CSRConstraint(ConstraintBase):
         )
 
     def has_variable(self, variable: variables.Variable) -> bool:
+        csr = self._reconciled_csr()
         vlabels = self._model.variables.label_index.vlabels
-        return bool(
-            np.isin(vlabels[self._csr.indices], variable.labels.values.ravel()).any()
-        )
+        return bool(np.isin(vlabels[csr.indices], variable.labels.values.ravel()).any())
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Return (csr, con_labels, b, sense) — pre-stored, widened if needed.
-
-        See ``_csr_for_index`` for why the cached CSR may need widening to the
-        current active-variable count before it can be stacked.
-        """
+        """Return (csr, con_labels, b, sense) — pre-stored, reconciled to the current basis."""
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
             sense = np.array([s[0] for s in self._sign])
-        return self._csr_for_index(label_index), self._con_labels, self._rhs, sense
+        return self._reconciled_csr(), self._con_labels, self._rhs, sense
 
     def active_labels(self) -> np.ndarray:
         return self._con_labels
@@ -1075,7 +1097,7 @@ class CSRConstraint(ConstraintBase):
 
     def to_polars(self) -> pl.DataFrame:
         """Convert frozen constraint to polars DataFrame directly from CSR."""
-        csr = self._csr
+        csr = self._reconciled_csr()
         sign_dtype = pl.Enum(["=", "<=", ">="])
         if csr.nnz == 0:
             return pl.DataFrame(
@@ -1119,21 +1141,23 @@ class CSRConstraint(ConstraintBase):
         would be misleading. Do not call ``.data``, ``.mutable()``, or any
         coord-dependent property on batch slices.
         """
-        nnz = self._csr.nnz
+        csr = self._reconciled_csr()
+        nnz = csr.nnz
         if slice_size is None or nnz <= slice_size:
             yield self
             return
 
-        for rows in _equal_nnz_slices(self._csr.indptr, slice_size):
+        for rows in _equal_nnz_slices(csr.indptr, slice_size):
             sign = self._sign if isinstance(self._sign, str) else self._sign[rows]
             yield CSRConstraint(
-                csr=self._csr[rows],
+                csr=csr[rows],
                 con_labels=self._con_labels[rows],
                 rhs=self._rhs[rows],
                 sign=sign,
                 coords=[],
                 model=self._model,
                 name=self._name,
+                vlabels=self._vlabels,
             )
 
     @classmethod
@@ -2301,6 +2325,9 @@ class Constraints:
                         c._name,
                         cindex=c._cindex,
                         dual=None,
+                        binvar_labels=c._binvar_labels,
+                        binval=c._binval,
+                        vlabels=c._vlabels,
                     )
             elif isinstance(c, Constraint):
                 if "dual" in c.data:
