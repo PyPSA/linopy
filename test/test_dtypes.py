@@ -1,7 +1,9 @@
 """Tests for int32 default label dtype."""
 
 import pickle
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -127,7 +129,9 @@ def test_sign_stored_as_int8_but_read_as_strings() -> None:
         (lambda x: x == 3, "="),
     ],
 )
-def test_all_three_senses_round_trip(build, expected) -> None:
+def test_all_three_senses_round_trip(
+    build: Callable[[Any], Any], expected: str
+) -> None:
     m = Model()
     x = m.add_variables(lower=0, upper=10, coords=[range(5)], name="x")
     m.add_constraints(build(x), name="c")
