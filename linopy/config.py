@@ -34,9 +34,6 @@ class LinopySemanticsWarning(FutureWarning):
     """
 
 
-_VALID_LABEL_DTYPES = {np.int32, np.int64}
-
-
 class OptionSettings:
     """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
 
@@ -61,10 +58,6 @@ class OptionSettings:
                 raise ValueError(
                     f"Invalid semantics: {v!r}. "
                     f"Must be one of {sorted(VALID_SEMANTICS)}."
-                )
-            if k == "label_dtype" and v not in _VALID_LABEL_DTYPES:
-                raise ValueError(
-                    f"label_dtype must be one of {_VALID_LABEL_DTYPES}, got {v}"
                 )
             self._current_values[k] = v
 
@@ -99,5 +92,4 @@ options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
     semantics=LEGACY_SEMANTICS,
-    label_dtype=np.int32,
 )

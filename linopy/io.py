@@ -757,7 +757,7 @@ def to_gurobipy(
         set_names=set_names,
         env=env,
     )
-    return solver.solver_model
+    return solver._detach_solver_model()
 
 
 def to_highspy(
@@ -1118,6 +1118,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
+
+    if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
+        m._dtypes["labels"] = np.int64
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])

@@ -1344,7 +1344,7 @@ class Variable:
             .fillna(self._fill_value)
         )
         return self.assign_multiindex_safe(
-            labels=data.labels.astype(options["label_dtype"])
+            labels=data.labels.astype(self.model._dtypes["labels"])
         )
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
@@ -1372,7 +1372,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign(labels=data.labels.astype(options["label_dtype"]))
+        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
 
     def sanitize(self) -> Variable:
         """
@@ -1384,7 +1384,7 @@ class Variable:
         """
         if issubdtype(self.labels.dtype, floating):
             return self.assign(
-                labels=self.labels.fillna(-1).astype(options["label_dtype"])
+                labels=self.labels.fillna(-1).astype(self.model._dtypes["labels"])
             )
         return self
 
@@ -1842,7 +1842,8 @@ class Variables:
         Get the labels of all variables.
         """
         return save_join(
-            *[v.labels.rename(k) for k, v in self.items()], integer_dtype=True
+            *[v.labels.rename(k) for k, v in self.items()],
+            fill_dtype=self.model._dtypes["labels"],
         )
 
     @property
@@ -2153,7 +2154,7 @@ class Variables:
         df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=options["label_dtype"]),
+            np.arange(len(unique_labels), dtype=self.model._dtypes["labels"]),
             index=unique_labels,
         )
         df["key"] = df.labels.map(map_labels)

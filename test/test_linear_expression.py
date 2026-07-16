@@ -1704,9 +1704,8 @@ class TestGroupbyByAttachedCoordinate:
         assert grouped.vars.transpose(level, TERM_DIM).values.tolist() == vars_
 
 
-@pytest.mark.parametrize("use_fallback", [True])
+@pytest.mark.parametrize("use_fallback", [True, False])
 def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None:
-    # TODO: implement fallback for n-dim groupby, see https://github.com/PyPSA/linopy/issues/299
     expr = 1 * z
     groups = xr.DataArray([[1, 1, 2], [1, 3, 3]], coords=z.coords)
     grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
@@ -1714,6 +1713,22 @@ def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None
     # there are three groups, 1, 2 and 3, the largest group has 3 elements
     assert (grouped.data.group == [1, 2, 3]).all()
     assert grouped.nterm == 3
+    assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
+
+
+def test_linear_expression_groupby_multidim_preserves_extra_dim() -> None:
+    # a 2-D grouper reduces over both its dims jointly, leaving unrelated dims
+    # untouched, see https://github.com/PyPSA/linopy/issues/823
+    m = Model()
+    v = m.add_variables(coords=[[0, 1], [0, 1], [0, 1]], dims=["i", "j", "k"])
+    groups = xr.DataArray(
+        [[1, 1], [2, 2]], dims=["i", "j"], coords={"i": [0, 1], "j": [0, 1]}, name="g"
+    )
+    expr = 1 * v
+    grouped = expr.groupby(groups).sum()
+    assert set(grouped.dims) == {"g", "k", "_term"}
+    assert (grouped.data.g == [1, 2]).all()
+    assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
