@@ -365,10 +365,13 @@ class Variable:
         if is_v1():
             # Under v1 the LinearExpression must carry absence (NaN at
             # `labels == -1`) so §6 propagation through downstream
-            # arithmetic works.
+            # arithmetic works. A dense variable has none, so the
+            # mask/where/const collapse to no-ops (skipped below).
+            has_absence = bool((self.labels == -1).any())
             coefficient = coefficient.reindex_like(self.labels, fill_value=np.nan)
-            absent = self.labels == -1
-            coefficient = coefficient.where(~absent)
+            if has_absence:
+                absent = self.labels == -1
+                coefficient = coefficient.where(~absent)
         else:
             # LEGACY: warn if the variable carries absent slots — those
             # silently contribute 0 here, but v1 will propagate the
@@ -383,7 +386,7 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
-        if is_v1():
+        if is_v1() and has_absence:
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
             ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
