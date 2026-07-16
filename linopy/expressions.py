@@ -768,7 +768,7 @@ class BaseExpression(ABC):
         join : str, optional
             Alignment method. If None, the default is determined by
             ``options["semantics"]`` — under ``v1`` shared dimensions must
-            carry the same label set (a pure reorder aligns by label), the
+            carry identical labels (same order; a reorder raises), the
             legacy size-aware behavior under ``legacy``.
 
         Returns
@@ -1069,9 +1069,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__add__(other)
@@ -1099,9 +1099,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.add(-other, join=join)
 
@@ -1120,9 +1120,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__mul__(other)
@@ -1147,9 +1147,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         if join is None:
             return self.__div__(other)
@@ -1176,9 +1176,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
@@ -1197,9 +1197,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
@@ -1218,9 +1218,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_constraint(EQUAL, rhs, join=join)
 
@@ -1481,9 +1481,9 @@ class BaseExpression(ABC):
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry the
-            same label set — a pure reorder aligns by label, a differing set
-            raises; under legacy, positional alignment.
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
 
         Returns
         -------

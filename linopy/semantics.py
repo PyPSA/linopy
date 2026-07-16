@@ -153,11 +153,11 @@ def _legacy_coord_mismatch_message(
 
 
 def _legacy_coord_reorder_message(context: str, dim: str, left: Any, right: Any) -> str:
-    """Same labels, different order — aligned positionally by legacy; v1 reindexes."""
+    """Same labels, different order — aligned positionally by legacy; v1 raises."""
     return (
         f"Coordinate order mismatch in {context} aligned positionally by legacy."
-        " Under v1 the same labels in a different order align by label (a"
-        " reindex), giving a different result."
+        " Under v1 the same labels in a different order raise ValueError (§8);"
+        " reindex or sort one side to align by label."
         f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
         "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
         "\n             `.assign_coords(...)` to relabel one side"
@@ -343,16 +343,13 @@ def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
     return first_mismatched_dim(a, b) is not None
 
 
-def first_mismatched_dim(
-    a: DataArray, b: DataArray, *, reorder_ok: bool = False
-) -> tuple[str, Any, Any] | None:
+def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | None:
     """
     Return ``(dim, a_labels, b_labels)`` for the first shared dim that
     disagrees on coordinate labels OR size, or ``None`` if all agree.
 
-    With ``reorder_ok=True`` a *pure reorder* — the same label set in a
-    different order (same length) — is not a disagreement, matching §8:
-    reorders align by label and only a differing label *set* raises.
+    Label equality is order-sensitive (§8 exact): the same labels in a
+    different order are a mismatch, like a differing label *set*.
 
     Uses ``indexes[dim]`` (the bare pandas Index) rather than
     ``coords[dim]`` — a coord DataArray's ``equals`` compares attached
@@ -361,12 +358,8 @@ def first_mismatched_dim(
     """
     for dim in set(a.dims) & set(b.dims):
         if dim in a.indexes and dim in b.indexes:
-            ai, bi = a.indexes[dim], b.indexes[dim]
-            if ai.equals(bi):
-                continue
-            if reorder_ok and len(ai) == len(bi) and set(ai) == set(bi):
-                continue
-            return str(dim), ai.values, bi.values
+            if not a.indexes[dim].equals(b.indexes[dim]):
+                return str(dim), a.indexes[dim].values, b.indexes[dim].values
         elif a.sizes[dim] != b.sizes[dim]:
             return str(dim), None, None
     return None
