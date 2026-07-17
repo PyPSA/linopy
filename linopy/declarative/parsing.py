@@ -9,7 +9,7 @@ import itertools
 import logging
 import operator
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import pyparsing as pp
 import xarray as xr
@@ -22,6 +22,7 @@ from linopy.declarative import (
 )
 from linopy.declarative.schema import MATH_DEFS_T, ConfigModel, MathModel, _Equations
 from linopy.expressions import LinearExpression
+
 if TYPE_CHECKING:
     from linopy.model import Model
 TRUE_ARRAY = xr.DataArray(True)
@@ -195,7 +196,7 @@ class ParsedBackendEquation:
         math: MathModel,
         config: ConfigModel,
         *,
-        return_type: Literal["array"] = "array",
+        return_type: Literal["raw"] = "raw",
         references: set | None = None,
         initial_mask: xr.DataArray = TRUE_ARRAY,
     ) -> xr.DataArray: ...
@@ -220,7 +221,7 @@ class ParsedBackendEquation:
         math: MathModel,
         config: ConfigModel,
         *,
-        return_type: str = "array",
+        return_type: str = "raw",
         references: set | None = None,
         initial_mask: xr.DataArray = TRUE_ARRAY,
     ) -> xr.DataArray | str:
@@ -232,9 +233,9 @@ class ParsedBackendEquation:
             model (Model): Linopy model.
             math (MathModel): Calliope math definitions.
             config (ConfigModel): Build configuration options.
-            return_type (str, optional): If "array", return xarray.DataArray.
+            return_type (str, optional): If "raw", return xarray.DataArray.
                 If "math_string", return LaTex math string.
-                Defaults to "array".
+                Defaults to "raw".
             references (set | None, optional): List of references to use in evaluation.
                 Defaults to None.
             initial_mask (xr.DataArray, optional): If given, the mask array resulting
@@ -286,7 +287,37 @@ class ParsedBackendEquation:
         unwanted_dims = set(mask.dims).difference(self.sets)
         return (mask.sum(unwanted_dims) > 0).astype(bool).transpose(*self.sets)
 
-    # Expecting anything (most likely an array) if not requesting latex string.
+    def _evaluate(
+        self,
+        input_data: xr.Dataset,
+        model: Model,
+        math: MathModel,
+        *,
+        return_type: Literal["expr", "math_string"],
+        references: set | None,
+        mask: xr.DataArray,
+    ) -> Any:
+        """
+        Evaluate the parsed expression tree.
+
+        Shared by :meth:`evaluate_expression` (arithmetic roots) and
+        :meth:`evaluate_equation` (comparison roots).
+        """
+        eval_attrs_ = {
+            "equation_name": self.name,
+            "slice_dict": self.slices,
+            "sub_expression_dict": self.sub_expressions,
+            "input_data": input_data,
+            "model": model,
+            "math": math,
+            "mask": mask,
+            "helper_functions": helper_functions._registry["expression"],
+        }
+        if references is not None:
+            eval_attrs_["references"] = references
+        return self.expression[0].eval(return_type, eval_attrs.EvalAttrs(**eval_attrs_))
+
+    # Expecting a linopy expression if not requesting latex string.
     @overload
     def evaluate_expression(
         self,
@@ -322,17 +353,17 @@ class ParsedBackendEquation:
         mask: xr.DataArray = TRUE_ARRAY,
     ) -> LinearExpression | str:
         """
-        Evaluate a math string to produce an array backend objects or a LaTex math string.
+        Evaluate an arithmetic math string (expressions/objectives).
 
         Args:
             input_data (xr.Dataset): Model input data.
-            model (xr.Dataset): Backend interface component dataset.
-            math (MathModel): Calliope math definitions.
+            model (Model): Linopy model.
+            math (MathModel): Linopy math definitions.
 
         Keyword Args:
             return_type (str, optional):
-                If "array", return xarray.DataArray. If "math_string", return LaTex math string.
-                Defaults to "array".
+                If "expr", return a linopy expression. If "math_string", return a LaTeX
+                math string. Defaults to "expr".
             references (set | None, optional):
                 If given, any references in the math string to other model components
                 will be logged here. Defaults to None.
@@ -341,27 +372,101 @@ class ParsedBackendEquation:
                 Defaults to xr.DataArray(True).
 
         Returns:
-            xr.DataArray | str:
-                If return_type == `array`: array of backend expression objects.
-                If return_type == `math_string`: Valid LaTeX math string defining the
-                "mask" conditions using logic notation.
+            LinearExpression | str:
+                If return_type == `expr`: a linopy expression. A pure-parameter
+                expression (evaluated to an ``xr.DataArray``) is coerced to a
+                ``LinearExpression``.
+                If return_type == `math_string`: a valid LaTeX math string.
         """
-        eval_attrs_ = {
-            "equation_name": self.name,
-            "slice_dict": self.slices,
-            "sub_expression_dict": self.sub_expressions,
-            "input_data": input_data,
-            "model": model,
-            "math": math,
-            "mask": mask,
-            "helper_functions": helper_functions._registry["expression"],
-        }
-        if references is not None:
-            eval_attrs_["references"] = references
-        evaluated = self.expression[0].eval(
-            return_type, eval_attrs.EvalAttrs(**eval_attrs_)
+        evaluated = self._evaluate(
+            input_data,
+            model,
+            math,
+            return_type=return_type,
+            references=references,
+            mask=mask,
         )
+        if return_type == "expr" and isinstance(evaluated, xr.DataArray):
+            evaluated = LinearExpression(evaluated, model)
         return evaluated
+
+    # Expecting a (lhs, sign, rhs) tuple if not requesting latex string.
+    @overload
+    def evaluate_equation(
+        self,
+        input_data: xr.Dataset,
+        model: Model,
+        math: MathModel,
+        *,
+        return_type: Literal["expr"] = "expr",
+        references: set | None = None,
+        mask: xr.DataArray = TRUE_ARRAY,
+    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression]: ...
+
+    # Expecting string if requesting latex string.
+    @overload
+    def evaluate_equation(
+        self,
+        input_data: xr.Dataset,
+        model: Model,
+        math: MathModel,
+        *,
+        return_type: Literal["math_string"],
+        references: set | None = None,
+    ) -> str: ...
+
+    def evaluate_equation(
+        self,
+        input_data: xr.Dataset,
+        model: Model,
+        math: MathModel,
+        *,
+        return_type: Literal["expr", "math_string"] = "expr",
+        references: set | None = None,
+        mask: xr.DataArray = TRUE_ARRAY,
+    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression] | str:
+        """
+        Evaluate a comparison math string (constraints) of the form ``LHS OP RHS``.
+
+        Args:
+            input_data (xr.Dataset): Model input data.
+            model (Model): Linopy model.
+            math (MathModel): Linopy math definitions.
+
+        Keyword Args:
+            return_type (str, optional):
+                If "expr", return a ``(lhs, sign, rhs)`` tuple for constraint assembly.
+                If "math_string", return a LaTeX math string. Defaults to "expr".
+            references (set | None, optional):
+                If given, any references in the math string to other model components
+                will be logged here. Defaults to None.
+            mask (xr.DataArray, optional):
+                If given, should be a boolean array with which to mask any produced arrays.
+                Defaults to xr.DataArray(True).
+
+        Returns:
+            tuple[LinearExpression, xr.DataArray, LinearExpression] | str:
+                If return_type == `expr`: a ``(lhs, sign, rhs)`` tuple, where ``lhs``/``rhs``
+                are linopy expressions (a pure-parameter side is coerced to a
+                ``LinearExpression``) and ``sign`` is a DataArray of the comparison operator.
+                If return_type == `math_string`: a valid LaTeX math string.
+        """
+        evaluated = self._evaluate(
+            input_data,
+            model,
+            math,
+            return_type=return_type,
+            references=references,
+            mask=mask,
+        )
+        if return_type == "math_string":
+            return evaluated
+        lhs, sign, rhs = evaluated
+        if isinstance(lhs, xr.DataArray):
+            lhs = LinearExpression(lhs, model)
+        if isinstance(rhs, xr.DataArray):
+            rhs = LinearExpression(rhs, model)
+        return lhs, sign, rhs
 
     def raise_error_on_mask_expr_mismatch(
         self, expression: xr.DataArray, mask: xr.DataArray

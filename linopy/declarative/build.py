@@ -2,26 +2,24 @@ import textwrap
 import time
 import typing
 
-from requests import exceptions
-from tqdm.asyncio import tqdm
+import numpy as np
 import xarray as xr
+from tqdm.asyncio import tqdm
 
-from linopy.expressions import merge
 from linopy.declarative import eval_attrs, helper_functions, parsing
 from linopy.declarative.schema import (
     LOGGER,
     ConfigModel,
     ConstraintDef,
+    ExpressionDef,
     MathModel,
     ObjectiveDef,
     VariableDef,
-    ExpressionDef,
 )
-from linopy.expressions import LinearExpression
-from linopy.io import TQDM_COLOR
+from linopy.expressions import LinearExpression, merge
 from linopy.io import TQDM_COLOR
 from linopy.model import Model
-import numpy as np
+
 ORDERED_COMPONENTS_T = typing.Literal[
     "variables",
     "expressions",
@@ -59,7 +57,8 @@ class DeclarativeModelBuilder:
         self._check_inputs()
 
     def _update_dtypes(self, ds: xr.Dataset, id_: str = "") -> xr.Dataset:
-        """Update data types of coordinates or data variables in the dataset.
+        """
+        Update data types of coordinates or data variables in the dataset.
 
         Args:
             ds (xr.Dataset): Dataset to update.
@@ -92,7 +91,11 @@ class DeclarativeModelBuilder:
             )
             match dtype_str:
                 case "string":
-                    updated_var = var_data.astype(dtype).where(var_data.notnull()).where(var_data != "")
+                    updated_var = (
+                        var_data.astype(dtype)
+                        .where(var_data.notnull())
+                        .where(var_data != "")
+                    )
                 case "datetime":
                     updated_var = time._datetime_index(
                         var_data.to_series(), self.config.datetime_format
@@ -122,7 +125,7 @@ class DeclarativeModelBuilder:
 
     def _check_inputs(self) -> None:
         data_checks = self.math.checks
-        check_results = {"raise": [], "warn": []}
+        check_results: dict[str, list[str]] = {"raise": [], "warn": []}
         parser_ = parsing.mask_parser.generate_mask_string_parser(
             **self.math.parsing_components["mask"]
         )
@@ -131,18 +134,21 @@ class DeclarativeModelBuilder:
             "math": self.math,
             "input_data": self.input_data,
             "config": self.config,
-            "helper_functions":  helper_functions._registry["mask"],
+            "helper_functions": helper_functions._registry["mask"],
         }
+        active = self.input_data.get("active", xr.DataArray(True))
         for name, check in data_checks.root.items():
             if check.active:
                 parsed_ = parser_.parse_string(check.mask, parse_all=True)
                 eval_attrs_ = eval_attrs.EvalAttrs(equation_name=name, **eval_kwargs)
-                evaluated = parsed_[0].eval("array", eval_attrs_)
-                if evaluated.any() and (evaluated & self.input_data.active).any():
+                evaluated = parsed_[0].eval("raw", eval_attrs_)
+                if (evaluated & active).any():
                     check_results[check.errors].append(check.message)
 
         print_warnings_and_raise_errors(
-            check_results["warn"], check_results["raise"], during="model input data checks"
+            check_results["warn"],
+            check_results["raise"],
+            during="model input data checks",
         )
 
     def add_variable(self, name: str, definition: VariableDef) -> None:
@@ -215,10 +221,7 @@ class DeclarativeModelBuilder:
                     mask=sub_mask,
                     references=references,
                 )
-                if isinstance(expr_to_fill, xr.DataArray):
-                    expr = expr.fillna(expr_to_fill)
-                else:
-                    expr = merge([expr, expr_to_fill.where(sub_mask)])
+                expr = merge([expr, expr_to_fill.where(sub_mask)])
             if not expr.isnull().all():
                 self.model.add_expressions(name=name, data=expr, mask=all_mask)
                 self.model.expressions[name].attrs["references"] = references
@@ -250,7 +253,9 @@ class DeclarativeModelBuilder:
         rhs = LinearExpression(float("nan"), self.model).where(mask)
         all_mask = mask.copy()
         if not mask.any():
-            LOGGER.info(f"constraints:{name} | No valid data points after applying mask. Constraint not added to model.")
+            LOGGER.info(
+                f"constraints:{name} | No valid data points after applying mask. Constraint not added to model."
+            )
             return None
 
         equations = parsed_component.parse_equations()
@@ -264,7 +269,9 @@ class DeclarativeModelBuilder:
                 references=references,
             )
             if not sub_mask.any():
-                LOGGER.info(f"constraints:{equation.name} | No valid data points after applying mask. Constraint not added to model.")
+                LOGGER.info(
+                    f"constraints:{equation.name} | No valid data points after applying mask. Constraint not added to model."
+                )
                 continue
             sub_mask = parsed_component.drop_dims_not_in_foreach(sub_mask)
             if (sign.notnull() & sub_mask).any():
@@ -273,25 +280,21 @@ class DeclarativeModelBuilder:
                     "Overlapping 'mask' conditions between equations are not allowed. "
                     "Please revise the 'mask' conditions to ensure they are mutually exclusive."
                 )
-            lhs_to_fill, sign_to_fill, rhs_to_fill = equation.evaluate_expression(
+            lhs_to_fill, sign_to_fill, rhs_to_fill = equation.evaluate_equation(
                 self.input_data,
                 self.model,
                 self.math,
                 mask=sub_mask,
                 references=references,
             )
-            if isinstance(lhs_to_fill, xr.DataArray):
-                lhs_to_fill = LinearExpression(lhs_to_fill, self.model)
             lhs = merge([lhs, lhs_to_fill])
-
-            if isinstance(rhs_to_fill, xr.DataArray):
-                rhs_to_fill = LinearExpression(rhs_to_fill, self.model)
             rhs = merge([rhs, rhs_to_fill])
-
             sign = sign.fillna(sign_to_fill)
 
         if sign.isnull().all():
-            LOGGER.info(f"constraints:{name} | No valid data points after applying mask. Constraint not added to model.")
+            LOGGER.info(
+                f"constraints:{name} | No valid data points after applying mask. Constraint not added to model."
+            )
             return None
 
         self.model.add_constraints(
@@ -364,9 +367,7 @@ class DeclarativeModelBuilder:
                 start = time.time()
                 getattr(self, f"add_{component}")(name, definition)
                 end = time.time() - start
-                LOGGER.debug(
-                    f"{components}:{name} | Built in {end:.4f}s"
-                )
+                LOGGER.debug(f"{components}:{name} | Built in {end:.4f}s")
             LOGGER.info(f"{components} | Generated.")
         return self.model
 
@@ -377,7 +378,8 @@ def print_warnings_and_raise_errors(
     during: str = "model processing",
     bullet: str = " * ",
 ) -> None:
-    """Process collections of warnings/errors.
+    """
+    Process collections of warnings/errors.
 
     Prints warnings / raises errors with a bullet point list of the concatenated
     collections.

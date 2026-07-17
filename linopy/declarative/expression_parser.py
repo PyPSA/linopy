@@ -35,7 +35,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
-from typing import Any, Literal, overload, TypeVar
+from typing import Any, Literal, TypeVar, overload
 
 import numpy as np
 import pandas as pd
@@ -54,7 +54,7 @@ SUB_EXPRESSION_CLASSIFIER = "$"
 EXPR_T = LinearExpression | QuadraticExpression
 EXPRVAR_T = TypeVar("EXPRVAR_T", LinearExpression, QuadraticExpression)
 ARRAY_T = TypeVar("ARRAY_T", LinearExpression, QuadraticExpression, xr.DataArray)
-RETURN_T = Literal["expr", "array", "math_string"]
+RETURN_T = Literal["expr", "raw", "math_string"]
 
 
 class EvalString(ABC):
@@ -79,28 +79,57 @@ class EvalString(ABC):
         )
 
 
-class EvalArrayOrMath(EvalString):
-    """Abstract class to evaluate expressions as either arrays or math strings."""
+def _to_linexpr(obj: Any) -> Any:
+    """
+    Normalise a model object to a linopy expression.
+
+    ``Variable`` objects are converted to ``LinearExpression`` via ``to_linexpr``;
+    ``LinearExpression``/``QuadraticExpression``/``xr.DataArray`` objects are
+    returned unchanged. This is the single place where the ``Variable`` ->
+    ``LinearExpression`` coercion is performed on the expression route.
+    """
+    if isinstance(obj, Variable):
+        return obj.to_linexpr()
+    return obj
+
+
+class EvalNode(EvalString):
+    """
+    Base class for nodes evaluated as math strings, raw data, or expressions.
+
+    Three evaluation modes are supported (see :meth:`eval`):
+
+    - ``math_string``: a LaTeX string (:meth:`as_math_string`).
+    - ``raw``: the underlying data without any route-specific transformation
+      (:meth:`as_raw`) - an ``xr.DataArray`` for parameters/lookups/dimensions and
+      the raw model object (``Variable``/``LinearExpression``) for model entries.
+    - ``expr``: a linopy expression suitable for arithmetic composition
+      (:meth:`as_expr`). The default implementation returns the raw data; nodes that
+      compose arithmetic override it to guarantee an expression is returned.
+    """
 
     @abstractmethod
     def as_math_string(self) -> str:
         """Evaluate and return expression as LaTeX."""
 
     @abstractmethod
-    def as_array(self) -> xr.DataArray | list[xr.DataArray]:
+    def as_raw(self) -> xr.DataArray | list[xr.DataArray]:
         """
-        Evaluate and return expression as a DataArray or list.
+        Evaluate and return the underlying data without route-specific transformation.
 
         If the evaluated expression returns a simple string or number,
         this value will be assigned as both the `name` and the data of the returned DataArray.
         The purpose of this is to be able to access the string/number value whether we query the array name or its data.
         """
 
-    def as_expr(self) -> xr.DataArray | list[xr.DataArray]:
+    def as_expr(self) -> Any:
         """
         Evaluate and return expression as a LinearExpression or QuadraticExpression.
+
+        The default implementation returns the raw data (:meth:`as_raw`); nodes that
+        compose arithmetic (operands, signs, functions, (sub-)components) override it.
         """
-        return self.as_array()
+        return self.as_raw()
 
     # Math strings evaluate to strings.
     @overload
@@ -108,103 +137,38 @@ class EvalArrayOrMath(EvalString):
         self, return_type: Literal["math_string"], eval_attrs: EvalAttrs
     ) -> str: ...
 
-    # Arrays evaluate to arrays
+    # Raw evaluation returns the underlying data.
     @overload
     def eval(
-        self, return_type: Literal["array"], eval_attrs: EvalAttrs
+        self, return_type: Literal["raw"], eval_attrs: EvalAttrs
     ) -> xr.DataArray | list[xr.DataArray]: ...
 
-    def eval(
-        self, return_type: RETURN_T, eval_attrs: EvalAttrs
-    ) -> str | xr.DataArray | list[xr.DataArray] | EXPR_T:
+    def eval(self, return_type: RETURN_T, eval_attrs: EvalAttrs) -> Any:
         """
-        Evaluate math string expression.
+        Evaluate a parsed expression node.
 
         Args:
-            return_type (Literal[math_string, input, array]):
+            return_type (Literal["math_string", "raw", "expr"]):
                 Dictates how the expression should be evaluated (see `Returns` section).
             eval_attrs (EvalAttrs): Evaluation attributes.
 
         Returns:
-            str | list[str | float] | xr.DataArray:
-                If `math_string` is desired, returns a valid LaTex math string.
-                If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
+            If `math_string`, a valid LaTeX math string.
+            If `raw`, the underlying data (`xr.DataArray`, list, or raw model object).
+            If `expr`, a linopy `LinearExpression`/`QuadraticExpression`.
         """
         self.eval_attrs = eval_attrs
-        evaluated: str | list[str | float] | xr.DataArray | list[xr.DataArray] | EXPR_T
-        if return_type == "array":
-            evaluated = self.as_array()
+        evaluated: Any
+        if return_type == "raw":
+            evaluated = self.as_raw()
         elif return_type == "math_string":
             evaluated = self.as_math_string()
         elif return_type == "expr":
             evaluated = self.as_expr()
-
-        return evaluated
-
-class EvalArrayOrMathExpr(EvalString):
-    """Abstract class to evaluate expressions as either arrays or math strings."""
-
-    @abstractmethod
-    def as_math_string(self) -> str:
-        """Evaluate and return expression as LaTeX."""
-
-    @abstractmethod
-    def as_array(self) -> xr.DataArray | list[xr.DataArray]:
-        """
-        Evaluate and return expression as a DataArray or list.
-
-        If the evaluated expression returns a simple string or number,
-        this value will be assigned as both the `name` and the data of the returned DataArray.
-        The purpose of this is to be able to access the string/number value whether we query the array name or its data.
-        """
-
-    @abstractmethod
-    def as_expr(self) -> EXPR_T:
-        """
-        Evaluate and return expression as a LinearExpression or QuadraticExpression.
-        """
-
-    # Math strings evaluate to strings.
-    @overload
-    def eval(
-        self, return_type: Literal["math_string"], eval_attrs: EvalAttrs
-    ) -> str: ...
-
-    # Arrays evaluate to arrays
-    @overload
-    def eval(
-        self, return_type: Literal["array"], eval_attrs: EvalAttrs
-    ) -> xr.DataArray | list[xr.DataArray]: ...
-
-    def eval(
-        self, return_type: RETURN_T, eval_attrs: EvalAttrs
-    ) -> str | xr.DataArray | list[xr.DataArray] | EXPR_T:
-        """
-        Evaluate math string expression.
-
-        Args:
-            return_type (Literal[math_string, input, array]):
-                Dictates how the expression should be evaluated (see `Returns` section).
-            eval_attrs (EvalAttrs): Evaluation attributes.
-
-        Returns:
-            str | list[str | float] | xr.DataArray:
-                If `math_string` is desired, returns a valid LaTex math string.
-                If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
-        """
-        self.eval_attrs = eval_attrs
-        evaluated: str | list[str | float] | xr.DataArray | list[xr.DataArray] | EXPR_T
-        if return_type == "array":
-            evaluated = self.as_array()
-        elif return_type == "math_string":
-            evaluated = self.as_math_string()
-        elif return_type == "expr":
-            evaluated = self.as_expr()
-
         return evaluated
 
 
-class EvalComparisonOp(EvalString):
+class EvalComparisonOp(EvalNode):
     """Class for processing comparison operations."""
 
     OP_TRANSLATOR = {"<=": r" \leq ", ">=": r" \geq ", "==": " = ", "=": " = "}
@@ -234,15 +198,17 @@ class EvalComparisonOp(EvalString):
     @overload
     def _eval(self, return_type: Literal["math_string"]) -> tuple[str, str]: ...
 
-    # array return
+    # raw return
     @overload
     def _eval(
-        self, return_type: Literal["array"]
+        self, return_type: Literal["raw"]
     ) -> tuple[xr.DataArray, xr.DataArray]: ...
 
-    def _eval(
-        self, return_type: RETURN_T
-    ) -> tuple[str, str] | tuple[xr.DataArray, xr.DataArray]:
+    # expression return
+    @overload
+    def _eval(self, return_type: Literal["expr"]) -> tuple[Any, Any]: ...
+
+    def _eval(self, return_type: RETURN_T) -> tuple[Any, Any]:
         """Evaluate the LHS and RHS of the comparison."""
         lhs = self.lhs.eval(return_type, self.eval_attrs)
         rhs = self.rhs.eval(return_type, self.eval_attrs)
@@ -252,9 +218,9 @@ class EvalComparisonOp(EvalString):
         lhs, rhs = self._eval("math_string")
         return lhs + self.OP_TRANSLATOR[self.op] + rhs
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         self.eval_attrs = replace(self.eval_attrs, apply_mask=False)
-        lhs, rhs = self._eval("array")
+        lhs, rhs = self._eval("raw")
         match self.op:
             case "<=":
                 comparison = lhs <= rhs
@@ -271,6 +237,7 @@ class EvalComparisonOp(EvalString):
     def as_expr(
         self,
     ) -> tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray]:
+        """Evaluate the comparison as a ``(lhs, sign, rhs)`` tuple for constraint assembly."""
         lhs, rhs = self._eval("expr")
         mask = self.eval_attrs.mask
         for side, arr in {"left": lhs, "right": rhs}.items():
@@ -279,41 +246,11 @@ class EvalComparisonOp(EvalString):
                 raise self.error_msg(
                     f"The {side}-hand side of the equation is indexed over dimensions not present in `foreach`: {extra_dims}"
                 )
-        lhs_masked = lhs.where(mask)
-        rhs_masked = rhs.where(mask)
-        if isinstance(lhs_masked, Variable):
-            lhs_masked = lhs_masked.to_linexpr()
-        if isinstance(rhs_masked, Variable):
-            rhs_masked = rhs_masked.to_linexpr()
+        lhs_masked = _to_linexpr(lhs.where(mask))
+        rhs_masked = _to_linexpr(rhs.where(mask))
         sign_masked = xr.DataArray(self.op).where(mask)
         return lhs_masked, sign_masked, rhs_masked
 
-    def eval(
-        self, return_type: RETURN_T, eval_attrs: EvalAttrs
-    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray] | str:
-        """
-        Evaluate math string expression.
-
-        Args:
-            return_type (Literal[math_string, input, array]):
-                Dictates how the expression should be evaluated (see `Returns` section).
-            eval_attrs (EvalAttrs): Evaluation attributes.
-
-        Returns:
-            str | list[str | float] | xr.DataArray:
-                If `math_string` is desired, returns a valid LaTex math string.
-                If `array` is desired, returns xarray DataArray or a list of strings/numbers (if the expression represents a list).
-        """
-        self.eval_attrs = eval_attrs
-        evaluated: str | tuple[LinearExpression, xr.DataArray, LinearExpression | xr.DataArray]
-        if return_type == "array":
-            evaluated = self.as_array()
-        elif return_type == "math_string":
-            evaluated = self.as_math_string()
-        elif return_type == "expr":
-            evaluated = self.as_expr()
-
-        return evaluated
 
 class EvalToCallable(EvalString):
     """Parent class for callable functionality."""
@@ -339,7 +276,7 @@ class EvalToCallable(EvalString):
         return evaluated
 
 
-class EvalOperatorOperand(EvalArrayOrMathExpr):
+class EvalOperatorOperand(EvalNode):
     """Evaluation of math operands."""
 
     LATEX_OPERATOR_LOOKUP: dict[str, str] = {
@@ -429,7 +366,9 @@ class EvalOperatorOperand(EvalArrayOrMathExpr):
 
     @staticmethod
     def _operate(
-        val: xr.DataArray | EXPRVAR_T, evaluated_operand: xr.DataArray | EXPRVAR_T, operator_: str
+        val: xr.DataArray | EXPRVAR_T,
+        evaluated_operand: xr.DataArray | EXPRVAR_T,
+        operator_: str,
     ) -> xr.DataArray | EXPRVAR_T:
         """Apply evaluated operation on two DataArrays."""
         match operator_:
@@ -465,11 +404,11 @@ class EvalOperatorOperand(EvalArrayOrMathExpr):
                 )
         return val
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        val = self._apply_mask(self.value[0].eval("array", self.eval_attrs))
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        val = self._apply_mask(self.value[0].eval("raw", self.eval_attrs))
 
         for operator_, operand in self._operator_operands(self.value[1:]):
-            evaluated_operand = self._apply_mask(operand.eval("array", self.eval_attrs))
+            evaluated_operand = self._apply_mask(operand.eval("raw", self.eval_attrs))
             val = self._operate(val, evaluated_operand, operator_)
         return val
 
@@ -482,8 +421,7 @@ class EvalOperatorOperand(EvalArrayOrMathExpr):
         return val
 
 
-
-class EvalSignOp(EvalArrayOrMathExpr):
+class EvalSignOp(EvalNode):
     """Class for processing expressions with + or -."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -512,7 +450,7 @@ class EvalSignOp(EvalArrayOrMathExpr):
 
     # array return
     @overload
-    def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
+    def _eval(self, return_type: Literal["raw"]) -> xr.DataArray: ...
 
     # expression return
     @overload
@@ -525,8 +463,8 @@ class EvalSignOp(EvalArrayOrMathExpr):
     def as_math_string(self) -> str:  # noqa: D102
         return self.sign + self._eval("math_string")
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        evaluated = self._eval("array")
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        evaluated = self._eval("raw")
         if self.sign == "-":
             evaluated = -1 * evaluated
         return evaluated
@@ -538,7 +476,7 @@ class EvalSignOp(EvalArrayOrMathExpr):
         return evaluated
 
 
-class EvalFunction(EvalArrayOrMathExpr):
+class EvalFunction(EvalNode):
     """Class to process parsed functions."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -573,7 +511,7 @@ class EvalFunction(EvalArrayOrMathExpr):
 
     @overload
     def _arg_eval(
-        self, return_type: Literal["array"], arg: Any
+        self, return_type: Literal["raw"], arg: Any
     ) -> xr.DataArray | list[str | float]: ...
 
     def _arg_eval(
@@ -585,7 +523,7 @@ class EvalFunction(EvalArrayOrMathExpr):
         elif isinstance(arg, list):
             evaluated = [self._arg_eval(return_type, arg_) for arg_ in arg]
         elif isinstance(arg, ListParser):
-            evaluated = arg.eval("array", self.eval_attrs)
+            evaluated = arg.eval("raw", self.eval_attrs)
         else:
             evaluated = arg.eval(return_type, self.eval_attrs)
         if isinstance(evaluated, xr.DataArray) and isinstance(arg, EvalGenericString):
@@ -596,21 +534,33 @@ class EvalFunction(EvalArrayOrMathExpr):
     def _eval(self, return_type: Literal["math_string"]) -> str: ...
 
     @overload
-    def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
+    def _eval(self, return_type: Literal["raw"]) -> xr.DataArray: ...
 
     def _eval(self, return_type: RETURN_T) -> str | xr.DataArray | EXPR_T:
-        """Pass evaluated arguments to evaluated helper function."""
+        """
+        Pass evaluated arguments to evaluated helper function.
+
+        The helper function itself is created with the enclosing ``return_type`` so
+        that expression-route helpers can dispatch to their ``as_expr`` implementation.
+        Its arguments, however, are always evaluated in ``raw`` mode (never ``expr``):
+        helper functions must receive un-normalised inputs (``xr.DataArray`` for
+        parameters/lookups/dimensions and the raw model object for variables/expressions)
+        rather than values that have been coerced to boolean masks or ``LinearExpression``.
+        """
         helper_function = self.func_name.eval(return_type, self.eval_attrs)
         if helper_function.ignore_mask:
             self.eval_attrs = replace(self.eval_attrs, mask=xr.DataArray(True))
 
+        arg_return_type: RETURN_T = (
+            "math_string" if return_type == "math_string" else "raw"
+        )
         args_ = []
         for arg in self.args:
-            args_.append(self._arg_eval(return_type, arg))
+            args_.append(self._arg_eval(arg_return_type, arg))
 
         kwargs_ = {}
         for kwarg_name, kwarg_val in self.kwargs.items():
-            kwargs_[kwarg_name] = self._arg_eval(return_type, kwarg_val)
+            kwargs_[kwarg_name] = self._arg_eval(arg_return_type, kwarg_val)
 
         evaluated = helper_function(*args_, **kwargs_)
         return evaluated
@@ -618,8 +568,8 @@ class EvalFunction(EvalArrayOrMathExpr):
     def as_math_string(self) -> str:  # noqa: D102, override
         return self._eval("math_string")
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        return self._eval("array")
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        return self._eval("raw")
 
     def as_expr(self) -> EXPR_T:  # noqa: D102, override
         return self._eval("expr")
@@ -657,15 +607,15 @@ class EvalHelperFuncName(EvalToCallable):
         helper_functions = self.eval_attrs.helper_functions
         if self.name not in helper_functions.keys():
             raise self.error_msg(f"Invalid helper function defined: {self.name}")
-        elif not isinstance(helper_functions[self.name], type(ParsingHelperFunction)):
+        elif not issubclass(helper_functions[self.name], ParsingHelperFunction):
             raise self.error_msg(
-                f"Helper function must be subclassed from calliope.backend.helper_functions.ParsingHelperFunction: {self.name}"
+                f"Helper function must be subclassed from linopy.declarative.helper_functions.ParsingHelperFunction: {self.name}"
             )
         else:
             return helper_functions[self.name](return_type, self.eval_attrs)
 
 
-class EvalSlicedComponent(EvalArrayOrMathExpr):
+class EvalSlicedComponent(EvalNode):
     """For processing of sliced parameters / decision variables."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -723,7 +673,7 @@ class EvalSlicedComponent(EvalArrayOrMathExpr):
     def _eval(self, return_type: Literal["math_string"]) -> tuple[str, dict]: ...
 
     @overload
-    def _eval(self, return_type: Literal["array"]) -> tuple[xr.DataArray, dict]: ...
+    def _eval(self, return_type: Literal["raw"]) -> tuple[xr.DataArray, dict]: ...
 
     @overload
     def _eval(self, return_type: Literal["expr"]) -> tuple[EXPR_T, dict]: ...
@@ -757,8 +707,8 @@ class EvalSlicedComponent(EvalArrayOrMathExpr):
         obj_parser.set_parse_action(self._replace_rule(singular_slice_refs))
         return obj_parser.parse_string(evaluated, parse_all=True)[0]
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        evaluated, slices = self._eval("array")
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        evaluated, slices = self._eval("raw")
         return evaluated.sel(**slices)
 
     def as_expr(self) -> EXPR_T:
@@ -766,7 +716,7 @@ class EvalSlicedComponent(EvalArrayOrMathExpr):
         return evaluated.sel(**slices)
 
 
-class EvalIndexSlice(EvalArrayOrMath):
+class EvalIndexSlice(EvalNode):
     """For processing `$slice` expressions."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -794,7 +744,7 @@ class EvalIndexSlice(EvalArrayOrMath):
 
     @overload
     def _eval(
-        self, return_type: Literal["array"], as_values: bool
+        self, return_type: Literal["raw"], as_values: bool
     ) -> xr.DataArray | list[xr.DataArray]: ...
 
     def _eval(
@@ -809,13 +759,12 @@ class EvalIndexSlice(EvalArrayOrMath):
     def as_math_string(self) -> str:  # noqa: D102, override
         return self._eval("math_string", False)
 
-    def as_array(self) -> xr.DataArray | list[xr.DataArray]:  # noqa: D102, override
-        evaluated = self._eval("array", True)
+    def as_raw(self) -> xr.DataArray | list[xr.DataArray]:  # noqa: D102, override
+        evaluated = self._eval("raw", True)
         return evaluated
 
 
-
-class EvalSubExpressions(EvalArrayOrMathExpr):
+class EvalSubExpressions(EvalNode):
     """For processing sub-expressions."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -842,9 +791,12 @@ class EvalSubExpressions(EvalArrayOrMathExpr):
     def _eval(self, return_type: Literal["math_string"]) -> str: ...
 
     @overload
-    def _eval(self, return_type: Literal["array"]) -> xr.DataArray: ...
+    def _eval(self, return_type: Literal["raw"]) -> xr.DataArray: ...
 
-    def _eval(self, return_type: RETURN_T) -> str | xr.DataArray:
+    @overload
+    def _eval(self, return_type: Literal["expr"]) -> EXPR_T: ...
+
+    def _eval(self, return_type: RETURN_T) -> str | xr.DataArray | EXPR_T:
         """Evaluate the referenced sub_expression."""
         return self.eval_attrs.sub_expression_dict[self.name][0].eval(
             return_type, self.eval_attrs
@@ -853,15 +805,14 @@ class EvalSubExpressions(EvalArrayOrMathExpr):
     def as_math_string(self) -> str:  # noqa: D102, override
         return self._eval("math_string")
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        return self._eval("array")
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        return self._eval("raw")
 
-    def as_expr(self) -> EXPR_T:
+    def as_expr(self) -> EXPR_T:  # noqa: D102, override
         return self._eval("expr")
 
 
-
-class EvalNumber(EvalArrayOrMath):
+class EvalNumber(EvalNode):
     """For processing numbers."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -894,11 +845,11 @@ class EvalNumber(EvalArrayOrMath):
             f"{float(self.value):.6g}",
         )
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         return xr.DataArray(float(self.value), name=float(self.value))
 
 
-class ListParser(EvalArrayOrMath):
+class ListParser(EvalNode):
     """For parsing lists."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -923,17 +874,17 @@ class ListParser(EvalArrayOrMath):
         return f"{self.val}"
 
     def as_math_string(self) -> str:  # noqa: D102, override
-        input_list = self.as_array()
+        input_list = self.as_raw()
         return "[" + ",".join(str(i.name) for i in input_list) + "]"
 
-    def as_array(self) -> list[xr.DataArray]:  # noqa: D102, override
-        values = [val.eval("array", self.eval_attrs) for val in self.val]
+    def as_raw(self) -> list[xr.DataArray]:  # noqa: D102, override
+        values = [val.eval("raw", self.eval_attrs) for val in self.val]
         # strings and numbers are returned as xarray arrays of size 1,
         # so we extract those values.
         return values
 
 
-class EvalUnslicedComponent(EvalArrayOrMathExpr):
+class EvalUnslicedComponent(EvalNode):
     """Evaluation of unsliced components."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -961,7 +912,7 @@ class EvalUnslicedComponent(EvalArrayOrMathExpr):
 
     def as_math_string(self) -> str:  # noqa: D102, override
         self.eval_attrs = replace(self.eval_attrs, as_values=False)
-        evaluated = self.as_array()
+        evaluated = self.as_raw()
         self.eval_attrs.references.add(self.name)
 
         if "math_repr" in evaluated.attrs:
@@ -971,50 +922,57 @@ class EvalUnslicedComponent(EvalArrayOrMathExpr):
 
         return data_var_string
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        group = self.eval_attrs.math.find(self.name)._group
-        if group in ["parameters", "lookups"]:
-            evaluated = self.eval_attrs.input_data[self.name]
-        elif group == "dimensions":
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        math_def = self.eval_attrs.math.find(self.name)
+        group = math_def._group
+        self.eval_attrs.references.add(self.name)
+        if group in ["parameters", "lookups", "dimensions"]:
+            # A parameter/lookup/dimension defined in the math but absent from the
+            # input data resolves to its default (NaN if none is set).
             try:
                 evaluated = self.eval_attrs.input_data[self.name]
             except KeyError:
                 evaluated = xr.DataArray(np.nan)
         else:
-            evaluated = getattr(self.eval_attrs.model, group)[self.name]
-        if evaluated.isnull().any() and pd.notna(
-            default := self.eval_attrs.math.find(self.name)["default"]
-        ):
+            # Model entries (variables / expressions): return the raw model object
+            # unchanged. Defaults only apply to parameters/lookups/dimensions. A model
+            # entry that was never built (e.g. skipped because its mask was empty)
+            # resolves to a NaN expression rather than raising.
+            try:
+                return getattr(self.eval_attrs.model, group)[self.name]
+            except KeyError:
+                return LinearExpression(xr.DataArray(np.nan), self.eval_attrs.model)
+        if evaluated.isnull().any() and pd.notna(default := math_def["default"]):
             evaluated = evaluated.fillna(default)
-
-        self.eval_attrs.references.add(self.name)
         return evaluated
 
     def as_expr(self) -> xr.DataArray | EXPR_T:  # noqa: D102, override
-        group = self.eval_attrs.math.find(self.name)._group
+        math_def = self.eval_attrs.math.find(self.name)
+        group = math_def._group
+        self.eval_attrs.references.add(self.name)
         if group in ["parameters", "lookups", "dimensions"]:
+            # Parameters / lookups / dimensions are scalar coefficients: keep as DataArray.
             try:
                 evaluated = self.eval_attrs.input_data[self.name]
             except KeyError:
                 evaluated = xr.DataArray(np.nan)
         else:
+            # Model entries: normalise Variable -> LinearExpression immediately so that
+            # arithmetic composition on the expression route always sees an expression.
             try:
-                evaluated = getattr(self.eval_attrs.model, group)[self.name]
+                evaluated = _to_linexpr(
+                    getattr(self.eval_attrs.model, group)[self.name]
+                )
             except KeyError:
-                evaluated = LinearExpression(xr.DataArray(np.nan), self.eval_attrs.model)
-        if evaluated.isnull().any() and pd.notna(
-            default := self.eval_attrs.math.find(self.name)["default"]
-        ):
-            if isinstance(evaluated, Variable):
-                evaluated = evaluated.to_linexpr()
+                evaluated = LinearExpression(
+                    xr.DataArray(np.nan), self.eval_attrs.model
+                )
+        if evaluated.isnull().any() and pd.notna(default := math_def["default"]):
             evaluated = evaluated.fillna(default)
-
-        self.eval_attrs.references.add(self.name)
         return evaluated
 
 
-
-class EvalGenericString(EvalArrayOrMath):
+class EvalGenericString(EvalNode):
     """For generic string parsing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -1041,7 +999,7 @@ class EvalGenericString(EvalArrayOrMath):
     def as_math_string(self):  # noqa: D102, override
         return str(self.val)
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         return xr.DataArray(str(self.val), name=str(self.val))
 
 

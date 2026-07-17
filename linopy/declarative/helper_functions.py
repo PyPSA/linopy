@@ -14,7 +14,6 @@ from collections.abc import Mapping
 from typing import Any, Literal, overload
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from linopy.declarative.eval_attrs import EvalAttrs
@@ -37,7 +36,7 @@ class ParsingHelperFunction(ABC):
     """Abstract base class for helper function parsing."""
 
     def __init__(
-        self, return_type: Literal["array", "math_string"], attrs: "EvalAttrs"
+        self, return_type: Literal["raw", "expr", "math_string"], attrs: "EvalAttrs"
     ) -> None:
         """
         Abstract helper function class, which all helper functions must subclass.
@@ -71,12 +70,23 @@ class ParsingHelperFunction(ABC):
         """
 
     @abstractmethod
-    def as_array(self, *args: Any, **kwargs: Any) -> LinearExpression | xr.DataArray:
+    def as_raw(self, *args: Any, **kwargs: Any) -> LinearExpression | xr.DataArray:
         """
         Method to apply the helper function to provide an n-dimensional array output.
 
-        This method is called when the class is initialised with ``return_type=array``.
+        This method is called when the class is initialised with ``return_type=raw`` and,
+        by default, ``return_type=expr`` (see :meth:`as_expr`).
         """
+
+    def as_expr(self, *args: Any, **kwargs: Any) -> LinearExpression | xr.DataArray:
+        """
+        Method to apply the helper function on the expression route.
+
+        This method is called when the class is initialised with ``return_type=expr``.
+        By default it delegates to :meth:`as_raw`; helpers that need distinct behaviour
+        on the expression route (e.g. to return a linopy expression) should override it.
+        """
+        return self.as_raw(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """
@@ -84,15 +94,20 @@ class ParsingHelperFunction(ABC):
 
         The value of `return_type` on initialisation of the class defines whether this
         method returns either:
-        - a string (``return_type=math_string``)
-        - :meth:xr.DataArray (``return_type=array``)
+        - a string (``return_type=math_string``, via :meth:`as_math_string`)
+        - the raw data (``return_type=raw``, via :meth:`as_raw`)
+        - a linopy expression (``return_type=expr``, via :meth:`as_expr`)
         """
         if self._return_type == "math_string":
             return self.as_math_string(*args, **kwargs)
-        elif self._return_type == "array":
-            return self.as_array(*args, **kwargs)
+        elif self._return_type == "raw":
+            return self.as_raw(*args, **kwargs)
         elif self._return_type == "expr":
-            return self.as_array(*args, **kwargs)
+            return self.as_expr(*args, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown helper function return type: {self._return_type!r}"
+            )
 
     def __init_subclass__(cls) -> None:
         """
@@ -229,7 +244,7 @@ class MaskAny(ParsingHelperFunction):
         # Using bigvee for "collective-or"
         return rf"\bigvee\limits_{{{substack_overstring}}} ({array})"
 
-    def as_array(
+    def as_raw(
         self, input_component: xr.DataArray, *, over: xr.DataArray | list[xr.DataArray]
     ) -> xr.DataArray:
         """
@@ -275,7 +290,7 @@ class Defined(ParsingHelperFunction):
         else:
             return rf"\bigwedge({', '.join(substrings)})"
 
-    def as_array(
+    def as_raw(
         self, *, within: xr.DataArray, how: Literal["all", "any"], **dims: str
     ) -> xr.DataArray:
         """
@@ -399,7 +414,7 @@ class Sum(ParsingHelperFunction):
         substack_overstring = rf"\substack{{{overstring}}}"
         return rf"\sum\limits_{{{substack_overstring}}} ({array})"
 
-    def as_array(
+    def as_raw(
         self, array: xr.DataArray, *, over: xr.DataArray | list[xr.DataArray]
     ) -> xr.DataArray:
         """
@@ -437,7 +452,7 @@ class SelectFromLookupArrays(ParsingHelperFunction):
         array = self._update_iterator(array, new_strings, "add")
         return array
 
-    def as_array(
+    def as_raw(
         self, array: xr.DataArray, **lookup_arrays: xr.DataArray
     ) -> xr.DataArray:
         """
@@ -539,7 +554,7 @@ class GetValAtIndex(ParsingHelperFunction):
         dim, idx = self._mapping_to_dim_idx(**dim_idx_mapping)
         return f"{dim}[{idx}]"
 
-    def as_array(self, **dim_idx_mapping: int) -> xr.DataArray:
+    def as_raw(self, **dim_idx_mapping: int) -> xr.DataArray:
         """
         Get value of a model dimension at a given integer index.
 
@@ -577,7 +592,7 @@ class GetValAtIndex(ParsingHelperFunction):
         dim, idx = self._mapping_to_dim_idx(**dim_idx_mapping)
         return self._attrs.input_data.coords[dim][int(idx)]
 
-    # For as_array
+    # For as_raw
     @overload
     @staticmethod
     def _mapping_to_dim_idx(**dim_idx_mapping: int) -> tuple[str, int]: ...
@@ -614,7 +629,7 @@ class Roll(ParsingHelperFunction):
         component = self._update_iterator(array, new_strings, "add")
         return component
 
-    def as_array(self, array: xr.DataArray, **roll_kwargs: int) -> xr.DataArray:
+    def as_raw(self, array: xr.DataArray, **roll_kwargs: int) -> xr.DataArray:
         """
         Roll (a.k.a., shift) the array along the given dimension(s) by the given number of places.
 
@@ -654,7 +669,7 @@ class Mask(ParsingHelperFunction):
     def as_math_string(self, array: str, condition: str) -> str:  # noqa: D102, override
         return rf"({array} \text{{if }} {condition} == True)"
 
-    def as_array(self, array: xr.DataArray, condition: xr.DataArray) -> xr.DataArray:
+    def as_raw(self, array: xr.DataArray, condition: xr.DataArray) -> xr.DataArray:
         """
         Apply a `mask` condition to a math array within an expression string.
 
@@ -716,7 +731,7 @@ class GroupSum(ParsingHelperFunction):
         overstring = rf"\substack{{{foreach_string}}}"
         return rf"\sum\limits_{{{overstring}}} ({array})"
 
-    def as_array(
+    def as_raw(
         self, array: xr.DataArray, groupby: xr.DataArray, group_dim: xr.DataArray
     ) -> xr.DataArray:
         """
@@ -798,7 +813,7 @@ class GroupDatetime(ParsingHelperFunction):
 
         return rf"\sum\limits_{{{overstring}}} ({array})"
 
-    def as_array(
+    def as_raw(
         self, array: xr.DataArray, over: xr.DataArray, group: xr.DataArray
     ) -> xr.DataArray:
         """
@@ -894,7 +909,7 @@ class SumNextN(ParsingHelperFunction):
 
         return rf"\sum\limits_{{\text{{{new_iterator}}}={over_singular}}}^{{{over_singular}+{N}}} ({updated_iterator_array})"
 
-    def as_array(self, array: xr.DataArray, over: xr.DataArray, N: int) -> xr.DataArray:
+    def as_raw(self, array: xr.DataArray, over: xr.DataArray, N: int) -> xr.DataArray:
         """
         Sum values from current up to N from current on the dimension `over`.
 

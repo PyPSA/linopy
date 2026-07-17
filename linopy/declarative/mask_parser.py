@@ -45,21 +45,19 @@ def get_dot_attr(var: Any, attr: str) -> Any:
     return value
 
 
-class EvalNot(expression_parser.EvalSignOp, expression_parser.EvalArrayOrMath):
+class EvalNot(expression_parser.EvalSignOp):
     """Parse action to process successfully parsed expressions with a leading `not`."""
 
     def as_math_string(self) -> str:  # noqa: D102, override
         evaluated = self.value.eval("math_string", self.eval_attrs)
         return rf"\neg ({evaluated})"
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        evaluated = self.value.eval("array", self.eval_attrs)
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        evaluated = self.value.eval("raw", self.eval_attrs)
         return ~evaluated
 
 
-class EvalAndOr(
-    expression_parser.EvalOperatorOperand, expression_parser.EvalArrayOrMath
-):
+class EvalAndOr(expression_parser.EvalOperatorOperand):
     """
     Processing of successfully parsed expressions with and/or operators.
 
@@ -94,11 +92,11 @@ class EvalAndOr(
     def as_math_string(self) -> str:  # noqa: D102, override
         return super().as_math_string()
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
-        return super().as_array()
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
+        return super().as_raw()
 
 
-class ConfigOptionParser(expression_parser.EvalArrayOrMath):
+class ConfigOptionParser(expression_parser.EvalNode):
     """Parsing of configuration options."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -124,7 +122,7 @@ class ConfigOptionParser(expression_parser.EvalArrayOrMath):
     def as_math_string(self) -> str:  # noqa: D102, override
         return rf"\text{{config.{self.config_option}}}"
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         config_val = get_dot_attr(self.eval_attrs.config, self.config_option)
 
         if not isinstance(config_val, int | float | str | bool | np.bool_):
@@ -136,7 +134,7 @@ class ConfigOptionParser(expression_parser.EvalArrayOrMath):
             return xr.DataArray(config_val)
 
 
-class ResultArrayParser(expression_parser.EvalArrayOrMath):
+class ResultArrayParser(expression_parser.EvalNode):
     """Variable/Expression array processing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -167,7 +165,7 @@ class ResultArrayParser(expression_parser.EvalArrayOrMath):
 
         return math_repr
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         self.eval_attrs.references.add(self.array_name)
         da = self.eval_attrs.model[self.array_name]
         if self.eval_attrs.apply_mask:
@@ -175,7 +173,7 @@ class ResultArrayParser(expression_parser.EvalArrayOrMath):
         return da
 
 
-class InputArrayParser(expression_parser.EvalArrayOrMath):
+class InputArrayParser(expression_parser.EvalNode):
     """Input array processing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -208,7 +206,7 @@ class InputArrayParser(expression_parser.EvalArrayOrMath):
             math_repr = rf"\exists ({math_repr})"
         return math_repr
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         self.eval_attrs.references.add(self.array_name)
         da = self.eval_attrs.input_data.get(self.array_name, xr.DataArray(False))
         if self.eval_attrs.apply_mask and da.dtype.kind != "b":
@@ -220,7 +218,7 @@ class InputArrayParser(expression_parser.EvalArrayOrMath):
         return da
 
 
-class DimensionArrayParser(expression_parser.EvalArrayOrMath):
+class DimensionArrayParser(expression_parser.EvalNode):
     """Dimension array processing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -246,15 +244,13 @@ class DimensionArrayParser(expression_parser.EvalArrayOrMath):
     def as_math_string(self) -> str:  # noqa: D102, override
         return self.array_name
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         # We want the mask string to evaluate successfully even if a dimension hasn't been defined.
         da = self.eval_attrs.input_data.get(self.array_name, xr.DataArray())
         return da
 
 
-class ComparisonParser(
-    expression_parser.EvalComparisonOp, expression_parser.EvalArrayOrMath
-):
+class ComparisonParser(expression_parser.EvalComparisonOp):
     """Parse action to process successfully parsed strings of the form x=y."""
 
     OP_TRANSLATOR = {
@@ -276,9 +272,9 @@ class ComparisonParser(
             rhs = rf"\text{{{rhs}}}"
         return lhs + self.OP_TRANSLATOR[self.op] + rhs
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         self.eval_attrs = replace(self.eval_attrs, apply_mask=False)
-        lhs, rhs = self._eval("array")
+        lhs, rhs = self._eval("raw")
         match self.op:
             case "<=":
                 comparison = lhs <= rhs
@@ -293,7 +289,7 @@ class ComparisonParser(
         return xr.DataArray(comparison)
 
 
-class SubsetParser(expression_parser.EvalArrayOrMath):
+class SubsetParser(expression_parser.EvalNode):
     """Dimension subset parsing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -318,7 +314,7 @@ class SubsetParser(expression_parser.EvalArrayOrMath):
 
     def _eval(self) -> list[str | float]:
         """Evaluate each element of the subset list."""
-        values = [val.eval("array", self.eval_attrs) for val in self.val]
+        values = [val.eval("raw", self.eval_attrs) for val in self.val]
         return [val.item() if isinstance(val, xr.DataArray) else val for val in values]
 
     def as_math_string(self) -> str:  # noqa: D102, override
@@ -328,15 +324,15 @@ class SubsetParser(expression_parser.EvalArrayOrMath):
         subset_string = "[" + ",".join(str(i) for i in subset) + "]"
         return rf"\text{{{iterator}}} \in \text{{{subset_string}}}"
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         subset = self._eval()
         self.eval_attrs = replace(self.eval_attrs, apply_mask=False)
-        da = self.set_name.eval("array", replace(self.eval_attrs, apply_mask=False))
+        da = self.set_name.eval("raw", replace(self.eval_attrs, apply_mask=False))
         set_item_in_subset = da.isin(subset)
         return set_item_in_subset
 
 
-class BoolOperandParser(expression_parser.EvalArrayOrMath):
+class BoolOperandParser(expression_parser.EvalNode):
     """Boolean operand parsing."""
 
     def __init__(self, instring: str, loc: int, tokens: pp.ParseResults) -> None:
@@ -360,7 +356,7 @@ class BoolOperandParser(expression_parser.EvalArrayOrMath):
     def as_math_string(self):  # noqa: D102, override
         return self.val
 
-    def as_array(self) -> xr.DataArray:  # noqa: D102, override
+    def as_raw(self) -> xr.DataArray:  # noqa: D102, override
         if self.val == "true":
             bool_val = xr.DataArray(np.True_)
         elif self.val == "false":
@@ -398,14 +394,14 @@ class GenericStringParser(expression_parser.EvalString):
 
 
 def data_var_parser(
-    names: Iterable, parse_action: type[expression_parser.EvalArrayOrMath]
+    names: Iterable, parse_action: type[expression_parser.EvalNode]
 ) -> pp.ParserElement:
     """
     Process model data variables which can be any valid python identifier (string + "_").
 
     Args:
         names (Iterable): List of valid component names.
-        parse_action (type[expression_parser.EvalArrayOrMath]): Parse action to evaluate the parsed string.
+        parse_action (type[expression_parser.EvalNode]): Parse action to evaluate the parsed string.
 
     Returns:
         pp.ParserElement: parser for model data variables which will access the data
@@ -570,7 +566,10 @@ def generate_mask_string_parser(
         number, unique_evaluatable_string, dimensions_parser
     )
     subset = subset_parser(
-        [dimensions_parser, inputs_parser], config_option, number, general_evaluatable_string
+        [dimensions_parser, inputs_parser],
+        config_option,
+        number,
+        general_evaluatable_string,
     )
 
     arithmetic = pp.Forward()
