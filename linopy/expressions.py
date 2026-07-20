@@ -858,7 +858,6 @@ class BaseExpression(ABC):
                 join = "exact"
             else:
                 # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
-                # Legacy default: positional when sizes match, else left-join.
                 mismatch = first_mismatched_dim(self.const, other)
                 if mismatch is not None:
                     warn_legacy(
@@ -867,13 +866,12 @@ class BaseExpression(ABC):
                         ),
                         stacklevel=4,
                     )
+                # Legacy default: positional when sizes match, else left-join.
                 if other.sizes == self.const.sizes:
-                    return self.const, other.assign_coords(coords=self.coords), False
-                return (
-                    self.const,
-                    other.reindex_like(self.const, fill_value=fill_value),
-                    False,
-                )
+                    aligned = other.assign_coords(coords=self.coords)
+                else:
+                    aligned = other.reindex_like(self.const, fill_value=fill_value)
+                return self.const, aligned, False
 
         if join == "override":
             # §10: ``override`` is the *explicit* form of the legacy
