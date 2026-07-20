@@ -435,6 +435,19 @@ class TestUserNaNRaises:
             _OPS[op](x, float("nan"))
 
     @pytest.mark.v1
+    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+    @pytest.mark.parametrize("dtype", [np.float64, np.float32, np.float16])
+    def test_nan_numpy_scalar_raises(self, x: Variable, op: str, dtype: type) -> None:
+        """
+        A numpy-scalar NaN must raise regardless of dtype. ``np.float32`` /
+        ``np.float16`` do not subclass Python ``float``, so the scalar
+        fast-path §5 check (``isinstance(other, float)``) used to miss them
+        and silently add/multiply NaN into the expression.
+        """
+        with pytest.raises(ValueError, match="NaN"):
+            _OPS[op](1 * x, dtype("nan"))
+
+    @pytest.mark.v1
     def test_pypsa_1683_inf_times_zero_raises(
         self, x: Variable, time: pd.RangeIndex
     ) -> None:
@@ -827,6 +840,35 @@ class TestExactAlignmentMerge:
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
         with pytest.raises(ValueError, match="Coordinate mismatch"):
             (1 * a) + (1 * b)
+
+    @pytest.mark.v1
+    def test_var_plus_var_duplicate_differing_labels_raises_cleanly(
+        self, m: Model
+    ) -> None:
+        """
+        A shared dim with non-unique labels can't be resolved to a
+        permutation, so ``conform_merge_dims`` must report a §8 mismatch
+        (clean ``Coordinate mismatch`` ValueError) rather than letting
+        ``Index.get_indexer`` surface an opaque ``InvalidIndexError``.
+        """
+        a = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="a")
+        b = m.add_variables(coords=[pd.Index(["a", "b", "b"], name="d")], name="b")
+        with pytest.raises(ValueError, match="Coordinate mismatch"):
+            a + b
+
+    @pytest.mark.legacy
+    def test_var_plus_var_duplicate_differing_labels_legacy_positional(
+        self, m: Model
+    ) -> None:
+        """
+        Legacy aligns duplicate-labelled shared dims positionally (as it did
+        before the merge check existed). The reorder-detection must not crash
+        it with an ``InvalidIndexError`` on the non-unique index.
+        """
+        a = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="a")
+        b = m.add_variables(coords=[pd.Index(["a", "b", "b"], name="d")], name="b")
+        result = a + b
+        assert result.sizes["d"] == 3
 
     @pytest.mark.v1
     def test_reordered_constants_raise(self, m: Model) -> None:

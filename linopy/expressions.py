@@ -100,6 +100,7 @@ from linopy.semantics import (
     conform_merge_dims,
     enforce_aux_conflict,
     first_mismatched_dim,
+    is_nan_scalar,
     is_v1,
     warn_legacy,
 )
@@ -936,7 +937,7 @@ class BaseExpression(ABC):
         # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
         # §5: user NaN raised in check_user_nan; never reaches the math here.
         if np.isscalar(other) and join is None:
-            if isinstance(other, float) and np.isnan(other):
+            if is_nan_scalar(other):
                 check_user_nan()
             return self.assign(const=self.const + other)
         da = broadcast_to_coords(
@@ -964,7 +965,7 @@ class BaseExpression(ABC):
         # (additive identity) so missing data does not propagate through
         # arithmetic. ``check_user_nan`` only warns under legacy.
         if np.isscalar(other) and join is None:
-            if isinstance(other, float) and np.isnan(other):
+            if is_nan_scalar(other):
                 check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
         da = broadcast_to_coords(
@@ -1009,7 +1010,7 @@ class BaseExpression(ABC):
     ) -> Self:
         # §6: NaN in coeffs/const propagates through op (NaN * x = NaN).
         # §5: user NaN raised before we get here.
-        if isinstance(other, float) and np.isnan(other):
+        if is_nan_scalar(other):
             check_user_nan(op_kind=op_kind)
         factor = broadcast_to_coords(
             other, coords=self.coords, strict=False, warn_reorder=True
@@ -1042,7 +1043,7 @@ class BaseExpression(ABC):
     ) -> Self:
         # NaN values are silently filled with neutral elements before the op:
         # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
-        if isinstance(other, float) and np.isnan(other):
+        if is_nan_scalar(other):
             check_user_nan(op_kind=op_kind)
         factor = broadcast_to_coords(
             other, coords=self.coords, strict=False, warn_reorder=True
