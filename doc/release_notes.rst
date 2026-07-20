@@ -12,10 +12,12 @@ Upcoming Version
 * A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
 
   * shared dimensions align by label with ``join="exact"`` — a differing label set *or* a pure reorder (same labels, different order) raises instead of silently filling, dropping, or pairing by position. Resolve explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass an explicit ``join=`` to the named ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq`` methods.
+  * an *unlabeled* operand (a numpy array, list, or polars ``Series``) pairs with the linopy operand's dimensions by size; an ambiguous match (a square array, or two equal-length dimensions) or no size match raises instead of guessing. Wrap it in a ``DataArray`` to name the dimensions. (https://github.com/PyPSA/linopy/issues/736)
   * a ``NaN`` in a user-supplied constant raises, rather than being silently filled (with a value that used to differ per operator).
   * *absence* — masked, reindexed, or shifted-in slots — is a first-class state that propagates through every operator, instead of collapsing to zero.
   * conflicting auxiliary coordinates raise, instead of being silently dropped.
   * a first-class ``pd.MultiIndex`` dimension is rejected in favour of a flat dimension with the levels as auxiliary coordinates.
+  * a ``groupby`` grouper aligns to the grouped dimension by label — a grouper whose labels differ in set or order from the dimension raises instead of being matched positionally, and a multi-key grouper yields a flat ``group`` dimension (keys as aux coords) rather than a stacked ``group`` MultiIndex. (https://github.com/PyPSA/linopy/issues/827)
 
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in `the arithmetic convention <https://github.com/PyPSA/linopy/blob/master/arithmetics-design/convention.md>`_.
 
