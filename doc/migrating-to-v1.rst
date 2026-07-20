@@ -99,6 +99,12 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
      - Raises (``join="exact"`` — no silent reindex).
      - ``.sortby(dim)`` / ``.reindex`` one side to match, or a reindexing
        ``join=`` (``"outer"`` / ``"inner"`` / ``"left"`` / ``"right"``).
+   * - An **unlabeled** operand (numpy array, list, polars ``Series``)
+     - Pairs with the linopy operand's dimensions by *size*; an ambiguous
+       match (a square array, or two dimensions of equal length) or no size
+       match raises rather than guessing.
+     - Wrap it in a ``DataArray`` / ``Series`` / ``DataFrame`` with named
+       dimensions so it aligns by label.
    * - A **masked / absent** variable in arithmetic
      - Absence propagates (the slot stays absent) instead of counting as ``0``.
      - Decide the intent: ``.fillna(0)`` to keep the old "treat as zero", or
@@ -107,14 +113,24 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
      - Raises instead of silently dropping one.
      - ``.drop_vars(name)`` to remove the coord, or ``.assign_coords(name=...)``
        to relabel one side.
-   * - A first-class ``pd.MultiIndex`` **dimension**
-     - Rejected; v1 uses a flat dimension with the levels as aux coords.
-     - ``.reset_index(dim)`` to flatten before building the model.
+   * - A first-class ``pd.MultiIndex`` **dimension** — and a per-*level* input
+       onto it (e.g. per-``period`` bounds onto a ``(period, timestep)``
+       ``snapshot``)
+     - Rejected; v1 uses a flat dimension with the levels as aux coords, and a
+       per-level input must be mapped onto the flat dimension explicitly (no
+       implicit projection). Affects PyPSA multi-investment models.
+     - ``.reset_index(dim)`` to flatten, then project the per-level input by
+       its level aux coord.
    * - A multi-key ``groupby(...).sum()`` result
      - A flat ``group`` dimension with the keys as aux coords (not a stacked
        ``group`` MultiIndex).
      - Select on the key aux coords; convert an existing result with
        ``.reset_index("group")``.
+   * - A ``groupby`` grouper (``Series`` / ``DataArray`` / ``DataFrame`` /
+       coord name) with a differing label set or order
+     - Raises — the grouper aligns to the grouped dimension by label, never
+       by position.
+     - ``.sortby`` / ``.reindex`` the grouper to the dimension's labels.
 
 The full, normative rule list lives in the
 `arithmetic convention <https://github.com/PyPSA/linopy/blob/master/arithmetics-design/convention.md>`_.
