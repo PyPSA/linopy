@@ -430,22 +430,14 @@ class TestUserNaNRaises:
 
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_nan_scalar_raises(self, x: Variable, op: str) -> None:
+    # np.float32/float16 don't subclass Python float, so the scalar §5 check
+    # must catch them by dtype rather than isinstance(float).
+    @pytest.mark.parametrize(
+        "nan", [float("nan"), np.float32("nan"), np.float16("nan")]
+    )
+    def test_nan_scalar_raises(self, x: Variable, op: str, nan: float) -> None:
         with pytest.raises(ValueError, match="NaN"):
-            _OPS[op](x, float("nan"))
-
-    @pytest.mark.v1
-    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    @pytest.mark.parametrize("dtype", [np.float64, np.float32, np.float16])
-    def test_nan_numpy_scalar_raises(self, x: Variable, op: str, dtype: type) -> None:
-        """
-        A numpy-scalar NaN must raise regardless of dtype. ``np.float32`` /
-        ``np.float16`` do not subclass Python ``float``, so the scalar
-        fast-path §5 check (``isinstance(other, float)``) used to miss them
-        and silently add/multiply NaN into the expression.
-        """
-        with pytest.raises(ValueError, match="NaN"):
-            _OPS[op](1 * x, dtype("nan"))
+            _OPS[op](x, nan)
 
     @pytest.mark.v1
     def test_pypsa_1683_inf_times_zero_raises(
@@ -845,12 +837,8 @@ class TestExactAlignmentMerge:
     def test_var_plus_var_duplicate_differing_labels_raises_cleanly(
         self, m: Model
     ) -> None:
-        """
-        A shared dim with non-unique labels can't be resolved to a
-        permutation, so ``conform_merge_dims`` must report a §8 mismatch
-        (clean ``Coordinate mismatch`` ValueError) rather than letting
-        ``Index.get_indexer`` surface an opaque ``InvalidIndexError``.
-        """
+        # A non-unique shared index gives a clean §8 mismatch, not an opaque
+        # InvalidIndexError from get_indexer.
         a = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="a")
         b = m.add_variables(coords=[pd.Index(["a", "b", "b"], name="d")], name="b")
         with pytest.raises(ValueError, match="Coordinate mismatch"):
