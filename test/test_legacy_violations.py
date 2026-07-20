@@ -100,90 +100,93 @@ _OPS = {
 
 
 class TestExactAlignmentConstant:
-    @pytest.mark.v1
-    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_same_size_different_labels_raises(self, x: Variable, op: str) -> None:
-        """
-        #708 / #550 — same shape, different labels: legacy aligns by
-        position; v1 raises. Holds for every binary operator.
-        """
-        other = xr.DataArray(
+    """§8 — a constant sharing a dim must match the variable's coords exactly."""
+
+    _RESOLVE_TAIL = (
+        ". Resolve with `.sel(...)` / `.reindex(...)` to align before "
+        "combining, with `.assign_coords(...)` to relabel one side (positional "
+        "alignment, made explicit), with `linopy.align(...)` to pre-align "
+        "several operands at once, or by passing an explicit `join=` argument "
+        "to `.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` (accepts "
+        "inner / outer / left / right / override)."
+    )
+
+    # case -> (values, labels along "time", full v1 ValueError text)
+    _CASES = {
+        "different_labels": (
             [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+            [10, 11, 12, 13, 14],
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[10, 11, 12, 13, 14]" + _RESOLVE_TAIL,
+        ),
+        "subset": (
+            [10.0, 20.0],
+            [1, 3],
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[1, 3]" + _RESOLVE_TAIL,
+        ),
+    }
+
+    @staticmethod
+    def _const(values: list[float], labels: list[int]) -> xr.DataArray:
+        return xr.DataArray(
+            values, dims=["time"], coords={"time": pd.Index(labels, name="time")}
         )
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
-            _OPS[op](x, other)
 
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_subset_constant_raises(self, x: Variable, op: str) -> None:
-        """
-        #711 / #708 — constant covers only some of the variable's
-        coords. Legacy left-joins (silently drops the gap); v1 raises.
-        """
-        subset = xr.DataArray(
-            [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
-        )
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
-            _OPS[op](x, subset)
+    @pytest.mark.parametrize("case", list(_CASES))
+    def test_shared_dim_mismatch_raises(self, x: Variable, op: str, case: str) -> None:
+        """#708/#550/#711 — mismatched or subset constant coords raise for every op."""
+        values, labels, expected = self._CASES[case]
+        with pytest.raises(ValueError) as e:
+            _OPS[op](x, self._const(values, labels))
+        assert str(e.value) == expected
 
     @pytest.mark.legacy
-    def test_add_same_size_different_labels_silent(self, x: Variable) -> None:
-        """Document the legacy behaviour: silent positional alignment."""
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
-        # Legacy keeps left coords; the user's intended pairing by label is lost.
-        result = x + other
+    def test_add_different_labels_silent(self, x: Variable) -> None:
+        """Legacy silently keeps left coords (positional alignment)."""
+        values, labels, _ = self._CASES["different_labels"]
+        result = x + self._const(values, labels)
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
         assert result.const.values.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
 
     @pytest.mark.legacy
-    def test_add_subset_constant_silent(self, x: Variable) -> None:
-        """Document the legacy behaviour: silent left-join (gaps → 0)."""
-        subset = xr.DataArray(
-            [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
-        )
-        result = x + subset
-        # Legacy reindex_like fills the missing positions with 0 (additive fill).
+    def test_add_subset_silent(self, x: Variable) -> None:
+        """Legacy silently left-joins; missing slots fill with 0 (additive)."""
+        values, labels, _ = self._CASES["subset"]
+        result = x + self._const(values, labels)
         assert result.const.sel(time=0).item() == 0.0
         assert result.const.sel(time=1).item() == 10.0
         assert result.const.sel(time=3).item() == 20.0
 
 
 class TestBroadcastNonSharedDim:
-    """
-    §9 — a dimension that exists only in one operand broadcasts freely.
-    Runs under both semantics: this is unchanged behaviour.
-    """
+    """§9 — a dim present in only one operand broadcasts freely (both semantics)."""
 
-    def test_add_broadcast_introduces_new_dim(self, x: Variable) -> None:
+    @pytest.mark.parametrize(
+        "op, attr, expected_sizes",
+        [
+            ("add", "const", {"time": 5, "scenario": 2}),
+            ("mul", "coeffs", {"time": 5, "scenario": 2, "_term": 1}),
+        ],
+    )
+    def test_broadcast_introduces_new_dim(
+        self, x: Variable, op: str, attr: str, expected_sizes: dict[str, int]
+    ) -> None:
         bcast = xr.DataArray(
             [10.0, 20.0], dims=["scenario"], coords={"scenario": [0, 1]}
         )
-        result = x + bcast
-        assert set(result.const.dims) == {"time", "scenario"}
-        assert result.const.sizes == {"time": 5, "scenario": 2}
-
-    def test_mul_broadcast_introduces_new_dim(self, x: Variable) -> None:
-        bcast = xr.DataArray([2.0, 3.0], dims=["scenario"], coords={"scenario": [0, 1]})
-        result = x * bcast
-        assert set(result.coeffs.dims) == {"time", "scenario", "_term"}
+        obj = getattr(_OPS[op](x, bcast), attr)
+        assert dict(obj.sizes) == expected_sizes
 
     @pytest.mark.legacy
     def test_matmul_exactly_aligned_shared_dim_is_silent(
         self, x: Variable, unsilenced: None
     ) -> None:
-        # #849 — the contracted "time" dim is identically aligned; the size
-        # difference is only the constant's own "cyc" dim, which broadcasts.
-        # v1 accepts this, so legacy must not warn about a coordinate mismatch.
+        """#849 — an identically aligned contracted dim must not warn under legacy."""
         c = xr.DataArray(
-            np.ones((5, 2)),
-            dims=["time", "cyc"],
-            coords={"time": x.coords["time"]},
+            np.ones((5, 2)), dims=["time", "cyc"], coords={"time": x.coords["time"]}
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", LinopySemanticsWarning)
@@ -213,6 +216,61 @@ class TestUnlabeledPairing:
     under v1; legacy pairs with the leading dims positionally and warns when
     the v1 pairing would differ or reject.
     """
+
+    # Full v1 ValueError texts. The alignment error keeps a stable frame around
+    # a per-case reason; each literal is the complete message for that case.
+    _MSG_AMBIG_4_PQ = (
+        "Cannot pair an unlabeled array of shape (4,) with the operand's "
+        "dimensions: axis of length 4 could pair with any of ['p', 'q'] — "
+        "sizes alone cannot decide. Wrap the array in an xarray.DataArray "
+        "with explicit dims to name its axes."
+    )
+    _MSG_NOMATCH_7 = (
+        "Cannot pair an unlabeled array of shape (7,) with the operand's "
+        "dimensions: no unambiguous dimension match for an axis of length 7: "
+        "the operand has dimensions {'a': 3, 'b': 4}. Wrap the array in an "
+        "xarray.DataArray with explicit dims to name its axes."
+    )
+    _MSG_AMBIG_44_PQ = (
+        "Cannot pair an unlabeled array of shape (4, 4) with the operand's "
+        "dimensions: axis of length 4 could pair with any of ['p', 'q'] — "
+        "sizes alone cannot decide. Wrap the array in an xarray.DataArray "
+        "with explicit dims to name its axes."
+    )
+    _MSG_NOMATCH_53 = (
+        "Cannot pair an unlabeled array of shape (5, 3) with the operand's "
+        "dimensions: no unambiguous dimension match for an axis of length 5: "
+        "the operand has dimensions {'a': 3, 'b': 4}. Wrap the array in an "
+        "xarray.DataArray with explicit dims to name its axes."
+    )
+    _MSG_AMBIG_45_AB = (
+        "Cannot pair an unlabeled array of shape (4, 5) with the operand's "
+        "dimensions: axis of length 4 could pair with any of ['a', 'b'] — "
+        "sizes alone cannot decide. Wrap the array in an xarray.DataArray "
+        "with explicit dims to name its axes."
+    )
+    _MSG_BOUND_AMBIG = (
+        "lower bound could not be aligned to coords: Cannot pair an unlabeled "
+        "array of shape (4,) with the operand's dimensions: axis of length 4 "
+        "could pair with any of ['p', 'q'] — sizes alone cannot decide. Wrap "
+        "the array in an xarray.DataArray with explicit dims to name its axes."
+    )
+    # Full legacy LinopySemanticsWarning texts (built inline in alignment.py,
+    # no `_OPT_IN_HINT` suffix).
+    _WARN_DIFFERS = (
+        "An unlabeled array of shape (4,) was paired with the operand's "
+        "leading dimension(s) ['a'] by position. Under the v1 convention it "
+        "pairs by size instead — with ['b'] — which gives a different result. "
+        "Wrap the array in an xarray.DataArray with explicit dims to make the "
+        "pairing explicit."
+    )
+    _WARN_AMBIG_RAISES = (
+        "An unlabeled array of shape (4,) was paired with the operand's "
+        "leading dimension(s) ['p'] by position. Under the v1 convention this "
+        "raises: axis of length 4 could pair with any of ['p', 'q'] — sizes "
+        "alone cannot decide. Wrap the array in an xarray.DataArray with "
+        "explicit dims to keep it working."
+    )
 
     @pytest.fixture
     def xy(self) -> Variable:
@@ -244,6 +302,20 @@ class TestUnlabeledPairing:
             name="wide",
         )
 
+    @pytest.fixture
+    def ambig_higher(self) -> Variable:
+        # (a: 4, b: 4, c: 5) — the length-4 axis of a lower-rank operand is
+        # ambiguous even when another axis is unique
+        m = Model()
+        return m.add_variables(
+            coords=[
+                pd.RangeIndex(4, name="a"),
+                pd.RangeIndex(4, name="b"),
+                pd.RangeIndex(5, name="c"),
+            ],
+            name="y",
+        )
+
     # -- 1-d operands -----------------------------------------------------
 
     @pytest.mark.v1
@@ -256,15 +328,26 @@ class TestUnlabeledPairing:
 
     @pytest.mark.v1
     @pytest.mark.parametrize("make", UNLABELED_1D)
-    def test_v1_ambiguous_square_raises(self, square: Variable, make: Any) -> None:
-        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
-            (1 * square) + make(range(4))
-
-    @pytest.mark.v1
-    @pytest.mark.parametrize("make", UNLABELED_1D)
-    def test_v1_no_size_match_raises(self, xy: Variable, make: Any) -> None:
-        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
-            (1 * xy) + make(range(7))
+    @pytest.mark.parametrize(
+        "fixt, values, expected",
+        [
+            ("square", range(4), _MSG_AMBIG_4_PQ),
+            ("xy", range(7), _MSG_NOMATCH_7),
+        ],
+    )
+    def test_v1_1d_operand_raises(
+        self,
+        request: pytest.FixtureRequest,
+        make: Any,
+        fixt: str,
+        values: range,
+        expected: str,
+    ) -> None:
+        """A 1-d operand that is ambiguous or matches no dim raises for every type."""
+        operand = request.getfixturevalue(fixt)
+        with pytest.raises(ValueError) as e:
+            (1 * operand) + make(values)
+        assert str(e.value) == expected
 
     def test_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
         # the documented escape hatch: name the axis with a DataArray
@@ -280,19 +363,26 @@ class TestUnlabeledPairing:
         assert result.const.sizes == {"a": 3, "b": 4}
 
     @pytest.mark.v1
-    def test_v1_multidim_square_ambiguous_raises(self, square: Variable) -> None:
-        # a 2-d (4, 4) operand against dims (p: 4, q: 4) — sizes cannot tell
-        # (p, q) from (q, p). Exercises the multi-axis-same-size branch the 1-d
-        # cases never reach.
-        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
-            (1 * square) + np.ones((4, 4))
-
-    @pytest.mark.v1
-    def test_v1_multidim_no_size_match_raises(self, xy: Variable) -> None:
-        # a 2-d (5, 3) operand against (a: 3, b: 4) — the length-5 axis matches
-        # no dim.
-        with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
-            (1 * xy) + np.ones((5, 3))
+    @pytest.mark.parametrize(
+        "fixt, arr, expected",
+        [
+            ("square", np.ones((4, 4)), _MSG_AMBIG_44_PQ),
+            ("xy", np.ones((5, 3)), _MSG_NOMATCH_53),
+            ("ambig_higher", np.ones((4, 5)), _MSG_AMBIG_45_AB),
+        ],
+    )
+    def test_v1_multidim_operand_raises(
+        self,
+        request: pytest.FixtureRequest,
+        fixt: str,
+        arr: np.ndarray,
+        expected: str,
+    ) -> None:
+        """A multi-dim operand with an ambiguous or unmatched axis raises."""
+        operand = request.getfixturevalue(fixt)
+        with pytest.raises(ValueError) as e:
+            (1 * operand) + arr
+        assert str(e.value) == expected
 
     @pytest.mark.v1
     def test_v1_lower_rank_operand_pairs_subset_and_broadcasts(
@@ -302,23 +392,6 @@ class TestUnlabeledPairing:
         # size and broadcasts over the unpaired (a, d).
         result = (1 * wide) + np.ones((4, 5))
         assert result.const.sizes == {"a": 3, "b": 4, "c": 5, "d": 6}
-
-    @pytest.mark.v1
-    def test_v1_ambiguous_axis_within_higher_rank_raises(self) -> None:
-        # a 2-d (4, 5) operand where the length-4 axis matches two dims of the
-        # operand (a: 4, b: 4) — ambiguous even though the length-5 axis is
-        # unique.
-        m = Model()
-        y = m.add_variables(
-            coords=[
-                pd.RangeIndex(4, name="a"),
-                pd.RangeIndex(4, name="b"),
-                pd.RangeIndex(5, name="c"),
-            ],
-            name="y",
-        )
-        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
-            (1 * y) + np.ones((4, 5))
 
     # -- matmul -----------------------------------------------------------
 
@@ -348,12 +421,13 @@ class TestUnlabeledPairing:
     @pytest.mark.v1
     def test_v1_add_variables_ambiguous_bound_raises(self) -> None:
         m = Model()
-        with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+        with pytest.raises(ValueError) as e:
             m.add_variables(
                 coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")],
                 lower=np.arange(4.0),
                 name="x",
             )
+        assert str(e.value) == self._MSG_BOUND_AMBIG
 
     @pytest.mark.legacy
     def test_legacy_no_divergence_is_silent(
@@ -372,13 +446,13 @@ class TestUnlabeledPairing:
     def test_legacy_warns_when_v1_would_differ(
         self, xy: Variable, unsilenced: None
     ) -> None:
-        # length-4 array: legacy pairs positionally with "a" (size 3) → error,
-        # but the warning fires first explaining the v1 divergence.
-        # legacy positional pairing assigns the len-4 array to "a" (size 3),
-        # which then conflicts — assert it's that shape error, nothing incidental.
-        with pytest.warns(LinopySemanticsWarning, match=r"pairs by size instead"):
+        """length-4 array: legacy pairs with "a" (then errors); the warning fires first."""
+
+        def _op() -> None:
             with contextlib.suppress(ValueError):
                 (1 * xy) + np.arange(4.0)
+
+        assert _one_legacy_warning(_op) == self._WARN_DIFFERS
 
     @pytest.mark.legacy
     def test_legacy_ambiguous_pairs_positionally_with_warning(
@@ -387,8 +461,13 @@ class TestUnlabeledPairing:
         # The square (p:4, q:4) case where v1 *raises* — legacy must instead
         # pair positionally with the leading dim and warn, never raise. This is
         # the biggest legacy/v1 divergence and the strongest no-regression guard.
-        with pytest.warns(LinopySemanticsWarning, match=r"this raises"):
-            result = (1 * square) + np.arange(4.0)
+        captured: dict[str, Any] = {}
+
+        def _op() -> None:
+            captured["result"] = (1 * square) + np.arange(4.0)
+
+        assert _one_legacy_warning(_op) == self._WARN_AMBIG_RAISES
+        result = captured["result"]
         assert result.const.sizes == {"p": 4, "q": 4}
         # paired with the leading dim "p": the array varies along p, broadcast over q
         assert (result.const.isel(q=0).values == np.arange(4.0)).all()
@@ -416,36 +495,41 @@ class TestUnlabeledPairing:
 
 
 class TestUserNaNRaises:
+    # Full v1 message for NaN in a user-supplied constant
+    # (linopy.semantics._user_nan_message()).
+    USER_NAN_MSG = (
+        "NaN found in a user-supplied constant. linopy treats this as "
+        "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
+        "if you meant *absent at this slot*, mark it on the variable instead "
+        "(mask=, .where(cond), .reindex(...), .shift(...))."
+    )
+
+    # NaN-carrying constant operands. The DataArray uses [2, NaN, 3, 4, 5] so
+    # div doesn't trip on a 0 divisor at slot 0; the scalar cases cover that
+    # np.float32/float16 don't subclass Python float, so §5 must catch them by
+    # dtype rather than isinstance(float).
+    _NAN_OPERANDS = [
+        pytest.param(
+            lambda time: xr.DataArray(
+                [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+            ),
+            id="dataarray",
+        ),
+        pytest.param(lambda time: float("nan"), id="float"),
+        pytest.param(lambda time: np.float32("nan"), id="float32"),
+        pytest.param(lambda time: np.float16("nan"), id="float16"),
+    ]
+
     @pytest.mark.v1
     @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_nan_dataarray_raises(
-        self, x: Variable, time: pd.RangeIndex, op: str
+    @pytest.mark.parametrize("make_operand", _NAN_OPERANDS)
+    def test_nan_constant_raises(
+        self, x: Variable, time: pd.RangeIndex, op: str, make_operand: Any
     ) -> None:
-        # Use [2, NaN, 3, 4, 5] so div doesn't trip on a 0 divisor at slot 0.
-        nan_data = xr.DataArray(
-            [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
-            _OPS[op](x, nan_data)
-
-    @pytest.mark.v1
-    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    def test_nan_scalar_raises(self, x: Variable, op: str) -> None:
-        with pytest.raises(ValueError, match="NaN"):
-            _OPS[op](x, float("nan"))
-
-    @pytest.mark.v1
-    @pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
-    @pytest.mark.parametrize("dtype", [np.float64, np.float32, np.float16])
-    def test_nan_numpy_scalar_raises(self, x: Variable, op: str, dtype: type) -> None:
-        """
-        A numpy-scalar NaN must raise regardless of dtype. ``np.float32`` /
-        ``np.float16`` do not subclass Python ``float``, so the scalar
-        fast-path §5 check (``isinstance(other, float)``) used to miss them
-        and silently add/multiply NaN into the expression.
-        """
-        with pytest.raises(ValueError, match="NaN"):
-            _OPS[op](1 * x, dtype("nan"))
+        """v1 rejects any NaN in a user-supplied constant, for every operator."""
+        with pytest.raises(ValueError) as e:
+            _OPS[op](x, make_operand(time))
+        assert str(e.value) == self.USER_NAN_MSG
 
     @pytest.mark.v1
     def test_pypsa_1683_inf_times_zero_raises(
@@ -466,8 +550,9 @@ class TestUserNaNRaises:
         )
         bound = min_pu * nominal_fix  # 0 * inf = NaN at time=1
         assert np.isnan(bound.values[1])
-        with pytest.raises(ValueError, match="NaN"):
+        with pytest.raises(ValueError) as e:
             x * bound
+        assert str(e.value) == self.USER_NAN_MSG
 
     @pytest.mark.v1
     def test_to_linexpr_coefficient_nan_raises(
@@ -484,33 +569,29 @@ class TestUserNaNRaises:
         nan_coeff = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
-        with pytest.raises(ValueError, match="NaN"):
+        with pytest.raises(ValueError) as e:
             x.to_linexpr(nan_coeff)
+        assert str(e.value) == self.USER_NAN_MSG
 
     @pytest.mark.legacy
-    def test_add_nan_dataarray_silently_fills_with_zero(
-        self, x: Variable, time: pd.RangeIndex
+    @pytest.mark.parametrize(
+        "op, read_slot",
+        [
+            pytest.param("add", lambda r: r.const.sel(time=1).item(), id="add-const"),
+            pytest.param(
+                "mul", lambda r: r.coeffs.squeeze().sel(time=1).item(), id="mul-coeff"
+            ),
+        ],
+    )
+    def test_legacy_nan_dataarray_silently_fills_with_zero(
+        self, x: Variable, time: pd.RangeIndex, op: str, read_slot: Any
     ) -> None:
-        """Document legacy: NaN in addend silently becomes 0 (#713)."""
+        """Legacy: NaN in the constant operand silently becomes 0 (#713)."""
         nan_data = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
-        result = x + nan_data
-        assert result.const.sel(time=1).item() == 0.0  # NaN → 0
-
-    @pytest.mark.legacy
-    def test_mul_nan_dataarray_silently_fills_with_zero(
-        self, x: Variable, time: pd.RangeIndex
-    ) -> None:
-        """
-        Document legacy: NaN in multiplier silently becomes 0 — variable
-        zeroed out at that slot (#713).
-        """
-        nan_data = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        result = x * nan_data
-        assert result.coeffs.squeeze().sel(time=1).item() == 0.0
+        result = _OPS[op](x, nan_data)
+        assert read_slot(result) == 0.0
 
 
 # =====================================================================
@@ -552,41 +633,37 @@ class TestLegacyWarning:
     """
 
     @pytest.mark.legacy
-    def test_coord_mismatch_const_operand_same_size(
-        self, x: Variable, unsilenced: None
+    @pytest.mark.parametrize(
+        "labels, values, right_repr",
+        [
+            pytest.param(
+                [10, 11, 12, 13, 14],
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+                "[10, 11, 12, 13, 14]",
+                id="same-size",
+            ),
+            pytest.param([1, 3], [10.0, 20.0], "[1, 3]", id="subset"),
+        ],
+    )
+    def test_coord_mismatch_const_operand(
+        self,
+        x: Variable,
+        unsilenced: None,
+        labels: list[int],
+        values: list[float],
+        right_repr: str,
     ) -> None:
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        operand = xr.DataArray(
+            values, dims=["time"], coords={"time": pd.Index(labels, name="time")}
         )
-        msg = _one_legacy_warning(lambda: x + other)
+        msg = _one_legacy_warning(lambda: x + operand)
         assert msg == (
             "Coordinate mismatch in this operator's constant operand "
             "silently aligned by legacy (positional when sizes match, "
             "otherwise left-join). Under v1 this raises ValueError."
-            "\n  Dim:       'time': left=[0, 1, 2, 3, 4], "
-            "right=[10, 11, 12, 13, 14]"
-            "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
-            "\n             `.assign_coords(...)` to relabel one side"
-            "\n             `linopy.align(...)` to pre-align several operands"
-            "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
-        )
-
-    @pytest.mark.legacy
-    def test_coord_mismatch_const_operand_subset(
-        self, x: Variable, unsilenced: None
-    ) -> None:
-        subset = xr.DataArray(
-            [10.0, 20.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
-        )
-        msg = _one_legacy_warning(lambda: x + subset)
-        assert msg == (
-            "Coordinate mismatch in this operator's constant operand "
-            "silently aligned by legacy (positional when sizes match, "
-            "otherwise left-join). Under v1 this raises ValueError."
-            "\n  Dim:       'time': left=[0, 1, 2, 3, 4], right=[1, 3]"
-            "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+            "\n  Dim:       'time': left=[0, 1, 2, 3, 4], right="
+            + right_repr
+            + "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
             "\n             `.assign_coords(...)` to relabel one side"
             "\n             `linopy.align(...)` to pre-align several operands"
             "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
@@ -614,54 +691,56 @@ class TestLegacyWarning:
         )
 
     @pytest.mark.legacy
-    def test_nan_addend(
-        self, x: Variable, time: pd.RangeIndex, unsilenced: None
+    @pytest.mark.parametrize(
+        "op, values, expected",
+        [
+            pytest.param(
+                "add",
+                [1.0, np.nan, 3.0, 4.0, 5.0],
+                "NaN in the constant operand was silently treated as 0 by "
+                "legacy (additive identity). Under v1 this raises ValueError."
+                "\n  Resolve:   `.fillna(value)` (data error)"
+                "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+                "on the variable (intended absence)." + _OPT_IN_HINT,
+                id="addend",
+            ),
+            pytest.param(
+                "mul",
+                [1.0, np.nan, 3.0, 4.0, 5.0],
+                "NaN in the multiplicative factor was silently treated as 0 "
+                "by legacy (so the variable was zeroed out at that slot). "
+                "Under v1 this raises ValueError."
+                "\n  Resolve:   `.fillna(value)` (data error)"
+                "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+                "on the variable (intended absence)." + _OPT_IN_HINT,
+                id="multiplier",
+            ),
+            pytest.param(
+                # [2, NaN, ...] so the divisor isn't 0 at slot 0.
+                "div",
+                [2.0, np.nan, 3.0, 4.0, 5.0],
+                "NaN in the divisor was silently treated as 1 by legacy (a "
+                "different fill from `+`/`*` which use 0). Under v1 this "
+                "raises ValueError."
+                "\n  Resolve:   `.fillna(value)` (data error)"
+                "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
+                "on the variable (intended absence)." + _OPT_IN_HINT,
+                id="divisor",
+            ),
+        ],
+    )
+    def test_nan_operand(
+        self,
+        x: Variable,
+        time: pd.RangeIndex,
+        unsilenced: None,
+        op: str,
+        values: list[float],
+        expected: str,
     ) -> None:
-        nan_data = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        msg = _one_legacy_warning(lambda: x + nan_data)
-        assert msg == (
-            "NaN in the constant operand was silently treated as 0 by "
-            "legacy (additive identity). Under v1 this raises ValueError."
-            "\n  Resolve:   `.fillna(value)` (data error)"
-            "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-            "on the variable (intended absence)." + _OPT_IN_HINT
-        )
-
-    @pytest.mark.legacy
-    def test_nan_multiplier(
-        self, x: Variable, time: pd.RangeIndex, unsilenced: None
-    ) -> None:
-        nan_factor = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        msg = _one_legacy_warning(lambda: x * nan_factor)
-        assert msg == (
-            "NaN in the multiplicative factor was silently treated as 0 "
-            "by legacy (so the variable was zeroed out at that slot). "
-            "Under v1 this raises ValueError."
-            "\n  Resolve:   `.fillna(value)` (data error)"
-            "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-            "on the variable (intended absence)." + _OPT_IN_HINT
-        )
-
-    @pytest.mark.legacy
-    def test_nan_divisor(
-        self, x: Variable, time: pd.RangeIndex, unsilenced: None
-    ) -> None:
-        nan_divisor = xr.DataArray(
-            [2.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        msg = _one_legacy_warning(lambda: x / nan_divisor)
-        assert msg == (
-            "NaN in the divisor was silently treated as 1 by legacy (a "
-            "different fill from `+`/`*` which use 0). Under v1 this "
-            "raises ValueError."
-            "\n  Resolve:   `.fillna(value)` (data error)"
-            "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-            "on the variable (intended absence)." + _OPT_IN_HINT
-        )
+        nan_data = xr.DataArray(values, dims=["time"], coords={"time": time})
+        msg = _one_legacy_warning(lambda: _OPS[op](x, nan_data))
+        assert msg == expected
 
     @pytest.mark.legacy
     def test_aux_conflict(self, m: Model, unsilenced: None) -> None:
@@ -786,31 +865,51 @@ class TestExactAlignmentMerge:
             name="x_subset",
         )
 
-    @pytest.mark.v1
-    def test_var_plus_var_different_labels_raises(
-        self, x: Variable, x_other: Variable
-    ) -> None:
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
-            x + x_other
+    @staticmethod
+    def _mismatch(dim: str, left: list[Any], right: list[Any]) -> str:
+        """Full text of the v1 §8 shared-dimension ValueError."""
+        return (
+            f"Coordinate mismatch on shared dimension {dim!r}: "
+            f"left={left!r}, right={right!r}. "
+            "Resolve with `.sel(...)` / `.reindex(...)` to align before "
+            "combining, with `.assign_coords(...)` to relabel one side "
+            "(positional alignment, made explicit), with `linopy.align(...)` "
+            "to pre-align several operands at once, or by passing an explicit "
+            "`join=` argument to `.add` / `.sub` / `.mul` / `.div` / `.le` / "
+            "`.ge` / `.eq` (accepts inner / outer / left / right / override)."
+        )
+
+    @staticmethod
+    def _build_time(x: Variable, x_other: Variable, x_subset: Variable, case: str):  # type: ignore[no-untyped-def]
+        return {
+            "var+var": lambda: x + x_other,
+            "expr+expr": lambda: (1 * x) + (1 * x_other),
+            "var-var": lambda: x - x_other,
+            "var+subset": lambda: x + x_subset,
+        }[case]()
 
     @pytest.mark.v1
-    def test_expr_plus_expr_different_labels_raises(
-        self, x: Variable, x_other: Variable
+    @pytest.mark.parametrize(
+        "case,right",
+        [
+            ("var+var", [10, 11, 12, 13, 14]),
+            ("expr+expr", [10, 11, 12, 13, 14]),
+            ("var-var", [10, 11, 12, 13, 14]),
+            ("var+subset", [1, 3]),
+        ],
+    )
+    def test_shared_dim_mismatch_raises(
+        self,
+        x: Variable,
+        x_other: Variable,
+        x_subset: Variable,
+        case: str,
+        right: list[int],
     ) -> None:
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
-            (1 * x) + (1 * x_other)
-
-    @pytest.mark.v1
-    def test_var_plus_var_subset_raises(self, x: Variable, x_subset: Variable) -> None:
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
-            x + x_subset
-
-    @pytest.mark.v1
-    def test_var_minus_var_different_labels_raises(
-        self, x: Variable, x_other: Variable
-    ) -> None:
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
-            x - x_other
+        """#708 / #550 / #570 — different labels or a subset raise on the merge path."""
+        with pytest.raises(ValueError) as e:
+            self._build_time(x, x_other, x_subset, case)
+        assert str(e.value) == self._mismatch("time", [0, 1, 2, 3, 4], right)
 
     def test_var_plus_var_same_coords_works(
         self, m: Model, time: pd.RangeIndex
@@ -838,19 +937,18 @@ class TestExactAlignmentMerge:
         # silent reindex — the reorder must be resolved explicitly.
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
+        with pytest.raises(ValueError) as e:
             (1 * a) + (1 * b)
+        assert str(e.value) == self._mismatch(
+            "e", ["costs", "penalty"], ["penalty", "costs"]
+        )
 
     @pytest.mark.v1
     def test_var_plus_var_duplicate_differing_labels_raises_cleanly(
         self, m: Model
     ) -> None:
-        """
-        A shared dim with non-unique labels can't be resolved to a
-        permutation, so ``conform_merge_dims`` must report a §8 mismatch
-        (clean ``Coordinate mismatch`` ValueError) rather than letting
-        ``Index.get_indexer`` surface an opaque ``InvalidIndexError``.
-        """
+        # A non-unique shared index gives a clean §8 mismatch, not an opaque
+        # InvalidIndexError from get_indexer.
         a = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="a")
         b = m.add_variables(coords=[pd.Index(["a", "b", "b"], name="d")], name="b")
         with pytest.raises(ValueError, match="Coordinate mismatch"):
@@ -876,8 +974,11 @@ class TestExactAlignmentMerge:
         eb = pd.Index(["penalty", "costs"], name="e")
         a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
         b = m.add_variables(coords=[eb], name="b") + pd.Series([1.0, 2.0], index=eb)
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
+        with pytest.raises(ValueError) as e:
             a + b
+        assert str(e.value) == self._mismatch(
+            "e", ["costs", "penalty"], ["penalty", "costs"]
+        )
 
     @pytest.mark.v1
     def test_multi_operand_merge_reordered_raises(self, m: Model) -> None:
@@ -892,8 +993,9 @@ class TestExactAlignmentMerge:
         c = m.add_variables(coords=[ea], name="c") + pd.Series(
             [100, 200, 300.0], index=ea
         )
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
+        with pytest.raises(ValueError) as e:
             merge([a, b, c], cls=type(a))
+        assert str(e.value) == self._mismatch("e", ["x", "y", "z"], ["z", "y", "x"])
 
     @pytest.mark.v1
     def test_quadratic_merge_reordered_raises(self, m: Model) -> None:
@@ -901,8 +1003,9 @@ class TestExactAlignmentMerge:
         er = pd.Index(["z", "y", "x"], name="e")
         x = m.add_variables(coords=[ea], name="x")
         y = m.add_variables(coords=[er], name="y")
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
+        with pytest.raises(ValueError) as e:
             (x * x) + (y * y)
+        assert str(e.value) == self._mismatch("e", ["x", "y", "z"], ["z", "y", "x"])
 
     @pytest.mark.v1
     def test_reordered_escape_hatches_work(self, m: Model) -> None:
@@ -923,8 +1026,11 @@ class TestExactAlignmentMerge:
         ea = pd.Index(["costs", "penalty"], name="e")
         er = pd.Index(["penalty", "costs"], name="e")
         x = m.add_variables(coords=[ea], name="x")
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+        with pytest.raises(ValueError) as e:
             _ = pd.Series([10.0, 20.0], index=er) * x
+        assert str(e.value) == self._mismatch(
+            "e", ["costs", "penalty"], ["penalty", "costs"]
+        )
 
     @pytest.mark.v1
     def test_coeff_times_var_label_set_mismatch_raises(self, m: Model) -> None:
@@ -932,8 +1038,11 @@ class TestExactAlignmentMerge:
         ea = pd.Index(["costs", "penalty"], name="e")
         bad = pd.Index(["costs", "revenue"], name="e")
         x = m.add_variables(coords=[ea], name="x")
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+        with pytest.raises(ValueError) as e:
             _ = pd.Series([1.0, 2.0], index=bad) * x
+        assert str(e.value) == self._mismatch(
+            "e", ["costs", "penalty"], ["costs", "revenue"]
+        )
 
     @pytest.mark.legacy
     def test_reordered_merge_positional_legacy(self, m: Model) -> None:
@@ -946,16 +1055,12 @@ class TestExactAlignmentMerge:
         assert float(result.const.sel(e="penalty")) == 202.0
 
     @pytest.mark.legacy
-    def test_reordered_merge_warns_legacy(self, m: Model, unsilenced: None) -> None:
+    def test_reordered_merge_warns_legacy(self, m: Model) -> None:
         ea = pd.Index(["costs", "penalty"], name="e")
         eb = pd.Index(["penalty", "costs"], name="e")
         a = m.add_variables(coords=[ea], name="a")
         b = m.add_variables(coords=[eb], name="b")
-        with pytest.warns(LinopySemanticsWarning) as record:
-            (1 * a) + (1 * b)
-        msg = next(
-            str(w.message) for w in record if w.category is LinopySemanticsWarning
-        )
+        msg = _one_legacy_warning(lambda: (1 * a) + (1 * b))
         assert msg == (
             "Coordinate order mismatch in merge along dim '_term' aligned "
             "positionally by legacy. Under v1 the same labels in a different "
@@ -1006,8 +1111,11 @@ class TestExactAlignmentMerge:
         e = pd.Index(["costs", "penalty"], name="e")
         er = pd.Index(["penalty", "costs"], name="e")
         x = m.add_variables(coords=[e], name="x")
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+        with pytest.raises(ValueError) as exc:
             _ = 1 * x + pd.Series([1.0, 100.0], index=er)
+        assert str(exc.value) == self._mismatch(
+            "e", ["costs", "penalty"], ["penalty", "costs"]
+        )
 
     @pytest.mark.legacy
     def test_var_plus_var_reordered_pairs_positionally_legacy(self, m: Model) -> None:
@@ -1057,10 +1165,20 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.legacy
     def test_warn_on_var_plus_var_different_labels(
-        self, x: Variable, x_other: Variable, unsilenced: None
+        self, x: Variable, x_other: Variable
     ) -> None:
-        with pytest.warns(LinopySemanticsWarning, match="merge along dim"):
-            x + x_other
+        msg = _one_legacy_warning(lambda: x + x_other)
+        assert msg == (
+            "Coordinate mismatch in merge along dim '_term' silently "
+            "aligned by legacy (positional when sizes match, otherwise "
+            "left-join). Under v1 this raises ValueError."
+            "\n  Dim:       'time': left=[0, 1, 2, 3, 4], "
+            "right=[10, 11, 12, 13, 14]"
+            "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+            "\n             `.assign_coords(...)` to relabel one side"
+            "\n             `linopy.align(...)` to pre-align several operands"
+            "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+        )
 
 
 # =====================================================================
@@ -1083,6 +1201,32 @@ class TestAbsencePropagation:
         b = m.add_variables(name="b", coords=[t])
         mask = xr.DataArray(False, coords=[t])
         return a, b, mask
+
+    # Every entry point that ends in a QuadraticExpression, shared by the
+    # v1 (absence propagates) and legacy (absence collapses to 0) tests.
+    _QUAD_BUILDS = [
+        "var_mul_var",
+        "var_pow_2",
+        "expr_mul_var",
+        "expr_mul_expr",
+        "quad_plus_linexpr",
+        "quad_times_scalar",
+    ]
+
+    # Per-op constant on the present slots of ``shifted OP 3``.
+    _SCALAR_CONST = {"add": 3.0, "sub": -3.0, "mul": 0.0, "div": 0.0}
+
+    @staticmethod
+    def _build_quad(xs: Variable, x: Variable, build: str) -> QuadraticExpression:
+        builds = {
+            "var_mul_var": lambda: xs * x,
+            "var_pow_2": lambda: xs**2,
+            "expr_mul_var": lambda: (1 * xs) * x,
+            "expr_mul_expr": lambda: (1 * xs) * (1 * x),
+            "quad_plus_linexpr": lambda: (xs * x) + (2 * x),
+            "quad_times_scalar": lambda: (xs * x) * 3,
+        }
+        return cast(QuadraticExpression, builds[build]())
 
     @pytest.mark.v1
     def test_to_linexpr_marks_absent_with_nan_const(self, xs: Variable) -> None:
@@ -1115,8 +1259,7 @@ class TestAbsencePropagation:
         assert np.isnan(result.coeffs.values[0, 0])
         assert bool(result.isnull().values[0])
         # And the present slots carry the expected per-op value.
-        expected_const = {"add": 3.0, "sub": -3.0, "mul": 0.0, "div": 0.0}[op]
-        assert (result.const.values[1:] == expected_const).all()
+        assert (result.const.values[1:] == self._SCALAR_CONST[op]).all()
 
     @pytest.mark.v1
     def test_add_present_variable_propagates_absence(
@@ -1173,17 +1316,7 @@ class TestAbsencePropagation:
         assert not bool(zero.isnull().values[0])
 
     @pytest.mark.v1
-    @pytest.mark.parametrize(
-        "build",
-        [
-            "var_mul_var",
-            "var_pow_2",
-            "expr_mul_var",
-            "expr_mul_expr",
-            "quad_plus_linexpr",
-            "quad_times_scalar",
-        ],
-    )
+    @pytest.mark.parametrize("build", _QUAD_BUILDS)
     def test_quadratic_absence_propagates(
         self, xs: Variable, x: Variable, build: str
     ) -> None:
@@ -1195,15 +1328,7 @@ class TestAbsencePropagation:
         and the cross-term ``self.const * other.reset_const()`` path,
         plus the downstream operators on the resulting quadratic.
         """
-        builders = {
-            "var_mul_var": lambda: xs * x,
-            "var_pow_2": lambda: xs**2,
-            "expr_mul_var": lambda: (1 * xs) * x,
-            "expr_mul_expr": lambda: (1 * xs) * (1 * x),
-            "quad_plus_linexpr": lambda: (xs * x) + (2 * x),
-            "quad_times_scalar": lambda: (xs * x) * 3,
-        }
-        quad = builders[build]()
+        quad = self._build_quad(xs, x, build)
         # absent slot stays absent in the resulting quadratic
         assert bool(quad.isnull().values[0])
         # and §1/§2: every term at the absent slot has coeffs NaN and vars -1.
@@ -1250,8 +1375,7 @@ class TestAbsencePropagation:
         """
         result = _OPS[op](xs, 3)
         assert not bool(result.isnull().values[0])
-        expected = {"add": 3.0, "sub": -3.0, "mul": 0.0, "div": 0.0}[op]
-        assert (result.const.values == expected).all()
+        assert (result.const.values == self._SCALAR_CONST[op]).all()
 
     @pytest.mark.legacy
     def test_legacy_add_present_variable_keeps_live_term(
@@ -1281,17 +1405,7 @@ class TestAbsencePropagation:
         assert int(y.labels.values[0]) in live
 
     @pytest.mark.legacy
-    @pytest.mark.parametrize(
-        "build",
-        [
-            "var_mul_var",
-            "var_pow_2",
-            "expr_mul_var",
-            "expr_mul_expr",
-            "quad_plus_linexpr",
-            "quad_times_scalar",
-        ],
-    )
+    @pytest.mark.parametrize("build", _QUAD_BUILDS)
     def test_legacy_quadratic_collapses_absent(
         self, xs: Variable, x: Variable, build: str
     ) -> None:
@@ -1300,15 +1414,7 @@ class TestAbsencePropagation:
         present zero under legacy — no NaN signal anywhere (vs v1, which
         keeps the slot absent).
         """
-        builders = {
-            "var_mul_var": lambda: xs * x,
-            "var_pow_2": lambda: xs**2,
-            "expr_mul_var": lambda: (1 * xs) * x,
-            "expr_mul_expr": lambda: (1 * xs) * (1 * x),
-            "quad_plus_linexpr": lambda: (xs * x) + (2 * x),
-            "quad_times_scalar": lambda: (xs * x) * 3,
-        }
-        quad = builders[build]()
+        quad = self._build_quad(xs, x, build)
         assert not bool(quad.isnull().values[0])
         assert not np.isnan(quad.coeffs.values[0]).any()
 
@@ -1366,6 +1472,15 @@ class TestFillnaResolves:
     def xs(self, x: Variable) -> Variable:
         return x.shift(time=1)
 
+    @pytest.fixture
+    def outer_fillna_expr(
+        self, m: Model, time: pd.RangeIndex
+    ) -> tuple[LinearExpression, Variable]:
+        """``(x + y.shift()).fillna(0) + x`` — placement of fillna is load-bearing."""
+        x = m.add_variables(lower=0, coords=[time], name="x")
+        y = m.add_variables(lower=0, coords=[time], name="y")
+        return (x + y.shift(time=1)).fillna(0) + x, x
+
     @pytest.mark.v1
     def test_expr_fillna_replaces_absent_const(self, xs: Variable) -> None:
         result = xs.to_linexpr().fillna(42)
@@ -1379,8 +1494,6 @@ class TestFillnaResolves:
         A constant fill is not a variable, so the return type is a
         LinearExpression.
         """
-        from linopy import LinearExpression
-
         result = xs.fillna(42)
         assert isinstance(result, LinearExpression)
         assert result.const.values[0] == 42.0
@@ -1389,8 +1502,6 @@ class TestFillnaResolves:
     def test_variable_fillna_zero_revives_slot_as_present_zero(
         self, xs: Variable
     ) -> None:
-        from linopy import LinearExpression
-
         result = xs.fillna(0)
         assert isinstance(result, LinearExpression)  # numeric fill → expression
         assert not bool(result.isnull().values[0])
@@ -1398,30 +1509,23 @@ class TestFillnaResolves:
 
     @pytest.mark.v1
     def test_outer_fillna_then_add_collapses_to_just_added(
-        self, m: Model, time: pd.RangeIndex
+        self, outer_fillna_expr: tuple[LinearExpression, Variable]
     ) -> None:
         """
         Interpretation A — once `(x + y.shift())` is absent at slot 0,
         ``.fillna(0)`` revives the slot as the constant 0 (dead terms
         stay dead), and a subsequent ``+ x`` re-introduces only ``x[0]``.
-        Compare ``x + y.shift().fillna(0) + x`` which would double-count
-        ``x`` at slot 0 — the placement of fillna is load-bearing.
         """
-        x = m.add_variables(lower=0, coords=[time], name="x")
-        y = m.add_variables(lower=0, coords=[time], name="y")
-        expr = (x + y.shift(time=1)).fillna(0) + x
-
-        # At slot 0 the only live term is 1·x[0]; const is 0 → result == x[0].
+        expr, x = outer_fillna_expr
         coeffs0 = expr.coeffs.values[0]
         vars0 = expr.vars.values[0]
         live = ~np.isnan(coeffs0)
+        # At slot 0 the only live term is 1·x[0]; const is 0 → result == x[0].
         assert int(live.sum()) == 1
         assert float(coeffs0[live][0]) == 1.0
         assert int(vars0[live][0]) == int(x.labels.values[0])
         assert float(expr.const.values[0]) == 0.0
-
-        # At slots 1+ all three terms are live (x[i] + y[i-1] + x[i]) — the
-        # outer ``+ x`` is genuinely additive where y.shift was present.
+        # At slots 1+ all three terms are live (x[i] + y[i-1] + x[i]).
         assert int((~np.isnan(expr.coeffs.values[1])).sum()) == 3
 
     @pytest.mark.v1
@@ -1463,8 +1567,6 @@ class TestFillnaResolves:
         the fill value directly and honours it under legacy too, matching v1.
         This is the single cross-convention form the migration relies on.
         """
-        from linopy import LinearExpression
-
         result = xs.fillna(42)
         assert isinstance(result, LinearExpression)
         assert result.const.values[0] == 42.0
@@ -1480,18 +1582,14 @@ class TestFillnaResolves:
 
     @pytest.mark.legacy
     def test_legacy_outer_fillna_then_add_double_counts(
-        self, m: Model, time: pd.RangeIndex
+        self, outer_fillna_expr: tuple[LinearExpression, Variable]
     ) -> None:
         """
         Legacy never made slot 0 absent, so ``(x + y.shift()).fillna(0)``
-        already carries x[0] (and the y sentinel); the outer ``+ x`` then
-        adds a *second* x[0] — three live terms at slot 0, double-counting
-        x (vs v1's single live x[0]).
+        already carries x[0]; the outer ``+ x`` adds a *second* x[0] —
+        three live terms at slot 0, double-counting x (vs v1's single).
         """
-        x = m.add_variables(lower=0, coords=[time], name="x")
-        y = m.add_variables(lower=0, coords=[time], name="y")
-        expr = (x + y.shift(time=1)).fillna(0) + x
-
+        expr, x = outer_fillna_expr
         coeffs0 = expr.coeffs.values[0]
         vars0 = expr.vars.values[0]
         live = ~np.isnan(coeffs0)
@@ -1640,6 +1738,15 @@ class TestNamedMethodJoin:
             [10.0, 30.0], dims=["time"], coords={"time": pd.Index([1, 3], name="time")}
         )
 
+    @pytest.fixture
+    def relabelled(self) -> xr.DataArray:
+        """Same shape as ``x`` but time=[10..14] — a pure label mismatch."""
+        return xr.DataArray(
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            dims=["time"],
+            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
+        )
+
     def test_add_join_inner_intersects(self, x: Variable, subset: xr.DataArray) -> None:
         """`.add(other, join="inner")` picks the intersection of coords."""
         result = x.add(subset, join="inner")
@@ -1682,21 +1789,28 @@ class TestNamedMethodJoin:
         self, x: Variable, subset: xr.DataArray
     ) -> None:
         """`x + subset` (no `join=`) still raises — opt-in is required."""
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
+        with pytest.raises(ValueError) as e:
             x + subset
+        assert str(e.value) == (
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[1, 3]. Resolve with `.sel(...)` / "
+            "`.reindex(...)` to align before combining, with "
+            "`.assign_coords(...)` to relabel one side (positional alignment, "
+            "made explicit), with `linopy.align(...)` to pre-align several "
+            "operands at once, or by passing an explicit `join=` argument to "
+            "`.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+            "(accepts inner / outer / left / right / override)."
+        )
 
-    def test_add_join_override_aligns_positionally(self, x: Variable) -> None:
+    def test_add_join_override_aligns_positionally(
+        self, x: Variable, relabelled: xr.DataArray
+    ) -> None:
         """
         ``join="override"`` is the explicit-positional mode — the right
         operand's labels are dropped and the left's are reused. The mode
         is opt-in precisely because it can silently mis-pair if the user
         didn't mean it.
         """
-        relabelled = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
         result = x.add(relabelled, join="override")
         # Override keeps the left operand's labels — and silently re-uses
         # the right's values at those positions.
@@ -1717,37 +1831,37 @@ class TestNamedMethodJoin:
             dims=["time"],
             coords={"time": pd.Index([0, 1, 2], name="time")},
         )
-        with pytest.raises(ValueError, match="join='override' requires matching"):
+        with pytest.raises(ValueError) as e:
             x.add(shorter, join="override")
+        assert str(e.value) == (
+            "join='override' requires matching sizes on shared dimensions, "
+            "but sizes differ on 'time': left=5, right=3. Use join='inner' / "
+            "'outer' / 'left' / 'right' to combine by label, or reshape one "
+            "side first."
+        )
 
-    def test_reindex_like_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
+    def test_reindex_like_resolves_mismatch_before_bare_op(
+        self, x: Variable, relabelled: xr.DataArray
+    ) -> None:
         """
         §10 names ``.reindex(...)`` / ``.reindex_like(...)`` as
         canonical resolutions — pre-aligning lets the bare operator
         accept the once-mismatched operand without ``join=``.
         """
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
-        aligned = other.reindex_like(x.labels, fill_value=0)
+        aligned = relabelled.reindex_like(x.labels, fill_value=0)
         result = x + aligned  # bare + succeeds because coords now match
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
-    def test_assign_coords_resolves_mismatch_before_bare_op(self, x: Variable) -> None:
+    def test_assign_coords_resolves_mismatch_before_bare_op(
+        self, x: Variable, relabelled: xr.DataArray
+    ) -> None:
         """
         ``.assign_coords(...)`` is the explicit-positional escape —
         relabels one side outright so the bare operator's exact-join
         check passes.
         """
-        other = xr.DataArray(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            dims=["time"],
-            coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
-        )
-        relabelled = other.assign_coords(time=x.coords["time"])
-        result = x + relabelled  # bare + succeeds after relabel
+        aligned = relabelled.assign_coords(time=x.coords["time"])
+        result = x + aligned  # bare + succeeds after relabel
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
 
@@ -1764,31 +1878,76 @@ _SIGNS = {
 
 
 class TestConstraintRHS:
-    @pytest.mark.v1
-    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
-    def test_subset_rhs_raises(self, x: Variable, sign: str) -> None:
-        """§12 — all three comparison signs align by §8 the same way."""
-        subset = xr.DataArray(
+    # Full v1 error text for a NaN in a user-supplied constant (§5).
+    _USER_NAN_MSG = (
+        "NaN found in a user-supplied constant. linopy treats this as "
+        "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
+        "if you meant *absent at this slot*, mark it on the variable instead "
+        "(mask=, .where(cond), .reindex(...), .shift(...))."
+    )
+    _LEGACY_NAN_RHS_MSG = (
+        "NaN in the constraint RHS was silently kept as 'no constraint "
+        "at this row' by legacy auto-mask. Under v1 this raises ValueError."
+        "\n  Resolve:   `mask=` on the variable for explicit per-row masking"
+        "\n             or `.fillna(value)` if the NaN was a data error." + _OPT_IN_HINT
+    )
+    _LEGACY_COORD_MISMATCH_RHS_MSG = (
+        "Coordinate mismatch in constraint RHS silently aligned by legacy "
+        "(positional when sizes match, otherwise left-join). Under v1 this "
+        "raises ValueError."
+        "\n  Dim:       'time': left=[0, 1, 2, 3, 4], right=[1, 3]"
+        "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+        "\n             `.assign_coords(...)` to relabel one side"
+        "\n             `linopy.align(...)` to pre-align several operands"
+        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+    )
+
+    @pytest.fixture
+    def subset(self) -> xr.DataArray:
+        return xr.DataArray(
             [10.0, 20.0],
             dims=["time"],
             coords={"time": pd.Index([1, 3], name="time")},
         )
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
-            _SIGNS[sign](x, subset)
+
+    @pytest.fixture
+    def nan_rhs(self, time: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray(
+            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
+        )
 
     @pytest.mark.v1
     @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
-    def test_nan_rhs_raises(self, x: Variable, time: pd.RangeIndex, sign: str) -> None:
+    def test_subset_rhs_raises(
+        self, x: Variable, subset: xr.DataArray, sign: str
+    ) -> None:
+        """§12 — all three comparison signs align by §8 the same way."""
+        with pytest.raises(ValueError) as e:
+            _SIGNS[sign](x, subset)
+        assert str(e.value) == (
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[1, 3]. Resolve with `.sel(...)` / "
+            "`.reindex(...)` to align before combining, with "
+            "`.assign_coords(...)` to relabel one side (positional alignment, "
+            "made explicit), with `linopy.align(...)` to pre-align several "
+            "operands at once, or by passing an explicit `join=` argument to "
+            "`.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+            "(accepts inner / outer / left / right / override)."
+        )
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
+    def test_nan_rhs_raises(
+        self, x: Variable, nan_rhs: xr.DataArray, sign: str
+    ) -> None:
         """
         §5/§12 — a NaN in a user-supplied RHS raises for every sign,
         never silently becomes "no constraint" the way legacy auto_mask
         treats it.
         """
-        nan_rhs = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
+        with pytest.raises(ValueError) as e:
             _SIGNS[sign](x, nan_rhs)
+        assert str(e.value) == self._USER_NAN_MSG
 
     @pytest.mark.v1
     @pytest.mark.parametrize("sign", ["le", "ge", "eq"])
@@ -1835,36 +1994,31 @@ class TestConstraintRHS:
             [1.0, 0.0, 1.0, 1.0, 1.0], dims=["time"], coords={"time": time}
         )
         bound = min_pu * nominal  # 0*inf = NaN at time=1
-        with pytest.raises(ValueError, match="NaN"):
+        with pytest.raises(ValueError) as e:
             x >= bound
+        assert str(e.value) == self._USER_NAN_MSG
 
     @pytest.mark.legacy
     def test_nan_rhs_silently_treated_as_unconstrained(
-        self, x: Variable, time: pd.RangeIndex
+        self, x: Variable, nan_rhs: xr.DataArray
     ) -> None:
         """
         Document the legacy auto_mask path: a NaN RHS is silently
         kept as NaN and the constraint at that row is later dropped.
         """
-        nan_rhs = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
         constraint = x <= nan_rhs
         assert np.isnan(constraint.rhs.values[1])
 
     @pytest.mark.legacy
     def test_warn_on_nan_rhs(
-        self, x: Variable, time: pd.RangeIndex, unsilenced: None
+        self, x: Variable, nan_rhs: xr.DataArray, unsilenced: None
     ) -> None:
-        nan_rhs = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.warns(LinopySemanticsWarning, match="no constraint at this row"):
-            x <= nan_rhs
+        msg = _one_legacy_warning(lambda: x <= nan_rhs)
+        assert msg == self._LEGACY_NAN_RHS_MSG
 
     @pytest.mark.legacy
     def test_warn_on_coord_mismatch_rhs_distinguishes_from_nan(
-        self, x: Variable, unsilenced: None
+        self, x: Variable, subset: xr.DataArray, unsilenced: None
     ) -> None:
         """
         A subset RHS has no user NaN — legacy's ``reindex_like`` is what
@@ -1874,15 +2028,8 @@ class TestConstraintRHS:
         for the conflated warn text where both causes used the same
         ``_legacy_nan_rhs_constraint_message``.
         """
-        subset = xr.DataArray(
-            [10.0, 20.0],
-            dims=["time"],
-            coords={"time": pd.Index([1, 3], name="time")},
-        )
-        with pytest.warns(
-            LinopySemanticsWarning, match="Coordinate mismatch in constraint RHS"
-        ):
-            x <= subset
+        msg = _one_legacy_warning(lambda: x <= subset)
+        assert msg == self._LEGACY_COORD_MISMATCH_RHS_MSG
 
     @pytest.mark.legacy
     def test_both_warnings_fire_when_rhs_has_user_nan_and_mismatch(
@@ -1902,8 +2049,8 @@ class TestConstraintRHS:
             warnings.simplefilter("always", LinopySemanticsWarning)
             x <= both
         messages = [str(w.message) for w in caught]
-        assert any("Coordinate mismatch in constraint RHS" in m for m in messages)
-        assert any("no constraint at this row" in m for m in messages)
+        assert self._LEGACY_COORD_MISMATCH_RHS_MSG in messages
+        assert self._LEGACY_NAN_RHS_MSG in messages
 
 
 # =====================================================================
@@ -1934,22 +2081,21 @@ class TestReductionsSkipAbsent:
         return x.shift(time=1)
 
     @pytest.mark.v1
-    def test_sum_over_dim_skips_absent(self, xs: Variable) -> None:
+    @pytest.mark.parametrize(
+        "reduce",
+        [lambda e: e.sum("time"), lambda e: e.sum()],
+        ids=["over_dim", "no_dim"],
+    )
+    def test_sum_skips_absent(self, xs: Variable, reduce: Any) -> None:
         """
-        ``(xs + 5).sum('time')`` skips the absent slot at t=0 and
-        sums the four present 5s → 20.
+        ``(xs + 5).sum(...)`` skips the absent slot at t=0 and sums the
+        four present 5s → 20, whether or not a dim is named.
         """
-        result = (xs + 5).sum("time")
-        assert float(result.const) == 20.0
-
-    @pytest.mark.v1
-    def test_sum_no_dim_skips_absent(self, xs: Variable) -> None:
-        result = (xs + 5).sum()
-        assert float(result.const) == 20.0
+        assert float(reduce(xs + 5).const) == 20.0
 
     @pytest.mark.v1
     def test_sum_of_all_absent_is_zero(self, x: Variable) -> None:
-        """§13 — "the sum of none is the zero expression.""" ""
+        """§13 — the sum of none is the zero expression."""
         all_absent = x.shift(time=10).to_linexpr()
         assert bool(all_absent.isnull().all().item())
         result = all_absent.sum("time")
@@ -1966,18 +2112,17 @@ class TestReductionsSkipAbsent:
         assert result.const.values.tolist() == [5.0, 15.0]
 
     @pytest.mark.legacy
-    def test_sum_over_dim_fills_absent(self, xs: Variable) -> None:
+    @pytest.mark.parametrize(
+        "reduce",
+        [lambda e: e.sum("time"), lambda e: e.sum()],
+        ids=["over_dim", "no_dim"],
+    )
+    def test_sum_fills_absent(self, xs: Variable, reduce: Any) -> None:
         """
         Legacy fills the absent slot at t=0 with 0, so ``xs + 5`` stores
         ``5`` there and all five 5s are summed → 25 (vs v1's 20).
         """
-        result = (xs + 5).sum("time")
-        assert float(result.const) == 25.0
-
-    @pytest.mark.legacy
-    def test_sum_no_dim_fills_absent(self, xs: Variable) -> None:
-        result = (xs + 5).sum()
-        assert float(result.const) == 25.0
+        assert float(reduce(xs + 5).const) == 25.0
 
     @pytest.mark.legacy
     def test_groupby_sum_fills_absent(self, xs: Variable) -> None:
@@ -2002,113 +2147,117 @@ class TestAuxCoordConflict:
     conflict in arithmetic, which is the #295 bug.
     """
 
+    # Full v1 raise for the shared B=[311,311,322] vs [400,400,500] conflict.
+    AUX_VALUE_MSG = (
+        "Auxiliary coordinate 'B' has conflicting values across operands: "
+        "left=[311, 311, 322], right=[400, 400, 500]. xarray would silently "
+        "drop the conflict; linopy raises so the caller resolves it. Use "
+        "`.drop_vars('B')` to remove the coord, `.assign_coords(B=...)` to "
+        "relabel one side, or `.isel(..., drop=True)` if the coord was "
+        "introduced by a scalar isel."
+    )
+
     @pytest.fixture
     def A(self) -> pd.Index:
         return pd.Index([1, 2, 3], name="A")
 
-    @pytest.mark.v1
-    def test_expr_plus_dataarray_aux_conflict_raises(
-        self, m: Model, A: pd.Index
-    ) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+    @pytest.fixture
+    def v(self, m: Model, A: pd.Index) -> Variable:
+        return m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
-        const = xr.DataArray(
+
+    @pytest.fixture
+    def w(self, m: Model, A: pd.Index) -> Variable:
+        return m.add_variables(lower=0, coords=[A], name="w").assign_coords(
+            B=("A", [400, 400, 500])
+        )
+
+    @pytest.fixture
+    def const(self, A: pd.Index) -> xr.DataArray:
+        return xr.DataArray(
             [10.0, 20.0, 30.0],
             dims=["A"],
             coords={"A": A, "B": ("A", [400, 400, 500])},
         )
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
-            v + const
 
     @pytest.mark.v1
-    def test_var_plus_var_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
-            B=("A", [400, 400, 500])
-        )
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
-            v + w
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda v, w, const: v + const, id="expr_plus_dataarray"),
+            pytest.param(lambda v, w, const: v * const, id="mul_constant"),
+            pytest.param(lambda v, w, const: v == const, id="constraint"),
+            pytest.param(lambda v, w, const: v + w, id="var_plus_var"),
+        ],
+    )
+    def test_conflicting_aux_coord_raises(
+        self, v: Variable, w: Variable, const: xr.DataArray, build: Any
+    ) -> None:
+        """§11 fires on every path that combines the two operands (+, *, ==, var+var)."""
+        with pytest.raises(ValueError) as exc:
+            build(v, w, const)
+        assert str(exc.value) == self.AUX_VALUE_MSG
 
     @pytest.mark.v1
     def test_reordered_dim_raises_before_aux_check(self, m: Model) -> None:
-        # §8 runs before the §11 aux check: the reordered dim raises a
-        # "Coordinate mismatch"; the aux conflict it also carries is never reached.
+        """
+        §8 runs first: the reordered dim raises a coordinate mismatch; the
+        aux conflict the operands also carry is never reached.
+        """
         v = m.add_variables(
             lower=0, coords=[pd.Index(["x", "y", "z"], name="A")], name="v"
         ).assign_coords(B=("A", [1, 2, 3]))
         w = m.add_variables(
             lower=0, coords=[pd.Index(["z", "y", "x"], name="A")], name="w"
         ).assign_coords(B=("A", [1, 2, 3]))
-        with pytest.raises(ValueError, match="Coordinate mismatch"):
+        with pytest.raises(ValueError) as exc:
             v + w
-
-    @pytest.mark.v1
-    def test_mul_constant_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
-        """Same rule on the multiplication path — not just ``+``."""
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
+        assert str(exc.value) == (
+            "Coordinate mismatch on shared dimension 'A': "
+            "left=['x', 'y', 'z'], right=['z', 'y', 'x']. Resolve with "
+            "`.sel(...)` / `.reindex(...)` to align before combining, with "
+            "`.assign_coords(...)` to relabel one side (positional alignment, "
+            "made explicit), with `linopy.align(...)` to pre-align several "
+            "operands at once, or by passing an explicit `join=` argument to "
+            "`.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+            "(accepts inner / outer / left / right / override)."
         )
-        const = xr.DataArray(
-            [2.0, 3.0, 4.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
-            v * const
-
-    @pytest.mark.v1
-    def test_constraint_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
-        """§11 reaches constraint construction via the same machinery."""
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        const = xr.DataArray(
-            [10.0, 20.0, 30.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
-            v == const
 
     @pytest.mark.v1
     def test_scalar_isel_aux_conflict_raises(self, m: Model, A: pd.Index) -> None:
         """
-        Scalar isels leave the indexed dim as a non-dim coord whose
-        value differs between operands picked at different positions.
+        Scalar isels leave the indexed dim as a non-dim coord whose value
+        differs between operands picked at different positions.
         """
         v = m.add_variables(lower=0, coords=[A], name="v")
         a0 = (1 * v).isel({"A": 0})  # scalar A=1
         a1 = (1 * v).isel({"A": 1})  # scalar A=2
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+        with pytest.raises(ValueError) as exc:
             a0 + a1
+        assert str(exc.value) == (
+            "Auxiliary coordinate 'A' has conflicting values across operands: "
+            "left=1, right=2. xarray would silently drop the conflict; linopy "
+            "raises so the caller resolves it. Use `.drop_vars('A')` to remove "
+            "the coord, `.assign_coords(A=...)` to relabel one side, or "
+            "`.isel(..., drop=True)` if the coord was introduced by a scalar isel."
+        )
 
     def test_isel_with_drop_true_avoids_conflict(self, m: Model, A: pd.Index) -> None:
-        """
-        The §11 escape hatch the convention recommends: drop the
-        leftover scalar coord with ``isel(..., drop=True)``.
-        """
+        """§11 escape hatch: drop the leftover scalar coord with ``isel(..., drop=True)``."""
         v = m.add_variables(lower=0, coords=[A], name="v")
         a0 = (1 * v).isel({"A": 0}, drop=True)
         a1 = (1 * v).isel({"A": 1}, drop=True)
         result = a0 + a1  # no aux coord → no conflict
         assert "A" not in result.coords
 
-    def test_assign_coords_resolves_conflict(self, m: Model, A: pd.Index) -> None:
+    def test_assign_coords_resolves_conflict(
+        self, v: Variable, const: xr.DataArray
+    ) -> None:
         """
-        §11's third escape hatch: relabel one side with
-        ``.assign_coords`` so the coord values agree across operands.
+        §11 escape hatch: relabel one side with ``.assign_coords`` so the
+        coord values agree across operands.
         """
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        const = xr.DataArray(
-            [10.0, 20.0, 30.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
         relabelled = const.assign_coords(B=v.coords["B"])
         result = v + relabelled
         assert result.coords["B"].values.tolist() == [311, 311, 322]
@@ -2118,8 +2267,8 @@ class TestAuxCoordConflict:
         self, m: Model, A: pd.Index
     ) -> None:
         """
-        The merge-path check inspects all operands, not just two —
-        a 3-way ``sum(...)`` where the third disagrees still raises.
+        The merge-path check inspects all operands: a 3-way sum where the
+        third disagrees still raises.
         """
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
@@ -2130,83 +2279,75 @@ class TestAuxCoordConflict:
         u = m.add_variables(lower=0, coords=[A], name="u").assign_coords(
             B=("A", [999, 999, 999])
         )
-        with pytest.raises(ValueError, match="Auxiliary coordinate"):
+        with pytest.raises(ValueError) as exc:
             v + w + u
+        assert str(exc.value) == (
+            "Auxiliary coordinate 'B' has conflicting values across operands: "
+            "left=[311, 311, 322], right=[999, 999, 999]. xarray would silently "
+            "drop the conflict; linopy raises so the caller resolves it. Use "
+            "`.drop_vars('B')` to remove the coord, `.assign_coords(B=...)` to "
+            "relabel one side, or `.isel(..., drop=True)` if the coord was "
+            "introduced by a scalar isel."
+        )
 
     @pytest.mark.v1
+    @pytest.mark.parametrize(
+        "join", ["override", "inner", "outer", "left", "right", "exact"]
+    )
     def test_aux_conflict_raises_under_explicit_join_constant(
-        self, m: Model, A: pd.Index
+        self, v: Variable, const: xr.DataArray, join: Any
     ) -> None:
         """
-        §11 is independent of §8 — an explicit ``join=`` must not
-        silence the aux-coord raise. Regression for the
-        ``if join is None:`` gating bug where ``.add(const, join="override")``
-        would silently drop the conflicting coord.
+        §11 is independent of §8 — an explicit ``join=`` must not silence the
+        aux-coord raise (regression for the ``if join is None:`` gating bug).
         """
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        const = xr.DataArray(
-            [10.0, 20.0, 30.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
-        for join in ("override", "inner", "outer", "left", "right", "exact"):
-            with pytest.raises(ValueError, match="Auxiliary coordinate"):
-                v.add(const, join=join)
+        with pytest.raises(ValueError) as exc:
+            v.add(const, join=join)
+        assert str(exc.value) == self.AUX_VALUE_MSG
 
     @pytest.mark.v1
+    @pytest.mark.parametrize(
+        "join", ["override", "inner", "outer", "left", "right", "exact"]
+    )
     def test_aux_conflict_raises_under_explicit_join_merge(
-        self, m: Model, A: pd.Index
+        self, v: Variable, w: Variable, join: Any
     ) -> None:
         """
-        Same rule on the merge path: ``linopy.merge([v, w], join="override")``
-        with a conflicting aux coord must raise.
+        Same rule on the merge path: ``linopy.merge([v, w], join=...)`` with a
+        conflicting aux coord must raise.
         """
         import linopy
 
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
-            B=("A", [400, 400, 500])
-        )
-        for join in ("override", "inner", "outer", "left", "right", "exact"):
-            with pytest.raises(ValueError, match="Auxiliary coordinate"):
-                linopy.merge([1 * v, 1 * w], join=join)
+        with pytest.raises(ValueError) as exc:
+            linopy.merge([1 * v, 1 * w], join=join)
+        assert str(exc.value) == self.AUX_VALUE_MSG
 
     @pytest.mark.legacy
-    def test_aux_conflict_silently_keeps_left(self, m: Model, A: pd.Index) -> None:
+    def test_aux_conflict_silently_keeps_left(
+        self, v: Variable, const: xr.DataArray
+    ) -> None:
         """
-        Document legacy: a conflict is silently resolved by keeping
-        the left operand's aux coord — the right operand's [400,400,500]
-        disappears with no signal to the caller.
+        Document legacy: a conflict is silently resolved by keeping the left
+        operand's aux coord — the right's [400,400,500] disappears silently.
         """
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        const = xr.DataArray(
-            [10.0, 20.0, 30.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
         result = v + const
         assert result.coords["B"].values.tolist() == [311, 311, 322]
 
     @pytest.mark.legacy
     def test_warn_on_aux_conflict(
-        self, m: Model, A: pd.Index, unsilenced: None
+        self, v: Variable, const: xr.DataArray, unsilenced: None
     ) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
+        msg = _one_legacy_warning(lambda: v + const)
+        assert msg == (
+            "Auxiliary coordinate 'B' was conflicting across operands "
+            "and silently dropped by legacy (xarray's default). Under v1 "
+            "this raises ValueError."
+            "\n  Values:    left=[311, 311, 322], right=[400, 400, 500]"
+            "\n  Resolve:   `.drop_vars('B')`"
+            "\n             `.assign_coords(B=...)` to relabel one side"
+            "\n             or `.isel(..., drop=True)` if a scalar isel "
+            "introduced it." + _OPT_IN_HINT
         )
-        const = xr.DataArray(
-            [10.0, 20.0, 30.0],
-            dims=["A"],
-            coords={"A": A, "B": ("A", [400, 400, 500])},
-        )
-        with pytest.warns(LinopySemanticsWarning, match=r"(?s)'B'.*silently dropped"):
-            v + const
 
 
 class TestAuxCoordPropagation:
@@ -2219,34 +2360,32 @@ class TestAuxCoordPropagation:
     def A(self) -> pd.Index:
         return pd.Index([1, 2, 3], name="A")
 
-    def test_aux_coord_survives_scalar_mul(self, m: Model, A: pd.Index) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
+    @pytest.fixture
+    def v(self, m: Model, A: pd.Index) -> Variable:
+        return m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
-        assert "B" in (3 * v).coords
 
-    def test_aux_coord_survives_scalar_add(self, m: Model, A: pd.Index) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        assert "B" in (v + 5).coords
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda v: 3 * v, id="scalar_mul"),
+            pytest.param(lambda v: v + 5, id="scalar_add"),
+            pytest.param(lambda v: v <= 10, id="constraint"),
+        ],
+    )
+    def test_aux_coord_survives_scalar_op(self, v: Variable, build: Any) -> None:
+        assert "B" in build(v).coords
 
     def test_aux_coord_propagates_through_var_plus_var(
-        self, m: Model, A: pd.Index
+        self, m: Model, A: pd.Index, v: Variable
     ) -> None:
-        B = ("A", [311, 311, 322])
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(B=B)
-        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(B=B)
+        w = m.add_variables(lower=0, coords=[A], name="w").assign_coords(
+            B=("A", [311, 311, 322])
+        )
         result = v + w
         assert "B" in result.coords
         assert result.coords["B"].values.tolist() == [311, 311, 322]
-
-    def test_aux_coord_propagates_into_constraint(self, m: Model, A: pd.Index) -> None:
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
-        c = v <= 10
-        assert "B" in c.coords
 
     def test_aux_coord_only_on_dataarray_propagates(
         self, m: Model, A: pd.Index
@@ -2268,11 +2407,10 @@ class TestAuxCoordPropagation:
         c = x <= a
         assert "B" in c.coords
 
-    def test_aux_coord_only_on_one_side_propagates(self, m: Model, A: pd.Index) -> None:
+    def test_aux_coord_only_on_one_side_propagates(
+        self, m: Model, A: pd.Index, v: Variable
+    ) -> None:
         """Var+var counterpart of the above — hits the `merge` path."""
-        v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
-            B=("A", [311, 311, 322])
-        )
         w = m.add_variables(lower=0, coords=[A], name="w")  # no B
         result = v + w
         assert "B" in result.coords
@@ -2315,24 +2453,26 @@ class TestErrorMessageContent:
     @pytest.mark.v1
     def test_user_nan_message_separates_intents(self, x: Variable) -> None:
         """
-        The §5 raise must not collapse `data error` and `absence` into a
-        single suggestion — they need different fixes.
+        The §5 raise keeps `data error` and `absence` as separate,
+        differently-fixed intents.
         """
         with pytest.raises(ValueError) as exc:
             x + float("nan")
-        msg = str(exc.value)
-        assert "data error" in msg and ".fillna(value)" in msg
-        assert "absent" in msg and "mask=" in msg
-        assert ".reindex" in msg or ".where(cond)" in msg
+        assert str(exc.value) == (
+            "NaN found in a user-supplied constant. linopy treats this as "
+            "ambiguous: if you meant a *data error*, fix it with "
+            ".fillna(value); if you meant *absent at this slot*, mark it on "
+            "the variable instead (mask=, .where(cond), .reindex(...), "
+            ".shift(...))."
+        )
 
     @pytest.mark.v1
     def test_shared_dim_message_names_dim_and_values(
         self, m: Model, time: pd.RangeIndex
     ) -> None:
         """
-        The merge-path §8 raise must name the offending dim and show
-        both sides' labels — otherwise the user can't tell which dim
-        out of many.
+        The merge-path §8 raise names the offending dim and shows both
+        sides' labels.
         """
         other = m.add_variables(
             lower=0, coords=[pd.Index([10, 11, 12, 13, 14], name="time")], name="other"
@@ -2340,19 +2480,24 @@ class TestErrorMessageContent:
         x_local = m.add_variables(lower=0, coords=[time], name="x_local")
         with pytest.raises(ValueError) as exc:
             x_local + other
-        msg = str(exc.value)
-        assert "'time'" in msg
-        assert "[0, 1, 2, 3, 4]" in msg
-        assert "[10, 11, 12, 13, 14]" in msg
+        assert str(exc.value) == (
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[10, 11, 12, 13, 14]. Resolve with "
+            "`.sel(...)` / `.reindex(...)` to align before combining, with "
+            "`.assign_coords(...)` to relabel one side (positional alignment, "
+            "made explicit), with `linopy.align(...)` to pre-align several "
+            "operands at once, or by passing an explicit `join=` argument to "
+            "`.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+            "(accepts inner / outer / left / right / override)."
+        )
 
     @pytest.mark.v1
     def test_aux_conflict_message_names_coord_and_values(
         self, m: Model, A: pd.Index
     ) -> None:
         """
-        The §11 raise must name the conflicting coord and show both
-        sides' values — and mention `.assign_coords` as a fix, not only
-        `.drop_vars` and `isel(drop=True)`.
+        The §11 value-conflict raise names the coord, shows both sides'
+        values, and lists all three resolution paths.
         """
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
@@ -2364,37 +2509,38 @@ class TestErrorMessageContent:
         )
         with pytest.raises(ValueError) as exc:
             v + const
-        msg = str(exc.value)
-        assert "'B'" in msg
-        assert "conflicting values" in msg  # value-mismatch failure mode
-        assert "[311, 311, 322]" in msg
-        assert "[400, 400, 500]" in msg
-        # All three resolution paths from §11 should be listed.
-        assert ".drop_vars" in msg
-        assert ".assign_coords" in msg
-        assert ".isel" in msg
+        assert str(exc.value) == (
+            "Auxiliary coordinate 'B' has conflicting values across operands: "
+            "left=[311, 311, 322], right=[400, 400, 500]. xarray would "
+            "silently drop the conflict; linopy raises so the caller resolves "
+            "it. Use `.drop_vars('B')` to remove the coord, "
+            "`.assign_coords(B=...)` to relabel one side, or "
+            "`.isel(..., drop=True)` if the coord was introduced by a scalar isel."
+        )
 
     @pytest.mark.v1
     def test_aux_conflict_message_distinguishes_shape_vs_value(
         self, m: Model, A: pd.Index
     ) -> None:
         """
-        Shape mismatch and value disagreement are different failure
-        modes — surface that in the message text so the caller can
-        diagnose without re-reading both arrays.
+        Shape mismatch reports as its own failure mode — a scalar-isel leaves
+        a 0-d aux coord that differs in shape, not value, from the full vector.
         """
-        # scalar-isel leaves a 0-d aux coord on one side; the full vector
-        # on the other has a different shape, not a different value.
         v = m.add_variables(lower=0, coords=[A], name="v").assign_coords(
             B=("A", [311, 311, 322])
         )
         scalar_side = (1 * v).isel({"A": 0})  # B becomes a 0-d scalar coord
         full_side = 1 * v
-        with pytest.raises(ValueError, match="differing shapes") as exc:
+        with pytest.raises(ValueError) as exc:
             scalar_side + full_side
-        msg = str(exc.value)
-        assert "'B'" in msg
-        assert "shape" in msg
+        assert str(exc.value) == (
+            "Auxiliary coordinate 'B' has differing shapes across operands: "
+            "left.shape=(), right.shape=(3,). xarray would silently drop the "
+            "conflict; linopy raises so the caller resolves it. Use "
+            "`.drop_vars('B')` to remove the coord, `.assign_coords(B=...)` to "
+            "relabel one side, or `.isel(..., drop=True)` if the coord was "
+            "introduced by a scalar isel."
+        )
 
 
 # =====================================================================
@@ -2404,42 +2550,39 @@ class TestErrorMessageContent:
 
 class TestUserNaNEdgeCases:
     """
-    Regression guards for three NaN-entry routes that were untested.
-    The first two are already caught upstream (at the operator that
-    constructs the expression); the third needed an ``add_objective``
-    boundary check because a hand-built expression with NaN const
-    skips the operator path entirely.
+    Regression guards for NaN-entry routes that skip the operator-level
+    check: NaN reaching an objective or a constraint LHS must still raise
+    the standard §5 user-NaN error, at the ``*`` / ``+`` that builds the
+    expression.
     """
 
-    @pytest.mark.v1
-    def test_nan_in_expression_used_in_objective_raises(
-        self, m: Model, time: pd.RangeIndex
-    ) -> None:
-        """
-        ``add_objective((x * nan_costs).sum())`` raises at the ``*``
-        before the objective even sees the expression — guard against
-        a regression that lets NaN-cost objectives slip through.
-        """
-        x = m.add_variables(lower=0, coords=[time], name="x")
-        nan_costs = xr.DataArray(
-            [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
-        )
-        with pytest.raises(ValueError, match="NaN"):
-            m.add_objective((x * nan_costs).sum())
+    _USER_NAN_MSG = (
+        "NaN found in a user-supplied constant. linopy treats this as "
+        "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
+        "if you meant *absent at this slot*, mark it on the variable instead "
+        "(mask=, .where(cond), .reindex(...), .shift(...))."
+    )
 
     @pytest.mark.v1
-    def test_nan_in_constraint_lhs_raises(self, m: Model, time: pd.RangeIndex) -> None:
-        """
-        ``(x + nan_da) <= 5`` raises at the ``+`` on the LHS — the
-        RHS path is tested elsewhere; this guards the symmetric LHS
-        case.
-        """
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(
+                lambda m, x, nan: m.add_objective((x * nan).sum()), id="objective"
+            ),
+            pytest.param(lambda m, x, nan: (x + nan) <= 5, id="constraint_lhs"),
+        ],
+    )
+    def test_nan_slips_past_operator_check_raises(
+        self, m: Model, time: pd.RangeIndex, build: Any
+    ) -> None:
         x = m.add_variables(lower=0, coords=[time], name="x")
-        nan_da = xr.DataArray(
+        nan = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["time"], coords={"time": time}
         )
-        with pytest.raises(ValueError, match="NaN"):
-            (x + nan_da) <= 5
+        with pytest.raises(ValueError) as exc:
+            build(m, x, nan)
+        assert str(exc.value) == self._USER_NAN_MSG
 
 
 # =====================================================================
@@ -2466,8 +2609,6 @@ class TestObjectScope:
         self, kind: str, m: Model, time: pd.RangeIndex, da: xr.DataArray
     ) -> tuple[Any, Any]:
         """Return a raw constant of the given kind and its constant-expression twin."""
-        from linopy import LinearExpression
-
         if kind == "dataarray":
             return da, LinearExpression(da, m)
         if kind == "series":
@@ -2527,17 +2668,25 @@ class TestObjectScope:
     @pytest.mark.v1
     def test_coord_mismatch_raises_on_either_route(self, m: Model, x: Variable) -> None:
         """§8 fires identically whether the mismatched constant is raw or wrapped."""
-        from linopy import LinearExpression
-
         mismatched = xr.DataArray(
             self._VALUES,
             dims=["time"],
             coords={"time": pd.Index([10, 11, 12, 13, 14], name="time")},
         )
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
-            x + mismatched
-        with pytest.raises(ValueError, match="Coordinate mismatch on shared dimension"):
-            x + LinearExpression(mismatched, m)
+        expected = (
+            "Coordinate mismatch on shared dimension 'time': "
+            "left=[0, 1, 2, 3, 4], right=[10, 11, 12, 13, 14]. Resolve with "
+            "`.sel(...)` / `.reindex(...)` to align before combining, with "
+            "`.assign_coords(...)` to relabel one side (positional alignment, "
+            "made explicit), with `linopy.align(...)` to pre-align several "
+            "operands at once, or by passing an explicit `join=` argument to "
+            "`.add` / `.sub` / `.mul` / `.div` / `.le` / `.ge` / `.eq` "
+            "(accepts inner / outer / left / right / override)."
+        )
+        for mismatch in (mismatched, LinearExpression(mismatched, m)):
+            with pytest.raises(ValueError) as exc:
+                x + mismatch
+            assert str(exc.value) == expected
 
     def test_division_by_const_expr_is_type_error(
         self, m: Model, x: Variable, da: xr.DataArray
@@ -2546,8 +2695,6 @@ class TestObjectScope:
         The one type-decided footnote: a constant can be a divisor, an
         expression cannot — even one holding only constants.
         """
-        from linopy import LinearExpression
-
         x / da  # works: dividing by a constant
         with pytest.raises(TypeError):
             x / LinearExpression(da, m)

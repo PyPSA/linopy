@@ -13,8 +13,11 @@ class TestSemanticsOption:
         assert linopy.options["semantics"] == "legacy"
 
     def test_invalid_value_raises(self) -> None:
-        with pytest.raises(ValueError, match="Invalid semantics"):
+        with pytest.raises(ValueError) as e:
             linopy.options["semantics"] = "exact"
+        assert str(e.value) == (
+            "Invalid semantics: 'exact'. Must be one of ['legacy', 'v1']."
+        )
 
 
 class TestHarness:
