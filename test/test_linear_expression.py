@@ -1449,7 +1449,7 @@ class TestMultiKeyFastPath:
 
         assert {"period", "season"} <= set(grouped.dims)
         assert "group" not in grouped.dims
-        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+        assert not isinstance(grouped.indexes.get("period"), pd.MultiIndex)
 
     def test_sparse_combination_filled(self) -> None:
         # (2020, "s") never occurs -> empty term in the grid
@@ -1468,7 +1468,7 @@ class TestMultiKeyFastPath:
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
         with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
             grouped = expr.groupby(df).sum()
-        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
         assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
 
     @pytest.mark.v1
@@ -1477,8 +1477,8 @@ class TestMultiKeyFastPath:
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
         grouped = expr.groupby(df).sum()
-        assert not isinstance(grouped.data.indexes["group"], pd.MultiIndex)
-        assert {"period", "season"} <= set(grouped.data.coords)
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
         assert grouped.sizes["group"] == 3
 
     @pytest.mark.legacy
@@ -1489,14 +1489,14 @@ class TestMultiKeyFastPath:
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
-        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
 
     @pytest.mark.v1
     def test_namelist_observed_flat_v1(self) -> None:
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         grouped = expr.groupby(["period", "season"]).sum(observed=True)
-        assert not isinstance(grouped.data.indexes["group"], pd.MultiIndex)
-        assert {"period", "season"} <= set(grouped.data.coords)
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
 
     @pytest.mark.legacy
     def test_group_multiindex_reset_index_matches_v1(self) -> None:
@@ -1508,13 +1508,10 @@ class TestMultiKeyFastPath:
             warnings.simplefilter("ignore")
             legacy_mi = expr.groupby(["period", "season"]).sum(observed=True)
         converted = legacy_mi.reset_index("group")
-        prev = options["semantics"]
-        try:
-            options["semantics"] = "v1"
+        with options as o:
+            o.set_value(semantics="v1")
             v1_flat = expr.groupby(["period", "season"]).sum(observed=True)
-        finally:
-            options["semantics"] = prev
-        assert not isinstance(converted.data.indexes["group"], pd.MultiIndex)
+        assert not isinstance(converted.indexes["group"], pd.MultiIndex)
         assert_linequal(converted, v1_flat)
 
     def test_blowup_warns_when_sparse(self) -> None:
