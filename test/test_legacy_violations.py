@@ -1359,13 +1359,27 @@ class TestFillnaResolves:
         assert not bool(result.isnull().values.any())
 
     @pytest.mark.legacy
-    def test_legacy_variable_fillna_numeric_is_noop(self, xs: Variable) -> None:
-        """Same no-op on the Variable path: the fill value is ignored."""
+    def test_legacy_variable_fillna_numeric_fills_like_v1(self, xs: Variable) -> None:
+        """
+        #848 — unlike the raw ``to_linexpr().fillna`` two-step above,
+        ``Variable.fillna`` still holds the absent (-1) labels, so it places
+        the fill value directly and honours it under legacy too, matching v1.
+        This is the single cross-convention form the migration relies on.
+        """
         from linopy import LinearExpression
 
         result = xs.fillna(42)
         assert isinstance(result, LinearExpression)
-        assert result.const.values[0] == 0.0
+        assert result.const.values[0] == 42.0
+
+    @pytest.mark.legacy
+    def test_legacy_variable_fillna_does_not_warn(
+        self, xs: Variable, unsilenced: None
+    ) -> None:
+        """#847 — the documented absence resolution must not itself warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            xs.fillna(0)
 
     @pytest.mark.legacy
     def test_legacy_outer_fillna_then_add_double_counts(
