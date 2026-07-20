@@ -61,7 +61,12 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
   `grep "LEGACY: remove at 1.0"` marker. Dependency-ordered checklist in
   [`legacy-removal.md`].
 - [ ] Reframe [`convention.md`] / [`goals.md`] — drop the "v1"/legacy framing
-  once there is only one convention.
+  once there is only one convention. At this point [`convention.md`] also
+  **graduates into the rendered Sphinx docs** (add `myst-parser`, into the
+  toctree, internal `:doc:` cross-refs replacing the GitHub blob links in
+  `doc/migrating-to-v1.rst` and `doc/release_notes.rst`). Until then it stays a
+  design-record linked by URL — the rules are permanent but the transitional
+  framing would only be re-done, so rendering now is wasted effort.
 
 ## Not blocking (follow-ups)
 
