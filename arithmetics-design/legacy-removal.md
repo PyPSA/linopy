@@ -11,7 +11,6 @@ source tree.
 ### `linopy/config.py`
 
 - Drop `LEGACY_SEMANTICS`, `V1_SEMANTICS`, `VALID_SEMANTICS` constants.
-- Drop `LEGACY_SEMANTICS_MESSAGE`.
 - Drop the `LinopySemanticsWarning` class.
 - Remove the `semantics` key from `options`. The option no longer exists;
   callers don't need to opt in.
@@ -53,8 +52,7 @@ source tree.
     propagation rule).
   - The trailing `if is_v1(): ds = absorb_absence(ds)` becomes
     unconditional.
-- Drop the `LinopySemanticsWarning` / `LEGACY_SEMANTICS_MESSAGE` imports
-  from `expressions.py`.
+- Drop the legacy `warn_legacy` message imports from `expressions.py`.
 
 ### `linopy/variables.py`
 

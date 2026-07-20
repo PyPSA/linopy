@@ -13,14 +13,6 @@ LEGACY_SEMANTICS = "legacy"
 V1_SEMANTICS = "v1"
 VALID_SEMANTICS = {LEGACY_SEMANTICS, V1_SEMANTICS}
 
-LEGACY_SEMANTICS_MESSAGE = (
-    "The 'legacy' semantics are deprecated and will be removed in "
-    "linopy 1.0. Set linopy.options['semantics'] = 'v1' to opt in "
-    "to the new behaviour, or silence this warning with:\n"
-    "  import warnings; warnings.filterwarnings("
-    "'ignore', category=LinopySemanticsWarning)"
-)
-
 
 class LinopySemanticsWarning(FutureWarning):
     """

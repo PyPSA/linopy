@@ -309,6 +309,19 @@ def is_v1() -> bool:
     return options["semantics"] == V1_SEMANTICS
 
 
+def is_nan_scalar(value: Any) -> bool:
+    """
+    True for a scalar float NaN of any dtype — Python ``float`` or any
+    ``np.floating`` (``np.float32`` / ``np.float16`` included).
+
+    ``np.float64`` subclasses ``float``, but ``np.float32`` does not, so an
+    ``isinstance(value, float)`` guard alone lets a ``np.float32('nan')`` slip
+    past the §5 user-NaN check on a scalar fast path. The float-type guard is
+    still required to keep ``np.isnan`` from raising on non-numeric scalars.
+    """
+    return isinstance(value, (float, np.floating)) and bool(np.isnan(value))
+
+
 def check_user_nan(*, op_kind: str = "add") -> None:
     """
     Enforce §5 for a user-supplied constant (scalar or array).
@@ -412,6 +425,10 @@ def conform_merge_dims(
     either under v1, and warns on either under legacy. Helper dims (``_term``,
     ``_factor``) and the concat dim are excluded; bare dimension indexes are
     compared, so auxiliary coords stay §11's job.
+
+    A non-unique shared index can't be resolved to a permutation (``get_indexer``
+    requires uniqueness), so it is classified as a *mismatch* rather than a
+    reorder — harmless, since both raise under v1 and warn under legacy.
     """
     datasets = list(datasets)
     if len(datasets) < 2:
@@ -433,7 +450,10 @@ def conform_merge_dims(
             ref, idx = indexed[0][d], indexed[i][d]
             if ref.equals(idx):
                 continue
-            positions = idx.get_indexer(ref) if len(idx) == len(ref) else None
+            # Non-unique index → mismatch (see docstring).
+            positions = (
+                idx.get_indexer(ref) if len(idx) == len(ref) and idx.is_unique else None
+            )
             if positions is not None and (positions >= 0).all():
                 if reorder is None:
                     reorder = (str(d), ref.values, idx.values)
