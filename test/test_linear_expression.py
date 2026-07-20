@@ -1906,7 +1906,7 @@ def test_linear_expression_groupby_with_dataframe(v: Variable) -> None:
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="only supported for"):
         expr.groupby(groups).sum(use_fallback=True)
     with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
         grouped = expr.groupby(groups).sum()
@@ -1924,7 +1924,7 @@ def test_linear_expression_groupby_with_dataframe_v1(v: Variable) -> None:
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="only supported for"):
         expr.groupby(groups).sum(use_fallback=True)
     grouped = expr.groupby(groups).sum()
     assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
@@ -1943,7 +1943,7 @@ def test_linear_expression_groupby_with_dataframe_with_same_group_name(
         {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
         index=v.indexes["dim_2"],
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="only supported for"):
         expr.groupby(groups).sum(use_fallback=True)
     with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
         grouped = expr.groupby(groups).sum()
@@ -1974,7 +1974,7 @@ def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> 
     expr = 1 * u
     n = len(u.data["dim_3"])
     groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="only supported for"):
         expr.groupby(groups).sum(use_fallback=True)
     with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
         grouped = expr.groupby(groups).sum()
@@ -2869,39 +2869,6 @@ def test_variable_names() -> None:
     assert expr.variable_names == {"a"}
 
 
-@pytest.mark.legacy
-def test_variable_names_masked_addend_legacy() -> None:
-    # Legacy: a fully masked addend's terms turn dead; the live variable remains.
-    m = Model()
-    time = pd.Index(range(3), name="time")
-    a = m.add_variables(name="a", coords=[time])
-    b = m.add_variables(name="b", coords=[time])
-    mask = xr.DataArray(False, coords=[time])
-
-    expr = a + (b * 1).where(mask)
-    assert expr.nterm == 2
-    assert expr.variable_names == {"a"}
-
-    expr = (b * 1).where(mask)
-    assert expr.nterm == 1
-    assert expr.variable_names == set()
-
-
-@pytest.mark.v1
-def test_variable_names_masked_addend_v1() -> None:
-    # v1 (section 6): absence propagates — a sum with a fully masked addend
-    # has no live terms anywhere.
-    m = Model()
-    time = pd.Index(range(3), name="time")
-    a = m.add_variables(name="a", coords=[time])
-    b = m.add_variables(name="b", coords=[time])
-    mask = xr.DataArray(False, coords=[time])
-
-    expr = a + (b * 1).where(mask)
-    assert expr.variable_names == set()
-    assert expr.isnull().all()
-
-
 def test_nterm() -> None:
     m = Model()
     time = pd.Index(range(3), name="time")
@@ -2919,34 +2886,6 @@ def test_nterm() -> None:
 
     expr = a + b.where(all_false)
     assert expr.nterm == 2
-
-
-@pytest.mark.legacy
-def test_nterm_simplify_collapses_fully_masked_addend() -> None:
-    # Legacy: a fully masked addend contributes dead terms that simplify() drops.
-    m = Model()
-    time = pd.Index(range(3), name="time")
-    all_false = xr.DataArray(False, coords=[time])
-    a = m.add_variables(name="a", coords=[time])
-    b = m.add_variables(name="b", coords=[time])
-
-    expr = (a + b.where(all_false)).simplify()
-    assert expr.nterm == 1
-
-
-@pytest.mark.v1
-def test_nterm_simplify_absent_expression_has_no_terms() -> None:
-    # v1 (section 6): absence propagates — a fully masked addend absorbs the
-    # whole sum, so nothing is left to simplify.
-    m = Model()
-    time = pd.Index(range(3), name="time")
-    all_false = xr.DataArray(False, coords=[time])
-    a = m.add_variables(name="a", coords=[time])
-    b = m.add_variables(name="b", coords=[time])
-
-    expr = (a + b.where(all_false)).simplify()
-    assert expr.nterm == 0
-    assert expr.isnull().all()
 
 
 class TestJoinParameter:

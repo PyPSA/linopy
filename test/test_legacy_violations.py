@@ -1033,6 +1033,15 @@ class TestAbsencePropagation:
         # x.shift(time=1) → absent at time=0, present elsewhere.
         return x.shift(time=1)
 
+    @pytest.fixture
+    def ab_all_masked(self, m: Model) -> tuple[Variable, Variable, xr.DataArray]:
+        """Two present variables over a shared dim plus an all-False mask."""
+        t = pd.Index(range(3), name="time")
+        a = m.add_variables(name="a", coords=[t])
+        b = m.add_variables(name="b", coords=[t])
+        mask = xr.DataArray(False, coords=[t])
+        return a, b, mask
+
     @pytest.mark.v1
     def test_to_linexpr_marks_absent_with_nan_const(self, xs: Variable) -> None:
         """
@@ -1260,6 +1269,52 @@ class TestAbsencePropagation:
         quad = builders[build]()
         assert not bool(quad.isnull().values[0])
         assert not np.isnan(quad.coeffs.values[0]).any()
+
+    # --- masked-addend absence (a fully masked term in a sum) -----------
+    # Moved from test_linear_expression.py to co-locate §6 coverage.
+
+    @pytest.mark.v1
+    def test_masked_addend_absorbs_sum(
+        self, ab_all_masked: tuple[Variable, Variable, xr.DataArray]
+    ) -> None:
+        """§6: a fully masked addend absorbs the whole sum — no live terms."""
+        a, b, mask = ab_all_masked
+        expr = a + (b * 1).where(mask)
+        assert expr.variable_names == set()
+        assert expr.isnull().all()
+
+    @pytest.mark.v1
+    def test_simplify_absent_expression_has_no_terms(
+        self, ab_all_masked: tuple[Variable, Variable, xr.DataArray]
+    ) -> None:
+        """§6: absence propagates, so simplify() leaves nothing to keep."""
+        a, b, mask = ab_all_masked
+        expr = (a + b.where(mask)).simplify()
+        assert expr.nterm == 0
+        assert expr.isnull().all()
+
+    @pytest.mark.legacy
+    def test_legacy_masked_addend_keeps_dead_terms(
+        self, ab_all_masked: tuple[Variable, Variable, xr.DataArray]
+    ) -> None:
+        """Legacy: the masked addend's terms turn dead; the live one remains."""
+        a, b, mask = ab_all_masked
+        expr = a + (b * 1).where(mask)
+        assert expr.nterm == 2
+        assert expr.variable_names == {"a"}
+
+        expr = (b * 1).where(mask)
+        assert expr.nterm == 1
+        assert expr.variable_names == set()
+
+    @pytest.mark.legacy
+    def test_legacy_simplify_drops_masked_addend(
+        self, ab_all_masked: tuple[Variable, Variable, xr.DataArray]
+    ) -> None:
+        """Legacy: simplify() drops the masked addend's dead terms."""
+        a, b, mask = ab_all_masked
+        expr = (a + b.where(mask)).simplify()
+        assert expr.nterm == 1
 
 
 class TestFillnaResolves:
