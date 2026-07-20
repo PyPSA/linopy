@@ -325,6 +325,8 @@ class Variable:
     def to_linexpr(
         self,
         coefficient: ConstantLike = 1,
+        *,
+        _warn_absence: bool = True,  # LEGACY: remove at 1.0 — gates the legacy absence warning
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
@@ -380,7 +382,7 @@ class Variable:
             # the origin of the most common legacy↔v1 divergence (masked
             # variables in arithmetic) that no other warn-site catches.
             has_absence = bool((self.labels == -1).any())
-            if has_absence:
+            if has_absence and _warn_absence:
                 warn_legacy(_legacy_masked_variable_message(self.name))
             coefficient = reindex_like_if_needed(coefficient, self.labels, 0)
             coefficient = coefficient.fillna(0)
@@ -1319,7 +1321,14 @@ class Variable:
             Value to fill the absent slots with.
         """
         if isinstance(fill_value, int | float | np.integer | np.floating):
-            return self.to_linexpr().fillna(fill_value)
+            if is_v1():
+                return self.to_linexpr().fillna(fill_value)
+            # LEGACY: remove at 1.0 — legacy to_linexpr marks absent const as 0
+            # (not NaN), so LinearExpression.fillna can't fill it and the fill is
+            # silently dropped. Place fill_value directly to match v1, and skip
+            # the absence warning fillna is itself the documented resolution for.
+            lin = self.to_linexpr(_warn_absence=False)
+            return lin.assign(const=lin.const.where(self.labels != -1, fill_value))
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
