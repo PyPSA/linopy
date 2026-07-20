@@ -210,10 +210,17 @@ position). An operand whose *dimension* names one of those levels — a
 per-`period` weighting meeting a `snapshot`-indexed expression — is a
 same-name conflict between a dimension and an auxiliary coordinate, and it
 raises like any other conflict of this section. There is no implicit
-projection; write it explicitly by selecting with the dimension's level
-values:
+projection. `snapshot` is a flat dimension carrying `period` and `timestep`
+as auxiliary coordinates (v1 rejects a first-class `pd.MultiIndex` dimension,
+so `expr.indexes["snapshot"]` is a flat index, not a `MultiIndex`). Map the
+per-`period` input onto `snapshot` through that coordinate — a plain array
+of one weight per position — then use it in the operation:
 
-    weights.sel(period=expr.indexes["snapshot"].get_level_values("period"))
+    # weights: pd.Series indexed by `period`; expr: indexed by `snapshot`
+    w = xr.DataArray(
+        weights.loc[expr.coords["period"].values].to_numpy(), dims="snapshot"
+    )
+    weighted = expr * w   # one constraint/term per snapshot, weighted by period
 
 An input that reconstructs the *entire* MultiIndex (all levels, every
 combination) is not a conflict — it is the same coordinate spelled
