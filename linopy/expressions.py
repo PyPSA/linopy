@@ -860,22 +860,15 @@ class BaseExpression(ABC):
                 # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
                 # Legacy default: positional when sizes match, else left-join.
                 mismatch = first_mismatched_dim(self.const, other)
+                if mismatch is not None:
+                    warn_legacy(
+                        _legacy_coord_mismatch_message(
+                            "this operator's constant operand", *mismatch
+                        ),
+                        stacklevel=4,
+                    )
                 if other.sizes == self.const.sizes:
-                    if mismatch is not None:
-                        warn_legacy(
-                            _legacy_coord_mismatch_message(
-                                "this operator's constant operand", *mismatch
-                            ),
-                            stacklevel=4,
-                        )
                     return self.const, other.assign_coords(coords=self.coords), False
-                warn_legacy(
-                    _legacy_coord_mismatch_message(
-                        "this operator's constant operand",
-                        *(mismatch or (None, None, None)),
-                    ),
-                    stacklevel=4,
-                )
                 return (
                     self.const,
                     other.reindex_like(self.const, fill_value=fill_value),

@@ -173,6 +173,23 @@ class TestBroadcastNonSharedDim:
         result = x * bcast
         assert set(result.coeffs.dims) == {"time", "scenario", "_term"}
 
+    @pytest.mark.legacy
+    def test_matmul_exactly_aligned_shared_dim_is_silent(
+        self, x: Variable, unsilenced: None
+    ) -> None:
+        # #849 — the contracted "time" dim is identically aligned; the size
+        # difference is only the constant's own "cyc" dim, which broadcasts.
+        # v1 accepts this, so legacy must not warn about a coordinate mismatch.
+        c = xr.DataArray(
+            np.ones((5, 2)),
+            dims=["time", "cyc"],
+            coords={"time": x.coords["time"]},
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            result = x @ c
+        assert set(result.const.dims) == {"cyc"}
+
 
 # =====================================================================
 # Coordinate-alignment intro — unlabeled operands pair by size (#736)
