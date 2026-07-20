@@ -1735,6 +1735,16 @@ class BaseExpression(ABC):
         -------
         linopy.LinearExpression or linopy.QuadraticExpression
             A new object with missing values filled with the given value.
+
+        Notes
+        -----
+        This fills ``NaN`` entries only. Under legacy semantics an absent slot
+        of a variable is already materialised as ``const = 0`` by the time it
+        reaches an expression, so there is no ``NaN`` here to fill and the value
+        is a no-op (under v1 absence is carried as ``NaN`` and is filled). To
+        resolve a variable's absent slots to a constant on both conventions, use
+        :meth:`Variable.fillna` (or resolve on the variable before
+        ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
