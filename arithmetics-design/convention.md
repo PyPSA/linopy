@@ -202,6 +202,12 @@ conflict, which is the [#295] bug. The caller resolves it explicitly with
 `.drop_vars(name)` (remove the coord) or `.assign_coords(name=...)`
 (relabel one side).
 
+A common source is a *scalar* coordinate left behind by positional indexing:
+`x.isel(time=0)` drops `time` as a dimension but keeps it as a scalar coord
+(the first label), so a cyclic/boundary constraint like
+`x.isel(time=0) == x.isel(time=-1)` conflicts on `time` (first vs last). Drop
+it at the source with `.isel(..., drop=True)` / `.sel(..., drop=True)`.
+
 **Stacked MultiIndex dimensions.** A stacked MultiIndex dim (e.g. PyPSA's
 `(period, timestep)` `snapshot`) stores its *levels* as auxiliary
 coordinates — `period` and `timestep` are non-dimension coords on

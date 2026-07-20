@@ -109,10 +109,14 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
      - Absence propagates (the slot stays absent) instead of counting as ``0``.
      - Decide the intent: ``.fillna(0)`` to keep the old "treat as zero", or
        leave it to propagate and drop the term.
-   * - **Conflicting auxiliary coordinates** on a shared dim
+   * - **Conflicting auxiliary coordinates** on a shared dim — including a
+       leftover *scalar* coord from positional indexing (``x.isel(time=0)``
+       keeps ``time`` as a scalar coord, so a cyclic/boundary constraint like
+       ``x.isel(time=0) == x.isel(time=-1)`` sees ``time`` = first vs last)
      - Raises instead of silently dropping one.
-     - ``.drop_vars(name)`` to remove the coord, or ``.assign_coords(name=...)``
-       to relabel one side.
+     - ``.drop_vars(name)`` / ``.assign_coords(name=...)``; for a leftover index
+       coord, drop it at the source with ``.isel(..., drop=True)`` /
+       ``.sel(..., drop=True)``.
    * - A first-class ``pd.MultiIndex`` **dimension** — and a per-*level* input
        onto it (e.g. per-``period`` bounds onto a ``(period, timestep)``
        ``snapshot``)
