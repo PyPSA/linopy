@@ -202,6 +202,10 @@ def _restore_group_dim_position(
     place, but both the scatter kernel and the fallback append the group dim at
     the trailing position. Surviving dims keep their order; the group dim(s) are
     reinserted where the consumed dim(s) used to be.
+
+    The transposed terms are a non-contiguous view; numpy-backed arrays are made
+    C-contiguous so downstream flattening (LP/solver export) ravels a view
+    instead of copying. Dask arrays are left lazy.
     """
     consumed = [d for d in original_dims if d not in result.dims]
     if not consumed:
@@ -220,7 +224,12 @@ def _restore_group_dim_position(
         for d in order
         if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
     }
-    return result.assign_coords(reordered_coords)
+    result = result.assign_coords(reordered_coords)
+    for name in ("coeffs", "vars"):
+        term = result[name]
+        if term.chunks is None:
+            result[name] = (term.dims, np.ascontiguousarray(term.values))
+    return result
 
 
 def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
