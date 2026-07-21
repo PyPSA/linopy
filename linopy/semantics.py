@@ -6,8 +6,8 @@ enforcement that the v1 arithmetic convention requires. Importing from
 here keeps ``expressions.py`` focused on the operator dispatch and lets a
 future legacy removal be a single-file delete.
 
-See ``arithmetics-design/convention.md`` for the rules these helpers
-implement and ``arithmetics-design/goals.md`` for the design intent.
+See ``doc/design/convention.rst`` for the rules these helpers
+implement and ``doc/design/goals.rst`` for the design intent.
 """
 
 from __future__ import annotations

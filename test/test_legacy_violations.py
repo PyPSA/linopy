@@ -3,7 +3,7 @@ Legacy convention violations and v1 fixes.
 
 Pairs ``@pytest.mark.legacy`` tests that document the surprising legacy
 behaviour against ``@pytest.mark.v1`` tests that pin the v1 fix. Each
-class corresponds to a section of ``arithmetics-design/convention.md``
+class corresponds to a section of ``doc/design/convention.rst``
 and to one or more linopy bug reports.
 
 Slice A — constant operand path (§5, §8, §9):

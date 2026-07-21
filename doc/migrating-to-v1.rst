@@ -137,7 +137,7 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
      - ``.sortby`` / ``.reindex`` the grouper to the dimension's labels.
 
 The full, normative rule list lives in the
-`arithmetic convention <https://github.com/PyPSA/linopy/blob/master/arithmetics-design/convention.md>`_.
+:doc:`arithmetic convention <design/convention>`.
 
 .. _silencing-v1:
 

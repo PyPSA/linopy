@@ -19,7 +19,7 @@ Upcoming Version
   * a first-class ``pd.MultiIndex`` dimension is rejected in favour of a flat dimension with the levels as auxiliary coordinates.
   * a ``groupby`` grouper aligns to the grouped dimension by label — a grouper whose labels differ in set or order from the dimension raises instead of being matched positionally, and a multi-key grouper yields a flat ``group`` dimension (keys as aux coords) rather than a stacked ``group`` MultiIndex. (https://github.com/PyPSA/linopy/issues/827)
 
-* Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in `the arithmetic convention <https://github.com/PyPSA/linopy/blob/master/arithmetics-design/convention.md>`_.
+* Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
 *In-place solver updates (persistent re-solve)*
 

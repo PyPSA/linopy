@@ -167,3 +167,12 @@ This package is published under MIT license.
    api
    release_notes
    contributing
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Design & Internals
+
+   design/convention
+   design/goals
+   design/legacy-removal

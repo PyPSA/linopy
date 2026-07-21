@@ -858,7 +858,7 @@ class BaseExpression(ABC):
             if is_v1():
                 join = "exact"
             else:
-                # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+                # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
                 mismatch = first_mismatched_dim(self.const, other)
                 if mismatch is not None:
                     warn_legacy(
@@ -957,7 +957,7 @@ class BaseExpression(ABC):
             )
         return self.assign(const=self_const + da)
 
-    # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+    # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _add_constant_legacy(
         self, other: ConstantLike, join: JoinOptions | None
     ) -> Self:
@@ -1032,7 +1032,7 @@ class BaseExpression(ABC):
             )
         return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
 
-    # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+    # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _apply_constant_op_legacy(
         self,
         other: ConstantLike,
@@ -1587,7 +1587,7 @@ class BaseExpression(ABC):
             )
             return constraints.Constraint(data, model=self.model)
 
-        # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+        # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
         # Legacy auto-mask path: NaN RHS is silently preserved as "no
         # constraint at this row" (the legacy reindex_like-pad fills
         # subset coords with NaN, then `sub` would fill them with 0 as
@@ -1654,7 +1654,7 @@ class BaseExpression(ABC):
         """
         if is_v1():
             return self.const.isnull()
-        # LEGACY: remove at 1.0 — see arithmetics-design/legacy-removal.md.
+        # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
         helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
