@@ -25,7 +25,7 @@ Upcoming Version
 
 **Performance**
 
-* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x.
+* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x. The kernel emits the grouped result in its final axis order in one contiguous allocation; on dask inputs the reduction now runs over a single chunk (it no longer parallelises over the surviving dimensions).
 
 **Deprecations**
 
@@ -39,6 +39,7 @@ Upcoming Version
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
 * ``LinearExpression.groupby(...).sum()`` with a multi-dimensional ``DataArray`` grouper now reduces over all of the grouper's dimensions on the default (fast) path, instead of leaking one of them into the result.
+* ``LinearExpression.groupby(...).sum()`` now keeps the grouped dimension's position, replacing it in place like xarray's native groupby-reduce, instead of moving the group dimension to the trailing position (regressed in 0.8.0). Both the default and ``use_fallback=True`` paths are fixed.
 * ``LinearExpression.groupby(...).sum()`` now raises when a grouper's labels are reordered or a different set relative to the expression, instead of silently regrouping by position. Reorder the grouper to match the expression's coordinates before grouping. (https://github.com/PyPSA/linopy/issues/827)
 * ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail.
 * ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (https://github.com/PyPSA/linopy/issues/459)
