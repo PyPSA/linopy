@@ -1769,6 +1769,36 @@ def test_linear_expression_groupby_multidim_preserves_extra_dim() -> None:
     assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
 
 
+@pytest.mark.parametrize("group_name", ["bus", "name"])
+@pytest.mark.parametrize("use_fallback", [False, True])
+def test_linear_expression_groupby_preserves_dim_position(
+    use_fallback: bool, group_name: str
+) -> None:
+    # Grouping must replace the grouped dim in place, like xarray. `name` sits
+    # between `scenario` and `snapshot`, so the group dim must stay in the
+    # middle — also when the grouper reuses the grouped dim's name.
+    m = Model()
+    coords = [
+        pd.Index(["s1", "s2"], name="scenario"),
+        pd.Index(["a", "b", "c"], name="name"),
+        pd.RangeIndex(2, name="snapshot"),
+    ]
+    v = m.add_variables(coords=coords, name="x")
+    groups = xr.DataArray(
+        ["g1", "g1", "g2"], coords={"name": ["a", "b", "c"]}, name=group_name
+    )
+
+    reference = (
+        xr.DataArray(np.zeros((2, 3, 2)), coords=coords, dims=[c.name for c in coords])
+        .groupby(groups)
+        .sum()
+    )
+    grouped = (1 * v).groupby(groups).sum(use_fallback=use_fallback)
+
+    result_dims = tuple(d for d in grouped.dims if d != TERM_DIM)
+    assert result_dims == reference.dims
+
+
 class TestGroupbyGrouperAlignment:
     """
     A ``pd.Series``/``DataArray`` grouper whose labels are reordered or a
