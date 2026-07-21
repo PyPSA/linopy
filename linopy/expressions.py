@@ -494,7 +494,9 @@ class LinearExpressionGroupby:
         padded with fill values. The group dimension replaces the grouped one in
         place: all surviving dimensions are passed as core dims, so ``apply_ufunc``
         emits the target axis order and the padded arrays are allocated once,
-        contiguous. Dask arrays are collapsed to a single chunk (no per-dim
+        contiguous. The constant is reduced before the term scatters so its
+        temporaries are freed before the padded arrays exist, keeping peak memory
+        at input + result. Dask arrays are collapsed to a single chunk (no per-dim
         parallelism) since every dimension is now a core dim.
         """
         data = self.data if data is None else data
@@ -578,11 +580,12 @@ class LinearExpressionGroupby:
                 output_dtypes=[da.dtype],
             )
 
+        const = group_sum(data.const)
         ds = Dataset(
             {
                 "coeffs": scatter(data.coeffs, fill_value["coeffs"]),
                 "vars": scatter(data.vars, fill_value["vars"]),
-                "const": group_sum(data.const),
+                "const": const,
             }
         )
         return ds.assign_coords({GROUP_DIM: unique_groups})
