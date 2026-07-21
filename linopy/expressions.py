@@ -192,8 +192,22 @@ def _flatten_multidim_group(
     return series, data
 
 
+def _grouper_dims(group: Any) -> list[Hashable] | None:
+    """
+    The dims a grouper consumes when grouping, or None for grouper types whose
+    dims are unknown here (exotic hashables, validated by xarray's groupby).
+    """
+    if isinstance(group, (DataArray, IndexVariable)):
+        return list(group.dims)
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        return [group.index.name]
+    return None
+
+
 def _restore_group_dim_position(
-    result: Dataset, original_dims: tuple[str, ...]
+    result: Dataset,
+    original_dims: tuple[Hashable, ...],
+    grouped_dims: Sequence[Hashable] | None = None,
 ) -> Dataset:
     """
     Move the new group dimension into the slot the grouped dimension occupied,
@@ -206,15 +220,23 @@ def _restore_group_dim_position(
     This covers the fallback, which appends the group dim, and normalises the
     scatter kernel's target-ordered output.
 
+    ``grouped_dims`` names the dims the grouping consumed. It must be passed
+    whenever the grouper's name can equal a grouped dim (the replacement dim then
+    shadows the consumed one, so it cannot be inferred from the dims alone);
+    when None, the consumed dims are inferred as those absent from the result.
+
     Numpy-backed terms are made C-contiguous so downstream flattening (LP/solver
     export) ravels a view instead of copying; a no-op when already contiguous, as
     the scatter kernel's output is. Dask arrays are left lazy.
     """
-    consumed = [d for d in original_dims if d not in result.dims]
+    if grouped_dims is None:
+        consumed = [d for d in original_dims if d not in result.dims]
+    else:
+        consumed = [d for d in original_dims if d in set(grouped_dims)]
     if not consumed:
         return result
-    new_dims = [str(d) for d in result.dims if d not in original_dims]
-    order: list[str] = []
+    new_dims = [str(d) for d in result.dims if d not in original_dims or d in consumed]
+    order: list[Hashable] = []
     for d in original_dims:
         if d not in consumed:
             order.append(d)
@@ -441,6 +463,7 @@ class LinearExpressionGroupby:
 
         data = self.data
         original_dims = self.data.coeffs.dims
+        grouped_dims = _grouper_dims(group)
         is_multidim_grouper = (
             isinstance(group, DataArray)
             and group.ndim > 1
@@ -482,7 +505,7 @@ class LinearExpressionGroupby:
 
             ds = self.groupby.map(func)
 
-        ds = _restore_group_dim_position(ds, original_dims)
+        ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
