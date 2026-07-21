@@ -196,16 +196,19 @@ def _restore_group_dim_position(
     result: Dataset, original_dims: tuple[str, ...]
 ) -> Dataset:
     """
-    Move the new group dimension into the slot the grouped dimension occupied.
+    Move the new group dimension into the slot the grouped dimension occupied,
+    matching xarray's groupby-reduce and linopy <= 0.8.0.
 
-    xarray's groupby-reduce and linopy <= 0.8.0 replace the grouped dimension in
-    place, but both the scatter kernel and the fallback append the group dim at
-    the trailing position. Surviving dims keep their order; the group dim(s) are
-    reinserted where the consumed dim(s) used to be.
+    Surviving dims keep their order; the group dim(s) are reinserted where the
+    consumed dim(s) used to be. The coordinate variables are reordered too so the
+    dataset's canonical dim order (which the constructor's ``broadcast`` re-derives
+    from coordinate-insertion order) matches, instead of trailing the group dim.
+    This covers the fallback, which appends the group dim, and normalises the
+    scatter kernel's target-ordered output.
 
-    The transposed terms are a non-contiguous view; numpy-backed arrays are made
-    C-contiguous so downstream flattening (LP/solver export) ravels a view
-    instead of copying. Dask arrays are left lazy.
+    Numpy-backed terms are made C-contiguous so downstream flattening (LP/solver
+    export) ravels a view instead of copying; a no-op when already contiguous, as
+    the scatter kernel's output is. Dask arrays are left lazy.
     """
     consumed = [d for d in original_dims if d not in result.dims]
     if not consumed:
@@ -488,16 +491,18 @@ class LinearExpressionGroupby:
 
         Every group member keeps its block of ``nterm`` terms, so the resulting
         term dimension has size ``max_group_size * nterm`` and smaller groups are
-        padded with fill values. Only the result arrays are allocated, keeping
-        peak memory at input + result.
+        padded with fill values. The group dimension replaces the grouped one in
+        place: all surviving dimensions are passed as core dims, so ``apply_ufunc``
+        emits the target axis order and the padded arrays are allocated once,
+        contiguous. Dask arrays are collapsed to a single chunk (no per-dim
+        parallelism) since every dimension is now a core dim.
         """
         data = self.data if data is None else data
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
-        _scatter_core_dims = {group_dim: -1, TERM_DIM: -1}
         if data.chunks:
-            data = data.chunk(_scatter_core_dims)
+            data = data.chunk(-1)
 
         codes, unique_groups = pd.factorize(group, sort=True)
         if (codes == -1).any():
@@ -511,30 +516,34 @@ class LinearExpressionGroupby:
         position_in_group = pd.Series(codes).groupby(codes).cumcount().to_numpy()
         nterm = data.sizes[TERM_DIM]
 
-        def scatter_terms(values: np.ndarray, fill: Any) -> np.ndarray:
-            """Place each member's term block into its group's padded slot."""
-            leading = values.shape[:-2]
-            blocks = np.full(
-                (*leading, n_groups, nterm, max_size), fill, dtype=values.dtype
-            )
-            blocks[..., codes, :, position_in_group] = np.moveaxis(values, -2, 0)
-            return blocks.reshape((*leading, n_groups, nterm * max_size))
-
-        def group_sum(values: np.ndarray) -> np.ndarray:
-            """Sum values within each group along the last axis, skipping NaNs."""
-            by_element = np.moveaxis(values, -1, 0)
-            summed = np.zeros((n_groups, *by_element.shape[1:]), dtype=values.dtype)
-            np.add.at(summed, codes, np.where(np.isnan(by_element), 0, by_element))
-            return np.moveaxis(summed, 0, -1)
-
         def scatter(da: DataArray, fill: Any) -> DataArray:
-            """Run the term scatter over the core dims, lazily for dask arrays."""
+            """Scatter each member's terms into its group's padded slot, keeping
+            the grouped dimension's position."""
+            da = da.transpose(..., TERM_DIM)
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def scatter_terms(values: np.ndarray) -> np.ndarray:
+                surv_shape = [
+                    n_groups if d == group_dim else s
+                    for d, s in zip(dims_in, values.shape)
+                    if d != TERM_DIM
+                ]
+                out = np.full(
+                    (*surv_shape, nterm, max_size), fill, dtype=values.dtype
+                )
+                grouped = np.moveaxis(out, group_axis, 0)
+                grouped[codes, ..., :, position_in_group] = np.moveaxis(
+                    values, group_axis, 0
+                )
+                return out.reshape((*surv_shape, nterm * max_size))
+
             return xr.apply_ufunc(
                 scatter_terms,
                 da,
-                kwargs={"fill": fill},
-                input_core_dims=[[group_dim, TERM_DIM]],
-                output_core_dims=[[GROUP_DIM, TERM_DIM]],
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
                 exclude_dims={group_dim, TERM_DIM},
                 dask="parallelized",
                 dask_gufunc_kwargs={
@@ -543,21 +552,35 @@ class LinearExpressionGroupby:
                 output_dtypes=[da.dtype],
             )
 
-        const = xr.apply_ufunc(
-            group_sum,
-            data.const,
-            input_core_dims=[[group_dim]],
-            output_core_dims=[[GROUP_DIM]],
-            exclude_dims={group_dim},
-            dask="parallelized",
-            dask_gufunc_kwargs={"output_sizes": {GROUP_DIM: n_groups}},
-            output_dtypes=[data.const.dtype],
-        )
+        def group_sum(da: DataArray) -> DataArray:
+            """Sum the constant term within each group, keeping the grouped
+            dimension's position."""
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def reduce(values: np.ndarray) -> np.ndarray:
+                members = np.moveaxis(values, group_axis, 0)
+                summed = np.zeros((n_groups, *members.shape[1:]), dtype=values.dtype)
+                np.add.at(summed, codes, np.where(np.isnan(members), 0, members))
+                return np.moveaxis(summed, 0, group_axis)
+
+            return xr.apply_ufunc(
+                reduce,
+                da,
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
+                exclude_dims={group_dim},
+                dask="parallelized",
+                dask_gufunc_kwargs={"output_sizes": {GROUP_DIM: n_groups}},
+                output_dtypes=[da.dtype],
+            )
+
         ds = Dataset(
             {
                 "coeffs": scatter(data.coeffs, fill_value["coeffs"]),
                 "vars": scatter(data.vars, fill_value["vars"]),
-                "const": const,
+                "const": group_sum(data.const),
             }
         )
         return ds.assign_coords({GROUP_DIM: unique_groups})
