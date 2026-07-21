@@ -1695,6 +1695,39 @@ def test_linear_expression_groupby_multidim_preserves_extra_dim() -> None:
     assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="groupby-sum moves the group dim to the trailing position instead of "
+    "keeping the grouped dim's slot, diverging from xarray's native groupby-reduce "
+    "and linopy <= 0.8.0. Regressed in #802 (apply_ufunc scatter kernel); "
+    "assert_linequal aligns dims so existing tests miss it.",
+)
+@pytest.mark.parametrize("use_fallback", [False, True])
+def test_linear_expression_groupby_preserves_dim_position(use_fallback: bool) -> None:
+    # Grouping must replace the grouped dim in place, like xarray. `name` sits
+    # between `scenario` and `snapshot`, so the group dim must stay in the middle.
+    m = Model()
+    coords = [
+        pd.Index(["s1", "s2"], name="scenario"),
+        pd.Index(["a", "b", "c"], name="name"),
+        pd.RangeIndex(2, name="snapshot"),
+    ]
+    v = m.add_variables(coords=coords, name="x")
+    groups = xr.DataArray(
+        ["g1", "g1", "g2"], coords={"name": ["a", "b", "c"]}, name="bus"
+    )
+
+    reference = (
+        xr.DataArray(np.zeros((2, 3, 2)), coords=coords, dims=[c.name for c in coords])
+        .groupby(groups)
+        .sum()
+    )
+    grouped = (1 * v).groupby(groups).sum(use_fallback=use_fallback)
+
+    result_dims = tuple(d for d in grouped.dims if d != TERM_DIM)
+    assert result_dims == reference.dims
+
+
 class TestGroupbyGrouperAlignment:
     """
     A ``pd.Series``/``DataArray`` grouper whose labels are reordered or a
