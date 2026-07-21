@@ -192,7 +192,9 @@ def _flatten_multidim_group(
     return series, data
 
 
-def _restore_group_dim_position(result: Dataset, original_dims: tuple[str, ...]) -> Dataset:
+def _restore_group_dim_position(
+    result: Dataset, original_dims: tuple[str, ...]
+) -> Dataset:
     """
     Move the new group dimension into the slot the grouped dimension occupied.
 
