@@ -208,14 +208,12 @@ def _restore_group_dim_position(
         return result
     new_dims = [str(d) for d in result.dims if d not in original_dims]
     order: list[str] = []
-    inserted = False
     for d in original_dims:
-        if d in consumed:
-            if not inserted:
-                order.extend(new_dims)
-                inserted = True
-        else:
+        if d not in consumed:
             order.append(d)
+        elif new_dims:
+            order.extend(new_dims)
+            new_dims = []
     result = result.transpose(*order, missing_dims="ignore")
     reordered_coords = {
         d: result[d]
