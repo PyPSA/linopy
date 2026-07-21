@@ -517,8 +517,10 @@ class LinearExpressionGroupby:
         nterm = data.sizes[TERM_DIM]
 
         def scatter(da: DataArray, fill: Any) -> DataArray:
-            """Scatter each member's terms into its group's padded slot, keeping
-            the grouped dimension's position."""
+            """
+            Scatter each member's terms into its group's padded slot, keeping
+            the grouped dimension's position.
+            """
             da = da.transpose(..., TERM_DIM)
             dims_in = list(da.dims)
             group_axis = dims_in.index(group_dim)
@@ -530,9 +532,7 @@ class LinearExpressionGroupby:
                     for d, s in zip(dims_in, values.shape)
                     if d != TERM_DIM
                 ]
-                out = np.full(
-                    (*surv_shape, nterm, max_size), fill, dtype=values.dtype
-                )
+                out = np.full((*surv_shape, nterm, max_size), fill, dtype=values.dtype)
                 grouped = np.moveaxis(out, group_axis, 0)
                 grouped[codes, ..., :, position_in_group] = np.moveaxis(
                     values, group_axis, 0
@@ -553,8 +553,10 @@ class LinearExpressionGroupby:
             )
 
         def group_sum(da: DataArray) -> DataArray:
-            """Sum the constant term within each group, keeping the grouped
-            dimension's position."""
+            """
+            Sum the constant term within each group, keeping the grouped
+            dimension's position.
+            """
             dims_in = list(da.dims)
             group_axis = dims_in.index(group_dim)
             target = [GROUP_DIM if d == group_dim else d for d in dims_in]
