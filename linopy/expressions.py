@@ -192,6 +192,37 @@ def _flatten_multidim_group(
     return series, data
 
 
+def _restore_group_dim_position(result: Dataset, original_dims: tuple[str, ...]) -> Dataset:
+    """
+    Move the new group dimension into the slot the grouped dimension occupied.
+
+    xarray's groupby-reduce and linopy <= 0.8.0 replace the grouped dimension in
+    place, but both the scatter kernel and the fallback append the group dim at
+    the trailing position. Surviving dims keep their order; the group dim(s) are
+    reinserted where the consumed dim(s) used to be.
+    """
+    consumed = [d for d in original_dims if d not in result.dims]
+    if not consumed:
+        return result
+    new_dims = [str(d) for d in result.dims if d not in original_dims]
+    order: list[str] = []
+    inserted = False
+    for d in original_dims:
+        if d in consumed:
+            if not inserted:
+                order.extend(new_dims)
+                inserted = True
+        else:
+            order.append(d)
+    result = result.transpose(*order, missing_dims="ignore")
+    reordered_coords = {
+        d: result[d]
+        for d in order
+        if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
+    }
+    return result.assign_coords(reordered_coords)
+
+
 def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
     """
     Unstack a stacked multi-key group dimension into one dimension per key.
@@ -397,6 +428,7 @@ class LinearExpressionGroupby:
             group = multikey_frame
 
         data = self.data
+        original_dims = self.data.coeffs.dims
         is_multidim_grouper = (
             isinstance(group, DataArray)
             and group.ndim > 1
@@ -429,14 +461,17 @@ class LinearExpressionGroupby:
             ds = ds.rename({GROUP_DIM: final_group_name})
             if multikey_frame is not None and not observed:
                 ds = _unstack_multikey(ds, final_group_name)
-            return LinearExpression(ds, self.model)
+        else:
 
-        def func(ds: Dataset) -> Dataset:
-            ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
-            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
-            return ds
+            def func(ds: Dataset) -> Dataset:
+                ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+                ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+                return ds
 
-        return self.map(func)
+            ds = self.groupby.map(func)
+
+        ds = _restore_group_dim_position(ds, original_dims)
+        return LinearExpression(ds, self.model)
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """

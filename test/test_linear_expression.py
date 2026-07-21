@@ -1695,13 +1695,6 @@ def test_linear_expression_groupby_multidim_preserves_extra_dim() -> None:
     assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="groupby-sum moves the group dim to the trailing position instead of "
-    "keeping the grouped dim's slot, diverging from xarray's native groupby-reduce "
-    "and linopy <= 0.8.0. Regressed in #802 (apply_ufunc scatter kernel); "
-    "assert_linequal aligns dims so existing tests miss it.",
-)
 @pytest.mark.parametrize("use_fallback", [False, True])
 def test_linear_expression_groupby_preserves_dim_position(use_fallback: bool) -> None:
     # Grouping must replace the grouped dim in place, like xarray. `name` sits
