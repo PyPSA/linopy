@@ -2146,10 +2146,10 @@ class Constraints:
         Get a dataset of same shape as constraints.labels with block values.
 
         Let N be the number of blocks.
-        The following ciases are considered:
+        The following cases are considered:
 
-            * where are all vars are -1, the block is -1
-            * where are all vars are 0, the block is 0
+            * where all vars are -1, the block is -1
+            * where all vars are 0, the block is 0
             * where all vars are n, the block is n
             * where vars are n or 0 (both present), the block is n
             * N+1 otherwise
@@ -2159,18 +2159,19 @@ class Constraints:
         for name, constraint in self.items():
             if not isinstance(constraint, Constraint):
                 self.data[name] = constraint = constraint.mutable()
-            res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
+            term_dim = constraint.term_dim
             entries = replace_by_map(constraint.vars, block_map)
 
-            not_zero = entries != 0
-            not_missing = entries != -1
-            for n in range(N + 1):
-                not_n = entries != n
-                mask = not_n & not_zero & not_missing
-                res = res.where(mask.any(constraint.term_dim), n)
+            is_local = entries > 0
+            has_local = is_local.any(term_dim)
+            has_entry = (entries != -1).any(term_dim)
 
-            res = res.where(not_missing.any(constraint.term_dim), -1)
-            res = res.where(not_zero.any(constraint.term_dim), 0)
+            max_local = entries.where(is_local, 0).max(term_dim)
+            min_local = entries.where(is_local, N + 1).min(term_dim)
+            local = max_local.where(max_local == min_local, N + 1)
+
+            res = xr.where(has_local, local, xr.where(has_entry, 0, -1))
+            res = res.astype(block_map.dtype)
             constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
 
     @property

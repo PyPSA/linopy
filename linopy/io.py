@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -25,14 +25,21 @@ import xarray as xr
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import to_polars
-from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.common import to_dataframe, to_polars
+from linopy.constants import (
+    CONCAT_DIM,
+    EQUAL,
+    GREATER_EQUAL,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+)
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
+    from linopy.constraints import Constraint
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -794,12 +801,12 @@ def to_cupdlpx(m: Model) -> cupdlpxModel:
     return solver.solver_model
 
 
-def to_block_files(m: Model, fn: Path) -> None:
+def to_block_files(m: Model, fn: Path | None) -> None:
     """
-    Write out the linopy model to a block structured output.
+    Write out the linopy model to a block-structured output for PIPS-IPM++.
 
-    Experimental: This function does not support grouping duplicated variables
-    in one constraint row yet!
+    Experimental: duplicated variables within one constraint row are not
+    grouped into a single coefficient.
     """
     if fn is None:
         fn = Path(TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name)
@@ -818,96 +825,108 @@ def to_block_files(m: Model, fn: Path) -> None:
     for n in range(N + 2):
         (path / f"block{n}").mkdir()
 
-    raise NotImplementedError("This function is not yet implemented fully.")
+    block_map = m.variables.get_blockmap(m.blocks.dtype.type)
 
-    # # Write out variables
-    # blocks = vars.ravel("blocks", filter_missings=True)
-    # for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
-    #     arr = vars.ravel(key, filter_missings=True)
-    #     for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
-    #         arr[blocks == n].tofile(path / f"block{n}" / suffix, sep="\n")
+    # Write out variables
+    variables = m.variables.flat
+    var_blocks = variables.blocks.to_numpy()
+    for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
+        arr = variables[key].to_numpy()
+        for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
+            arr[var_blocks == n].tofile(path / f"block{n}" / suffix, sep="\n")
 
-    # # Write out objective (uses variable blocks from above)
-    # coeffs = np.zeros(m._xCounter)
-    # coeffs[np.asarray(m.objective.vars)] = np.asarray(m.objective.coeffs)
-    # # reorder like non-missing variables
-    # coeffs = coeffs[vars.ravel("labels", filter_missings=True)]
-    # for n in tqdm(range(N + 1), desc="Write objective"):
-    #     coeffs[blocks == n].tofile(path / f"block{n}" / "c", sep="\n")
+    # Write out objective, aligned to the non-missing variable order
+    objective = m.objective.flat
+    obj_coeffs = objective.groupby("vars")["coeffs"].sum()
+    coeffs = obj_coeffs.reindex(variables.labels, fill_value=0).to_numpy()
+    for n in tqdm(range(N + 1), desc="Write objective"):
+        coeffs[var_blocks == n].tofile(path / f"block{n}" / "c", sep="\n")
 
-    # # Write out rhs
-    # blocks = cons.ravel("blocks", filter_missings=True)
-    # rhs = cons.ravel("rhs", filter_missings=True)
-    # is_equality = cons.ravel(cons.sign == EQUAL, filter_missings=True)
-    # is_lower_bound = cons.ravel(cons.sign == GREATER_EQUAL, filter_missings=True)
+    # Flatten constraints to one row per (constraint, term)
+    def constraint_terms(constraint: Constraint) -> pd.DataFrame:
+        def mask_func(data: dict[Hashable, np.ndarray]) -> pd.Series:
+            return (data["vars"] != -1) & (data["labels"] != -1)
 
-    # for n in tqdm(range(N + 2), desc="Write RHS"):
-    #     is_blockn = blocks == n
+        return to_dataframe(constraint.data, mask_func=mask_func)
 
-    #     rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b", sep="\n")
+    terms = pd.concat(
+        [constraint_terms(m.constraints[k]) for k in m.constraints],
+        ignore_index=True,
+    )
 
-    #     not_equality = is_blockn & ~is_equality
-    #     is_lower_bound_sub = is_lower_bound[not_equality]
-    #     rhs_sub = rhs[not_equality]
+    # Write out rhs, one entry per constraint
+    per_constraint = terms.drop_duplicates("labels")
+    con_blocks = per_constraint.blocks.to_numpy()
+    rhs = per_constraint.rhs.to_numpy()
+    is_equality = (per_constraint.sign == EQUAL).to_numpy()
+    is_lower_bound = (per_constraint.sign == GREATER_EQUAL).to_numpy()
 
-    #     lower_bound = np.where(is_lower_bound_sub, rhs_sub, -np.inf)
-    #     lower_bound.tofile(path / f"block{n}" / "dl", sep="\n")
+    for n in tqdm(range(N + 2), desc="Write RHS"):
+        is_blockn = con_blocks == n
 
-    #     upper_bound = np.where(~is_lower_bound_sub, rhs_sub, np.inf)
-    #     upper_bound.tofile(path / f"block{n}" / "du", sep="\n")
+        rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b", sep="\n")
 
-    # # Write out constraints
-    # conblocks = cons.ravel("blocks", "vars", filter_missings=True)
-    # varblocks = cons.ravel("var_blocks", "vars", filter_missings=True)
-    # is_equality = cons.ravel(cons.sign == EQUAL, "vars", filter_missings=True)
+        not_equality = is_blockn & ~is_equality
+        is_lower_bound_sub = is_lower_bound[not_equality]
+        rhs_sub = rhs[not_equality]
 
-    # is_varblock_0 = varblocks == 0
-    # is_conblock_L = conblocks == N + 1
+        lower_bound = np.where(is_lower_bound_sub, rhs_sub, -np.inf)
+        lower_bound.tofile(path / f"block{n}" / "dl", sep="\n")
 
-    # keys = ["labels", "coeffs", "vars"]
+        upper_bound = np.where(~is_lower_bound_sub, rhs_sub, np.inf)
+        upper_bound.tofile(path / f"block{n}" / "du", sep="\n")
 
-    # def filtered(arr, mask, key):
-    #     """
-    #     Set coefficients to zero where mask is False, keep others unchanged.
+    # Write out constraints, one entry per (constraint, term)
+    term_con_blocks = terms.blocks.to_numpy()
+    term_var_blocks = block_map[terms.vars.to_numpy()]
+    term_is_equality = (terms.sign == EQUAL).to_numpy()
 
-    #     PIPS requires this information to set the shape of sub-matrices.
-    #     """
-    #     assert key in keys
-    #     return np.where(mask, arr, 0) if key == "coeffs" else arr
+    is_varblock_0 = term_var_blocks == 0
+    is_conblock_L = term_con_blocks == N + 1
 
-    # for key, suffix in zip(keys, ["row", "data", "col"]):
-    #     arr = cons.ravel(key, "vars", filter_missings=True)
-    #     for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
-    #         is_conblock_n = conblocks == n
-    #         is_varblock_n = varblocks == n
+    keys = ["labels", "coeffs", "vars"]
 
-    #         mask = is_conblock_n & is_equality
-    #         filtered(arr[mask], is_varblock_0[mask], key).tofile(
-    #             path / f"block{n}" / f"A_{suffix}", sep="\n"
-    #         )
-    #         mask = is_conblock_n & ~is_equality
-    #         filtered(arr[mask], is_varblock_0[mask], key).tofile(
-    #             path / f"block{n}" / f"C_{suffix}", sep="\n"
-    #         )
+    def filtered(arr: np.ndarray, mask: np.ndarray, key: str) -> np.ndarray:
+        """
+        Zero out coefficients where mask is False, keeping other keys unchanged.
 
-    #         mask = is_conblock_L & is_equality
-    #         filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #             path / f"block{n}" / f"BL_{suffix}", sep="\n"
-    #         )
-    #         mask = is_conblock_L & ~is_equality
-    #         filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #             path / f"block{n}" / f"DL_{suffix}", sep="\n"
-    #         )
+        PIPS requires this information to set the shape of sub-matrices.
+        """
+        return np.where(mask, arr, 0) if key == "coeffs" else arr
 
-    #         if n:
-    #             mask = is_conblock_n & is_equality
-    #             filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #                 path / f"block{n}" / f"B_{suffix}", sep="\n"
-    #             )
-    #             mask = is_conblock_n & ~is_equality
-    #             filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #                 path / f"block{n}" / f"D_{suffix}", sep="\n"
-    #             )
+    for key, suffix in zip(keys, ["row", "data", "col"]):
+        arr = terms[key].to_numpy()
+        for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
+            is_conblock_n = term_con_blocks == n
+            is_varblock_n = term_var_blocks == n
+
+            mask = is_conblock_n & term_is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"A_{suffix}", sep="\n"
+            )
+            mask = is_conblock_n & ~term_is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"C_{suffix}", sep="\n"
+            )
+
+            mask = is_conblock_L & term_is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                path / f"block{n}" / f"BL_{suffix}", sep="\n"
+            )
+            mask = is_conblock_L & ~term_is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                path / f"block{n}" / f"DL_{suffix}", sep="\n"
+            )
+
+            if n:
+                mask = is_conblock_n & term_is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                    path / f"block{n}" / f"B_{suffix}", sep="\n"
+                )
+                mask = is_conblock_n & ~term_is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                    path / f"block{n}" / f"D_{suffix}", sep="\n"
+                )
 
 
 def non_bool_dict(

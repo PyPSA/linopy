@@ -364,8 +364,8 @@ def test_to_blocks(tmp_path: Path) -> None:
 
     lower: pd.Series = pd.Series(range(20))
     upper: pd.Series = pd.Series(range(30, 50))
-    x = m.add_variables(lower, upper)
-    y = m.add_variables(lower, upper)
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(lower, upper, name="y")
 
     m.add_constraints(x + y, LESS_EQUAL, 10)
 
@@ -373,8 +373,31 @@ def test_to_blocks(tmp_path: Path) -> None:
 
     m.blocks = xr.DataArray([1] * 10 + [2] * 10)
 
-    with pytest.raises(NotImplementedError):
-        m.to_block_files(tmp_path)
+    m.to_block_files(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "block0",
+        "block1",
+        "block2",
+        "block3",
+    ]
+
+    def read(block: int, suffix: str) -> np.ndarray:
+        return np.fromfile(tmp_path / f"block{block}" / suffix, sep="\n")
+
+    labels = np.concatenate([read(n, "x") for n in range(3)]).astype(int)
+    assert sorted(labels) == list(range(40))
+
+    lowers = np.concatenate([read(n, "xl") for n in range(3)])
+    upper_bounds = np.concatenate([read(n, "xu") for n in range(3)])
+    assert sorted(lowers) == sorted(list(range(20)) * 2)
+    assert sorted(upper_bounds) == sorted(list(range(30, 50)) * 2)
+
+    coeffs = np.concatenate([read(n, "c") for n in range(3)])
+    x_labels = m.variables["x"].labels.values
+    is_x = np.isin(labels, x_labels)
+    assert (coeffs[is_x] == 2).all()
+    assert (coeffs[~is_x] == 3).all()
 
 
 class TestSignedNumberExpr:
