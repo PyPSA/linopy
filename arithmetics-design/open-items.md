@@ -97,7 +97,7 @@ here ([`goals.md`] step 1: *warn on legacy, raise on v1*).
 [#714]: https://github.com/PyPSA/linopy/issues/714
 [#717]: https://github.com/PyPSA/linopy/pull/717
 [#803]: https://github.com/PyPSA/linopy/pull/803
-[`goals.md`]: goals.md
+[`goals.md`]: ../doc/design/goals.rst
 [`docs-plan.md`]: docs-plan.md
-[`legacy-removal.md`]: legacy-removal.md
-[`convention.md`]: convention.md
+[`legacy-removal.md`]: ../doc/design/legacy-removal.rst
+[`convention.md`]: ../doc/design/convention.rst

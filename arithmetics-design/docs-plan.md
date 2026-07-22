@@ -32,4 +32,4 @@ the three pieces it needs to cover, written when someone picks it up.
    codebase: opt in on a branch, run tests, fix the raises. The
    legacy warning text already names the rule and the fix per site,
    so the guide is mostly the high-level recipe plus a pointer to
-   the spec (`arithmetics-design/convention.md`) for the rule list.
+   the spec (`doc/design/convention.rst`) for the rule list.

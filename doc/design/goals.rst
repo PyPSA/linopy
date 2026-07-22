@@ -1,18 +1,20 @@
-# The v1 convention — design & transitioning goals
+The v1 convention — design & transitioning goals
+================================================
 
 Goals for linopy's strict ("v1") convention. The bugs that motivate
-it are catalogued in [#714]; the convention itself is in
-[`convention.md`](convention.md).
+it are catalogued in `#714 <https://github.com/PyPSA/linopy/issues/714>`__; the convention itself is in
+:doc:`convention`.
 
-## Design goals
+Design goals
+------------
 
 The convention serves four goals, in priority order:
 
-1. **No silent wrong answers.** Every bug in the catalogue ([#714]) returns a
+1. **No silent wrong answers.** Every bug in the catalogue (`#714 <https://github.com/PyPSA/linopy/issues/714>`__) returns a
    plausible result with no error. The overriding goal: a mismatch linopy
    cannot resolve unambiguously must raise, not get guessed. Where the library
-   cannot decide, the caller does — with an explicit join, `.sel()`, or
-   `fill_value=`.
+   cannot decide, the caller does — with an explicit join, ``.sel()``, or
+   ``fill_value=``.
 2. **Preserve the algebraic laws.** Commutativity, associativity,
    distributivity, the identities. Optimization code builds expressions by
    rearranging terms, and the convention must keep that safe.
@@ -27,7 +29,8 @@ The convention serves four goals, in priority order:
    attached are the user's; linopy validates and carries them through,
    never silently dropped or rewritten.
 
-## Transitioning goals
+Transitioning goals
+-------------------
 
 1. **Non-breaking.** Existing code keeps working — legacy stays available and
    unchanged until it is removed at linopy 1.0.
@@ -42,6 +45,3 @@ The convention serves four goals, in priority order:
    opted into v1.
 2. Make v1 the default, allow opt-out.
 3. linopy 1.0 — drop the legacy convention entirely.
-
-<!-- references -->
-[#714]: https://github.com/PyPSA/linopy/issues/714
