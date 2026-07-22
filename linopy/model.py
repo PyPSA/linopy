@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, get_args, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -112,7 +112,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DtypeKey = Literal["labels"]
+DtypeKey = Literal["labels", "values"]
 
 
 class Model:
@@ -142,7 +142,7 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
-    _dtypes: dict[DtypeKey, type[np.signedinteger]]
+    _dtypes: dict[DtypeKey, type[np.number]]
     _varnameCounter: int
     _connameCounter: int
     _pwlCounter: int
@@ -187,19 +187,26 @@ class Model:
 
     @staticmethod
     def _resolve_dtypes(
-        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None,
-    ) -> dict[DtypeKey, type[np.signedinteger]]:
+        dtypes: Mapping[DtypeKey, type[np.number]] | None,
+    ) -> dict[DtypeKey, type[np.number]]:
         """Validate the ``dtypes`` argument and merge it onto the defaults."""
-        resolved: dict[DtypeKey, type[np.signedinteger]] = {"labels": np.int32}
+        resolved: dict[DtypeKey, type[np.number]] = {
+            "labels": np.int32,
+            "values": np.float32,
+        }
         for key, dtype in (dtypes or {}).items():
             if key not in get_args(DtypeKey):
                 raise ValueError(
                     f"dtypes only supports the keys {list(get_args(DtypeKey))}, "
                     f"got unknown key {key!r}"
                 )
-            if dtype not in (np.int32, np.int64):
+            if key == "labels" and dtype not in (np.int32, np.int64):
                 raise ValueError(
                     f"dtypes[{key!r}] must be np.int32 or np.int64, got {dtype}"
+                )
+            if key == "values" and dtype not in (np.float32, np.float64):
+                raise ValueError(
+                    f"dtypes[{key!r}] must be np.float32 or np.float64, got {dtype}"
                 )
             resolved[key] = dtype
         return resolved
@@ -212,7 +219,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
-        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
+        dtypes: Mapping[DtypeKey, type[np.number]] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -243,20 +250,27 @@ class Model:
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
         dtypes : mapping, optional
-            Integer dtypes for the model's data, exposed read-only as
-            ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
-            ``Model(dtypes={"labels": np.int64})``. The default ``np.int32``
-            halves label memory but caps the model at ~2.1 billion labels,
-            after which it widens to ``np.int64`` automatically; pass
-            ``np.int64`` upfront to avoid that mid-build upcast.
+            Per-model dtypes for the model's data, exposed read-only as
+            ``Model.dtypes``. Two keys are supported:
+
+            * ``"labels"`` (``np.int32`` or ``np.int64``, default ``np.int32``):
+              the dtype of the variable and constraint labels. The default
+              halves label memory but caps the model at ~2.1 billion labels,
+              after which it widens to ``np.int64`` automatically; pass
+              ``np.int64`` upfront to avoid that mid-build upcast.
+            * ``"values"`` (``np.float32`` or ``np.float64``, default
+              ``np.float32``): the dtype of the stored float arrays
+              (coefficients, constants, right-hand sides and variable bounds).
+              ``np.float32`` roughly halves the memory of the largest arrays;
+              pass ``np.float64`` to keep full double-precision storage.
+
+            e.g. ``Model(dtypes={"labels": np.int64, "values": np.float64})``.
 
         Returns
         -------
         linopy.Model
         """
-        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
-            dtypes
-        )
+        self._dtypes: dict[DtypeKey, type[np.number]] = self._resolve_dtypes(dtypes)
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
@@ -530,13 +544,14 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
+    def dtypes(self) -> Mapping[DtypeKey, type[np.number]]:
         """
-        Read-only mapping of the model's integer dtypes.
+        Read-only mapping of the model's dtypes.
 
-        Currently holds only ``"labels"``, the dtype of the variable and
-        constraint labels, which widens to ``int64`` automatically once the
-        labels outgrow int32.
+        Holds ``"labels"``, the dtype of the variable and constraint labels,
+        which widens to ``int64`` automatically once the labels outgrow int32,
+        and ``"values"``, the dtype of the stored float arrays (coefficients,
+        constants, right-hand sides and variable bounds).
         """
         return MappingProxyType(self._dtypes)
 
@@ -556,7 +571,8 @@ class Model:
 
     def _allocate_labels(self, start: int, end: int) -> np.ndarray:
         """Return the label range ``[start, end)``, widening the dtype on overflow."""
-        if end > np.iinfo(self._dtypes["labels"]).max:
+        label_dtype = cast(type[np.signedinteger], self._dtypes["labels"])
+        if end > np.iinfo(label_dtype).max:
             self._widen_label_dtype()
         return np.arange(start, end, dtype=self._dtypes["labels"])
 
@@ -854,8 +870,13 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
-        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
+        values_dtype = self._dtypes["values"]
+        lower_da = broadcast_to_coords(
+            lower, coords, label="lower bound", **kwargs
+        ).astype(values_dtype)
+        upper_da = broadcast_to_coords(
+            upper, coords, label="upper bound", **kwargs
+        ).astype(values_dtype)
         data = Dataset(
             {
                 "lower": lower_da,

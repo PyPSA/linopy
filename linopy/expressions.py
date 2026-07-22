@@ -696,8 +696,9 @@ class BaseExpression(ABC):
             data = assign_multiindex_safe(
                 data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
-        if not np.issubdtype(data.coeffs, np.floating):
-            data["coeffs"].values = data.coeffs.values.astype(float)
+        values_dtype = model._dtypes["values"]
+        if data.coeffs.dtype != values_dtype:
+            data["coeffs"].values = data.coeffs.values.astype(values_dtype)
 
         data = fill_missing_coords(data)
 
@@ -705,9 +706,9 @@ class BaseExpression(ABC):
             raise ValueError("data must contain one dimension ending with '_term'")
 
         if "const" not in data:
-            data = data.assign(const=0.0)
-        elif not np.issubdtype(data.const, np.floating):
-            data = assign_multiindex_safe(data, const=data.const.astype(float))
+            data = data.assign(const=values_dtype(0))
+        elif data.const.dtype != values_dtype:
+            data = assign_multiindex_safe(data, const=data.const.astype(values_dtype))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         data = cast(Dataset, data)
@@ -900,6 +901,18 @@ class BaseExpression(ABC):
             )
             return self_const, aligned, True
 
+    def _as_value_dtype(self, da: DataArray) -> DataArray:
+        """
+        Cast ``da`` to the model's configured value dtype.
+
+        Applied to the other operand of an elementwise op so that a float32
+        expression stays float32 throughout, rather than letting numpy upcast to
+        a large (broadcast) float64 intermediate that ``__init__`` only downcasts
+        again — a transient that would double the operation's peak memory.
+        """
+        values_dtype = self.model._dtypes["values"]
+        return da.astype(values_dtype) if da.dtype != values_dtype else da
+
     def _add_constant(
         self, other: ConstantLike, join: JoinOptions | None = None
     ) -> Self:
@@ -915,6 +928,7 @@ class BaseExpression(ABC):
         )
         da = da.fillna(0)
         self_const = self_const.fillna(0)
+        da = self._as_value_dtype(da)
         if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
@@ -946,6 +960,7 @@ class BaseExpression(ABC):
         )
         factor = factor.fillna(fill_value)
         self_const = self_const.fillna(0)
+        factor = self._as_value_dtype(factor)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
             coeffs = data.coeffs.fillna(0)
