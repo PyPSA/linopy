@@ -1,6 +1,12 @@
-# Copyright (C) since 2013 Calliope contributors listed in AUTHORS.
-# Licensed under the Apache 2.0 License (see LICENSE file).
-"""Methods for math syntax parsing."""
+"""
+Linopy declarative math parsing module.
+
+This module turns a validated math component definition into a list of
+:class:`Equation` objects — pure data holding the parsed expression/mask ASTs
+with all `$name` sub-expression and slicer references resolved — and provides
+the typed entry points that evaluate an equation to a boolean mask array, a
+linopy expression, a constraint tuple, or a LaTeX math string.
+"""
 
 from __future__ import annotations
 
@@ -8,928 +14,583 @@ import functools
 import itertools
 import logging
 import operator
-from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Literal, overload
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal
 
 import pyparsing as pp
 import xarray as xr
 
-from linopy.declarative import (
-    eval_attrs,
-    expression_parser,
-    helper_functions,
-    mask_parser,
+from linopy.declarative import grammar
+from linopy.declarative.evaluate import (
+    TRUE_ARRAY,
+    Context,
+    evaluate,
+    to_math_string,
 )
-from linopy.declarative.schema import MATH_DEFS_T, ConfigModel, MathModel, _Equations
+from linopy.declarative.grammar import Node
+from linopy.declarative.schema import (
+    MATH_DEFS_T,
+    ConstraintDef,
+    ExpressionDef,
+    MathModel,
+    ObjectiveDef,
+    _Equations,
+)
 from linopy.expressions import LinearExpression
-
-if TYPE_CHECKING:
-    from linopy.model import Model
-TRUE_ARRAY = xr.DataArray(True)
 
 LOGGER = logging.getLogger(__name__)
 
+GROUP_T = Literal[
+    "variables",
+    "expressions",
+    "constraints",
+    "piecewise_constraints",
+    "objectives",
+    "postprocessed",
+]
 
-class ParsedBackendEquation:
-    """Backend equation parser."""
+EQUATION_DEFS_T = ConstraintDef | ExpressionDef | ObjectiveDef
+"""Math component definitions that carry `equations`/`sub_expressions`/`slices` keys."""
 
-    def __init__(
-        self,
-        equation_name: str,
-        sets: list[str],
-        expression: pp.ParseResults,
-        mask_list: list[pp.ParseResults],
-        sub_expressions: dict[str, pp.ParseResults] | None = None,
-        slices: dict[str, pp.ParseResults] | None = None,
-    ) -> None:
-        """
-        For parsing equation expressions and corresponding "mask" strings.
+_ERR_BULLET = " * "
 
-        Args:
-            equation_name (str): Name of equation.
-            sets (list[str]):
-                Model data sets with which to create the initial multi-dimensional masking array
-                of the evaluated "mask" string.
-            expression (pp.ParseResults):
-                Parsed arithmetic/equation expression.
-            mask_list (list[pp.ParseResults]):
-                List of parsed mask strings.
-            sub_expressions (dict[str, pp.ParseResults] | None, optional):
-                Dictionary of parsed sub-expressions with which to replace sub-expression references
-                on evaluation of the parsed expression. Defaults to None.
-            slices (dict[str, pp.ParseResults] | None, optional):
-                Dictionary of parsed array slices with which to replace slice references
-                on evaluation of the parsed expression / sub-expression. Defaults to None.
-        """
-        self.name = equation_name
-        self.mask = mask_list
-        self.expression = expression
-        self.sub_expressions = (
-            sub_expressions if sub_expressions is not None else dict()
-        )
-        self.slices = slices if slices is not None else dict()
-        self.sets = sets
 
-    def find_sub_expressions(self) -> set[str]:
-        """
-        Identify all the references to sub_expressions in the parsed expression.
+@dataclass(frozen=True)
+class Equation:
+    """
+    One fully-resolved equation of a math component.
 
-        Returns:
-            set[str]: Unique sub-expression references.
-        """
-        valid_eval_classes: tuple = (
-            expression_parser.EvalOperatorOperand,
-            expression_parser.EvalFunction,
-        )
-        to_find = expression_parser.EvalSubExpressions
-        elements: list
-        if isinstance(self.expression[0], to_find):
-            elements = [self.expression[0]]
-        else:
-            elements = [self.expression[0].values]
+    Produced by :func:`parse_component`: each combination of sub-expression and
+    slicer variants referenced by a user-defined equation yields one `Equation`.
+    """
 
-        return self._find_items_in_expression(elements, to_find, valid_eval_classes)
+    name: str
+    """Unique equation name, including the chosen sub-expression/slicer variants."""
 
-    def find_slices(self) -> set[str]:
-        """
-        Finds all references to array slices in the expression and sub-expressions.
+    sets: tuple[str, ...]
+    """The component's `foreach` dimensions."""
 
-        Returns:
-            set[str]: Unique slice references.
-        """
-        valid_eval_classes = tuple(
-            [
-                expression_parser.EvalOperatorOperand,
-                expression_parser.EvalFunction,
-                expression_parser.EvalSlicedComponent,
-            ]
-        )
-        to_find = expression_parser.EvalIndexSlice
-        elements: list = [
-            self.expression[0].values,
-            *list(self.sub_expressions.values()),
+    expression: Node
+    """Parsed expression AST."""
+
+    masks: tuple[Node, ...]
+    """Parsed mask ASTs: the equation's own mask plus those of the chosen variants."""
+
+    sub_expressions: dict[str, Node] = field(default_factory=dict)
+    """Resolved `$name` sub-expression AST per name."""
+
+    slices: dict[str, Node] = field(default_factory=dict)
+    """Resolved `$name` slicer AST per name."""
+
+    def references(self) -> set[str]:
+        """Return the names of all math components referenced by this equation."""
+        trees = [
+            self.expression,
+            *self.masks,
+            *self.sub_expressions.values(),
+            *self.slices.values(),
         ]
-
-        return self._find_items_in_expression(elements, to_find, valid_eval_classes)
-
-    @staticmethod
-    def _find_items_in_expression(
-        parser_elements: list | pp.ParseResults,
-        to_find: type[expression_parser.EvalString],
-        valid_eval_classes: tuple[type[expression_parser.EvalString], ...],
-    ) -> set[str]:
-        """
-        Recursively find sub-expressions / index items defined in an equation expression.
-
-        Args:
-            parser_elements (list | pp.ParseResults): list of parser elements to check.
-            to_find (type[expression_parser.EvalString]): type of equation element to search for.
-            valid_eval_classes (tuple[type[expression_parser.EvalString], ...]): Other expression
-                elements that can be recursively searched
-
-        Returns:
-            set[str]: All unique component / index item names.
-        """
-        items: list = []
-        recursive_func = functools.partial(
-            ParsedBackendEquation._find_items_in_expression,
-            to_find=to_find,
-            valid_eval_classes=valid_eval_classes,
-        )
-        for parser_element in parser_elements:
-            if isinstance(parser_element, to_find):
-                items.append(parser_element.name)
-
-            elif isinstance(parser_element, pp.ParseResults | list):
-                items.extend(recursive_func(parser_elements=parser_element))
-
-            elif isinstance(parser_element, valid_eval_classes):
-                items.extend(recursive_func(parser_elements=parser_element.values))
-        return set(items)
-
-    def add_expression_group_combination(
-        self,
-        expression_group_name: Literal["sub_expressions", "slices"],
-        expression_group_combination: Iterable[ParsedBackendEquation],
-    ) -> ParsedBackendEquation:
-        """
-        Add parsed sub-expressions/index slices to a copy of self with updated names and mask lists.
-
-        Args:
-            expression_group_name (Literal[sub_expressions, slices]):
-                Which of `sub-expressions`/`index slices` is being added.
-            expression_group_combination (Iterable[ParsedBackendEquation]):
-                All items of expression_group_name to be added.
-
-        Returns:
-            ParsedBackendEquation: Copy of self with added sub-expressions/index slice dictionary and updated name
-                and mask list to include those corresponding to the dictionary entries.
-        """
-        new_mask_list = [*self.mask]
-        for expr in expression_group_combination:
-            new_mask_list.extend(expr.mask)
-        new_name = f"{self.name}-{'-'.join([expr.name for expr in expression_group_combination])}"
-        expression_group_dict = {
-            expression_group_name: {
-                expr.name.split(":")[0]: expr.expression
-                for expr in expression_group_combination
-            }
-        }
-        return ParsedBackendEquation(
-            equation_name=new_name,
-            sets=self.sets,
-            expression=self.expression,
-            mask_list=new_mask_list,
-            **{
-                "sub_expressions": self.sub_expressions,
-                "slices": self.slices,
-                **expression_group_dict,  # type: ignore
-            },
-        )
-
-    # Expecting array if not requesting latex string
-    @overload
-    def evaluate_mask(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        config: ConfigModel,
-        *,
-        return_type: Literal["raw"] = "raw",
-        references: set | None = None,
-        initial_mask: xr.DataArray = TRUE_ARRAY,
-    ) -> xr.DataArray: ...
-
-    # Expecting string if requesting latex string.
-    @overload
-    def evaluate_mask(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        config: ConfigModel,
-        *,
-        return_type: Literal["math_string"],
-        references: set | None = None,
-    ) -> str: ...
-
-    def evaluate_mask(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        config: ConfigModel,
-        *,
-        return_type: str = "raw",
-        references: set | None = None,
-        initial_mask: xr.DataArray = TRUE_ARRAY,
-    ) -> xr.DataArray | str:
-        """
-        Evaluate parsed backend object dictionary `mask` string.
-
-        Args:
-            input_data (xr.Dataset): Model input data.
-            model (Model): Linopy model.
-            math (MathModel): Calliope math definitions.
-            config (ConfigModel): Build configuration options.
-            return_type (str, optional): If "raw", return xarray.DataArray.
-                If "math_string", return LaTex math string.
-                Defaults to "raw".
-            references (set | None, optional): List of references to use in evaluation.
-                Defaults to None.
-            initial_mask (xr.DataArray, optional): If given, the mask array resulting
-                from evaluation will be further masked by this array.
-                Defaults to xr.DataArray(True) (i.e., no effect).
-
-        Returns:
-            xr.DataArray | str:
-                If return_type == `array`: Boolean array defining on which index items a parsed component should be built.
-                If return_type == `math_string`: Valid LaTeX math string defining the "mask" conditions using logic notation.
-        """
-        eval_attrs_ = {
-            "equation_name": self.name,
-            "helper_functions": helper_functions._registry["mask"],
-            "input_data": input_data,
-            "model": model,
-            "math": math,
-            "config": config,
-        }
-        if references is not None:
-            eval_attrs_["references"] = references
-
-        evaluated_masks = [
-            mask[0].eval(return_type, eval_attrs.EvalAttrs(**eval_attrs_))
-            for mask in self.mask
-        ]
-        if return_type == "math_string":
-            return r"\land{}".join(f"({i})" for i in evaluated_masks if i != "true")
-        else:
-            mask = xr.DataArray(
-                functools.reduce(operator.and_, [initial_mask, *evaluated_masks])
-            )
-            if not mask.any():
-                self.log_not_added("'mask' does not apply anywhere.")
-            return mask
-
-    def drop_dims_not_in_foreach(self, mask: xr.DataArray) -> xr.DataArray:
-        """
-        Remove all dimensions not included in "foreach" from the input array.
-
-        Args:
-            mask (xr.DataArray): Array with potentially unwanted dimensions
-
-        Returns:
-            xr.DataArray:
-                Array with same dimensions as the user-defined foreach sets.
-                Dimensions are ordered to match the order given by the sets.
-        """
-        unwanted_dims = set(mask.dims).difference(self.sets)
-        return (mask.sum(unwanted_dims) > 0).astype(bool).transpose(*self.sets)
-
-    def _evaluate(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["expr", "math_string"],
-        references: set | None,
-        mask: xr.DataArray,
-    ) -> Any:
-        """
-        Evaluate the parsed expression tree.
-
-        Shared by :meth:`evaluate_expression` (arithmetic roots) and
-        :meth:`evaluate_equation` (comparison roots).
-        """
-        eval_attrs_ = {
-            "equation_name": self.name,
-            "slice_dict": self.slices,
-            "sub_expression_dict": self.sub_expressions,
-            "input_data": input_data,
-            "model": model,
-            "math": math,
-            "mask": mask,
-            "helper_functions": helper_functions._registry["expression"],
-        }
-        if references is not None:
-            eval_attrs_["references"] = references
-        return self.expression[0].eval(return_type, eval_attrs.EvalAttrs(**eval_attrs_))
-
-    # Expecting a linopy expression if not requesting latex string.
-    @overload
-    def evaluate_expression(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["expr"] = "expr",
-        references: set | None = None,
-        mask: xr.DataArray = TRUE_ARRAY,
-    ) -> LinearExpression: ...
-
-    # Expecting string if requesting latex string.
-    @overload
-    def evaluate_expression(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["math_string"],
-        references: set | None = None,
-    ) -> str: ...
-
-    def evaluate_expression(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["expr", "math_string"] = "expr",
-        references: set | None = None,
-        mask: xr.DataArray = TRUE_ARRAY,
-    ) -> LinearExpression | str:
-        """
-        Evaluate an arithmetic math string (expressions/objectives).
-
-        Args:
-            input_data (xr.Dataset): Model input data.
-            model (Model): Linopy model.
-            math (MathModel): Linopy math definitions.
-
-        Keyword Args:
-            return_type (str, optional):
-                If "expr", return a linopy expression. If "math_string", return a LaTeX
-                math string. Defaults to "expr".
-            references (set | None, optional):
-                If given, any references in the math string to other model components
-                will be logged here. Defaults to None.
-            mask (xr.DataArray, optional):
-                If given, should be a boolean array with which to mask any produced arrays.
-                Defaults to xr.DataArray(True).
-
-        Returns:
-            LinearExpression | str:
-                If return_type == `expr`: a linopy expression. A pure-parameter
-                expression (evaluated to an ``xr.DataArray``) is coerced to a
-                ``LinearExpression``.
-                If return_type == `math_string`: a valid LaTeX math string.
-        """
-        evaluated = self._evaluate(
-            input_data,
-            model,
-            math,
-            return_type=return_type,
-            references=references,
-            mask=mask,
-        )
-        if return_type == "expr" and isinstance(evaluated, xr.DataArray):
-            evaluated = LinearExpression(evaluated, model)
-        return evaluated
-
-    # Expecting a (lhs, sign, rhs) tuple if not requesting latex string.
-    @overload
-    def evaluate_equation(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["expr"] = "expr",
-        references: set | None = None,
-        mask: xr.DataArray = TRUE_ARRAY,
-    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression]: ...
-
-    # Expecting string if requesting latex string.
-    @overload
-    def evaluate_equation(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["math_string"],
-        references: set | None = None,
-    ) -> str: ...
-
-    def evaluate_equation(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        *,
-        return_type: Literal["expr", "math_string"] = "expr",
-        references: set | None = None,
-        mask: xr.DataArray = TRUE_ARRAY,
-    ) -> tuple[LinearExpression, xr.DataArray, LinearExpression] | str:
-        """
-        Evaluate a comparison math string (constraints) of the form ``LHS OP RHS``.
-
-        Args:
-            input_data (xr.Dataset): Model input data.
-            model (Model): Linopy model.
-            math (MathModel): Linopy math definitions.
-
-        Keyword Args:
-            return_type (str, optional):
-                If "expr", return a ``(lhs, sign, rhs)`` tuple for constraint assembly.
-                If "math_string", return a LaTeX math string. Defaults to "expr".
-            references (set | None, optional):
-                If given, any references in the math string to other model components
-                will be logged here. Defaults to None.
-            mask (xr.DataArray, optional):
-                If given, should be a boolean array with which to mask any produced arrays.
-                Defaults to xr.DataArray(True).
-
-        Returns:
-            tuple[LinearExpression, xr.DataArray, LinearExpression] | str:
-                If return_type == `expr`: a ``(lhs, sign, rhs)`` tuple, where ``lhs``/``rhs``
-                are linopy expressions (a pure-parameter side is coerced to a
-                ``LinearExpression``) and ``sign`` is a DataArray of the comparison operator.
-                If return_type == `math_string`: a valid LaTeX math string.
-        """
-        evaluated = self._evaluate(
-            input_data,
-            model,
-            math,
-            return_type=return_type,
-            references=references,
-            mask=mask,
-        )
-        if return_type == "math_string":
-            return evaluated
-        lhs, sign, rhs = evaluated
-        if isinstance(lhs, xr.DataArray):
-            lhs = LinearExpression(lhs, model)
-        if isinstance(rhs, xr.DataArray):
-            rhs = LinearExpression(rhs, model)
-        return lhs, sign, rhs
-
-    def raise_error_on_mask_expr_mismatch(
-        self, expression: xr.DataArray, mask: xr.DataArray
-    ) -> None:
-        """
-        Checks if an evaluated expression is consistent with the `mask` array.
-
-        Args:
-            expression (xr.DataArray): array of linear expressions or one side of a constraint equation.
-            mask (xr.DataArray): mask array; there should be a valid expression value for all True elements.
-
-        Raises:
-            BackendError:
-                Raised if there is a dimension in the expression that is not in the mask.
-            BackendError:
-                Raised if the expression has any NaN mask the mask applies.
-        """
-        broadcast_dims_mask = set(expression.dims).difference(set(mask.dims))
-        if broadcast_dims_mask:
-            raise ValueError(
-                f"{self.name} | The linear expression array is indexed over dimensions not present in `foreach`: {broadcast_dims_mask}"
-            )
-        # Check whether expression has NaN values in elements mask the expression should be valid.
-        incomplete_constraints = expression.isnull() & mask
-        if incomplete_constraints.any():
-            raise ValueError(
-                f"{self.name} | Missing a linear expression for some coordinates selected by 'mask'. Adapting 'mask' might help."
-            )
-
-    def log_not_added(
-        self,
-        message: str,
-        level: Literal["info", "warning", "debug", "error", "critical"] = "debug",
-    ):
-        """
-        Log to module-level logger with some prettification of the message.
-
-        Args:
-            message (str): Message to log.
-            level (Literal["info", "warning", "debug", "error", "critical"], optional):
-                Log level. Defaults to "debug".
-        """
-        getattr(LOGGER, level)(
-            f"Math parsing | {self.name} | Component not added; {message}"
+        return set().union(
+            *(grammar.find_refs(tree, grammar.Component) for tree in trees)
         )
 
 
-class ParsedBackendComponent(ParsedBackendEquation):
-    """Backend component parser."""
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
 
-    _ERR_BULLET: str = " * "
-    _ERR_STRING_ORDER: list[str] = ["expression_group", "id", "expr_or_mask"]
-    PARSERS: dict[str, Callable] = {
-        "constraints": expression_parser.generate_equation_parser,
-        "expressions": expression_parser.generate_arithmetic_parser,
-        "postprocessed": expression_parser.generate_arithmetic_parser,
-        "objectives": expression_parser.generate_arithmetic_parser,
-        "piecewise_constraints": expression_parser.generate_arithmetic_parser,
-    }
 
-    def __init__(
-        self,
-        group: Literal[
-            "variables",
-            "expressions",
-            "constraints",
-            "piecewise_constraints",
-            "objectives",
-            "postprocessed",
-        ],
-        name: str,
-        unparsed_data: MATH_DEFS_T,
-        parsing_components: dict[str, dict[str, set[str]]],
-    ) -> None:
+def _expression_names(math: MathModel) -> frozenset[str]:
+    """Return the valid component names for expression-string parsing."""
+    return frozenset(set().union(*math.parsing_components["expression"].values()))
+
+
+def _mask_grammar(math: MathModel) -> pp.ParserElement:
+    """Return the mask-string grammar for the math definition's component names."""
+    names = math.parsing_components["mask"]
+    return grammar.mask_grammar(
+        frozenset(names["dimensions"]),
+        frozenset(names["inputs"]),
+        frozenset(names["results"]),
+    )
+
+
+class _ErrorCollector:
+    """Collect parse errors with their positions, to raise a single error at the end."""
+
+    def __init__(self, component_name: str) -> None:
+        self.component_name = component_name
+        self.errors: list[str] = []
+
+    def parse(
+        self, parser: pp.ParserElement, string: str, position: str
+    ) -> Node | None:
         """
-        Parse an optimisation problem configuration.
+        Parse `string`, returning its AST root or None if parsing fails.
 
-        Defined in a dictionary of strings loaded from YAML into a series of Python
-        objects that can be passed onto a solver interface like Pyomo or Gurobipy.
-
-        Args:
-            group (Literal["variables", "expressions", "constraints", "objectives"]):
-                Optimisation problem component group to which the unparsed data belongs.
-            name (str): Name of the optimisation problem component
-            unparsed_data (T): Unparsed math formulation. Expected structure depends on
-                the group to which the optimisation problem component belongs.
-            parsing_components (dict[str, dict[str, Iterable[str]]]):
-                Dictionary of valid component names for different categories of model data to use in parsing `mask` and `expression` strings.
-        """
-        self.name = f"{group}:{name}"
-        self.group = group
-        self._unparsed = unparsed_data
-        self._mask_components = parsing_components["mask"]
-        self._expression_components = set().union(
-            *parsing_components["expression"].values()
-        )
-        self.mask: list[pp.ParseResults] = []
-        self.equations: list[ParsedBackendEquation] = []
-        self.equation_expression_parser: Callable = self.PARSERS.get(
-            group, lambda x: None
-        )
-
-        # capture errors to dump after processing,
-        # to make it easier for a user to fix the constraint YAML.
-        self._errors: list = []
-        self._tracker = self._init_tracker()
-
-        # Initialise switches
-        self._is_valid: bool = True
-
-        # Add objects that are used by shared functions
-        self.sets: set[str] = set(unparsed_data.foreach)
-
-    def get_parsing_position(self):
-        """Create "." separated list from tracked strings."""
-        return ".".join(
-            filter(None, [self._tracker[i] for i in self._ERR_STRING_ORDER])
-        )
-
-    def reset_tracker(self):
-        """Re-initialise error string tracking."""
-        self._tracker = self._init_tracker()
-
-    def _init_tracker(self):
-        """Initialise error string tracking as dictionary of `key: None`."""
-        return {i: None for i in self._ERR_STRING_ORDER}
-
-    def parse_top_level_mask(
-        self, errors: Literal["raise", "ignore"] = "raise"
-    ) -> None:
-        """
-        Parse the "mask" string that is (optionally) given as a top-level key of the math component dictionary.
-
-        Args:
-            errors (Literal["raise", "ignore"], optional):
-                Collected parsing errors can be raised directly or ignored.
-                If errors exist and are ignored, the parsed component cannot be successfully evaluated. Defaults to "raise".
-        """
-        top_level_mask = self.parse_mask_string(self._unparsed.mask)
-
-        if errors == "raise":
-            self.raise_caught_errors()
-
-        if self._is_valid:
-            self.mask = [top_level_mask]
-
-    def parse_equations(
-        self, errors: Literal["raise", "ignore"] = "raise"
-    ) -> list[ParsedBackendEquation]:
-        """
-        Parse `expression` and `mask` strings of math component dictionary.
-
-        Args:
-            errors (Literal["raise", "ignore"], optional):
-                Collected parsing errors can be raised directly or ignored.
-                If errors exist and are ignored, the parsed component cannot be successfully evaluated. Defaults to "raise".
-
-        Returns:
-            list[ParsedBackendEquation]:
-                List of parsed equations ready to be evaluated.
-                The length of the list depends on the product of provided equations and sub-expression/slice references.
-        """
-        equations = self.generate_expression_list(
-            expression_parser=self.equation_expression_parser(
-                self._expression_components
-            ),
-            expression_list=self._unparsed.equations,
-            expression_group="equations",
-            id_prefix=self.name,
-        )
-
-        sub_expression_dict = {
-            c_name: self.generate_expression_list(
-                expression_parser=expression_parser.generate_sub_expression_parser(
-                    self._expression_components
-                ),
-                expression_list=c_list,
-                expression_group="sub_expressions",
-                id_prefix=c_name,
-            )
-            for c_name, c_list in self._unparsed.sub_expressions.root.items()
-        }
-        slice_dict = {
-            idx_name: self.generate_expression_list(
-                expression_parser=expression_parser.generate_slice_parser(
-                    self._expression_components
-                ),
-                expression_list=idx_list,
-                expression_group="slices",
-                id_prefix=idx_name,
-            )
-            for idx_name, idx_list in self._unparsed.slices.root.items()
-        }
-
-        if errors == "raise":
-            self.raise_caught_errors()
-
-        equations_with_sub_expressions = []
-        for equation in equations:
-            equations_with_sub_expressions.extend(
-                self.extend_equation_list_with_expression_group(
-                    equation, sub_expression_dict, "sub_expressions"
-                )
-            )
-        equations_with_sub_expressions_and_slices: list[ParsedBackendEquation] = []
-        for equation in equations_with_sub_expressions:
-            equations_with_sub_expressions_and_slices.extend(
-                self.extend_equation_list_with_expression_group(
-                    equation, slice_dict, "slices"
-                )
-            )
-
-        return equations_with_sub_expressions_and_slices
-
-    def _parse_string(
-        self, parser: pp.ParserElement, parse_string: str
-    ) -> pp.ParseResults:
-        """
-        Parse equation string according to predefined parsing grammar.
-
-        Args:
-            parser (pp.ParserElement): Parsing grammar.
-            parse_string (str): String to parse according to parser grammar.
-
-        Returns:
-            Optional[pp.ParseResults]:
-                Parsed string. If any parsing errors are caught,
-                they will be logged to `self._errors` to raise later.
+        Failures are stored with a caret marker pointing at the parse position,
+        for raising later via :meth:`raise_errors`.
         """
         try:
-            parsed = parser.parse_string(parse_string, parse_all=True)
+            return parser.parse_string(string, parse_all=True)[0]
         except pp.ParseException as excinfo:
-            parsed = pp.ParseResults([])
-            self._is_valid = False
-            pointer = f"{self.get_parsing_position()} (line {excinfo.lineno}, char {excinfo.col}): "
-            marker_pos = " " * (
-                len(pointer) + 2 * len(self._ERR_BULLET) + excinfo.col - 1
-            )
-            self._errors.append(f"{pointer}{excinfo.line}\n{marker_pos}^")
+            pointer = f"{position} (line {excinfo.lineno}, char {excinfo.col}): "
+            marker_pos = " " * (len(pointer) + 2 * len(_ERR_BULLET) + excinfo.col - 1)
+            self.errors.append(f"{pointer}{excinfo.line}\n{marker_pos}^")
+            return None
 
-        return parsed
+    def raise_errors(self) -> None:
+        """Raise all collected parse errors as a single bullet-point ValueError."""
+        if self.errors:
+            raise ValueError(f"- {self.component_name}: {self.errors}")
 
-    def parse_mask_string(self, mask_string: str = "True") -> pp.ParseResults:
-        """
-        Parse a "mask" string of the form "CONDITION OPERATOR CONDITION".
 
-        The operator can be "and"/"or"/"not and"/"not or".
+def parse_mask(mask_string: str, math: MathModel, name: str = "") -> Node:
+    """
+    Parse a standalone mask string, raising on invalid syntax.
 
-        Args:
-            mask_string (str):
-                string value from a math dictionary "mask" key.
-                Defaults to "True", to have no effect on the subsequent subsetting.
+    Parameters
+    ----------
+    mask_string : str
+        The mask ("where"-condition) string to parse.
+    math : MathModel
+        Math definition providing the valid component names.
+    name : str, optional
+        Name to identify the string by in error messages.
+    """
+    collector = _ErrorCollector(name)
+    parsed = collector.parse(_mask_grammar(math), mask_string, "mask")
+    collector.raise_errors()
+    assert parsed is not None
+    return parsed
 
-        Returns:
-            pp.ParseResults: Parsed string. If any parsing errors are caught,
-                they will be logged to `self._errors` to raise later.
-        """
-        parser = mask_parser.generate_mask_string_parser(**self._mask_components)
-        self._tracker["expr_or_mask"] = "mask"
-        return self._parse_string(parser, mask_string)
 
-    def generate_expression_list(
-        self,
-        expression_parser: pp.ParserElement,
-        expression_list: _Equations,
-        expression_group: Literal["equations", "sub_expressions", "slices"],
-        id_prefix: str = "",
-    ) -> list[ParsedBackendEquation]:
-        """
-        Align user-defined constraint equations/sub-expressions.
-
-        Achieved by parsing expressions, specifying a default "mask" string if not
-        defined, and providing an ID to enable returning to the initial dictionary.
-
-        Args:
-            expression_parser (pp.ParserElement): parser to use.
-            expression_list (list[UnparsedEquation]): list of constraint equations
-                or sub-expressions with arithmetic expression string and optional
-                mask string.
-            expression_group (Literal["equations", "sub_expressions", "slices"]):
-                For error reporting, the constraint dict key corresponding to the parse_string.
-            id_prefix (str, optional): Extends the ID from a number corresponding to the
-                expression_list position `idx` to a tuple of the form (id_prefix, idx).
-                Defaults to "".
-
-        Returns:
-            list[ParsedBackendEquation]: Aligned expression dictionaries with parsed
-                expression strings.
-        """
-        parsed_equation_list = []
-
-        if expression_group == "equations":
-            to_track = {"expression_group": f"{expression_group}[{{id}}]"}
-        else:
-            to_track = {
-                "expression_group": expression_group,
-                "id": f"{id_prefix}[{{id}}]",
-            }
-
-        for idx, expression_data in enumerate(expression_list):
-            self._tracker.update({k: v.format(id=idx) for k, v in to_track.items()})
-
-            parsed_mask = self.parse_mask_string(expression_data.mask)
-
-            self._tracker["expr_or_mask"] = "expression"
-            parsed_expression = self._parse_string(
-                expression_parser, expression_data.expression
-            )
-            if len(parsed_expression) > 0:
-                parsed_equation_list.append(
-                    ParsedBackendEquation(
-                        equation_name=":".join(filter(None, [id_prefix, str(idx)])),
-                        sets=self.sets,
-                        mask_list=[parsed_mask],
-                        expression=parsed_expression,
-                    )
+def _parse_variants(
+    collector: _ErrorCollector,
+    parser: pp.ParserElement,
+    mask_parser: pp.ParserElement,
+    expression_list: _Equations,
+    sets: tuple[str, ...],
+    position: str,
+    name_prefix: str,
+) -> list[Equation]:
+    """Parse a list of `{mask, expression}` items into one Equation per item."""
+    equations = []
+    for idx, item in enumerate(expression_list):
+        position_id = f"{position}[{idx}]"
+        mask = collector.parse(mask_parser, item.mask, f"{position_id}.mask")
+        expression = collector.parse(
+            parser, item.expression, f"{position_id}.expression"
+        )
+        if expression is not None and mask is not None:
+            equations.append(
+                Equation(
+                    name=f"{name_prefix}:{idx}",
+                    sets=sets,
+                    expression=expression,
+                    masks=(mask,),
                 )
-        self.reset_tracker()
+            )
+    return equations
 
-        return parsed_equation_list
 
-    def extend_equation_list_with_expression_group(
-        self,
-        parsed_equation: ParsedBackendEquation,
-        parsed_items: dict[str, list[ParsedBackendEquation]],
-        expression_group: Literal["sub_expressions", "slices"],
-    ) -> list[ParsedBackendEquation]:
-        """
-        Extend equation expressions with sub-expression data.
+def _expand(
+    component_name: str,
+    equations: list[Equation],
+    candidates: dict[str, list[Equation]],
+    kind: Literal["sub_expressions", "slices"],
+) -> list[Equation]:
+    """
+    Expand equations with all combinations of their referenced `$name` variants.
 
-        Finds all sub-expressions referenced in an equation expression and returns a
-        product of the sub-expression data.
-
-        Args:
-            parsed_equation (ParsedBackendEquation): Equation data dictionary.
-            parsed_items (dict[str, list[ParsedBackendEquation]]):
-                Dictionary of expressions to replace within the equation data dictionary.
-            expression_group (Literal["sub_expressions", "slices"]):
-                Name of expression group that the parsed_items dict is referencing.
-
-        Returns:
-            list[ParsedBackendEquation]: Expanded list of parsed equations with the
-                product of all references to items from the `expression_group`
-                producing a new equation object. E.g., if the input equation object has
-                a reference to an slice which itself has two expression options, two
-                equation objects will be added to the return list.
-        """
-        if expression_group == "sub_expressions":
-            equation_items = parsed_equation.find_sub_expressions()
-        elif expression_group == "slices":
-            equation_items = parsed_equation.find_slices()
-        if not equation_items:
-            return [parsed_equation]
-
-        invalid_items = equation_items.difference(parsed_items.keys())
-        if invalid_items:
+    Each `$name` reference maps to a list of `{mask, expression}` variants; an
+    equation referencing them is replaced by one equation per element of the
+    cartesian product of those variant lists, with the chosen variants' masks and
+    ASTs merged in.
+    """
+    expanded = []
+    for equation in equations:
+        ref_type = grammar.SubExprRef if kind == "sub_expressions" else grammar.SliceRef
+        trees = [equation.expression, *equation.sub_expressions.values()]
+        refs = set().union(*(grammar.find_refs(tree, ref_type) for tree in trees))
+        if not refs:
+            expanded.append(equation)
+            continue
+        undefined = refs.difference(candidates.keys())
+        if undefined:
             raise KeyError(
-                f"{self.name}: Undefined {expression_group} found in equation: {invalid_items}"
+                f"{component_name}: Undefined {kind} found in equation: {undefined}"
             )
+        for combination in itertools.product(*(candidates[ref] for ref in refs)):
+            new_name = "-".join([equation.name, *(v.name for v in combination)])
+            new_masks = (
+                *equation.masks,
+                *(mask for variant in combination for mask in variant.masks),
+            )
+            resolved = {
+                variant.name.split(":")[0]: variant.expression
+                for variant in combination
+            }
+            if kind == "sub_expressions":
+                new_equation = replace(
+                    equation, name=new_name, masks=new_masks, sub_expressions=resolved
+                )
+            else:
+                new_equation = replace(
+                    equation, name=new_name, masks=new_masks, slices=resolved
+                )
+            expanded.append(new_equation)
+    return expanded
 
-        parsed_item_product = itertools.product(
-            *[parsed_items[k] for k in equation_items]
+
+def parse_component(
+    group: GROUP_T, name: str, definition: EQUATION_DEFS_T, math: MathModel
+) -> list[Equation]:
+    """
+    Parse a math component's equations into fully-resolved :class:`Equation` objects.
+
+    All `expression` and `mask` strings of the component's equations,
+    sub-expressions, and slicers are parsed (syntax errors across all of them are
+    collected and raised together), then every equation is expanded with the
+    cartesian product of the sub-expression and slicer variants it references.
+
+    Parameters
+    ----------
+    group : GROUP_T
+        Component group the definition belongs to (defines the equation grammar:
+        comparisons for constraints, arithmetic otherwise).
+    name : str
+        Name of the math component.
+    definition : EQUATION_DEFS_T
+        The component's (already schema-validated) definition.
+    math : MathModel
+        The full math definition, providing valid component names.
+
+    Returns
+    -------
+    list[Equation]
+        One equation per user-defined equation and referenced variant combination.
+    """
+    component_name = f"{group}:{name}"
+    names = _expression_names(math)
+    equation_parser = (
+        grammar.equation_grammar(names)
+        if group == "constraints"
+        else grammar.arithmetic_grammar(names)
+    )
+    mask_parser = _mask_grammar(math)
+    # Objectives are adimensional: they carry no `foreach` key.
+    sets = tuple(getattr(definition, "foreach", ()))
+    collector = _ErrorCollector(component_name)
+
+    equations = _parse_variants(
+        collector,
+        equation_parser,
+        mask_parser,
+        definition.equations,
+        sets,
+        "equations",
+        component_name,
+    )
+    sub_expressions = {
+        sub_name: _parse_variants(
+            collector,
+            grammar.sub_expression_grammar(names),
+            mask_parser,
+            sub_list,
+            sets,
+            f"sub_expressions.{sub_name}",
+            sub_name,
         )
-
-        return [
-            parsed_equation.add_expression_group_combination(
-                expression_group, parsed_item_combination
-            )
-            for parsed_item_combination in parsed_item_product
-        ]
-
-    def foreach_matrix(self, input_data: xr.Dataset) -> xr.DataArray:
-        """
-        Generate a multi-dimensional array mask a constraint will be built.
-
-        The multi-dimensional boolean array is based on the sets over which the
-        constraint is to be built (`foreach`) and the model `exists` array.
-
-        Args:
-            input_data (xr.Dataset): Calliope model dataset.
-
-        Returns:
-            xr.DataArray: boolean array indexed over ["nodes", "techs", "carriers"]
-                + any additional dimensions provided by `foreach`.
-        """
-        if self.sets.difference(input_data.dims):
-            self.log_not_added(
-                f"indexed over unidentified set names: `{self.sets.difference(input_data.dims)}`."
-            )
-            return xr.DataArray(False)
-        if not self.sets:
-            return xr.DataArray(True)
-        else:
-            exists_and_foreach = [input_data[i].notnull() for i in self.sets]
-            return functools.reduce(operator.and_, exists_and_foreach)
-
-    def generate_top_level_mask(
-        self,
-        input_data: xr.Dataset,
-        model: Model,
-        math: MathModel,
-        config: ConfigModel,
-        *,
-        align_to_foreach_sets: bool = True,
-        break_early: bool = True,
-        references: set | None = None,
-    ) -> xr.DataArray:
-        """
-        Generate a multi-dimentional "mask" array.
-
-        The multi-dimensional array is created using model inputs and component sets
-        defined in foreach. The component top-level "mask" is then applied to the
-        array.
-
-        Args:
-            input_data (xr.Dataset): Model input data.
-            model (xr.Dataset): Backend interface component dataset.
-            math (MathModel): Calliope math definitions.
-            config (ConfigModel): Build configuration options.
-            align_to_foreach_sets (bool, optional):
-                By default, all foreach arrays have the dimensions ("nodes", "techs", "carriers")
-                as well as any additional dimensions provided by the component's "foreach" key.
-                If this argument is True, the dimensions not included in "foreach" are removed from the array.
-                Defaults to True.
-            break_early (bool, optional):
-                If any intermediate array has no valid elements (i.e. all are False),
-                the function will return that array rather than continuing - saving
-                time and memory on large models. Defaults to True.
-            references (set | None, optional): references to use during evaluation. Defaults to None.
-
-        Returns:
-            xr.DataArray: Boolean array defining on which index items a parsed component should be built.
-        """
-        foreach_mask = self.foreach_matrix(input_data)
-
-        if not foreach_mask.any():
-            self.log_not_added("'foreach' does not apply anywhere.")
-
-        if break_early and not foreach_mask.any():
-            return foreach_mask
-
-        self.parse_top_level_mask()
-        mask = self.evaluate_mask(
-            input_data,
-            model,
-            math,
-            config,
-            initial_mask=foreach_mask,
-            references=references if references is not None else set(),
+        for sub_name, sub_list in definition.sub_expressions.root.items()
+    }
+    slices = {
+        slice_name: _parse_variants(
+            collector,
+            grammar.slice_grammar(names),
+            mask_parser,
+            slice_list,
+            sets,
+            f"slices.{slice_name}",
+            slice_name,
         )
-        if break_early and not mask.any():
-            return mask
+        for slice_name, slice_list in definition.slices.root.items()
+    }
+    collector.raise_errors()
 
-        if align_to_foreach_sets:
-            mask = self.drop_dims_not_in_foreach(mask)
+    equations = _expand(component_name, equations, sub_expressions, "sub_expressions")
+    return _expand(component_name, equations, slices, "slices")
+
+
+# ---------------------------------------------------------------------------
+# Component-level masking
+# ---------------------------------------------------------------------------
+
+
+def foreach_mask(sets: tuple[str, ...], input_data: xr.Dataset) -> xr.DataArray:
+    """
+    Return the initial boolean array spanning a component's `foreach` dimensions.
+
+    Parameters
+    ----------
+    sets : tuple[str, ...]
+        The component's `foreach` dimensions.
+    input_data : xr.Dataset
+        Model input data providing the dimension coordinates.
+    """
+    missing_sets = set(sets).difference(input_data.dims)
+    if missing_sets:
+        LOGGER.debug(
+            f"Math parsing | indexed over unidentified set names: `{missing_sets}`."
+        )
+        return xr.DataArray(False)
+    if not sets:
+        return TRUE_ARRAY
+    exists_and_foreach = [input_data[i].notnull() for i in sets]
+    return functools.reduce(operator.and_, exists_and_foreach)
+
+
+def drop_dims_not_in_foreach(mask: xr.DataArray, sets: tuple[str, ...]) -> xr.DataArray:
+    """
+    Reduce a mask array to a component's `foreach` dimensions.
+
+    Any dimension not in `sets` is reduced with a boolean any-operation, and the
+    result is transposed to the order given by `sets`.
+    """
+    unwanted_dims = set(mask.dims).difference(sets)
+    return (mask.sum(unwanted_dims) > 0).astype(bool).transpose(*sets)
+
+
+def component_mask(
+    group: GROUP_T,
+    name: str,
+    definition: MATH_DEFS_T,
+    ctx: Context,
+    *,
+    align_to_foreach_sets: bool = True,
+) -> xr.DataArray:
+    """
+    Evaluate a component's top-level mask over its `foreach` dimensions.
+
+    Combines the `foreach` existence array with the component's (optional)
+    top-level `mask` string, breaking early if no valid element remains.
+
+    Parameters
+    ----------
+    group : GROUP_T
+        Component group the definition belongs to.
+    name : str
+        Name of the math component.
+    definition : MATH_DEFS_T
+        The component's (already schema-validated) definition.
+    ctx : Context
+        Evaluation context.
+    align_to_foreach_sets : bool, default: True
+        If True, reduce the result to the `foreach` dimensions
+        (see :func:`drop_dims_not_in_foreach`).
+    """
+    component_name = f"{group}:{name}"
+    # Objectives are adimensional: they carry no `foreach` or `mask` keys.
+    sets = tuple(getattr(definition, "foreach", ()))
+    mask_string = getattr(definition, "mask", "True")
+    initial_mask = foreach_mask(sets, ctx.input_data)
+    if not initial_mask.any():
+        LOGGER.debug(
+            f"Math parsing | {component_name} | Component not added; "
+            "'foreach' does not apply anywhere."
+        )
+        return initial_mask
+
+    mask_node = parse_mask(mask_string, ctx.math, component_name)
+    mask_ctx = replace(ctx, route="mask", equation_name=component_name)
+    mask = xr.DataArray(initial_mask & evaluate(mask_node, mask_ctx))
+    if not mask.any():
+        LOGGER.debug(
+            f"Math parsing | {component_name} | Component not added; "
+            "'mask' does not apply anywhere."
+        )
         return mask
 
-    def raise_caught_errors(self):
-        """Pipe parsing errors to the ModelError bullet point list generator."""
-        errors = []
-        if not self._is_valid:
-            errors.append({f"{self.name}": self._errors})
-        if errors:
-            raise ValueError(
-                "\n".join(f"- {k}: {v}" for err in errors for k, v in err.items())
-            )
+    if align_to_foreach_sets:
+        mask = drop_dims_not_in_foreach(mask, sets)
+    return mask
+
+
+# ---------------------------------------------------------------------------
+# Typed evaluation entry points
+# ---------------------------------------------------------------------------
+
+
+def _equation_ctx(
+    equation: Equation,
+    ctx: Context,
+    route: Literal["expression", "mask"],
+    **kwargs: Any,
+) -> Context:
+    """Return a context copy carrying the equation's name and resolved references."""
+    return replace(
+        ctx,
+        equation_name=equation.name,
+        route=route,
+        sub_expressions=equation.sub_expressions,
+        slices=equation.slices,
+        **kwargs,
+    )
+
+
+def as_mask(
+    equation: Equation, ctx: Context, *, initial_mask: xr.DataArray = TRUE_ARRAY
+) -> xr.DataArray:
+    """
+    Evaluate an equation's mask strings to a boolean array.
+
+    Parameters
+    ----------
+    equation : Equation
+        Parsed equation.
+    ctx : Context
+        Evaluation context.
+    initial_mask : xr.DataArray, optional
+        Mask to combine (boolean AND) with the equation's own masks, e.g. the
+        component-level mask from :func:`component_mask`.
+
+    Returns
+    -------
+    xr.DataArray
+        Boolean array defining on which index items the equation applies.
+    """
+    mask_ctx = _equation_ctx(equation, ctx, "mask")
+    evaluated = [evaluate(mask, mask_ctx) for mask in equation.masks]
+    mask = xr.DataArray(functools.reduce(operator.and_, [initial_mask, *evaluated]))
+    if not mask.any():
+        LOGGER.debug(
+            f"Math parsing | {equation.name} | Component not added; "
+            "'mask' does not apply anywhere."
+        )
+    return mask
+
+
+def as_expression(
+    equation: Equation, ctx: Context, *, mask: xr.DataArray = TRUE_ARRAY
+) -> LinearExpression:
+    """
+    Evaluate an equation's arithmetic expression to a linopy expression.
+
+    Parameters
+    ----------
+    equation : Equation
+        Parsed equation (from an `expressions`/`objectives` component).
+    ctx : Context
+        Evaluation context.
+    mask : xr.DataArray, optional
+        Boolean array with which to mask the produced arrays.
+
+    Returns
+    -------
+    LinearExpression
+        The evaluated expression; a pure-parameter expression (evaluated to an
+        `xr.DataArray`) is coerced to a `LinearExpression`.
+    """
+    expr_ctx = _equation_ctx(equation, ctx, "expression", mask=mask)
+    evaluated = evaluate(equation.expression, expr_ctx, expr=True)
+    if isinstance(evaluated, xr.DataArray):
+        evaluated = LinearExpression(evaluated, ctx.model)
+    return evaluated
+
+
+def as_constraint(
+    equation: Equation, ctx: Context, *, mask: xr.DataArray = TRUE_ARRAY
+) -> tuple[LinearExpression, xr.DataArray, LinearExpression]:
+    """
+    Evaluate an equation of the form `LHS OP RHS` to a constraint tuple.
+
+    Parameters
+    ----------
+    equation : Equation
+        Parsed equation (from a `constraints` component).
+    ctx : Context
+        Evaluation context.
+    mask : xr.DataArray, optional
+        Boolean array with which to mask the produced arrays.
+
+    Returns
+    -------
+    tuple[LinearExpression, xr.DataArray, LinearExpression]
+        `(lhs, sign, rhs)` for constraint assembly; pure-parameter sides are
+        coerced to `LinearExpression` and `sign` is an array of the comparison
+        operator.
+    """
+    expr_ctx = _equation_ctx(equation, ctx, "expression", mask=mask)
+    lhs, sign, rhs = evaluate(equation.expression, expr_ctx, expr=True)
+    if isinstance(lhs, xr.DataArray):
+        lhs = LinearExpression(lhs, ctx.model)
+    if isinstance(rhs, xr.DataArray):
+        rhs = LinearExpression(rhs, ctx.model)
+    return lhs, sign, rhs
+
+
+def as_latex(
+    equation: Equation,
+    ctx: Context,
+    *,
+    what: Literal["expression", "mask"] = "expression",
+) -> str:
+    """
+    Render an equation's expression or mask as a LaTeX math string.
+
+    Parameters
+    ----------
+    equation : Equation
+        Parsed equation.
+    ctx : Context
+        Evaluation context.
+    what : Literal["expression", "mask"], default: "expression"
+        Whether to render the equation's expression (including an equation's
+        comparison operator) or its combined mask conditions.
+
+    Returns
+    -------
+    str
+        A valid LaTeX math string.
+    """
+    if what == "mask":
+        mask_ctx = _equation_ctx(equation, ctx, "mask")
+        strings = [to_math_string(mask, mask_ctx) for mask in equation.masks]
+        return r"\land{}".join(f"({s})" for s in strings if s != "true")
+    expr_ctx = _equation_ctx(equation, ctx, "expression")
+    return to_math_string(equation.expression, expr_ctx)
+
+
+def check_mask_expr_consistency(
+    name: str, expression: xr.DataArray, mask: xr.DataArray
+) -> None:
+    """
+    Check that an evaluated expression is consistent with its mask array.
+
+    Parameters
+    ----------
+    name : str
+        Name to identify the equation by in error messages.
+    expression : xr.DataArray
+        Array of linear expressions or one side of a constraint equation.
+    mask : xr.DataArray
+        Boolean mask; there should be a valid expression value wherever it is True.
+
+    Raises
+    ------
+    ValueError
+        If the expression is indexed over dimensions not present in the mask, or
+        has missing (NaN) entries where the mask applies.
+    """
+    broadcast_dims_mask = set(expression.dims).difference(set(mask.dims))
+    if broadcast_dims_mask:
+        raise ValueError(
+            f"{name} | The linear expression array is indexed over dimensions "
+            f"not present in `foreach`: {broadcast_dims_mask}"
+        )
+    incomplete_constraints = expression.isnull() & mask
+    if incomplete_constraints.any():
+        raise ValueError(
+            f"{name} | Missing a linear expression for some coordinates selected "
+            "by 'mask'. Adapting 'mask' might help."
+        )

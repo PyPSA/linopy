@@ -1,21 +1,36 @@
-# Copyright (C) since 2013 Calliope contributors listed in AUTHORS.
-# Licensed under the Apache 2.0 License (see LICENSE file).
-"""Schema for Calliope mathematical definition."""
+"""
+Linopy declarative math schema module.
+
+This module contains the pydantic models that validate declarative math and
+build-configuration definitions.
+"""
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Hashable, Iterable
 from functools import cached_property
-from typing import Annotated, ClassVar, Literal, Self, TypeVar
+from typing import Annotated, Any, ClassVar, Literal, Self, TypeVar
 
+import numpy as np
 from annotated_types import Len
 from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validator
 from pydantic_core import PydanticCustomError
 
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.INFO)
-# ==
+
 # Modified from https://github.com/pydantic/pydantic-core/pull/820#issuecomment-1670475909
 T = TypeVar("T", bound=Hashable | list)
+
+DTYPE_OPTIONS: dict[str, type] = {
+    "string": str,
+    "float": float,
+    "bool": bool,
+    "integer": int,
+    "datetime": np.datetime64,
+    "date": np.datetime64,
+}
+"""Mapping from math-schema dtype names to Python/numpy types."""
 
 COMPONENTS_T = Literal[
     "dimensions",
@@ -58,24 +73,24 @@ NumericVal = int | Annotated[float, Field(allow_inf_nan=True)]
 
 
 class LinopyDictModel(RootModel):
-    """Pydantic Model that is used to store dictionaries with user-defined keys and Calliope pydantic model values."""
+    """Pydantic model storing a dictionary of user-named component definitions."""
 
-    def __setitem__(self, *args, **kwargs) -> None:
+    def __setitem__(self, *args: Any, **kwargs: Any) -> None:
         """Do not allow direct item setting."""
         raise PydanticCustomError(
             "no_extra_dict",
-            f"Cannot set a {self.__class__.__name__} directly. Use the `update` method instead, which will return a copy.",
+            f"Cannot set a {self.__class__.__name__} item directly. Re-validate a new definition dictionary instead.",
         )
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
         """Expose the root attribute when getting an item by key."""
         return self.root[key]
 
-    def __repr__(self, *args, **kwargs):
+    def __repr__(self, *args: Any, **kwargs: Any) -> str:
         """Show the __repr__ of the root attribute when requesting the __repr__ of the class."""
         return self.root.__repr__(*args, **kwargs)
 
-    def __rich_repr__(self):
+    def __rich_repr__(self) -> Iterable:
         """Prettyprint the __repr__ of the root attribute when requesting the prettyprint of the class."""
         yield from self.root.items()
 
@@ -84,82 +99,29 @@ class LinopyDictModel(RootModel):
         """Return only active components."""
         return {k: v for k, v in self.root.items() if v.active}
 
-    def update(
-        self, update_def: dict | BaseModel, deep: bool = False, overwrite: bool = True
-    ) -> Self:
-        """
-        Return a new iteration of the model with updated fields.
-
-        Args:
-            update_def (dict | BaseModel): Dictionary or pydantic model with which to update the base model.
-            deep (bool, optional): Set to True to make a deep copy of the model. Defaults to False.
-            overwrite (bool, optional): Set to False to only update fields that are not already set in the base model. Defaults to True.
-
-        Returns:
-            BaseModel: New model instance.
-        """
-        update_dict: dict = (
-            update_def.model_dump(exclude_unset=True)
-            if isinstance(update_def, BaseModel)
-            else update_def
-        )
-        new_dict = dict()
-        # Iterate through dict to be updated and convert any sub-dicts into their respective pydantic model objects.
-        for key, val in update_dict.items():
-            key_class = self.root.get(key, None)
-            if isinstance(key_class, LinopyBaseModel):
-                new_dict[key] = key_class.update(val, deep=deep, overwrite=overwrite)
-            elif isinstance(key_class, LinopyListModel):
-                if overwrite:
-                    new_dict[key] = key_class.update(val)
-                else:
-                    continue
-            elif key_class == val:
-                continue
-            else:
-                if key not in self.root or overwrite:
-                    LOGGER.debug(f"Adding {self.__class__.__name__} entry: `{key}`")
-                    new_dict[key] = self.model_validate({key: val})[key]
-
-        return self.model_validate(self.root | new_dict)
-
 
 class LinopyListModel(RootModel):
-    """Pydantic Model that is used to store lists of Linopy pydantic models."""
+    """Pydantic model storing a list of definitions."""
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         """Iterate over root attribute contents when iterating over class."""
         return iter(self.root)
 
-    def __getitem__(self, item: int):
+    def __getitem__(self, item: int) -> Any:
         """Expose the root attribute when getting an item by index value."""
         return self.root[item]
 
-    def __repr__(self, *args, **kwargs):
+    def __repr__(self, *args: Any, **kwargs: Any) -> str:
         """Show the __repr__ of the root attribute when requesting the __repr__ of the class."""
         return self.root.__repr__(*args, **kwargs)
 
-    def __rich_repr__(self):
+    def __rich_repr__(self) -> Iterable:
         """Prettyprint the __repr__ of the root attribute when requesting the prettyprint of the class."""
         yield from self.root
 
-    def update(self, update_list: list) -> Self:
-        """
-        Return a new iteration of the model fields entirely replaced.
-
-        We do not allow updating individual items in the list as it's hard to guarantee the order of items in the list.
-
-        Args:
-            update_list (list): List with which to update the base model.
-
-        Returns:
-            BaseModel: New model instance.
-        """
-        return self.model_validate(update_list)
-
 
 class LinopyBaseModel(BaseModel):
-    """A base class for creating pydantic models for Linopy models."""
+    """Base class for declarative math pydantic models."""
 
     model_config = {
         "extra": "forbid",
@@ -168,68 +130,9 @@ class LinopyBaseModel(BaseModel):
         "use_attribute_docstrings": True,
     }
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: str) -> Any:
         """Allow attribute access via item lookup."""
         return getattr(self, item)
-
-    def update(
-        self,
-        update_def: dict | BaseModel,
-        deep: bool = False,
-        overwrite: bool = True,
-        _suppress_log: bool = False,
-    ) -> Self:
-        """
-        Return a new iteration of the model with updated fields.
-
-        Args:
-            update_def (dict | BaseModel): Dictionary or pydantic model with which to update the base model.
-            deep (bool, optional): Set to True to make a deep copy of the model. Defaults to False.
-            overwrite (bool, optional): Set to False to only update fields that are not already set in the base model. Defaults to True.
-            _suppress_log (bool, optional):
-            Set to True to suppress logging of updated fields.
-            This is an internal method argument used to avoid logging updates when the update method is called recursively.
-            Defaults to False.
-
-        Returns:
-            BaseModel: New model instance.
-        """
-        new_dict = dict()
-        # Iterate through dict to be updated and convert any sub-dicts into their respective pydantic model objects.
-        # Wrapped in `AttrDict` to allow users to define dot notation nested configuration.
-        # We revert to dict format to avoid issues with the `model_copy` method later.
-        update_dict = (
-            update_def.model_dump(exclude_unset=True)
-            if isinstance(update_def, BaseModel)
-            else update_def
-        )
-        for key, val in update_dict.items():
-            key_class = getattr(self, key, None)
-            if isinstance(key_class, LinopyBaseModel | LinopyDictModel):
-                new_dict[key] = key_class.update(val, deep=deep, overwrite=overwrite)
-            elif isinstance(key_class, LinopyListModel):
-                if overwrite:
-                    new_dict[key] = key_class.update(val)
-                else:
-                    continue
-            elif key_class == val:
-                continue
-            else:
-                if not _suppress_log and (
-                    key not in self.model_fields_set
-                    or (key in self.model_fields_set and overwrite)
-                ):
-                    LOGGER.debug(
-                        f"Updating {self.__class__.__name__} `{key}`: {key_class} -> {val}"
-                    )
-                new_dict[key] = val
-        updated = super().model_copy(update=new_dict, deep=deep)
-        if not overwrite:
-            extra_update = super().model_dump(exclude_unset=True, serialize_as_any=True)
-            updated = updated.update(extra_update, deep=deep, _suppress_log=True)
-        return updated.model_validate(
-            updated.model_dump(exclude_unset=True, serialize_as_any=True)
-        )
 
 
 class _ExpressionItem(LinopyBaseModel):
@@ -371,21 +274,6 @@ class PiecewiseConstraintDef(_MathIndexedComponent):
     y_values: str
     """Y parameter name containing data, indexed over the `breakpoints` dimension."""
 
-    @property
-    def equations(self) -> _Equations:
-        """Dummy property to satisfy type hinting."""
-        return _Equations()
-
-    @property
-    def sub_expressions(self) -> _SubExpressions:
-        """Dummy property to satisfy type hinting."""
-        return _SubExpressions()
-
-    @property
-    def slices(self) -> _SubExpressions:
-        """Dummy property to satisfy type hinting."""
-        return _SubExpressions()
-
     _group: ClassVar[COMPONENTS_T] = "piecewise_constraints"
 
 
@@ -448,21 +336,6 @@ class VariableDef(_MathIndexedComponent):
     Either real (a.k.a. continuous) or integer."""
     bounds: _Bounds = _Bounds()
 
-    @property
-    def equations(self) -> _Equations:
-        """Dummy property to satisfy type hinting."""
-        return _Equations()
-
-    @property
-    def sub_expressions(self) -> _SubExpressions:
-        """Dummy property to satisfy type hinting."""
-        return _SubExpressions()
-
-    @property
-    def slices(self) -> _SubExpressions:
-        """Dummy property to satisfy type hinting."""
-        return _SubExpressions()
-
     _group: ClassVar[COMPONENTS_T] = "variables"
 
 
@@ -477,16 +350,6 @@ class ObjectiveDef(_MathEquationComponent):
     sense: Literal["min", "max"]
     """Whether the objective function should be minimised or maximised in the
     optimisation."""
-
-    @property
-    def foreach(self) -> UniqueList[AttrStr]:
-        """Objectives are always adimensional."""
-        return []
-
-    @property
-    def mask(self) -> str:
-        """Dummy property to satisfy type hinting."""
-        return "True"
 
     _group: ClassVar[COMPONENTS_T] = "objectives"
 
@@ -579,11 +442,10 @@ class Checks(LinopyDictModel):
 
 class MathModel(LinopyBaseModel):
     """
-    Mathematical definition of Calliope math.
+    Declarative definition of a linopy optimisation problem.
 
-    Contains mathematical programming components available for optimising with Calliope.
-    Can contain partial definitions if they are meant to be layered on top of another.
-    E.g.: layering 'base' and 'operate' math.
+    Contains all mathematical programming components from which a linopy model
+    can be built.
     """
 
     model_config = {"title": "Model math schema"}
@@ -619,8 +481,8 @@ class MathModel(LinopyBaseModel):
             ),
             key=len,
         )
-        seen = set()
-        duplicates = set()
+        seen: set[str] = set()
+        duplicates: set[str] = set()
         for field_names in groups:
             duplicates |= field_names & seen
             seen |= field_names
@@ -634,11 +496,13 @@ class MathModel(LinopyBaseModel):
     @cached_property
     def parsing_components(self) -> dict[str, dict[str, set[str]]]:
         """
-        Return a set of valid component names in the model to use in `mask` string parsing.
+        Return the valid component names available to each parser.
 
-        Returns:
-            dict[Literal["dimension_names", "input_names", "result_names"], set[str]]:
-                Set of valid names grouped by location in the math in which they are defined.
+        Returns
+        -------
+        dict[str, dict[str, set[str]]]
+            Per parser kind ("expression" / "mask"), the valid names grouped by
+            where they are defined in the math ("dimensions" / "inputs" / "results").
         """
         parsing_components = {
             "dimensions": ["dimensions"],
@@ -646,7 +510,7 @@ class MathModel(LinopyBaseModel):
             "results": ["variables", "expressions"],
         }
 
-        def _names():
+        def _names() -> dict[str, set[str]]:
             return {
                 k: set().union(*[getattr(self, i)._active for i in v])
                 for k, v in parsing_components.items()
@@ -680,11 +544,7 @@ class MathModel(LinopyBaseModel):
 
 
 MATH_DEFS_T = (
-    ConstraintDef
-    | VariableDef
-    | ExpressionDef
-    | ObjectiveDef
-    | PiecewiseConstraintDef
+    ConstraintDef | VariableDef | ExpressionDef | ObjectiveDef | PiecewiseConstraintDef
 )
 
 

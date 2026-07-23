@@ -1,14 +1,28 @@
-import textwrap
+"""
+Linopy declarative model-build module.
+
+This module contains the entry point to build a linopy optimisation model from a
+declarative math definition (a dictionary, typically loaded from YAML) and an
+xarray dataset of input data.
+"""
+
+from __future__ import annotations
+
+import logging
 import time
-import typing
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import replace
+from typing import Any, Literal, get_args
 
-import numpy as np
 import xarray as xr
-from tqdm.asyncio import tqdm
+from tqdm.auto import tqdm
 
-from linopy.declarative import eval_attrs, helper_functions, parsing
+from linopy.declarative import parsing
+from linopy.declarative.evaluate import Context, evaluate
+from linopy.declarative.grammar import Component, find_refs
+from linopy.declarative.helpers import HelperFunction, build_registry
 from linopy.declarative.schema import (
-    LOGGER,
+    DTYPE_OPTIONS,
     ConfigModel,
     ConstraintDef,
     ExpressionDef,
@@ -20,62 +34,97 @@ from linopy.expressions import LinearExpression, merge
 from linopy.io import TQDM_COLOR
 from linopy.model import Model
 
-ORDERED_COMPONENTS_T = typing.Literal[
+LOGGER = logging.getLogger(__name__)
+
+ORDERED_COMPONENTS_T = Literal[
     "variables",
     "expressions",
     "constraints",
-    # "piecewise_constraints",
     "objectives",
 ]
 
-DTYPE_OPTIONS = {
-    "string": str,
-    "float": float,
-    "bool": bool,
-    "datetime": np.datetime64,
-    "date": np.datetime64,
-    "integer": int,
-}
-
-DATETIME_DTYPE = "M"
-"""Numpy type kind for datetime arrays"""
+_SKIP_MESSAGE = "No valid data points after applying mask. Not added to model."
 
 
-def declarative_model(math_def: dict, input_data: xr.Dataset, config: dict) -> Model:
-    """Build a Linopy Model from declarative math definitions and input data."""
-    builder = DeclarativeModelBuilder(math_def, input_data, config)
-    return builder.build()
+def declarative_model(
+    math_def: dict,
+    input_data: xr.Dataset,
+    config: dict,
+    helpers: Iterable[type[HelperFunction]] = (),
+) -> Model:
+    """
+    Build a linopy Model from a declarative math definition and input data.
+
+    Parameters
+    ----------
+    math_def : dict
+        Declarative math definition (see
+        :class:`linopy.declarative.schema.MathModel` for the expected structure).
+    input_data : xr.Dataset
+        Model input data (parameters, lookups, dimensions).
+    config : dict
+        Build configuration options.
+    helpers : Iterable[type[HelperFunction]], optional
+        User-defined helper functions to make available in math strings, in
+        addition to the built-in ones.
+
+    Returns
+    -------
+    Model
+        The built linopy model, ready to solve.
+    """
+    return DeclarativeModelBuilder(math_def, input_data, config, helpers).build()
 
 
 class DeclarativeModelBuilder:
-    def __init__(self, math_def: dict, input_data: xr.Dataset, config: dict):
+    """Builder turning a declarative math definition into a linopy Model."""
+
+    def __init__(
+        self,
+        math_def: dict,
+        input_data: xr.Dataset,
+        config: dict,
+        helpers: Iterable[type[HelperFunction]] = (),
+    ) -> None:
+        """
+        Validate the math definition, input data, and config, ready to `build()`.
+
+        Parameters
+        ----------
+        math_def : dict
+            Declarative math definition.
+        input_data : xr.Dataset
+            Model input data.
+        config : dict
+            Build configuration options.
+        helpers : Iterable[type[HelperFunction]], optional
+            User-defined helper functions, in addition to the built-in ones.
+        """
         self.model = Model()
         self.math = MathModel.model_validate(math_def)
         self.input_data = self._update_dtypes(input_data)
         self.config = ConfigModel.model_validate(config)
-
+        self._ctx = Context(
+            model=self.model,
+            input_data=self.input_data,
+            math=self.math,
+            config=self.config,
+            helpers=build_registry(helpers),
+        )
         self._check_inputs()
 
     def _update_dtypes(self, ds: xr.Dataset, id_: str = "") -> xr.Dataset:
         """
-        Update data types of coordinates or data variables in the dataset.
+        Coerce dataset variables to the dtypes given by their math definitions.
 
-        Args:
-            ds (xr.Dataset): Dataset to update.
-            math (math_schema.CalliopeBuildMath): Model math definition.
-            id_ (str, optional): ID of the dataset being updated, for logging purposes. Defaults to an empty string.
-
-        Raises:
-            ValueError: If there is a mismatch between the provided variable and its definition in the model math.
-
-        Returns:
-            xr.Dataset: `ds` with data types updated.
+        Variables not defined in the math are left unchanged (with an INFO log);
+        datetime/date variables pass through uncoerced.
         """
         prefix = f"{id_} | " if id_ else ""
         for var_name, var_data in ds.items():
             try:
                 math_def = self.math.find(
-                    var_name, subset=["lookups", "parameters", "dimensions"]
+                    str(var_name), subset=["lookups", "parameters", "dimensions"]
                 )
             except KeyError:
                 LOGGER.info(
@@ -84,7 +133,9 @@ class DeclarativeModelBuilder:
                 )
                 continue
 
-            dtype_str = math_def.dtype  # type: ignore
+            dtype_str: str = math_def["dtype"]
+            if dtype_str in ("datetime", "date"):
+                continue
             dtype = DTYPE_OPTIONS[dtype_str]
             LOGGER.debug(
                 f"{prefix}{math_def._group} | Updating values of `{var_name}` to {dtype_str} type"
@@ -96,18 +147,6 @@ class DeclarativeModelBuilder:
                         .where(var_data.notnull())
                         .where(var_data != "")
                     )
-                case "datetime":
-                    updated_var = time._datetime_index(
-                        var_data.to_series(), self.config.datetime_format
-                    ).to_xarray()
-                case "date":
-                    updated_var = (
-                        time._datetime_index(
-                            var_data.to_series(), self.config.date_format
-                        )
-                        .to_xarray()
-                        .assign_attrs(var_data.attrs)
-                    )
                 case "bool":
                     updated_var = var_data.fillna(False).astype(dtype)
                 case _:
@@ -116,327 +155,203 @@ class DeclarativeModelBuilder:
             ds[var_name] = updated_var
         return ds
 
+    def _check_inputs(self) -> None:
+        """Run the math's input-data checks, warning or raising on triggered ones."""
+        warn_msgs: list[str] = []
+        error_msgs: list[str] = []
+        active = self.input_data.get("active", xr.DataArray(True))
+        for name, check in self.math.checks.root.items():
+            if not check.active:
+                continue
+            mask_node = parsing.parse_mask(check.mask, self.math, name)
+            check_ctx = replace(self._ctx, route="mask", equation_name=name)
+            evaluated = evaluate(mask_node, check_ctx)
+            if (evaluated & active).any():
+                messages = error_msgs if check.errors == "raise" else warn_msgs
+                messages.append(check.message)
+
+        if warn_msgs:
+            bullets = "\n".join(f" * {msg}" for msg in sorted(set(warn_msgs)))
+            LOGGER.info(
+                f"Possible issues found during model input data checks:\n{bullets}"
+            )
+        if error_msgs:
+            bullets = "\n".join(f" * {msg}" for msg in sorted(set(error_msgs)))
+            raise ValueError(f"Errors during model input data checks:\n{bullets}")
+
     @staticmethod
-    def _sorted_by_order(
-        root: typing.Mapping[str, typing.Any],
-    ) -> list[tuple[str, typing.Any]]:
-        """Return (name, obj) pairs from a root mapping, sorted by obj.order."""
+    def _sorted_by_order(root: Mapping[str, Any]) -> list[tuple[str, Any]]:
+        """Return (name, definition) pairs from a root mapping, sorted by definition order."""
         return sorted(root.items(), key=lambda item: getattr(item[1], "order", 0))
 
-    def _check_inputs(self) -> None:
-        data_checks = self.math.checks
-        check_results: dict[str, list[str]] = {"raise": [], "warn": []}
-        parser_ = parsing.mask_parser.generate_mask_string_parser(
-            **self.math.parsing_components["mask"]
-        )
-        eval_kwargs = {
-            "model": self.model,
-            "math": self.math,
-            "input_data": self.input_data,
-            "config": self.config,
-            "helper_functions": helper_functions._registry["mask"],
-        }
-        active = self.input_data.get("active", xr.DataArray(True))
-        for name, check in data_checks.root.items():
-            if check.active:
-                parsed_ = parser_.parse_string(check.mask, parse_all=True)
-                eval_attrs_ = eval_attrs.EvalAttrs(equation_name=name, **eval_kwargs)
-                evaluated = parsed_[0].eval("raw", eval_attrs_)
-                if (evaluated & active).any():
-                    check_results[check.errors].append(check.message)
+    def _references(
+        self, definition: Any, equations: Iterable[parsing.Equation] = ()
+    ) -> list[str]:
+        """Return the sorted names of all math components a component references."""
+        mask_node = parsing.parse_mask(getattr(definition, "mask", "True"), self.math)
+        refs = find_refs(mask_node, Component)
+        for equation in equations:
+            refs |= equation.references()
+        return sorted(refs)
 
-        print_warnings_and_raise_errors(
-            check_results["warn"],
-            check_results["raise"],
-            during="model input data checks",
-        )
+    def _iter_equations(
+        self,
+        equations: list[parsing.Equation],
+        group: parsing.GROUP_T,
+        mask: xr.DataArray,
+    ) -> Iterator[tuple[parsing.Equation, xr.DataArray]]:
+        """
+        Yield each parsed equation with its evaluated, foreach-aligned sub-mask.
+
+        Equations whose mask leaves no valid data point are skipped (with an INFO log).
+        """
+        for equation in equations:
+            sub_mask = parsing.as_mask(equation, self._ctx, initial_mask=mask)
+            if not sub_mask.any():
+                LOGGER.info(f"{group}:{equation.name} | {_SKIP_MESSAGE}")
+                continue
+            yield equation, parsing.drop_dims_not_in_foreach(sub_mask, equation.sets)
 
     def add_variable(self, name: str, definition: VariableDef) -> None:
-        references: set[str] = set()
-        parsed_component = parsing.ParsedBackendComponent(
-            "variables", name, definition, self.math.parsing_components
+        """Add a decision variable to the model, masked by its math definition."""
+        mask = parsing.component_mask("variables", name, definition, self._ctx)
+        if not mask.any():
+            LOGGER.info(f"variables:{name} | {_SKIP_MESSAGE}")
+            return
+        self.model.add_variables(
+            coords=mask.coords,
+            name=name,
+            mask=mask,
+            upper=definition.bounds.upper,
+            lower=definition.bounds.lower,
+            integer=definition.domain == "integer",
         )
-        mask = parsed_component.generate_top_level_mask(
-            self.input_data,
-            self.model,
-            self.math,
-            self.config,
-            align_to_foreach_sets=True,
-            break_early=True,
-            references=references,
-        )
-        kwargs = {
-            "upper": definition.bounds.upper,
-            "lower": definition.bounds.lower,
-            "integer": definition.domain == "integer",
-            "binary": definition.domain == "binary",
-        }
-        if mask.any():
-            self.model.add_variables(coords=mask.coords, name=name, mask=mask, **kwargs)
-            self.model.variables[name].attrs["references"] = references
-        else:
-            LOGGER.info(
-                f"variables:{name} | No valid data points after applying mask. Variable not added to model."
-            )
+        # Variable.attrs values are typed Hashable, but a sorted list serializes best.
+        self.model.variables[name].attrs["references"] = self._references(definition)  # type: ignore[assignment]
 
     def add_expression(self, name: str, definition: ExpressionDef) -> None:
-        references: set[str] = set()
-        parsed_component = parsing.ParsedBackendComponent(
-            "expressions", name, definition, self.math.parsing_components
+        """Add a named expression to the model, merging its equation variants."""
+        mask = parsing.component_mask("expressions", name, definition, self._ctx)
+        if not mask.any():
+            LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
+            return
+        expr: Any = LinearExpression(float("nan"), self.model).where(mask)
+        filled = xr.DataArray(False)
+        equations = parsing.parse_component("expressions", name, definition, self.math)
+        for equation, sub_mask in self._iter_equations(equations, "expressions", mask):
+            if (filled & sub_mask).any():
+                raise ValueError(
+                    f"expressions:{name} | Overlapping 'mask' conditions between "
+                    "equations are not allowed. Please revise the 'mask' conditions "
+                    "to ensure they are mutually exclusive."
+                )
+            filled = filled | sub_mask
+            expr_to_fill = parsing.as_expression(equation, self._ctx, mask=sub_mask)
+            expr = merge([expr, expr_to_fill.where(sub_mask)])
+        if not filled.any():
+            LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
+            return
+        self.model.add_expressions(name=name, data=expr, mask=mask)
+        self.model.expressions[name].attrs["references"] = self._references(
+            definition, equations
         )
-        mask = parsed_component.generate_top_level_mask(
-            self.input_data,
-            self.model,
-            self.math,
-            self.config,
-            align_to_foreach_sets=True,
-            break_early=True,
-            references=references,
-        )
-        expr = LinearExpression(float("nan"), self.model).where(mask)
-        all_mask = mask.copy()
-        if mask.any():
-            equations = parsed_component.parse_equations()
-            for equation in equations:
-                sub_mask = equation.evaluate_mask(
-                    self.input_data,
-                    self.model,
-                    self.math,
-                    self.config,
-                    initial_mask=mask,
-                    references=references,
-                )
-                if not sub_mask.any():
-                    continue
-                sub_mask = parsed_component.drop_dims_not_in_foreach(sub_mask)
-                if (~expr.isnull() & sub_mask).any():
-                    raise ValueError(
-                        f"expressions:{name} | Overlapping 'mask' conditions between equations are not allowed. "
-                        "Please revise the 'mask' conditions to ensure they are mutually exclusive."
-                    )
-                expr_to_fill = equation.evaluate_expression(
-                    self.input_data,
-                    self.model,
-                    self.math,
-                    mask=sub_mask,
-                    references=references,
-                )
-                expr = merge([expr, expr_to_fill.where(sub_mask)])
-            if not expr.isnull().all():
-                self.model.add_expressions(name=name, data=expr, mask=all_mask)
-                self.model.expressions[name].attrs["references"] = references
-            else:
-                LOGGER.info(
-                    f"expressions:{name} | No valid data points after applying mask. Expression not added to model."
-                )
-        else:
-            LOGGER.info(
-                f"expressions:{name} | No valid data points after applying mask. Expression not added to model."
-            )
 
     def add_constraint(self, name: str, definition: ConstraintDef) -> None:
-        references: set[str] = set()
-        parsed_component = parsing.ParsedBackendComponent(
-            "constraints", name, definition, self.math.parsing_components
-        )
-        mask = parsed_component.generate_top_level_mask(
-            self.input_data,
-            self.model,
-            self.math,
-            self.config,
-            align_to_foreach_sets=True,
-            break_early=True,
-            references=references,
-        )
-        lhs = LinearExpression(float("nan"), self.model).where(mask)
-        sign = xr.DataArray().where(parsed_component.drop_dims_not_in_foreach(mask))
-        rhs = LinearExpression(float("nan"), self.model).where(mask)
-        all_mask = mask.copy()
+        """Add a constraint to the model, merging its equation variants."""
+        mask = parsing.component_mask("constraints", name, definition, self._ctx)
         if not mask.any():
-            LOGGER.info(
-                f"constraints:{name} | No valid data points after applying mask. Constraint not added to model."
-            )
-            return None
-
-        equations = parsed_component.parse_equations()
-        for equation in equations:
-            sub_mask = equation.evaluate_mask(
-                self.input_data,
-                self.model,
-                self.math,
-                self.config,
-                initial_mask=mask,
-                references=references,
-            )
-            if not sub_mask.any():
-                LOGGER.info(
-                    f"constraints:{equation.name} | No valid data points after applying mask. Constraint not added to model."
-                )
-                continue
-            sub_mask = parsed_component.drop_dims_not_in_foreach(sub_mask)
+            LOGGER.info(f"constraints:{name} | {_SKIP_MESSAGE}")
+            return
+        lhs: Any = LinearExpression(float("nan"), self.model).where(mask)
+        rhs: Any = LinearExpression(float("nan"), self.model).where(mask)
+        sign = xr.DataArray().where(mask)
+        equations = parsing.parse_component("constraints", name, definition, self.math)
+        for equation, sub_mask in self._iter_equations(equations, "constraints", mask):
             if (sign.notnull() & sub_mask).any():
                 raise ValueError(
-                    f"constraints:{name} | "
-                    "Overlapping 'mask' conditions between equations are not allowed. "
-                    "Please revise the 'mask' conditions to ensure they are mutually exclusive."
+                    f"constraints:{name} | Overlapping 'mask' conditions between "
+                    "equations are not allowed. Please revise the 'mask' conditions "
+                    "to ensure they are mutually exclusive."
                 )
-            lhs_to_fill, sign_to_fill, rhs_to_fill = equation.evaluate_equation(
-                self.input_data,
-                self.model,
-                self.math,
-                mask=sub_mask,
-                references=references,
+            lhs_to_fill, sign_to_fill, rhs_to_fill = parsing.as_constraint(
+                equation, self._ctx, mask=sub_mask
             )
             lhs = merge([lhs, lhs_to_fill])
             rhs = merge([rhs, rhs_to_fill])
             sign = sign.fillna(sign_to_fill)
 
         if sign.isnull().all():
-            LOGGER.info(
-                f"constraints:{name} | No valid data points after applying mask. Constraint not added to model."
-            )
-            return None
-
+            LOGGER.info(f"constraints:{name} | {_SKIP_MESSAGE}")
+            return
         self.model.add_constraints(
-            coords=all_mask.coords,
+            coords=mask.coords,
             name=name,
             lhs=lhs,
-            sign=sign.fillna(
-                "=="
-            ),  # Default to equality to avoid errors; will be masked.
+            # Default to equality to avoid errors on masked-out points.
+            sign=sign.fillna("=="),
             rhs=rhs,
-            mask=all_mask,
+            mask=mask,
         )
-        self.model.constraints[name].attrs["references"] = references
+        self.model.constraints[name].attrs["references"] = self._references(
+            definition, equations
+        )
 
     def add_objective(self, name: str, definition: ObjectiveDef) -> None:
-        references: set[str] = set()
-        parsed_component = parsing.ParsedBackendComponent(
-            "objectives", name, definition, self.math.parsing_components
-        )
-        mask = parsed_component.generate_top_level_mask(
-            self.input_data,
-            self.model,
-            self.math,
-            self.config,
-            align_to_foreach_sets=True,
-            break_early=True,
-            references=references,
-        )
-        expr = LinearExpression(float("nan"), self.model).where(mask)
-        if mask.any():
-            equations = parsed_component.parse_equations()
-            for equation in equations:
-                sub_mask = equation.evaluate_mask(
-                    self.input_data,
-                    self.model,
-                    self.math,
-                    self.config,
-                    initial_mask=mask,
-                    references=references,
+        """Set the model objective, merging its equation variants."""
+        mask = parsing.component_mask("objectives", name, definition, self._ctx)
+        if not mask.any():
+            LOGGER.info(f"objectives:{name} | {_SKIP_MESSAGE}")
+            return
+        pieces: list[tuple[LinearExpression, xr.DataArray]] = []
+        filled = xr.DataArray(False)
+        equations = parsing.parse_component("objectives", name, definition, self.math)
+        for equation, sub_mask in self._iter_equations(equations, "objectives", mask):
+            if (filled & sub_mask).any():
+                raise ValueError(
+                    f"objectives:{name} | Overlapping 'mask' conditions between "
+                    "equations are not allowed. Please revise the 'mask' conditions "
+                    "to ensure they are mutually exclusive."
                 )
-                if not sub_mask.any():
-                    continue
-                sub_mask = parsed_component.drop_dims_not_in_foreach(sub_mask)
-                if (~expr.isnull() & sub_mask).any():
-                    raise ValueError(
-                        f"objectives:{name} | Overlapping 'mask' conditions between equations are not allowed. "
-                        "Please revise the 'mask' conditions to ensure they are mutually exclusive."
-                    )
-                expr_to_fill = equation.evaluate_expression(
-                    self.input_data,
-                    self.model,
-                    self.math,
-                    mask=sub_mask,
-                    references=references,
-                )
-                expr = expr_to_fill
-            self.model.add_objective(expr=expr, sense=definition.sense)
-            self.model.objective.attrs["references"] = references
+            filled = filled | sub_mask
+            pieces.append(
+                (parsing.as_expression(equation, self._ctx, mask=sub_mask), sub_mask)
+            )
+        if not pieces:
+            LOGGER.info(f"objectives:{name} | {_SKIP_MESSAGE}")
+            return
+        expr: Any = pieces[0][0]
+        if len(pieces) > 1:
+            expr = merge([piece.where(sub_mask) for piece, sub_mask in pieces])
+        self.model.add_objective(expr=expr, sense=definition.sense)
+        self.model.objective.attrs["references"] = self._references(
+            definition, equations
+        )
 
     def build(self) -> Model:
-        for components in typing.get_args(ORDERED_COMPONENTS_T):
-            component = components.removesuffix("s")
-            ordered_items = self._sorted_by_order(self.math[components].root)
-            ordered_items_tqdm = tqdm(
-                ordered_items,
-                desc=f"Building {components}.",
-                colour=TQDM_COLOR,
+        """
+        Build all math components into the linopy model.
+
+        Components are built in group order (variables, expressions, constraints,
+        objectives) and, within a group, by their `order` attribute where defined.
+
+        Returns
+        -------
+        Model
+            The built linopy model.
+        """
+        active_objectives = list(self.math.objectives._active)
+        if len(active_objectives) > 1:
+            raise ValueError(
+                f"Only one active objective is supported, found: {active_objectives}"
             )
-            for name, definition in ordered_items_tqdm:
+        for group in get_args(ORDERED_COMPONENTS_T):
+            component = group.removesuffix("s")
+            ordered_items = self._sorted_by_order(self.math[group].root)
+            for name, definition in tqdm(
+                ordered_items, desc=f"Building {group}.", colour=TQDM_COLOR
+            ):
                 start = time.time()
                 getattr(self, f"add_{component}")(name, definition)
-                end = time.time() - start
-                LOGGER.debug(f"{components}:{name} | Built in {end:.4f}s")
-            LOGGER.info(f"{components} | Generated.")
+                LOGGER.debug(f"{group}:{name} | Built in {time.time() - start:.4f}s")
+            LOGGER.info(f"{group} | Generated.")
         return self.model
-
-
-def print_warnings_and_raise_errors(
-    warnings: list[str] | dict[str, list[str]] | None = None,
-    errors: list[str] | dict[str, list[str]] | None = None,
-    during: str = "model processing",
-    bullet: str = " * ",
-) -> None:
-    """
-    Process collections of warnings/errors.
-
-    Prints warnings / raises errors with a bullet point list of the concatenated
-    collections.
-
-    Lists will return simple bullet lists:
-    E.g. warnings=["foo", "bar"] becomes:
-
-        Possible issues found during model processing:
-        * foo
-        * bar
-
-    Dicts of lists will return nested bullet lists:
-    E.g. errors={"foo": ["foobar", "foobaz"]} becomes:
-
-        Errors during model processing:
-        * foo
-            * foobar
-            * foobaz
-
-    Args:
-        warnings (list[str] | dict[str, list[str]] | None, optional):
-            List of warning strings or dictionary of warning strings.
-            If None or an empty list, no warnings will be printed.
-            Defaults to None.
-        errors (list[str] | dict[str, list[str]] | None, optional):
-            List of error strings or dictionary of error strings.
-            If None or an empty list, no errors will be raised.
-            Defaults to None.
-        during (str, optional):
-            Substring that will be placed at the top of the concatenated list of warnings/errors to point to during which phase of data processing they occurred.
-            Defaults to "model processing".
-        bullet (str, optional): Type of bullet points to use. Defaults to " * ".
-
-    Raises:
-        ModelError: If errors is not None or is a non-empty list/dict
-
-    """
-    spacer = " " * len(bullet)
-
-    def _sort_strings(stringlist: list[str]) -> list[str]:
-        return sorted(list(set(stringlist)))
-
-    def _predicate(string_: str) -> bool:
-        return not string_.startswith((bullet, spacer))
-
-    def _indenter(strings: list[str] | dict[str, list[str]]) -> str:
-        if isinstance(strings, dict):
-            sorted_strings = []
-            for k, v in strings.items():
-                sorted_strings.append(str(k) + ":")
-                sorted_strings.extend(_sort_strings([spacer + bullet + i for i in v]))
-        else:
-            sorted_strings = _sort_strings(strings)
-        return textwrap.indent("\n".join(sorted_strings), bullet, predicate=_predicate)
-
-    if warnings:
-        LOGGER.info(f"Possible issues found during {during}:\n" + _indenter(warnings))
-
-    if errors:
-        raise ValueError(f"Errors during {during}:\n" + _indenter(errors))
