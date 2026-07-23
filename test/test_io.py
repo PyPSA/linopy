@@ -617,6 +617,19 @@ def test_pips_solution_roundtrip(tmp_path: Path) -> None:
     assert m2.objective.value == pytest.approx(m.objective.value)
 
 
+@pytest.mark.skipif(
+    "pips" not in available_solvers or "highs" not in available_solvers,
+    reason="requires the PIPS driver (set PIPS_BINARY) and highs for the reference",
+)
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_end_to_end_solve(builder: Callable[[], Model]) -> None:
+    reference = builder()
+    reference.solve(solver_name="highs")
+    m = builder()
+    assert m.solve(solver_name="pips") == ("ok", "optimal")
+    assert m.objective.value == pytest.approx(reference.objective.value, abs=1e-3)
+
+
 class TestSignedNumberExpr:
     """Test the signed_number helper function for LP file formatting."""
 

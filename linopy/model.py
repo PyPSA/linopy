@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -2020,7 +2021,7 @@ class Model:
             finally:
                 for fn in (problem_fn, solution_fn):
                     if fn is not None and (os.path.exists(fn) and not keep_files):
-                        os.remove(fn)
+                        shutil.rmtree(fn) if os.path.isdir(fn) else os.remove(fn)
 
             return self.assign_result(result)
 
