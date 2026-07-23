@@ -71,7 +71,9 @@ pure-Python analysis that needs no PIPS build:
 
     import linopy.backends.pips
 
-    linopy.backends.pips.assign_blocks(m, "time", 50)  # 50 contiguous blocks over "time"
+    linopy.backends.pips.assign_blocks(
+        m, "time", 50
+    )  # 50 contiguous blocks over "time"
     report = linopy.backends.pips.diagnose(m)
     print(report)
 
@@ -223,7 +225,8 @@ before you queue anything:
 .. code-block:: python
 
     import linopy.backends.pips
-    print(linopy.backends.pips.doctor())        # PIPS-IPM++ OK: objective=3.0000 ...
+
+    print(linopy.backends.pips.doctor())  # PIPS-IPM++ OK: objective=3.0000 ...
 
 It builds a tiny 2-block LP with a known optimum and solves it end-to-end
 through the resolved launcher, driver binary and callback backend, then checks
