@@ -504,8 +504,10 @@ class TestCollapseAuxCoords:
         [
             pytest.param(lambda e: e.sum("A"), id="sum"),
             pytest.param(
-                lambda e: e
-                @ xr.DataArray([1.0, 1.0, 1.0], dims=["A"], coords={"A": [1, 2, 3]}),
+                lambda e: (
+                    e
+                    @ xr.DataArray([1.0, 1.0, 1.0], dims=["A"], coords={"A": [1, 2, 3]})
+                ),
                 id="matmul",
             ),
         ],
