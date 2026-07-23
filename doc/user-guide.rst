@@ -48,7 +48,9 @@ Where to go next
 ----------------
 
 - **Examples** — end-to-end problem walkthroughs:
-  :doc:`transport-tutorial`, :doc:`migrating-from-pyomo`.
+  :doc:`transport-tutorial`, :doc:`energy-resource-build` (power
+  portfolio build-out), :doc:`sudoku` (indexing with N-D coordinates),
+  :doc:`migrating-from-pyomo`.
 - **Advanced features** — :doc:`sos-constraints`,
   :doc:`piecewise-linear-constraints`, and the
   :doc:`testing-framework` for asserting structural properties of a

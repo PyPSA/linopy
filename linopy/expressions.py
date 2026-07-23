@@ -74,6 +74,7 @@ from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
     GROUP_DIM,
+    GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
     STACKED_TERM_DIM,
@@ -186,6 +187,89 @@ def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
     return data[names].to_dataframe()[names]
 
 
+def _flatten_multidim_group(
+    group: DataArray, data: Dataset
+) -> tuple[pd.Series, Dataset]:
+    """
+    Flatten an N-D DataArray grouper into a 1-D key over a stacked dimension.
+
+    A multi-dimensional grouper defines its groups jointly over all its dims, so
+    the data is stacked over those dims and the grouper's values are raveled into
+    a Series aligned with the stacked axis. This lets the fast path reduce over
+    every grouper dim at once instead of leaking the extra dims into the result.
+    """
+    group_dims = list(group.dims)
+    data = data.stack({GROUP_STACK_DIM: group_dims}, create_index=False)
+    series = pd.Series(group.transpose(*group_dims).values.reshape(-1), name=group.name)
+    series.index.name = GROUP_STACK_DIM
+    return series, data
+
+
+def _grouper_dims(group: Any) -> list[Hashable] | None:
+    """
+    The dims a grouper consumes when grouping, or None for grouper types whose
+    dims are unknown here (exotic hashables, validated by xarray's groupby).
+    """
+    if isinstance(group, (DataArray, IndexVariable)):
+        return list(group.dims)
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        return [group.index.name]
+    return None
+
+
+def _restore_group_dim_position(
+    result: Dataset,
+    original_dims: tuple[Hashable, ...],
+    grouped_dims: Sequence[Hashable] | None = None,
+) -> Dataset:
+    """
+    Move the new group dimension into the slot the grouped dimension occupied,
+    matching xarray's groupby-reduce and linopy <= 0.8.0.
+
+    Surviving dims keep their order; the group dim(s) are reinserted where the
+    consumed dim(s) used to be. The coordinate variables are reordered too so the
+    dataset's canonical dim order (which the constructor's ``broadcast`` re-derives
+    from coordinate-insertion order) matches, instead of trailing the group dim.
+    This covers the fallback, which appends the group dim, and normalises the
+    scatter kernel's target-ordered output.
+
+    ``grouped_dims`` names the dims the grouping consumed. It must be passed
+    whenever the grouper's name can equal a grouped dim (the replacement dim then
+    shadows the consumed one, so it cannot be inferred from the dims alone);
+    when None, the consumed dims are inferred as those absent from the result.
+
+    Numpy-backed terms are made C-contiguous so downstream flattening (LP/solver
+    export) ravels a view instead of copying; a no-op when already contiguous, as
+    the scatter kernel's output is. Dask arrays are left lazy.
+    """
+    if grouped_dims is None:
+        consumed = [d for d in original_dims if d not in result.dims]
+    else:
+        consumed = [d for d in original_dims if d in set(grouped_dims)]
+    if not consumed:
+        return result
+    new_dims = [str(d) for d in result.dims if d not in original_dims or d in consumed]
+    order: list[Hashable] = []
+    for d in original_dims:
+        if d not in consumed:
+            order.append(d)
+        elif new_dims:
+            order.extend(new_dims)
+            new_dims = []
+    result = result.transpose(*order, missing_dims="ignore")
+    reordered_coords = {
+        d: result[d]
+        for d in order
+        if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
+    }
+    result = result.assign_coords(reordered_coords)
+    for name in ("coeffs", "vars"):
+        term = result[name]
+        if term.chunks is None:
+            result[name] = (term.dims, np.ascontiguousarray(term.values))
+    return result
+
+
 def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
     """
     Unstack a stacked multi-key group dimension into one dimension per key.
@@ -209,19 +293,55 @@ def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
     return ds.unstack(dim, fill_value=LinearExpression._fill_value)
 
 
+def _check_grouper_alignment(group: Any, data: Dataset) -> None:
+    """
+    Ensure an indexed grouper's labels match the data along each shared dim.
+
+    The fast path matches a ``pd.Series``, ``pd.DataFrame`` or ``DataArray``
+    grouper to the expression by position, so a grouper whose coordinates are
+    reordered -- or a different set entirely -- relative to the expression would
+    silently regroup. linopy does not reindex the grouper: it checks that the
+    labels match and raises otherwise, leaving the caller to align the grouper
+    explicitly. A grouper without an index along a dimension has nothing to align
+    by and keeps the positional match.
+    """
+    shared: list[tuple[Hashable, pd.Index]]
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        shared = [(group.index.name, group.index)]
+    elif isinstance(group, DataArray):
+        shared = [
+            (dim, group.get_index(dim)) for dim in group.dims if dim in group.indexes
+        ]
+    else:
+        return
+    for dim, index in shared:
+        if dim not in data.indexes or index.equals(data.indexes[dim]):
+            continue
+        detail = (
+            "the same labels in a different order"
+            if set(index) == set(data.indexes[dim])
+            else "a different set of labels"
+        )
+        raise ValueError(
+            f"the grouper's labels along dimension {dim!r} do not match the "
+            f"expression's coordinates ({detail}). linopy matches groupers by "
+            f"position and does not reindex; reorder the grouper to the "
+            f"expression's {dim!r} coordinates before grouping."
+        )
+
+
 def _encode_multikey_group(
-    frame: pd.DataFrame, index: pd.Index
+    frame: pd.DataFrame,
 ) -> tuple[pd.Series, tuple[dict, pd.Index]]:
     """
     Encode a multi-key group frame as a single integer-coded Series.
 
     ``_grouped_sum`` groups by one key, so each row's tuple of key values is
-    mapped to an integer. The returned ``(int_map, columns)`` lets
-    :func:`_restore_multikey_index` rebuild the MultiIndex on the result.
+    mapped to an integer. The frame is already aligned to the data (see
+    :func:`_check_grouper_alignment`), so no reindexing is needed. The returned
+    ``(int_map, columns)`` lets :func:`_restore_multikey_index` rebuild the
+    MultiIndex on the result.
     """
-    index_name = frame.index.name
-    frame = frame.reindex(index)
-    frame.index.name = index_name
     int_map = get_index_map(*frame.values.T)
     coded = frame.apply(tuple, axis=1).map(int_map)
     return coded, (int_map, frame.columns)
@@ -346,12 +466,24 @@ class LinearExpressionGroupby:
             )
 
         group = _resolve_group(self.group, self.data)
+        _check_grouper_alignment(group, self.data)
 
         multikey_frame = (
             None if use_fallback else _multikey_value_frame(group, self.data)
         )
         if multikey_frame is not None:
             group = multikey_frame
+
+        data = self.data
+        original_dims = self.data.coeffs.dims
+        grouped_dims = _grouper_dims(group)
+        is_multidim_grouper = (
+            isinstance(group, DataArray)
+            and group.ndim > 1
+            and set(group.dims) <= set(data.dims)
+        )
+        if is_multidim_grouper and not use_fallback:
+            group, data = _flatten_multidim_group(group, data)
 
         fast_path_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(group, fast_path_types) and not use_fallback:
@@ -366,12 +498,10 @@ class LinearExpressionGroupby:
 
             multikey_decode = None
             if isinstance(group, pd.DataFrame):
-                group, multikey_decode = _encode_multikey_group(
-                    group, self.data.indexes[group.index.name]
-                )
+                group, multikey_decode = _encode_multikey_group(group)
 
             assert isinstance(group, pd.Series)
-            ds = self._grouped_sum(group)
+            ds = self._grouped_sum(group, data)
 
             if multikey_decode is not None:
                 ds = _restore_multikey_index(ds, multikey_decode)
@@ -379,31 +509,38 @@ class LinearExpressionGroupby:
             ds = ds.rename({GROUP_DIM: final_group_name})
             if multikey_frame is not None and not observed:
                 ds = _unstack_multikey(ds, final_group_name)
-            return LinearExpression(ds, self.model)
+        else:
 
-        def func(ds: Dataset) -> Dataset:
-            ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
-            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
-            return ds
+            def func(ds: Dataset) -> Dataset:
+                ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+                ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+                return ds
 
-        return self.map(func)
+            ds = self.groupby.map(func)
 
-    def _grouped_sum(self, group: pd.Series) -> Dataset:
+        ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
+        return LinearExpression(ds, self.model)
+
+    def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """
         Sum groups by scattering all terms directly into the final padded arrays.
 
         Every group member keeps its block of ``nterm`` terms, so the resulting
         term dimension has size ``max_group_size * nterm`` and smaller groups are
-        padded with fill values. Only the result arrays are allocated, keeping
-        peak memory at input + result.
+        padded with fill values. The group dimension replaces the grouped one in
+        place: all surviving dimensions are passed as core dims, so ``apply_ufunc``
+        emits the target axis order and the padded arrays are allocated once,
+        contiguous. The constant is reduced before the term scatters so its
+        temporaries are freed before the padded arrays exist, keeping peak memory
+        at input + result. Dask arrays are collapsed to a single chunk (no per-dim
+        parallelism) since every dimension is now a core dim.
         """
-        data = self.data
+        data = self.data if data is None else data
         group_dim = group.index.name
         fill_value = LinearExpression._fill_value
 
-        _scatter_core_dims = {group_dim: -1, TERM_DIM: -1}
         if data.chunks:
-            data = data.chunk(_scatter_core_dims)
+            data = data.chunk(-1)
 
         codes, unique_groups = pd.factorize(group, sort=True)
         if (codes == -1).any():
@@ -417,30 +554,34 @@ class LinearExpressionGroupby:
         position_in_group = pd.Series(codes).groupby(codes).cumcount().to_numpy()
         nterm = data.sizes[TERM_DIM]
 
-        def scatter_terms(values: np.ndarray, fill: Any) -> np.ndarray:
-            """Place each member's term block into its group's padded slot."""
-            leading = values.shape[:-2]
-            blocks = np.full(
-                (*leading, n_groups, nterm, max_size), fill, dtype=values.dtype
-            )
-            blocks[..., codes, :, position_in_group] = np.moveaxis(values, -2, 0)
-            return blocks.reshape((*leading, n_groups, nterm * max_size))
-
-        def group_sum(values: np.ndarray) -> np.ndarray:
-            """Sum values within each group along the last axis, skipping NaNs."""
-            by_element = np.moveaxis(values, -1, 0)
-            summed = np.zeros((n_groups, *by_element.shape[1:]), dtype=values.dtype)
-            np.add.at(summed, codes, np.where(np.isnan(by_element), 0, by_element))
-            return np.moveaxis(summed, 0, -1)
-
         def scatter(da: DataArray, fill: Any) -> DataArray:
-            """Run the term scatter over the core dims, lazily for dask arrays."""
+            """
+            Scatter each member's terms into its group's padded slot, keeping
+            the grouped dimension's position.
+            """
+            da = da.transpose(..., TERM_DIM)
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def scatter_terms(values: np.ndarray) -> np.ndarray:
+                surv_shape = [
+                    n_groups if d == group_dim else s
+                    for d, s in zip(dims_in, values.shape)
+                    if d != TERM_DIM
+                ]
+                out = np.full((*surv_shape, nterm, max_size), fill, dtype=values.dtype)
+                grouped = np.moveaxis(out, group_axis, 0)
+                grouped[codes, ..., :, position_in_group] = np.moveaxis(
+                    values, group_axis, 0
+                )
+                return out.reshape((*surv_shape, nterm * max_size))
+
             return xr.apply_ufunc(
                 scatter_terms,
                 da,
-                kwargs={"fill": fill},
-                input_core_dims=[[group_dim, TERM_DIM]],
-                output_core_dims=[[GROUP_DIM, TERM_DIM]],
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
                 exclude_dims={group_dim, TERM_DIM},
                 dask="parallelized",
                 dask_gufunc_kwargs={
@@ -449,16 +590,33 @@ class LinearExpressionGroupby:
                 output_dtypes=[da.dtype],
             )
 
-        const = xr.apply_ufunc(
-            group_sum,
-            data.const,
-            input_core_dims=[[group_dim]],
-            output_core_dims=[[GROUP_DIM]],
-            exclude_dims={group_dim},
-            dask="parallelized",
-            dask_gufunc_kwargs={"output_sizes": {GROUP_DIM: n_groups}},
-            output_dtypes=[data.const.dtype],
-        )
+        def group_sum(da: DataArray) -> DataArray:
+            """
+            Sum the constant term within each group, keeping the grouped
+            dimension's position.
+            """
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def reduce(values: np.ndarray) -> np.ndarray:
+                members = np.moveaxis(values, group_axis, 0)
+                summed = np.zeros((n_groups, *members.shape[1:]), dtype=values.dtype)
+                np.add.at(summed, codes, np.where(np.isnan(members), 0, members))
+                return np.moveaxis(summed, 0, group_axis)
+
+            return xr.apply_ufunc(
+                reduce,
+                da,
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
+                exclude_dims={group_dim},
+                dask="parallelized",
+                dask_gufunc_kwargs={"output_sizes": {GROUP_DIM: n_groups}},
+                output_dtypes=[da.dtype],
+            )
+
+        const = group_sum(data.const)
         ds = Dataset(
             {
                 "coeffs": scatter(data.coeffs, fill_value["coeffs"]),
@@ -523,6 +681,9 @@ class BaseExpression(ABC):
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
+        if not isinstance(model, Model):
+            raise ValueError("model must be an instance of linopy.Model")
+
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
@@ -546,7 +707,7 @@ class BaseExpression(ABC):
 
         if np.issubdtype(data.vars, np.floating):
             data = assign_multiindex_safe(
-                data, vars=data.vars.fillna(-1).astype(options["label_dtype"])
+                data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
@@ -573,9 +734,6 @@ class BaseExpression(ABC):
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
-
-        if not isinstance(model, Model):
-            raise ValueError("model must be an instance of linopy.Model")
 
         self._model = model
         self._data = cast(Dataset, data)
@@ -1631,7 +1789,9 @@ class BaseExpression(ABC):
         linopy.LinearExpression
         """
         if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(vars=self.vars.fillna(-1).astype(options["label_dtype"]))
+            return self.assign(
+                vars=self.vars.fillna(-1).astype(self.model._dtypes["labels"])
+            )
 
         return self
 
@@ -2034,12 +2194,12 @@ class LinearExpression(BaseExpression):
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
         # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
 
         # Extract vars and coeffs from the combined result
-        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data

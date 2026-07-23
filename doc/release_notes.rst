@@ -19,13 +19,13 @@ Upcoming Version
 
 *Other*
 
-* Default internal integer labels to ``int32`` (configurable via ``linopy.options["label_dtype"]``, set to ``np.int64`` for the old behavior), cutting memory ~25% and speeding up model build 10-35%. Raises ``ValueError`` if labels exceed the int32 maximum.
+* Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).
 * ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
 * ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
 
 **Performance**
 
-* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x.
+* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x. The kernel emits the grouped result in its final axis order in one contiguous allocation; on dask inputs the reduction now runs over a single chunk (it no longer parallelises over the surviving dimensions).
 
 **Deprecations**
 
@@ -38,8 +38,12 @@ Upcoming Version
 * LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
+* ``LinearExpression.groupby(...).sum()`` with a multi-dimensional ``DataArray`` grouper now reduces over all of the grouper's dimensions on the default (fast) path, instead of leaking one of them into the result.
+* ``LinearExpression.groupby(...).sum()`` now keeps the grouped dimension's position, replacing it in place like xarray's native groupby-reduce, instead of moving the group dimension to the trailing position (regressed in 0.8.0). Both the default and ``use_fallback=True`` paths are fixed.
+* ``LinearExpression.groupby(...).sum()`` now raises when a grouper's labels are reordered or a different set relative to the expression, instead of silently regrouping by position. Reorder the grouper to match the expression's coordinates before grouping. (https://github.com/PyPSA/linopy/issues/827)
 * ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail.
 * Summing an expression over a dimension that carries an auxiliary (non-dimension) coordinate no longer leaks that coordinate onto the internal term dimension, where it broke later arithmetic with a ``CoordinateValidationError``. Auxiliary coordinates on the remaining dimensions still propagate. (https://github.com/PyPSA/linopy/issues/295)
+* ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (https://github.com/PyPSA/linopy/issues/459)
 
 Version 0.8.0
 -------------

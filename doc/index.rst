@@ -121,6 +121,8 @@ This package is published under MIT license.
    :caption: Examples
 
    transport-tutorial
+   energy-resource-build
+   sudoku
    migrating-from-pyomo
 
 .. toctree::
@@ -137,6 +139,7 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Solving
 
+   using-solvers
    solve-on-remote
    solve-on-oetc
    gpu-acceleration

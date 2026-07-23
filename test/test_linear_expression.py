@@ -1718,9 +1718,8 @@ class TestGroupbyByAttachedCoordinate:
         assert grouped.vars.transpose(level, TERM_DIM).values.tolist() == vars_
 
 
-@pytest.mark.parametrize("use_fallback", [True])
+@pytest.mark.parametrize("use_fallback", [True, False])
 def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None:
-    # TODO: implement fallback for n-dim groupby, see https://github.com/PyPSA/linopy/issues/299
     expr = 1 * z
     groups = xr.DataArray([[1, 1, 2], [1, 3, 3]], coords=z.coords)
     grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
@@ -1728,6 +1727,121 @@ def test_linear_expression_groupby_ndim(z: Variable, use_fallback: bool) -> None
     # there are three groups, 1, 2 and 3, the largest group has 3 elements
     assert (grouped.data.group == [1, 2, 3]).all()
     assert grouped.nterm == 3
+    assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
+
+
+def test_linear_expression_groupby_multidim_preserves_extra_dim() -> None:
+    # a 2-D grouper reduces over both its dims jointly, leaving unrelated dims
+    # untouched, see https://github.com/PyPSA/linopy/issues/823
+    m = Model()
+    v = m.add_variables(coords=[[0, 1], [0, 1], [0, 1]], dims=["i", "j", "k"])
+    groups = xr.DataArray(
+        [[1, 1], [2, 2]], dims=["i", "j"], coords={"i": [0, 1], "j": [0, 1]}, name="g"
+    )
+    expr = 1 * v
+    grouped = expr.groupby(groups).sum()
+    assert set(grouped.dims) == {"g", "k", "_term"}
+    assert (grouped.data.g == [1, 2]).all()
+    assert_linequal(grouped, expr.groupby(groups).sum(use_fallback=True))
+
+
+@pytest.mark.parametrize("group_name", ["bus", "name"])
+@pytest.mark.parametrize("use_fallback", [False, True])
+def test_linear_expression_groupby_preserves_dim_position(
+    use_fallback: bool, group_name: str
+) -> None:
+    # Grouping must replace the grouped dim in place, like xarray. `name` sits
+    # between `scenario` and `snapshot`, so the group dim must stay in the
+    # middle — also when the grouper reuses the grouped dim's name.
+    m = Model()
+    coords = [
+        pd.Index(["s1", "s2"], name="scenario"),
+        pd.Index(["a", "b", "c"], name="name"),
+        pd.RangeIndex(2, name="snapshot"),
+    ]
+    v = m.add_variables(coords=coords, name="x")
+    groups = xr.DataArray(
+        ["g1", "g1", "g2"], coords={"name": ["a", "b", "c"]}, name=group_name
+    )
+
+    reference = (
+        xr.DataArray(np.zeros((2, 3, 2)), coords=coords, dims=[c.name for c in coords])
+        .groupby(groups)
+        .sum()
+    )
+    grouped = (1 * v).groupby(groups).sum(use_fallback=use_fallback)
+
+    result_dims = tuple(d for d in grouped.dims if d != TERM_DIM)
+    assert result_dims == reference.dims
+
+
+class TestGroupbyGrouperAlignment:
+    """
+    A ``pd.Series``/``DataArray`` grouper whose labels are reordered or a
+    different set relative to the expression must raise, not silently regroup
+    by position. See https://github.com/PyPSA/linopy/issues/827.
+    """
+
+    @staticmethod
+    def _expr() -> LinearExpression:
+        m = Model()
+        v = m.add_variables(coords=[[0, 1, 2, 3]], dims=["i"], name="v")
+        return 1 * v
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_reordered_series_raises(self, use_fallback: bool) -> None:
+        expr = self._expr()
+        s = pd.Series([1, 1, 2, 2], index=pd.Index([0, 1, 2, 3], name="i"), name="g")
+        with pytest.raises(ValueError, match="different order"):
+            expr.groupby(s.iloc[::-1]).sum(use_fallback=use_fallback)
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_reordered_dataarray_raises(self, use_fallback: bool) -> None:
+        expr = self._expr()
+        da = xr.DataArray([1, 1, 2, 2], coords={"i": [0, 1, 2, 3]}, name="g")
+        with pytest.raises(ValueError, match="different order"):
+            expr.groupby(da.isel(i=slice(None, None, -1))).sum(
+                use_fallback=use_fallback
+            )
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_mismatched_label_set_raises(self, use_fallback: bool) -> None:
+        expr = self._expr()
+        s = pd.Series([1, 1, 2, 2], index=pd.Index([0, 1, 2, 9], name="i"), name="g")
+        with pytest.raises(ValueError, match="different set of labels"):
+            expr.groupby(s).sum(use_fallback=use_fallback)
+
+    def test_reordered_dataframe_raises(self) -> None:
+        # the DataFrame grouper path aligns by label like Series/DataArray
+        expr = self._expr()
+        df = pd.DataFrame({"g": [1, 1, 2, 2]}, index=pd.Index([0, 1, 2, 3], name="i"))
+        with pytest.raises(ValueError, match="different order"):
+            expr.groupby(df.iloc[::-1]).sum()
+
+    def test_reordered_ndim_dataarray_raises(self) -> None:
+        m = Model()
+        v = m.add_variables(coords=[[0, 1], [0, 1]], dims=["i", "j"], name="v")
+        groups = xr.DataArray(
+            [[1, 1], [2, 2]], dims=["i", "j"], coords={"i": [1, 0], "j": [0, 1]}
+        )
+        with pytest.raises(ValueError, match="dimension 'i'"):
+            (1 * v).groupby(groups).sum()
+
+    @pytest.mark.parametrize("use_fallback", [True, False])
+    def test_aligned_grouper_unaffected(self, use_fallback: bool) -> None:
+        # an aligned grouper still groups by label as before
+        expr = self._expr()
+        s = pd.Series([1, 1, 2, 2], index=pd.Index([0, 1, 2, 3], name="i"), name="g")
+        grouped = expr.groupby(s).sum(use_fallback=use_fallback)
+        assert (grouped.data.g == [1, 2]).all()
+        assert grouped.nterm == 2
+
+    def test_unindexed_grouper_matches_positionally(self) -> None:
+        # a grouper without an index along the dim has nothing to align by
+        expr = self._expr()
+        da = xr.DataArray([1, 1, 2, 2], dims=["i"], name="g")  # no "i" coordinate
+        grouped = expr.groupby(da).sum()
+        assert (grouped.data.g == [1, 2]).all()
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
@@ -1879,15 +1993,16 @@ def test_linear_expression_groupby_with_dataarray(
 
 
 def test_linear_expression_groupby_with_dataframe_non_aligned(v: Variable) -> None:
+    # a DataFrame grouper aligns by label like Series/DataArray: a reordered
+    # index raises instead of silently regrouping. See issue #827.
     expr = 1 * v
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    target = expr.groupby(groups).sum()
+    expr.groupby(groups).sum()  # aligned: fine
 
-    groups_non_aligned = groups[::-1]
-    grouped = expr.groupby(groups_non_aligned).sum()
-    assert_linequal(grouped, target)
+    with pytest.raises(ValueError, match="different order"):
+        expr.groupby(groups[::-1]).sum()
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
