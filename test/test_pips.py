@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from test_io import _pips_time_plant_model
 
-import linopy.pips as pips
+import linopy.backends.pips as pips
 from linopy import Model, available_solvers
 
 

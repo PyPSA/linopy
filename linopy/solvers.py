@@ -35,6 +35,7 @@ from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
 
 import linopy.io
+from linopy.backends.pips import PipsConfig, build_pips_command, write_run_manifest
 from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
     EQUAL,
@@ -59,7 +60,6 @@ from linopy.persistent import (
     VarKind,
     clear_coef_dirty,
 )
-from linopy.pips import PipsConfig, build_pips_command, write_run_manifest
 
 
 def _int_list(arr: np.ndarray, dtype: type = np.int64) -> list[int]:

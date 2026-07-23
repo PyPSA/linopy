@@ -622,12 +622,13 @@ Helpers for the block-structured PIPS-IPM++ backend. See the
 .. autosummary::
    :toctree: generated/
 
-   pips.assign_blocks
-   pips.diagnose
-   pips.BlockReport
-   pips.PipsConfig
-   pips.build_pips_command
-   pips.write_job
+   backends.pips.assign_blocks
+   backends.pips.diagnose
+   backends.pips.BlockReport
+   backends.pips.PipsConfig
+   backends.pips.build_pips_command
+   backends.pips.write_job
+   backends.pips.doctor
 
 
 Solver status and result types

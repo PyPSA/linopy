@@ -62,17 +62,17 @@ Diagnosing block quality
 ========================
 
 Before committing to an HPC run, check *whether* a K-way split will actually
-scale on PIPS. ``linopy.pips.assign_blocks`` builds the ``m.blocks`` assignment
+scale on PIPS. ``linopy.backends.pips.assign_blocks`` builds the ``m.blocks`` assignment
 for you by splitting one dimension into contiguous blocks, and
-``linopy.pips.diagnose`` reports the resulting arrowhead structure — a cheap,
+``linopy.backends.pips.diagnose`` reports the resulting arrowhead structure — a cheap,
 pure-Python analysis that needs no PIPS build:
 
 .. code-block:: python
 
-    import linopy.pips
+    import linopy.backends.pips
 
-    linopy.pips.assign_blocks(m, "time", 50)  # 50 contiguous blocks over "time"
-    report = linopy.pips.diagnose(m)
+    linopy.backends.pips.assign_blocks(m, "time", 50)  # 50 contiguous blocks over "time"
+    report = linopy.backends.pips.diagnose(m)
     print(report)
 
 .. code-block:: text
@@ -214,16 +214,16 @@ through ``CMAKE_EXTRA_ARGS`` following the upstream PIPS-IPM++ documentation.
    run. If ``dev-scripts/pips/{pips-ipmpp/build,build-driver}`` already exist
    from an earlier toolchain, delete them so the new compilers take effect.
 
-Preflight: ``linopy.pips.doctor()``
+Preflight: ``linopy.backends.pips.doctor()``
 -----------------------------------
 
-Once the driver is built, run :func:`linopy.pips.doctor` on the login node
+Once the driver is built, run :func:`linopy.backends.pips.doctor` on the login node
 before you queue anything:
 
 .. code-block:: python
 
-    import linopy.pips
-    print(linopy.pips.doctor())        # PIPS-IPM++ OK: objective=3.0000 ...
+    import linopy.backends.pips
+    print(linopy.backends.pips.doctor())        # PIPS-IPM++ OK: objective=3.0000 ...
 
 It builds a tiny 2-block LP with a known optimum and solves it end-to-end
 through the resolved launcher, driver binary and callback backend, then checks
@@ -269,11 +269,11 @@ Running on a cluster (detached / SLURM)
 
 On an HPC system you do not hold a Python process for a multi-hour, multi-node
 solve. Split the work into three steps — export, submit, ingest — controlled by
-a :class:`linopy.pips.PipsConfig`:
+a :class:`linopy.backends.pips.PipsConfig`:
 
 .. code-block:: python
 
-    import linopy.pips as pips
+    import linopy.backends.pips as pips
 
     # 1. build on a login/build node
     pips.assign_blocks(m, "time", 50)

@@ -30,6 +30,7 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.backends.pips import assign_blocks
 from linopy.common import (
     assign_multiindex_safe,
     best_int,
@@ -81,7 +82,6 @@ from linopy.objective import Objective
 from linopy.piecewise import (
     add_piecewise_formulation,
 )
-from linopy.pips import assign_blocks
 from linopy.remote import RemoteHandler
 
 try:
