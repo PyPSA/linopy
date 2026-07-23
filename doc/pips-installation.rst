@@ -21,6 +21,33 @@ against MPI and a linear solver. The instructions below use the fully-open
 `MUMPS <https://mumps-solver.org/>`_ backend, which needs no proprietary
 solver.
 
+Using the ``pips`` solver
+=========================
+
+Once PIPS-IPM++ is installed and the callback driver is built (see the
+:ref:`installation steps <pips-install>` below), solving is a one-liner. Point
+linopy at the driver binary through two environment variables and call
+``Model.solve`` with ``solver_name="pips"``:
+
+.. code-block:: bash
+
+    export PIPS_BINARY=/path/to/build-driver/pips_driver
+    export PIPS_MPI_RANKS=2      # optional, default 1; must be <= number of blocks
+
+.. code-block:: python
+
+    m.blocks = ...              # assign the block structure (see "When to use it")
+    m.solve(solver_name="pips")
+
+    m.objective.value           # optimal objective
+    m.solution                  # primal values, mapped back onto the variables
+
+The solver exports the model, runs PIPS under ``mpirun`` and reads the primal,
+duals and objective back onto ``m`` — the same interface as every other linopy
+solver. It is strictly opt-in: without ``PIPS_BINARY`` set, ``pips`` is absent
+from ``linopy.available_solvers`` and is never auto-selected, so ordinary
+installs are unaffected.
+
 When to use it
 ==============
 
@@ -30,6 +57,8 @@ set of global (first-stage) variables and linking constraints. Assign the block
 structure via ``m.blocks`` (a ``xarray.DataArray`` of block ids over one
 dimension); everything independent of that dimension becomes global (block 0).
 A model where everything ends up linking defeats the purpose.
+
+.. _pips-install:
 
 System dependencies
 ===================
@@ -141,18 +170,6 @@ directory; solving it with any ordinary solver reproduces the original optimum:
 This round-trip runs in linopy's test suite and validates the full arrowhead
 carve-up (block partition, linking rows, bound encoding) with no external
 dependency.
-
-Solver integration
-==================
-
-An env-gated ``pips`` solver wraps the export → ``mpirun`` → read-back flow.
-It only becomes available when both are discoverable:
-
-- ``PIPS_BINARY`` — path to the compiled ``pips_driver``.
-- ``PIPS_MPI_RANKS`` — number of MPI ranks (``<= N``; default 1).
-
-Without them, ``pips`` is absent from ``linopy.available_solvers`` and never
-auto-selected, so ordinary installs are unaffected.
 
 Limitations
 ===========
