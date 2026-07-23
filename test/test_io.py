@@ -469,6 +469,114 @@ def test_pips_problem_matches_matrices(
     assert prob.objective_sense == m.objective.sense
 
 
+def _read_pips_block_system(
+    d: Path,
+) -> tuple[
+    dict[tuple[int, int], float], dict[int, tuple[str, float]], list[np.ndarray]
+]:
+    n_blocks = json.loads((d / "pips.json").read_text())["n_blocks"]
+
+    def vec(k: int, name: str, dtype: type = np.float64) -> np.ndarray:
+        path = d / f"block{k}" / name
+        return (
+            np.fromfile(path, dtype=dtype, sep="\n")
+            if path.exists()
+            else np.array([], dtype)
+        )
+
+    def labels(k: int, name: str) -> np.ndarray:
+        return vec(k, name, np.int64)
+
+    def csr(k: int, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        if not (d / f"block{k}" / f"{name}_krow").exists():
+            return None
+        return (
+            vec(k, f"{name}_krow", np.int32),
+            vec(k, f"{name}_jcol", np.int32),
+            vec(k, f"{name}_val"),
+        )
+
+    coeffs: dict[tuple[int, int], float] = {}
+
+    def add(triplet, row_labels: np.ndarray, col_labels: np.ndarray) -> None:
+        if triplet is None:
+            return
+        krow, jcol, val = triplet
+        for i, row in enumerate(row_labels):
+            for p in range(int(krow[i]), int(krow[i + 1])):
+                key = (int(row), int(col_labels[int(jcol[p])]))
+                coeffs[key] = coeffs.get(key, 0.0) + float(val[p])
+
+    global_cols = labels(0, "col_labels")
+    eqL, ineqL = labels(0, "eqL_labels"), labels(0, "ineqL_labels")
+    add(csr(0, "BL"), eqL, global_cols)
+    add(csr(0, "DL"), ineqL, global_cols)
+    for k in range(n_blocks + 1):
+        eqr, ineqr = labels(k, "eq_labels"), labels(k, "ineq_labels")
+        add(csr(k, "A"), eqr, global_cols)
+        add(csr(k, "C"), ineqr, global_cols)
+        if k >= 1:
+            local = labels(k, "col_labels")
+            add(csr(k, "B"), eqr, local)
+            add(csr(k, "D"), ineqr, local)
+            add(csr(k, "BL"), eqL, local)
+            add(csr(k, "DL"), ineqL, local)
+
+    rhs: dict[int, tuple[str, float]] = {}
+
+    def add_ineq(row_labels: np.ndarray, suffix: str) -> None:
+        iclow = vec(0, f"iclow{suffix}", np.int8)
+        clow, cupp = vec(0, f"clow{suffix}"), vec(0, f"cupp{suffix}")
+        for i, lbl in enumerate(row_labels):
+            rhs[int(lbl)] = (">", float(clow[i])) if iclow[i] else ("<", float(cupp[i]))
+
+    for k in range(n_blocks + 1):
+        for lbl, b in zip(labels(k, "eq_labels"), vec(k, "b")):
+            rhs[int(lbl)] = ("=", float(b))
+        iclow = vec(k, "iclow", np.int8)
+        clow, cupp = vec(k, "clow"), vec(k, "cupp")
+        for i, lbl in enumerate(labels(k, "ineq_labels")):
+            rhs[int(lbl)] = (">", float(clow[i])) if iclow[i] else ("<", float(cupp[i]))
+    for lbl, b in zip(eqL, vec(0, "bL")):
+        rhs[int(lbl)] = ("=", float(b))
+    add_ineq(ineqL, "L")
+
+    col_partition = [labels(k, "col_labels") for k in range(n_blocks + 1)]
+    return coeffs, rhs, col_partition
+
+
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_block_structure_reconstructs_matrix(
+    builder: Callable[[], Model], tmp_path: Path
+) -> None:
+    m = builder()
+    m.to_pips_files(tmp_path)
+    coeffs, rhs, col_partition = _read_pips_block_system(tmp_path)
+    mats = m.matrices
+
+    all_cols = np.concatenate(col_partition)
+    assert sorted(all_cols.tolist()) == sorted(mats.vlabels.tolist())
+    assert len(all_cols) == len(set(all_cols.tolist()))
+
+    coo = mats.A.tocoo()
+    canon: dict[tuple[int, int], float] = {}
+    for r, c, v in zip(coo.row.tolist(), coo.col.tolist(), coo.data.tolist()):
+        key = (int(mats.clabels[r]), int(mats.vlabels[c]))
+        canon[key] = canon.get(key, 0.0) + v
+    assert coeffs.keys() == canon.keys()
+    for key, value in canon.items():
+        assert coeffs[key] == pytest.approx(value)
+
+    canon_rhs = {
+        int(mats.clabels[i]): (str(mats.sense[i]), float(mats.b[i]))
+        for i in range(len(mats.clabels))
+    }
+    assert rhs.keys() == canon_rhs.keys()
+    for key, (sense, b) in canon_rhs.items():
+        assert rhs[key][0] == sense
+        assert rhs[key][1] == pytest.approx(b)
+
+
 @pytest.mark.skipif("highs" not in available_solvers, reason="highs not installed")
 @pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
 def test_pips_roundtrip_solve(builder: Callable[[], Model], tmp_path: Path) -> None:
