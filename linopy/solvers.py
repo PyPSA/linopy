@@ -4110,14 +4110,106 @@ class MindOpt(Solver[None]):
             env_.dispose()
 
 
+PIPS_BINARY_ENV = "PIPS_BINARY"
+PIPS_MPI_RANKS_ENV = "PIPS_MPI_RANKS"
+
+
+def _pips_binary() -> str | None:
+    """Resolve the PIPS-IPM++ driver from ``$PIPS_BINARY``, or None if unset/missing."""
+    binary = os.environ.get(PIPS_BINARY_ENV)
+    return shutil.which(binary) if binary else None
+
+
 class PIPS(Solver[None]):
     """
-    Solver subclass for the PIPS solver.
+    Solver subclass for the distributed PIPS-IPM++ solver.
+
+    The model is exported to the arrowhead block format via
+    :func:`linopy.io.to_pips_files`, the driver is launched through
+    ``mpirun -np <ranks> <binary> <export-dir>`` and the solution is read back
+    with :func:`linopy.io.read_pips_solution`. The driver binary is taken from
+    ``$PIPS_BINARY`` and the MPI rank count from ``$PIPS_MPI_RANKS`` (default 1).
+    PIPS only appears in ``available_solvers`` when both the binary and
+    ``mpirun`` are found.
+
+    Attributes
+    ----------
+    **solver_options
+        forwarded to the driver as ``--<key> <value>`` command-line arguments
     """
 
-    def __post_init__(self) -> None:
-        msg = "The PIPS solver interface is not yet implemented."
-        raise NotImplementedError(msg)
+    display_name: ClassVar[str] = "PIPS-IPM++"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {SolverFeature.SOLUTION_FILE_NOT_NEEDED}
+    )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _pips_binary() is not None and shutil.which("mpirun") is not None
+
+    def _build_file(self, **build_kwargs: Any) -> None:
+        model = self.model
+        assert model is not None
+        self._problem_fn = linopy.io.to_pips_files(model)
+        self.io_api = "blocks"
+        self._cache_model_labels(model)
+
+    def _run_file(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        **kw: Any,
+    ) -> Result:
+        export_dir = self._problem_fn
+        assert export_dir is not None
+        binary = _pips_binary()
+        if binary is None:
+            raise RuntimeError(
+                f"PIPS driver binary not found. Set the {PIPS_BINARY_ENV} "
+                "environment variable to the PIPS-IPM++ executable."
+            )
+        if shutil.which("mpirun") is None:
+            raise RuntimeError("`mpirun` not found on PATH; cannot launch PIPS-IPM++.")
+
+        ranks = int(os.environ.get(PIPS_MPI_RANKS_ENV, "1"))
+        command = ["mpirun", "-np", str(ranks), binary, path_to_string(export_dir)]
+        for k, v in self.solver_options.items():
+            command += [f"--{k}", str(v)]
+
+        if log_fn is not None:
+            with open(log_fn, "w") as log_f:
+                proc = sub.run(command, stdout=log_f, stderr=sub.STDOUT, text=True)
+        else:
+            proc = sub.run(command, stdout=sub.PIPE, stderr=sub.STDOUT, text=True)
+            logger.info(proc.stdout)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"PIPS driver exited with code {proc.returncode}: {' '.join(command)}"
+            )
+
+        pips_solution = linopy.io.read_pips_solution(export_dir)
+        status = Status.from_termination_condition(pips_solution.status or "unknown")
+        status.legacy_status = pips_solution.status or ""
+
+        def get_solver_solution() -> Solution:
+            primal = _solution_from_labels(
+                pips_solution.primal, pips_solution.labels, self._n_vars
+            )
+            objective = (
+                pips_solution.objective
+                if pips_solution.objective is not None
+                else np.nan
+            )
+            return Solution(primal, np.array([], dtype=float), objective)
+
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+
+        self.io_api = "blocks"
+        return self._make_result(status, solution, report=SolverReport())
 
 
 class cuPDLPx(Solver[None]):

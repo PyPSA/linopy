@@ -72,6 +72,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_pips_files,
     to_xpress,
 )
 from linopy.matrices import MatrixAccessor
@@ -2390,5 +2391,7 @@ class Model:
     to_xpress = to_xpress
 
     to_block_files = to_block_files
+
+    to_pips_files = to_pips_files
 
     dualize = dualize
