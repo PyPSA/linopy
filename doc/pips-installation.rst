@@ -36,11 +36,11 @@ linopy at the driver binary through two environment variables and call
 
 .. code-block:: python
 
-    m.blocks = ...              # assign the block structure (see "When to use it")
+    m.blocks = ...  # assign the block structure (see "When to use it")
     m.solve(solver_name="pips")
 
-    m.objective.value           # optimal objective
-    m.solution                  # primal values, mapped back onto the variables
+    m.objective.value  # optimal objective
+    m.solution  # primal values, mapped back onto the variables
 
 The solver exports the model, runs PIPS under ``mpirun`` and reads the primal,
 duals and objective back onto ``m`` — the same interface as every other linopy
@@ -129,13 +129,13 @@ Export in-process, then hand the directory to the driver:
 
     m = linopy.Model()
     time = pd.Index(range(12), name="time")
-    m.blocks = xr.DataArray(np.repeat([1, 2], 6), [time])   # 2 local blocks
+    m.blocks = xr.DataArray(np.repeat([1, 2], 6), [time])  # 2 local blocks
     x = m.add_variables(lower=0, coords=[time], name="x")
-    g = m.add_variables(lower=0, name="g")                  # global (block 0)
+    g = m.add_variables(lower=0, name="g")  # global (block 0)
     m.add_constraints(x <= g, name="cap")
     m.add_objective(x.sum() + g)
 
-    m.to_pips_files("export-dir")                           # writes the block files
+    m.to_pips_files("export-dir")  # writes the block files
 
 .. code-block:: bash
 
