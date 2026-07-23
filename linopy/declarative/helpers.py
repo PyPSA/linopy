@@ -22,9 +22,8 @@ from linopy.declarative.schema import DTYPE_OPTIONS, MathModel
 from linopy.expressions import LinearExpression
 
 if TYPE_CHECKING:
-    from linopy.declarative.evaluate import Context
+    from linopy.declarative.nodes import Context
 
-MODE_T = Literal["raw", "expr", "math_string"]
 KIND_T = Literal["mask", "expression"]
 
 
@@ -107,18 +106,15 @@ class HelperFunction(ABC):
     ignore_mask: ClassVar[bool] = False
     """If True, `mask` arrays are not applied to the function's incoming arguments."""
 
-    def __init__(self, mode: MODE_T, context: Context) -> None:
+    def __init__(self, context: Context) -> None:
         """
-        Initialise the helper for one evaluation mode.
+        Initialise the helper.
 
         Parameters
         ----------
-        mode : Literal["raw", "expr", "math_string"]
-            The evaluation mode this instance will dispatch to when called.
         context : Context
             The evaluation context (input data, math definition, config, ...).
         """
-        self._mode = mode
         self._context = context
 
     @abstractmethod
@@ -138,17 +134,6 @@ class HelperFunction(ABC):
         should override it.
         """
         return self.as_raw(*args, **kwargs)
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Dispatch to the `as_*` method matching the mode set at initialisation."""
-        if self._mode == "math_string":
-            return self.as_math_string(*args, **kwargs)
-        elif self._mode == "raw":
-            return self.as_raw(*args, **kwargs)
-        elif self._mode == "expr":
-            return self.as_expr(*args, **kwargs)
-        else:
-            raise ValueError(f"Unknown helper function mode: {self._mode!r}")
 
     def _dim_iterator(self, dim: str) -> str:
         """Return the LaTeX iterator name of dimension `dim`."""
@@ -543,8 +528,8 @@ class GroupDatetime(HelperFunction):
         """
         group_name = str(group.name)
         dtype = DTYPE_OPTIONS[self._context.math.dimensions[group_name].dtype]
-        group_sum_helper = GroupSum(self._mode, self._context)
-        return group_sum_helper(
+        group_sum_helper = GroupSum(self._context)
+        return group_sum_helper.as_raw(
             array, getattr(array[str(over.name)].dt, group_name).astype(dtype), group
         )
 

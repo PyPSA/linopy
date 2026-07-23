@@ -16,7 +16,7 @@ import pytest
 import xarray as xr
 import yaml
 
-from linopy.declarative import evaluate, grammar, parsing
+from linopy.declarative import grammar, nodes, parsing
 from linopy.declarative.build import DeclarativeModelBuilder, declarative_model
 from linopy.declarative.helpers import HelperFunction, build_registry
 from linopy.declarative.latex import (
@@ -24,7 +24,7 @@ from linopy.declarative.latex import (
     _escape_text_mode,
     latex_math_doc,
 )
-from linopy.declarative.schema import MathModel
+from linopy.declarative.schema import ConfigModel, MathModel
 from linopy.expressions import LinearExpression
 from linopy.variables import Variable
 
@@ -87,13 +87,13 @@ def _inputs() -> xr.Dataset:
     )
 
 
-def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> evaluate.Context:
+def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> nodes.Context:
     """Build a fresh evaluation context from a builder's validated components."""
-    return evaluate.Context(
+    return nodes.Context(
         model=builder.model,
         input_data=builder.input_data,
         math=builder.math,
-        config=builder.config,
+        config=kwargs.pop("config", builder.config),
         helpers=kwargs.pop("helpers", build_registry()),
         **kwargs,
     )
@@ -101,7 +101,7 @@ def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> evaluate.Context:
 
 def _first_equation(
     builder: DeclarativeModelBuilder, group: str, name: str
-) -> tuple[parsing.Equation, xr.DataArray, evaluate.Context]:
+) -> tuple[parsing.Equation, xr.DataArray, nodes.Context]:
     """Parse a component and return its first equation, sub-mask, and context."""
     ctx = _ctx(builder)
     definition = getattr(builder.math, group)[name]
@@ -171,6 +171,14 @@ class TestGrammar:
         assert grammar.find_refs(tree, grammar.SliceRef) == {"n"}
         assert grammar.find_refs(tree, grammar.Component) == {"node", "flow"}
 
+    def test_node_repr_is_clean(self):
+        tree = grammar.arithmetic_grammar(self.NAMES).parse_string(
+            "flow * cost + 1", parse_all=True
+        )[0]
+        rendered = repr(tree)
+        assert "instring=" not in rendered
+        assert "loc=" not in rendered
+
     def test_parse_error_carries_position_marker(self):
         math = _math()
         math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
@@ -208,14 +216,17 @@ class TestMaskRoute:
     )
     def test_mask_atoms_return_bool(self, builder_with_flow, mask_string):
         node = parsing.parse_mask(mask_string, builder_with_flow.math)
-        result = evaluate.evaluate(node, _ctx(builder_with_flow, route="mask"))
+        config = ConfigModel.model_validate({"foo": "bar"})
+        result = nodes.evaluate(
+            node, _ctx(builder_with_flow, mode="mask", config=config)
+        )
         assert isinstance(result, xr.DataArray)
         assert result.dtype == bool
 
     def test_existence_coercion(self, builder_with_flow):
         """Bare input references coerce to existence booleans on the mask route."""
         node = parsing.parse_mask("cap_max", builder_with_flow.math)
-        result = evaluate.evaluate(node, _ctx(builder_with_flow, route="mask"))
+        result = nodes.evaluate(node, _ctx(builder_with_flow, mode="mask"))
         assert result.values.tolist() == [True, True, True]
 
 
@@ -289,16 +300,20 @@ class TestExpressionRoute:
             )
 
     def test_plain_and_list_slices(self, builder_with_flow):
-        ctx = _ctx(builder_with_flow, mask=xr.full_like(_inputs()["cost"], True, bool))
+        ctx = _ctx(
+            builder_with_flow,
+            mode="expr",
+            mask=xr.full_like(_inputs()["cost"], True, bool),
+        )
         arith = grammar.arithmetic_grammar(
             frozenset({"flow", "cost", "cap_max", "node"})
         )
         scalar_sliced = arith.parse_string("flow[node=a] * cost", parse_all=True)[0]
-        result = evaluate.evaluate(scalar_sliced, ctx, expr=True)
+        result = nodes.evaluate(scalar_sliced, ctx)
         assert isinstance(result, LinearExpression)
 
         list_sliced = arith.parse_string("flow[node=[a, b]]", parse_all=True)[0]
-        result = evaluate.evaluate(list_sliced, ctx, expr=True)
+        result = nodes.evaluate(list_sliced, ctx)
         assert result.data.sizes["node"] == 2
 
     def test_slicer_reference(self, builder_with_flow):
@@ -375,13 +390,13 @@ class TestLatexRoute:
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow", "node"}))
         tree = arith.parse_string("flow[node=a]", parse_all=True)[0]
-        assert evaluate.to_math_string(tree, ctx) == r"flow_\text{n=a}"
+        assert nodes.to_math_string(tree, ctx) == r"flow_\text{n=a}"
 
     def test_identity_operands_are_skipped(self, builder_with_flow):
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow"}))
         tree = arith.parse_string("0 + flow", parse_all=True)[0]
-        assert evaluate.to_math_string(tree, ctx) == "flow"
+        assert nodes.to_math_string(tree, ctx) == "flow"
 
 
 class _RecordArgs(HelperFunction):
@@ -440,24 +455,6 @@ class TestHelpers:
         with pytest.raises(ValueError, match="must be subclassed"):
             build_registry([str])  # type: ignore[list-item]
 
-    def test_non_subclass_rejected_at_evaluation(self):
-        """A hand-built registry with an invalid entry is rejected at call time."""
-        math = _math()
-        math["expressions"]["total_cost"]["equations"][0]["expression"] = (
-            "not_a_helper(flow)"
-        )
-        builder = DeclarativeModelBuilder(math, _inputs(), {})
-        builder.add_variable("flow", builder.math.variables["flow"])
-        registry = build_registry()
-        registry["expression"]["not_a_helper"] = str  # type: ignore[assignment]
-        ctx = _ctx(builder, helpers=registry)
-        definition = builder.math.expressions["total_cost"]
-        equation = parsing.parse_component(
-            "expressions", "total_cost", definition, builder.math
-        )[0]
-        with pytest.raises(ValueError, match="must be subclassed"):
-            parsing.as_expression(equation, ctx)
-
     def test_unknown_helper_rejected(self):
         math = _math()
         math["expressions"]["total_cost"]["equations"][0]["expression"] = (
@@ -471,6 +468,26 @@ class TestHelpers:
         )[0]
         with pytest.raises(ValueError, match="Invalid helper function"):
             parsing.as_expression(equation, _ctx(builder))
+
+    def test_eval_error_carries_caret(self):
+        """Evaluation errors point a caret at the failing node in the source string."""
+        math = _math()
+        math["expressions"]["total_cost"]["equations"][0]["expression"] = (
+            "unknown_helper(flow)"
+        )
+        builder = DeclarativeModelBuilder(math, _inputs(), {})
+        builder.add_variable("flow", builder.math.variables["flow"])
+        definition = builder.math.expressions["total_cost"]
+        equation = parsing.parse_component(
+            "expressions", "total_cost", definition, builder.math
+        )[0]
+        with pytest.raises(ValueError) as excinfo:
+            parsing.as_expression(equation, _ctx(builder))
+        message = str(excinfo.value)
+        assert "unknown_helper(flow)" in message
+        source_line, caret_line = message.splitlines()[-2:]
+        assert caret_line.strip() == "^"
+        assert caret_line.index("^") == source_line.index("unknown_helper")
 
     def test_duplicate_name_rejected(self):
         class _ClashingSum(HelperFunction):
@@ -498,7 +515,7 @@ class TestHelpers:
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow", "node"}))
         tree = arith.parse_string("get_val_at_index(node=0)", parse_all=True)[0]
-        assert evaluate.evaluate(tree, ctx).item() == "a"
+        assert nodes.evaluate(tree, ctx).item() == "a"
 
 
 class TestBuilder:

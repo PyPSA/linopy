@@ -12,17 +12,18 @@ import logging
 import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import replace
-from typing import Any, Literal, get_args
+from typing import Any
 
 import xarray as xr
 from tqdm.auto import tqdm
 
 from linopy.declarative import parsing
-from linopy.declarative.evaluate import Context, evaluate
-from linopy.declarative.grammar import Component, find_refs
 from linopy.declarative.helpers import HelperFunction, build_registry
+from linopy.declarative.nodes import Component, Context, find_refs
 from linopy.declarative.schema import (
+    BUILD_ORDER,
     DTYPE_OPTIONS,
+    EQUATION_GROUP_T,
     ConfigModel,
     ConstraintDef,
     ExpressionDef,
@@ -35,13 +36,6 @@ from linopy.io import TQDM_COLOR
 from linopy.model import Model
 
 LOGGER = logging.getLogger(__name__)
-
-ORDERED_COMPONENTS_T = Literal[
-    "variables",
-    "expressions",
-    "constraints",
-    "objectives",
-]
 
 _SKIP_MESSAGE = "No valid data points after applying mask. Not added to model."
 
@@ -76,7 +70,59 @@ def declarative_model(
     return DeclarativeModelBuilder(math_def, input_data, config, helpers).build()
 
 
-class DeclarativeModelBuilder:
+class _DeclarativeBase:
+    """Shared validation and context setup of the model and LaTeX builders."""
+
+    def __init__(
+        self,
+        math_def: dict,
+        input_data: xr.Dataset | None,
+        config: dict | None,
+        helpers: Iterable[type[HelperFunction]] = (),
+        *,
+        math_reprs: dict[str, str] | None = None,
+    ) -> None:
+        """
+        Validate the math definition, input data, and config.
+
+        Parameters
+        ----------
+        math_def : dict
+            Declarative math definition.
+        input_data : xr.Dataset, optional
+            Model input data.
+        config : dict, optional
+            Build configuration options.
+        helpers : Iterable[type[HelperFunction]], optional
+            User-defined helper functions, in addition to the built-in ones.
+        math_reprs : dict[str, str], optional
+            Custom LaTeX representations per component name.
+        """
+        self.model = Model()
+        self.math = MathModel.model_validate(math_def)
+        self.input_data = input_data if input_data is not None else xr.Dataset()
+        self.config = ConfigModel.model_validate(config or {})
+        self._ctx = Context(
+            model=self.model,
+            input_data=self.input_data,
+            math=self.math,
+            config=self.config,
+            helpers=build_registry(helpers),
+            math_reprs=math_reprs or {},
+        )
+
+    def _references(
+        self, definition: Any, equations: Iterable[parsing.Equation] = ()
+    ) -> list[str]:
+        """Return the sorted names of all math components a component references."""
+        mask_node = parsing.parse_mask(getattr(definition, "mask", "True"), self.math)
+        refs = find_refs(mask_node, Component)
+        for equation in equations:
+            refs |= equation.references()
+        return sorted(refs)
+
+
+class DeclarativeModelBuilder(_DeclarativeBase):
     """Builder turning a declarative math definition into a linopy Model."""
 
     def __init__(
@@ -100,17 +146,9 @@ class DeclarativeModelBuilder:
         helpers : Iterable[type[HelperFunction]], optional
             User-defined helper functions, in addition to the built-in ones.
         """
-        self.model = Model()
-        self.math = MathModel.model_validate(math_def)
-        self.input_data = self._update_dtypes(input_data)
-        self.config = ConfigModel.model_validate(config)
-        self._ctx = Context(
-            model=self.model,
-            input_data=self.input_data,
-            math=self.math,
-            config=self.config,
-            helpers=build_registry(helpers),
-        )
+        super().__init__(math_def, input_data, config, helpers)
+        self.input_data = self._update_dtypes(self.input_data)
+        self._ctx = replace(self._ctx, input_data=self.input_data)
         self._check_inputs()
 
     def _update_dtypes(self, ds: xr.Dataset, id_: str = "") -> xr.Dataset:
@@ -164,8 +202,8 @@ class DeclarativeModelBuilder:
             if not check.active:
                 continue
             mask_node = parsing.parse_mask(check.mask, self.math, name)
-            check_ctx = replace(self._ctx, route="mask", equation_name=name)
-            evaluated = evaluate(mask_node, check_ctx)
+            check_ctx = replace(self._ctx, mode="mask", equation_name=name)
+            evaluated = mask_node.evaluate(check_ctx)
             if (evaluated & active).any():
                 messages = error_msgs if check.errors == "raise" else warn_msgs
                 messages.append(check.message)
@@ -184,20 +222,10 @@ class DeclarativeModelBuilder:
         """Return (name, definition) pairs from a root mapping, sorted by definition order."""
         return sorted(root.items(), key=lambda item: getattr(item[1], "order", 0))
 
-    def _references(
-        self, definition: Any, equations: Iterable[parsing.Equation] = ()
-    ) -> list[str]:
-        """Return the sorted names of all math components a component references."""
-        mask_node = parsing.parse_mask(getattr(definition, "mask", "True"), self.math)
-        refs = find_refs(mask_node, Component)
-        for equation in equations:
-            refs |= equation.references()
-        return sorted(refs)
-
     def _iter_equations(
         self,
         equations: list[parsing.Equation],
-        group: parsing.GROUP_T,
+        group: EQUATION_GROUP_T,
         mask: xr.DataArray,
     ) -> Iterator[tuple[parsing.Equation, xr.DataArray]]:
         """
@@ -344,7 +372,7 @@ class DeclarativeModelBuilder:
             raise ValueError(
                 f"Only one active objective is supported, found: {active_objectives}"
             )
-        for group in get_args(ORDERED_COMPONENTS_T):
+        for group in BUILD_ORDER:
             component = group.removesuffix("s")
             ordered_items = self._sorted_by_order(self.math[group].root)
             for name, definition in tqdm(

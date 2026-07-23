@@ -44,6 +44,24 @@ COMPONENTS_T = Literal[
     "postprocessed",
 ]
 
+EQUATION_GROUP_T = Literal["expressions", "constraints", "objectives"]
+
+EQUATION_GROUPS: tuple[str, ...] = ("expressions", "constraints", "objectives")
+"""Component groups whose definitions carry parseable equations."""
+
+BUILD_ORDER: tuple[str, ...] = ("variables", "expressions", "constraints", "objectives")
+"""Component groups in the order they are built into a linopy model."""
+
+DOCUMENTED_GROUPS: dict[str, str] = {
+    "parameters": "Parameters",
+    "lookups": "Lookups",
+    "variables": "Variables",
+    "expressions": "Expressions",
+    "constraints": "Constraints",
+    "objectives": "Objectives",
+}
+"""Component groups documented in LaTeX math docs, with their section titles."""
+
 
 def _validate_unique_list(v: list) -> list:
     try:
@@ -551,7 +569,4 @@ MATH_DEFS_T = (
 class ConfigModel(LinopyBaseModel):
     """Base configuration options used when building a Linopy optimisation problem."""
 
-    model_config = {"title": "Model build configuration"}
-
-    foo: str = "bar"
-    """A dummy variable to test accessing the config items in declarative math."""
+    model_config = {"title": "Model build configuration", "extra": "allow"}

@@ -21,14 +21,20 @@ import pyparsing as pp
 import xarray as xr
 
 from linopy.declarative import grammar
-from linopy.declarative.evaluate import (
+from linopy.declarative.nodes import (
+    MODE_T,
     TRUE_ARRAY,
+    Component,
     Context,
-    evaluate,
-    to_math_string,
+    Node,
+    SliceRef,
+    SubExprRef,
+    find_refs,
+    to_linexpr,
 )
-from linopy.declarative.grammar import Node
 from linopy.declarative.schema import (
+    COMPONENTS_T,
+    EQUATION_GROUP_T,
     MATH_DEFS_T,
     ConstraintDef,
     ExpressionDef,
@@ -39,15 +45,6 @@ from linopy.declarative.schema import (
 from linopy.expressions import LinearExpression
 
 LOGGER = logging.getLogger(__name__)
-
-GROUP_T = Literal[
-    "variables",
-    "expressions",
-    "constraints",
-    "piecewise_constraints",
-    "objectives",
-    "postprocessed",
-]
 
 EQUATION_DEFS_T = ConstraintDef | ExpressionDef | ObjectiveDef
 """Math component definitions that carry `equations`/`sub_expressions`/`slices` keys."""
@@ -90,9 +87,7 @@ class Equation:
             *self.sub_expressions.values(),
             *self.slices.values(),
         ]
-        return set().union(
-            *(grammar.find_refs(tree, grammar.Component) for tree in trees)
-        )
+        return set().union(*(find_refs(tree, Component) for tree in trees))
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +205,9 @@ def _expand(
     """
     expanded = []
     for equation in equations:
-        ref_type = grammar.SubExprRef if kind == "sub_expressions" else grammar.SliceRef
+        ref_type = SubExprRef if kind == "sub_expressions" else SliceRef
         trees = [equation.expression, *equation.sub_expressions.values()]
-        refs = set().union(*(grammar.find_refs(tree, ref_type) for tree in trees))
+        refs = set().union(*(find_refs(tree, ref_type) for tree in trees))
         if not refs:
             expanded.append(equation)
             continue
@@ -244,7 +239,7 @@ def _expand(
 
 
 def parse_component(
-    group: GROUP_T, name: str, definition: EQUATION_DEFS_T, math: MathModel
+    group: EQUATION_GROUP_T, name: str, definition: EQUATION_DEFS_T, math: MathModel
 ) -> list[Equation]:
     """
     Parse a math component's equations into fully-resolved :class:`Equation` objects.
@@ -256,7 +251,7 @@ def parse_component(
 
     Parameters
     ----------
-    group : GROUP_T
+    group : EQUATION_GROUP_T
         Component group the definition belongs to (defines the equation grammar:
         comparisons for constraints, arithmetic otherwise).
     name : str
@@ -361,8 +356,16 @@ def drop_dims_not_in_foreach(mask: xr.DataArray, sets: tuple[str, ...]) -> xr.Da
     return (mask.sum(unwanted_dims) > 0).astype(bool).transpose(*sets)
 
 
+def _mask_is_empty(mask: xr.DataArray, name: str, reason: str) -> bool:
+    """Return True (with a debug log) if `mask` leaves no valid data point."""
+    if not mask.any():
+        LOGGER.debug(f"Math parsing | {name} | Component not added; {reason}.")
+        return True
+    return False
+
+
 def component_mask(
-    group: GROUP_T,
+    group: COMPONENTS_T,
     name: str,
     definition: MATH_DEFS_T,
     ctx: Context,
@@ -377,7 +380,7 @@ def component_mask(
 
     Parameters
     ----------
-    group : GROUP_T
+    group : COMPONENTS_T
         Component group the definition belongs to.
     name : str
         Name of the math component.
@@ -394,21 +397,15 @@ def component_mask(
     sets = tuple(getattr(definition, "foreach", ()))
     mask_string = getattr(definition, "mask", "True")
     initial_mask = foreach_mask(sets, ctx.input_data)
-    if not initial_mask.any():
-        LOGGER.debug(
-            f"Math parsing | {component_name} | Component not added; "
-            "'foreach' does not apply anywhere."
-        )
+    if _mask_is_empty(
+        initial_mask, component_name, "'foreach' does not apply anywhere"
+    ):
         return initial_mask
 
     mask_node = parse_mask(mask_string, ctx.math, component_name)
-    mask_ctx = replace(ctx, route="mask", equation_name=component_name)
-    mask = xr.DataArray(initial_mask & evaluate(mask_node, mask_ctx))
-    if not mask.any():
-        LOGGER.debug(
-            f"Math parsing | {component_name} | Component not added; "
-            "'mask' does not apply anywhere."
-        )
+    mask_ctx = replace(ctx, mode="mask", equation_name=component_name)
+    mask = xr.DataArray(initial_mask & mask_node.evaluate(mask_ctx))
+    if _mask_is_empty(mask, component_name, "'mask' does not apply anywhere"):
         return mask
 
     if align_to_foreach_sets:
@@ -424,14 +421,14 @@ def component_mask(
 def _equation_ctx(
     equation: Equation,
     ctx: Context,
-    route: Literal["expression", "mask"],
+    mode: MODE_T,
     **kwargs: Any,
 ) -> Context:
     """Return a context copy carrying the equation's name and resolved references."""
     return replace(
         ctx,
         equation_name=equation.name,
-        route=route,
+        mode=mode,
         sub_expressions=equation.sub_expressions,
         slices=equation.slices,
         **kwargs,
@@ -460,13 +457,9 @@ def as_mask(
         Boolean array defining on which index items the equation applies.
     """
     mask_ctx = _equation_ctx(equation, ctx, "mask")
-    evaluated = [evaluate(mask, mask_ctx) for mask in equation.masks]
+    evaluated = [mask.evaluate(mask_ctx) for mask in equation.masks]
     mask = xr.DataArray(functools.reduce(operator.and_, [initial_mask, *evaluated]))
-    if not mask.any():
-        LOGGER.debug(
-            f"Math parsing | {equation.name} | Component not added; "
-            "'mask' does not apply anywhere."
-        )
+    _mask_is_empty(mask, equation.name, "'mask' does not apply anywhere")
     return mask
 
 
@@ -491,11 +484,8 @@ def as_expression(
         The evaluated expression; a pure-parameter expression (evaluated to an
         `xr.DataArray`) is coerced to a `LinearExpression`.
     """
-    expr_ctx = _equation_ctx(equation, ctx, "expression", mask=mask)
-    evaluated = evaluate(equation.expression, expr_ctx, expr=True)
-    if isinstance(evaluated, xr.DataArray):
-        evaluated = LinearExpression(evaluated, ctx.model)
-    return evaluated
+    expr_ctx = _equation_ctx(equation, ctx, "expr", mask=mask)
+    return to_linexpr(equation.expression.evaluate(expr_ctx), ctx.model)
 
 
 def as_constraint(
@@ -520,12 +510,8 @@ def as_constraint(
         coerced to `LinearExpression` and `sign` is an array of the comparison
         operator.
     """
-    expr_ctx = _equation_ctx(equation, ctx, "expression", mask=mask)
-    lhs, sign, rhs = evaluate(equation.expression, expr_ctx, expr=True)
-    if isinstance(lhs, xr.DataArray):
-        lhs = LinearExpression(lhs, ctx.model)
-    if isinstance(rhs, xr.DataArray):
-        rhs = LinearExpression(rhs, ctx.model)
+    expr_ctx = _equation_ctx(equation, ctx, "expr", mask=mask)
+    lhs, sign, rhs = equation.expression.evaluate(expr_ctx)
     return lhs, sign, rhs
 
 
@@ -555,42 +541,7 @@ def as_latex(
     """
     if what == "mask":
         mask_ctx = _equation_ctx(equation, ctx, "mask")
-        strings = [to_math_string(mask, mask_ctx) for mask in equation.masks]
+        strings = [mask.to_latex(mask_ctx) for mask in equation.masks]
         return r"\land{}".join(f"({s})" for s in strings if s != "true")
-    expr_ctx = _equation_ctx(equation, ctx, "expression")
-    return to_math_string(equation.expression, expr_ctx)
-
-
-def check_mask_expr_consistency(
-    name: str, expression: xr.DataArray, mask: xr.DataArray
-) -> None:
-    """
-    Check that an evaluated expression is consistent with its mask array.
-
-    Parameters
-    ----------
-    name : str
-        Name to identify the equation by in error messages.
-    expression : xr.DataArray
-        Array of linear expressions or one side of a constraint equation.
-    mask : xr.DataArray
-        Boolean mask; there should be a valid expression value wherever it is True.
-
-    Raises
-    ------
-    ValueError
-        If the expression is indexed over dimensions not present in the mask, or
-        has missing (NaN) entries where the mask applies.
-    """
-    broadcast_dims_mask = set(expression.dims).difference(set(mask.dims))
-    if broadcast_dims_mask:
-        raise ValueError(
-            f"{name} | The linear expression array is indexed over dimensions "
-            f"not present in `foreach`: {broadcast_dims_mask}"
-        )
-    incomplete_constraints = expression.isnull() & mask
-    if incomplete_constraints.any():
-        raise ValueError(
-            f"{name} | Missing a linear expression for some coordinates selected "
-            "by 'mask'. Adapting 'mask' might help."
-        )
+    expr_ctx = _equation_ctx(equation, ctx, "raw")
+    return equation.expression.to_latex(expr_ctx)

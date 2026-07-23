@@ -20,24 +20,12 @@ import pandas as pd
 import xarray as xr
 
 from linopy.declarative import parsing
-from linopy.declarative.evaluate import Context, to_math_string
-from linopy.declarative.grammar import Component, find_refs
-from linopy.declarative.helpers import HelperFunction, build_registry, dim_iterator
-from linopy.declarative.schema import ConfigModel, MathModel
-from linopy.model import Model
+from linopy.declarative.build import _DeclarativeBase
+from linopy.declarative.helpers import HelperFunction, dim_iterator
+from linopy.declarative.nodes import Component, Node, find_refs, latex_number
+from linopy.declarative.schema import DOCUMENTED_GROUPS, EQUATION_GROUPS
 
 FORMAT_T = Literal["md", "rst", "tex"]
-
-_DOCUMENTED_GROUPS: dict[str, str] = {
-    "parameters": "Parameters",
-    "lookups": "Lookups",
-    "variables": "Variables",
-    "expressions": "Expressions",
-    "constraints": "Constraints",
-    "objectives": "Objectives",
-}
-
-_EQUATION_GROUPS = ("expressions", "constraints", "objectives")
 
 _REPR_STYLES = {
     "parameters": "textit",
@@ -82,16 +70,7 @@ class RenderedComponent:
     """Additional metadata to document (unit, default, sense, ...)."""
 
 
-def _number_string(value: float | int) -> str:
-    r"""Format a number for LaTeX, mapping infinities to `\infty`."""
-    if value == float("inf"):
-        return r"\infty"
-    if value == float("-inf"):
-        return r"-\infty"
-    return f"{value:.6g}"
-
-
-class LatexModelBuilder:
+class LatexModelBuilder(_DeclarativeBase):
     """
     Builder turning a declarative math definition into LaTeX math documentation.
 
@@ -128,22 +107,9 @@ class LatexModelBuilder:
         helpers : Iterable[type[HelperFunction]], optional
             User-defined helper functions, in addition to the built-in ones.
         """
-        self.math = MathModel.model_validate(math_def)
-        self.input_data = input_data if input_data is not None else xr.Dataset()
-        self.config = ConfigModel.model_validate(config or {})
+        super().__init__(math_def, input_data, config, helpers)
         self.components: dict[str, dict[str, RenderedComponent]] = {}
-        self._ctx = Context(
-            model=Model(),
-            input_data=self.input_data,
-            math=self.math,
-            config=self.config,
-            helpers=build_registry(helpers),
-            math_reprs=self._build_math_reprs(),
-        )
-
-    def _iterator(self, dim: str) -> str:
-        """Return the LaTeX iterator of a dimension (its own name if not declared)."""
-        return dim_iterator(self.math, dim)
+        self._ctx = replace(self._ctx, math_reprs=self._build_math_reprs())
 
     def _build_math_reprs(self) -> dict[str, str]:
         r"""
@@ -163,7 +129,7 @@ class LatexModelBuilder:
                         if name in self.input_data
                         else []
                     )
-                iterators = ",".join(self._iterator(str(dim)) for dim in dims)
+                iterators = ",".join(dim_iterator(self.math, str(dim)) for dim in dims)
                 subscript = rf"_\text{{{iterators}}}" if iterators else ""
                 reprs[name] = rf"\{style}{{{name}}}{subscript}"
         return reprs
@@ -174,17 +140,15 @@ class LatexModelBuilder:
         if not sets:
             return ""
         instrs = ", ".join(
-            rf"\text{{{self._iterator(dim)}}} \in \text{{{dim}}}" for dim in sets
+            rf"\text{{{dim_iterator(self.math, dim)}}} \in \text{{{dim}}}"
+            for dim in sets
         )
         return rf"\forall{{}} {instrs}"
 
-    def _mask_string(self, definition: object, name: str) -> str:
-        """Return the LaTeX rendering of a component's top-level mask ("" if true)."""
-        mask_node = parsing.parse_mask(
-            getattr(definition, "mask", "True"), self.math, name
-        )
-        rendered = to_math_string(
-            mask_node, replace(self._ctx, route="mask", equation_name=name)
+    def _mask_string(self, mask_node: Node, name: str) -> str:
+        """Return the LaTeX rendering of a component's parsed top-level mask ("" if true)."""
+        rendered = mask_node.to_latex(
+            replace(self._ctx, mode="mask", equation_name=name)
         )
         return "" if rendered == "true" else rendered
 
@@ -204,19 +168,21 @@ class LatexModelBuilder:
 
     def add_component(self, group: str, name: str, definition: object) -> None:
         """Render one math component and store it under `self.components`."""
+        mask_node = parsing.parse_mask(
+            getattr(definition, "mask", "True"), self.math, f"{group}:{name}"
+        )
         rendered = RenderedComponent(
             group=group,
             name=name,
             title=getattr(definition, "title", ""),
             description=getattr(definition, "description", ""),
             foreach=self._foreach_string(definition),
-            mask=self._mask_string(definition, f"{group}:{name}"),
+            mask=self._mask_string(mask_node, f"{group}:{name}"),
             extras=self._render_metadata(definition),
         )
-        mask_node = parsing.parse_mask(getattr(definition, "mask", "True"), self.math)
         uses = find_refs(mask_node, Component)
 
-        if group in _EQUATION_GROUPS:
+        if group in EQUATION_GROUPS:
             equations = parsing.parse_component(group, name, definition, self.math)  # type: ignore[arg-type]
             for equation in equations:
                 equation_ctx = replace(self._ctx, equation_name=equation.name)
@@ -263,7 +229,7 @@ class LatexModelBuilder:
         lower, upper = (
             reprs.get(bound, rf"\textit{{{bound}}}")
             if isinstance(bound, str)
-            else _number_string(bound)
+            else latex_number(bound)
             for bound in (bounds.lower, bounds.upper)
         )
         return rf"{lower} \leq {reprs[name]} \leq {upper}"
@@ -278,7 +244,7 @@ class LatexModelBuilder:
             Itself, with `self.components` filled, so that document generation
             can be chained (`builder.build().generate_math_doc()`).
         """
-        for group in _DOCUMENTED_GROUPS:
+        for group in DOCUMENTED_GROUPS:
             for name, definition in getattr(self.math, group)._active.items():
                 self.add_component(group, name, definition)
 
@@ -309,7 +275,7 @@ class LatexModelBuilder:
         if not self.components:
             self.build()
         blocks = [_heading(format, 1, "Math formulation"), ""]
-        for group, group_title in _DOCUMENTED_GROUPS.items():
+        for group, group_title in DOCUMENTED_GROUPS.items():
             group_components = self.components.get(group)
             if not group_components:
                 continue
