@@ -612,6 +612,25 @@ Remote solving
    remote.RemoteHandler
 
 
+PIPS block decomposition
+========================
+
+Helpers for the block-structured PIPS-IPM++ backend. See the
+:doc:`pips-installation` guide for usage. ``assign_blocks`` is also bound as
+:meth:`Model.assign_blocks <linopy.model.Model.assign_blocks>`.
+
+.. autosummary::
+   :toctree: generated/
+
+   backends.pips.assign_blocks
+   backends.pips.diagnose
+   backends.pips.BlockReport
+   backends.pips.PipsConfig
+   backends.pips.build_pips_command
+   backends.pips.write_job
+   backends.pips.doctor
+
+
 Solver status and result types
 ==============================
 

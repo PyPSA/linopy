@@ -30,6 +30,7 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.backends.pips import assign_blocks
 from linopy.common import (
     assign_multiindex_safe,
     best_int,
@@ -2394,5 +2395,7 @@ class Model:
     to_block_files = to_block_files
 
     to_pips_files = to_pips_files
+
+    assign_blocks = assign_blocks
 
     dualize = dualize

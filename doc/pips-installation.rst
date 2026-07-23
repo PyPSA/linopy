@@ -58,6 +58,62 @@ structure via ``m.blocks`` (a ``xarray.DataArray`` of block ids over one
 dimension); everything independent of that dimension becomes global (block 0).
 A model where everything ends up linking defeats the purpose.
 
+Diagnosing block quality
+========================
+
+Before committing to an HPC run, check *whether* a K-way split will actually
+scale on PIPS. ``linopy.backends.pips.assign_blocks`` builds the ``m.blocks`` assignment
+for you by splitting one dimension into contiguous blocks, and
+``linopy.backends.pips.diagnose`` reports the resulting arrowhead structure — a cheap,
+pure-Python analysis that needs no PIPS build:
+
+.. code-block:: python
+
+    import linopy.backends.pips
+
+    linopy.backends.pips.assign_blocks(
+        m, "time", 50
+    )  # 50 contiguous blocks over "time"
+    report = linopy.backends.pips.diagnose(m)
+    print(report)
+
+.. code-block:: text
+
+    BlockReport: 50 blocks | 412 340 vars | 388 900 cons | 2 140 552 nnz
+      columns    global=1 240   per-block min/med/max = 8 180 / 8 220 / 8 260
+      block nnz  min/med/max = 41 002 / 42 780 / 44 190   (max/med ratio 1.03)
+      rows       local=386 400  global=12  linking=2 488  (adjacent=2 450  border=38)
+      border     nnz=214 300 / 2 140 552 = 10.0%
+      parallel   max_ranks=50  target_cores=200 -> ranks=50 threads=4
+      warnings   (none)
+
+``assign_blocks(m, dim, n_blocks)`` is also available as a bound method,
+``m.assign_blocks("time", 50)``. It returns the model and only supports the
+default ``boundary="contiguous"`` split for now.
+
+How to read the report:
+
+- **border_fraction** is the share of matrix nonzeros that sit in linking rows
+  or global columns — the part PIPS handles through the root Schur complement.
+  It must stay small: above ~15% the root work dominates and parallel speedup
+  collapses, so reduce ``K`` or reformulate.
+- **balance** (the block-nnz ``max/median`` ratio) measures how evenly work is
+  spread across blocks. Synchronous interior-point iterations move at the pace
+  of the slowest block, so a ratio far above 1 (roughly > 3) means stragglers
+  stall every iteration.
+- **adjacent vs. border linking rows**: *adjacent* rows touch exactly two
+  neighbouring local blocks (e.g. storage state-of-charge continuity at block
+  boundaries) and are cheap; *border* rows span many blocks (global budget /
+  CO₂ / energy caps) and feed the root complement. Many border rows are the
+  expensive case.
+- **max_ranks = n_blocks**: MPI width is capped by the number of blocks, exactly
+  as PIPS enforces at solve time. ``diagnose(m, target_cores=...)`` folds any
+  cores beyond that cap into threads-per-rank and warns when the target exceeds
+  the block count.
+
+``diagnose`` also emits warnings for a non-decomposed model (``n_blocks == 1``),
+high border fraction, block imbalance, and empty blocks.
+
 .. _pips-install:
 
 System dependencies
@@ -118,6 +174,66 @@ The callback driver (``pips_driver.cpp``) and a scripted end-to-end build
 (``build.sh``, which performs all of the above) live under
 ``dev-scripts/pips/`` in the linopy repository.
 
+On HPC (module-based build)
+---------------------------
+
+A cluster gives you no ``sudo``: instead of ``apt-get`` you ``module load`` a
+compiler + MPI toolchain (plus MKL if you want PARDISO), then run the same
+``dev-scripts/pips/build.sh``. It honours the compilers the modules export
+(``CC``/``CXX``/``FC``, never overriding them) and takes three optional env
+knobs: ``PIPS_PREFIX`` (install prefix, default ``dev-scripts/pips/pips-install``),
+``NPROC`` (parallel build jobs) and ``CMAKE_EXTRA_ARGS`` (appended verbatim to
+the PIPS-IPM++ ``cmake`` configure line).
+
+OpenMPI + MUMPS — the fully-open path, if your site ships those modules:
+
+.. code-block:: bash
+
+    module load gcc openmpi
+    git clone --depth 1 https://gitlab.com/pips-ipmpp/pips-ipmpp.git \
+        dev-scripts/pips/pips-ipmpp
+    NPROC=16 bash dev-scripts/pips/build.sh
+
+Vendor toolchain (Intel/Cray MPI + MKL) — sketch only; the exact module names
+and cmake flags are site- and version-specific:
+
+.. code-block:: bash
+
+    module load intel impi mkl            # or the Cray PrgEnv equivalent
+    export CC=mpiicc CXX=mpiicpc FC=mpiifort
+    export PIPS_PREFIX=$HOME/opt/pips
+    export CMAKE_EXTRA_ARGS="-D<vendor MKL/MPI prefix flags here>"
+    bash dev-scripts/pips/build.sh
+
+MUMPS needs nothing beyond the toolchain. PARDISO (Panua ≥7.2) and HSL/MA57 are
+**user-supplied** and their cmake flags are not invented here — pass them
+through ``CMAKE_EXTRA_ARGS`` following the upstream PIPS-IPM++ documentation.
+
+.. note::
+
+   CMake reads ``CC``/``CXX``/``FC`` only on the **first** configure of a build
+   directory, so ``module load`` your compiler *before* the first ``build.sh``
+   run. If ``dev-scripts/pips/{pips-ipmpp/build,build-driver}`` already exist
+   from an earlier toolchain, delete them so the new compilers take effect.
+
+Preflight: ``linopy.backends.pips.doctor()``
+-----------------------------------
+
+Once the driver is built, run :func:`linopy.backends.pips.doctor` on the login node
+before you queue anything:
+
+.. code-block:: python
+
+    import linopy.backends.pips
+
+    print(linopy.backends.pips.doctor())  # PIPS-IPM++ OK: objective=3.0000 ...
+
+It builds a tiny 2-block LP with a known optimum and solves it end-to-end
+through the resolved launcher, driver binary and callback backend, then checks
+the objective. It raises if anything in the chain is broken (missing binary or
+launcher, a link/runtime failure, a wrong optimum) — so a broken toolchain
+surfaces in seconds on the login node instead of mid-allocation.
+
 Exporting and solving a model
 =============================
 
@@ -150,6 +266,64 @@ Export in-process, then hand the directory to the driver:
 
 The driver writes the primal, objective and status back into ``export-dir``.
 Read them with ``linopy.io.read_pips_solution``.
+
+Running on a cluster (detached / SLURM)
+=======================================
+
+On an HPC system you do not hold a Python process for a multi-hour, multi-node
+solve. Split the work into three steps — export, submit, ingest — controlled by
+a :class:`linopy.backends.pips.PipsConfig`:
+
+.. code-block:: python
+
+    import linopy.backends.pips as pips
+
+    # 1. build on a login/build node
+    pips.assign_blocks(m, "time", 50)
+    m.to_pips_files("/lustre/run42")  # put the export on the parallel FS
+    cfg = pips.PipsConfig(threads_per_rank=8, linear_solver="pardiso")
+    pips.write_job(
+        "/lustre/run42",
+        cfg,
+        binary="/opt/pips/pips_driver",
+        nodes=13,
+        time="04:00:00",
+        partition="fat",
+        account="psa",
+        modules=["gcc", "openmpi", "mkl"],
+        env_setup=["source /opt/pips/env.sh"],
+        output="/lustre/run42/pips.%j.log",
+    )
+
+.. code-block:: bash
+
+    # 2. submit the generated job
+    sbatch /lustre/run42/pips.slurm
+
+.. code-block:: python
+
+    # 3. later, in a fresh session, load the result onto the model
+    from linopy.io import read_pips_solution
+
+    read_pips_solution("/lustre/run42", model=m)
+
+``write_job`` writes a SLURM script that sets ``--ntasks`` to the block count
+(or ``config.n_ranks``, capped at the number of blocks), ``--cpus-per-task`` to
+``threads_per_rank``, ``--output`` to the log path (``output=``, default
+``<export_dir>/pips.%j.log``), exports ``OMP_NUM_THREADS``/``MKL_NUM_THREADS``,
+and runs the driver under ``srun`` with the chosen ``linear_solver`` and any
+extra options. The script body starts with ``set -euo pipefail``; when
+``modules=`` is given it emits a ``module purge`` + ``module load`` preamble,
+and any ``env_setup=`` lines (e.g. ``source`` a site profile) are run verbatim
+before the launch. For an interactive allocation, the inline path
+(``m.solve(solver_name="pips", solver_options={...})``) uses the same
+``PipsConfig`` keys and honours ``launcher="srun"``.
+
+Both ``write_job`` and the inline solver drop a ``pips.run.json`` provenance
+manifest next to the export — the linopy version, a timestamp, the resolved
+``PipsConfig``, the exact launch command and its environment (and, for
+``write_job``, the job settings) — so a run stays reproducible and auditable
+long after the allocation ends.
 
 Validating the export without PIPS
 ==================================

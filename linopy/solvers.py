@@ -9,6 +9,7 @@ import contextlib
 import enum
 import functools
 import io
+import json
 import logging
 import os
 import re
@@ -34,6 +35,7 @@ from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
 
 import linopy.io
+from linopy.backends.pips import PipsConfig, build_pips_command, write_run_manifest
 from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
     EQUAL,
@@ -4112,6 +4114,9 @@ class MindOpt(Solver[None]):
 
 PIPS_BINARY_ENV = "PIPS_BINARY"
 PIPS_MPI_RANKS_ENV = "PIPS_MPI_RANKS"
+PIPS_LAUNCHER_ENV = "PIPS_LAUNCHER"
+PIPS_THREADS_ENV = "PIPS_THREADS"
+PIPS_LINEAR_SOLVER_ENV = "PIPS_LINEAR_SOLVER"
 
 
 def _pips_binary() -> str | None:
@@ -4120,22 +4125,38 @@ def _pips_binary() -> str | None:
     return shutil.which(binary) if binary else None
 
 
+def _pips_config(solver_options: dict[str, Any]) -> PipsConfig:
+    """Build a :class:`PipsConfig` from env-var defaults overridden by solver options."""
+    opts = dict(solver_options)
+    n_ranks = opts.pop("n_ranks", os.environ.get(PIPS_MPI_RANKS_ENV))
+    threads = opts.pop("threads_per_rank", os.environ.get(PIPS_THREADS_ENV, "1"))
+    return PipsConfig(
+        launcher=opts.pop("launcher", os.environ.get(PIPS_LAUNCHER_ENV, "mpirun")),
+        n_ranks=int(n_ranks) if n_ranks is not None else None,
+        threads_per_rank=int(threads),
+        launcher_args=list(opts.pop("launcher_args", [])),
+        linear_solver=opts.pop("linear_solver", os.environ.get(PIPS_LINEAR_SOLVER_ENV)),
+        options=opts,
+    )
+
+
 class PIPS(Solver[None]):
     """
     Solver subclass for the distributed PIPS-IPM++ solver.
 
     The model is exported to the arrowhead block format via
     :func:`linopy.io.to_pips_files`, the driver is launched through
-    ``mpirun -np <ranks> <binary> <export-dir>`` and the solution is read back
-    with :func:`linopy.io.read_pips_solution`. The driver binary is taken from
-    ``$PIPS_BINARY`` and the MPI rank count from ``$PIPS_MPI_RANKS`` (default 1).
-    PIPS only appears in ``available_solvers`` when both the binary and
-    ``mpirun`` are found.
+    ``<launcher> <-np|-n> <ranks> <binary> <export-dir>`` and the solution is
+    read back with :func:`linopy.io.read_pips_solution`. The driver binary is
+    taken from ``$PIPS_BINARY``; PIPS only appears in ``available_solvers`` when
+    the binary and a launcher (``mpirun`` or ``srun``) are found.
 
-    Attributes
-    ----------
-    **solver_options
-        forwarded to the driver as ``--<key> <value>`` command-line arguments
+    Launch is controlled through ``solver_options`` (overriding env defaults):
+    ``launcher`` (``mpirun``/``srun``; ``$PIPS_LAUNCHER``), ``n_ranks``
+    (``$PIPS_MPI_RANKS``, default = number of blocks), ``threads_per_rank``
+    (``$PIPS_THREADS``, sets ``OMP_NUM_THREADS``/``MKL_NUM_THREADS``),
+    ``linear_solver`` (``$PIPS_LINEAR_SOLVER``) and ``launcher_args``. Any other
+    option is forwarded to the driver as ``--<key> <value>``.
     """
 
     display_name: ClassVar[str] = "PIPS-IPM++"
@@ -4146,7 +4167,10 @@ class PIPS(Solver[None]):
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
-        return _pips_binary() is not None and shutil.which("mpirun") is not None
+        launcher = (
+            shutil.which("mpirun") is not None or shutil.which("srun") is not None
+        )
+        return _pips_binary() is not None and launcher
 
     def _build_file(self, **build_kwargs: Any) -> None:
         model = self.model
@@ -4172,19 +4196,37 @@ class PIPS(Solver[None]):
                 f"PIPS driver binary not found. Set the {PIPS_BINARY_ENV} "
                 "environment variable to the PIPS-IPM++ executable."
             )
-        if shutil.which("mpirun") is None:
-            raise RuntimeError("`mpirun` not found on PATH; cannot launch PIPS-IPM++.")
+        config = _pips_config(self.solver_options)
+        if shutil.which(config.launcher) is None:
+            raise RuntimeError(
+                f"launcher {config.launcher!r} not found on PATH; cannot launch "
+                "PIPS-IPM++."
+            )
 
-        ranks = int(os.environ.get(PIPS_MPI_RANKS_ENV, "1"))
-        command = ["mpirun", "-np", str(ranks), binary, path_to_string(export_dir)]
-        for k, v in self.solver_options.items():
-            command += [f"--{k}", str(v)]
+        manifest = json.loads(
+            (Path(path_to_string(export_dir)) / "pips.json").read_text()
+        )
+        command, launch_env = build_pips_command(
+            binary, path_to_string(export_dir), config, manifest.get("n_blocks")
+        )
+        write_run_manifest(
+            path_to_string(export_dir),
+            config=config,
+            command=command,
+            env=launch_env,
+            n_blocks=manifest.get("n_blocks"),
+        )
+        run_env = {**os.environ, **launch_env}
 
         if log_fn is not None:
             with open(log_fn, "w") as log_f:
-                proc = sub.run(command, stdout=log_f, stderr=sub.STDOUT, text=True)
+                proc = sub.run(
+                    command, stdout=log_f, stderr=sub.STDOUT, text=True, env=run_env
+                )
         else:
-            proc = sub.run(command, stdout=sub.PIPE, stderr=sub.STDOUT, text=True)
+            proc = sub.run(
+                command, stdout=sub.PIPE, stderr=sub.STDOUT, text=True, env=run_env
+            )
             logger.info(proc.stdout)
         if proc.returncode != 0:
             raise RuntimeError(
