@@ -282,3 +282,73 @@ def test_pips_config_env_defaults_and_option_overrides(monkeypatch) -> None:
     assert override.launcher == "mpirun"
     assert override.n_ranks == 12
     assert override.linear_solver == "ma57"
+
+
+def _exported(tmp_path, n_blocks: int = 3) -> Model:
+    m = _time_model(6)
+    m.assign_blocks("time", n_blocks)
+    m.to_pips_files(tmp_path)
+    return m
+
+
+def test_write_job_slurm_script(tmp_path) -> None:
+    _exported(tmp_path, 3)
+    cfg = pips.PipsConfig(threads_per_rank=4, linear_solver="mumps")
+    script = pips.write_job(
+        tmp_path,
+        cfg,
+        binary="/opt/pips/drv",
+        nodes=2,
+        time="01:00:00",
+        partition="p",
+        account="a",
+    )
+    assert script == tmp_path / "pips.slurm"
+    text = script.read_text()
+    assert text.startswith("#!/bin/bash")
+    assert "#SBATCH --ntasks=3" in text
+    assert "#SBATCH --cpus-per-task=4" in text
+    assert "#SBATCH --nodes=2" in text
+    assert "#SBATCH --time=01:00:00" in text
+    assert "#SBATCH --partition=p" in text
+    assert "#SBATCH --account=a" in text
+    assert "export OMP_NUM_THREADS=4" in text
+    assert "export MKL_NUM_THREADS=4" in text
+    assert "srun -n 3" in text
+    assert "/opt/pips/drv" in text
+    assert str(tmp_path.resolve()) in text
+    assert "--linear-solver mumps" in text
+
+
+def test_write_job_binary_from_env(tmp_path, monkeypatch) -> None:
+    _exported(tmp_path, 2)
+    monkeypatch.setenv("PIPS_BINARY", "/env/drv")
+    text = pips.write_job(tmp_path).read_text()
+    assert "/env/drv" in text
+    assert "#SBATCH --ntasks=2" in text
+
+
+def test_write_job_custom_path_and_sbatch_args(tmp_path) -> None:
+    _exported(tmp_path, 2)
+    out = tmp_path / "custom.slurm"
+    script = pips.write_job(
+        tmp_path, binary="/d", path=out, sbatch_args=["--qos=long", "--mem=0"]
+    )
+    assert script == out
+    text = out.read_text()
+    assert "#SBATCH --qos=long" in text
+    assert "#SBATCH --mem=0" in text
+
+
+@pytest.mark.parametrize(
+    "kwargs, exc",
+    [
+        ({"scheduler": "pbs", "binary": "/d"}, NotImplementedError),
+        ({}, ValueError),
+    ],
+)
+def test_write_job_fail_fast(tmp_path, monkeypatch, kwargs: dict, exc) -> None:
+    _exported(tmp_path, 2)
+    monkeypatch.delenv("PIPS_BINARY", raising=False)
+    with pytest.raises(exc):
+        pips.write_job(tmp_path, **kwargs)

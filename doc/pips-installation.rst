@@ -205,6 +205,43 @@ Export in-process, then hand the directory to the driver:
 The driver writes the primal, objective and status back into ``export-dir``.
 Read them with ``linopy.io.read_pips_solution``.
 
+Running on a cluster (detached / SLURM)
+=======================================
+
+On an HPC system you do not hold a Python process for a multi-hour, multi-node
+solve. Split the work into three steps — export, submit, ingest — controlled by
+a :class:`linopy.pips.PipsConfig`:
+
+.. code-block:: python
+
+    import linopy.pips as pips
+
+    # 1. build on a login/build node
+    pips.assign_blocks(m, "time", 50)
+    m.to_pips_files("/lustre/run42")            # put the export on the parallel FS
+    cfg = pips.PipsConfig(threads_per_rank=8, linear_solver="pardiso")
+    pips.write_job("/lustre/run42", cfg, binary="/opt/pips/pips_driver",
+                   nodes=13, time="04:00:00", partition="fat", account="psa")
+
+.. code-block:: bash
+
+    # 2. submit the generated job
+    sbatch /lustre/run42/pips.slurm
+
+.. code-block:: python
+
+    # 3. later, in a fresh session, load the result onto the model
+    from linopy.io import read_pips_solution
+    read_pips_solution("/lustre/run42", model=m)
+
+``write_job`` writes a SLURM script that sets ``--ntasks`` to the block count
+(or ``config.n_ranks``, capped at the number of blocks), ``--cpus-per-task`` to
+``threads_per_rank``, exports ``OMP_NUM_THREADS``/``MKL_NUM_THREADS``, and runs
+the driver under ``srun`` with the chosen ``linear_solver`` and any extra
+options. For an interactive allocation, the inline path
+(``m.solve(solver_name="pips", solver_options={...})``) uses the same
+``PipsConfig`` keys and honours ``launcher="srun"``.
+
 Validating the export without PIPS
 ==================================
 

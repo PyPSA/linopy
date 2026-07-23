@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+import os
+import shlex
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -251,6 +255,15 @@ class PipsConfig:
     options: dict[str, Any] = field(default_factory=dict)
 
 
+def _resolve_ranks(config: PipsConfig, n_blocks: int | None) -> int:
+    ranks = config.n_ranks if config.n_ranks is not None else (n_blocks or 1)
+    if ranks < 1:
+        raise ValueError("n_ranks must be >= 1")
+    if n_blocks is not None and ranks > n_blocks:
+        ranks = n_blocks
+    return ranks
+
+
 def build_pips_command(
     binary: str,
     export_dir: str,
@@ -262,11 +275,7 @@ def build_pips_command(
             f"launcher {config.launcher!r} not supported; use one of "
             f"{sorted(LAUNCHER_RANK_FLAG)}"
         )
-    ranks = config.n_ranks if config.n_ranks is not None else (n_blocks or 1)
-    if ranks < 1:
-        raise ValueError("n_ranks must be >= 1")
-    if n_blocks is not None and ranks > n_blocks:
-        ranks = n_blocks
+    ranks = _resolve_ranks(config, n_blocks)
     command = [
         config.launcher,
         LAUNCHER_RANK_FLAG[config.launcher],
@@ -283,3 +292,56 @@ def build_pips_command(
     threads = str(config.threads_per_rank)
     env = {"OMP_NUM_THREADS": threads, "MKL_NUM_THREADS": threads}
     return command, env
+
+
+def write_job(
+    export_dir: str | Path,
+    config: PipsConfig | None = None,
+    *,
+    binary: str | None = None,
+    scheduler: str = "slurm",
+    nodes: int | None = None,
+    time: str | None = None,
+    partition: str | None = None,
+    account: str | None = None,
+    job_name: str = "pips-ipmpp",
+    sbatch_args: list[str] | None = None,
+    path: str | Path | None = None,
+) -> Path:
+    if scheduler != "slurm":
+        raise NotImplementedError(f"scheduler {scheduler!r} not supported; use 'slurm'")
+    config = config or PipsConfig()
+    export_dir = Path(export_dir).resolve()
+    n_blocks = json.loads((export_dir / "pips.json").read_text()).get("n_blocks")
+    binary = binary or os.environ.get("PIPS_BINARY")
+    if not binary:
+        raise ValueError("no PIPS driver binary given and $PIPS_BINARY is not set")
+    resolved = Path(binary)
+    binary = str(resolved.resolve()) if resolved.exists() else binary
+
+    command, env = build_pips_command(
+        binary, str(export_dir), replace(config, launcher="srun"), n_blocks
+    )
+    ranks = _resolve_ranks(config, n_blocks)
+
+    directives = [
+        f"#SBATCH --job-name={job_name}",
+        f"#SBATCH --ntasks={ranks}",
+        f"#SBATCH --cpus-per-task={config.threads_per_rank}",
+    ]
+    if nodes is not None:
+        directives.append(f"#SBATCH --nodes={nodes}")
+    if time is not None:
+        directives.append(f"#SBATCH --time={time}")
+    if partition is not None:
+        directives.append(f"#SBATCH --partition={partition}")
+    if account is not None:
+        directives.append(f"#SBATCH --account={account}")
+    directives += [f"#SBATCH {arg}" for arg in sbatch_args or []]
+
+    exports = [f"export {key}={value}" for key, value in env.items()]
+    lines = ["#!/bin/bash", *directives, "", *exports, "", shlex.join(command), ""]
+
+    path = Path(path) if path is not None else export_dir / "pips.slurm"
+    path.write_text("\n".join(lines))
+    return path

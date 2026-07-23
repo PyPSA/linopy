@@ -625,6 +625,9 @@ Helpers for the block-structured PIPS-IPM++ backend. See the
    pips.assign_blocks
    pips.diagnose
    pips.BlockReport
+   pips.PipsConfig
+   pips.build_pips_command
+   pips.write_job
 
 
 Solver status and result types
