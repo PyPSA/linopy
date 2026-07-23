@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
 if TYPE_CHECKING:
     from linopy.model import Model
+
+LAUNCHER_RANK_FLAG = {"mpirun": "-np", "srun": "-n"}
 
 
 def assign_blocks(
@@ -237,3 +239,47 @@ def diagnose(m: Model, target_cores: int | None = None) -> BlockReport:
         rec_threads=rec_threads,
         warnings=warnings,
     )
+
+
+@dataclass
+class PipsConfig:
+    launcher: str = "mpirun"
+    n_ranks: int | None = None
+    threads_per_rank: int = 1
+    launcher_args: list[str] = field(default_factory=list)
+    linear_solver: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+def build_pips_command(
+    binary: str,
+    export_dir: str,
+    config: PipsConfig,
+    n_blocks: int | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    if config.launcher not in LAUNCHER_RANK_FLAG:
+        raise ValueError(
+            f"launcher {config.launcher!r} not supported; use one of "
+            f"{sorted(LAUNCHER_RANK_FLAG)}"
+        )
+    ranks = config.n_ranks if config.n_ranks is not None else (n_blocks or 1)
+    if ranks < 1:
+        raise ValueError("n_ranks must be >= 1")
+    if n_blocks is not None and ranks > n_blocks:
+        ranks = n_blocks
+    command = [
+        config.launcher,
+        LAUNCHER_RANK_FLAG[config.launcher],
+        str(ranks),
+        *config.launcher_args,
+        binary,
+        export_dir,
+    ]
+    driver_options = dict(config.options)
+    if config.linear_solver is not None:
+        driver_options.setdefault("linear-solver", config.linear_solver)
+    for key, value in driver_options.items():
+        command += [f"--{key}", str(value)]
+    threads = str(config.threads_per_rank)
+    env = {"OMP_NUM_THREADS": threads, "MKL_NUM_THREADS": threads}
+    return command, env

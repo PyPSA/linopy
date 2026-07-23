@@ -220,3 +220,65 @@ def test_diagnose_realistic_consistency(masked: bool) -> None:
     assert r.n_adjacent_rows + r.n_border_rows == r.n_linking_rows
     assert r.border_nnz == pytest.approx(r.border_fraction * r.nnz)
     assert r.rec_ranks <= r.max_ranks == r.n_blocks
+
+
+def test_build_pips_command_defaults_ranks_to_blocks() -> None:
+    cmd, env = pips.build_pips_command("drv", "dir", pips.PipsConfig(), n_blocks=8)
+    assert cmd == ["mpirun", "-np", "8", "drv", "dir"]
+    assert env == {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+
+
+def test_build_pips_command_caps_ranks_at_blocks() -> None:
+    cfg = pips.PipsConfig(n_ranks=200)
+    cmd, _ = pips.build_pips_command("drv", "dir", cfg, n_blocks=50)
+    assert cmd[:3] == ["mpirun", "-np", "50"]
+
+
+def test_build_pips_command_srun_threads_solver_and_args() -> None:
+    cfg = pips.PipsConfig(
+        launcher="srun",
+        n_ranks=4,
+        threads_per_rank=8,
+        launcher_args=["--exclusive"],
+        linear_solver="pardiso",
+        options={"tol": 1e-8},
+    )
+    cmd, env = pips.build_pips_command("drv", "dir", cfg)
+    assert cmd[:4] == ["srun", "-n", "4", "--exclusive"]
+    assert cmd[4:6] == ["drv", "dir"]
+    assert cmd[6:] == ["--tol", "1e-08", "--linear-solver", "pardiso"]
+    assert env == {"OMP_NUM_THREADS": "8", "MKL_NUM_THREADS": "8"}
+
+
+@pytest.mark.parametrize(
+    "cfg, exc",
+    [
+        (pips.PipsConfig(launcher="poe"), ValueError),
+        (pips.PipsConfig(n_ranks=0), ValueError),
+    ],
+)
+def test_build_pips_command_fail_fast(
+    cfg: pips.PipsConfig, exc: type[Exception]
+) -> None:
+    with pytest.raises(exc):
+        pips.build_pips_command("drv", "dir", cfg, n_blocks=4)
+
+
+def test_pips_config_env_defaults_and_option_overrides(monkeypatch) -> None:
+    from linopy.solvers import _pips_config
+
+    monkeypatch.setenv("PIPS_LAUNCHER", "srun")
+    monkeypatch.setenv("PIPS_THREADS", "4")
+    monkeypatch.setenv("PIPS_LINEAR_SOLVER", "mumps")
+    env_cfg = _pips_config({"presolve": "on"})
+    assert env_cfg.launcher == "srun"
+    assert env_cfg.threads_per_rank == 4
+    assert env_cfg.linear_solver == "mumps"
+    assert env_cfg.options == {"presolve": "on"}
+
+    override = _pips_config(
+        {"launcher": "mpirun", "n_ranks": 12, "linear_solver": "ma57"}
+    )
+    assert override.launcher == "mpirun"
+    assert override.n_ranks == 12
+    assert override.linear_solver == "ma57"
