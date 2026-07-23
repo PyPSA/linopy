@@ -487,20 +487,54 @@ def test_linear_expression_sum_drop_zeros(z: Variable) -> None:
     assert res.nterm == 2
 
 
-def test_linear_expression_sum_aux_coords() -> None:
-    # an auxiliary coordinate on a summed dimension must not leak onto the
-    # helper term dimension, see https://github.com/PyPSA/linopy/issues/295
-    m = Model()
-    v = m.add_variables(coords=[[1, 2], [1, 2]], dims=["A", "k"], name="v")
-    v = v.assign_coords({"B": ("A", [311, 322]), "C": ("k", ["x", "y"])})
+class TestCollapseAuxCoords:
+    # collapsing a dimension carrying an auxiliary coordinate must drop it, not
+    # leak it onto the term dimension where it breaks later arithmetic with a
+    # CoordinateValidationError, see https://github.com/PyPSA/linopy/issues/295
 
-    summed = (1 * v).sum("A")
-    assert "B" not in summed.coords
-    assert summed.coords["C"].dims == ("k",)
-    con = summed >= xr.DataArray(10)  # previously CoordinateValidationError
-    assert "B" not in con.coords
+    @pytest.fixture
+    def expr(self) -> LinearExpression:
+        m = Model()
+        v = m.add_variables(coords=[[1, 2, 3], [1, 2]], dims=["A", "k"], name="v")
+        v = v.assign_coords({"B": ("A", [311, 311, 322]), "C": ("k", ["p", "q"])})
+        return 1 * v
 
-    assert "B" not in (1 * v).sum().coords
+    @pytest.mark.parametrize(
+        "collapse",
+        [
+            pytest.param(lambda e: e.sum("A"), id="sum"),
+            pytest.param(
+                lambda e: e
+                @ xr.DataArray([1.0, 1.0, 1.0], dims=["A"], coords={"A": [1, 2, 3]}),
+                id="matmul",
+            ),
+        ],
+    )
+    def test_contracting_a_dim_drops_its_aux_coord(
+        self, expr: LinearExpression, collapse: Any
+    ) -> None:
+        res = collapse(expr)
+        assert "B" not in res.coords
+        assert res.coords["C"].dims == ("k",)
+        con = res >= xr.DataArray(10)
+        assert "B" not in con.coords
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_groupby_sum_keeps_aux_coord_on_kept_dim(
+        self, expr: LinearExpression, use_fallback: bool
+    ) -> None:
+        grouped = expr.groupby("B").sum(use_fallback=use_fallback)
+        assert "A" not in grouped.coords
+        assert grouped.coords["C"].dims == ("k",)
+        con = grouped >= xr.DataArray(10)
+        assert set(con.coords) == {"B", "k", "C"}
+
+    def test_summing_all_dims_drops_all_aux_coords(
+        self, expr: LinearExpression
+    ) -> None:
+        summed = expr.sum()
+        assert "B" not in summed.coords
+        assert "C" not in summed.coords
 
 
 def test_linear_expression_sum_warn_using_dims(z: Variable) -> None:
