@@ -58,6 +58,60 @@ structure via ``m.blocks`` (a ``xarray.DataArray`` of block ids over one
 dimension); everything independent of that dimension becomes global (block 0).
 A model where everything ends up linking defeats the purpose.
 
+Diagnosing block quality
+========================
+
+Before committing to an HPC run, check *whether* a K-way split will actually
+scale on PIPS. ``linopy.pips.assign_blocks`` builds the ``m.blocks`` assignment
+for you by splitting one dimension into contiguous blocks, and
+``linopy.pips.diagnose`` reports the resulting arrowhead structure — a cheap,
+pure-Python analysis that needs no PIPS build:
+
+.. code-block:: python
+
+    import linopy.pips
+
+    linopy.pips.assign_blocks(m, "time", 50)   # 50 contiguous blocks over "time"
+    report = linopy.pips.diagnose(m)
+    print(report)
+
+.. code-block:: text
+
+    BlockReport: 50 blocks | 412 340 vars | 388 900 cons | 2 140 552 nnz
+      columns    global=1 240   per-block min/med/max = 8 180 / 8 220 / 8 260
+      block nnz  min/med/max = 41 002 / 42 780 / 44 190   (max/med ratio 1.03)
+      rows       local=386 400  global=12  linking=2 488  (adjacent=2 450  border=38)
+      border     nnz=214 300 / 2 140 552 = 10.0%
+      parallel   max_ranks=50  target_cores=200 -> ranks=50 threads=4
+      warnings   (none)
+
+``assign_blocks(m, dim, n_blocks)`` is also available as a bound method,
+``m.assign_blocks("time", 50)``. It returns the model and only supports the
+default ``boundary="contiguous"`` split for now.
+
+How to read the report:
+
+- **border_fraction** is the share of matrix nonzeros that sit in linking rows
+  or global columns — the part PIPS handles through the root Schur complement.
+  It must stay small: above ~15% the root work dominates and parallel speedup
+  collapses, so reduce ``K`` or reformulate.
+- **balance** (the block-nnz ``max/median`` ratio) measures how evenly work is
+  spread across blocks. Synchronous interior-point iterations move at the pace
+  of the slowest block, so a ratio far above 1 (roughly > 3) means stragglers
+  stall every iteration.
+- **adjacent vs. border linking rows**: *adjacent* rows touch exactly two
+  neighbouring local blocks (e.g. storage state-of-charge continuity at block
+  boundaries) and are cheap; *border* rows span many blocks (global budget /
+  CO₂ / energy caps) and feed the root complement. Many border rows are the
+  expensive case.
+- **max_ranks = n_blocks**: MPI width is capped by the number of blocks, exactly
+  as PIPS enforces at solve time. ``diagnose(m, target_cores=...)`` folds any
+  cores beyond that cap into threads-per-rank and warns when the target exceeds
+  the block count.
+
+``diagnose`` also emits warnings for a non-decomposed model (``n_blocks == 1``),
+high border fraction, block imbalance, and empty blocks.
+
 .. _pips-install:
 
 System dependencies

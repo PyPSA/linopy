@@ -81,6 +81,7 @@ from linopy.objective import Objective
 from linopy.piecewise import (
     add_piecewise_formulation,
 )
+from linopy.pips import assign_blocks
 from linopy.remote import RemoteHandler
 
 try:
@@ -2394,5 +2395,7 @@ class Model:
     to_block_files = to_block_files
 
     to_pips_files = to_pips_files
+
+    assign_blocks = assign_blocks
 
     dualize = dualize
