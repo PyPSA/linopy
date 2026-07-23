@@ -71,7 +71,7 @@ pure-Python analysis that needs no PIPS build:
 
     import linopy.pips
 
-    linopy.pips.assign_blocks(m, "time", 50)   # 50 contiguous blocks over "time"
+    linopy.pips.assign_blocks(m, "time", 50)  # 50 contiguous blocks over "time"
     report = linopy.pips.diagnose(m)
     print(report)
 
@@ -218,10 +218,17 @@ a :class:`linopy.pips.PipsConfig`:
 
     # 1. build on a login/build node
     pips.assign_blocks(m, "time", 50)
-    m.to_pips_files("/lustre/run42")            # put the export on the parallel FS
+    m.to_pips_files("/lustre/run42")  # put the export on the parallel FS
     cfg = pips.PipsConfig(threads_per_rank=8, linear_solver="pardiso")
-    pips.write_job("/lustre/run42", cfg, binary="/opt/pips/pips_driver",
-                   nodes=13, time="04:00:00", partition="fat", account="psa")
+    pips.write_job(
+        "/lustre/run42",
+        cfg,
+        binary="/opt/pips/pips_driver",
+        nodes=13,
+        time="04:00:00",
+        partition="fat",
+        account="psa",
+    )
 
 .. code-block:: bash
 
@@ -232,6 +239,7 @@ a :class:`linopy.pips.PipsConfig`:
 
     # 3. later, in a fresh session, load the result onto the model
     from linopy.io import read_pips_solution
+
     read_pips_solution("/lustre/run42", model=m)
 
 ``write_job`` writes a SLURM script that sets ``--ntasks`` to the block count
