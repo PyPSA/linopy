@@ -172,6 +172,65 @@ The callback driver (``pips_driver.cpp``) and a scripted end-to-end build
 (``build.sh``, which performs all of the above) live under
 ``dev-scripts/pips/`` in the linopy repository.
 
+On HPC (module-based build)
+---------------------------
+
+A cluster gives you no ``sudo``: instead of ``apt-get`` you ``module load`` a
+compiler + MPI toolchain (plus MKL if you want PARDISO), then run the same
+``dev-scripts/pips/build.sh``. It honours the compilers the modules export
+(``CC``/``CXX``/``FC``, never overriding them) and takes three optional env
+knobs: ``PIPS_PREFIX`` (install prefix, default ``dev-scripts/pips/pips-install``),
+``NPROC`` (parallel build jobs) and ``CMAKE_EXTRA_ARGS`` (appended verbatim to
+the PIPS-IPM++ ``cmake`` configure line).
+
+OpenMPI + MUMPS — the fully-open path, if your site ships those modules:
+
+.. code-block:: bash
+
+    module load gcc openmpi
+    git clone --depth 1 https://gitlab.com/pips-ipmpp/pips-ipmpp.git \
+        dev-scripts/pips/pips-ipmpp
+    NPROC=16 bash dev-scripts/pips/build.sh
+
+Vendor toolchain (Intel/Cray MPI + MKL) — sketch only; the exact module names
+and cmake flags are site- and version-specific:
+
+.. code-block:: bash
+
+    module load intel impi mkl            # or the Cray PrgEnv equivalent
+    export CC=mpiicc CXX=mpiicpc FC=mpiifort
+    export PIPS_PREFIX=$HOME/opt/pips
+    export CMAKE_EXTRA_ARGS="-D<vendor MKL/MPI prefix flags here>"
+    bash dev-scripts/pips/build.sh
+
+MUMPS needs nothing beyond the toolchain. PARDISO (Panua ≥7.2) and HSL/MA57 are
+**user-supplied** and their cmake flags are not invented here — pass them
+through ``CMAKE_EXTRA_ARGS`` following the upstream PIPS-IPM++ documentation.
+
+.. note::
+
+   CMake reads ``CC``/``CXX``/``FC`` only on the **first** configure of a build
+   directory, so ``module load`` your compiler *before* the first ``build.sh``
+   run. If ``dev-scripts/pips/{pips-ipmpp/build,build-driver}`` already exist
+   from an earlier toolchain, delete them so the new compilers take effect.
+
+Preflight: ``linopy.pips.doctor()``
+-----------------------------------
+
+Once the driver is built, run :func:`linopy.pips.doctor` on the login node
+before you queue anything:
+
+.. code-block:: python
+
+    import linopy.pips
+    print(linopy.pips.doctor())        # PIPS-IPM++ OK: objective=3.0000 ...
+
+It builds a tiny 2-block LP with a known optimum and solves it end-to-end
+through the resolved launcher, driver binary and callback backend, then checks
+the objective. It raises if anything in the chain is broken (missing binary or
+launcher, a link/runtime failure, a wrong optimum) — so a broken toolchain
+surfaces in seconds on the login node instead of mid-allocation.
+
 Exporting and solving a model
 =============================
 
@@ -228,6 +287,9 @@ a :class:`linopy.pips.PipsConfig`:
         time="04:00:00",
         partition="fat",
         account="psa",
+        modules=["gcc", "openmpi", "mkl"],
+        env_setup=["source /opt/pips/env.sh"],
+        output="/lustre/run42/pips.%j.log",
     )
 
 .. code-block:: bash
@@ -244,11 +306,21 @@ a :class:`linopy.pips.PipsConfig`:
 
 ``write_job`` writes a SLURM script that sets ``--ntasks`` to the block count
 (or ``config.n_ranks``, capped at the number of blocks), ``--cpus-per-task`` to
-``threads_per_rank``, exports ``OMP_NUM_THREADS``/``MKL_NUM_THREADS``, and runs
-the driver under ``srun`` with the chosen ``linear_solver`` and any extra
-options. For an interactive allocation, the inline path
+``threads_per_rank``, ``--output`` to the log path (``output=``, default
+``<export_dir>/pips.%j.log``), exports ``OMP_NUM_THREADS``/``MKL_NUM_THREADS``,
+and runs the driver under ``srun`` with the chosen ``linear_solver`` and any
+extra options. The script body starts with ``set -euo pipefail``; when
+``modules=`` is given it emits a ``module purge`` + ``module load`` preamble,
+and any ``env_setup=`` lines (e.g. ``source`` a site profile) are run verbatim
+before the launch. For an interactive allocation, the inline path
 (``m.solve(solver_name="pips", solver_options={...})``) uses the same
 ``PipsConfig`` keys and honours ``launcher="srun"``.
+
+Both ``write_job`` and the inline solver drop a ``pips.run.json`` provenance
+manifest next to the export — the linopy version, a timestamp, the resolved
+``PipsConfig``, the exact launch command and its environment (and, for
+``write_job``, the job settings) — so a run stays reproducible and auditable
+long after the allocation ends.
 
 Validating the export without PIPS
 ==================================

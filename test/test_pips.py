@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, replace
+
 import numpy as np
 import pandas as pd
 import pytest
 from test_io import _pips_time_plant_model
 
 import linopy.pips as pips
-from linopy import Model
+from linopy import Model, available_solvers
 
 
 def _time_model(n_time: int) -> Model:
@@ -352,3 +355,87 @@ def test_write_job_fail_fast(tmp_path, monkeypatch, kwargs: dict, exc) -> None:
     monkeypatch.delenv("PIPS_BINARY", raising=False)
     with pytest.raises(exc):
         pips.write_job(tmp_path, **kwargs)
+
+
+def test_write_job_emits_output_and_strict_mode_and_manifest(tmp_path) -> None:
+    _exported(tmp_path, 2)
+    text = pips.write_job(tmp_path, binary="/d").read_text()
+    assert "#SBATCH --output=" in text
+    assert "set -euo pipefail" in text
+    assert "module load" not in text
+    assert (tmp_path / "pips.run.json").exists()
+
+
+def test_write_job_modules_env_setup_and_custom_output(tmp_path) -> None:
+    _exported(tmp_path, 2)
+    text = pips.write_job(
+        tmp_path,
+        binary="/d",
+        modules=["gcc", "openmpi"],
+        env_setup=["source /opt/x/setvars.sh"],
+        output="/x/%j.out",
+    ).read_text()
+    assert "module purge" in text
+    assert "module load gcc openmpi" in text
+    assert "source /opt/x/setvars.sh" in text
+    assert "#SBATCH --output=/x/%j.out" in text
+    assert "set +u" in text and "set -u" in text
+
+
+def test_write_job_run_manifest_content(tmp_path) -> None:
+    _exported(tmp_path, 2)
+    cfg = pips.PipsConfig(threads_per_rank=4, linear_solver="mumps")
+    pips.write_job(
+        tmp_path,
+        cfg,
+        binary="/d",
+        modules=["gcc"],
+        env_setup=["source /opt/x/setvars.sh"],
+        output="/x/%j.out",
+    )
+    manifest = json.loads((tmp_path / "pips.run.json").read_text())
+    assert set(manifest) == {
+        "linopy_version",
+        "created",
+        "n_blocks",
+        "config",
+        "command",
+        "env",
+        "job",
+    }
+    assert manifest["config"] == asdict(replace(cfg, launcher="srun"))
+    assert manifest["command"][0] == "srun"
+    assert manifest["env"]["OMP_NUM_THREADS"] == "4"
+    assert manifest["n_blocks"] == 2
+    job = manifest["job"]
+    assert job["modules"] == ["gcc"]
+    assert job["env_setup"] == ["source /opt/x/setvars.sh"]
+    assert job["output"] == "/x/%j.out"
+
+
+def test_write_run_manifest_inline_shape(tmp_path) -> None:
+    cfg = pips.PipsConfig(threads_per_rank=2)
+    command, env = pips.build_pips_command("/d", str(tmp_path), cfg, n_blocks=2)
+    pips.write_run_manifest(tmp_path, config=cfg, command=command, env=env, n_blocks=2)
+    manifest = json.loads((tmp_path / "pips.run.json").read_text())
+    assert set(manifest) == {
+        "linopy_version",
+        "created",
+        "n_blocks",
+        "config",
+        "command",
+        "env",
+    }
+    assert manifest["config"] == asdict(cfg)
+    assert manifest["command"] == command
+    assert manifest["env"] == env
+
+
+@pytest.mark.skipif(
+    "pips" not in available_solvers,
+    reason="requires the PIPS driver (set PIPS_BINARY)",
+)
+def test_doctor_ok() -> None:
+    report = pips.doctor()
+    assert "OK" in report
+    assert "objective" in report

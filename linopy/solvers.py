@@ -59,7 +59,7 @@ from linopy.persistent import (
     VarKind,
     clear_coef_dirty,
 )
-from linopy.pips import PipsConfig, build_pips_command
+from linopy.pips import PipsConfig, build_pips_command, write_run_manifest
 
 
 def _int_list(arr: np.ndarray, dtype: type = np.int64) -> list[int]:
@@ -4208,6 +4208,13 @@ class PIPS(Solver[None]):
         )
         command, launch_env = build_pips_command(
             binary, path_to_string(export_dir), config, manifest.get("n_blocks")
+        )
+        write_run_manifest(
+            path_to_string(export_dir),
+            config=config,
+            command=command,
+            env=launch_env,
+            n_blocks=manifest.get("n_blocks"),
         )
         run_env = {**os.environ, **launch_env}
 

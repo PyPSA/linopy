@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -294,6 +295,39 @@ def build_pips_command(
     return command, env
 
 
+def _linopy_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("linopy")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def write_run_manifest(
+    export_dir: str | Path,
+    *,
+    config: PipsConfig,
+    command: list[str],
+    env: dict[str, str],
+    n_blocks: int | None,
+    job: dict[str, Any] | None = None,
+) -> Path:
+    manifest = {
+        "linopy_version": _linopy_version(),
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "n_blocks": n_blocks,
+        "config": asdict(config),
+        "command": command,
+        "env": env,
+    }
+    if job is not None:
+        manifest["job"] = job
+    path = Path(export_dir) / "pips.run.json"
+    path.write_text(json.dumps(manifest, indent=2, default=str))
+    return path
+
+
 def write_job(
     export_dir: str | Path,
     config: PipsConfig | None = None,
@@ -305,6 +339,9 @@ def write_job(
     partition: str | None = None,
     account: str | None = None,
     job_name: str = "pips-ipmpp",
+    output: str | None = None,
+    modules: list[str] | None = None,
+    env_setup: list[str] | None = None,
     sbatch_args: list[str] | None = None,
     path: str | Path | None = None,
 ) -> Path:
@@ -319,15 +356,16 @@ def write_job(
     resolved = Path(binary)
     binary = str(resolved.resolve()) if resolved.exists() else binary
 
-    command, env = build_pips_command(
-        binary, str(export_dir), replace(config, launcher="srun"), n_blocks
-    )
+    launch_config = replace(config, launcher="srun")
+    command, env = build_pips_command(binary, str(export_dir), launch_config, n_blocks)
     ranks = _resolve_ranks(config, n_blocks)
+    output = output or str(export_dir / "pips.%j.log")
 
     directives = [
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --ntasks={ranks}",
         f"#SBATCH --cpus-per-task={config.threads_per_rank}",
+        f"#SBATCH --output={output}",
     ]
     if nodes is not None:
         directives.append(f"#SBATCH --nodes={nodes}")
@@ -339,9 +377,87 @@ def write_job(
         directives.append(f"#SBATCH --account={account}")
     directives += [f"#SBATCH {arg}" for arg in sbatch_args or []]
 
+    setup = ["set -euo pipefail"]
+    env_block = []
+    if modules:
+        env_block.append("module purge")
+        env_block.append("module load " + " ".join(modules))
+    env_block += list(env_setup or [])
+    if env_block:
+        setup += ["set +u", *env_block, "set -u"]
+
     exports = [f"export {key}={value}" for key, value in env.items()]
-    lines = ["#!/bin/bash", *directives, "", *exports, "", shlex.join(command), ""]
+    echoes = [f'echo "PIPS-IPM++ driver: {binary}"', f'echo "export dir: {export_dir}"']
+    lines = [
+        "#!/bin/bash",
+        *directives,
+        "",
+        *setup,
+        "",
+        *exports,
+        "",
+        *echoes,
+        "",
+        shlex.join(command),
+        "",
+    ]
 
     path = Path(path) if path is not None else export_dir / "pips.slurm"
     path.write_text("\n".join(lines))
+
+    job = {
+        "scheduler": scheduler,
+        "job_name": job_name,
+        "nodes": nodes,
+        "time": time,
+        "partition": partition,
+        "account": account,
+        "output": output,
+        "modules": list(modules or []),
+        "env_setup": list(env_setup or []),
+        "sbatch_args": list(sbatch_args or []),
+        "script": str(path),
+    }
+    write_run_manifest(
+        export_dir,
+        config=launch_config,
+        command=command,
+        env=env,
+        n_blocks=n_blocks,
+        job=job,
+    )
     return path
+
+
+def doctor(solver_options: dict[str, Any] | None = None) -> str:
+    """
+    Solve a tiny 2-block LP through the resolved PIPS launcher+binary+backend.
+
+    A login-node preflight: builds a synthetic separable model with a known
+    optimum (3.0), solves it via ``solver_name="pips"`` and checks the objective.
+    Raises on any failure (missing binary/launcher, non-optimal, wrong optimum);
+    returns a one-line OK report otherwise.
+    """
+    import pandas as pd
+
+    from linopy import Model
+
+    m = Model()
+    time = pd.RangeIndex(4, name="time")
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    g = m.add_variables(lower=0, name="g")
+    m.add_constraints(x - g <= 0, name="cap")
+    m.add_constraints(x.sum() <= 4, name="budget")
+    m.add_objective(x.sum() - g, sense="max")
+    m.assign_blocks("time", 2)
+
+    m.solve(solver_name="pips", solver_options=solver_options or {})
+
+    objective = m.objective.value
+    expected = 3.0
+    if objective is None or abs(float(objective) - expected) > 1e-4:
+        raise RuntimeError(
+            f"PIPS doctor failed: objective {objective} != expected {expected}; "
+            "the driver ran but produced a wrong optimum"
+        )
+    return f"PIPS-IPM++ OK: objective={float(objective):.4f} (expected {expected:.4f})"
