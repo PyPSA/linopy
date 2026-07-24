@@ -114,7 +114,7 @@ solvers = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["linopy"]
+include = ["linopy", "linopy.*"]
 
 [tool.setuptools.package-data]
 "linopy" = ["py.typed"]

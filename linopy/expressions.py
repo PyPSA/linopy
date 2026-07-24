@@ -11,7 +11,7 @@ import functools
 import logging
 import operator
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import TYPE_CHECKING, Any, Self, TypeAlias, TypeVar, cast, overload
@@ -158,6 +158,19 @@ def _expr_unwrap(
 
 
 logger = logging.getLogger(__name__)
+
+
+def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
+    """
+    Drop every coordinate touching the given dimensions.
+
+    A coordinate on a dimension that is being reduced away must not survive
+    the reduction: an auxiliary coordinate left in place would ride a
+    subsequent stack onto the helper term dimension and break later
+    alignment (https://github.com/PyPSA/linopy/issues/295).
+    """
+    dims = set(dims)
+    return ds.drop_vars(k for k, c in ds.coords.items() if dims & set(c.dims))
 
 
 def _resolve_group(group: Any, data: Dataset) -> Any:
@@ -2094,8 +2107,7 @@ class BaseExpression(ABC):
         else:
             dim = [d for d in dim if d != TERM_DIM]
             ds = (
-                data[["coeffs", "vars"]]
-                .reset_index(dim, drop=True)
+                _drop_coords_on_dims(data[["coeffs", "vars"]], dim)
                 .rename({TERM_DIM: STACKED_TERM_DIM})
                 .stack({TERM_DIM: [STACKED_TERM_DIM] + dim}, create_index=False)
             )
