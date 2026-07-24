@@ -108,6 +108,37 @@ def cond(profile: Profile) -> xr.DataArray:
     return array(profile) > 0.0
 
 
+# the contraction dim for `expr @ M` — M spans (last profile dim × c), KVL-style
+CONTRACT_DIM = "c"
+CONTRACT_LEN = 100
+
+
+def contraction_matrix(profile: Profile, density: float = 1.0) -> xr.DataArray:
+    """
+    A matrix contracting the profile's last (large) dim, with the given
+    fraction of nonzero (±1) entries per column. The default is fully dense;
+    ``density=0.003`` matches a cycle-incidence matrix (~3 of 1000 branches
+    per cycle, #748).
+    """
+    last, n = profile.dims[-1], profile.shape[-1]
+    if density == 1.0:
+        values = np.linspace(-1.0, 1.0, n * CONTRACT_LEN).reshape(n, CONTRACT_LEN)
+    else:
+        per_column = max(1, round(density * n))
+        values = np.zeros((n, CONTRACT_LEN))
+        cols = np.repeat(np.arange(CONTRACT_LEN), per_column)
+        rows = np.arange(cols.size) * 37 % n
+        values[rows, cols] = np.where(np.arange(cols.size) % 2, 1.0, -1.0)
+    return xr.DataArray(
+        values,
+        dims=[last, CONTRACT_DIM],
+        coords={
+            last: pd.RangeIndex(n, name=last),
+            CONTRACT_DIM: pd.RangeIndex(CONTRACT_LEN, name=CONTRACT_DIM),
+        },
+    )
+
+
 def masked_expr(profile: Profile) -> linopy.LinearExpression:
     """An expression carrying absence (§4) — masked in place."""
     return expr(profile).where(cond(profile))
@@ -260,6 +291,21 @@ register_op(
     "expr_arith",
     lambda p: (expr(p), extra_array(p)),
     lambda e, a: a * e,
+)
+
+# matmul / contraction (#748) — `dense` measures the full-`_term` kernel;
+# `sparse` (0.3% nonzero, incidence-shaped) is what a sparse-aware kernel collapses
+register_op(
+    "expr_matmul_dense",
+    "matmul",
+    lambda p: (expr(p), contraction_matrix(p)),
+    lambda e, mat: e @ mat,
+)
+register_op(
+    "expr_matmul_sparse",
+    "matmul",
+    lambda p: (expr(p), contraction_matrix(p, density=0.003)),
+    lambda e, mat: e @ mat,
 )
 
 # reductions
