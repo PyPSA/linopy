@@ -26,7 +26,7 @@ def require_v1() -> None:
 
 
 def base_model(gens_per_bus=(7, 1, 3, 1, 2), n_snap=3, seed=0):
-    """Model with gen_p (gen, snapshot) and flow (line, snapshot) on a ring."""
+    """Model with gen_p and flow on a ring; load ordered like the sorted groups (v1)."""
     rng = np.random.default_rng(seed)
     n_bus = len(gens_per_bus)
     buses = pd.Index([f"bus{i}" for i in range(n_bus)], name="bus")
@@ -42,7 +42,6 @@ def base_model(gens_per_bus=(7, 1, 3, 1, 2), n_snap=3, seed=0):
     gbus = pd.Series(buses[gen_bus], index=gens, name="bus")
     bus0 = pd.Series(buses[np.arange(n_bus)], index=lines, name="bus")
     bus1 = pd.Series(buses[(np.arange(n_bus) + 1) % n_bus], index=lines, name="bus")
-    # v1 requires explicit alignment: order the load like the (sorted) groups
     load = xr.DataArray(
         rng.uniform(1, 10, (n_bus, n_snap)), coords=[buses, snaps], name="load"
     ).sortby("bus")
@@ -74,7 +73,6 @@ def test_csr_requires_v1():
         return
     with pytest.raises(ValueError, match="requires v1 semantics"):
         (eff * gen_p).groupby(gbus).sum(sparse=True)
-    # the option is not honored under legacy: result is eager and dense
     linopy.options["sparse_groupby"] = True
     try:
         res = (eff * gen_p).groupby(gbus).sum()
@@ -89,7 +87,6 @@ def test_csr_is_plain_linear_expression_and_materializes_equivalently():
     sparse = (eff * gen_p).groupby(gbus).sum(sparse=True)
     eager = (eff * gen_p).groupby(gbus).sum()
     assert type(sparse) is LinearExpression
-    # comparing data materializes; the result must be exactly today's
     assert_linequal(sparse, eager)
 
 
@@ -108,9 +105,6 @@ def test_scalar_ops_stay_csr():
     sparse = -2.0 * (eff * gen_p).groupby(gbus).sum(sparse=True)
     assert sparse._csr is not None  # still unmaterialized after neg/scale
     eager = -2.0 * (eff * gen_p).groupby(gbus).sum()
-    # scaling after grouping normalizes padded-slot fills while scaling
-    # before grouping keeps fresh pads; masked-slot fill is not contractual,
-    # so compare with masked slots blanked on both sides
     from linopy.testing import _sort_by_vars_along_term
 
     a, b = _sort_by_vars_along_term(sparse), _sort_by_vars_along_term(eager)
@@ -144,6 +138,7 @@ def test_freeze_realizes_csr_without_dense_rectangle():
 
 
 def test_freeze_false_falls_back_to_identical_dense_constraint():
+    """The fallback is canonical-form, so compare mathematically (strict=False)."""
     require_v1()
     m1, *rest = base_model()
     c1 = m1.add_constraints(
@@ -155,8 +150,6 @@ def test_freeze_false_falls_back_to_identical_dense_constraint():
         balance_lhs(*rest2[:6], sparse=True) == rest2[6], name="balance"
     )
     assert isinstance(c2, Constraint)
-    # the sparse lhs materializes in canonical form (terms label-sorted,
-    # padding trailing), so compare mathematically, not layout-strictly
     assert_conequal(c1, c2, strict=False)
     assert np.array_equal(c1.labels.values, c2.labels.values)
 
