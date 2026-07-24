@@ -20,8 +20,8 @@ Upcoming Version
 *Other*
 
 * Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).
-* ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
-* ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
+* ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (`#776 <https://github.com/PyPSA/linopy/issues/776>`__)
+* ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (`#796 <https://github.com/PyPSA/linopy/issues/796>`__)
 
 **Performance**
 
@@ -34,16 +34,16 @@ Upcoming Version
 
 **Bug fixes**
 
-* Fix GLPK objective parsing. (https://github.com/PyPSA/linopy/pull/818)
-* LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (https://github.com/PyPSA/linopy/issues/776)
+* Fix GLPK objective parsing. (`#818 <https://github.com/PyPSA/linopy/pull/818>`__)
+* LP file export now honors bounds tightened below ``[0, 1]`` on a binary variable via the ``.lower``/``.upper`` setters after creation (e.g. ``upper = 0``). Previously such bounds were written only by ``io_api="direct"`` and dropped by ``io_api="lp"``. (`#776 <https://github.com/PyPSA/linopy/issues/776>`__)
 * Freezing an empty constraint group (e.g. an empty ``isel`` slice) no longer raises ``ValueError: cannot reshape array of size 0``. ``Model(freeze_constraints=True)`` and ``Constraint.freeze()`` now round-trip zero-row constraints losslessly.
 * ``Variable.where`` no longer raises ``ValueError: exact match required for all data variable names`` once a solution is attached (after ``Model.solve``) or the variable is fixed. The fill value now covers auxiliary data variables (``solution``, stashed bounds) instead of only ``labels``/``lower``/``upper``.
 * ``LinearExpression.groupby(...).sum()`` with a multi-dimensional ``DataArray`` grouper now reduces over all of the grouper's dimensions on the default (fast) path, instead of leaking one of them into the result.
 * ``LinearExpression.groupby(...).sum()`` now keeps the grouped dimension's position, replacing it in place like xarray's native groupby-reduce, instead of moving the group dimension to the trailing position (regressed in 0.8.0). Both the default and ``use_fallback=True`` paths are fixed.
-* ``LinearExpression.groupby(...).sum()`` now raises when a grouper's labels are reordered or a different set relative to the expression, instead of silently regrouping by position. Reorder the grouper to match the expression's coordinates before grouping. (https://github.com/PyPSA/linopy/issues/827)
+* ``LinearExpression.groupby(...).sum()`` now raises when a grouper's labels are reordered or a different set relative to the expression, instead of silently regrouping by position. Reorder the grouper to match the expression's coordinates before grouping. (`#827 <https://github.com/PyPSA/linopy/issues/827>`__)
 * ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail.
-* Summing an expression over a dimension that carries an auxiliary (non-dimension) coordinate no longer leaks that coordinate onto the internal term dimension, where it broke later arithmetic with a ``CoordinateValidationError``. Auxiliary coordinates on the remaining dimensions still propagate. (https://github.com/PyPSA/linopy/issues/295)
-* ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (https://github.com/PyPSA/linopy/issues/459)
+* Summing an expression over a dimension that carries an auxiliary (non-dimension) coordinate no longer leaks that coordinate onto the internal term dimension, where it broke later arithmetic with a ``CoordinateValidationError``. Auxiliary coordinates on the remaining dimensions still propagate. (`#295 <https://github.com/PyPSA/linopy/issues/295>`__)
+* ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (`#459 <https://github.com/PyPSA/linopy/issues/459>`__)
 
 Version 0.8.0
 -------------
@@ -63,7 +63,7 @@ Version 0.8.0
 
 *Dualize LP models*
 
-* New ``Model.dualize()`` constructs the LP dual as a standalone model, lifting finite variable bounds into explicit constraints so they are reflected in the dual. Dual variables are named after the primal constraints. Works for linear problems with linear objective and constraints. (https://github.com/PyPSA/linopy/pull/626)
+* New ``Model.dualize()`` constructs the LP dual as a standalone model, lifting finite variable bounds into explicit constraints so they are reflected in the dual. Dual variables are named after the primal constraints. Works for linear problems with linear objective and constraints. (`#626 <https://github.com/PyPSA/linopy/pull/626>`__)
 
 *A new way to call a solver (advanced)*
 
@@ -98,7 +98,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 *Other additions*
 
-* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`_).
+* Add ``BaseExpression.has_terms`` property: boolean array, true at slots with at least one live term (`#741 <https://github.com/PyPSA/linopy/issues/741>`__).
 * Add ``BaseExpression.variable_names`` property, and documentation for ``LinearExpression.where`` with ``drop=True``.
 
 **Performance**
@@ -114,7 +114,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 **Bug Fixes**
 
-* **⚠ Behavior change:** ``add_variables`` / ``add_constraints``: extends 0.7.0's coords-as-truth rule to ``lower``, ``upper`` and ``mask`` for every bound type and dim order. Pandas ``Series`` / ``DataFrame`` bounds or masks missing a dimension are now broadcast to ``coords`` instead of being silently dropped (`#709 <https://github.com/PyPSA/linopy/issues/709>`__) — a model that previously *ignored* such a partial bound now *applies* it, silently, with no error — review partial pandas bounds/masks when upgrading. The variable's dimension order always follows ``coords`` (`#706 <https://github.com/PyPSA/linopy/issues/706>`__); bare-tuple coord entries (``coords=[(0, 1, 2)]``) now behave like lists. Mismatched values or extra dims raise ``ValueError`` with a labelled message; sparse-coord masks (formerly a v0.6.3 ``FutureWarning``, #580) raise ``ValueError``, and masks with dims not in the data raise ``ValueError`` instead of ``AssertionError``.
+* **⚠ Behavior change:** ``add_variables`` / ``add_constraints``: extends 0.7.0's coords-as-truth rule to ``lower``, ``upper`` and ``mask`` for every bound type and dim order. Pandas ``Series`` / ``DataFrame`` bounds or masks missing a dimension are now broadcast to ``coords`` instead of being silently dropped (`#709 <https://github.com/PyPSA/linopy/issues/709>`__) — a model that previously *ignored* such a partial bound now *applies* it, silently, with no error — review partial pandas bounds/masks when upgrading. The variable's dimension order always follows ``coords`` (`#706 <https://github.com/PyPSA/linopy/issues/706>`__); bare-tuple coord entries (``coords=[(0, 1, 2)]``) now behave like lists. Mismatched values or extra dims raise ``ValueError`` with a labelled message; sparse-coord masks (formerly a v0.6.3 ``FutureWarning``, `#580 <https://github.com/PyPSA/linopy/issues/580>`__) raise ``ValueError``, and masks with dims not in the data raise ``ValueError`` instead of ``AssertionError``.
 * **⚠ Behavior change:** Fix Mosek interface to inspect both the basic and IPM solutions and pick the one with the better status, so that an optimal crossover solution is not discarded when IPM terminates with a (near-)Farkas certificate. Mosek may now return a different (better-status) solution than 0.7.0 for the same model.
 * Pandas inputs whose index names *levels* of a stacked-``MultiIndex`` ``coords`` dimension are now projected onto that dimension: a level subset broadcasts across the others, the full set aligns element-wise. In ``add_variables`` / ``add_constraints`` the input must provide a value for every level combination of the MultiIndex or a ``ValueError`` is raised (the error lists the missing combinations); aligning the full level set with full coverage stays silent. Strict validation also rejects a ``MultiIndex`` input with *unnamed* levels whose combinations don't match ``coords`` (previously a silent bypass, as such inputs can't be projected by level name). Implicit level projections are deprecated (see Deprecations).
 * ``LinearExpression.groupby`` now accepts a **non-dimension** coordinate as the key -- by name (``expr.groupby("period").sum()``, where ``period`` labels another dimension) or as the coordinate ``DataArray`` -- which previously raised ``ValueError: ... already exists``. Grouping by a dimension or a ``MultiIndex`` level already worked (`#750 <https://github.com/PyPSA/linopy/issues/750>`__).
@@ -130,7 +130,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
 * Drop Python 3.10 support. Minimum supported version is now Python 3.11.
-* ``add_variables`` / ``add_constraints``: the v0.6.3 ``mask`` deprecations (#580) are now hard ``ValueError``\ s; an unnamed ``pd.MultiIndex`` in sequence-form ``coords`` raises ``TypeError`` unless paired with ``dims=[i]``. See Bug Fixes above.
+* ``add_variables`` / ``add_constraints``: the v0.6.3 ``mask`` deprecations (`#580 <https://github.com/PyPSA/linopy/issues/580>`__) are now hard ``ValueError``\ s; an unnamed ``pd.MultiIndex`` in sequence-form ``coords`` raises ``TypeError`` unless paired with ``dims=[i]``. See Bug Fixes above.
 * Sequence-form ``coords`` entries can no longer be ``xarray.DataArray`` objects — they raise ``TypeError``. Pass the underlying index instead: ``variable.indexes[dim]`` (a ``pd.Index``).
 
 **Internal**
@@ -141,7 +141,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
 * ``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
 * Adopt Python 3.11 type-syntax: the status enums (``ModelStatus``, ``SolverStatus``, ``TerminationCondition``) are now ``StrEnum``, and classmethods plus the expression base class use ``Self`` instead of string forward-references and a self-typed ``TypeVar``. No user-visible change — ``Model.solve()`` still returns ``(status, termination_condition)`` as plain strings.
-* ``Variable.fix()`` now fixes a variable by collapsing its bounds (``lower = upper = value``) instead of adding a ``__fix__`` equality constraint; ``unfix()`` restores the original bounds (`#769 <https://github.com/PyPSA/linopy/issues/769>`_). A fix outside the current bounds now warns and overrides instead of raising, and its shadow price appears as the variable's reduced cost rather than a constraint dual.
+* ``Variable.fix()`` now fixes a variable by collapsing its bounds (``lower = upper = value``) instead of adding a ``__fix__`` equality constraint; ``unfix()`` restores the original bounds (`#769 <https://github.com/PyPSA/linopy/issues/769>`__). A fix outside the current bounds now warns and overrides instead of raising, and its shadow price appears as the variable's reduced cost rather than a constraint dual.
 
 Version 0.7.0
 -------------
@@ -720,7 +720,7 @@ Version 0.1.4
 -------------
 
 * Fix representation of empty variables and linear expressions.
-* The benchmark reported in [here](https://github.com/PyPSA/linopy/tree/master/benchmark) was updated to the latest version of linopy and adjusted to be fully reproducible.
+* The benchmark reported `here <https://github.com/PyPSA/linopy/tree/master/benchmark>`__ was updated to the latest version of linopy and adjusted to be fully reproducible.
 
 
 Version 0.1.3
