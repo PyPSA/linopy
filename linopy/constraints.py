@@ -1144,7 +1144,7 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_lazy")
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_pending")
 
     def __init__(
         self,
@@ -1174,29 +1174,29 @@ class Constraint(ConstraintBase):
         self._data = data
         self._model = model
         self._coef_dirty = False
-        self._lazy = None
+        self._pending = None
 
     @classmethod
-    def _from_lazy(
+    def _from_pending(
         cls, lhs: expressions.LinearExpression, sign: str, rhs: Any, model: Model
     ) -> Constraint:
-        """Anonymous constraint over a still-lazy lhs (see linopy.lazy)."""
+        """Anonymous constraint over a still-sparse lhs (see linopy.csr)."""
         obj = cls.__new__(cls)
         obj._model = model
         obj._data = None
         obj._assigned = False
         obj._coef_dirty = False
-        obj._lazy = (lhs, sign, rhs)
+        obj._pending = (lhs, sign, rhs)
         return obj
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._lazy is not None:
-            lhs, sign, rhs = self._lazy
-            lhs.data  # noqa: B018 materialize; clears lhs's lazy payload
+        if self._data is None and self._pending is not None:
+            lhs, sign, rhs = self._pending
+            lhs.data  # noqa: B018 materialize; clears lhs's sparse payload
             self._data = lhs.to_constraint(sign, rhs).data
             self._assigned = "labels" in self._data
-            self._lazy = None
+            self._pending = None
         return self._data
 
     @property

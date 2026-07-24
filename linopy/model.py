@@ -1139,16 +1139,16 @@ class Model:
 
         name = self._resolve_constraint_name(name)
 
-        # a still-lazy grouped lhs with freeze on realizes directly as a
-        # CSRConstraint from long triplets, skipping the padded dense form
+        # a still-sparse grouped lhs with freeze on becomes a CSRConstraint
+        # directly (sign and rhs stapled on), skipping the padded dense form
         resolved_freeze = self.freeze_constraints if freeze is None else freeze
         if resolved_freeze and mask is None and not self.chunk:
-            from linopy.lazy import extract_lazy, realize_lazy_constraint
+            from linopy.csr import extract_pending, realize_csr_constraint
 
-            extracted = extract_lazy(lhs, sign, rhs)
+            extracted = extract_pending(lhs, sign, rhs)
             if extracted is not None:
-                lazy_sum, lazy_sign, lazy_rhs = extracted
-                con = realize_lazy_constraint(self, lazy_sum, lazy_sign, lazy_rhs, name)
+                payload, csr_sign, csr_rhs = extracted
+                con = realize_csr_constraint(self, payload, csr_sign, csr_rhs, name)
                 return self.constraints.add(con)
 
         if sign is not None:

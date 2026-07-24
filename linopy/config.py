@@ -82,5 +82,5 @@ options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
     semantics=LEGACY_SEMANTICS,
-    lazy_groupby=False,
+    sparse_groupby=False,
 )

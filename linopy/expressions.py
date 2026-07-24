@@ -480,7 +480,7 @@ class LinearExpressionGroupby:
         self,
         use_fallback: bool = False,
         observed: bool = False,
-        lazy: bool | None = None,
+        sparse: bool | None = None,
     ) -> LinearExpression:
         """
         Sum the expression over each group.
@@ -494,17 +494,19 @@ class LinearExpressionGroupby:
             Fall back to the previous, slower groupby-sum implementation, kept
             as an escape hatch. Leave at False unless the default misbehaves.
             Defaults to False.
-        lazy : bool, optional
-            Return the grouped sum unmaterialized: a long-format payload
-            behind the ordinary LinearExpression type, akin to dask-backed
-            xarray objects. Any operation without a lazy branch
-            transparently materializes today's dense result; a still-lazy
-            left-hand side reaching ``Model.add_constraints`` with
-            ``freeze=True`` is realized directly as a CSRConstraint,
-            skipping the group-size-padded term dimension. Requires v1
-            semantics. Defaults to ``linopy.options["lazy_groupby"]``
-            (only honored under v1). Only single-key groupers over an
-            existing dimension are held lazily.
+        sparse : bool, optional
+            Build the grouped sum in CSR form behind the ordinary
+            LinearExpression type (akin to dask-backed xarray objects): one
+            row per result cell, one column per variable, duplicate
+            variables summed and terms label-ordered — the group-size
+            padding of the dense kernel has no analog. Operations without a
+            sparse branch transparently expand to the dense rectangle in
+            this canonical form; a still-sparse left-hand side reaching
+            ``Model.add_constraints`` with ``freeze=True`` becomes a
+            CSRConstraint directly. Requires v1 semantics. Defaults to
+            ``linopy.options["sparse_groupby"]`` (only honored under v1).
+            Only single-key groupers over an existing dimension are held
+            sparse.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -530,22 +532,22 @@ class LinearExpressionGroupby:
             None if use_fallback else _multikey_value_frame(group, self.data)
         )
 
-        if lazy is None:
-            lazy = is_v1() and options["lazy_groupby"]
-        elif lazy and not is_v1():
+        if sparse is None:
+            sparse = is_v1() and options["sparse_groupby"]
+        elif sparse and not is_v1():
             raise ValueError(
-                "lazy groupby-sum requires v1 semantics; opt in with "
+                "sparse groupby-sum requires v1 semantics; opt in with "
                 "linopy.options['semantics'] = 'v1'."
             )
-        if lazy and not use_fallback and not observed and multikey_frame is None:
+        if sparse and not use_fallback and not observed and multikey_frame is None:
             series = group.to_pandas() if isinstance(group, DataArray) else group
             if isinstance(series, pd.Series) and series.index.name in self.data.dims:
-                from linopy.lazy import LazyGroupSum
+                from linopy.csr import CSRPayload
 
                 expr = LinearExpression(self.data, self.model)
                 group_name = str(getattr(series, "name", None) or "group")
-                payload = LazyGroupSum.from_grouper(expr, series, group_name)
-                return LinearExpression._from_lazy(payload, self.model)
+                payload = CSRPayload.from_grouper(expr, series, group_name)
+                return LinearExpression._from_csr(payload, self.model)
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -743,7 +745,7 @@ class LinearExpressionRolling:
 
 
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model", "_lazy")
+    __slots__ = ("_data", "_model", "_csr")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -817,7 +819,7 @@ class BaseExpression(ABC):
 
         self._model = model
         self._data = cast(Dataset, data)
-        self._lazy = None
+        self._csr = None
 
     def __repr__(self) -> str:
         """
@@ -918,8 +920,8 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        if self._lazy is not None:
-            return self._from_lazy(self._lazy.scaled(-1.0), self._model)
+        if self._csr is not None:
+            return self._from_csr(self._csr.scaled(-1.0), self._model)
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
@@ -1495,19 +1497,19 @@ class BaseExpression(ABC):
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._lazy is not None:
-            # materialize through today's dense kernel; laziness is spent
-            self._data = self._lazy.materialize().data
-            self._lazy = None
+        if self._data is None and self._csr is not None:
+            # expand to the dense rectangle (canonical form); sparsity is spent
+            self._data = self._csr.materialize().data
+            self._csr = None
         return self._data
 
     @classmethod
-    def _from_lazy(cls, lazy: Any, model: Model) -> Self:
-        """Construct an expression backed by an unmaterialized LazyGroupSum."""
+    def _from_csr(cls, payload: Any, model: Model) -> Self:
+        """Construct an expression backed by a CSRPayload."""
         obj = cls.__new__(cls)
         obj._model = model
         obj._data = None  # type: ignore[assignment]
-        obj._lazy = lazy
+        obj._csr = payload
         return obj
 
     @property
@@ -1521,9 +1523,9 @@ class BaseExpression(ABC):
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._data is None and self._lazy is not None:
-            # answerable from the lazy payload without materializing
-            return tuple(self._lazy.grid_dims)
+        if self._data is None and self._csr is not None:
+            # answerable from the sparse payload without materializing
+            return tuple(self._csr.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -1712,10 +1714,10 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
-        if self._lazy is not None and isinstance(sign, str) and is_constant(rhs):
-            # carry the lazy payload on the constraint; its .data property
+        if self._csr is not None and isinstance(sign, str) and is_constant(rhs):
+            # carry the sparse payload on the constraint; its .data property
             # materializes through this method's dense path if needed
-            return constraints.Constraint._from_lazy(self, sign, rhs, self.model)
+            return constraints.Constraint._from_pending(self, sign, rhs, self.model)
 
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
@@ -2354,8 +2356,8 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if self._lazy is not None and isinstance(other, int | float | np.number):
-            return type(self)._from_lazy(self._lazy.scaled(float(other)), self._model)
+        if self._csr is not None and isinstance(other, int | float | np.number):
+            return type(self)._from_csr(self._csr.scaled(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -3128,11 +3130,11 @@ def merge(
     model = exprs[0].model
 
     if issubclass(cls, LinearExpression) and not has_quad_expression:
-        from linopy.lazy import try_lazy_merge
+        from linopy.csr import try_csr_merge
 
-        lazy_result = try_lazy_merge(exprs, dim=dim, join=join, kwargs=kwargs)
-        if lazy_result is not None:
-            return lazy_result
+        csr_result = try_csr_merge(exprs, dim=dim, join=join, kwargs=kwargs)
+        if csr_result is not None:
+            return csr_result
 
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
