@@ -20,6 +20,7 @@ nor the continuous LPs hit those paths.
 from __future__ import annotations
 
 import numpy as np
+import xarray as xr
 
 import linopy
 from benchmarks.registry import (
@@ -38,7 +39,11 @@ def build_milp(n: int) -> linopy.Model:
 
     cap = 100.0  # capacity per module
     Y_MAX = 5  # max modules per facility
-    transport = rng.uniform(1, 20, size=(n, n))  # per-unit shipping cost
+    transport = xr.DataArray(
+        rng.uniform(1, 20, size=(n, n)),
+        dims=["facility", "customer"],
+        coords={"facility": facilities, "customer": customers},
+    )
     fixed = rng.uniform(50, 200, size=n)  # cost per facility module
     demand = rng.uniform(20, 80, size=n)  # demand at each customer
 

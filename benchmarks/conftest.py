@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,6 +13,33 @@ from benchmarks.registry import iter_params, spec_param_id
 if TYPE_CHECKING:
     import linopy
     from benchmarks.registry import BenchSpec
+
+
+@pytest.fixture(autouse=True)
+def _bench_semantics() -> Iterator[None]:
+    """
+    Force the arithmetic semantics for the whole run from
+    ``LINOPY_BENCH_SEMANTICS`` (``legacy`` / ``v1``), restoring after.
+
+    The memory-report job runs the build twice — once at the default (legacy),
+    once with this set to ``v1`` — to A/B the v1 cost. Leaving it unset keeps the
+    default, so the node ids the legacy run and the CodSpeed run produce are
+    identical (``test_build[…]``, no suffix): CodSpeed keeps its per-id history
+    against master, and the two report JSONs line up under ``benchmem compare``.
+    """
+    import linopy
+
+    mode = os.environ.get("LINOPY_BENCH_SEMANTICS")
+    if not mode:
+        yield
+        return
+    old = linopy.options["semantics"]
+    linopy.options["semantics"] = mode
+    try:
+        yield
+    finally:
+        linopy.options["semantics"] = old
+
 
 # Test modules the CodSpeed instruments measure (edit to change coverage).
 # build + the two export paths: to_lp (LP text) and to_solver (direct handoff,

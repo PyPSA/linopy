@@ -1773,12 +1773,22 @@ def _add_incremental(
     )
 
     if n_pieces >= 2:
+        # ``piece_dim`` is a *positional* relation here: the constraint pairs
+        # each lower piece with the next-higher one. The two ``isel`` slices
+        # share the dim but carry different labels (first n-1 vs last n-1 of
+        # piece_index), which v1 §8 rejects. Relabel the high slice onto the
+        # low slice's labels so alignment-by-label gives the intended
+        # positional pairing — convention §10's explicit-positional path.
         delta_lo = delta_var.isel({piece_dim: slice(None, -1)}, drop=True)
-        delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True)
+        delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True).assign_coords(
+            {piece_dim: delta_lo.coords[piece_dim]}
+        )
         model.add_constraints(
             delta_hi <= delta_lo, name=f"{name}{PWL_FILL_ORDER_SUFFIX}"
         )
-        binary_hi = binary_var.isel({piece_dim: slice(1, None)}, drop=True)
+        binary_hi = binary_var.isel(
+            {piece_dim: slice(1, None)}, drop=True
+        ).assign_coords({piece_dim: delta_lo.coords[piece_dim]})
         model.add_constraints(
             binary_hi <= delta_lo, name=f"{name}{PWL_BINARY_ORDER_SUFFIX}"
         )
@@ -1786,7 +1796,10 @@ def _add_incremental(
     def _incremental_weighted(bp: DataArray) -> LinearExpression:
         steps = bp.diff(dim).rename({dim: piece_dim})
         steps[piece_dim] = piece_index
-        bp0 = bp.isel({dim: 0})
+        # ``drop=True`` keeps the breakpoint coord from sticking around as a
+        # scalar on ``bp0_term`` — otherwise §11 rejects it as an aux-coord
+        # conflict against the constraint LHS.
+        bp0 = bp.isel({dim: 0}, drop=True)
         bp0_term: DataArray | LinearExpression = bp0
         if active is not None:
             bp0_term = bp0 * active

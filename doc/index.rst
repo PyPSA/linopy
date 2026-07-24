@@ -113,6 +113,7 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
+   migrating-to-v1
    manipulating-models
 
 .. toctree::
@@ -168,3 +169,12 @@ This package is published under MIT license.
    api
    release_notes
    contributing
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Design & Internals
+
+   design/convention
+   design/goals
+   design/legacy-removal

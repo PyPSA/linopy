@@ -20,12 +20,13 @@ from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import (
-    EvolvingAPIWarning,
     LinearExpression,
+    LinopySemanticsWarning,
     Model,
     QuadraticExpression,
     Variable,
     merge,
+    options,
 )
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
@@ -297,6 +298,7 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+@pytest.mark.legacy
 def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     Expression over a MultiIndex dim times a single-level constant.
@@ -308,7 +310,7 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+    with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
         expr = (1 * u) * by_level1
 
     coeffs = expr.coeffs.squeeze("_term")
@@ -316,6 +318,15 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
     assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
     assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
+@pytest.mark.v1
+def test_multiply_expression_by_level_aux_coord_v1(u: Variable) -> None:
+    """v1: weight each entry by its `level1` explicitly via the aux coord."""
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+    weights = by_level1.sel(level1=u.coords["level1"])
+    coeffs = ((1 * u) * weights).coeffs.squeeze("_term")
+    assert coeffs.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
 
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
@@ -418,9 +429,12 @@ def test_linear_expression_substraction(
     assert res.data.notnull().all().to_array().all()
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -440,9 +454,12 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum_with_const(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
+    # (forbidden by v1 §8).
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
 
@@ -661,7 +678,17 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
+@pytest.mark.legacy
 class TestCoordinateAlignment:
+    """
+    Documents legacy positional/left-join alignment and silent NaN fill.
+
+    The whole block is legacy-only: v1 raises on these cases (see
+    `test_legacy_violations.py` and convention.md §5/§8). Once later slices
+    flesh out v1's equivalent coverage, individual tests here can be
+    reclassified or removed.
+    """
+
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "da":
@@ -1474,7 +1501,7 @@ class TestMultiKeyFastPath:
 
         assert {"period", "season"} <= set(grouped.dims)
         assert "group" not in grouped.dims
-        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+        assert not isinstance(grouped.indexes.get("period"), pd.MultiIndex)
 
     def test_sparse_combination_filled(self) -> None:
         # (2020, "s") never occurs -> empty term in the grid
@@ -1486,16 +1513,58 @@ class TestMultiKeyFastPath:
         assert (cell.vars == -1).all()
         assert cell.coeffs.isnull().all()
 
+    @pytest.mark.legacy
     def test_dataframe_grouper_stays_compact(self) -> None:
-        # the DataFrame grouper keeps the stacked observed-only group dim
+        # legacy: the DataFrame grouper keeps the stacked observed-only group MI
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
-
-        grouped = expr.groupby(df).sum()
-
-        assert "group" in grouped.dims
-        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(df).sum()
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
         assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+
+    @pytest.mark.v1
+    def test_dataframe_grouper_stays_compact_v1(self) -> None:
+        # v1: flat `group` dim + period/season aux coords, still observed-only
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+        grouped = expr.groupby(df).sum()
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
+        assert grouped.sizes["group"] == 3
+
+    @pytest.mark.legacy
+    def test_namelist_observed_warns_legacy(self) -> None:
+        # `groupby([names]).sum(observed=True)` keeps the stacked `group` MI under
+        # legacy exactly like a DataFrame grouper — so it must warn too (v1 gives
+        # a flat dim, a silent divergence otherwise).
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+
+    @pytest.mark.v1
+    def test_namelist_observed_flat_v1(self) -> None:
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
+
+    @pytest.mark.legacy
+    def test_group_multiindex_reset_index_matches_v1(self) -> None:
+        # The warning tells legacy users `.reset_index('group')` yields the v1
+        # shape — pin that it produces exactly the v1 flat result (same expr, so
+        # variable labels line up).
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            legacy_mi = expr.groupby(["period", "season"]).sum(observed=True)
+        converted = legacy_mi.reset_index("group")
+        with options as o:
+            o.set_value(semantics="v1")
+            v1_flat = expr.groupby(["period", "season"]).sum(observed=True)
+        assert not isinstance(converted.indexes["group"], pd.MultiIndex)
+        assert_linequal(converted, v1_flat)
 
     def test_blowup_warns_when_sparse(self) -> None:
         # 200 observed combos, 200x200 grid -> nudge toward observed=True
@@ -1525,10 +1594,14 @@ class TestMultiKeyFastPath:
     def test_observed_silences_blowup_warning(self) -> None:
         expr = self._expr(list(range(200)), list(range(200)))
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        # ``observed=True`` silences the dense-grid blowup warning; under legacy
+        # it still emits the deprecated-`group`-MultiIndex warning, which is not
+        # what this test is about, so assert on the blowup warning specifically.
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
 
+        assert not any("dense" in str(w.message) for w in record)
         assert grouped.sizes["group"] == 200
 
     def test_observed_with_fallback_raises(self) -> None:
@@ -1703,6 +1776,7 @@ class TestGroupbyByAttachedCoordinate:
             ("timestep", ["t1", "t2", "t3"], [[0, 3], [1, 4], [2, 5]]),
         ],
     )
+    @pytest.mark.legacy
     def test_multiindex_level(
         self, level: str, values: list, vars_: list, use_fallback: bool
     ) -> None:
@@ -1908,89 +1982,125 @@ def test_linear_expression_groupby_with_series_on_multiindex(
     assert grouped.nterm == len_grouped_dim
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe(v: Variable) -> None:
     expr = 1 * v
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_v1(v: Variable) -> None:
+    """v1: a frame grouper yields a flat `group` dim with the keys as aux coords."""
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.legacy
 def test_linear_expression_groupby_with_dataframe_with_same_group_name(
-    v: Variable, use_fallback: bool
+    v: Variable,
 ) -> None:
-    """
-    Test that the group by works with a dataframe whose column name is the same as
-    the dimension to group.
-    """
+    """A frame grouper whose column name equals the grouped dimension."""
     expr = 1 * v
     groups = pd.DataFrame(
         {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
         index=v.indexes["dim_2"],
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe_on_multiindex(
-    u: Variable, use_fallback: bool
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_with_same_group_name_v1(
+    v: Variable,
 ) -> None:
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
+        index=v.indexes["dim_2"],
+    )
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data["dim_2"].values, grouped.data["b"].values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> None:
     expr = 1 * u
-    len_grouped_dim = len(u.data["dim_3"])
-    groups = pd.DataFrame({"a": [1] * len_grouped_dim}, index=u.indexes["dim_3"])
-
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    assert "group" in grouped.dims
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
     assert isinstance(grouped.indexes["group"], pd.MultiIndex)
-    assert grouped.nterm == len_grouped_dim
+    assert grouped.nterm == n
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataarray(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_on_multiindex_v1(u: Variable) -> None:
+    expr = 1 * u
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.a.values) == {1}
+    assert grouped.nterm == n
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataarray(v: Variable) -> None:
     expr = 1 * v
     df = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
     groups = xr.DataArray(df)
-
     # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
-    if use_fallback:
-        with pytest.raises((KeyError, IndexError)):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
+    with pytest.raises((KeyError, IndexError)):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(pd.MultiIndex.from_frame(df).values)
+    assert grouped.nterm == 3
 
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(df)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataarray_v1(v: Variable) -> None:
+    expr = 1 * v
+    df = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(xr.DataArray(df)).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(df).values)
     assert grouped.nterm == 3
 
 
@@ -2100,8 +2210,8 @@ def groupby_ctx() -> SimpleNamespace:
             coords=[idx], name="mx", mask=xr.DataArray(np.arange(60) % 4 != 0, [idx])
         ),
         const=const,
-        nan_const=const.where(rng.random((3, 60)) > 0.3),
         nan_vec=np.where(np.arange(60) % 3, np.nan, 5.0),
+        cond2d=xr.DataArray(rng.random((3, 60)) > 0.3, coords=[other, idx]),
         stacked=stacked,
         skewed=skewed,
         one_group=pd.Series(1, index=idx, name="g"),
@@ -2111,21 +2221,32 @@ def groupby_ctx() -> SimpleNamespace:
 
 
 # (expr, groups) builders keyed by structure; `c` is the groupby_ctx fixture.
-# Cases the old use_fallback=True engine also reproduces.
+# Cases the old use_fallback=True engine also reproduces, valid under both
+# semantics. ``where_absent`` scatters NaN constants (with their variables
+# dropped) over a 2-D const through ``.where`` — the construction v1 sanctions
+# for intended absence — so the kernel's NaN-skip path stays covered there.
 FALLBACK_SUM_CASES = {
     "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
     "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
-    "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
+    "where_absent": lambda c: (
+        (2 * c.y - 3 * c.y + 1 * c.y + c.const).where(c.cond2d),
+        c.skewed,
+    ),
     "masked_vars": lambda c: (1 * c.mx, c.skewed),
     "single_group": lambda c: (1 * c.x, c.one_group),
     "identity_groups": lambda c: (1 * c.x, c.identity),
-    "multidim_const_nan": lambda c: (
-        2 * c.y - 3 * c.y + 1 * c.y + c.nan_const,
-        c.skewed,
-    ),
     "three_dims": lambda c: (4 * c.y3 + 1 * c.y3, c.skewed),
     "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
+
+# Legacy-only: builds a NaN constant next to live variables directly in
+# arithmetic, which legacy silently fills as 0 while v1 rejects it with
+# ValueError at construction — a layout no v1 construction can produce.
+LEGACY_FALLBACK_SUM_CASES = {
+    "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
+}
+
+ALL_FALLBACK_SUM_CASES = {**FALLBACK_SUM_CASES, **LEGACY_FALLBACK_SUM_CASES}
 
 
 def _grouped_sum_on_backend(
@@ -2315,7 +2436,16 @@ class TestGroupbySumKernel:
         assert dict(grouped.sizes) == {"g": 0, "_term": 0}
 
     @pytest.mark.parametrize("backend", ["numpy", "dask"])
-    @pytest.mark.parametrize("case", FALLBACK_SUM_CASES)
+    @pytest.mark.parametrize(
+        "case",
+        [
+            *FALLBACK_SUM_CASES,
+            *(
+                pytest.param(name, marks=pytest.mark.legacy)
+                for name in LEGACY_FALLBACK_SUM_CASES
+            ),
+        ],
+    )
     def test_grouped_sum_matches_fallback(
         self, groupby_ctx: SimpleNamespace, case: str, backend: str
     ) -> None:
@@ -2324,7 +2454,7 @@ class TestGroupbySumKernel:
         kernel must match ``use_fallback=True``, on both numpy and dask backends.
         The fallback oracle always runs on numpy.
         """
-        expr, groups = FALLBACK_SUM_CASES[case](groupby_ctx)
+        expr, groups = ALL_FALLBACK_SUM_CASES[case](groupby_ctx)
         fallback = expr.groupby(groups).sum(use_fallback=True)
         scatter = _grouped_sum_on_backend(expr, groups, backend)
         assert_linequal(scatter, fallback)
@@ -2569,15 +2699,18 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
-    expr1 = z.sel(dim_0=0).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    # ``drop=True`` so the scalar ``dim_0`` coord doesn't survive each .sel
+    # and trip §11's aux-coord-conflict check (the two picks pin dim_0=0
+    # vs dim_0=1).
+    expr1 = z.sel(dim_0=0, drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
-    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1), drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
@@ -2805,15 +2938,6 @@ def test_variable_names() -> None:
     assert expr.nterm == 2
     assert expr.variable_names == {"a", "b"}
 
-    mask = xr.DataArray(False, coords=[time])
-    expr = a + (b * 1).where(mask)
-    assert expr.nterm == 2
-    assert expr.variable_names == {"a"}
-
-    expr = (b * 1).where(mask)
-    assert expr.nterm == 1
-    assert expr.variable_names == set()
-
     expr = LinearExpression.from_constant(model=m, constant=5)
     assert expr.nterm == 0
     assert expr.variable_names == set()
@@ -2845,9 +2969,6 @@ def test_nterm() -> None:
     expr = a + b.where(all_false)
     assert expr.nterm == 2
 
-    expr = expr.simplify()
-    assert expr.nterm == 1
-
 
 class TestJoinParameter:
     @pytest.fixture
@@ -2871,9 +2992,12 @@ class TestJoinParameter:
         return m2.variables["c"]
 
     class TestAddition:
+        @pytest.mark.legacy
         def test_add_join_none_preserves_default(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a and b have different coords on dim ``i``;
+            # under v1 both arithmetic forms raise (see convention.md §8).
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
@@ -3132,9 +3256,11 @@ class TestJoinParameter:
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
     class TestQuadratic:
+        @pytest.mark.legacy
         def test_quadratic_add_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
@@ -3146,9 +3272,11 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.indexes["i"]) == [0, 1]
 
+        @pytest.mark.legacy
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")

@@ -12,6 +12,12 @@ import linopy as lp
 pypsa = pytest.importorskip("pypsa")
 
 
+@pytest.fixture(autouse=True)
+def _skip_under_v1(_bench_semantics: None) -> None:
+    if lp.options["semantics"] == "v1":
+        pytest.skip("PyPSA emits NaN-valued constants that v1 rejects by design.")
+
+
 @pytest.fixture(scope="module")
 def network() -> Any:
     try:

@@ -39,6 +39,10 @@ ConstantLike: TypeAlias = (
     | pl.Series
 )
 CONSTANT_TYPES: tuple[type, ...] = get_args(ConstantLike)
+
+UnlabeledLike: TypeAlias = numpy.ndarray | list | pl.Series
+UNLABELED_TYPES = get_args(UnlabeledLike)
+
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
 MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
 PathLike: TypeAlias = str | Path

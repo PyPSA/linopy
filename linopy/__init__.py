@@ -13,7 +13,7 @@ __version__ = version("linopy")
 # we need to extend their __mul__ functions with a quick special case
 import linopy.monkey_patch_xarray  # noqa: F401
 from linopy.alignment import align
-from linopy.config import options
+from linopy.config import LinopySemanticsWarning, options
 from linopy.constants import (
     EQUAL,
     GREATER_EQUAL,
@@ -57,6 +57,7 @@ __all__ = (
     "GREATER_EQUAL",
     "LESS_EQUAL",
     "LinearExpression",
+    "LinopySemanticsWarning",
     "Model",
     "Objective",
     "OetcHandler",
