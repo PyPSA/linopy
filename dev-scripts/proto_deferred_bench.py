@@ -1,13 +1,14 @@
 """
-Benchmark: dense groupby-sum balance constraint vs deferred CSR realization.
+Benchmark: eager groupby-sum balance constraint vs lazy CSR realization.
 
 Scenario from issue #745 (hub-skewed nodal balance): 120 buses, one hub with
-8000 generators, 100 on each other bus (19,900 total), ring of 120 lines,
-24 snapshots. Build-only.
+HUB generators, 100 on each other bus, ring of 120 lines, 24 snapshots.
+Build-only, using the real API: ``groupby(g).sum(lazy=...)`` +
+``add_constraints(lhs == load, freeze=...)``.
 
 Run under memray, one variant per process:
-    memray run -o dense.bin proto_deferred_bench.py dense
-    memray run -o deferred.bin proto_deferred_bench.py deferred
+    memray run -o eager.bin proto_deferred_bench.py eager [hub]
+    memray run -o lazy.bin  proto_deferred_bench.py lazy  [hub]
 """
 
 from __future__ import annotations
@@ -15,54 +16,43 @@ from __future__ import annotations
 import sys
 import time
 
-from proto_deferred_check import build_base_model
-from proto_deferred_groupby import DeferredGroupbySum, add_deferred_constraints
+sys.path.insert(
+    0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "test")
+)
+from test_lazy_groupby import balance_lhs, base_model
 
 N_BUS = 120
 HUB = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
-GENS_PER_BUS = [HUB] + [100] * (N_BUS - 1)
+GENS_PER_BUS = tuple([HUB] + [100] * (N_BUS - 1))
 N_SNAP = 24
 
 
 def main() -> None:
+    import linopy
+
+    linopy.options["semantics"] = "v1"  # the lazy path is gated behind v1
     variant = sys.argv[1]
-    m, gen_p, flow, eff, gbus, bus0, bus1, load, buses = build_base_model(
-        N_BUS, GENS_PER_BUS, N_SNAP
+    m, gen_p, flow, eff, gbus, bus0, bus1, load, buses = base_model(
+        gens_per_bus=GENS_PER_BUS, n_snap=N_SNAP
     )
     start = time.perf_counter()
 
     if variant == "setup":
         print(f"setup only: {time.perf_counter() - start:.2f}s")
         return
-    if variant == "dense":
-        lhs = (
-            (eff * gen_p).groupby(gbus).sum()
-            + (1.0 * flow).groupby(bus0).sum()
-            - (1.0 * flow).groupby(bus1).sum()
-        )
-        con = m.add_constraints(lhs == load, name="balance")
-        nterm = con.data.sizes["_term"]
-    elif variant == "deferred":
-        parts = [
-            DeferredGroupbySum(eff * gen_p, gbus),
-            DeferredGroupbySum(1.0 * flow, bus0),
-            DeferredGroupbySum(-1.0 * flow, bus1),
-        ]
-        con = add_deferred_constraints(m, parts, "=", load, "balance", buses)
-        nterm = con.nterm
-    else:
-        raise SystemExit(f"unknown variant {variant!r}")
 
+    lazy = variant == "lazy"
+    lhs = balance_lhs(gen_p, flow, eff, gbus, bus0, bus1, lazy=lazy)
+    con = m.add_constraints(lhs == load, name="balance", freeze=lazy)
     build_s = time.perf_counter() - start
 
-    # prove the export seam works: the LP writer consumes this frame
     start = time.perf_counter()
     n_rows = con.to_polars().height
     export_s = time.perf_counter() - start
 
     print(
         f"{variant}: build {build_s:.2f}s, to_polars {export_s:.2f}s, "
-        f"nterm={nterm}, polars term rows={n_rows}"
+        f"type={type(con).__name__}, polars term rows={n_rows}"
     )
 
 
