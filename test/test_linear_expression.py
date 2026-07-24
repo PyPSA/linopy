@@ -27,6 +27,7 @@ from linopy import (
     Variable,
     merge,
 )
+from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -645,6 +646,177 @@ def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     with pytest.raises(TypeError):
         expr @ expr
+
+
+def canonical_terms(expr: LinearExpression, dims: list[str]) -> pd.Series:
+    """
+    Cell-wise variable/coefficient map of an expression, ignoring term layout.
+
+    Absent terms and zero coefficients carry no information, so two
+    expressions with equal canonical terms represent the same linear function
+    regardless of term count, order or padding.
+    """
+    ds = xr.Dataset({"vars": expr.vars, "coeffs": expr.coeffs})
+    df = ds.to_dataframe().reset_index()
+    df = df[(df["vars"] != -1) & (df["coeffs"] != 0) & df["coeffs"].notna()]
+    return df.groupby(dims + ["vars"])["coeffs"].sum().sort_index()
+
+
+def assert_same_linear_function(a: LinearExpression, b: LinearExpression) -> None:
+    """Dimension order is not semantic, so it is deliberately not compared."""
+    assert set(a.coord_dims) == set(b.coord_dims)
+    dims = sorted(map(str, a.coord_dims))
+    pd.testing.assert_series_equal(canonical_terms(a, dims), canonical_terms(b, dims))
+    xr.testing.assert_allclose(a.const.transpose(*dims), b.const.transpose(*dims))
+
+
+@pytest.fixture
+def flow_and_incidence() -> tuple[LinearExpression, xr.DataArray]:
+    m = Model()
+    snapshots = pd.Index(range(3), name="snapshot")
+    branches = pd.Index([f"b{i}" for i in range(8)], name="branch")
+    cycles = pd.Index(list("dbac"), name="cycle")  # deliberately unsorted
+    flow = m.add_variables(coords=[snapshots, branches], name="flow")
+
+    C = xr.DataArray(
+        np.zeros((8, 4)),
+        coords={"branch": branches, "cycle": cycles},
+        dims=["branch", "cycle"],
+    )
+    C.loc["b0", "d"] = 1.0
+    C.loc["b1", "d"] = -1.0
+    C.loc["b2", "b"] = 1.0
+    C.loc["b3", "b"] = 1.0
+    C.loc["b0", "b"] = -1.0  # b0 belongs to two cycles
+    C.loc["b4", "a"] = 2.5
+    # cycle "c" has no branches
+    return 1 * flow, C
+
+
+def test_matmul_sparse_const_incidence(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    """A sparse incidence matrix contracts to observed terms only (#748)."""
+    expr, C = flow_and_incidence
+    res = expr @ C
+    dense = (expr * C).sum("branch")
+
+    assert_same_linear_function(res, dense)
+    assert res.nterm == 3  # largest cycle, not the branch count
+    assert dense.nterm == len(expr.indexes["branch"])
+    assert res.data.coeffs.dims == dense.data.coeffs.dims
+    assert res.indexes["cycle"].equals(C.indexes["cycle"])
+
+
+def test_matmul_sparse_const_carries_free_dim_aux_coords(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    C = C.assign_coords(voltage=("cycle", [380, 220, 380, 110]))
+    res = expr @ C
+    dense = (expr * C).sum("branch")
+    assert_same_linear_function(res, dense)
+    assert_equal(res.data.voltage, dense.data.voltage)
+
+
+def test_matmul_sparse_const_vector(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    """Contraction without a free dimension keeps only nonzero entries."""
+    expr, C = flow_and_incidence
+    w = xr.DataArray(
+        np.array([0.0, 2.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0]),
+        coords=[expr.indexes["branch"]],
+    )
+    res = expr @ w
+    dense = (expr * w).sum("branch")
+    assert_same_linear_function(res, dense)
+    assert res.nterm == 2
+
+
+def test_matmul_sparse_const_with_expression_const(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    res = (expr + 5.0) @ C
+    dense = ((expr + 5.0) * C).sum("branch")
+    assert_same_linear_function(res, dense)
+
+
+def test_matmul_sparse_const_keeps_nan_entries(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    """A NaN entry in the operand must stay a term, like on the dense path."""
+    expr, C = flow_and_incidence
+    C.loc["b5", "a"] = np.nan
+    res = expr @ C
+    cell = res.data.sel(cycle="a", snapshot=0)
+    nan_terms = cell.vars.values[np.isnan(cell.coeffs.values)]
+    assert expr.vars.sel(branch="b5", snapshot=0).item() in nan_terms
+
+
+def test_matmul_sparse_const_falls_back_on_reordered_labels(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    """Mismatching contracted labels take the dense path unchanged."""
+    expr, C = flow_and_incidence
+    C_reordered = C.reindex(branch=C.indexes["branch"][::-1])
+    res = expr @ C_reordered
+    assert_linequal(res, (expr * C_reordered).sum("branch"))
+    assert res.nterm == len(expr.indexes["branch"])
+
+
+def test_matmul_sparse_const_falls_back_on_dense_operand(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    """A mostly-nonzero operand keeps the dense path's exact layout."""
+    expr, C = flow_and_incidence
+    dense_C = xr.ones_like(C)
+    res = expr @ dense_C
+    assert_linequal(res, (expr * dense_C).sum("branch"))
+    assert res.nterm == len(expr.indexes["branch"])
+
+
+def test_matmul_sparse_const_falls_back_on_duplicate_free_labels(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    C_dup = C.assign_coords(cycle=["d", "d", "a", "c"])
+    res = expr @ C_dup
+    assert_linequal(res, (expr * C_dup).sum("branch"))
+
+
+def test_matmul_sparse_const_falls_back_on_multiple_free_dims(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    C_3d = C.expand_dims(scenario=pd.Index([0, 1], name="scenario"))
+    res = expr @ C_3d
+    common = [d for d in expr.coord_dims if d in C_3d.dims]
+    assert_linequal(res, (expr * C_3d).sum(common))
+
+
+def test_matmul_sparse_const_disabled_by_option(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    with options:
+        options(sparse_dot_max_density=0.0)
+        res = expr @ C
+    assert_linequal(res, (expr * C).sum("branch"))
+    assert res.nterm == len(expr.indexes["branch"])
+
+
+def test_matmul_sparse_const_free_dim_without_coords(
+    flow_and_incidence: tuple[LinearExpression, xr.DataArray],
+) -> None:
+    expr, C = flow_and_incidence
+    C_nocoords = C.drop_vars("cycle")
+    res = expr @ C_nocoords
+    dense = (expr * C_nocoords).sum("branch")
+    # the constructor fills integer coords for coordinate-less dims either way
+    assert res.indexes["cycle"].equals(dense.indexes["cycle"])
+    assert_same_linear_function(res, dense)
 
 
 def test_linear_expression_multiplication_invalid(

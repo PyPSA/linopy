@@ -101,6 +101,8 @@ if TYPE_CHECKING:
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
+ENTRY_DIM = "_entry"
+
 
 def exprwrap(
     method: Callable, *default_args: Any, **new_default_kwargs: Any
@@ -2057,12 +2059,113 @@ class LinearExpression(BaseExpression):
     ) -> LinearExpression | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
+
+        A constant operand that is mostly zeros (e.g. an incidence matrix) is
+        contracted by :meth:`_matmul_sparse_constant`, which only materializes
+        terms for its nonzero entries.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            res = self._matmul_sparse_constant(other)
+            if res is not None:
+                return res
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
+
+    def _matmul_sparse_constant(self, other: DataArray) -> LinearExpression | None:
+        """
+        Sparse-aware kernel for ``self @ other`` with a mostly-zero constant.
+
+        The dense path ``(self * other).sum(common_dims)`` stacks one term per
+        element of the contracted dimensions regardless of the values in
+        ``other``, so a sparse operand densifies the result. This kernel
+        instead pairs each nonzero entry of ``other`` with its slice of the
+        expression and group-sums the entries into the result, so only
+        contributing terms are materialized. The represented expression is
+        identical to the dense path's; only the positional term layout (term
+        count, order and padding) differs.
+
+        Returns None whenever the shortcut does not apply and the caller must
+        take the dense path. The kernel only engages when the contracted
+        labels already match the expression exactly, so the dense path's
+        alignment semantics never need to be reproduced here. The operand
+        density at which the kernel engages is set by the
+        ``sparse_dot_max_density`` option (0 disables the sparse path).
+        """
+        common_dims = [d for d in self.coord_dims if d in other.dims]
+        free_dims = [d for d in other.dims if d not in common_dims]
+        if not common_dims or len(free_dims) > 1:
+            return None
+        free_dim = free_dims[0] if free_dims else None
+        if free_dim in HELPER_DIMS or ENTRY_DIM in (*self.data.dims, *other.dims):
+            return None
+        if self.data.chunks or other.chunks is not None:
+            return None
+        if not np.issubdtype(other.dtype, np.number):
+            return None
+        for dim in common_dims:
+            if other.sizes[dim] != self.data.sizes[dim] or not other.get_index(
+                dim
+            ).equals(self.data.get_index(dim)):
+                return None
+        if free_dim is not None and not other.get_index(free_dim).is_unique:
+            return None
+
+        values = other.transpose(*common_dims, *free_dims).to_numpy()
+        nonzero = values != 0  # keeps NaN entries: NaN coefficients must stay terms
+        nnz = int(nonzero.sum())
+        if nnz == 0 or nnz > options["sparse_dot_max_density"] * values.size:
+            return None
+
+        entries = np.nonzero(nonzero)
+        indexers = {
+            dim: DataArray(positions, dims=ENTRY_DIM)
+            for dim, positions in zip(common_dims, entries)
+        }
+        ds = self.data[["coeffs", "vars"]].isel(indexers)
+        ds = ds.drop_vars(
+            [name for name, coord in ds.coords.items() if ENTRY_DIM in coord.dims]
+        )
+        ds = ds.assign(coeffs=ds.coeffs * DataArray(values[entries], dims=ENTRY_DIM))
+
+        if (self.const == 0).all():
+            const: DataArray | float = 0.0
+        else:
+            # the dense path reduces the constant with xarray's skipna sum, so
+            # NaNs must not propagate through the contraction
+            const = xr.dot(self.const.fillna(0.0), other.fillna(0.0), dim=common_dims)
+
+        expr = LinearExpression(ds, self.model)
+        if free_dim is None:
+            res = expr.sum(ENTRY_DIM).data
+        else:
+            free_index = other.get_index(free_dim)
+            grouper = pd.Series(
+                np.asarray(free_index)[entries[-1]],
+                index=pd.RangeIndex(nnz, name=ENTRY_DIM),
+                name=free_dim,
+            )
+            res = expr.groupby(grouper).sum().data
+            res = res.reindex({free_dim: free_index}, fill_value=self._fill_value)
+
+        allowed_dims = set() if free_dim is None else {free_dim}
+        carried = {
+            name: coord
+            for name, coord in other.coords.items()
+            if name not in res.coords and set(coord.dims) <= allowed_dims
+        }
+        if carried:
+            res = res.assign_coords(carried)
+
+        res = assign_multiindex_safe(res, const=const)
+        order = [
+            d for d in self.data.coeffs.dims if d not in common_dims and d != TERM_DIM
+        ]
+        if free_dim is not None:
+            order.append(free_dim)
+        res = res.transpose(*order, TERM_DIM)
+        return LinearExpression(res, self.model)
 
     @property
     def flat(self) -> pd.DataFrame:

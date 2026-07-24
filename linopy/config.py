@@ -62,4 +62,5 @@ class OptionSettings:
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
+    sparse_dot_max_density=0.5,
 )
