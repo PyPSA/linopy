@@ -1139,8 +1139,6 @@ class Model:
 
         name = self._resolve_constraint_name(name)
 
-        # a still-sparse grouped lhs with freeze on becomes a CSRConstraint
-        # directly (sign and rhs stapled on), skipping the padded dense form
         resolved_freeze = self.freeze_constraints if freeze is None else freeze
         if resolved_freeze and mask is None and not self.chunk:
             from linopy.csr import extract_pending, realize_csr_constraint

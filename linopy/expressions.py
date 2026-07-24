@@ -496,17 +496,12 @@ class LinearExpressionGroupby:
             Defaults to False.
         sparse : bool, optional
             Build the grouped sum in CSR form behind the ordinary
-            LinearExpression type (akin to dask-backed xarray objects): one
-            row per result cell, one column per variable, duplicate
-            variables summed and terms label-ordered — the group-size
-            padding of the dense kernel has no analog. Operations without a
-            sparse branch transparently expand to the dense rectangle in
-            this canonical form; a still-sparse left-hand side reaching
-            ``Model.add_constraints`` with ``freeze=True`` becomes a
-            CSRConstraint directly. Requires v1 semantics. Defaults to
-            ``linopy.options["sparse_groupby"]`` (only honored under v1).
-            Only single-key groupers over an existing dimension are held
-            sparse.
+            LinearExpression type — no group-size padding; a still-sparse
+            lhs reaching ``Model.add_constraints`` with ``freeze=True``
+            becomes a CSRConstraint directly, other operations expand to
+            the dense rectangle in canonical term layout. Single-key
+            groupers only; requires v1 semantics. Defaults to
+            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -1498,7 +1493,6 @@ class BaseExpression(ABC):
     @property
     def data(self) -> Dataset:
         if self._data is None and self._csr is not None:
-            # expand to the dense rectangle (canonical form); sparsity is spent
             self._data = self._csr.materialize().data
             self._csr = None
         return self._data
@@ -1524,7 +1518,6 @@ class BaseExpression(ABC):
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
         if self._data is None and self._csr is not None:
-            # answerable from the sparse payload without materializing
             return tuple(self._csr.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
@@ -1715,8 +1708,6 @@ class BaseExpression(ABC):
         to the right-hand side.
         """
         if self._csr is not None and isinstance(sign, str) and is_constant(rhs):
-            # carry the sparse payload on the constraint; its .data property
-            # materializes through this method's dense path if needed
             return constraints.Constraint._from_pending(self, sign, rhs, self.model)
 
         rhs = as_constant(rhs)

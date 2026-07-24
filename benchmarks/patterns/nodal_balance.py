@@ -98,9 +98,6 @@ SPEC = register_pattern(
     )
 )
 
-# narrower phases: the model holds a CSRConstraint from the start, which the
-# build/matrix/LP paths consume natively; the netcdf/solver-API round-trips
-# are the dense Constraint's territory and not what this pair measures
 SPARSE_SPEC = register_pattern(
     BenchSpec(
         name="nodal_balance_sparse",

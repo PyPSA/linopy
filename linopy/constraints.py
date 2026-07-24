@@ -1193,7 +1193,7 @@ class Constraint(ConstraintBase):
     def data(self) -> Dataset:
         if self._data is None and self._pending is not None:
             lhs, sign, rhs = self._pending
-            lhs.data  # noqa: B018 materialize; clears lhs's sparse payload
+            lhs.data  # noqa: B018
             self._data = lhs.to_constraint(sign, rhs).data
             self._assigned = "labels" in self._data
             self._pending = None
