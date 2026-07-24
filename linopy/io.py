@@ -11,7 +11,8 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
+from dataclasses import dataclass
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -21,18 +22,26 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import to_polars
-from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.common import to_dataframe, to_polars
+from linopy.constants import (
+    CONCAT_DIM,
+    EQUAL,
+    GREATER_EQUAL,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+)
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
+    from linopy.constraints import Constraint
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -794,12 +803,12 @@ def to_cupdlpx(m: Model) -> cupdlpxModel:
     return solver.solver_model
 
 
-def to_block_files(m: Model, fn: Path) -> None:
+def to_block_files(m: Model, fn: Path | None) -> None:
     """
-    Write out the linopy model to a block structured output.
+    Write out the linopy model to a block-structured output for PIPS-IPM++.
 
-    Experimental: This function does not support grouping duplicated variables
-    in one constraint row yet!
+    Experimental: duplicated variables within one constraint row are not
+    grouped into a single coefficient.
     """
     if fn is None:
         fn = Path(TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name)
@@ -818,96 +827,532 @@ def to_block_files(m: Model, fn: Path) -> None:
     for n in range(N + 2):
         (path / f"block{n}").mkdir()
 
-    raise NotImplementedError("This function is not yet implemented fully.")
+    block_map = m.variables.get_blockmap(m.blocks.dtype.type)
 
-    # # Write out variables
-    # blocks = vars.ravel("blocks", filter_missings=True)
-    # for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
-    #     arr = vars.ravel(key, filter_missings=True)
-    #     for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
-    #         arr[blocks == n].tofile(path / f"block{n}" / suffix, sep="\n")
+    # Write out variables
+    variables = m.variables.flat
+    var_blocks = variables.blocks.to_numpy()
+    for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
+        arr = variables[key].to_numpy()
+        for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
+            arr[var_blocks == n].tofile(path / f"block{n}" / suffix, sep="\n")
 
-    # # Write out objective (uses variable blocks from above)
-    # coeffs = np.zeros(m._xCounter)
-    # coeffs[np.asarray(m.objective.vars)] = np.asarray(m.objective.coeffs)
-    # # reorder like non-missing variables
-    # coeffs = coeffs[vars.ravel("labels", filter_missings=True)]
-    # for n in tqdm(range(N + 1), desc="Write objective"):
-    #     coeffs[blocks == n].tofile(path / f"block{n}" / "c", sep="\n")
+    # Write out objective, aligned to the non-missing variable order
+    objective = m.objective.flat
+    obj_coeffs = objective.groupby("vars")["coeffs"].sum()
+    coeffs = obj_coeffs.reindex(variables.labels, fill_value=0).to_numpy()
+    for n in tqdm(range(N + 1), desc="Write objective"):
+        coeffs[var_blocks == n].tofile(path / f"block{n}" / "c", sep="\n")
 
-    # # Write out rhs
-    # blocks = cons.ravel("blocks", filter_missings=True)
-    # rhs = cons.ravel("rhs", filter_missings=True)
-    # is_equality = cons.ravel(cons.sign == EQUAL, filter_missings=True)
-    # is_lower_bound = cons.ravel(cons.sign == GREATER_EQUAL, filter_missings=True)
+    # Flatten constraints to one row per (constraint, term)
+    def constraint_terms(constraint: Constraint) -> pd.DataFrame:
+        def mask_func(data: dict[Hashable, np.ndarray]) -> pd.Series:
+            return (data["vars"] != -1) & (data["labels"] != -1)
 
-    # for n in tqdm(range(N + 2), desc="Write RHS"):
-    #     is_blockn = blocks == n
+        return to_dataframe(constraint.data, mask_func=mask_func)
 
-    #     rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b", sep="\n")
+    terms = pd.concat(
+        [constraint_terms(m.constraints[k]) for k in m.constraints],
+        ignore_index=True,
+    )
 
-    #     not_equality = is_blockn & ~is_equality
-    #     is_lower_bound_sub = is_lower_bound[not_equality]
-    #     rhs_sub = rhs[not_equality]
+    # Write out rhs, one entry per constraint
+    per_constraint = terms.drop_duplicates("labels")
+    con_blocks = per_constraint.blocks.to_numpy()
+    rhs = per_constraint.rhs.to_numpy()
+    is_equality = (per_constraint.sign == EQUAL).to_numpy()
+    is_lower_bound = (per_constraint.sign == GREATER_EQUAL).to_numpy()
 
-    #     lower_bound = np.where(is_lower_bound_sub, rhs_sub, -np.inf)
-    #     lower_bound.tofile(path / f"block{n}" / "dl", sep="\n")
+    for n in tqdm(range(N + 2), desc="Write RHS"):
+        is_blockn = con_blocks == n
 
-    #     upper_bound = np.where(~is_lower_bound_sub, rhs_sub, np.inf)
-    #     upper_bound.tofile(path / f"block{n}" / "du", sep="\n")
+        rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b", sep="\n")
 
-    # # Write out constraints
-    # conblocks = cons.ravel("blocks", "vars", filter_missings=True)
-    # varblocks = cons.ravel("var_blocks", "vars", filter_missings=True)
-    # is_equality = cons.ravel(cons.sign == EQUAL, "vars", filter_missings=True)
+        not_equality = is_blockn & ~is_equality
+        is_lower_bound_sub = is_lower_bound[not_equality]
+        rhs_sub = rhs[not_equality]
 
-    # is_varblock_0 = varblocks == 0
-    # is_conblock_L = conblocks == N + 1
+        lower_bound = np.where(is_lower_bound_sub, rhs_sub, -np.inf)
+        lower_bound.tofile(path / f"block{n}" / "dl", sep="\n")
 
-    # keys = ["labels", "coeffs", "vars"]
+        upper_bound = np.where(~is_lower_bound_sub, rhs_sub, np.inf)
+        upper_bound.tofile(path / f"block{n}" / "du", sep="\n")
 
-    # def filtered(arr, mask, key):
-    #     """
-    #     Set coefficients to zero where mask is False, keep others unchanged.
+    # Write out constraints, one entry per (constraint, term)
+    term_con_blocks = terms.blocks.to_numpy()
+    term_var_blocks = block_map[terms.vars.to_numpy()]
+    term_is_equality = (terms.sign == EQUAL).to_numpy()
 
-    #     PIPS requires this information to set the shape of sub-matrices.
-    #     """
-    #     assert key in keys
-    #     return np.where(mask, arr, 0) if key == "coeffs" else arr
+    is_varblock_0 = term_var_blocks == 0
+    is_conblock_L = term_con_blocks == N + 1
 
-    # for key, suffix in zip(keys, ["row", "data", "col"]):
-    #     arr = cons.ravel(key, "vars", filter_missings=True)
-    #     for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
-    #         is_conblock_n = conblocks == n
-    #         is_varblock_n = varblocks == n
+    keys = ["labels", "coeffs", "vars"]
 
-    #         mask = is_conblock_n & is_equality
-    #         filtered(arr[mask], is_varblock_0[mask], key).tofile(
-    #             path / f"block{n}" / f"A_{suffix}", sep="\n"
-    #         )
-    #         mask = is_conblock_n & ~is_equality
-    #         filtered(arr[mask], is_varblock_0[mask], key).tofile(
-    #             path / f"block{n}" / f"C_{suffix}", sep="\n"
-    #         )
+    def filtered(arr: np.ndarray, mask: np.ndarray, key: str) -> np.ndarray:
+        """
+        Zero out coefficients where mask is False, keeping other keys unchanged.
 
-    #         mask = is_conblock_L & is_equality
-    #         filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #             path / f"block{n}" / f"BL_{suffix}", sep="\n"
-    #         )
-    #         mask = is_conblock_L & ~is_equality
-    #         filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #             path / f"block{n}" / f"DL_{suffix}", sep="\n"
-    #         )
+        PIPS requires this information to set the shape of sub-matrices.
+        """
+        return np.where(mask, arr, 0) if key == "coeffs" else arr
 
-    #         if n:
-    #             mask = is_conblock_n & is_equality
-    #             filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #                 path / f"block{n}" / f"B_{suffix}", sep="\n"
-    #             )
-    #             mask = is_conblock_n & ~is_equality
-    #             filtered(arr[mask], is_varblock_n[mask], key).tofile(
-    #                 path / f"block{n}" / f"D_{suffix}", sep="\n"
-    #             )
+    for key, suffix in zip(keys, ["row", "data", "col"]):
+        arr = terms[key].to_numpy()
+        for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
+            is_conblock_n = term_con_blocks == n
+            is_varblock_n = term_var_blocks == n
+
+            mask = is_conblock_n & term_is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"A_{suffix}", sep="\n"
+            )
+            mask = is_conblock_n & ~term_is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"C_{suffix}", sep="\n"
+            )
+
+            mask = is_conblock_L & term_is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                path / f"block{n}" / f"BL_{suffix}", sep="\n"
+            )
+            mask = is_conblock_L & ~term_is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                path / f"block{n}" / f"DL_{suffix}", sep="\n"
+            )
+
+            if n:
+                mask = is_conblock_n & term_is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                    path / f"block{n}" / f"B_{suffix}", sep="\n"
+                )
+                mask = is_conblock_n & ~term_is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
+                    path / f"block{n}" / f"D_{suffix}", sep="\n"
+                )
+
+
+@dataclass
+class PipsProblem:
+    A_full: scipy.sparse.csr_array
+    senses: np.ndarray
+    rhs: np.ndarray
+    lb: np.ndarray
+    ub: np.ndarray
+    c: np.ndarray
+    x_labels: np.ndarray
+    objective_sense: str
+    objective_offset: float
+    n_blocks: int
+    col_offsets: list[int]
+
+
+@dataclass
+class PipsSolution:
+    primal: np.ndarray
+    labels: np.ndarray
+    objective: float | None
+    status: str | None
+    dual_eq: np.ndarray | None
+    dual_ineq: np.ndarray | None
+
+
+def _lower_indicators(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    flag = np.isfinite(values).astype(np.int8)
+    stored = np.where(flag == 1, values, 0.0).astype(np.float64)
+    return stored, flag
+
+
+def _ineq_indicators(
+    sense: np.ndarray, rhs: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    is_lower = sense == ">"
+    iclow = is_lower.astype(np.int8)
+    icupp = (~is_lower).astype(np.int8)
+    clow = np.where(is_lower, rhs, 0.0).astype(np.float64)
+    cupp = np.where(is_lower, 0.0, rhs).astype(np.float64)
+    return clow, iclow, cupp, icupp
+
+
+def _write(path: Path, arr: np.ndarray, dtype: type) -> None:
+    arr.astype(dtype).tofile(path, sep="\n")
+
+
+def _read(path: Path, dtype: type) -> np.ndarray:
+    if not path.exists():
+        return np.array([], dtype=dtype)
+    return np.fromfile(path, dtype=dtype, sep="\n")
+
+
+def _write_csr(directory: Path, name: str, sub: scipy.sparse.csr_array) -> None:
+    sub = sub.tocsr()
+    sub.sort_indices()
+    _write(directory / f"{name}_krow", sub.indptr, np.int32)
+    _write(directory / f"{name}_jcol", sub.indices, np.int32)
+    _write(directory / f"{name}_val", sub.data, np.float64)
+
+
+def to_pips_files(m: Model, fn: Path | str | None = None) -> Path:
+    """
+    Export `m` to the PIPS-IPM++ arrowhead block format under `fn`.
+
+    Requires block structure set via `m.blocks`; calls `m.calculate_block_maps()`.
+    Indicator constraints are skipped. Returns the root directory written.
+    """
+    if m.blocks is None:
+        raise ValueError("Model does not have blocks defined.")
+    if fn is None:
+        fn = Path(TemporaryDirectory(prefix="linopy-pips-", dir=m.solver_dir).name)
+    path = Path(fn)
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+
+    m.calculate_block_maps()
+    N = int(m.blocks.max())
+    for n in range(N + 1):
+        (path / f"block{n}").mkdir()
+
+    label_index = m.variables.label_index
+    vlabels = label_index.vlabels
+    block_map = m.variables.get_blockmap(m.blocks.dtype.type)
+    col_blocks = block_map[vlabels]
+
+    rows, con_labels_list, b_list, sense_list, row_blocks_list = [], [], [], [], []
+    for _, c in m.constraints.items():
+        if c.is_indicator:
+            continue
+        csr, cl, bb, ss = c.to_matrix_with_rhs(label_index)
+        mask = c.active_row_mask()
+        rows.append(csr)
+        con_labels_list.append(cl)
+        b_list.append(bb)
+        sense_list.append(ss)
+        row_blocks_list.append(c.data["blocks"].values.ravel()[mask])
+    A_full = scipy.sparse.vstack(rows, format="csr")
+    con_labels = np.concatenate(con_labels_list).astype(np.int64)
+    b_all = np.concatenate(b_list).astype(np.float64)
+    sense_all = np.concatenate(sense_list).astype("U1")
+    row_blocks = np.concatenate(row_blocks_list)
+
+    mats = m.matrices
+    lb, ub, c_obj, vtypes = mats.lb, mats.ub, mats.c, mats.vtypes
+
+    col_masks = [np.flatnonzero(col_blocks == n) for n in range(N + 1)]
+    block_cols = [len(cm) for cm in col_masks]
+    col_offsets = np.concatenate([[0], np.cumsum(block_cols)])[:-1].tolist()
+    n0 = block_cols[0]
+
+    row_eq = sense_all == "="
+    row_ineq = ~row_eq
+    row_diag = [row_blocks == n for n in range(N + 1)]
+    row_link = row_blocks == N + 1
+    eqL = row_eq & row_link
+    ineqL = row_ineq & row_link
+    mBL, mDL = int(eqL.sum()), int(ineqL.sum())
+
+    def carve(rowmask: np.ndarray, cols: np.ndarray) -> scipy.sparse.csr_array:
+        return A_full[np.flatnonzero(rowmask)][:, cols]
+
+    def write_bounds(directory: Path, cols: np.ndarray) -> None:
+        xlow, ixlow = _lower_indicators(lb[cols])
+        xupp, ixupp = _lower_indicators(ub[cols])
+        _write(directory / "col_labels", vlabels[cols], np.int64)
+        _write(directory / "xlow", xlow, np.float64)
+        _write(directory / "ixlow", ixlow, np.int8)
+        _write(directory / "xupp", xupp, np.float64)
+        _write(directory / "ixupp", ixupp, np.int8)
+        _write(directory / "c", c_obj[cols], np.float64)
+        (directory / "vtypes").write_text("\n".join(vtypes[cols].tolist()))
+
+    def write_ineq_rhs(
+        directory: Path, rowmask: np.ndarray, labels_name: str, suffix: str
+    ) -> None:
+        clow, iclow, cupp, icupp = _ineq_indicators(sense_all[rowmask], b_all[rowmask])
+        _write(directory / f"clow{suffix}", clow, np.float64)
+        _write(directory / f"iclow{suffix}", iclow, np.int8)
+        _write(directory / f"cupp{suffix}", cupp, np.float64)
+        _write(directory / f"icupp{suffix}", icupp, np.int8)
+        _write(directory / labels_name, con_labels[rowmask], np.int64)
+
+    manifest_blocks = []
+    for k in range(N + 1):
+        directory = path / f"block{k}"
+        write_bounds(directory, col_masks[k])
+
+        eq_diag = row_eq & row_diag[k]
+        ineq_diag = row_ineq & row_diag[k]
+        mA_k, mC_k = int(eq_diag.sum()), int(ineq_diag.sum())
+
+        if mA_k:
+            _write_csr(directory, "A", carve(eq_diag, col_masks[0]))
+            if k:
+                _write_csr(directory, "B", carve(eq_diag, col_masks[k]))
+        if mC_k:
+            _write_csr(directory, "C", carve(ineq_diag, col_masks[0]))
+            if k:
+                _write_csr(directory, "D", carve(ineq_diag, col_masks[k]))
+
+        _write(directory / "b", b_all[eq_diag], np.float64)
+        _write(directory / "eq_labels", con_labels[eq_diag], np.int64)
+        write_ineq_rhs(directory, ineq_diag, "ineq_labels", "")
+
+        link_cols = col_masks[0] if k == 0 else col_masks[k]
+        if mBL:
+            _write_csr(directory, "BL", carve(eqL, link_cols))
+        if mDL:
+            _write_csr(directory, "DL", carve(ineqL, link_cols))
+
+        has = {"A": bool(mA_k), "C": bool(mC_k), "BL": bool(mBL), "DL": bool(mDL)}
+        if k:
+            has["B"] = bool(mA_k)
+            has["D"] = bool(mC_k)
+        manifest_blocks.append(
+            {
+                "block": k,
+                "n_cols": block_cols[k],
+                "col_offset": int(col_offsets[k]),
+                "mA": mA_k,
+                "mC": mC_k,
+                "has": has,
+            }
+        )
+
+    directory = path / "block0"
+    _write(directory / "bL", b_all[eqL], np.float64)
+    _write(directory / "eqL_labels", con_labels[eqL], np.int64)
+    write_ineq_rhs(directory, ineqL, "ineqL_labels", "L")
+
+    expr = m.objective.expression
+    offset = float(expr.const) if np.isfinite(expr.const) else 0.0
+    manifest = {
+        "format": "linopy-pips",
+        "version": 1,
+        "n_blocks": N,
+        "objective_sense": m.objective.sense,
+        "objective_offset": offset,
+        "n_global_cols": n0,
+        "block_cols": block_cols,
+        "col_offsets": [int(o) for o in col_offsets],
+        "linking": {"mBL": mBL, "mDL": mDL},
+        "blocks": manifest_blocks,
+    }
+    (path / "pips.json").write_text(json.dumps(manifest, indent=2))
+    return path
+
+
+def read_pips_problem(fn: Path | str) -> PipsProblem:
+    """Read a PIPS block directory into a flat :class:`PipsProblem`."""
+    path = Path(fn)
+    manifest = json.loads((path / "pips.json").read_text())
+    N = manifest["n_blocks"]
+    block_cols = manifest["block_cols"]
+    col_offsets = manifest["col_offsets"]
+    n0 = manifest["n_global_cols"]
+    mBL, mDL = manifest["linking"]["mBL"], manifest["linking"]["mDL"]
+
+    x_labels, lb_list, ub_list, c_list = [], [], [], []
+    for k in range(N + 1):
+        d = path / f"block{k}"
+        xlow = _read(d / "xlow", np.float64)
+        ixlow = _read(d / "ixlow", np.int8)
+        xupp = _read(d / "xupp", np.float64)
+        ixupp = _read(d / "ixupp", np.int8)
+        x_labels.append(_read(d / "col_labels", np.int64))
+        lb_list.append(np.where(ixlow == 1, xlow, -np.inf))
+        ub_list.append(np.where(ixupp == 1, xupp, np.inf))
+        c_list.append(_read(d / "c", np.float64))
+    x_labels = np.concatenate(x_labels).astype(np.int64)
+    lb = np.concatenate(lb_list)
+    ub = np.concatenate(ub_list)
+    c = np.concatenate(c_list)
+    n_active = len(x_labels)
+
+    def read_wide(
+        d: Path, name: str, nrows: int, ncols: int, base: int
+    ) -> scipy.sparse.csr_array:
+        krow = d / f"{name}_krow"
+        if not krow.exists() or nrows == 0:
+            return scipy.sparse.csr_array((nrows, n_active))
+        indptr = _read(krow, np.int32)
+        indices = _read(d / f"{name}_jcol", np.int32)
+        data = _read(d / f"{name}_val", np.float64)
+        if indptr.size == 0:
+            indptr = np.zeros(nrows + 1, dtype=np.int32)
+        sub = scipy.sparse.csr_array((data, indices, indptr), shape=(nrows, ncols))
+        coo = sub.tocoo()
+        return scipy.sparse.csr_array(
+            (coo.data, (coo.row, coo.col + base)), shape=(nrows, n_active)
+        )
+
+    def decode_ineq(
+        d: Path, suffix: str, nrows: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        clow = _read(d / f"clow{suffix}", np.float64)
+        iclow = _read(d / f"iclow{suffix}", np.int8)
+        cupp = _read(d / f"cupp{suffix}", np.float64)
+        icupp = _read(d / f"icupp{suffix}", np.int8)
+        row_idx, senses, rhs = [], [], []
+        for i in range(nrows):
+            if iclow[i]:
+                row_idx.append(i)
+                senses.append(">")
+                rhs.append(clow[i])
+            if icupp[i]:
+                row_idx.append(i)
+                senses.append("<")
+                rhs.append(cupp[i])
+        return (
+            np.array(row_idx, dtype=int),
+            np.array(senses, dtype="U1"),
+            np.array(rhs, dtype=np.float64),
+        )
+
+    a_blocks, senses_all, rhs_all = [], [], []
+    for k in range(N + 1):
+        d = path / f"block{k}"
+        info = manifest["blocks"][k]
+        mA_k, mC_k = info["mA"], info["mC"]
+        if mA_k:
+            wide = read_wide(d, "A", mA_k, n0, 0)
+            if k:
+                wide = wide + read_wide(d, "B", mA_k, block_cols[k], col_offsets[k])
+            a_blocks.append(wide)
+            rhs_all.append(_read(d / "b", np.float64))
+            senses_all.append(np.full(mA_k, "=", dtype="U1"))
+        if mC_k:
+            wide = read_wide(d, "C", mC_k, n0, 0)
+            if k:
+                wide = wide + read_wide(d, "D", mC_k, block_cols[k], col_offsets[k])
+            row_idx, senses, rhs = decode_ineq(d, "", mC_k)
+            a_blocks.append(wide[row_idx])
+            senses_all.append(senses)
+            rhs_all.append(rhs)
+
+    if mBL:
+        d0 = path / "block0"
+        wide = read_wide(d0, "BL", mBL, n0, 0)
+        for n in range(1, N + 1):
+            wide = wide + read_wide(
+                path / f"block{n}", "BL", mBL, block_cols[n], col_offsets[n]
+            )
+        a_blocks.append(wide)
+        rhs_all.append(_read(d0 / "bL", np.float64))
+        senses_all.append(np.full(mBL, "=", dtype="U1"))
+    if mDL:
+        d0 = path / "block0"
+        wide = read_wide(d0, "DL", mDL, n0, 0)
+        for n in range(1, N + 1):
+            wide = wide + read_wide(
+                path / f"block{n}", "DL", mDL, block_cols[n], col_offsets[n]
+            )
+        row_idx, senses, rhs = decode_ineq(d0, "L", mDL)
+        a_blocks.append(wide[row_idx])
+        senses_all.append(senses)
+        rhs_all.append(rhs)
+
+    A_full = scipy.sparse.vstack(a_blocks, format="csr")
+    return PipsProblem(
+        A_full=A_full,
+        senses=np.concatenate(senses_all).astype("U1"),
+        rhs=np.concatenate(rhs_all).astype(np.float64),
+        lb=lb,
+        ub=ub,
+        c=c,
+        x_labels=x_labels,
+        objective_sense=manifest["objective_sense"],
+        objective_offset=manifest["objective_offset"],
+        n_blocks=N,
+        col_offsets=col_offsets,
+    )
+
+
+def read_pips_files(fn: Path | str) -> Model:
+    """Read a PIPS block directory back into an equivalent, solvable Model."""
+    from linopy.constants import TERM_DIM
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model
+
+    prob = read_pips_problem(fn)
+    m = Model()
+    lower = xr.DataArray(prob.lb, dims="col")
+    upper = xr.DataArray(prob.ub, dims="col")
+    x = m.add_variables(lower=lower, upper=upper, name="x")
+    x_model_labels = x.labels.values
+
+    A = prob.A_full.tocsr()
+    A.sort_indices()
+    nrows = A.shape[0]
+    counts = np.diff(A.indptr)
+    max_t = int(counts.max()) if nrows else 1
+    fill = np.arange(max_t)[None, :] < counts[:, None]
+    vars_pad = np.full((nrows, max_t), -1, dtype=np.int64)
+    coeffs_pad = np.zeros((nrows, max_t), dtype=np.float64)
+    vars_pad[fill] = x_model_labels[A.indices]
+    coeffs_pad[fill] = A.data
+
+    data = xr.Dataset(
+        {
+            "coeffs": xr.DataArray(coeffs_pad, dims=["row", TERM_DIM]),
+            "vars": xr.DataArray(vars_pad, dims=["row", TERM_DIM]),
+            "const": 0.0,
+        }
+    )
+    lhs = LinearExpression(data, m)
+    signs = np.where(prob.senses == "=", "=", np.where(prob.senses == "<", "<=", ">="))
+    m.add_constraints(
+        lhs, xr.DataArray(signs, dims="row"), xr.DataArray(prob.rhs, dims="row")
+    )
+
+    m.add_objective(
+        (x * xr.DataArray(prob.c, dims="col")).sum(), sense=prob.objective_sense
+    )
+    return m
+
+
+def read_pips_solution(fn: Path | str, model: Model | None = None) -> PipsSolution:
+    """Read the solution the C++ driver wrote into `fn` (spec section D)."""
+    path = Path(fn)
+    manifest = json.loads((path / "pips.json").read_text())
+    N = manifest["n_blocks"]
+
+    primal, labels, y, z = [], [], [], []
+    for k in range(N + 1):
+        d = path / f"block{k}"
+        primal.append(_read(d / "x_sol", np.float64))
+        labels.append(_read(d / "col_labels", np.int64))
+        y.append(_read(d / "y_sol", np.float64))
+        z.append(_read(d / "z_sol", np.float64))
+    y.append(_read(path / "block0" / "yL_sol", np.float64))
+    z.append(_read(path / "block0" / "zL_sol", np.float64))
+
+    primal_arr = np.concatenate(primal).astype(np.float64)
+    labels_arr = np.concatenate(labels).astype(np.int64)
+    dual_eq = np.concatenate(y) if any(a.size for a in y) else None
+    dual_ineq = np.concatenate(z) if any(a.size for a in z) else None
+
+    obj_path = path / "objective"
+    objective = float(_read(obj_path, np.float64)[0]) if obj_path.exists() else None
+    status_path = path / "status"
+    status = status_path.read_text().strip() if status_path.exists() else None
+
+    if model is not None and primal_arr.size:
+        lookup = np.full(int(labels_arr.max()) + 1, np.nan)
+        lookup[labels_arr] = primal_arr
+        for _, var in model.variables.items():
+            vl = var.labels.values
+            vals = np.where(vl == -1, np.nan, lookup[np.where(vl == -1, 0, vl)])
+            var.solution = xr.DataArray(vals, var.coords, dims=var.dims)
+        if objective is not None:
+            model.objective._value = objective
+
+    return PipsSolution(
+        primal=primal_arr,
+        labels=labels_arr,
+        objective=objective,
+        status=status,
+        dual_eq=dual_eq,
+        dual_ineq=dual_ineq,
+    )
 
 
 def non_bool_dict(

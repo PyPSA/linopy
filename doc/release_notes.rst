@@ -17,6 +17,11 @@ Upcoming Version
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
 
+*Block-structured solving (PIPS-IPM++)*
+
+* New ``Model.to_pips_files`` exports a model with block structure (assigned via ``Model.blocks``) into the doubly-bordered block-diagonal ("arrowhead") format consumed by the distributed solver `PIPS-IPM++ <https://gitlab.com/pips-ipmpp/pips-ipmpp>`_, deriving the submatrices from linopy's internal CSR. ``linopy.io.read_pips_files`` reconstructs an equivalent flat model (usable to validate the export against any solver with no PIPS build), and ``read_pips_solution`` reads the solver output back. See :doc:`pips-installation`.
+* An env-gated ``pips`` solver (``solver_name="pips"``, enabled through the ``PIPS_BINARY`` environment variable) runs the export through PIPS under MPI and maps the primal, duals and objective back onto the model. It stays absent from ``available_solvers`` unless the driver binary is present, so ordinary installs are unaffected.
+
 *Other*
 
 * Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).

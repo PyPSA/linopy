@@ -18,7 +18,12 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
-from linopy.io import signed_number
+from linopy.io import (
+    read_pips_files,
+    read_pips_problem,
+    read_pips_solution,
+    signed_number,
+)
 from linopy.testing import assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
@@ -364,8 +369,8 @@ def test_to_blocks(tmp_path: Path) -> None:
 
     lower: pd.Series = pd.Series(range(20))
     upper: pd.Series = pd.Series(range(30, 50))
-    x = m.add_variables(lower, upper)
-    y = m.add_variables(lower, upper)
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(lower, upper, name="y")
 
     m.add_constraints(x + y, LESS_EQUAL, 10)
 
@@ -373,8 +378,256 @@ def test_to_blocks(tmp_path: Path) -> None:
 
     m.blocks = xr.DataArray([1] * 10 + [2] * 10)
 
-    with pytest.raises(NotImplementedError):
-        m.to_block_files(tmp_path)
+    m.to_block_files(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "block0",
+        "block1",
+        "block2",
+        "block3",
+    ]
+
+    def read(block: int, suffix: str) -> np.ndarray:
+        return np.fromfile(tmp_path / f"block{block}" / suffix, sep="\n")
+
+    labels = np.concatenate([read(n, "x") for n in range(3)]).astype(int)
+    assert sorted(labels) == list(range(40))
+
+    lowers = np.concatenate([read(n, "xl") for n in range(3)])
+    upper_bounds = np.concatenate([read(n, "xu") for n in range(3)])
+    assert sorted(lowers) == sorted(list(range(20)) * 2)
+    assert sorted(upper_bounds) == sorted(list(range(30, 50)) * 2)
+
+    coeffs = np.concatenate([read(n, "c") for n in range(3)])
+    x_labels = m.variables["x"].labels.values
+    is_x = np.isin(labels, x_labels)
+    assert (coeffs[is_x] == 2).all()
+    assert (coeffs[~is_x] == 3).all()
+
+
+def _pips_time_plant_model(masked: bool) -> Model:
+    n_time, n_plant, n_blocks = 12, 3, 2
+    m = Model()
+    time = pd.Index(range(n_time), name="time")
+    plant = pd.Index(range(n_plant), name="plant")
+    demand = pd.Series(3 + np.sin(np.pi / 24 * time), index=time)
+    m.blocks = xr.DataArray(
+        np.repeat(np.arange(1, n_blocks + 1), n_time // n_blocks), [time]
+    )
+    x = m.add_variables(lower=0, coords=[time, plant], name="x")
+    y = m.add_variables(lower=0, coords=[plant], name="y")
+    m.add_constraints(y.sum() >= 0, name="total_capacity")
+    m.add_constraints(y - x >= 0, name="capacity")
+    m.add_constraints(x.sum("plant") == demand, name="demand")
+    ramp = (x - x.shift(time=1)).isel(time=slice(1, None))
+    m.add_constraints(ramp <= 10, name="ramplimit")
+    m.add_constraints(x.sum() <= 50, name="co2limit")
+    if masked:
+        mask = xr.DataArray(np.arange(n_time) < n_time // 2, [time])
+        m.add_constraints(x.sum("plant") <= 20, name="cap", mask=mask)
+    m.add_objective((2 * x).sum() + y.sum())
+    return m
+
+
+def _trivial_pips_model() -> Model:
+    m = Model()
+    idx = pd.Index(range(4), name="i")
+    m.blocks = xr.DataArray([1, 1, 2, 2], [idx])
+    x = m.add_variables(lower=0, upper=10, coords=[idx], name="x")
+    g = m.add_variables(lower=0, upper=5, name="g")
+    m.add_constraints(x.sum() + g <= 20, name="lim")
+    m.add_constraints(x >= 1, name="floor")
+    m.add_objective(x.sum() + 2 * g, sense="max")
+    return m
+
+
+PIPS_MODELS = {
+    "time-plant": lambda: _pips_time_plant_model(masked=False),
+    "time-plant-masked": lambda: _pips_time_plant_model(masked=True),
+    "trivial": _trivial_pips_model,
+}
+
+
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_problem_matches_matrices(
+    builder: Callable[[], Model], tmp_path: Path
+) -> None:
+    m = builder()
+    m.to_pips_files(tmp_path)
+    prob = read_pips_problem(tmp_path)
+    mats = m.matrices
+
+    order_prob = np.argsort(prob.x_labels)
+    order_orig = np.argsort(mats.vlabels)
+    assert np.array_equal(prob.x_labels[order_prob], mats.vlabels[order_orig])
+    assert np.allclose(prob.lb[order_prob], mats.lb[order_orig])
+    assert np.allclose(prob.ub[order_prob], mats.ub[order_orig])
+    assert np.allclose(prob.c[order_prob], mats.c[order_orig])
+    assert prob.A_full.nnz == mats.A.nnz
+    assert prob.A_full.shape == mats.A.shape
+    assert sorted(prob.senses.tolist()) == sorted(mats.sense.tolist())
+    assert prob.objective_sense == m.objective.sense
+
+
+def _read_pips_block_system(
+    d: Path,
+) -> tuple[
+    dict[tuple[int, int], float], dict[int, tuple[str, float]], list[np.ndarray]
+]:
+    n_blocks = json.loads((d / "pips.json").read_text())["n_blocks"]
+
+    def vec(k: int, name: str, dtype: type = np.float64) -> np.ndarray:
+        path = d / f"block{k}" / name
+        return (
+            np.fromfile(path, dtype=dtype, sep="\n")
+            if path.exists()
+            else np.array([], dtype)
+        )
+
+    def labels(k: int, name: str) -> np.ndarray:
+        return vec(k, name, np.int64)
+
+    def csr(k: int, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        if not (d / f"block{k}" / f"{name}_krow").exists():
+            return None
+        return (
+            vec(k, f"{name}_krow", np.int32),
+            vec(k, f"{name}_jcol", np.int32),
+            vec(k, f"{name}_val"),
+        )
+
+    coeffs: dict[tuple[int, int], float] = {}
+
+    def add(triplet, row_labels: np.ndarray, col_labels: np.ndarray) -> None:
+        if triplet is None:
+            return
+        krow, jcol, val = triplet
+        for i, row in enumerate(row_labels):
+            for p in range(int(krow[i]), int(krow[i + 1])):
+                key = (int(row), int(col_labels[int(jcol[p])]))
+                coeffs[key] = coeffs.get(key, 0.0) + float(val[p])
+
+    global_cols = labels(0, "col_labels")
+    eqL, ineqL = labels(0, "eqL_labels"), labels(0, "ineqL_labels")
+    add(csr(0, "BL"), eqL, global_cols)
+    add(csr(0, "DL"), ineqL, global_cols)
+    for k in range(n_blocks + 1):
+        eqr, ineqr = labels(k, "eq_labels"), labels(k, "ineq_labels")
+        add(csr(k, "A"), eqr, global_cols)
+        add(csr(k, "C"), ineqr, global_cols)
+        if k >= 1:
+            local = labels(k, "col_labels")
+            add(csr(k, "B"), eqr, local)
+            add(csr(k, "D"), ineqr, local)
+            add(csr(k, "BL"), eqL, local)
+            add(csr(k, "DL"), ineqL, local)
+
+    rhs: dict[int, tuple[str, float]] = {}
+
+    def add_ineq(row_labels: np.ndarray, suffix: str) -> None:
+        iclow = vec(0, f"iclow{suffix}", np.int8)
+        clow, cupp = vec(0, f"clow{suffix}"), vec(0, f"cupp{suffix}")
+        for i, lbl in enumerate(row_labels):
+            rhs[int(lbl)] = (">", float(clow[i])) if iclow[i] else ("<", float(cupp[i]))
+
+    for k in range(n_blocks + 1):
+        for lbl, b in zip(labels(k, "eq_labels"), vec(k, "b")):
+            rhs[int(lbl)] = ("=", float(b))
+        iclow = vec(k, "iclow", np.int8)
+        clow, cupp = vec(k, "clow"), vec(k, "cupp")
+        for i, lbl in enumerate(labels(k, "ineq_labels")):
+            rhs[int(lbl)] = (">", float(clow[i])) if iclow[i] else ("<", float(cupp[i]))
+    for lbl, b in zip(eqL, vec(0, "bL")):
+        rhs[int(lbl)] = ("=", float(b))
+    add_ineq(ineqL, "L")
+
+    col_partition = [labels(k, "col_labels") for k in range(n_blocks + 1)]
+    return coeffs, rhs, col_partition
+
+
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_block_structure_reconstructs_matrix(
+    builder: Callable[[], Model], tmp_path: Path
+) -> None:
+    m = builder()
+    m.to_pips_files(tmp_path)
+    coeffs, rhs, col_partition = _read_pips_block_system(tmp_path)
+    mats = m.matrices
+
+    all_cols = np.concatenate(col_partition)
+    assert sorted(all_cols.tolist()) == sorted(mats.vlabels.tolist())
+    assert len(all_cols) == len(set(all_cols.tolist()))
+
+    coo = mats.A.tocoo()
+    canon: dict[tuple[int, int], float] = {}
+    for r, c, v in zip(coo.row.tolist(), coo.col.tolist(), coo.data.tolist()):
+        key = (int(mats.clabels[r]), int(mats.vlabels[c]))
+        canon[key] = canon.get(key, 0.0) + v
+    assert coeffs.keys() == canon.keys()
+    for key, value in canon.items():
+        assert coeffs[key] == pytest.approx(value)
+
+    canon_rhs = {
+        int(mats.clabels[i]): (str(mats.sense[i]), float(mats.b[i]))
+        for i in range(len(mats.clabels))
+    }
+    assert rhs.keys() == canon_rhs.keys()
+    for key, (sense, b) in canon_rhs.items():
+        assert rhs[key][0] == sense
+        assert rhs[key][1] == pytest.approx(b)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="highs not installed")
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_roundtrip_solve(builder: Callable[[], Model], tmp_path: Path) -> None:
+    m = builder()
+    m.to_pips_files(tmp_path)
+    m2 = read_pips_files(tmp_path)
+
+    assert m2.objective.sense == m.objective.sense
+    m.solve(solver_name="highs")
+    m2.solve(solver_name="highs")
+    assert m2.objective.value == pytest.approx(m.objective.value)
+    assert set(m2.matrices.vlabels.tolist()) == set(m.matrices.vlabels.tolist())
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="highs not installed")
+def test_pips_solution_roundtrip(tmp_path: Path) -> None:
+    m = _pips_time_plant_model(masked=True)
+    m.to_pips_files(tmp_path)
+    m2 = read_pips_files(tmp_path)
+    m.solve(solver_name="highs")
+
+    lookup = dict(zip(m.matrices.vlabels.tolist(), m.matrices.sol.tolist()))
+    manifest = json.loads((tmp_path / "pips.json").read_text())
+    for k in range(manifest["n_blocks"] + 1):
+        cl = np.fromfile(
+            tmp_path / f"block{k}" / "col_labels", dtype=np.int64, sep="\n"
+        )
+        np.array([lookup[int(label)] for label in cl]).tofile(
+            tmp_path / f"block{k}" / "x_sol", sep="\n"
+        )
+    np.array([m.objective.value]).tofile(tmp_path / "objective", sep="\n")
+    (tmp_path / "status").write_text("optimal")
+
+    solution = read_pips_solution(tmp_path, model=m2)
+    assert solution.status == "optimal"
+    assert solution.objective == pytest.approx(m.objective.value)
+    assert sorted(solution.primal) == pytest.approx(sorted(m.matrices.sol))
+    assert m2.objective.value == pytest.approx(m.objective.value)
+
+
+@pytest.mark.skipif(
+    "pips" not in available_solvers or "highs" not in available_solvers,
+    reason="requires the PIPS driver (set PIPS_BINARY) and highs for the reference",
+)
+@pytest.mark.parametrize("builder", PIPS_MODELS.values(), ids=PIPS_MODELS.keys())
+def test_pips_end_to_end_solve(builder: Callable[[], Model]) -> None:
+    reference = builder()
+    reference.solve(solver_name="highs")
+    m = builder()
+    assert m.solve(solver_name="pips") == ("ok", "optimal")
+    assert m.objective.value == pytest.approx(reference.objective.value, abs=1e-3)
 
 
 class TestSignedNumberExpr:
