@@ -207,6 +207,28 @@ class DeclarativeModelBuilder(_DeclarativeBase):
                 messages = error_msgs if check.errors == "raise" else warn_msgs
                 messages.append(check.message)
 
+        for param in self.math.parameters._active:
+            param_math = self.math.parameters[param]
+            param_data = self.input_data.get(param, None)
+            if param_data is None or param_math.dims is None:
+                continue
+            if set(param_data.dims).difference(param_math.dims):
+                error_msgs.append(
+                    f"Parameter `{param}` has dimensions {param_data.dims}, "
+                    f"but math definition expects max {param_math.dims}."
+                )
+
+        for lookup in self.math.lookups._active:
+            lookup_math = self.math.lookups[lookup]
+            lookup_data = self.input_data.get(lookup, None)
+            if lookup_data is None or lookup_math.dims is None:
+                continue
+            if set(lookup_data.dims).difference(lookup_math.dims):
+                error_msgs.append(
+                    f"Lookup `{lookup}` has dimensions {lookup_data.dims}, "
+                    f"but math definition expects max {lookup_math.dims}."
+                )
+
         if warn_msgs:
             bullets = "\n".join(f" * {msg}" for msg in sorted(set(warn_msgs)))
             LOGGER.info(

@@ -333,6 +333,11 @@ class Component(Node):
             # A parameter/lookup/dimension defined in the math but absent from the
             # input data resolves to its default (NaN if none is set).
             evaluated = ctx.input_data.get(name, xr.DataArray(np.nan))
+            if hasattr(math_def, "dims") and math_def.dims is not None:
+                evaluated = evaluated.reindex(
+                    {dim: ctx.input_data.coords[dim] for dim in math_def.dims},
+                    fill_value=np.nan,
+                )
         else:
             # Model entries (variables / expressions): a model entry that was never
             # built (e.g. skipped because its mask was empty) resolves to a NaN

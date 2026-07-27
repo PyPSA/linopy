@@ -1,0 +1,442 @@
+dimensions:
+  name:
+    dtype: string
+    ordered: false
+  snapshot:
+    dtype: datetime
+    ordered: true
+  node:
+    dtype: string
+    ordered: false
+
+parameters:
+  p_max_pu:
+    dims: [name, snapshot]
+    default: .inf
+    unit: pu
+  e_max_pu:
+    dims: [name, snapshot]
+    default: .inf
+    unit: pu
+  s_max_pu:
+    dims: [name, snapshot]
+    default: .inf
+    unit: pu
+  p_min_pu:
+    dims: [name, snapshot]
+    default: 0
+    unit: pu
+  e_min_pu:
+    dims: [name, snapshot]
+    default: 0
+    unit: pu
+  s_min_pu:
+    dims: [name, snapshot]
+    default: 0
+    unit: pu
+  p_nom_min:
+    dims: [name]
+    default: 0
+    unit: MW
+  e_nom_min:
+    dims: [name]
+    default: 0
+    unit: MWh
+  s_nom_min:
+    dims: [name]
+    default: 0
+    unit: MVA
+  p_nom_max:
+    dims: [name]
+    default: .inf
+    unit: MW
+  e_nom_max:
+    dims: [name]
+    default: .inf
+    unit: MWh
+  s_nom_max:
+    dims: [name]
+    default: .inf
+    unit: MVA
+  capital_cost:
+    dims: [name]
+    default: 0
+    unit: $\frac{currency}{nominal_capacity}$
+  overnight_cost:
+    dims: [name]
+    default: 0
+    unit: $\frac{currency}{nominal_capacity}$
+  fom_cost:
+    dims: [name]
+    default: 0
+    unit: $\frac{currency}{nominal_capacity}$
+  nyears:
+    dims: [name]
+    default: 1.0
+    unit: years
+  discount_rate:
+    dims: [name]
+    default: 0
+    unit: unitless
+  lifetime:
+    dims: [name]
+    default: .inf
+    unit: years
+  snapshot_weightings:
+    dims: [snapshot]
+    default: 1
+    unit: hours
+  marginal_cost:
+    dims: [name, snapshot]
+    default: 0
+    unit: $\frac{currency}{dispatch}$
+  efficiency:
+    dims: [name, snapshot]
+    default: 1
+    unit: unitless
+  rate1:
+    dims: [name, snapshot]
+    default: 1
+    unit: unitless
+  sign:
+    dims: [name]
+    default: 1
+    unit: unitless
+  p_set:
+    dims: [name, snapshot]
+    default: 0
+    unit: MWh
+  efficiency_dispatch:
+    dims: [name, snapshot]
+    default: 1
+    unit: unitless
+  efficiency_store:
+    dims: [name, snapshot]
+    default: 1
+    unit: unitless
+  inflow:
+    dims: [name, snapshot]
+    default: 0
+    unit: MWh
+  e_initial:
+    dims: [name]
+    default: 0
+    unit: MWh
+  state_of_charge_initial:
+    dims: [name]
+    default: 0
+    unit: MWh
+  standing_loss:
+    dims: [name, snapshot]
+    default: 0
+    unit: $\frac{}{hour}$
+
+lookups:
+  active:
+    dims: [name, snapshot]
+    dtype: bool
+    default: true
+  committable:
+    dims: [name]
+    dtype: bool
+    default: false
+  component:
+    dims: [name]
+    dtype: string
+    one_of:
+      - "buses"
+      - "global_constraints"
+      - "lines"
+      - "transformers"
+      - "links"
+      - "loads"
+      - "generators"
+      - "processes"
+      - "storage_units"
+      - "stores"
+  s_nom_extendable:
+    dims: [name]
+    dtype: bool
+    default: true
+  p_nom_extendable:
+    dims: [name]
+    dtype: bool
+    default: true
+  e_nom_extendable:
+    dims: [name]
+    dtype: bool
+    default: true
+  bus:
+    dims: [name]
+    dtype: string
+  bus0:
+    dims: [name]
+    dtype: string
+  bus1:
+    dims: [name]
+    dtype: string
+  cyclic_state_of_charge:
+    dims: [name]
+    dtype: bool
+    default: true
+
+variables:
+  p:
+    foreach: [name, snapshot]
+    mask: "[generators, links, loads, processes, stores] in component"
+    unit: MWh
+    default: 0
+    bounds:
+      lower: -.inf
+      upper: .inf
+  p_dispatch:
+    foreach: [name]
+    mask: component == storage_units
+    unit: MWh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+  p_store:
+    foreach: [name]
+    mask: component == storage_units
+    unit: MWh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+  e:
+    foreach: [name, snapshot]
+    mask: component == stores
+    unit: MWh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+  state_of_charge:
+    foreach: [name, snapshot]
+    mask: component == storage_units
+    unit: MWh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+  s:
+    foreach: [name, snapshot]
+    mask: "[lines, transformers] in component"
+    unit: MVAh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+  p_nom:
+    foreach: [name]
+    mask: "[generators, links, processes, storage_units, stores] in component"
+    unit: MW
+    default: .inf
+    bounds:
+      lower: 0
+      upper: .inf
+  s_nom:
+    foreach: [name]
+    mask: "[lines, transformers] in component"
+    unit: MW
+    default: .inf
+    bounds:
+      lower: 0
+      upper: .inf
+  e_nom:
+    foreach: [name]
+    mask: component == stores
+    unit: MW
+    default: .inf
+    bounds:
+      lower: 0
+      upper: .inf
+  spill:
+    foreach: [name, snapshot]
+    mask: component == storage_units
+    unit: MWh
+    default: 0
+    bounds:
+      lower: 0
+      upper: .inf
+
+expressions:
+
+  capex:
+    foreach: [name]
+    mask: capital_cost or overnight_cost or fom_cost
+    equations:
+      - expression: $capacity * (capital_cost + fom_cost + $cc)
+    sub_expressions:
+      capacity:
+        - mask: "[generators, links, processes, stores] in component"
+          expression: p_nom
+        - mask: component == stores
+          expression: e_nom
+        - mask: component == lines
+          expression: s_nom
+      cc: # capital cost derived from overnight cost
+        - mask: overnight_cost and discount_rate == 0 and lifetime == .inf
+          expression: "0"
+        - mask: overnight_cost and discount_rate == 0 and not lifetime == .inf
+          expression: 1 / lifetime
+        - mask: overnight_cost and discount_rate > 0 and not lifetime == .inf
+          expression: overnight_cost * discount_rate / (1 - 1 / (1 + discount_rate) ** lifetime)
+  opex:
+    foreach: [name, snapshot]
+    mask: marginal_cost
+    equations:
+      - expression: (p + s) * marginal_cost * snapshot_weightings
+
+constraints:
+  operation_upper:
+    description: "Upper limit on per-snapshot dispatch"
+    foreach: [name, snapshot]
+    mask: active and not committable
+    equations:
+      - mask: "[generators, links, processes] in component and not p_max_pu == 0"
+        expression: p <= p_max_pu * p_nom
+      - mask: "[generators, links, processes] in component and p_max_pu == 0"
+        expression: p <= 0
+      - mask: "component == storage_units and not p_max_pu == 0"
+        expression: p_dispatch <= p_max_pu * p_nom
+      - mask: "component == storage_units and p_max_pu == 0"
+        expression: p_dispatch <= 0
+      - mask: "component == stores and not e_max_pu == 0"
+        expression: e <= e_max_pu * e_nom
+      - mask: "component == stores and e_max_pu == 0"
+        expression: e <= 0
+      - mask: "[lines, transformers] in component and not s_max_pu == 0"
+        expression: s <= s_max_pu * s_nom
+      - mask: "[lines, transformers] in component and s_max_pu == 0"
+        expression: s <= 0
+
+  operation_upper_store:
+    description: "Upper limit on per-snapshot storage unit charging"
+    foreach: [name, snapshot]
+    mask: active and not committable and component == storage_units
+    equations:
+      - mask: "not p_max_pu == 0"
+        expression: p_store <= p_max_pu * p_nom
+      - mask: "p_max_pu == 0"
+        expression: p_store <= 0
+
+  operation_lower:
+    description: "Lower limit on per-snapshot dispatch"
+    foreach: [name, snapshot]
+    mask: active and not committable
+    equations:
+      - mask: "[generators, links, processes] in component and not p_min_pu == 0"
+        expression: p >= p_min_pu * p_nom
+      - mask: "[generators, links, processes] in component and p_min_pu == 0"
+        expression: p >= 0
+      - mask: "component == storage_units and not p_min_pu == 0"
+        expression: p_dispatch >= p_min_pu * p_nom
+      - mask: "component == storage_units and p_min_pu == 0"
+        expression: p_dispatch >= 0
+      - mask: "component == stores and not e_min_pu == 0"
+        expression: e >= e_min_pu * e_nom
+      - mask: "component == stores and e_min_pu == 0"
+        expression: e >= 0
+      - mask: "[lines, transformers] in component and not s_min_pu == 0"
+        expression: s >= s_min_pu * s_nom
+      - mask: "[lines, transformers] in component and s_min_pu == 0"
+        expression: s >= 0
+
+  operation_lower_store:
+    description: "Lower limit on per-snapshot storage unit charging"
+    foreach: [name, snapshot]
+    mask: active and not committable and component == storage_units
+    equations:
+      - mask: "not p_min_pu == 0"
+        expression: p_store >= p_min_pu * p_nom
+      - mask: "p_min_pu == 0"
+        expression: p_store >= 0
+
+  capacity_lower:
+    foreach: [name]
+    mask: any(active, over=snapshot)
+    equations:
+      - mask: "[generators, links, processes, storage_units] in component and p_nom_extendable==True"
+        expression: p_nom >= p_nom_min
+      - mask: "component == stores and e_nom_extendable==True"
+        expression: e_nom >= e_nom_min
+      - mask: "[lines, transformers] in component and s_nom_extendable==True"
+        expression: s_nom >= s_nom_min
+
+  capacity_upper:
+    foreach: [name]
+    mask: any(active, over=snapshot)
+    equations:
+      - mask: "[generators, links, processes, storage_units] in component and p_nom_extendable==True and not p_nom_max == inf"
+        expression: p_nom <= p_nom_max
+      - mask: "component == stores and e_nom_extendable==True and not e_nom_max == inf"
+        expression: e_nom <= e_nom_max
+      - mask: "[lines, transformers] in component and s_nom_extendable==True and not s_nom_max == inf"
+        expression: s_nom <= s_nom_max
+
+  fix_load:
+    description: "Fix load flow"
+    foreach: [name, snapshot]
+    mask: component == loads
+    equations:
+      - expression: p = p_set
+
+  nodal_balance:
+    foreach: [node, snapshot]
+    equations:
+      - expression: >-
+          group_sum((p + p_dispatch - p_store) * sign, bus, node) -
+          group_sum(p * sign, bus0, node) +
+          group_sum(p * sign * (efficiency + rate1), bus1, node)
+          = 0
+
+  storage_balance:
+    foreach: [name, snapshot]
+    mask: active
+    equations:
+      - mask: not cyclic_state_of_charge==True and snapshot == get_val_at_index(snapshot=0)
+        expression: $soc + ($dispatch * snapshot_weightings) = $soc_init
+      - mask: (not cyclic_state_of_charge and not snapshot == get_val_at_index(snapshot=0)) or cyclic_state_of_charge
+        expression: >-
+          $soc + ($dispatch * snapshot_weightings) =
+          roll($soc * (standing_loss ** snapshot_weightings), snapshot=1)
+    sub_expressions:
+      soc:
+        - mask: component == stores
+          expression: e
+        - mask: component == storage_units
+          expression: state_of_charge
+      dispatch:
+        - mask: component == stores
+          expression: p
+        - mask: component == storage_units
+          expression: (1 / efficiency_dispatch) * p_dispatch - efficiency_store * p_store + spill - inflow
+      soc_init:
+        - mask: component == stores
+          expression: e_initial
+        - mask: component == storage_units
+          expression: state_of_charge_initial
+
+objectives:
+  cost_minimisation:
+    equations:
+      - expression: sum(opex, over=[snapshot]) + sum(capex, over=name)
+    sense: min
+
+checks:
+  overnight_capital_overlap:
+    mask: overnight_cost and capital_cost
+    message: can only define one of `overnight_cost` and `capital_cost`
+    errors: raise
+    active: false
+  rate_efficiency_overlap:
+    mask: efficiency and rate1
+    message: cannot define `efficiency` and `rate1` for the same component
+    errors: raise
+  efficiency_range:
+    mask: efficiency > 1 or efficiency < 0
+    message: must be between 0 and 1
+    errors: raise

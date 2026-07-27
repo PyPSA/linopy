@@ -196,6 +196,14 @@ class ParameterDef(_MathComponent):
     """The default value for the parameter, if not set in the data."""
     unit: str = ""
     """The unit of the parameter, e.g. 'kW', 'm', 'kg', 'energy', 'power', ..."""
+    dims: UniqueList[AttrStr] | None = Field(default=None)
+    """The dimensions over which the parameter can be defined.
+
+    It is not necessary for a parameter to be defined over all of its dimensions.
+
+    If undefined, it is assumed that the parameter can be indexed over all dimensions.
+    If an empty list, it is assumed that the parameter is a scalar and not indexed over any dimensions.
+    """
 
     @property
     def dtype(self) -> Literal["float"]:
@@ -212,6 +220,13 @@ class LookupDef(_MathComponent):
     """The default value for the lookup, if not set in the data."""
     dtype: Literal["float", "string", "bool", "datetime", "date"] = "string"
     """The lookup data type."""
+    dims: UniqueList[AttrStr] | None = Field(default=None)
+    """The dimensions over which the lookup can be defined.
+
+    It is not necessary for a lookup to be defined over all of its dimensions.
+
+    If undefined, it is assumed that the lookup can be indexed over all dimensions.
+    If an empty list, it is assumed that the lookup is a scalar and not indexed over any dimensions."""
     one_of: list | None = None
     """If given, the lookup values must be one of these items."""
 
@@ -510,6 +525,24 @@ class MathModel(LinopyBaseModel):
                 f"Non-unique names in math components: {sorted(duplicates)}."
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> Self:
+        """Ensure all dimensions referenced in the math schema are defined."""
+        defined_dims = set(self.dimensions._active)
+        for field in type(self).model_fields:
+            if field == "dimensions":
+                continue
+            dim_field = "dims" if field in ("parameters", "lookups") else "foreach"
+            for component, _def in getattr(self, field)._active.items():
+                if hasattr(_def, dim_field):
+                    component_dims = set(getattr(_def, dim_field) or defined_dims)
+                    missing = component_dims - defined_dims
+                    if missing:
+                        raise ValueError(
+                            f"Component `{field}.{component}` references undefined dimensions: {sorted(missing)}."
+                        )
         return self
 
     @cached_property
