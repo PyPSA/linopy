@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -24,7 +25,7 @@ from linopy.declarative.latex import (
     _escape_text_mode,
     latex_math_doc,
 )
-from linopy.declarative.schema import ConfigModel, MathModel
+from linopy.declarative.schema import COMPONENTS_T, ConfigModel, MathModel
 from linopy.expressions import LinearExpression
 from linopy.variables import Variable
 
@@ -87,7 +88,7 @@ def _inputs() -> xr.Dataset:
     )
 
 
-def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> nodes.Context:
+def _ctx(builder: DeclarativeModelBuilder, **kwargs: Any) -> nodes.Context:
     """Build a fresh evaluation context from a builder's validated components."""
     return nodes.Context(
         model=builder.model,
@@ -100,7 +101,7 @@ def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> nodes.Context:
 
 
 def _first_equation(
-    builder: DeclarativeModelBuilder, group: str, name: str
+    builder: DeclarativeModelBuilder, group: COMPONENTS_T, name: str
 ) -> tuple[parsing.Equation, xr.DataArray, nodes.Context]:
     """Return a pre-parsed component's first equation, sub-mask, and context."""
     ctx = _ctx(builder)
@@ -126,7 +127,7 @@ class TestGrammar:
 
     NAMES = frozenset({"flow", "cost", "cap_max", "node"})
 
-    def test_equation_tree_shape(self):
+    def test_equation_tree_shape(self) -> None:
         tree = grammar.equation_grammar(self.NAMES).parse_string(
             "flow <= cap_max", parse_all=True
         )[0]
@@ -134,7 +135,7 @@ class TestGrammar:
         assert tree.op == "<="
         assert isinstance(tree.lhs, grammar.Component) and tree.lhs.name == "flow"
 
-    def test_equation_rejects_mask_only_operators(self):
+    def test_equation_rejects_mask_only_operators(self) -> None:
         import pyparsing as pp
 
         with pytest.raises(pp.ParseException):
@@ -142,21 +143,21 @@ class TestGrammar:
                 "flow < cap_max", parse_all=True
             )
 
-    def test_arithmetic_tree_shape(self):
+    def test_arithmetic_tree_shape(self) -> None:
         tree = grammar.arithmetic_grammar(self.NAMES).parse_string(
             "flow * cost + 1", parse_all=True
         )[0]
         assert isinstance(tree, grammar.Arith)
         assert tree.rest[0][0] == "+"
 
-    def test_sliced_component(self):
+    def test_sliced_component(self) -> None:
         tree = grammar.arithmetic_grammar(self.NAMES).parse_string(
             "flow[node=$n]", parse_all=True
         )[0]
         assert isinstance(tree, grammar.Sliced)
         assert isinstance(tree.slices["node"], grammar.SliceRef)
 
-    def test_sub_expression_grammar_rejects_refs(self):
+    def test_sub_expression_grammar_rejects_refs(self) -> None:
         import pyparsing as pp
 
         with pytest.raises(pp.ParseException):
@@ -164,7 +165,7 @@ class TestGrammar:
                 "$foo + 1", parse_all=True
             )
 
-    def test_find_refs_in_call_kwargs(self):
+    def test_find_refs_in_call_kwargs(self) -> None:
         tree = grammar.arithmetic_grammar(self.NAMES).parse_string(
             "sum($foo, over=node) + flow[node=$n]", parse_all=True
         )[0]
@@ -172,7 +173,7 @@ class TestGrammar:
         assert grammar.find_refs(tree, grammar.SliceRef) == {"n"}
         assert grammar.find_refs(tree, grammar.Component) == {"node", "flow"}
 
-    def test_node_repr_is_clean(self):
+    def test_node_repr_is_clean(self) -> None:
         tree = grammar.arithmetic_grammar(self.NAMES).parse_string(
             "flow * cost + 1", parse_all=True
         )[0]
@@ -180,7 +181,7 @@ class TestGrammar:
         assert "instring=" not in rendered
         assert "loc=" not in rendered
 
-    def test_parse_error_carries_position_marker(self):
+    def test_parse_error_carries_position_marker(self) -> None:
         math = _math()
         math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
         with pytest.raises(ValueError, match="equations\\[0\\].expression") as excinfo:
@@ -193,7 +194,7 @@ class TestGrammar:
 class TestParseWalkthrough:
     """Whole-dict parse walkthrough with aggregated errors."""
 
-    def test_errors_aggregate_across_components(self):
+    def test_errors_aggregate_across_components(self) -> None:
         """Broken strings in two components raise as one grouped error."""
         math = _math()
         math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
@@ -207,7 +208,7 @@ class TestParseWalkthrough:
         assert "expressions:total_cost:" in message
         assert message.count("^") == 2
 
-    def test_undefined_ref_collected_alongside_syntax_errors(self):
+    def test_undefined_ref_collected_alongside_syntax_errors(self) -> None:
         """A syntax error does not short-circuit undefined `$ref` collection."""
         math = _math()
         math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
@@ -221,7 +222,7 @@ class TestParseWalkthrough:
         assert "expressions:sub_expr_test:" in message
         assert "Undefined sub_expressions" in message
 
-    def test_inactive_components_are_skipped(self):
+    def test_inactive_components_are_skipped(self) -> None:
         """Inactive components are neither parsed nor built."""
         math = _math()
         math["expressions"]["broken"] = {
@@ -234,13 +235,13 @@ class TestParseWalkthrough:
         model = builder.build()
         assert "broken" not in model.expressions
 
-    def test_check_masks_are_parsed(self):
+    def test_check_masks_are_parsed(self) -> None:
         math = _math()
         math["checks"] = {"bad": {"mask": "cost > >", "message": "boom"}}
         with pytest.raises(ValueError, match="checks:bad"):
             DeclarativeModelBuilder(math, _inputs(), {})
 
-    def test_inactive_check_masks_are_skipped(self):
+    def test_inactive_check_masks_are_skipped(self) -> None:
         math = _math()
         math["checks"] = {
             "bad": {"mask": "cost > >", "message": "boom", "active": False}
@@ -248,7 +249,7 @@ class TestParseWalkthrough:
         builder = DeclarativeModelBuilder(math, _inputs(), {})
         assert "bad" not in builder.parsed.checks
 
-    def test_parsed_math_shape(self):
+    def test_parsed_math_shape(self) -> None:
         builder = DeclarativeModelBuilder(_math(), _inputs(), {})
         assert set(builder.parsed.components) == {
             "variables",
@@ -263,13 +264,15 @@ class TestParseWalkthrough:
 class TestMaskRoute:
     """Mask strings evaluate to boolean arrays."""
 
-    def test_top_level_mask_returns_boolean_dataarray(self, builder_with_flow):
+    def test_top_level_mask_returns_boolean_dataarray(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         _, sub_mask, _ = _first_equation(builder_with_flow, "constraints", "cap")
         assert isinstance(sub_mask, xr.DataArray)
         assert sub_mask.dtype == bool
         assert bool(sub_mask.all())
 
-    def test_mask_comparison_and_subset_and_helper_return_bool(self):
+    def test_mask_comparison_and_subset_and_helper_return_bool(self) -> None:
         math = _math()
         math["constraints"]["cap"]["equations"][0]["mask"] = (
             "cost > 1 and [a, b] in node and any(cap_max, over=node)"
@@ -285,7 +288,9 @@ class TestMaskRoute:
         "mask_string",
         ["True", "not cost > 1", "cost > 1 or cap_max <= 10", "config.foo == bar"],
     )
-    def test_mask_atoms_return_bool(self, builder_with_flow, mask_string):
+    def test_mask_atoms_return_bool(
+        self, builder_with_flow: DeclarativeModelBuilder, mask_string: str
+    ) -> None:
         node = parsing.parse_mask(mask_string, builder_with_flow.math)
         config = ConfigModel.model_validate({"foo": "bar"})
         result = nodes.evaluate(
@@ -294,7 +299,9 @@ class TestMaskRoute:
         assert isinstance(result, xr.DataArray)
         assert result.dtype == bool
 
-    def test_existence_coercion(self, builder_with_flow):
+    def test_existence_coercion(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         """Bare input references coerce to existence booleans on the mask route."""
         node = parsing.parse_mask("cap_max", builder_with_flow.math)
         result = nodes.evaluate(node, _ctx(builder_with_flow, mode="mask"))
@@ -304,14 +311,18 @@ class TestMaskRoute:
 class TestExpressionRoute:
     """Expression strings evaluate to linopy expressions."""
 
-    def test_expression_with_variable_returns_linexpr(self, builder_with_flow):
+    def test_expression_with_variable_returns_linexpr(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         equation, sub_mask, ctx = _first_equation(
             builder_with_flow, "expressions", "total_cost"
         )
         result = parsing.as_expression(equation, ctx, mask=sub_mask)
         assert isinstance(result, LinearExpression)
 
-    def test_pure_parameter_expression_coerced_to_linexpr(self, builder_with_flow):
+    def test_pure_parameter_expression_coerced_to_linexpr(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         equation, sub_mask, ctx = _first_equation(
             builder_with_flow, "expressions", "cost_plus_one"
         )
@@ -319,7 +330,9 @@ class TestExpressionRoute:
         # No decision variable is involved, but the contract is still LinearExpression.
         assert isinstance(result, LinearExpression)
 
-    def test_sub_expression_reference_returns_linexpr(self, builder_with_flow):
+    def test_sub_expression_reference_returns_linexpr(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         equation, sub_mask, ctx = _first_equation(
             builder_with_flow, "expressions", "sub_expr_test"
         )
@@ -327,7 +340,7 @@ class TestExpressionRoute:
         result = parsing.as_expression(equation, ctx, mask=sub_mask)
         assert isinstance(result, LinearExpression)
 
-    def test_sub_expression_variants_expand_to_cartesian_product(self):
+    def test_sub_expression_variants_expand_to_cartesian_product(self) -> None:
         """Two variants of one sub-expression yield two equations with merged masks."""
         math = _math()
         math["expressions"]["sub_expr_test"]["sub_expressions"]["foo"] = [
@@ -356,7 +369,7 @@ class TestExpressionRoute:
         builder.add_expression("sub_expr_test", definition)
         assert "sub_expr_test" in builder.model.expressions
 
-    def test_undefined_sub_expression_reference_raises(self):
+    def test_undefined_sub_expression_reference_raises(self) -> None:
         math = _math()
         math["expressions"]["sub_expr_test"]["sub_expressions"] = {
             "bar": [{"expression": "flow"}]
@@ -364,7 +377,9 @@ class TestExpressionRoute:
         with pytest.raises(ValueError, match="Undefined sub_expressions"):
             DeclarativeModelBuilder(math, _inputs(), {})
 
-    def test_plain_and_list_slices(self, builder_with_flow):
+    def test_plain_and_list_slices(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         ctx = _ctx(
             builder_with_flow,
             mode="expr",
@@ -381,7 +396,7 @@ class TestExpressionRoute:
         result = nodes.evaluate(list_sliced, ctx)
         assert result.data.sizes["node"] == 2
 
-    def test_slicer_reference(self, builder_with_flow):
+    def test_slicer_reference(self, builder_with_flow: DeclarativeModelBuilder) -> None:
         """`$name` slicer references resolve like sub-expressions (feature parity)."""
         math = _math()
         math["expressions"]["sliced"] = {
@@ -404,7 +419,9 @@ class TestExpressionRoute:
 class TestConstraintRoute:
     """Constraint equations evaluate to (lhs, sign, rhs) tuples."""
 
-    def test_equation_returns_lhs_sign_rhs_tuple(self, builder_with_flow):
+    def test_equation_returns_lhs_sign_rhs_tuple(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         equation, sub_mask, ctx = _first_equation(
             builder_with_flow, "constraints", "cap"
         )
@@ -414,7 +431,7 @@ class TestConstraintRoute:
         assert isinstance(sign, xr.DataArray)
         assert set(np.unique(sign.values)) <= {"<="}
 
-    def test_foreach_dim_mismatch_raises(self):
+    def test_foreach_dim_mismatch_raises(self) -> None:
         math = _math()
         # `sum` removed: the equation is indexed over `node` but foreach is empty.
         math["constraints"]["cap"]["foreach"] = []
@@ -428,18 +445,18 @@ class TestConstraintRoute:
 class TestLatexRoute:
     """Math strings render as LaTeX."""
 
-    def test_equation_latex(self, builder_with_flow):
+    def test_equation_latex(self, builder_with_flow: DeclarativeModelBuilder) -> None:
         equation, _, ctx = _first_equation(builder_with_flow, "constraints", "cap")
         assert parsing.as_latex_expression(equation, ctx) == r"flow \leq cap_max"
 
-    def test_sum_latex(self, builder_with_flow):
+    def test_sum_latex(self, builder_with_flow: DeclarativeModelBuilder) -> None:
         equation, _, ctx = _first_equation(builder_with_flow, "objectives", "obj")
         assert (
             parsing.as_latex_expression(equation, ctx)
             == r"\sum\limits_{\substack{\text{n} \in \text{node}}} (total_cost)"
         )
 
-    def test_mask_latex(self):
+    def test_mask_latex(self) -> None:
         math = _math()
         math["constraints"]["cap"]["equations"][0]["mask"] = (
             "cost > 1 and [a, b] in node"
@@ -451,7 +468,7 @@ class TestLatexRoute:
             r"(\textit{cost}\mathord{>}\text{1} \land \text{n} \in \text{[a,b]})"
         )
 
-    def test_mask_infinity_latex_not_wrapped_in_text(self):
+    def test_mask_infinity_latex_not_wrapped_in_text(self) -> None:
         # `\infty` (and other bare LaTeX commands) must stay in math mode; only
         # plain-text tokens (numbers, coordinate labels, booleans) get `\text{}`.
         math = _math()
@@ -463,13 +480,17 @@ class TestLatexRoute:
         assert r"\mathord{==}\infty" in rendered
         assert r"\text{\infty}" not in rendered
 
-    def test_sliced_component_latex(self, builder_with_flow):
+    def test_sliced_component_latex(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow", "node"}))
         tree = arith.parse_string("flow[node=a]", parse_all=True)[0]
         assert nodes.to_math_string(tree, ctx) == r"flow_\text{n=a}"
 
-    def test_identity_operands_are_skipped(self, builder_with_flow):
+    def test_identity_operands_are_skipped(
+        self, builder_with_flow: DeclarativeModelBuilder
+    ) -> None:
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow"}))
         tree = arith.parse_string("0 + flow", parse_all=True)[0]
@@ -483,10 +504,10 @@ class _RecordArgs(HelperFunction):
     ALLOWED_IN = ["expression"]
     received: list[type] = []
 
-    def as_math_string(self, *args, **kwargs):  # noqa: D102
+    def as_math_string(self, *args: Any, **kwargs: Any) -> str:  # noqa: D102
         return "record_args"
 
-    def as_raw(self, *args, **kwargs):  # noqa: D102
+    def as_raw(self, *args: Any, **kwargs: Any) -> LinearExpression | xr.DataArray:  # noqa: D102
         type(self).received.extend(type(a) for a in args)
         # Return the first argument so the enclosing expression stays valid.
         return args[0]
@@ -498,17 +519,17 @@ class _Double(HelperFunction):
     NAME = "double"
     ALLOWED_IN = ["expression"]
 
-    def as_math_string(self, array):  # noqa: D102
+    def as_math_string(self, array: Any) -> str:  # noqa: D102
         return rf"2 \times {array}"
 
-    def as_raw(self, array):  # noqa: D102
+    def as_raw(self, array: Any) -> LinearExpression | xr.DataArray:  # noqa: D102
         return 2 * array
 
 
 class TestHelpers:
     """Helper-function registration and argument evaluation."""
 
-    def test_helper_arguments_are_evaluated_raw(self):
+    def test_helper_arguments_are_evaluated_raw(self) -> None:
         """Helper args arrive un-normalised: raw Variable/DataArray, not LinearExpression."""
         math = _math()
         math["expressions"]["total_cost"]["equations"][0]["expression"] = (
@@ -528,11 +549,11 @@ class TestHelpers:
         assert xr.DataArray in _RecordArgs.received
         assert LinearExpression not in _RecordArgs.received
 
-    def test_non_subclass_rejected_by_registry(self):
+    def test_non_subclass_rejected_by_registry(self) -> None:
         with pytest.raises(ValueError, match="must be subclassed"):
             build_registry([str])  # type: ignore[list-item]
 
-    def test_unknown_helper_rejected(self):
+    def test_unknown_helper_rejected(self) -> None:
         math = _math()
         math["expressions"]["total_cost"]["equations"][0]["expression"] = (
             "unknown_helper(flow)"
@@ -546,7 +567,7 @@ class TestHelpers:
         with pytest.raises(ValueError, match="Invalid helper function"):
             parsing.as_expression(equation, _ctx(builder))
 
-    def test_eval_error_carries_caret(self):
+    def test_eval_error_carries_caret(self) -> None:
         """Evaluation errors point a caret at the failing node in the source string."""
         math = _math()
         math["expressions"]["total_cost"]["equations"][0]["expression"] = (
@@ -566,21 +587,23 @@ class TestHelpers:
         assert caret_line.strip() == "^"
         assert caret_line.index("^") == source_line.index("unknown_helper")
 
-    def test_duplicate_name_rejected(self):
+    def test_duplicate_name_rejected(self) -> None:
         class _ClashingSum(HelperFunction):
             NAME = "sum"
             ALLOWED_IN = ["expression"]
 
-            def as_math_string(self, *args, **kwargs):  # noqa: D102
+            def as_math_string(self, *args: Any, **kwargs: Any) -> str:  # noqa: D102
                 return ""
 
-            def as_raw(self, *args, **kwargs):  # noqa: D102
+            def as_raw(
+                self, *args: Any, **kwargs: Any
+            ) -> LinearExpression | xr.DataArray:  # noqa: D102
                 return xr.DataArray()
 
         with pytest.raises(ValueError, match="already exists"):
             build_registry([_ClashingSum])
 
-    def test_custom_helper_end_to_end(self):
+    def test_custom_helper_end_to_end(self) -> None:
         math = _math()
         math["expressions"]["total_cost"]["equations"][0]["expression"] = (
             "double(flow) * cost"
@@ -588,7 +611,7 @@ class TestHelpers:
         model = declarative_model(math, _inputs(), {}, helpers=[_Double])
         assert "total_cost" in model.expressions
 
-    def test_get_val_at_index(self, builder_with_flow):
+    def test_get_val_at_index(self, builder_with_flow: DeclarativeModelBuilder) -> None:
         ctx = _ctx(builder_with_flow)
         arith = grammar.arithmetic_grammar(frozenset({"flow", "node"}))
         tree = arith.parse_string("get_val_at_index(node=0)", parse_all=True)[0]
@@ -598,7 +621,7 @@ class TestHelpers:
 class TestBuilder:
     """Model assembly from parsed math."""
 
-    def test_overlapping_equation_masks_rejected(self):
+    def test_overlapping_equation_masks_rejected(self) -> None:
         math = _math()
         math["constraints"]["cap"]["equations"] = [
             {"mask": "cost > 0", "expression": "flow <= cap_max"},
@@ -607,20 +630,20 @@ class TestBuilder:
         with pytest.raises(ValueError, match="Overlapping 'mask' conditions"):
             declarative_model(math, _inputs(), {})
 
-    def test_multiple_active_objectives_rejected(self):
+    def test_multiple_active_objectives_rejected(self) -> None:
         math = _math()
         math["objectives"]["obj2"] = math["objectives"]["obj"].copy()
         with pytest.raises(ValueError, match="Only one active objective"):
             declarative_model(math, _inputs(), {})
 
-    def test_references_are_sorted_lists(self):
+    def test_references_are_sorted_lists(self) -> None:
         model = declarative_model(_math(), _inputs(), {})
         refs = model.constraints["cap"].attrs["references"]
         assert refs == sorted(refs)
         assert isinstance(refs, list)
         assert set(refs) == {"cap_max", "flow"}
 
-    def test_dtype_coercion(self):
+    def test_dtype_coercion(self) -> None:
         math = _math()
         math["lookups"] = {
             "flag": {"dtype": "bool", "default": False},
@@ -635,7 +658,7 @@ class TestBuilder:
         # Empty strings are coerced to missing values.
         assert builder.input_data["label"].isnull().sum() == 1
 
-    def test_checks_run_without_active_variable(self):
+    def test_checks_run_without_active_variable(self) -> None:
         """Input checks must not require an `active` variable in the input data."""
         math = _math()
         math["checks"] = {
@@ -648,7 +671,7 @@ class TestBuilder:
         # No `active` variable in the inputs, and the check does not trigger.
         declarative_model(math, _inputs(), {})
 
-    def test_check_raises_when_triggered_without_active(self):
+    def test_check_raises_when_triggered_without_active(self) -> None:
         math = _math()
         math["checks"] = {
             "too_expensive": {
@@ -660,7 +683,7 @@ class TestBuilder:
         with pytest.raises(ValueError, match="cost too high"):
             declarative_model(math, _inputs(), {})
 
-    def test_check_warns(self, caplog):
+    def test_check_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         math = _math()
         math["checks"] = {
             "pricey": {"mask": "cost > 0", "message": "prices!", "errors": "warn"}
@@ -673,7 +696,7 @@ class TestBuilder:
 class TestLatexDoc:
     """LaTeX math documentation building."""
 
-    def test_components_render_with_decorated_reprs(self):
+    def test_components_render_with_decorated_reprs(self) -> None:
         builder = LatexModelBuilder(_math(), _inputs(), {}).build()
         cap = builder.components["constraints"]["cap"]
         assert cap.foreach == r"\forall{} \text{n} \in \text{node}"
@@ -684,7 +707,7 @@ class TestLatexDoc:
             }
         ]
 
-    def test_variable_bounds_equation(self):
+    def test_variable_bounds_equation(self) -> None:
         math = _math()
         math["variables"]["flow"]["bounds"] = {"lower": 0, "upper": "cap_max"}
         builder = LatexModelBuilder(math, _inputs(), {}).build()
@@ -694,7 +717,7 @@ class TestLatexDoc:
         )
         assert flow.uses == ["cap_max"]
 
-    def test_underscores_escaped_in_text_mode(self):
+    def test_underscores_escaped_in_text_mode(self) -> None:
         # `cap_max` is a parameter (rendered `\textit{...}`); its underscore must
         # be escaped so KaTeX does not read it as a subscript operator.
         builder = LatexModelBuilder(_math(), _inputs(), {}).build()
@@ -703,7 +726,7 @@ class TestLatexDoc:
         # The subscript operator between the name and its dimension is preserved.
         assert r"\textbf{flow}_\text{n}" in cap.equations[0]["expression"]
 
-    def test_escape_text_mode_escapes_content_only(self):
+    def test_escape_text_mode_escapes_content_only(self) -> None:
         # Underscores inside text commands (names and coordinate values) are
         # escaped, while the subscript operator between them is left intact.
         assert _escape_text_mode(r"\text{storage_units}") == r"\text{storage\_units}"
@@ -713,14 +736,14 @@ class TestLatexDoc:
         # Already-escaped underscores are not doubled up.
         assert _escape_text_mode(r"\text{a\_b}") == r"\text{a\_b}"
 
-    def test_no_unescaped_underscore_in_math_text(self):
+    def test_no_unescaped_underscore_in_math_text(self) -> None:
         # `cap_max` is a parameter whose underscore is rendered inside `\textit`;
         # no `\text*{...}` argument in the document may hold an unescaped one.
         doc = latex_math_doc(_math(), _inputs(), format="md")
         for arg in re.findall(r"\\text(?:bf|it)?\{([^{}]*)\}", doc):
             assert "_" not in arg.replace(r"\_", "")
 
-    def test_cross_references(self):
+    def test_cross_references(self) -> None:
         builder = LatexModelBuilder(_math(), _inputs(), {}).build()
         cost = builder.components["parameters"]["cost"]
         assert set(cost.used_in) == {"cost_plus_one", "sub_expr_test", "total_cost"}
@@ -729,13 +752,13 @@ class TestLatexDoc:
         assert obj.uses == ["total_cost"]
         assert obj.extras["Sense"] == "minimise"
 
-    def test_equation_masks_render_as_if_conditions(self):
+    def test_equation_masks_render_as_if_conditions(self) -> None:
         math = _math()
         math["constraints"]["cap"]["equations"][0]["mask"] = "cost > 1"
         doc = latex_math_doc(math, _inputs(), format="md")
         assert r"\text{if } (\textit{cost}_\text{n}\mathord{>}\text{1})" in doc
 
-    def test_infinity_not_wrapped_in_text(self):
+    def test_infinity_not_wrapped_in_text(self) -> None:
         # `cap_max`'s default is `inf`; a mask comparing against it must render
         # `\infty` as a bare math token, never `\text{\infty}` (which KaTeX
         # would print as the literal string, not the symbol).
@@ -745,7 +768,7 @@ class TestLatexDoc:
         assert r"\infty" in doc
         assert r"\text{\infty}" not in doc
 
-    def test_sub_expression_variants_produce_multiple_equations(self):
+    def test_sub_expression_variants_produce_multiple_equations(self) -> None:
         math = _math()
         math["expressions"]["sub_expr_test"]["sub_expressions"]["foo"] = [
             {"mask": "cost > 1", "expression": "flow"},
@@ -758,7 +781,7 @@ class TestLatexDoc:
             r"\textbf{flow}_\text{n} \times 2 \times \textit{cost}_\text{n}"
         )
 
-    def test_multiple_equations_render_as_one_block_with_cases(self):
+    def test_multiple_equations_render_as_one_block_with_cases(self) -> None:
         # Sub-clauses of a component share one `foreach`/top-level mask and
         # should render as `cases` rows at the same nesting level, not as
         # separate top-level math blocks.
@@ -777,25 +800,25 @@ class TestLatexDoc:
             r"\text{if } (\neg (\textit{cost}_\text{n}\mathord{>}\text{1}))" in section
         )
 
-    def test_single_equation_renders_inline_without_cases(self):
+    def test_single_equation_renders_inline_without_cases(self) -> None:
         doc = latex_math_doc(_math(), _inputs(), format="md")
         section = doc.split("### total_cost\n")[1].split("### ")[0]
         assert r"\begin{cases}" not in section
         assert r"\begin{array}{l}" in section
 
-    def test_markdown_document_structure(self):
+    def test_markdown_document_structure(self) -> None:
         doc = latex_math_doc(_math(), _inputs(), format="md")
         assert doc.startswith("# Math formulation")
         for heading in ("## Parameters", "## Variables", "## Constraints", "### cap"):
             assert heading in doc
         assert "$$" in doc
 
-    def test_rst_document_structure(self):
+    def test_rst_document_structure(self) -> None:
         doc = latex_math_doc(_math(), _inputs(), format="rst")
         assert ".. math::" in doc
         assert "Math formulation\n================" in doc
 
-    def test_tex_document_structure(self):
+    def test_tex_document_structure(self) -> None:
         doc = latex_math_doc(_math(), _inputs(), format="tex")
         assert r"\section{Math formulation}" in doc
         assert r"\begin{equation}" in doc
@@ -806,7 +829,7 @@ class TestLatexDoc:
 class TestEndToEnd:
     """Full builds from math definitions."""
 
-    def test_declarative_model_end_to_end(self):
+    def test_declarative_model_end_to_end(self) -> None:
         model = declarative_model(_math(), _inputs(), {})
         assert "flow" in model.variables
         assert "total_cost" in model.expressions
@@ -815,7 +838,7 @@ class TestEndToEnd:
         # flow is indexed over the node dimension.
         assert set(model.variables["flow"].dims) == {"node"}
 
-    def test_repo_math_yaml_validates_and_parses(self):
+    def test_repo_math_yaml_validates_and_parses(self) -> None:
         """The demo math.yaml at the repo root validates and every component parses."""
         math_path = Path(__file__).parent.parent / "math.yaml"
         if not math_path.exists():
