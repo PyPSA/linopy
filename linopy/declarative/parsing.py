@@ -33,6 +33,7 @@ from linopy.declarative.nodes import (
     to_linexpr,
 )
 from linopy.declarative.schema import (
+    BUILD_ORDER,
     COMPONENTS_T,
     EQUATION_GROUP_T,
     MATH_DEFS_T,
@@ -90,9 +91,92 @@ class Equation:
         return set().union(*(find_refs(tree, Component) for tree in trees))
 
 
-# ---------------------------------------------------------------------------
-# Parsing
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ParsedComponent:
+    """The parsed math strings of one active component."""
+
+    mask: Node
+    """Parsed top-level `mask` AST (the trivial "True" AST for objectives)."""
+
+    equations: list[Equation] = field(default_factory=list)
+    """Fully-resolved equations (empty for variables, which carry none)."""
+
+
+@dataclass(frozen=True)
+class ParsedMath:
+    """All parsed math strings of a math definition's active components."""
+
+    components: dict[str, dict[str, ParsedComponent]]
+    """Per build group, the parsed strings of each active component by name."""
+
+    checks: dict[str, Node]
+    """Parsed mask AST of each active input-data check by name."""
+
+    def __getitem__(self, group: str) -> dict[str, ParsedComponent]:
+        """Return the parsed components of a build group."""
+        return self.components[group]
+
+
+def parse_math(math: MathModel) -> ParsedMath:
+    """
+    Parse every math string of the active components, aggregating ALL failures.
+
+    Walks the masks, equations, sub-expressions, and slices of active variables,
+    expressions, constraints, and objectives, plus active check masks. Inactive
+    components and groups without a build path (`piecewise_constraints`,
+    `postprocessed`) are deliberately not parsed: definitions there are
+    declarations of intent, and a stale string in them must never block a build.
+
+    Parameters
+    ----------
+    math : MathModel
+        The validated math definition.
+
+    Returns
+    -------
+    ParsedMath
+        Every math string of the walked components, parsed exactly once.
+
+    Raises
+    ------
+    ValueError
+        One error listing every parse failure (syntax errors and undefined
+        `$name` references), grouped by component.
+    """
+    collector = _ParsingCollector()
+    mask_parser = _mask_grammar(math)
+    raw: dict[str, dict[str, tuple[Node | None, list[Equation]]]] = {}
+    for group in BUILD_ORDER:
+        raw[group] = {}
+        for name in getattr(math, group)._active:
+            definition = getattr(math, group)[name]
+            component_name = f"{group}:{name}"
+            mask_node = collector.parse(
+                mask_parser, definition.mask, component_name, "mask"
+            )
+            equations = (
+                parse_component(group, name, definition, math, collector)
+                if group != "variables"
+                else []
+            )
+            raw[group][name] = (mask_node, equations)
+    raw_checks = {
+        name: collector.parse(
+            mask_parser, math.checks[name].mask, f"checks:{name}", "mask"
+        )
+        for name in math.checks._active
+    }
+    collector.raise_errors()
+    components = {
+        group: {
+            name: ParsedComponent(mask=mask_node, equations=equations)
+            for name, (mask_node, equations) in group_raw.items()
+            if mask_node is not None  # always true after raise_errors
+        }
+        for group, group_raw in raw.items()
+    }
+    checks = {name: node for name, node in raw_checks.items() if node is not None}
+    return ParsedMath(components=components, checks=checks)
 
 
 def _expression_names(math: MathModel) -> frozenset[str]:
@@ -110,34 +194,49 @@ def _mask_grammar(math: MathModel) -> pp.ParserElement:
     )
 
 
-class _ErrorCollector:
-    """Collect parse errors with their positions, to raise a single error at the end."""
+class _ParsingCollector:
+    """
+    Collect parsing results and errors per component.
 
-    def __init__(self, component_name: str) -> None:
-        self.component_name = component_name
-        self.errors: list[str] = []
+    Collected errors can be raised as a single ValueError at the end.
+    """
+
+    def __init__(self) -> None:
+        self.errors: dict[str, list[str]] = {}
+
+    def add(self, component_name: str, message: str) -> None:
+        """Store a plain (caret-free) error message against a component."""
+        self.errors.setdefault(component_name, []).append(f"{_ERR_BULLET}{message}")
 
     def parse(
-        self, parser: pp.ParserElement, string: str, position: str
+        self, parser: pp.ParserElement, string: str, component_name: str, position: str
     ) -> Node | None:
         """
         Parse `string`, returning its AST root or None if parsing fails.
 
-        Failures are stored with a caret marker pointing at the parse position,
-        for raising later via :meth:`raise_errors`.
+        Failures are stored against `component_name` with a caret marker pointing
+        at the parse position, for raising later via :meth:`raise_errors`.
         """
         try:
             return parser.parse_string(string, parse_all=True)[0]
         except pp.ParseException as excinfo:
-            pointer = f"{position} (line {excinfo.lineno}, char {excinfo.col}): "
-            marker_pos = " " * (len(pointer) + 2 * len(_ERR_BULLET) + excinfo.col - 1)
-            self.errors.append(f"{pointer}{excinfo.line}\n{marker_pos}^")
+            pointer = (
+                f"{_ERR_BULLET}{position} (line {excinfo.lineno}, char {excinfo.col}): "
+            )
+            marker_pos = " " * (len(pointer) + excinfo.col - 1)
+            self.errors.setdefault(component_name, []).append(
+                f"{pointer}{excinfo.line}\n{marker_pos}^"
+            )
             return None
 
     def raise_errors(self) -> None:
-        """Raise all collected parse errors as a single bullet-point ValueError."""
+        """Raise all collected errors as one ValueError, grouped by component."""
         if self.errors:
-            raise ValueError(f"- {self.component_name}: {self.errors}")
+            sections = "\n".join(
+                f"{component}:\n" + "\n".join(bullets)
+                for component, bullets in self.errors.items()
+            )
+            raise ValueError(sections)
 
 
 def parse_mask(mask_string: str, math: MathModel, name: str = "") -> Node:
@@ -153,15 +252,16 @@ def parse_mask(mask_string: str, math: MathModel, name: str = "") -> Node:
     name : str, optional
         Name to identify the string by in error messages.
     """
-    collector = _ErrorCollector(name)
-    parsed = collector.parse(_mask_grammar(math), mask_string, "mask")
+    collector = _ParsingCollector()
+    parsed = collector.parse(_mask_grammar(math), mask_string, name, "mask")
     collector.raise_errors()
     assert parsed is not None
     return parsed
 
 
 def _parse_variants(
-    collector: _ErrorCollector,
+    collector: _ParsingCollector,
+    component_name: str,
     parser: pp.ParserElement,
     mask_parser: pp.ParserElement,
     expression_list: _Equations,
@@ -173,9 +273,11 @@ def _parse_variants(
     equations = []
     for idx, item in enumerate(expression_list):
         position_id = f"{position}[{idx}]"
-        mask = collector.parse(mask_parser, item.mask, f"{position_id}.mask")
+        mask = collector.parse(
+            mask_parser, item.mask, component_name, f"{position_id}.mask"
+        )
         expression = collector.parse(
-            parser, item.expression, f"{position_id}.expression"
+            parser, item.expression, component_name, f"{position_id}.expression"
         )
         if expression is not None and mask is not None:
             equations.append(
@@ -194,14 +296,16 @@ def _expand(
     equations: list[Equation],
     candidates: dict[str, list[Equation]],
     kind: Literal["sub_expressions", "slices"],
+    collector: _ParsingCollector,
 ) -> list[Equation]:
     """
     Expand equations with all combinations of their referenced `$name` variants.
 
-    Each `$name` reference maps to a list of `{mask, expression}` variants; an
-    equation referencing them is replaced by one equation per element of the
-    cartesian product of those variant lists, with the chosen variants' masks and
-    ASTs merged in.
+    Each `$name` reference maps to a list of `{mask, expression}` variants.
+    An equation referencing them is replaced by one equation per element of the
+    cartesian product of those variant lists.
+    The chosen variants' masks and ASTs are merged in.
+    Undefined `$name` references are collected (not raised) so they aggregate with any other parse failures.
     """
     expanded = []
     for equation in equations:
@@ -213,9 +317,11 @@ def _expand(
             continue
         undefined = refs.difference(candidates.keys())
         if undefined:
-            raise KeyError(
-                f"{component_name}: Undefined {kind} found in equation: {undefined}"
+            collector.add(
+                component_name,
+                f"Undefined {kind} found in equation: {sorted(undefined)}",
             )
+            continue
         for combination in itertools.product(*(candidates[ref] for ref in refs)):
             new_name = "-".join([equation.name, *(v.name for v in combination)])
             new_masks = (
@@ -239,15 +345,17 @@ def _expand(
 
 
 def parse_component(
-    group: EQUATION_GROUP_T, name: str, definition: EQUATION_DEFS_T, math: MathModel
+    group: EQUATION_GROUP_T,
+    name: str,
+    definition: EQUATION_DEFS_T,
+    math: MathModel,
+    collector: _ParsingCollector | None = None,
 ) -> list[Equation]:
     """
     Parse a math component's equations into fully-resolved :class:`Equation` objects.
 
-    All `expression` and `mask` strings of the component's equations,
-    sub-expressions, and slicers are parsed (syntax errors across all of them are
-    collected and raised together), then every equation is expanded with the
-    cartesian product of the sub-expression and slicer variants it references.
+    All `expression` and `mask` strings of the component's equations, sub-expressions, and slicers are parsed.
+    Then every equation is expanded with the cartesian product of the sub-expression and slicer variants it references.
 
     Parameters
     ----------
@@ -260,6 +368,9 @@ def parse_component(
         The component's (already schema-validated) definition.
     math : MathModel
         The full math definition, providing valid component names.
+    collector : _ParsingCollector, optional
+        Shared error collector (used by :func:`parse_math` to aggregate failures across components).
+        If not given, all failures of this component are raised at the end of the call.
 
     Returns
     -------
@@ -267,6 +378,8 @@ def parse_component(
         One equation per user-defined equation and referenced variant combination.
     """
     component_name = f"{group}:{name}"
+    own_collector = collector is None
+    collector = collector or _ParsingCollector()
     names = _expression_names(math)
     equation_parser = (
         grammar.equation_grammar(names)
@@ -274,12 +387,11 @@ def parse_component(
         else grammar.arithmetic_grammar(names)
     )
     mask_parser = _mask_grammar(math)
-    # Objectives are adimensional: they carry no `foreach` key.
-    sets = tuple(getattr(definition, "foreach", ()))
-    collector = _ErrorCollector(component_name)
+    sets = tuple(definition.foreach)
 
     equations = _parse_variants(
         collector,
+        component_name,
         equation_parser,
         mask_parser,
         definition.equations,
@@ -290,6 +402,7 @@ def parse_component(
     sub_expressions = {
         sub_name: _parse_variants(
             collector,
+            component_name,
             grammar.sub_expression_grammar(names),
             mask_parser,
             sub_list,
@@ -302,6 +415,7 @@ def parse_component(
     slices = {
         slice_name: _parse_variants(
             collector,
+            component_name,
             grammar.slice_grammar(names),
             mask_parser,
             slice_list,
@@ -311,10 +425,14 @@ def parse_component(
         )
         for slice_name, slice_list in definition.slices.root.items()
     }
-    collector.raise_errors()
 
-    equations = _expand(component_name, equations, sub_expressions, "sub_expressions")
-    return _expand(component_name, equations, slices, "slices")
+    equations = _expand(
+        component_name, equations, sub_expressions, "sub_expressions", collector
+    )
+    equations = _expand(component_name, equations, slices, "slices", collector)
+    if own_collector:
+        collector.raise_errors()
+    return equations
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +486,7 @@ def component_mask(
     group: COMPONENTS_T,
     name: str,
     definition: MATH_DEFS_T,
+    mask_node: Node,
     ctx: Context,
     *,
     align_to_foreach_sets: bool = True,
@@ -375,8 +494,7 @@ def component_mask(
     """
     Evaluate a component's top-level mask over its `foreach` dimensions.
 
-    Combines the `foreach` existence array with the component's (optional)
-    top-level `mask` string, breaking early if no valid element remains.
+    Combines the `foreach` existence array with the component's pre-parsed top-level `mask` AST, breaking early if no valid element remains.
 
     Parameters
     ----------
@@ -386,6 +504,9 @@ def component_mask(
         Name of the math component.
     definition : MATH_DEFS_T
         The component's (already schema-validated) definition.
+    mask_node : Node
+        The component's pre-parsed top-level `mask` AST
+        (e.g. from :func:`parse_math` / :class:`ParsedMath`).
     ctx : Context
         Evaluation context.
     align_to_foreach_sets : bool, default: True
@@ -393,16 +514,13 @@ def component_mask(
         (see :func:`drop_dims_not_in_foreach`).
     """
     component_name = f"{group}:{name}"
-    # Objectives are adimensional: they carry no `foreach` or `mask` keys.
-    sets = tuple(getattr(definition, "foreach", ()))
-    mask_string = getattr(definition, "mask", "True")
+    sets = tuple(definition.foreach)
     initial_mask = foreach_mask(sets, ctx.input_data)
     if _mask_is_empty(
         initial_mask, component_name, "'foreach' does not apply anywhere"
     ):
         return initial_mask
 
-    mask_node = parse_mask(mask_string, ctx.math, component_name)
     mask_ctx = replace(ctx, mode="mask", equation_name=component_name)
     mask = xr.DataArray(initial_mask & mask_node.evaluate(mask_ctx))
     if _mask_is_empty(mask, component_name, "'mask' does not apply anywhere"):
@@ -411,11 +529,6 @@ def component_mask(
     if align_to_foreach_sets:
         mask = drop_dims_not_in_foreach(mask, sets)
     return mask
-
-
-# ---------------------------------------------------------------------------
-# Typed evaluation entry points
-# ---------------------------------------------------------------------------
 
 
 def _equation_ctx(
@@ -448,8 +561,8 @@ def as_mask(
     ctx : Context
         Evaluation context.
     initial_mask : xr.DataArray, optional
-        Mask to combine (boolean AND) with the equation's own masks, e.g. the
-        component-level mask from :func:`component_mask`.
+        Mask to combine (boolean AND) with the equation's own masks.
+        E.g., the component-level mask from :func:`component_mask`.
 
     Returns
     -------
@@ -506,23 +619,21 @@ def as_constraint(
     Returns
     -------
     tuple[LinearExpression, xr.DataArray, LinearExpression]
-        `(lhs, sign, rhs)` for constraint assembly; pure-parameter sides are
-        coerced to `LinearExpression` and `sign` is an array of the comparison
-        operator.
+        `(lhs, sign, rhs)` for constraint assembly.
+        `lhs` and `rhs` are coerced to `LinearExpression`.
+        `sign` is an array of the comparison operator.
     """
     expr_ctx = _equation_ctx(equation, ctx, "expr", mask=mask)
     lhs, sign, rhs = equation.expression.evaluate(expr_ctx)
     return lhs, sign, rhs
 
 
-def as_latex(
+def as_latex_mask(
     equation: Equation,
     ctx: Context,
-    *,
-    what: Literal["expression", "mask"] = "expression",
 ) -> str:
     """
-    Render an equation's expression or mask as a LaTeX math string.
+    Render an equation's mask as a LaTeX math string.
 
     Parameters
     ----------
@@ -531,17 +642,36 @@ def as_latex(
     ctx : Context
         Evaluation context.
     what : Literal["expression", "mask"], default: "expression"
-        Whether to render the equation's expression (including an equation's
-        comparison operator) or its combined mask conditions.
+        Whether to render the equation's expression (including an equation's comparison operator) or its combined mask conditions.
 
     Returns
     -------
     str
         A valid LaTeX math string.
     """
-    if what == "mask":
-        mask_ctx = _equation_ctx(equation, ctx, "mask")
-        strings = [mask.to_latex(mask_ctx) for mask in equation.masks]
-        return r"\land{}".join(f"({s})" for s in strings if s != "true")
+    mask_ctx = _equation_ctx(equation, ctx, "mask")
+    strings = [mask.to_latex(mask_ctx) for mask in equation.masks]
+    return r"\land{}".join(f"({s})" for s in strings if s != "true")
+
+
+def as_latex_expression(
+    equation: Equation,
+    ctx: Context,
+) -> str:
+    """
+    Render an equation's expression as a LaTeX math string.
+
+    Parameters
+    ----------
+    equation : Equation
+        Parsed equation.
+    ctx : Context
+        Evaluation context.
+
+    Returns
+    -------
+    str
+        A valid LaTeX math string.
+    """
     expr_ctx = _equation_ctx(equation, ctx, "raw")
     return equation.expression.to_latex(expr_ctx)

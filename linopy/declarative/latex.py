@@ -10,7 +10,6 @@ can be generated as Markdown, reStructuredText, or LaTeX source.
 
 from __future__ import annotations
 
-import math as pymath
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
@@ -23,7 +22,14 @@ from linopy.declarative import parsing
 from linopy.declarative.build import _DeclarativeBase
 from linopy.declarative.helpers import HelperFunction, dim_iterator
 from linopy.declarative.nodes import Component, Node, find_refs, latex_number
-from linopy.declarative.schema import DOCUMENTED_GROUPS, EQUATION_GROUPS
+from linopy.declarative.schema import (
+    ConstraintDef,
+    ExpressionDef,
+    LookupDef,
+    ObjectiveDef,
+    ParameterDef,
+    VariableDef,
+)
 
 FORMAT_T = Literal["md", "rst", "tex"]
 
@@ -33,6 +39,28 @@ _REPR_STYLES = {
     "variables": "textbf",
     "expressions": "textbf",
 }
+
+DOCUMENTED_GROUPS_T = (
+    ParameterDef
+    | LookupDef
+    | VariableDef
+    | ExpressionDef
+    | ConstraintDef
+    | ObjectiveDef
+)
+DOCUMENTED_LINOPY_OBJ_GROUPS_T = (
+    VariableDef | ExpressionDef | ConstraintDef | ObjectiveDef
+)
+DOCUMENTED_EXPRESSION_GROUPS_T = ExpressionDef | ConstraintDef | ObjectiveDef
+DOCUMENTED_GROUPS: dict[str, str] = {
+    "parameters": "Parameters",
+    "lookups": "Lookups",
+    "variables": "Variables",
+    "expressions": "Expressions",
+    "constraints": "Constraints",
+    "objectives": "Objectives",
+}
+"""Component groups documented in LaTeX math docs, with their section titles."""
 
 
 @dataclass
@@ -122,22 +150,23 @@ class LatexModelBuilder(_DeclarativeBase):
         reprs: dict[str, str] = {}
         for group, style in _REPR_STYLES.items():
             for name, definition in getattr(self.math, group)._active.items():
-                dims = getattr(definition, "foreach", None)
-                if dims is None:
+                if isinstance(definition, DOCUMENTED_LINOPY_OBJ_GROUPS_T):
+                    dims = definition.foreach
+                else:
                     dims = (
                         list(self.input_data[name].dims)
                         if name in self.input_data
                         else []
                     )
+
                 iterators = ",".join(dim_iterator(self.math, str(dim)) for dim in dims)
                 subscript = rf"_\text{{{iterators}}}" if iterators else ""
                 reprs[name] = rf"\{style}{{{name}}}{subscript}"
         return reprs
 
-    def _foreach_string(self, definition: object) -> str:
+    def _foreach_string(self, definition: DOCUMENTED_LINOPY_OBJ_GROUPS_T) -> str:
         r"""Return the LaTeX `\forall` line body for a component's `foreach` sets."""
-        sets = getattr(definition, "foreach", [])
-        if not sets:
+        if not (sets := definition.foreach):
             return ""
         instrs = ", ".join(
             rf"\text{{{dim_iterator(self.math, dim)}}} \in \text{{{dim}}}"
@@ -152,79 +181,96 @@ class LatexModelBuilder(_DeclarativeBase):
         )
         return "" if rendered == "true" else rendered
 
-    def _render_metadata(self, definition: object) -> dict[str, str]:
+    def _render_metadata(self, definition: DOCUMENTED_GROUPS_T) -> dict[str, str]:
         """Return the documentable metadata (unit, default, ...) of a definition."""
         extras: dict[str, str] = {}
-        unit = getattr(definition, "unit", "")
-        if unit:
+        if unit := getattr(definition, "unit", None):
             extras["Unit"] = unit
-        default = getattr(definition, "default", None)
-        if default is not None and pd.notna(default):
-            if isinstance(default, int | float) and pymath.isinf(default):
-                extras["Default"] = "inf" if default > 0 else "-inf"
-            else:
-                extras["Default"] = str(default)
+        if pd.notnull(default := getattr(definition, "default", None)):
+            extras["Default"] = str(default)
         return extras
 
-    def add_component(self, group: str, name: str, definition: object) -> None:
+    def add_component(
+        self, group: str, name: str, definition: DOCUMENTED_GROUPS_T
+    ) -> None:
         """Render one math component and store it under `self.components`."""
-        mask_node = parsing.parse_mask(
-            getattr(definition, "mask", "True"), self.math, f"{group}:{name}"
-        )
         rendered = RenderedComponent(
             group=group,
             name=name,
-            title=getattr(definition, "title", ""),
-            description=getattr(definition, "description", ""),
-            foreach=self._foreach_string(definition),
-            mask=self._mask_string(mask_node, f"{group}:{name}"),
+            title=definition.title,
+            description=definition.description,
             extras=self._render_metadata(definition),
         )
-        uses = find_refs(mask_node, Component)
+        if isinstance(definition, DOCUMENTED_LINOPY_OBJ_GROUPS_T):
+            self._add_linopy_obj_component(group, name, rendered, definition)
+        self.components.setdefault(definition._group, {})[name] = rendered
 
-        if group in EQUATION_GROUPS:
-            equations = parsing.parse_component(group, name, definition, self.math)  # type: ignore[arg-type]
-            for equation in equations:
-                equation_ctx = replace(self._ctx, equation_name=equation.name)
-                rendered.equations.append(
-                    {
-                        "mask": parsing.as_latex(equation, equation_ctx, what="mask"),
-                        "expression": parsing.as_latex(equation, equation_ctx),
-                    }
-                )
-                uses |= equation.references()
-        elif group == "variables":
-            rendered.extras["Domain"] = definition.domain  # type: ignore[attr-defined]
-            rendered.equations.append(
-                {"mask": "", "expression": self._bounds_string(name, definition)}
-            )
-            uses |= {
-                bound
-                for bound in (definition.bounds.lower, definition.bounds.upper)  # type: ignore[attr-defined]
-                if isinstance(bound, str)
-            }
-        if group == "objectives":
-            rendered.extras["Sense"] = (
-                "minimise" if definition.sense == "min" else "maximise"  # type: ignore[attr-defined]
-            )
+    def _add_linopy_obj_component(
+        self,
+        group: str,
+        name: str,
+        rendered: RenderedComponent,
+        definition: DOCUMENTED_LINOPY_OBJ_GROUPS_T,
+    ) -> None:
+        parsed = self.parsed[group][name]
+        rendered.mask = self._mask_string(parsed.mask, f"{group}:{name}")
+        rendered.foreach = self._foreach_string(definition)
 
+        uses = find_refs(parsed.mask, Component)
+        if isinstance(definition, DOCUMENTED_EXPRESSION_GROUPS_T):
+            self._add_expr_component(rendered, uses, parsed)
+        if isinstance(definition, VariableDef):
+            self._add_var_component(name, rendered, uses, definition)
+        if isinstance(definition, ObjectiveDef):
+            self._add_obj_component(rendered, definition)
         # Only cross-reference documented components (not dimensions or strings).
         rendered.uses = sorted(uses & set(self._ctx.math_reprs))
 
         # Escape special characters in text-mode LaTeX so KaTeX can render names
         # and coordinate values containing e.g. underscores. Done here, on the
         # final display strings, so `math_reprs` stay unescaped for evaluation.
-        rendered.foreach = _escape_text_mode(rendered.foreach)
-        rendered.mask = _escape_text_mode(rendered.mask)
         for rendered_eq in rendered.equations:
             rendered_eq["mask"] = _escape_text_mode(rendered_eq["mask"])
             rendered_eq["expression"] = _escape_text_mode(rendered_eq["expression"])
+        rendered.foreach = _escape_text_mode(rendered.foreach)
+        rendered.mask = _escape_text_mode(rendered.mask)
 
-        self.components.setdefault(group, {})[name] = rendered
+    def _add_expr_component(
+        self,
+        rendered: RenderedComponent,
+        uses: set[str],
+        parsed: parsing.ParsedComponent,
+    ) -> None:
+        for equation in parsed.equations:
+            equation_ctx = replace(self._ctx, equation_name=equation.name)
+            rendered.equations.append(
+                {
+                    "mask": parsing.as_latex_mask(equation, equation_ctx),
+                    "expression": parsing.as_latex_expression(equation, equation_ctx),
+                }
+            )
+            uses |= equation.references()
 
-    def _bounds_string(self, name: str, definition: object) -> str:
+    def _add_var_component(
+        self,
+        name: str,
+        rendered: RenderedComponent,
+        uses: set[str],
+        definition: VariableDef,
+    ) -> None:
+        rendered.extras["Domain"] = definition.domain
+        rendered.equations.append(
+            {"mask": "", "expression": self._bounds_string(name, definition)}
+        )
+        uses |= {
+            bound
+            for bound in (definition.bounds.lower, definition.bounds.upper)
+            if isinstance(bound, str)
+        }
+
+    def _bounds_string(self, name: str, definition: VariableDef) -> str:
         """Return the LaTeX bounds equation of a decision variable."""
-        bounds = definition.bounds  # type: ignore[attr-defined]
+        bounds = definition.bounds
         reprs = self._ctx.math_reprs
         lower, upper = (
             reprs.get(bound, rf"\textit{{{bound}}}")
@@ -233,6 +279,13 @@ class LatexModelBuilder(_DeclarativeBase):
             for bound in (bounds.lower, bounds.upper)
         )
         return rf"{lower} \leq {reprs[name]} \leq {upper}"
+
+    def _add_obj_component(
+        self, rendered: RenderedComponent, definition: ObjectiveDef
+    ) -> None:
+        rendered.extras["Sense"] = (
+            "minimise" if definition.sense == "min" else "maximise"
+        )
 
     def build(self) -> LatexModelBuilder:
         """
@@ -372,16 +425,38 @@ def _metadata_lines(format: FORMAT_T, key: str, value: str) -> list[str]:
     return [f"- **{key}**: {value}"]
 
 
-def _math_block(format: FORMAT_T, lines: list[str]) -> list[str]:
-    """Return a display-math block wrapping an `array` of the given LaTeX lines."""
+def _array_block(lines: list[str]) -> str:
+    """Return a LaTeX `array` environment of the given lines."""
     joined = " \\\\\n    ".join(lines)
-    array = f"\\begin{{array}}{{l}}\n    {joined}\n\\end{{array}}"
+    return f"\\begin{{array}}{{l}}\n    {joined}\n\\end{{array}}"
+
+
+def _cases_block(equations: list[dict[str, str]]) -> str:
+    r"""
+    Return a LaTeX `cases` environment, one row per equation variant.
+
+    Each row is the variant's expression, with its own mask (if any) as the
+    row's `\text{if }` condition, so that variants sharing a component's
+    `foreach`/top-level mask render as sub-clauses at the same nesting level.
+    """
+    rows = []
+    for equation in equations:
+        row = equation["expression"]
+        if equation["mask"]:
+            row += rf" & \quad \text{{if }} {equation['mask']}"
+        rows.append(row)
+    joined = " \\\\\n    ".join(rows)
+    return f"\\begin{{cases}}\n    {joined}\n\\end{{cases}}"
+
+
+def _math_block(format: FORMAT_T, inner: str) -> list[str]:
+    """Return a display-math block wrapping the given LaTeX body."""
     if format == "md":
-        return ["$$", array, "$$", ""]
+        return ["$$", inner, "$$", ""]
     if format == "rst":
-        indented = "\n".join(f"    {line}" for line in array.split("\n"))
+        indented = "\n".join(f"    {line}" for line in inner.split("\n"))
         return [".. math::", "", indented, ""]
-    return [r"\begin{equation}", array, r"\end{equation}", ""]
+    return [r"\begin{equation}", inner, r"\end{equation}", ""]
 
 
 def _component_doc(format: FORMAT_T, component: RenderedComponent) -> list[str]:
@@ -400,13 +475,22 @@ def _component_doc(format: FORMAT_T, component: RenderedComponent) -> list[str]:
         blocks.extend(_metadata_lines(format, key, value))
     if metadata:
         blocks.append("")
-    for equation in component.equations:
-        lines = []
+    if component.equations:
+        header = []
         if component.foreach:
-            lines.append(component.foreach)
-        for mask in (component.mask, equation["mask"]):
-            if mask:
-                lines.append(rf"\text{{if }} {mask}")
-        lines.append(equation["expression"])
-        blocks.extend(_math_block(format, lines))
+            header.append(component.foreach)
+        if component.mask:
+            header.append(rf"\text{{if }} {component.mask}")
+
+        if len(component.equations) == 1:
+            equation = component.equations[0]
+            lines = [*header]
+            if equation["mask"]:
+                lines.append(rf"\text{{if }} {equation['mask']}")
+            lines.append(equation["expression"])
+            inner = _array_block(lines)
+        else:
+            cases = _cases_block(component.equations)
+            inner = f"{_array_block(header)}\n{cases}" if header else cases
+        blocks.extend(_math_block(format, inner))
     return blocks

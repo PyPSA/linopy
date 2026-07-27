@@ -100,6 +100,7 @@ class _DeclarativeBase:
         """
         self.model = Model()
         self.math = MathModel.model_validate(math_def)
+        self.parsed = parsing.parse_math(self.math)
         self.input_data = input_data if input_data is not None else xr.Dataset()
         self.config = ConfigModel.model_validate(config or {})
         self._ctx = Context(
@@ -111,13 +112,10 @@ class _DeclarativeBase:
             math_reprs=math_reprs or {},
         )
 
-    def _references(
-        self, definition: Any, equations: Iterable[parsing.Equation] = ()
-    ) -> list[str]:
+    def _references(self, parsed: parsing.ParsedComponent) -> list[str]:
         """Return the sorted names of all math components a component references."""
-        mask_node = parsing.parse_mask(getattr(definition, "mask", "True"), self.math)
-        refs = find_refs(mask_node, Component)
-        for equation in equations:
+        refs = find_refs(parsed.mask, Component)
+        for equation in parsed.equations:
             refs |= equation.references()
         return sorted(refs)
 
@@ -198,10 +196,9 @@ class DeclarativeModelBuilder(_DeclarativeBase):
         warn_msgs: list[str] = []
         error_msgs: list[str] = []
         active = self.input_data.get("active", xr.DataArray(True))
-        for name, check in self.math.checks.root.items():
-            if not check.active:
-                continue
-            mask_node = parsing.parse_mask(check.mask, self.math, name)
+        for name in self.math.checks._active:
+            check = self.math.checks[name]
+            mask_node = self.parsed.checks[name]
             check_ctx = replace(self._ctx, mode="mask", equation_name=name)
             evaluated = mask_node.evaluate(check_ctx)
             if (evaluated & active).any():
@@ -242,7 +239,10 @@ class DeclarativeModelBuilder(_DeclarativeBase):
 
     def add_variable(self, name: str, definition: VariableDef) -> None:
         """Add a decision variable to the model, masked by its math definition."""
-        mask = parsing.component_mask("variables", name, definition, self._ctx)
+        parsed = self.parsed["variables"][name]
+        mask = parsing.component_mask(
+            "variables", name, definition, parsed.mask, self._ctx
+        )
         if not mask.any():
             LOGGER.info(f"variables:{name} | {_SKIP_MESSAGE}")
             return
@@ -255,18 +255,22 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             integer=definition.domain == "integer",
         )
         # Variable.attrs values are typed Hashable, but a sorted list serializes best.
-        self.model.variables[name].attrs["references"] = self._references(definition)  # type: ignore[assignment]
+        self.model.variables[name].attrs["references"] = self._references(parsed)  # type: ignore[assignment]
 
     def add_expression(self, name: str, definition: ExpressionDef) -> None:
         """Add a named expression to the model, merging its equation variants."""
-        mask = parsing.component_mask("expressions", name, definition, self._ctx)
+        parsed = self.parsed["expressions"][name]
+        mask = parsing.component_mask(
+            "expressions", name, definition, parsed.mask, self._ctx
+        )
         if not mask.any():
             LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
             return
         expr: Any = LinearExpression(float("nan"), self.model).where(mask)
         filled = xr.DataArray(False)
-        equations = parsing.parse_component("expressions", name, definition, self.math)
-        for equation, sub_mask in self._iter_equations(equations, "expressions", mask):
+        for equation, sub_mask in self._iter_equations(
+            parsed.equations, "expressions", mask
+        ):
             if (filled & sub_mask).any():
                 raise ValueError(
                     f"expressions:{name} | Overlapping 'mask' conditions between "
@@ -280,21 +284,23 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
             return
         self.model.add_expressions(name=name, data=expr, mask=mask)
-        self.model.expressions[name].attrs["references"] = self._references(
-            definition, equations
-        )
+        self.model.expressions[name].attrs["references"] = self._references(parsed)
 
     def add_constraint(self, name: str, definition: ConstraintDef) -> None:
         """Add a constraint to the model, merging its equation variants."""
-        mask = parsing.component_mask("constraints", name, definition, self._ctx)
+        parsed = self.parsed["constraints"][name]
+        mask = parsing.component_mask(
+            "constraints", name, definition, parsed.mask, self._ctx
+        )
         if not mask.any():
             LOGGER.info(f"constraints:{name} | {_SKIP_MESSAGE}")
             return
         lhs: Any = LinearExpression(float("nan"), self.model).where(mask)
         rhs: Any = LinearExpression(float("nan"), self.model).where(mask)
         sign = xr.DataArray().where(mask)
-        equations = parsing.parse_component("constraints", name, definition, self.math)
-        for equation, sub_mask in self._iter_equations(equations, "constraints", mask):
+        for equation, sub_mask in self._iter_equations(
+            parsed.equations, "constraints", mask
+        ):
             if (sign.notnull() & sub_mask).any():
                 raise ValueError(
                     f"constraints:{name} | Overlapping 'mask' conditions between "
@@ -320,20 +326,22 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             rhs=rhs,
             mask=mask,
         )
-        self.model.constraints[name].attrs["references"] = self._references(
-            definition, equations
-        )
+        self.model.constraints[name].attrs["references"] = self._references(parsed)
 
     def add_objective(self, name: str, definition: ObjectiveDef) -> None:
         """Set the model objective, merging its equation variants."""
-        mask = parsing.component_mask("objectives", name, definition, self._ctx)
+        parsed = self.parsed["objectives"][name]
+        mask = parsing.component_mask(
+            "objectives", name, definition, parsed.mask, self._ctx
+        )
         if not mask.any():
             LOGGER.info(f"objectives:{name} | {_SKIP_MESSAGE}")
             return
         pieces: list[tuple[LinearExpression, xr.DataArray]] = []
         filled = xr.DataArray(False)
-        equations = parsing.parse_component("objectives", name, definition, self.math)
-        for equation, sub_mask in self._iter_equations(equations, "objectives", mask):
+        for equation, sub_mask in self._iter_equations(
+            parsed.equations, "objectives", mask
+        ):
             if (filled & sub_mask).any():
                 raise ValueError(
                     f"objectives:{name} | Overlapping 'mask' conditions between "
@@ -351,9 +359,7 @@ class DeclarativeModelBuilder(_DeclarativeBase):
         if len(pieces) > 1:
             expr = merge([piece.where(sub_mask) for piece, sub_mask in pieces])
         self.model.add_objective(expr=expr, sense=definition.sense)
-        self.model.objective.attrs["references"] = self._references(
-            definition, equations
-        )
+        self.model.objective.attrs["references"] = self._references(parsed)
 
     def build(self) -> Model:
         """
@@ -374,7 +380,7 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             )
         for group in BUILD_ORDER:
             component = group.removesuffix("s")
-            ordered_items = self._sorted_by_order(self.math[group].root)
+            ordered_items = self._sorted_by_order(self.math[group]._active)
             for name, definition in tqdm(
                 ordered_items, desc=f"Building {group}.", colour=TQDM_COLOR
             ):

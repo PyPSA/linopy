@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import operator
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal
@@ -191,7 +192,7 @@ def latex_number(value: float | int) -> str:
 
 
 @dataclass(frozen=True, kw_only=True)
-class Node:
+class Node(ABC):
     """
     Base class of all declarative math AST nodes.
 
@@ -207,13 +208,13 @@ class Node:
     loc: int = field(default=0, repr=False, compare=False)
     """Character offset of this node in `instring` (used in error messages)."""
 
+    @abstractmethod
     def evaluate(self, ctx: Context) -> Any:
         """Evaluate this node to data (an `xr.DataArray` or a linopy expression)."""
-        raise NotImplementedError
 
+    @abstractmethod
     def to_latex(self, ctx: Context) -> str:
         """Render this node as a LaTeX math string."""
-        raise NotImplementedError
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -671,7 +672,8 @@ class Compare(Node):
             unmasked_ctx = replace(ctx, apply_mask=False)
             lhs_str = self.lhs.to_latex(unmasked_ctx)
             rhs_str = self.rhs.to_latex(unmasked_ctx)
-            if r"\text" not in rhs_str:
+            # Wrap plain-text tokens (coordinate labels, bare numbers, booleans) in `\text{}` so they render upright
+            if "\\" not in rhs_str:
                 rhs_str = rf"\text{{{rhs_str}}}"
             return lhs_str + _LATEX_MASK_OPERATORS[self.op] + rhs_str
         lhs_str = self.lhs.to_latex(ctx)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Hashable, Iterable
 from functools import cached_property
-from typing import Annotated, Any, ClassVar, Literal, Self, TypeVar
+from typing import Annotated, Any, ClassVar, Literal, Self, TypeVar, get_args
 
 import numpy as np
 from annotated_types import Len
@@ -46,21 +46,10 @@ COMPONENTS_T = Literal[
 
 EQUATION_GROUP_T = Literal["expressions", "constraints", "objectives"]
 
-EQUATION_GROUPS: tuple[str, ...] = ("expressions", "constraints", "objectives")
-"""Component groups whose definitions carry parseable equations."""
+BUILD_ORDER_T = Literal["variables", "expressions", "constraints", "objectives"]
+BUILD_ORDER: tuple[BUILD_ORDER_T, ...] = get_args(BUILD_ORDER_T)
 
-BUILD_ORDER: tuple[str, ...] = ("variables", "expressions", "constraints", "objectives")
 """Component groups in the order they are built into a linopy model."""
-
-DOCUMENTED_GROUPS: dict[str, str] = {
-    "parameters": "Parameters",
-    "lookups": "Lookups",
-    "variables": "Variables",
-    "expressions": "Expressions",
-    "constraints": "Constraints",
-    "objectives": "Objectives",
-}
-"""Component groups documented in LaTeX math docs, with their section titles."""
 
 
 def _validate_unique_list(v: list) -> list:
@@ -194,7 +183,7 @@ class DimensionDef(_MathComponent):
 
     @property
     def default(self) -> float:
-        """Dummy variable to align with lookups and dims."""
+        """Dummy field to align with lookups and dims."""
         return float("nan")
 
 
@@ -208,7 +197,7 @@ class ParameterDef(_MathComponent):
 
     @property
     def dtype(self) -> Literal["float"]:
-        """Dummy variable to align with lookups and dims."""
+        """Dummy field to align with lookups and dims."""
         return "float"
 
     _group: ClassVar[COMPONENTS_T] = "parameters"
@@ -370,6 +359,16 @@ class ObjectiveDef(_MathEquationComponent):
     optimisation."""
 
     _group: ClassVar[COMPONENTS_T] = "objectives"
+
+    @property
+    def foreach(self) -> UniqueList:
+        """Dummy field to align with other math components."""
+        return []
+
+    @property
+    def mask(self) -> str:
+        """Dummy field to align with other math components."""
+        return "True"
 
 
 class PostprocessedExpressionDef(ExpressionDef):

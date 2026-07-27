@@ -102,11 +102,12 @@ def _ctx(builder: DeclarativeModelBuilder, **kwargs) -> nodes.Context:
 def _first_equation(
     builder: DeclarativeModelBuilder, group: str, name: str
 ) -> tuple[parsing.Equation, xr.DataArray, nodes.Context]:
-    """Parse a component and return its first equation, sub-mask, and context."""
+    """Return a pre-parsed component's first equation, sub-mask, and context."""
     ctx = _ctx(builder)
     definition = getattr(builder.math, group)[name]
-    mask = parsing.component_mask(group, name, definition, ctx)
-    equation = parsing.parse_component(group, name, definition, builder.math)[0]
+    parsed = builder.parsed[group][name]
+    mask = parsing.component_mask(group, name, definition, parsed.mask, ctx)
+    equation = parsed.equations[0]
     sub_mask = parsing.as_mask(equation, ctx, initial_mask=mask)
     sub_mask = parsing.drop_dims_not_in_foreach(sub_mask, equation.sets)
     return equation, sub_mask, ctx
@@ -182,11 +183,81 @@ class TestGrammar:
     def test_parse_error_carries_position_marker(self):
         math = _math()
         math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
+        with pytest.raises(ValueError, match="equations\\[0\\].expression") as excinfo:
+            DeclarativeModelBuilder(math, _inputs(), {})
+        message = str(excinfo.value)
+        assert "constraints:cap:" in message
+        assert "^" in message
+
+
+class TestParseWalkthrough:
+    """Whole-dict parse walkthrough with aggregated errors."""
+
+    def test_errors_aggregate_across_components(self):
+        """Broken strings in two components raise as one grouped error."""
+        math = _math()
+        math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
+        math["expressions"]["total_cost"]["equations"][0]["expression"] = (
+            "flow * * cost"
+        )
+        with pytest.raises(ValueError) as excinfo:
+            DeclarativeModelBuilder(math, _inputs(), {})
+        message = str(excinfo.value)
+        assert "constraints:cap:" in message
+        assert "expressions:total_cost:" in message
+        assert message.count("^") == 2
+
+    def test_undefined_ref_collected_alongside_syntax_errors(self):
+        """A syntax error does not short-circuit undefined `$ref` collection."""
+        math = _math()
+        math["constraints"]["cap"]["equations"][0]["expression"] = "flow <= <="
+        math["expressions"]["sub_expr_test"]["sub_expressions"] = {
+            "bar": [{"expression": "flow"}]
+        }
+        with pytest.raises(ValueError) as excinfo:
+            DeclarativeModelBuilder(math, _inputs(), {})
+        message = str(excinfo.value)
+        assert "constraints:cap:" in message
+        assert "expressions:sub_expr_test:" in message
+        assert "Undefined sub_expressions" in message
+
+    def test_inactive_components_are_skipped(self):
+        """Inactive components are neither parsed nor built."""
+        math = _math()
+        math["expressions"]["broken"] = {
+            "active": False,
+            "foreach": ["node"],
+            "equations": [{"expression": "flow * * cost"}],
+        }
         builder = DeclarativeModelBuilder(math, _inputs(), {})
-        with pytest.raises(ValueError, match="equations\\[0\\].expression"):
-            parsing.parse_component(
-                "constraints", "cap", builder.math.constraints["cap"], builder.math
-            )
+        assert "broken" not in builder.parsed["expressions"]
+        model = builder.build()
+        assert "broken" not in model.expressions
+
+    def test_check_masks_are_parsed(self):
+        math = _math()
+        math["checks"] = {"bad": {"mask": "cost > >", "message": "boom"}}
+        with pytest.raises(ValueError, match="checks:bad"):
+            DeclarativeModelBuilder(math, _inputs(), {})
+
+    def test_inactive_check_masks_are_skipped(self):
+        math = _math()
+        math["checks"] = {
+            "bad": {"mask": "cost > >", "message": "boom", "active": False}
+        }
+        builder = DeclarativeModelBuilder(math, _inputs(), {})
+        assert "bad" not in builder.parsed.checks
+
+    def test_parsed_math_shape(self):
+        builder = DeclarativeModelBuilder(_math(), _inputs(), {})
+        assert set(builder.parsed.components) == {
+            "variables",
+            "expressions",
+            "constraints",
+            "objectives",
+        }
+        assert builder.parsed["variables"]["flow"].equations == []
+        assert builder.parsed["constraints"]["cap"].equations
 
 
 class TestMaskRoute:
@@ -290,14 +361,8 @@ class TestExpressionRoute:
         math["expressions"]["sub_expr_test"]["sub_expressions"] = {
             "bar": [{"expression": "flow"}]
         }
-        builder = DeclarativeModelBuilder(math, _inputs(), {})
-        with pytest.raises(KeyError, match="Undefined sub_expressions"):
-            parsing.parse_component(
-                "expressions",
-                "sub_expr_test",
-                builder.math.expressions["sub_expr_test"],
-                builder.math,
-            )
+        with pytest.raises(ValueError, match="Undefined sub_expressions"):
+            DeclarativeModelBuilder(math, _inputs(), {})
 
     def test_plain_and_list_slices(self, builder_with_flow):
         ctx = _ctx(
@@ -365,12 +430,12 @@ class TestLatexRoute:
 
     def test_equation_latex(self, builder_with_flow):
         equation, _, ctx = _first_equation(builder_with_flow, "constraints", "cap")
-        assert parsing.as_latex(equation, ctx) == r"flow \leq cap_max"
+        assert parsing.as_latex_expression(equation, ctx) == r"flow \leq cap_max"
 
     def test_sum_latex(self, builder_with_flow):
         equation, _, ctx = _first_equation(builder_with_flow, "objectives", "obj")
         assert (
-            parsing.as_latex(equation, ctx)
+            parsing.as_latex_expression(equation, ctx)
             == r"\sum\limits_{\substack{\text{n} \in \text{node}}} (total_cost)"
         )
 
@@ -382,9 +447,21 @@ class TestLatexRoute:
         builder = DeclarativeModelBuilder(math, _inputs(), {})
         builder.add_variable("flow", builder.math.variables["flow"])
         equation, _, ctx = _first_equation(builder, "constraints", "cap")
-        assert parsing.as_latex(equation, ctx, what="mask") == (
+        assert parsing.as_latex_mask(equation, ctx) == (
             r"(\textit{cost}\mathord{>}\text{1} \land \text{n} \in \text{[a,b]})"
         )
+
+    def test_mask_infinity_latex_not_wrapped_in_text(self):
+        # `\infty` (and other bare LaTeX commands) must stay in math mode; only
+        # plain-text tokens (numbers, coordinate labels, booleans) get `\text{}`.
+        math = _math()
+        math["constraints"]["cap"]["equations"][0]["mask"] = "cap_max == inf"
+        builder = DeclarativeModelBuilder(math, _inputs(), {})
+        builder.add_variable("flow", builder.math.variables["flow"])
+        equation, _, ctx = _first_equation(builder, "constraints", "cap")
+        rendered = parsing.as_latex_mask(equation, ctx)
+        assert r"\mathord{==}\infty" in rendered
+        assert r"\text{\infty}" not in rendered
 
     def test_sliced_component_latex(self, builder_with_flow):
         ctx = _ctx(builder_with_flow)
@@ -658,7 +735,17 @@ class TestLatexDoc:
         doc = latex_math_doc(math, _inputs(), format="md")
         assert r"\text{if } (\textit{cost}_\text{n}\mathord{>}\text{1})" in doc
 
-    def test_sub_expression_variants_render_as_separate_blocks(self):
+    def test_infinity_not_wrapped_in_text(self):
+        # `cap_max`'s default is `inf`; a mask comparing against it must render
+        # `\infty` as a bare math token, never `\text{\infty}` (which KaTeX
+        # would print as the literal string, not the symbol).
+        math = _math()
+        math["constraints"]["cap"]["equations"][0]["mask"] = "cap_max == inf"
+        doc = latex_math_doc(math, _inputs(), format="md")
+        assert r"\infty" in doc
+        assert r"\text{\infty}" not in doc
+
+    def test_sub_expression_variants_produce_multiple_equations(self):
         math = _math()
         math["expressions"]["sub_expr_test"]["sub_expressions"]["foo"] = [
             {"mask": "cost > 1", "expression": "flow"},
@@ -670,6 +757,31 @@ class TestLatexDoc:
         assert equations[1]["expression"] == (
             r"\textbf{flow}_\text{n} \times 2 \times \textit{cost}_\text{n}"
         )
+
+    def test_multiple_equations_render_as_one_block_with_cases(self):
+        # Sub-clauses of a component share one `foreach`/top-level mask and
+        # should render as `cases` rows at the same nesting level, not as
+        # separate top-level math blocks.
+        math = _math()
+        math["constraints"]["cap"]["equations"] = [
+            {"mask": "cost > 1", "expression": "flow <= cap_max"},
+            {"mask": "not cost > 1", "expression": "flow <= 0"},
+        ]
+        doc = latex_math_doc(math, _inputs(), format="md")
+        section = doc.split("### cap\n")[1].split("### ")[0]
+        assert section.count(r"\begin{array}{l}") == 1
+        assert section.count(r"\begin{cases}") == 1
+        assert section.count("$$") == 2  # one opening, one closing delimiter
+        assert r"\text{if } (\textit{cost}_\text{n}\mathord{>}\text{1})" in section
+        assert (
+            r"\text{if } (\neg (\textit{cost}_\text{n}\mathord{>}\text{1}))" in section
+        )
+
+    def test_single_equation_renders_inline_without_cases(self):
+        doc = latex_math_doc(_math(), _inputs(), format="md")
+        section = doc.split("### total_cost\n")[1].split("### ")[0]
+        assert r"\begin{cases}" not in section
+        assert r"\begin{array}{l}" in section
 
     def test_markdown_document_structure(self):
         doc = latex_math_doc(_math(), _inputs(), format="md")
