@@ -1,11 +1,12 @@
 """
 Linopy declarative math parsing module.
 
-This module turns a validated math component definition into a list of
-:class:`Equation` objects — pure data holding the parsed expression/mask ASTs
-with all `$name` sub-expression and slicer references resolved — and provides
-the typed entry points that evaluate an equation to a boolean mask array, a
-linopy expression, a constraint tuple, or a LaTeX math string.
+This module turns a validated math component definition into a list of :class:`Equation` objects.
+The objects hold the parsed expression/mask ASTs with all `$name` sub-expression and slicer references resolved.
+They also provide the typed entry points that evaluate an equation to a boolean mask array, a linopy expression, a constraint tuple, or a LaTeX math string.
+
+This module is adapted from the calliope Apache-2.0 licensed equation parsing module:
+https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/parsing.py
 """
 
 from __future__ import annotations

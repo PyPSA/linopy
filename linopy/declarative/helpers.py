@@ -1,10 +1,13 @@
 """
 Linopy declarative math helper-functions module.
 
-This module contains the helper functions that can be called in declarative math
-`mask` and `expression` strings (by their `NAME`), the abstract base class from
-which users can define their own, and the registry builder that makes them
-available to a model build.
+This module contains:
+- the helper functions that can be called in declarative math `mask` and `expression` strings using their `NAME`;
+- the abstract base class from which users can define their own helpers, and;
+- the registry builder that makes them available to a model build.
+
+This module is adapted from the calliope Apache-2.0 licensed helper function module:
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/helper_functions.py
 """
 
 from __future__ import annotations

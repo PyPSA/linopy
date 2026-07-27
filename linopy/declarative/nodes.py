@@ -1,12 +1,15 @@
 """
 Linopy declarative math AST module.
 
-This module contains the AST node types produced when parsing declarative math
-strings, together with — per node — the pyparsing parse action(s) that build it
-(`from_tokens`), the data evaluator (`evaluate`, returning an `xr.DataArray` or
-a linopy expression), and the LaTeX renderer (`to_latex`). The evaluation
-context (:class:`Context`) and shared utilities live here too; the pyparsing
-grammars that produce the nodes live in :mod:`linopy.declarative.grammar`.
+This module contains the AST node types produced when parsing declarative math strings.
+For each node, this module contains the `pyparsing` parse action(s) that build it, the data evaluator, and the LaTeX math renderer.
+The evaluation context and shared utilities live here too.
+The pyparsing grammars that produce the nodes live in :mod:`linopy.declarative.grammar`.
+
+This module is adapted from the calliope Apache-2.0 licensed math parsers:
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/expression_parser.py
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/where_parser.py
+
 """
 
 from __future__ import annotations

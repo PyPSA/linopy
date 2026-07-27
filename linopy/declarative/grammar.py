@@ -1,14 +1,15 @@
 """
 Linopy declarative math grammar module.
 
-This module contains the pyparsing grammars that turn declarative math strings
-into ASTs of :mod:`linopy.declarative.nodes` node objects. Parse actions are the
-node classes' `from_tokens` classmethods; all evaluation logic lives on the
-nodes themselves.
+This module contains the pyparsing grammars that turn declarative math strings into ASTs of :mod:`linopy.declarative.nodes` node objects.
+Parse actions are the node classes' `from_tokens` classmethods; all evaluation logic lives on the nodes themselves.
 
-The infix-notation grammar structure is adapted from the pyparsing `eval_arith.py`
-example (https://github.com/pyparsing/pyparsing/blob/master/examples/eval_arith.py,
-MIT licensed).
+The infix-notation grammar structure is adapted from the pyparsing MIT licensed `eval_arith.py` example:
+https://github.com/pyparsing/pyparsing/blob/master/examples/eval_arith.py.
+
+This module is adapted from the calliope Apache-2.0 licensed math parsers:
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/expression_parser.py
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/where_parser.py
 """
 
 from __future__ import annotations

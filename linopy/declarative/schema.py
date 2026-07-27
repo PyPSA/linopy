@@ -1,8 +1,10 @@
 """
 Linopy declarative math schema module.
 
-This module contains the pydantic models that validate declarative math and
-build-configuration definitions.
+This module contains the pydantic models that validate declarative math and build-configuration definitions.
+
+This module is adapted from the calliope Apache-2.0 licensed math schema module:
+https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/schemas/math_schema.py
 """
 
 from __future__ import annotations

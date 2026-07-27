@@ -1,11 +1,12 @@
 """
 Linopy declarative LaTeX math documentation module.
 
-This module builds a human-readable mathematical formulation document from a
-declarative math definition, without building an optimisation problem: every
-active math component is rendered to LaTeX (equations, mask conditions, foreach
-sets, bounds) together with its metadata and cross-references, and the result
-can be generated as Markdown, reStructuredText, or LaTeX source.
+This module builds a human-readable mathematical formulation document from a declarative math definition.
+Every active math component is rendered to LaTeX (equations, mask conditions, foreach sets, bounds) without building an optimisation problem.
+Metadata and cross-references are then combined together with the LaTeX rendering to produce a complete mathematical formulation document.
+
+This module is adapted from the calliope Apache-2.0 licensed latex backend module:
+- https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/latex_backend.py
 """
 
 from __future__ import annotations

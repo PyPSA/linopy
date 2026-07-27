@@ -1,9 +1,11 @@
 """
 Linopy declarative model-build module.
 
-This module contains the entry point to build a linopy optimisation model from a
-declarative math definition (a dictionary, typically loaded from YAML) and an
+This module contains the entry point to build a linopy optimisation model from a declarative math definition and an
 xarray dataset of input data.
+
+This module is adapted from the calliope Apache-2.0 licensed math backend model:
+https://github.com/calliope-project/calliope/blob/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend/backend_model.py
 """
 
 from __future__ import annotations

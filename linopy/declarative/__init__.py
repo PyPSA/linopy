@@ -1,8 +1,10 @@
 """
 Linopy declarative math interface.
 
-Build a linopy model from a declarative math definition (typically loaded from
-YAML) and an xarray dataset of input data, via :func:`declarative_model`.
+Build a linopy model from a declarative math definition and an xarray dataset of input data, via :func:`declarative_model`.
+
+This directory is adapted from the calliope Apache-2.0 licensed math backend module:
+https://github.com/calliope-project/calliope/tree/9916116a06ec8c1feaf3c2606bdb8941b916ce85/src/calliope/backend
 """
 
 from linopy.declarative.build import DeclarativeModelBuilder, declarative_model
