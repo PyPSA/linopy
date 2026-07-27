@@ -933,7 +933,8 @@ class Model:
     def add_expressions(
         self,
         data: Variable
-        | LinearExpression | QuadraticExpression
+        | LinearExpression
+        | QuadraticExpression
         | Sequence[tuple[ConstantLike, Variable | str]],
         name: str | None = None,
         mask: MaskLike | None = None,
