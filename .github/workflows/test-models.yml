@@ -5,8 +5,7 @@ on:
     branches:
       - master
   pull_request:
-    branches:
-      - master
+    branches: ["*"]
   schedule:
     - cron: "0 5 * * *"
 
@@ -24,14 +23,14 @@ jobs:
       matrix:
         version:
           - master
-        # - latest # Activate when v0.14.0 is released
+        # - latest
 
     defaults:
       run:
         shell: bash -l {0}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: PyPSA/pypsa-eur
           ref: master
@@ -43,11 +42,23 @@ jobs:
           latest_tag=$(git describe --tags `git rev-list --tags --max-count=1`)
           git checkout $latest_tag
 
-      # Only run check if package is not pinned
-      - name: Check if inhouse package is pinned
+      - name: Setup Pixi
+        uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          pixi-version: v0.68.1
+          cache: true
+          # Do not cache in branches
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'master' }}
+
+      - name: Setup cache keys
         run: |
-          grep_line=$(grep -- '- pypsa' envs/environment.yaml)
-          if [[ $grep_line == *"<"* || $grep_line == *"=="* ]]; then
+          echo "WEEK=$(date +'%Y%U')" >> $GITHUB_ENV # data and cutouts
+
+      # Only run check if package is not pinned
+      - name: Check if linopy package is pinned
+        run: |
+          grep_line=$(grep -- '${{ github.event.repository.name }} = ' pixi.toml)
+          if [[ $grep_line == *"<* || $grep_line == *"==* ]]; then
               echo "pinned=true" >> $GITHUB_ENV
           else
               echo "pinned=false" >> $GITHUB_ENV
@@ -59,7 +70,7 @@ jobs:
           echo -ne "url: ${CDSAPI_URL}\nkey: ${CDSAPI_TOKEN}\n" > ~/.cdsapirc
           echo "week=$(date +'%Y%U')" >> $GITHUB_ENV # data and cutouts
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         if: env.pinned == 'false'
         with:
           path: |
@@ -67,37 +78,23 @@ jobs:
             cutouts
           key: data-cutouts-${{ env.week }}
 
-      - uses: conda-incubator/setup-miniconda@v4
-        if: env.pinned == 'false'
-        with:
-          activate-environment: pypsa-eur
-
-      - name: Cache Conda env
-        if: env.pinned == 'false'
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.CONDA }}/envs
-          key: conda-pypsa-eur-${{ env.week }}-${{ hashFiles('envs/linux-64.lock.yaml') }}
-        id: cache-env
-
-      - name: Update environment
-        if: env.pinned == 'false' && steps.cache-env.outputs.cache-hit != 'true'
-        run: conda env update -n pypsa-eur -f envs/linux-64.lock.yaml
-
       - name: Install package from ref
         if: env.pinned == 'false'
         run: |
-          python -m pip install git+https://github.com/${{ github.repository }}@${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          pixi remove pypsa
+          pixi remove linopy
+          pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          pixi add --pypi pypsa
 
       - name: Run snakemake test workflows
         if: env.pinned == 'false'
         run: |
-          make test
+          pixi run integration-tests
 
       - name: Run unit tests
         if: env.pinned == 'false'
         run: |
-          make unit-test
+          pixi run unit-tests
 
       - name: Upload artifacts
         if: env.pinned == 'false'
@@ -109,3 +106,7 @@ jobs:
             .snakemake/log
             results
           retention-days: 3
+
+      - name: Show remaining disk space
+        if: always()
+        run: df -h

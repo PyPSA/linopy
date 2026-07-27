@@ -11,10 +11,26 @@ import functools
 import logging
 import operator
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Hashable,
+    ItemsView,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast, overload, ItemsView
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Self,
+    TypeAlias,
+    TypeVar,
+    cast,
+    overload,
+)
 from warnings import warn
 
 import numpy as np
@@ -44,15 +60,14 @@ except ImportError:
 from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
+from linopy.alignment import as_dataarray, broadcast_to_coords, fill_missing_coords
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
-    fill_missing_coords,
     filter_nulls_polars,
     format_coord,
     format_single_expression,
@@ -77,7 +92,7 @@ from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
     GROUP_DIM,
-    GROUPED_TERM_DIM,
+    GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
     STACKED_TERM_DIM,
@@ -139,6 +154,226 @@ def _expr_unwrap(
 logger = logging.getLogger(__name__)
 
 
+def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
+    """
+    Drop every coordinate touching the given dimensions.
+
+    A coordinate on a dimension that is being reduced away must not survive
+    the reduction: an auxiliary coordinate left in place would ride a
+    subsequent stack onto the helper term dimension and break later
+    alignment (https://github.com/PyPSA/linopy/issues/295).
+    """
+    dims = set(dims)
+    return ds.drop_vars(k for k, c in ds.coords.items() if dims & set(c.dims))
+
+
+def _resolve_group(group: Any, data: Dataset) -> Any:
+    """
+    Normalize a groupby key.
+
+    Unwrap a single-element key list to the scalar key, and resolve a string
+    naming a coordinate to that coordinate -- so ``groupby("name")`` behaves
+    like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
+    DataFrame, DataArray, multi-key lists) are returned unchanged.
+    """
+    if isinstance(group, (list, tuple)) and len(group) == 1:
+        group = group[0]
+    if isinstance(group, str) and group in data.coords:
+        group = data[group]
+    return group
+
+
+def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
+    """
+    Gather a multi-key list of coordinate names into a value frame.
+
+    Return a DataFrame of the named coordinates when all keys are 1-D
+    coordinates sharing a single dimension -- so the list rides the fast
+    reindex path -- otherwise None.
+    """
+    is_name_list = (
+        isinstance(group, (list, tuple))
+        and len(group) > 1
+        and all(isinstance(g, str) and g in data.coords for g in group)
+    )
+    if not is_name_list:
+        return None
+    coord_dims = {data[g].dims for g in group}
+    if len(coord_dims) != 1 or len(next(iter(coord_dims))) != 1:
+        return None
+    names = list(group)
+    return data[names].to_dataframe()[names]
+
+
+def _flatten_multidim_group(
+    group: DataArray, data: Dataset
+) -> tuple[pd.Series, Dataset]:
+    """
+    Flatten an N-D DataArray grouper into a 1-D key over a stacked dimension.
+
+    A multi-dimensional grouper defines its groups jointly over all its dims, so
+    the data is stacked over those dims and the grouper's values are raveled into
+    a Series aligned with the stacked axis. This lets the fast path reduce over
+    every grouper dim at once instead of leaking the extra dims into the result.
+    """
+    group_dims = list(group.dims)
+    data = data.stack({GROUP_STACK_DIM: group_dims}, create_index=False)
+    series = pd.Series(group.transpose(*group_dims).values.reshape(-1), name=group.name)
+    series.index.name = GROUP_STACK_DIM
+    return series, data
+
+
+def _grouper_dims(group: Any) -> list[Hashable] | None:
+    """
+    The dims a grouper consumes when grouping, or None for grouper types whose
+    dims are unknown here (exotic hashables, validated by xarray's groupby).
+    """
+    if isinstance(group, (DataArray, IndexVariable)):
+        return list(group.dims)
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        return [group.index.name]
+    return None
+
+
+def _restore_group_dim_position(
+    result: Dataset,
+    original_dims: tuple[Hashable, ...],
+    grouped_dims: Sequence[Hashable] | None = None,
+) -> Dataset:
+    """
+    Move the new group dimension into the slot the grouped dimension occupied,
+    matching xarray's groupby-reduce and linopy <= 0.8.0.
+
+    Surviving dims keep their order; the group dim(s) are reinserted where the
+    consumed dim(s) used to be. The coordinate variables are reordered too so the
+    dataset's canonical dim order (which the constructor's ``broadcast`` re-derives
+    from coordinate-insertion order) matches, instead of trailing the group dim.
+    This covers the fallback, which appends the group dim, and normalises the
+    scatter kernel's target-ordered output.
+
+    ``grouped_dims`` names the dims the grouping consumed. It must be passed
+    whenever the grouper's name can equal a grouped dim (the replacement dim then
+    shadows the consumed one, so it cannot be inferred from the dims alone);
+    when None, the consumed dims are inferred as those absent from the result.
+
+    Numpy-backed terms are made C-contiguous so downstream flattening (LP/solver
+    export) ravels a view instead of copying; a no-op when already contiguous, as
+    the scatter kernel's output is. Dask arrays are left lazy.
+    """
+    if grouped_dims is None:
+        consumed = [d for d in original_dims if d not in result.dims]
+    else:
+        consumed = [d for d in original_dims if d in set(grouped_dims)]
+    if not consumed:
+        return result
+    new_dims = [str(d) for d in result.dims if d not in original_dims or d in consumed]
+    order: list[Hashable] = []
+    for d in original_dims:
+        if d not in consumed:
+            order.append(d)
+        elif new_dims:
+            order.extend(new_dims)
+            new_dims = []
+    result = result.transpose(*order, missing_dims="ignore")
+    reordered_coords = {
+        d: result[d]
+        for d in order
+        if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
+    }
+    result = result.assign_coords(reordered_coords)
+    for name in ("coeffs", "vars"):
+        term = result[name]
+        if term.chunks is None:
+            result[name] = (term.dims, np.ascontiguousarray(term.values))
+    return result
+
+
+def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
+    """
+    Unstack a stacked multi-key group dimension into one dimension per key.
+
+    Warn before materialising the grid when most cells would be fill values,
+    pointing to ``observed=True`` for a compact result.
+    """
+    mi = ds.indexes[dim].remove_unused_levels()
+    observed = len(mi)
+    grid = int(np.prod([len(level) for level in mi.levels]))
+    if grid > 2 * observed and grid - observed > 10_000:
+        warn(
+            f"Grouping a LinearExpression by {list(mi.names)} produces a dense "
+            f"{grid:,}-cell grid, but only {observed:,} of those combinations "
+            f"occur -- the {grid - observed:,} absent ones are materialised as "
+            f"fill values. Pass `observed=True` to keep the result compact over "
+            f"only the observed combinations.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return ds.unstack(dim, fill_value=LinearExpression._fill_value)
+
+
+def _check_grouper_alignment(group: Any, data: Dataset) -> None:
+    """
+    Ensure an indexed grouper's labels match the data along each shared dim.
+
+    The fast path matches a ``pd.Series``, ``pd.DataFrame`` or ``DataArray``
+    grouper to the expression by position, so a grouper whose coordinates are
+    reordered -- or a different set entirely -- relative to the expression would
+    silently regroup. linopy does not reindex the grouper: it checks that the
+    labels match and raises otherwise, leaving the caller to align the grouper
+    explicitly. A grouper without an index along a dimension has nothing to align
+    by and keeps the positional match.
+    """
+    shared: list[tuple[Hashable, pd.Index]]
+    if isinstance(group, (pd.Series, pd.DataFrame)):
+        shared = [(group.index.name, group.index)]
+    elif isinstance(group, DataArray):
+        shared = [
+            (dim, group.get_index(dim)) for dim in group.dims if dim in group.indexes
+        ]
+    else:
+        return
+    for dim, index in shared:
+        if dim not in data.indexes or index.equals(data.indexes[dim]):
+            continue
+        detail = (
+            "the same labels in a different order"
+            if set(index) == set(data.indexes[dim])
+            else "a different set of labels"
+        )
+        raise ValueError(
+            f"the grouper's labels along dimension {dim!r} do not match the "
+            f"expression's coordinates ({detail}). linopy matches groupers by "
+            f"position and does not reindex; reorder the grouper to the "
+            f"expression's {dim!r} coordinates before grouping."
+        )
+
+
+def _encode_multikey_group(
+    frame: pd.DataFrame,
+) -> tuple[pd.Series, tuple[dict, pd.Index]]:
+    """
+    Encode a multi-key group frame as a single integer-coded Series.
+
+    ``_grouped_sum`` groups by one key, so each row's tuple of key values is
+    mapped to an integer. The frame is already aligned to the data (see
+    :func:`_check_grouper_alignment`), so no reindexing is needed. The returned
+    ``(int_map, columns)`` lets :func:`_restore_multikey_index` rebuild the
+    MultiIndex on the result.
+    """
+    int_map = get_index_map(*frame.values.T)
+    coded = frame.apply(tuple, axis=1).map(int_map)
+    return coded, (int_map, frame.columns)
+
+
+def _restore_multikey_index(ds: Dataset, decode: tuple[dict, pd.Index]) -> Dataset:
+    """Rebuild the MultiIndex group dimension encoded by _encode_multikey_group."""
+    int_map, columns = decode
+    index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
+    index.names = [str(col) for col in columns]
+    index.name = GROUP_DIM
+    return ds.assign_coords(Coordinates.from_pandas_multiindex(index, GROUP_DIM))
+
+
 @dataclass
 @forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
@@ -161,22 +396,30 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        if isinstance(self.group, pd.DataFrame):
+        data = self.data
+        group = _resolve_group(self.group, data)
+
+        if isinstance(group, pd.DataFrame):
             raise ValueError(
                 "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
             )
-        if isinstance(self.group, pd.Series):
-            group_name = self.group.name or "group"
-            group = DataArray(self.group, name=group_name)
-        else:
-            group = self.group  # type: ignore
+        if isinstance(group, pd.Series):
+            group = DataArray(group, name=group.name or "group")
 
-        return self.data.groupby(group=group, **self.kwargs)
+        # detach an attached free coordinate (never an indexed/level coord)
+        if (
+            isinstance(group, DataArray)
+            and group.name in set(data.coords) - set(data.dims)
+            and group.name not in data.xindexes
+        ):
+            data = data.drop_vars([group.name])
+
+        return data.groupby(group=group, **self.kwargs)
 
     def map(
         self,
         func: Callable[..., Dataset],
-        shortcut: bool = False,
+        shortcut: bool | None = None,
         args: tuple[()] = (),
         **kwargs: Any,
     ) -> LinearExpression:
@@ -188,7 +431,7 @@ class LinearExpressionGroupby:
         func : callable
             The function to apply.
         shortcut : bool, optional
-            Whether to use shortcut or not.
+            Deprecated and ignored. Will be removed in linopy v1.
         args : tuple, optional
             The arguments to pass to the function.
         **kwargs
@@ -199,88 +442,207 @@ class LinearExpressionGroupby:
         LinearExpression
             The result of applying the function to the groupby object.
         """
-        return LinearExpression(
-            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
-        )
+        if shortcut is not None:
+            warn(
+                "The `shortcut` argument is deprecated, no longer has any effect "
+                "and will be removed in linopy v1.",
+                FutureWarning,
+            )
+        return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
 
-    def sum(self, use_fallback: bool = False, **kwargs: Any) -> LinearExpression:
+    def sum(
+        self, use_fallback: bool = False, observed: bool = False
+    ) -> LinearExpression:
         """
-        Sum the groupby object.
+        Sum the expression over each group.
 
-        There are two options to perform the summation over groups.
-        The first and faster option uses an internal reindexing mechanism, which
-        however ignores keyword arguments. This will be used when passing a
-        pandas object or a DataArray as group, and setting `use_fallack`
-        to False (default).
-        The second uses a mapping of xarray groups which performs slower but
-        also takes into account the keyword arguments.
+        Replaces the grouped dimension with one entry per group, each holding
+        the sum of its members' terms.
 
         Parameters
         ----------
         use_fallback : bool
-            Whether to use the fallback implementation, which is a sort of default
-            xarray implementation. If set to False, the operation will be much
-            faster but keyword arguments are ignored. Defaults to False.
-        **kwargs
-            Arbitrary keyword arguments.
+            Fall back to the previous, slower groupby-sum implementation, kept
+            as an escape hatch. Leave at False unless the default misbehaves.
+            Defaults to False.
+        observed : bool
+            Only applies when grouping by a list of coordinate names. If True,
+            keep the result stacked over the observed key combinations (a
+            ``MultiIndex`` ``group`` dimension) instead of unstacking into one
+            dimension per key, which materialises the dense cartesian grid.
+            Defaults to False, mirroring xarray. Not supported together with
+            `use_fallback`.
 
         Returns
         -------
         LinearExpression
-            The sum of the groupby object.
+            The summed expression, with one entry per group.
         """
-        non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
-        if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
-            if isinstance(group, pd.DataFrame):
-                # dataframes do not have a name, so we need to set it
-                final_group_name = "group"
-            else:
-                final_group_name = getattr(group, "name", "group") or "group"
+        if observed and use_fallback:
+            raise ValueError(
+                "`observed=True` is not supported with `use_fallback=True`."
+            )
+
+        group = _resolve_group(self.group, self.data)
+        _check_grouper_alignment(group, self.data)
+
+        multikey_frame = (
+            None if use_fallback else _multikey_value_frame(group, self.data)
+        )
+        if multikey_frame is not None:
+            group = multikey_frame
+
+        data = self.data
+        original_dims = self.data.coeffs.dims
+        grouped_dims = _grouper_dims(group)
+        is_multidim_grouper = (
+            isinstance(group, DataArray)
+            and group.ndim > 1
+            and set(group.dims) <= set(data.dims)
+        )
+        if is_multidim_grouper and not use_fallback:
+            group, data = _flatten_multidim_group(group, data)
+
+        fast_path_types = (pd.Series, pd.DataFrame, xr.DataArray)
+        if isinstance(group, fast_path_types) and not use_fallback:
+            final_group_name = (
+                "group"
+                if isinstance(group, pd.DataFrame)
+                else getattr(group, "name", "group") or "group"
+            )
 
             if isinstance(group, DataArray):
                 group = group.to_pandas()
 
-            int_map = None
+            multikey_decode = None
             if isinstance(group, pd.DataFrame):
-                index_name = group.index.name
-                group = group.reindex(self.data.indexes[group.index.name])
-                group.index.name = index_name  # ensure name for multiindex
-                int_map = get_index_map(*group.values.T)
-                orig_group = group
-                group = group.apply(tuple, axis=1).map(int_map)
+                group, multikey_decode = _encode_multikey_group(group)
 
-            # At this point, group is always a pandas Series
             assert isinstance(group, pd.Series)
-            group_dim = group.index.name
+            ds = self._grouped_sum(group, data)
 
-            arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
-            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            coords = self.data.indexes[group_dim]
-            names_to_drop = [coords.name]
-            if isinstance(coords, pd.MultiIndex):
-                names_to_drop += list(coords.names)
-            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
-            ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
-            ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
-
-            if int_map is not None:
-                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
-                index.names = [str(col) for col in orig_group.columns]
-                index.name = GROUP_DIM
-                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = ds.assign_coords(new_coords)
+            if multikey_decode is not None:
+                ds = _restore_multikey_index(ds, multikey_decode)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
-            return LinearExpression(ds, self.model)
+            if multikey_frame is not None and not observed:
+                ds = _unstack_multikey(ds, final_group_name)
+        else:
 
-        def func(ds: Dataset) -> Dataset:
-            ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
-            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
-            return ds
+            def func(ds: Dataset) -> Dataset:
+                ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+                ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+                return ds
 
-        return self.map(func, **kwargs, shortcut=True)
+            ds = self.groupby.map(func)
+
+        ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
+        return LinearExpression(ds, self.model)
+
+    def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
+        """
+        Sum groups by scattering all terms directly into the final padded arrays.
+
+        Every group member keeps its block of ``nterm`` terms, so the resulting
+        term dimension has size ``max_group_size * nterm`` and smaller groups are
+        padded with fill values. The group dimension replaces the grouped one in
+        place: all surviving dimensions are passed as core dims, so ``apply_ufunc``
+        emits the target axis order and the padded arrays are allocated once,
+        contiguous. The constant is reduced before the term scatters so its
+        temporaries are freed before the padded arrays exist, keeping peak memory
+        at input + result. Dask arrays are collapsed to a single chunk (no per-dim
+        parallelism) since every dimension is now a core dim.
+        """
+        data = self.data if data is None else data
+        group_dim = group.index.name
+        fill_value = LinearExpression._fill_value
+
+        if data.chunks:
+            data = data.chunk(-1)
+
+        codes, unique_groups = pd.factorize(group, sort=True)
+        if (codes == -1).any():
+            raise ValueError(
+                "Cannot group by a pandas object containing NaN values. "
+                "Drop or fill the corresponding entries before grouping."
+            )
+
+        n_groups = len(unique_groups)
+        max_size = int(np.bincount(codes, minlength=n_groups).max()) if n_groups else 0
+        position_in_group = pd.Series(codes).groupby(codes).cumcount().to_numpy()
+        nterm = data.sizes[TERM_DIM]
+
+        def scatter(da: DataArray, fill: Any) -> DataArray:
+            """
+            Scatter each member's terms into its group's padded slot, keeping
+            the grouped dimension's position.
+            """
+            da = da.transpose(..., TERM_DIM)
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def scatter_terms(values: np.ndarray) -> np.ndarray:
+                surv_shape = [
+                    n_groups if d == group_dim else s
+                    for d, s in zip(dims_in, values.shape)
+                    if d != TERM_DIM
+                ]
+                out = np.full((*surv_shape, nterm, max_size), fill, dtype=values.dtype)
+                grouped = np.moveaxis(out, group_axis, 0)
+                grouped[codes, ..., :, position_in_group] = np.moveaxis(
+                    values, group_axis, 0
+                )
+                return out.reshape((*surv_shape, nterm * max_size))
+
+            return xr.apply_ufunc(
+                scatter_terms,
+                da,
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
+                exclude_dims={group_dim, TERM_DIM},
+                dask="parallelized",
+                dask_gufunc_kwargs={
+                    "output_sizes": {GROUP_DIM: n_groups, TERM_DIM: nterm * max_size}
+                },
+                output_dtypes=[da.dtype],
+            )
+
+        def group_sum(da: DataArray) -> DataArray:
+            """
+            Sum the constant term within each group, keeping the grouped
+            dimension's position.
+            """
+            dims_in = list(da.dims)
+            group_axis = dims_in.index(group_dim)
+            target = [GROUP_DIM if d == group_dim else d for d in dims_in]
+
+            def reduce(values: np.ndarray) -> np.ndarray:
+                members = np.moveaxis(values, group_axis, 0)
+                summed = np.zeros((n_groups, *members.shape[1:]), dtype=values.dtype)
+                np.add.at(summed, codes, np.where(np.isnan(members), 0, members))
+                return np.moveaxis(summed, 0, group_axis)
+
+            return xr.apply_ufunc(
+                reduce,
+                da,
+                input_core_dims=[dims_in],
+                output_core_dims=[target],
+                exclude_dims={group_dim},
+                dask="parallelized",
+                dask_gufunc_kwargs={"output_sizes": {GROUP_DIM: n_groups}},
+                output_dtypes=[da.dtype],
+            )
+
+        const = group_sum(data.const)
+        ds = Dataset(
+            {
+                "coeffs": scatter(data.coeffs, fill_value["coeffs"]),
+                "vars": scatter(data.vars, fill_value["vars"]),
+                "const": const,
+            }
+        )
+        return ds.assign_coords({GROUP_DIM: unique_groups})
 
     def roll(self, **kwargs: Any) -> LinearExpression:
         """
@@ -337,6 +699,9 @@ class BaseExpression(ABC):
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
+        if not isinstance(model, Model):
+            raise ValueError("model must be an instance of linopy.Model")
+
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
@@ -359,7 +724,9 @@ class BaseExpression(ABC):
             )
 
         if np.issubdtype(data.vars, np.floating):
-            data = assign_multiindex_safe(data, vars=data.vars.fillna(-1).astype(int))
+            data = assign_multiindex_safe(
+                data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
+            )
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
 
@@ -385,9 +752,6 @@ class BaseExpression(ABC):
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
-
-        if not isinstance(model, Model):
-            raise ValueError("model must be an instance of linopy.Model")
 
         data = data.assign_attrs(name=None)
         self._model = model
@@ -466,40 +830,30 @@ class BaseExpression(ABC):
             print(self)
 
     @abstractmethod
-    def __add__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __add__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __radd__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __radd__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __sub__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __sub__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rsub__(self: GenericExpression, other: SideLike) -> GenericExpression: ...
+    def __rsub__(self, other: SideLike) -> Self: ...
 
     @abstractmethod
-    def __mul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __mul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __rmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __rmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
-    def __matmul__(
-        self: GenericExpression, other: SideLike
-    ) -> GenericExpression | QuadraticExpression: ...
+    def __matmul__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
     @abstractmethod
     def __pow__(self, other: int) -> QuadraticExpression: ...
 
-    def __neg__(self: GenericExpression) -> GenericExpression:
+    def __neg__(self) -> Self:
         """
         Get the negative of the expression.
         """
@@ -533,7 +887,7 @@ class BaseExpression(ABC):
         return cast(QuadraticExpression, res)
 
     def _align_constant(
-        self: GenericExpression,
+        self,
         other: DataArray,
         fill_value: float = 0,
         join: JoinOptions | None = None,
@@ -579,13 +933,15 @@ class BaseExpression(ABC):
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         # NaN values in self.const or other are filled with 0 (additive identity)
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -601,12 +957,12 @@ class BaseExpression(ABC):
         return self.assign(const=self_const + da)
 
     def _apply_constant_op(
-        self: GenericExpression,
+        self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
         join: JoinOptions | None = None,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
 
@@ -614,7 +970,9 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = broadcast_to_coords(
+            other, coords=self.coords, dims=self.coord_dims, strict=False
+        )
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -633,16 +991,16 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
-    ) -> GenericExpression:
+        self, other: ConstantLike, join: JoinOptions | None = None
+    ) -> Self:
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
-    def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __div__(self, other: SideLike) -> Self:
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
@@ -654,7 +1012,7 @@ class BaseExpression(ABC):
         except TypeError:
             return NotImplemented
 
-    def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
+    def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
 
     def __le__(self, rhs: SideLike) -> Constraint:
@@ -677,10 +1035,10 @@ class BaseExpression(ABC):
         )
 
     def add(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Add an expression to others.
 
@@ -705,10 +1063,10 @@ class BaseExpression(ABC):
         return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Subtract others from expression.
 
@@ -724,10 +1082,10 @@ class BaseExpression(ABC):
         return self.add(-other, join=join)
 
     def mul(
-        self: GenericExpression,
+        self,
         other: SideLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Multiply the expr by a factor.
 
@@ -749,10 +1107,10 @@ class BaseExpression(ABC):
         return self._multiply_by_constant(other, join=join)
 
     def div(
-        self: GenericExpression,
+        self,
         other: VariableLike | ConstantLike,
         join: JoinOptions | None = None,
-    ) -> GenericExpression | QuadraticExpression:
+    ) -> Self | QuadraticExpression:
         """
         Divide the expr by a factor.
 
@@ -776,7 +1134,7 @@ class BaseExpression(ABC):
         return self._divide_by_constant(other, join=join)
 
     def le(
-        self: GenericExpression,
+        self,
         rhs: SideLike,
         join: JoinOptions | None = None,
     ) -> Constraint:
@@ -838,17 +1196,13 @@ class BaseExpression(ABC):
         """
         return self.__pow__(other)
 
-    def dot(
-        self: GenericExpression, other: ndarray
-    ) -> GenericExpression | QuadraticExpression:
+    def dot(self, other: ndarray) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
 
-    def __getitem__(
-        self: GenericExpression, selector: int | tuple[slice, list[int]] | slice
-    ) -> GenericExpression:
+    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
         """
         Get selection from the expression.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -974,7 +1328,8 @@ class BaseExpression(ABC):
         Replace variable labels by solution values.
         """
         m = self.model
-        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        M = m.matrices
+        sol = pd.Series(M.sol, M.vlabels)
         sol[-1] = np.nan
         idx = np.ravel(self.vars)
         values = np.asarray(sol[idx]).reshape(self.vars.shape)
@@ -993,11 +1348,11 @@ class BaseExpression(ABC):
         return sol.rename("solution")
 
     def sum(
-        self: GenericExpression,
+        self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -1113,7 +1468,9 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = broadcast_to_coords(
+                rhs, coords=self.coords, dims=self.coord_dims, strict=False
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1145,7 +1502,7 @@ class BaseExpression(ABC):
         )
         return constraints.Constraint(data, model=self.model)
 
-    def reset_const(self: GenericExpression) -> GenericExpression:
+    def reset_const(self) -> Self:
         """
         Reset the constant of the linear expression to zero.
         """
@@ -1163,7 +1520,7 @@ class BaseExpression(ABC):
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
     def where(
-        self: GenericExpression,
+        self,
         cond: DataArray,
         other: LinearExpression
         | int
@@ -1171,7 +1528,7 @@ class BaseExpression(ABC):
         | dict[str, float | int | DataArray]
         | None = None,
         **kwargs: Any,
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Filter variables based on a condition.
 
@@ -1215,14 +1572,14 @@ class BaseExpression(ABC):
         return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
 
     def fillna(
-        self: GenericExpression,
+        self,
         value: int
         | float
         | DataArray
         | Dataset
         | LinearExpression
         | dict[str, float | int | DataArray],
-    ) -> GenericExpression:
+    ) -> Self:
         """
         Fill missing values with a given value.
 
@@ -1246,7 +1603,7 @@ class BaseExpression(ABC):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
 
-    def diff(self: GenericExpression, dim: str, n: int = 1) -> GenericExpression:
+    def diff(self, dim: str, n: int = 1) -> Self:
         """
         Calculate the n-th order discrete difference along given axis.
 
@@ -1342,6 +1699,37 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
+    def has_terms(self) -> DataArray:
+        """
+        Get a boolean array which is true at slots with at least one live term.
+
+        A term is live when it references a variable (``vars != -1``). Slots
+        without any live term arise from outer joins in
+        :func:`merge <linopy.expressions.merge>`, from reindexing past the
+        original coordinates, or from masking. In contrast to
+        :meth:`isnull`, the constant is ignored: a slot carrying only a
+        constant has no terms.
+
+        Returns
+        -------
+        xr.DataArray
+
+        Examples
+        --------
+        Mask out constraint rows whose left-hand side has no terms:
+
+        >>> import linopy
+        >>> import pandas as pd
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+        >>> lhs = (1 * x).reindex(i=pd.RangeIndex(5, name="i"))
+        >>> lhs.has_terms.values
+        array([ True,  True,  True, False, False])
+        """
+        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
+        return (self.vars != -1).any(helper_dims).rename("has_terms")
+
+    @property
     def variable_names(self) -> set[str]:
         """
         Get the names of the unique variables present in the expression.
@@ -1387,7 +1775,7 @@ class BaseExpression(ABC):
         """
         return EmptyDeprecationWrapper(not self.size)
 
-    def densify_terms(self: GenericExpression) -> GenericExpression:
+    def densify_terms(self) -> Self:
         """
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
@@ -1418,7 +1806,7 @@ class BaseExpression(ABC):
 
         return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
 
-    def sanitize(self: GenericExpression) -> GenericExpression:
+    def sanitize(self) -> Self:
         """
         Sanitize LinearExpression by ensuring int dtype for variables.
 
@@ -1427,7 +1815,9 @@ class BaseExpression(ABC):
         linopy.LinearExpression
         """
         if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(vars=self.vars.fillna(-1).astype(int))
+            return self.assign(
+                vars=self.vars.fillna(-1).astype(self.model._dtypes["labels"])
+            )
 
         return self
 
@@ -1460,8 +1850,7 @@ class BaseExpression(ABC):
         else:
             dim = [d for d in dim if d != TERM_DIM]
             ds = (
-                data[["coeffs", "vars"]]
-                .reset_index(dim, drop=True)
+                _drop_coords_on_dims(data[["coeffs", "vars"]], dim)
                 .rename({TERM_DIM: STACKED_TERM_DIM})
                 .stack({TERM_DIM: [STACKED_TERM_DIM] + dim}, create_index=False)
             )
@@ -1831,12 +2220,12 @@ class LinearExpression(BaseExpression):
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
         # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
-        vars = combined.isel({CV_DIM: 0}).astype(int)
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
 
         # Extract vars and coeffs from the combined result
-        vars = combined.isel({CV_DIM: 0}).astype(int)
+        vars = combined.isel({CV_DIM: 0}).astype(self.model._dtypes["labels"])
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data
@@ -1875,7 +2264,7 @@ class LinearExpression(BaseExpression):
         cls,
         model: Model,
         rule: Callable,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -2300,7 +2689,7 @@ def as_expression(
     model : linopy.Model, optional
         Assigned model, by default None
     **kwargs :
-        Keyword arguments passed to `linopy.as_dataarray`.
+        Keyword arguments passed to `linopy.alignment.broadcast_to_coords`.
 
     Returns
     -------
@@ -2317,7 +2706,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = broadcast_to_coords(obj, strict=False, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
@@ -2487,7 +2876,9 @@ class Expressions:
     @overload
     def __getitem__(self, names: list[str]) -> Expressions: ...
 
-    def __getitem__(self, names: str | list[str]) -> LinearExpression | QuadraticExpression | Expressions:
+    def __getitem__(
+        self, names: str | list[str]
+    ) -> LinearExpression | QuadraticExpression | Expressions:
         if isinstance(names, str):
             return self.data[names]
         return Expressions({name: self.data[name] for name in names}, self.model)

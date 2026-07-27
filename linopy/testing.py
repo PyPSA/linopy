@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
@@ -8,6 +9,22 @@ from linopy.constraints import ConstraintBase, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
+
+
+def _align_dim_order(target: xr.Dataset, other: xr.Dataset) -> xr.Dataset:
+    """
+    Reorder ``other``'s dimensions to match ``target`` when they share a dim set.
+
+    linopy expressions inherit xarray's broadcasting, whose dimension order
+    follows operand order (``x + y`` yields ``(x_dim, y_dim)`` while ``y + x``
+    yields ``(y_dim, x_dim)``). That difference is not semantically meaningful,
+    so it should not make two expressions compare unequal. If the dimension
+    sets differ the inputs are genuinely unequal; leave ``other`` untouched so
+    :func:`assert_equal` reports the real difference.
+    """
+    if set(target.dims) == set(other.dims):
+        return other.transpose(*target.dims)
+    return other
 
 
 def _sort_by_vars_along_term(expr: LinearExpression) -> LinearExpression:
@@ -35,15 +52,15 @@ def assert_linequal(
     """
     Assert that two linear expressions are semantically equal.
 
-    Terms are sorted by variable labels along _term before comparing,
-    so expressions with different term orderings but identical mathematical
-    meaning are considered equal.
+    Terms are sorted by variable labels along _term and dimension order is
+    aligned before comparing, so expressions with different term orderings or
+    dimension orderings but identical mathematical meaning are considered equal.
     """
     assert isinstance(a, LinearExpression)
     assert isinstance(b, LinearExpression)
-    a_sorted = _sort_by_vars_along_term(a)
-    b_sorted = _sort_by_vars_along_term(b)
-    return assert_equal(_expr_unwrap(a_sorted), _expr_unwrap(b_sorted))
+    a_ds = _expr_unwrap(_sort_by_vars_along_term(a))
+    b_ds = _expr_unwrap(_sort_by_vars_along_term(b))
+    return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
 
 
 def assert_quadequal(

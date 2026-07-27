@@ -13,25 +13,25 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import TYPE_CHECKING, Any, Literal, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, ndarray
+from numpy import inf
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
-    as_dataarray,
     assign_multiindex_safe,
     best_int,
-    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -55,6 +55,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
     LinearExpression,
@@ -112,72 +113,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-def _coords_to_dict(
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
-) -> dict[str, Any]:
-    """Normalize coords to a dict mapping dim names to coordinate values."""
-    if isinstance(coords, Mapping):
-        return dict(coords)
-    # Sequence of indexes
-    result: dict[str, Any] = {}
-    for c in coords:
-        if isinstance(c, pd.Index) and c.name:
-            result[c.name] = c
-    return result
-
-
-def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
-    """
-    Validate and expand DataArray bounds against explicit coords.
-
-    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
-    will handle conversion). For DataArray inputs:
-
-    - Raises ``ValueError`` if the array has dimensions not in coords.
-    - Raises ``ValueError`` if shared dimension coordinates don't match.
-    - Expands missing dimensions via ``expand_dims``.
-    """
-    if not isinstance(arr, DataArray):
-        return arr
-
-    expected = _coords_to_dict(coords)
-    if not expected:
-        return arr
-
-    extra = set(arr.dims) - set(expected)
-    if extra:
-        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
-
-    for dim, coord_values in expected.items():
-        if dim not in arr.dims:
-            continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
-            continue
-        expected_idx = (
-            coord_values
-            if isinstance(coord_values, pd.Index)
-            else pd.Index(coord_values)
-        )
-        actual_idx = arr.coords[dim].to_index()
-        if not actual_idx.equals(expected_idx):
-            # Same values, different order → reindex to match expected order
-            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
-                expected_idx
-            ):
-                arr = arr.reindex({dim: expected_idx})
-            else:
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' do not match: "
-                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-                )
-
-    # Expand missing dimensions
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if expand:
-        arr = arr.expand_dims(expand)
-
-    return arr
+DtypeKey = Literal["labels"]
 
 
 class Model:
@@ -208,6 +144,7 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
+    _dtypes: dict[DtypeKey, type[np.signedinteger]]
     _varnameCounter: int
     _exprnameCounter: int
     _connameCounter: int
@@ -233,6 +170,7 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
+        "_dtypes",
         "_varnameCounter",
         "_exprnameCounter",
         "_connameCounter",
@@ -252,6 +190,25 @@ class Model:
         "__weakref__",
     )
 
+    @staticmethod
+    def _resolve_dtypes(
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None,
+    ) -> dict[DtypeKey, type[np.signedinteger]]:
+        """Validate the ``dtypes`` argument and merge it onto the defaults."""
+        resolved: dict[DtypeKey, type[np.signedinteger]] = {"labels": np.int32}
+        for key, dtype in (dtypes or {}).items():
+            if key not in get_args(DtypeKey):
+                raise ValueError(
+                    f"dtypes only supports the keys {list(get_args(DtypeKey))}, "
+                    f"got unknown key {key!r}"
+                )
+            if dtype not in (np.int32, np.int64):
+                raise ValueError(
+                    f"dtypes[{key!r}] must be np.int32 or np.int64, got {dtype}"
+                )
+            resolved[key] = dtype
+        return resolved
+
     def __init__(
         self,
         solver_dir: str | None = None,
@@ -260,6 +217,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -289,11 +247,21 @@ class Model:
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
+        dtypes : mapping, optional
+            Integer dtypes for the model's data, exposed read-only as
+            ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
+            ``Model(dtypes={"labels": np.int64})``. The default ``np.int32``
+            halves label memory but caps the model at ~2.1 billion labels,
+            after which it widens to ``np.int64`` automatically; pass
+            ``np.int64`` upfront to avoid that mid-build upcast.
 
         Returns
         -------
         linopy.Model
         """
+        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
+            dtypes
+        )
         self._variables: Variables = Variables({}, model=self)
         self._expressions: Expressions = Expressions({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
@@ -378,6 +346,16 @@ class Model:
         Constraints assigned to the model.
         """
         return self._constraints
+
+    @property
+    def indicator_constraints(self) -> Constraints:
+        """
+        Indicator constraints assigned to the model.
+
+        Returns the subset of ``model.constraints`` for which
+        ``is_indicator`` is True.
+        """
+        return self.constraints.indicator
 
     @property
     def objective(self) -> Objective:
@@ -566,6 +544,37 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
+    def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
+        """
+        Read-only mapping of the model's integer dtypes.
+
+        Currently holds only ``"labels"``, the dtype of the variable and
+        constraint labels, which widens to ``int64`` automatically once the
+        labels outgrow int32.
+        """
+        return MappingProxyType(self._dtypes)
+
+    def _widen_label_dtype(self) -> None:
+        """Widen this model's label dtype to ``int64`` (monotonic, never narrows)."""
+        if self._dtypes["labels"] == np.int64:
+            return
+        self._dtypes["labels"] = np.int64
+        warnings.warn(
+            "The model exceeded the int32 label limit (~2.1 billion labels); "
+            "its label dtype was widened to int64. Pass "
+            'dtypes={"labels": np.int64} to Model() when building large models '
+            "to avoid the mid-build upcast.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+    def _allocate_labels(self, start: int, end: int) -> np.ndarray:
+        """Return the label range ``[start, end)``, widening the dtype on overflow."""
+        if end > np.iinfo(self._dtypes["labels"]).max:
+            self._widen_label_dtype()
+        return np.arange(start, end, dtype=self._dtypes["labels"])
+
+    @property
     def dataset_attrs(self) -> list[str]:
         return ["parameters"]
 
@@ -674,9 +683,9 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         name: str | None = None,
-        mask: DataArray | ndarray | Series | None = None,
+        mask: MaskLike | None = None,
         binary: bool = False,
         integer: bool = False,
         semi_continuous: bool = False,
@@ -694,17 +703,32 @@ class Model:
         Parameters
         ----------
         lower : float/array_like, optional
-            Lower bound of the variable(s). Ignored if `binary` is True.
-            The default is -inf.
+            Lower bound of the variable(s). For binary variables it
+            defaults to 0 and, if given, must be 0 or 1. The default is -inf.
         upper : TYPE, optional
-            Upper bound of the variable(s). Ignored if `binary` is True.
-            The default is inf.
-        coords : list/xarray.Coordinates, optional
-            The coords of the variable array.
-            These are directly passed to the DataArray creation of
-            `lower` and `upper`. For every single combination of
-            coordinates a optimization variable is added to the model.
-            The default is None.
+            Upper bound of the variable(s). For binary variables it
+            defaults to 1 and, if given, must be 0 or 1. The default is inf.
+        coords : list/dict/xarray.Coordinates, optional
+            The coords of the variable array. When provided with **named
+            dimensions** (a ``Mapping``, ``xarray.Coordinates``, a
+            sequence of named ``pd.Index`` objects, or an unnamed
+            sequence paired with ``dims=`` in ``**kwargs``), ``coords``
+            is the source of truth for the variable's dimensions,
+            order, and values. ``lower``, ``upper`` and ``mask`` are
+            aligned to this contract:
+
+            - dims of every bound must be a subset of ``coords.dims``;
+              extra dims raise ``ValueError``;
+            - dim order in the variable always follows ``coords``;
+            - shared-dim coordinate values must equal ``coords``; same
+              values in a different order are auto-reindexed, different
+              value sets raise ``ValueError``;
+            - dims listed in ``coords`` but missing from a bound are
+              broadcast to ``coords`` shape.
+
+            One optimization variable is added per combination of
+            coordinates. The default is ``None``, in which case the
+            shape is inferred from the bounds.
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
@@ -757,6 +781,67 @@ class Model:
         [7]: x[7] ∈ [0, inf]
         [8]: x[8] ∈ [0, inf]
         [9]: x[9] ∈ [0, inf]
+
+        Strict coords-as-truth: a bound with an extra dim raises.
+
+        >>> import xarray as xr
+        >>> m = Model()
+        >>> bad = xr.DataArray(
+        ...     [[1.0, 2.0, 3.0]] * 2,
+        ...     dims=["extra", "x"],
+        ...     coords={"x": [0, 1, 2]},
+        ... )
+        >>> m.add_variables(lower=bad, coords=[pd.Index([0, 1, 2], name="x")], name="v")
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
+
+        Strict coords-as-truth: a bound whose shared-dim values don't
+        match raises.
+
+        >>> m = Model()
+        >>> wrong = xr.DataArray(
+        ...     [1.0, 2.0, 3.0], dims=["x"], coords={"x": [10, 20, 30]}
+        ... )
+        >>> m.add_variables(
+        ...     lower=wrong, coords=[pd.Index([0, 1, 2], name="x")], name="v"
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound: coordinate values for dimension 'x' do not match coords ...
+
+        Strict coords-as-truth, helpful side: a bound whose coord values
+        match ``coords`` only in a different order is auto-reindexed.
+
+        >>> m = Model()
+        >>> reordered = xr.DataArray(
+        ...     [3.0, 1.0, 2.0], dims=["x"], coords={"x": ["c", "a", "b"]}
+        ... )
+        >>> v = m.add_variables(
+        ...     lower=reordered,
+        ...     coords=[pd.Index(["a", "b", "c"], name="x")],
+        ...     name="r",
+        ... )
+        >>> v.lower.values.tolist()
+        [1.0, 2.0, 3.0]
+
+        Unnamed-coords sequence + ``dims=`` opts into the same strict
+        enforcement as a named index — extra dims still raise.
+
+        >>> m = Model()
+        >>> m.add_variables(lower=bad, coords=[[0, 1, 2]], dims=["x"], name="w")
+        Traceback (most recent call last):
+        ...
+        ValueError: lower bound has dimension(s) ['extra'] not declared in coords ...
+
+        The same strict contract applies to ``mask`` (including with
+        ``coords=[[...]], dims=[...]``).
+
+        >>> m = Model()
+        >>> m.add_variables(mask=bad, coords=[[0, 1, 2]], dims=["x"], name="wm")
+        Traceback (most recent call last):
+        ...
+        ValueError: mask has dimension(s) ['extra'] not declared in coords ...
         """
         if name is None:
             name = f"var{self._varnameCounter}"
@@ -771,10 +856,14 @@ class Model:
             )
 
         if binary:
-            if (lower != -inf) or (upper != inf):
-                raise ValueError("Binary variables cannot have lower or upper bounds.")
-            else:
-                lower, upper = 0, 1
+            if np.isscalar(lower) and lower == -inf:
+                lower = 0
+            elif not (np.isin(lower, (0, 1)) | pd.isna(lower)).all():
+                raise ValueError("Binary variable lower bounds must be 0 or 1.")
+            if np.isscalar(upper) and upper == inf:
+                upper = 1
+            elif not (np.isin(upper, (0, 1)) | pd.isna(upper)).all():
+                raise ValueError("Binary variable upper bounds must be 0 or 1.")
 
         if semi_continuous:
             if not np.isscalar(lower) or float(lower) <= 0:  # type: ignore[arg-type]
@@ -782,14 +871,12 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        if coords is not None:
-            lower = _validate_dataarray_bounds(lower, coords)
-            upper = _validate_dataarray_bounds(upper, coords)
-
+        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
+        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         data = Dataset(
             {
-                "lower": as_dataarray(lower, coords, **kwargs),
-                "upper": as_dataarray(upper, coords, **kwargs),
+                "lower": lower_da,
+                "upper": upper_da,
                 "labels": -1,
             }
         )
@@ -798,8 +885,12 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = broadcast_to_coords(
+                mask,
+                coords if coords is not None else data.coords,
+                label="mask",
+                **kwargs,
+            ).astype(bool)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -816,7 +907,9 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        data.labels.values = self._allocate_labels(start, end).reshape(
+            data.labels.shape
+        )
         self._xCounter += data.labels.size
 
         if mask is not None:
@@ -972,6 +1065,78 @@ class Model:
 
     add_piecewise_formulation = add_piecewise_formulation
 
+    def _resolve_constraint_name(self, name: str | None, prefix: str = "con") -> str:
+        """Validate a constraint name or generate one from ``prefix``."""
+        if name in list(self.constraints):
+            raise ValueError(f"Constraint '{name}' already assigned to model")
+        if name is None:
+            name = f"{prefix}{self._connameCounter}"
+            self._connameCounter += 1
+        return name
+
+    def _constraint_data_from_lhs(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
+    ) -> Dataset:
+        """Build the constraint Dataset from an ``lhs`` and optional ``sign``/``rhs``."""
+        msg_required = (
+            f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
+        )
+        msg_must_be_none = (
+            f"`sign` and `rhs` must be None when `lhs` is a {type(lhs).__name__}."
+        )
+        if isinstance(lhs, LinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return lhs.to_constraint(sign, rhs).data
+        elif isinstance(lhs, list | tuple):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return self.linexpr(*lhs).to_constraint(sign, rhs).data
+        elif callable(lhs):
+            assert coords is not None, "`coords` must be given when lhs is a function"
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return Constraint.from_rule(self, lhs, coords).data
+        elif isinstance(lhs, AnonymousScalarConstraint):
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return lhs.to_constraint().data
+        elif isinstance(lhs, ConstraintBase):
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_must_be_none)
+            return lhs.data
+        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError(msg_required)
+            return lhs.to_linexpr().to_constraint(sign, rhs).data
+        else:
+            raise TypeError(
+                f"`lhs` must be a LinearExpression, Variable, Constraint, tuple, or "
+                f"callable, got {type(lhs).__name__}."
+            )
+
+    def _allocate_constraint_labels(
+        self, data: Dataset, name: str, mask: DataArray | None = None
+    ) -> Dataset:
+        """Assign label ranges from the constraint counter and apply an optional mask."""
+        start = self._cCounter
+        end = start + data.labels.size
+        data.labels.values = self._allocate_labels(start, end).reshape(
+            data.labels.shape
+        )
+        self._cCounter += data.labels.size
+        if mask is not None:
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
+        return data.assign_attrs(label_range=(start, end), name=name)
+
     @overload
     def add_constraints(
         self,
@@ -983,7 +1148,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
     ) -> Constraint: ...
@@ -999,7 +1164,7 @@ class Model:
         sign: SignLike | None = ...,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
         name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
     ) -> CSRConstraint: ...
@@ -1014,7 +1179,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
-        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
         freeze: bool | None = None,
     ) -> ConstraintBase:
@@ -1062,14 +1227,7 @@ class Model:
             The added constraint (Constraint by default, or CSRConstraint if freeze=True).
         """
 
-        msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-        msg_sign_rhs_not_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-
-        if name in list(self.constraints):
-            raise ValueError(f"Constraint '{name}' already assigned to model")
-        elif name is None:
-            name = f"con{self._connameCounter}"
-            self._connameCounter += 1
+        name = self._resolve_constraint_name(name)
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
@@ -1081,37 +1239,7 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        if isinstance(lhs, LinearExpression):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_not_none)
-            data = lhs.to_constraint(sign, rhs).data
-        elif isinstance(lhs, list | tuple):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_none)
-            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
-        # directly convert first argument to a constraint
-        elif callable(lhs):
-            assert coords is not None, "`coords` must be given when lhs is a function"
-            rule = lhs
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = Constraint.from_rule(self, rule, coords).data
-        elif isinstance(lhs, AnonymousScalarConstraint):
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = lhs.to_constraint().data
-        elif isinstance(lhs, ConstraintBase):
-            if sign is not None or rhs is not None:
-                raise ValueError(msg_sign_rhs_none)
-            data = lhs.data
-        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_not_none)
-            data = lhs.to_linexpr().to_constraint(sign, rhs).data
-        else:
-            raise ValueError(
-                f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
-            )
+        data = self._constraint_data_from_lhs(lhs, sign, rhs, coords)
 
         invalid_infinity_values = (
             (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
@@ -1138,8 +1266,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            mask = broadcast_mask(mask, data.labels)
+            mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
@@ -1164,15 +1291,7 @@ class Model:
 
         self.check_force_dim_names(data)
 
-        start = self._cCounter
-        end = start + data.labels.size
-        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
-        self._cCounter += data.labels.size
-
-        if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
-
-        data = data.assign_attrs(label_range=(start, end), name=name)
+        data = self._allocate_constraint_labels(data, name, mask)
 
         if self.chunk:
             data = data.chunk(self.chunk)
@@ -1181,6 +1300,80 @@ class Model:
         if freeze is None:
             freeze = self.freeze_constraints
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
+
+    def add_indicator_constraints(
+        self,
+        binary_var: Variable,
+        binary_val: int,
+        lhs: ConstraintLike | ExpressionLike | VariableLike,
+        sign: SignLike | None = None,
+        rhs: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> ConstraintBase:
+        """
+        Add indicator constraints to the model.
+
+        An indicator constraint has the form:
+            (binary_var == binary_val) => (linear_constraint)
+
+        The linear constraint is only enforced when binary_var equals
+        binary_val. These constraints are handled natively by solvers
+        like Gurobi and CPLEX via general constraints.
+
+        Parameters
+        ----------
+        binary_var : linopy.Variable
+            Binary variable serving as the indicator. Must have binary=True.
+        binary_val : int
+            Triggering value, must be 0 or 1.
+        lhs : linopy.Constraint, linopy.LinearExpression, or linopy.Variable
+            The conditionally enforced constraint. If a LinearExpression or
+            Variable is passed, ``sign`` and ``rhs`` must also be provided.
+        sign : str, optional
+            Constraint sign ('<=', '>=', '='). Required when ``lhs`` is an
+            expression.
+        rhs : numeric, optional
+            Right-hand side. Required when ``lhs`` is an expression.
+        name : str, optional
+            Name for the indicator constraint group.
+
+        Returns
+        -------
+        linopy.constraints.ConstraintBase
+            The added indicator constraint.
+        """
+        if not binary_var.attrs.get("binary", False):
+            raise ValueError(
+                "Indicator variable must be binary. "
+                f"Variable '{binary_var.name}' is not binary."
+            )
+
+        if binary_val not in (0, 1):
+            raise ValueError(f"binary_val must be 0 or 1, got {binary_val}.")
+
+        name = self._resolve_constraint_name(name, prefix="indcon")
+        if sign is not None:
+            sign = maybe_replace_signs(as_dataarray(sign))
+
+        data = self._constraint_data_from_lhs(lhs, sign, rhs)
+
+        data["binary_var"] = binary_var.labels
+        data["binary_val"] = binary_val
+
+        data["labels"] = -1
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
+        data = self._allocate_constraint_labels(data, name)
+
+        con = Constraint(data, name=name, model=self, skip_broadcast=True)
+        freeze = self.freeze_constraints
+        return self.constraints.add(con, freeze=freeze and not self.chunk)
+
+    def remove_indicator_constraints(self, name: str) -> None:
+        """
+        Remove indicator constraint by name.
+        """
+        self.constraints.remove(name)
 
     def add_objective(
         self,
@@ -1232,16 +1425,8 @@ class Model:
         -------
         None.
         """
-        from linopy.constants import FIX_CONSTRAINT_PREFIX
-
         variable = self.variables[name]
 
-        # Clean up fix constraint if present
-        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
-        if fix_name in self.constraints:
-            self.constraints.remove(fix_name)
-
-        # Clean up relaxed registry if present
         self._relaxed_registry.pop(name, None)
 
         to_remove = [
@@ -1520,7 +1705,7 @@ class Model:
 
     @overload
     def linexpr(
-        self, *args: Sequence[Sequence | pd.Index | DataArray] | Mapping
+        self, *args: Sequence[Sequence | pd.Index] | Mapping
     ) -> LinearExpression: ...
 
     @overload
@@ -1533,7 +1718,7 @@ class Model:
         *args: tuple[ConstantLike, str | Variable | ScalarVariable]
         | ConstantLike
         | Callable
-        | Sequence[Sequence | pd.Index | DataArray]
+        | Sequence[Sequence | pd.Index]
         | Mapping,
     ) -> LinearExpression:
         """
@@ -1779,6 +1964,17 @@ class Model:
         status : tuple
             Tuple containing the status and termination condition of the
             optimization process.
+
+        Notes
+        -----
+        After solving, the solver stays attached as ``model.solver`` for
+        post-solve introspection (``model.solver_model``,
+        ``compute_infeasibilities()``) and reuse, e.g. persistent in-place
+        re-solves. For solvers with limited licenses (e.g. Gurobi) this
+        means the license remains acquired until the solver is released:
+        call ``model.solver.close()`` (or assign ``model.solver = None``)
+        to free it explicitly. It is also released on the next ``solve()``
+        call and when the model is garbage-collected.
         """
         if mock_solve:
             return self._mock_solve(
@@ -1967,12 +2163,14 @@ class Model:
         for _, var in self.variables.items():
             start, end = var.range
             var.solution = xr.DataArray(
-                primal[start:end].reshape(var.shape), var.coords
+                primal[start:end].reshape(var.shape), var.coords, dims=var.dims
             )
 
         if len(result.solution.dual):
             dual = result.solution.dual
             for _, con in self.constraints.items():
+                if con.is_indicator:
+                    continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 con.dual = xr.DataArray(
@@ -2284,3 +2482,5 @@ class Model:
     to_xpress = to_xpress
 
     to_block_files = to_block_files
+
+    dualize = dualize

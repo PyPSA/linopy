@@ -68,6 +68,27 @@ def test_matrices_duplicated_variables() -> None:
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
+def test_matrices_drops_explicit_zeros() -> None:
+    # https://github.com/PyPSA/linopy/issues/814
+    # Expressions that broadcast against a dense coordinate store one coefficient
+    # per pair, most of them structurally zero. Those must not reach A, whose
+    # stored nnz drives the direct-solver handoff (e.g. highspy.addRows).
+    m = Model()
+
+    x = m.add_variables(coords=[range(4)], name="x")
+    coeff = xr.DataArray(
+        np.eye(4), dims=["j", "i"], coords={"j": range(4), "i": range(4)}
+    )
+    m.add_constraints((coeff * x.rename(dim_0="i")).sum("i") <= 1, name="c")
+
+    A = m.matrices.A
+    assert A is not None
+    # 4 structural nonzeros on the diagonal; the 12 broadcast zeros are dropped.
+    assert A.nnz == 4
+    assert not (A.data == 0).any()
+    assert np.array_equal(A.todense(), np.eye(4))
+
+
 def test_matrices_float_c() -> None:
     # https://github.com/PyPSA/linopy/issues/200
     m = Model()

@@ -10,6 +10,17 @@ contributing code.
 You are invited to submit pull requests / issues to our
 `Github repository <https://github.com/pypsa/linopy>`_.
 
+AI-assisted contributions
+=========================
+
+We're happy for you to use AI tools when contributing to linopy, but the
+conversation around a change — pull request and issue descriptions, comments and
+review discussions — must stay human and honest. The rules (mark AI-generated
+content, write your own intent by hand) apply to humans and AI agents alike and
+are kept in a single place: see `AGENTS.md
+<https://github.com/pypsa/linopy/blob/master/AGENTS.md>`_ in the repository
+root. If you use an AI agent here, point it at that file.
+
 Development Setup
 =================
 

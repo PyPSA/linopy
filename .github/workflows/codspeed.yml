@@ -1,0 +1,76 @@
+name: CodSpeed
+
+# Both instruments in one workflow (CodSpeed aggregates per-commit results from a
+# single workflow). Memory: heap tracking on a free GitHub runner, every PR +
+# master. Walltime: bare-metal macro runner, master + the maintainer-gated
+# `trigger:benchmark` label only.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+    types: [ opened, synchronize, reopened, labeled ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  memory:
+    name: Memory (heap)
+    runs-on: ubuntu-latest
+    continue-on-error: true   # informational, never blocks a merge
+    permissions:
+      contents: read   # actions/checkout
+      id-token: write  # OIDC auth with CodSpeed — no token secret
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0  # setuptools_scm
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+    - name: Install pinned benchmark environment
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+    - name: Run benchmarks under CodSpeed (memory)
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: memory
+        run: |
+          pytest benchmarks/ --codspeed
+
+  walltime:
+    name: Walltime (macro runner)
+    # Master push / dispatch always; PRs only when explicitly labelled — macro
+    # minutes are metered and bare-metal shouldn't run arbitrary PR code.
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          contains(github.event.pull_request.labels.*.name, 'trigger:benchmark') }}
+    runs-on: codspeed-macro
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0  # setuptools_scm
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+    - name: Install pinned benchmark environment
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+    - name: Run benchmarks under CodSpeed (walltime)
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: walltime
+        run: |
+          pytest benchmarks/ --codspeed

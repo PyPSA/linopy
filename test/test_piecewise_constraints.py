@@ -1383,6 +1383,23 @@ class TestBroadcasting:
         assert "generator" in delta.dims
         assert "time" in delta.dims
 
+    def test_broadcast_points_dim_order_follows_exprs(self) -> None:
+        """Expanded dims follow the expression dim order, not set ordering."""
+        import xarray as xr
+
+        from linopy.piecewise import BREAKPOINT_DIM, _broadcast_points
+
+        m = Model()
+        coords = [
+            pd.Index(["v0", "v1"], name="alpha"),
+            pd.Index(["w0", "w1"], name="beta"),
+            pd.Index([0, 1], name="gamma"),
+        ]
+        x = m.add_variables(coords=coords, name="x")
+        points = xr.DataArray([0, 1, 2, 3], dims=[BREAKPOINT_DIM])
+        out = _broadcast_points(points, 1 * x)
+        assert out.dims == ("alpha", "beta", "gamma", BREAKPOINT_DIM)
+
 
 # ===========================================================================
 # NaN masking

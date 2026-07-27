@@ -45,6 +45,10 @@ benchmark/scripts/__pycache__
 benchmark/scripts/benchmarks-pypsa-eur/__pycache__
 benchmark/scripts/leftovers/
 
+# Benchmarks (internal suite): regenerable .ipynb viewing artifacts
+benchmarks/walkthrough.ipynb
+benchmarks/.ipynb_checkpoints/
+
 # IDE
 .idea/
 
@@ -53,5 +57,4 @@ benchmark/scripts/leftovers/
 
 # direnv
 .envrc
-AGENTS.md
 coverage.xml

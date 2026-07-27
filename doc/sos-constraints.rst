@@ -268,12 +268,13 @@ as binary + linear constraints using the Big-M method.
 
 .. code-block:: python
 
-    # Automatic reformulation during solve
+    # Automatic reformulation during solve (apply / undo bracketed by Model.solve)
     m.solve(solver_name="highs", reformulate_sos=True)
 
-    # Or reformulate manually
-    m.reformulate_sos_constraints()
+    # Or stage the reformulation manually — e.g. to inspect or export the MILP
+    m.apply_sos_reformulation()
     m.solve(solver_name="highs")
+    m.undo_sos_reformulation()
 
 **Requirements:**
 

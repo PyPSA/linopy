@@ -5,8 +5,8 @@ Linopy module for defining constant values used within the package.
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Literal, TypeAlias, Union, get_args
+from enum import StrEnum
+from typing import Any, Literal, Self, TypeAlias, get_args
 
 import numpy as np
 
@@ -37,7 +37,9 @@ sign_replace_dict: dict[str, str] = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
-FIX_CONSTRAINT_PREFIX = "__fix__"
+STASHED_LOWER = "_stashed_lower"
+STASHED_UPPER = "_stashed_upper"
+STASHED_ATTRS: list[str] = [STASHED_LOWER, STASHED_UPPER]
 
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
@@ -73,15 +75,14 @@ BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"
 PWL_LINK_DIM = "_pwl_var"
-GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
+GROUP_STACK_DIM = "_group_stack"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
 CV_DIM = "_cv"
 HELPER_DIMS: list[str] = [
     TERM_DIM,
     STACKED_TERM_DIM,
-    GROUPED_TERM_DIM,
     FACTOR_DIM,
     CONCAT_DIM,
     CV_DIM,
@@ -91,6 +92,10 @@ HELPER_DIMS: list[str] = [
 SOS_TYPE_ATTR = "sos_type"
 SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
+
+# Indicator constraint attribute keys
+INDICATOR_BINARY_VAR_ATTR = "indicator_binary_var"
+INDICATOR_BINARY_VAL_ATTR = "indicator_binary_val"
 
 
 class EvolvingAPIWarning(FutureWarning):
@@ -119,7 +124,7 @@ class EvolvingAPIWarning(FutureWarning):
     """
 
 
-class ModelStatus(Enum):
+class ModelStatus(StrEnum):
     """
     Model status.
 
@@ -135,7 +140,7 @@ class ModelStatus(Enum):
     initialized = "initialized"
 
 
-class SolverStatus(Enum):
+class SolverStatus(StrEnum):
     """
     Solver status.
     """
@@ -147,7 +152,7 @@ class SolverStatus(Enum):
     unknown = "unknown"
 
     @classmethod
-    def process(cls, status: str) -> "SolverStatus":
+    def process(cls, status: str) -> Self:
         try:
             return cls(status)
         except ValueError:
@@ -156,14 +161,14 @@ class SolverStatus(Enum):
     @classmethod
     def from_termination_condition(
         cls, termination_condition: "TerminationCondition"
-    ) -> "SolverStatus":
+    ) -> Self:
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
         return cls("unknown")
 
 
-class TerminationCondition(Enum):
+class TerminationCondition(StrEnum):
     """
     Termination condition of the solver.
     """
@@ -195,9 +200,7 @@ class TerminationCondition(Enum):
     licensing_problems = "licensing_problems"
 
     @classmethod
-    def process(
-        cls, termination_condition: Union["TerminationCondition", str]
-    ) -> "TerminationCondition":
+    def process(cls, termination_condition: Self | str) -> Self:
         if isinstance(termination_condition, TerminationCondition):
             termination_condition = termination_condition.value
         try:
@@ -245,7 +248,7 @@ class Status:
     legacy_status: tuple[str, str] | str = ""
 
     @classmethod
-    def process(cls, status: str, termination_condition: str) -> "Status":
+    def process(cls, status: str, termination_condition: str) -> Self:
         return cls(
             status=SolverStatus.process(status),
             termination_condition=TerminationCondition.process(termination_condition),
@@ -254,8 +257,8 @@ class Status:
 
     @classmethod
     def from_termination_condition(
-        cls, termination_condition: Union["TerminationCondition", str, None]
-    ) -> "Status":
+        cls, termination_condition: TerminationCondition | str | None
+    ) -> Self:
         termination_condition = TerminationCondition.process(
             termination_condition if termination_condition is not None else "unknown"
         )
