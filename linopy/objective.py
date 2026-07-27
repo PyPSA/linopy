@@ -192,6 +192,9 @@ class Objective:
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
+        # TODO-871: If we want to track the objective name from declarative math IO then there should be the ability to set this dynamically.
+        # For now, we just set it to "objective" to avoid issues with the name being None (for .nc serialisation).
+        expr.attrs["name"] = "objective"
         self._expression = expr
 
     @property
