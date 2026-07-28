@@ -63,7 +63,6 @@ docs = [
     "nbsphinx==0.9.4",
     "nbsphinx-link==1.4.1",
     "docutils<0.24",
-    "numpy<2",
     "gurobipy>=13.0.0",
     "ipykernel==7.3.0",
     "matplotlib==3.11.0",
