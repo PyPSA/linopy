@@ -11,10 +11,26 @@ import functools
 import logging
 import operator
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Hashable,
+    ItemsView,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, Self, TypeAlias, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Self,
+    TypeAlias,
+    TypeVar,
+    cast,
+    overload,
+)
 from warnings import warn
 
 import numpy as np
@@ -55,6 +71,7 @@ from linopy.common import (
     filter_nulls_polars,
     format_coord,
     format_single_expression,
+    format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -64,6 +81,7 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    save_join,
     to_dataframe,
     to_polars,
 )
@@ -735,6 +753,7 @@ class BaseExpression(ABC):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
 
+        data = data.assign_attrs(name=None)
         self._model = model
         self._data = cast(Dataset, data)
 
@@ -1234,6 +1253,13 @@ class BaseExpression(ABC):
     @property
     def type(self) -> str:
         return "LinearExpression"
+
+    @property
+    def name(self) -> str:
+        """
+        Return the name of the variable.
+        """
+        return str(self.attrs["name"])
 
     @property
     def data(self) -> Dataset:
@@ -2825,6 +2851,127 @@ def merge(
         ds = ds.reset_index(d, drop=True)
 
     return cls(ds, model)
+
+
+@dataclass(repr=False)
+class Expressions:
+    """
+    An expressions container used for storing multiple expression arrays.
+    """
+
+    data: dict[str, LinearExpression | QuadraticExpression]
+    model: Model
+
+    def _formatted_names(self) -> dict[str, str]:
+        """
+        Get a dictionary of formatted names to the proper variable names.
+        This map enables a attribute like accession of variable names which
+        are not valid python variable names.
+        """
+        return {format_string_as_variable_name(n): n for n in self}
+
+    @overload
+    def __getitem__(self, names: str) -> LinearExpression | QuadraticExpression: ...
+
+    @overload
+    def __getitem__(self, names: list[str]) -> Expressions: ...
+
+    def __getitem__(
+        self, names: str | list[str]
+    ) -> LinearExpression | QuadraticExpression | Expressions:
+        if isinstance(names, str):
+            return self.data[names]
+        return Expressions({name: self.data[name] for name in names}, self.model)
+
+    def __getattr__(self, name: str) -> LinearExpression | QuadraticExpression:
+        # If name is an attribute of self (including methods and properties), return that
+        if name in self.data:
+            return self.data[name]
+        else:
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"Expressions has no attribute `{name}` or the attribute is not accessible / raises an error."
+        )
+
+    def __getstate__(self) -> dict:
+        return self.__dict__
+
+    def __setstate__(self, d: dict) -> None:
+        self.__dict__.update(d)
+
+    def __dir__(self) -> list[str]:
+        base_attributes = list(super().__dir__())
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
+
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format expression items, optionally excluding names in a group."""
+        r = ""
+        count = 0
+        for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
+            coords = (
+                " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
+                if ds.coords
+                else ""
+            )
+            r += f" * {name}{coords}\n"
+        if count == 0:
+            r += "<empty>\n"
+        return r
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the expressions container.
+        """
+        r = "linopy.model.Expressions"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
+        return r
+
+    def __len__(self) -> int:
+        return self.data.__len__()
+
+    def __iter__(self) -> Iterator[str]:
+        return self.data.__iter__()
+
+    def items(self) -> ItemsView[str, LinearExpression | QuadraticExpression]:
+        return self.data.items()
+
+    def _ipython_key_completions_(self) -> list[str]:
+        """
+        Provide method for the key-autocompletions in IPython.
+
+        See
+        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        return list(self)
+
+    def add(self, expression: LinearExpression | QuadraticExpression) -> None:
+        """
+        Add an expression to the expressions container.
+        """
+        self.data[expression.name] = expression
+
+    def remove(self, name: str) -> None:
+        """
+        Remove variable `name` from the variables.
+        """
+        self.data.pop(name)
+
+    @property
+    def solution(self) -> Dataset:
+        """
+        Get the solution of variables.
+        """
+        return save_join(*[v.solution.rename(k) for k, v in self.items()])
 
 
 class ScalarLinearExpression:
