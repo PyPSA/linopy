@@ -309,8 +309,9 @@ class ExpressionDef(_MathIndexedComponent, _MathEquationComponent):
     expressions elsewhere in the math formulation (i.e., in constraints, objectives,
     and other expressions).
 
-    NOTE: If expecting to use expression `A` in expression `B`, `A` must
-    be defined above `B`.
+    Expressions are built in dependency order: if expression `A` is used in
+    expression `B`, `A` is built first regardless of definition order.
+    Independent expressions keep their relative definition order.
     """
 
     unit: str = ""

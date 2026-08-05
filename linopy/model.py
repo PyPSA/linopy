@@ -946,7 +946,8 @@ class Model:
         Parameters
         ----------
         data : Variable, LinearExpression, QuadraticExpression, or Sequence of (constant, variable) tuples
-            The expression(s) to add. This can be a Variable or LinearExpression, a sequence of (constant, variable) tuples which will be summed up, or a callable that takes the model as input and returns either of the previous two.
+            The expression(s) to add.
+            This can be a Variable or LinearExpression, or a sequence of (constant, variable) tuples which will be summed up.
         coords : list/xarray.Coordinates, optional
             The coords of the expression array.
             The default is None.

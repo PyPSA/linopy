@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from typing import Any
 
@@ -24,6 +24,7 @@ from linopy.declarative.helpers import HelperFunction, build_registry
 from linopy.declarative.nodes import Component, Context, find_refs
 from linopy.declarative.schema import (
     BUILD_ORDER,
+    BUILD_ORDER_T,
     DTYPE_OPTIONS,
     EQUATION_GROUP_T,
     ConfigModel,
@@ -40,6 +41,55 @@ from linopy.model import Model
 LOGGER = logging.getLogger(__name__)
 
 _SKIP_MESSAGE = "No valid data points after applying mask. Not added to model."
+
+
+def _intra_group_dependencies(
+    references: dict[str, list[str]], names: Iterable[str]
+) -> dict[str, set[str]]:
+    """
+    Restrict each name's references to the active names in `names`.
+
+    Self-references are deliberately kept: a component referencing itself can
+    never be satisfied and must surface as an ordering error rather than build
+    silently against a missing model entry.
+    """
+    name_set = set(names)
+    return {name: set(references.get(name, [])) & name_set for name in name_set}
+
+
+def _topological_order(
+    names: list[str], deps: dict[str, set[str]], group: str
+) -> list[str]:
+    """
+    Return `names` ordered so that every name follows all names it depends on.
+
+    Uses a stable Kahn's algorithm: within each round, dependency-satisfied
+    names are taken in their original (definition) order, so independent
+    names keep their authored relative order and the result is deterministic.
+
+    Raises
+    ------
+    ValueError
+        If a cycle (including a self-reference) prevents any name in the
+        remaining set from ever becoming ready.
+    """
+    remaining = list(names)
+    built: set[str] = set()
+    ordered: list[str] = []
+    while remaining:
+        ready = [name for name in remaining if deps[name] <= built]
+        if not ready:
+            unresolved = ", ".join(
+                f"{name} (needs: {sorted(deps[name] - built)})" for name in remaining
+            )
+            raise ValueError(
+                f"{group} | Could not resolve a build order: a cycle or "
+                f"self-reference exists among: {unresolved}."
+            )
+        ordered.extend(ready)
+        built.update(ready)
+        remaining = [name for name in remaining if name not in built]
+    return ordered
 
 
 def declarative_model(
@@ -113,6 +163,13 @@ class _DeclarativeBase:
             helpers=build_registry(helpers),
             math_reprs=math_reprs or {},
         )
+        self.references: dict[str, dict[str, list[str]]] = {
+            group: {
+                name: self._references(parsed)
+                for name, parsed in self.parsed[group].items()
+            }
+            for group in BUILD_ORDER
+        }
 
     def _references(self, parsed: parsing.ParsedComponent) -> list[str]:
         """Return the sorted names of all math components a component references."""
@@ -238,10 +295,21 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             bullets = "\n".join(f" * {msg}" for msg in sorted(set(error_msgs)))
             raise ValueError(f"Errors during model input data checks:\n{bullets}")
 
-    @staticmethod
-    def _sorted_by_order(root: Mapping[str, Any]) -> list[tuple[str, Any]]:
-        """Return (name, definition) pairs from a root mapping, sorted by definition order."""
-        return sorted(root.items(), key=lambda item: getattr(item[1], "order", 0))
+    def _build_order(self, group: BUILD_ORDER_T) -> list[str]:
+        """
+        Return the active component names of `group` in dependency-safe build order.
+
+        `variables` and `expressions` may reference other active names in their
+        own group (a variable mask referencing another variable; an expression
+        referencing another expression), so those groups are ordered
+        topologically. `constraints` and `objectives` are never referenced by
+        other math, so they keep their definition order.
+        """
+        names = list(self.math[group]._active)
+        if group not in ("variables", "expressions"):
+            return names
+        deps = _intra_group_dependencies(self.references[group], names)
+        return _topological_order(names, deps, group)
 
     def _iter_equations(
         self,
@@ -279,7 +347,9 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             integer=definition.domain == "integer",
         )
         # Variable.attrs values are typed Hashable, but a sorted list serializes best.
-        self.model.variables[name].attrs["references"] = self._references(parsed)  # type: ignore[assignment]
+        self.model.variables[name].attrs["references"] = self.references["variables"][
+            name
+        ]  # type: ignore[assignment]
 
     def add_expression(self, name: str, definition: ExpressionDef) -> None:
         """Add a named expression to the model, merging its equation variants."""
@@ -308,7 +378,9 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
             return
         self.model.add_expressions(name=name, data=expr, mask=mask)
-        self.model.expressions[name].attrs["references"] = self._references(parsed)
+        self.model.expressions[name].attrs["references"] = self.references[
+            "expressions"
+        ][name]
 
     def add_constraint(self, name: str, definition: ConstraintDef) -> None:
         """Add a constraint to the model, merging its equation variants."""
@@ -350,7 +422,9 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             rhs=rhs,
             mask=mask,
         )
-        self.model.constraints[name].attrs["references"] = self._references(parsed)
+        self.model.constraints[name].attrs["references"] = self.references[
+            "constraints"
+        ][name]
 
     def add_objective(self, name: str, definition: ObjectiveDef) -> None:
         """Set the model objective, merging its equation variants."""
@@ -390,7 +464,10 @@ class DeclarativeModelBuilder(_DeclarativeBase):
         Build all math components into the linopy model.
 
         Components are built in group order (variables, expressions, constraints,
-        objectives) and, within a group, by their `order` attribute where defined.
+        objectives). Within `variables` and `expressions`, components are
+        further ordered so that any component referencing another in the same
+        group is built after it, regardless of definition order; independent
+        components keep their relative definition order.
 
         Returns
         -------
@@ -404,12 +481,13 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             )
         for group in BUILD_ORDER:
             component = group.removesuffix("s")
-            ordered_items = self._sorted_by_order(self.math[group]._active)
-            for name, definition in tqdm(
-                ordered_items, desc=f"Building {group}.", colour=TQDM_COLOR
+            active = self.math[group]._active
+            ordered_names = self._build_order(group)
+            for name in tqdm(
+                ordered_names, desc=f"Building {group}.", colour=TQDM_COLOR
             ):
                 start = time.time()
-                getattr(self, f"add_{component}")(name, definition)
+                getattr(self, f"add_{component}")(name, active[name])
                 LOGGER.debug(f"{group}:{name} | Built in {time.time() - start:.4f}s")
             LOGGER.info(f"{group} | Generated.")
         return self.model
