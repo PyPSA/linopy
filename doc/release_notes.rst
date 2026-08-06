@@ -17,6 +17,11 @@ Upcoming Version
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged. (`#780 <https://github.com/PyPSA/linopy/pull/780>`__)
 
+*Named expressions*
+
+* ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
+  Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
+
 *Other*
 
 * Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``). (`#566 <https://github.com/PyPSA/linopy/pull/566>`__)
