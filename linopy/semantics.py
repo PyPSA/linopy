@@ -122,6 +122,52 @@ def _legacy_nan_constant_message(op_kind: str) -> str:
     )
 
 
+_RAGGED_RESOLVE_HINT = (
+    "\n  Ragged:    declare which slots hold a breakpoint —"
+    "\n             `add_piecewise_formulation(..., mask=x_pts.notnull())`"
+    "\n  Data error: `.fillna(value)`"
+)
+
+
+def _user_nan_breakpoint_message(context: str) -> str:
+    """
+    User-NaN error text for breakpoint tables.
+
+    The generic §5 message points at `mask=` on a *variable*, which is the
+    wrong remedy here — breakpoints are plain data, and raggedness is the
+    reason a NaN usually shows up. Name that case instead.
+    """
+    return (
+        f"NaN found in user-supplied {context} (§5). linopy trusts NaN only "
+        "from its own structural operations (§4): here it cannot tell a "
+        "shorter curve (a padded slot) from a data error, and guessing would "
+        "silently change the model." + _RAGGED_RESOLVE_HINT
+    )
+
+
+def _legacy_nan_breakpoint_message(context: str) -> str:
+    """Legacy inferred padding from NaN placement; v1 wants it declared."""
+    return (
+        f"NaN in user-supplied {context} was silently read as a padded slot "
+        "(an absent breakpoint) by legacy. Under v1 this raises ValueError — "
+        "the raggedness has to be declared rather than inferred."
+        + _RAGGED_RESOLVE_HINT
+        + _OPT_IN_HINT
+    )
+
+
+def check_user_nan_breakpoints(*, context: str = "breakpoints") -> None:
+    """
+    Enforce §5 for a breakpoint table whose padding was not declared.
+
+    v1 raises; legacy warns and lets the caller infer the padding from NaN
+    placement, preserving pre-v1 behaviour.
+    """
+    if is_v1():
+        raise ValueError(_user_nan_breakpoint_message(context))
+    warn_legacy(_legacy_nan_breakpoint_message(context))
+
+
 def _legacy_coord_mismatch_message(
     context: str,
     dim: str | None = None,

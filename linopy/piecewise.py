@@ -50,12 +50,13 @@ from linopy.constants import (
     EvolvingAPIWarning,
     sign_replace_dict,
 )
+from linopy.semantics import check_user_nan_breakpoints
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model
-    from linopy.types import LinExprLike
+    from linopy.types import LinExprLike, MaskLike
     from linopy.variables import Variables
 
 logger = logging.getLogger(__name__)
@@ -736,12 +737,17 @@ def _tangent_lines_impl(
     x: LinExprLike,
     x_points: BreaksLike,
     y_points: BreaksLike,
+    piece_mask: DataArray | None = None,
 ) -> LinearExpression:
     """
     Chord-expression math — the body of ``tangent_lines`` without the
     :class:`EvolvingAPIWarning`.  Called internally by ``_add_lp`` so a
     single ``add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))``
     emits exactly one warning, not two.
+
+    ``piece_mask`` marks the pieces that exist.  A padded piece of a ragged
+    curve gets a neutral zero chord, which the caller is expected to mask
+    out of the resulting constraint.
     """
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
@@ -753,7 +759,7 @@ def _tangent_lines_impl(
     dy = y_points.diff(BREAKPOINT_DIM)
     piece_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    slopes = _rename_to_pieces(dy / dx, piece_index)
+    slopes = _drop_absent(_rename_to_pieces(dy / dx, piece_index), piece_mask)
     x_base = _rename_to_pieces(
         x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
@@ -761,7 +767,7 @@ def _tangent_lines_impl(
         y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
 
-    intercepts = y_base - slopes * x_base
+    intercepts = _drop_absent(y_base - slopes * x_base, piece_mask)
 
     if not isinstance(x, Variable | LinExpr):
         raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
@@ -830,6 +836,13 @@ def tangent_lines(
         "entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
     )
+    # No mask to declare absence on this low-level helper, so a ragged curve
+    # can only be reported (§5), not resolved — say so here rather than let
+    # the generic user-NaN message surface from the chord arithmetic.
+    if bool(_coerce_breaks(x_points).isnull().any()) or bool(
+        _coerce_breaks(y_points).isnull().any()
+    ):
+        check_user_nan_breakpoints()
     return _tangent_lines_impl(x, x_points, y_points)
 
 
@@ -983,6 +996,69 @@ def _paired_valid_points(*points: DataArray) -> DataArray:
     return points[0].where(~invalid)
 
 
+def _drop_absent(values: DataArray, mask: DataArray | None) -> DataArray:
+    """
+    Make a breakpoint table safe to use as a *constant* operand.
+
+    Absent slots are marked with ``NaN`` (§2), but as soon as the table
+    multiplies a variable it is an ordinary constant, and §5 rejects NaN
+    there — provenance is gone by that point. The absence is already
+    carried by the variable, which was created with ``mask=`` (§4), so it
+    propagates on its own (§6) and the coefficient at that slot is never
+    read. Replace it with a neutral zero.
+    """
+    if mask is None:
+        return values
+    return values.where(mask, 0.0)
+
+
+def _resolve_breakpoint_mask(
+    bp_list: list[DataArray], mask: MaskLike | None
+) -> tuple[list[DataArray], DataArray | None]:
+    """
+    Settle which slots hold a real breakpoint, and align the values to it.
+
+    A ragged curve is stored densely along ``BREAKPOINT_DIM`` with the
+    surplus slots absent, which §2 encodes as ``NaN``. §5 forbids reading
+    that marker off *user* data — a shorter curve and a data error are
+    indistinguishable — so the caller declares the absence through §4's
+    ``mask=`` and this returns it. Without a declaration, v1 raises and
+    legacy keeps inferring from NaN placement.
+
+    The returned arrays carry ``NaN`` exactly where the mask says absent,
+    so ``isnull()`` stays the single predicate (§3) downstream.
+    """
+    combined_null = bp_list[0].isnull()
+    for bp in bp_list[1:]:
+        combined_null = combined_null | bp.isnull()
+
+    if mask is None:
+        if not bool(combined_null.any()):
+            return bp_list, None
+        check_user_nan_breakpoints()
+        return bp_list, ~combined_null
+
+    declared = (mask if isinstance(mask, DataArray) else DataArray(mask)).astype(bool)
+    bp_dims = set().union(*(bp.dims for bp in bp_list))
+    extra = set(declared.dims) - bp_dims
+    if extra:
+        raise ValueError(
+            f"`mask` is not broadcastable against the breakpoints: it has "
+            f"dimension(s) {sorted(map(str, extra))} which the breakpoints "
+            f"({sorted(map(str, bp_dims))}) do not have."
+        )
+    _, declared = xr.broadcast(bp_list[0], declared)
+
+    if bool((combined_null & declared).any()):
+        raise ValueError(
+            "NaN at a breakpoint slot that `mask` marks as present. Either "
+            "widen the mask to cover those slots or fix the values with "
+            "`.fillna(...)`."
+        )
+
+    return [bp.where(declared) for bp in bp_list], declared
+
+
 def _validate_shared_coords(points: Sequence[DataArray]) -> None:
     skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
     for i, left in enumerate(points):
@@ -1074,6 +1150,7 @@ def add_piecewise_formulation(
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
     active_fill: int | None = None,
+    mask: MaskLike | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
@@ -1183,6 +1260,25 @@ def add_piecewise_formulation(
         Transitional convenience: under v1 semantics, pad ``active``
         explicitly with ``active.reindex(coords).fillna(value)`` instead —
         this parameter is slated for removal then.
+    mask : MaskLike, optional
+        Which breakpoint slots hold a real breakpoint — ``True`` where one
+        exists, ``False`` where it is absent.  Shaped like the breakpoint
+        arrays (entity dims × ``_breakpoint``), or anything that broadcasts
+        against them.
+
+        Needed only for **ragged** curves, where entities have different
+        numbers of breakpoints.  These are stored densely with the surplus
+        slots left absent, and under v1 that absence has to be declared
+        rather than read off the data: a shorter curve and a stray NaN look
+        identical, so linopy refuses to guess (see the convention, §4/§5).
+        For breakpoints that are already NaN-padded, the declaration is
+        ``mask=x_pts.notnull()``.
+
+        Slots marked absent are excluded from the formulation: no auxiliary
+        variable is created for them and no constraint references them.
+        Passing a mask that hides a *present* value is allowed and drops
+        that breakpoint; a NaN at a slot the mask calls present is a data
+        error and raises.
     name : str, optional
         Base name for generated variables/constraints.
 
@@ -1319,10 +1415,7 @@ def add_piecewise_formulation(
     _validate_shared_coords(bp_list)
     _validate_expr_coords(bp_list, lin_exprs)
 
-    combined_null = bp_list[0].isnull()
-    for bp in bp_list[1:]:
-        combined_null = combined_null | bp.isnull()
-    bp_mask = ~combined_null if bool(combined_null.any()) else None
+    bp_list, bp_mask = _resolve_breakpoint_mask(bp_list, mask)
 
     if name is None:
         name = f"pwl{model._pwlCounter}"
@@ -1705,13 +1798,15 @@ def _add_sos2(
     )
 
     if links.eq_expr is not None and links.eq_bp is not None:
-        input_weighted = (lambda_var * links.eq_bp).sum(dim=dim)
+        eq_bp = _drop_absent(links.eq_bp, links.bp_mask)
+        input_weighted = (lambda_var * eq_bp).sum(dim=dim)
         model.add_constraints(
             links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
         )
 
     if links.signed_expr is not None and links.signed_bp is not None:
-        output_weighted = (lambda_var * links.signed_bp).sum(dim=dim)
+        signed_bp = _drop_absent(links.signed_bp, links.bp_mask)
+        output_weighted = (lambda_var * signed_bp).sum(dim=dim)
         _add_signed_link(
             model,
             links.signed_expr,
@@ -1796,6 +1891,7 @@ def _add_incremental(
     def _incremental_weighted(bp: DataArray) -> LinearExpression:
         steps = bp.diff(dim).rename({dim: piece_dim})
         steps[piece_dim] = piece_index
+        steps = _drop_absent(steps, delta_mask)
         # ``drop=True`` keeps the breakpoint coord from sticking around as a
         # scalar on ``bp0_term`` — otherwise §11 rejects it as an aux-coord
         # conflict against the constraint LHS.
@@ -1877,13 +1973,15 @@ def _add_disjunctive(
     )
 
     if links.eq_expr is not None and links.eq_bp is not None:
-        input_weighted = (lambda_var * links.eq_bp).sum(dim=[SEGMENT_DIM, dim])
+        eq_bp = _drop_absent(links.eq_bp, bp_mask)
+        input_weighted = (lambda_var * eq_bp).sum(dim=[SEGMENT_DIM, dim])
         model.add_constraints(
             links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
         )
 
     if links.signed_expr is not None and links.signed_bp is not None:
-        output_weighted = (lambda_var * links.signed_bp).sum(dim=[SEGMENT_DIM, dim])
+        signed_bp = _drop_absent(links.signed_bp, bp_mask)
+        output_weighted = (lambda_var * signed_bp).sum(dim=[SEGMENT_DIM, dim])
         _add_signed_link(
             model,
             links.signed_expr,
@@ -1939,7 +2037,7 @@ def _add_lp(
 
     # Use the internal impl so we don't fire a second EvolvingAPIWarning —
     # ``add_piecewise_formulation`` already warned on entry.
-    tangents = _tangent_lines_impl(x_expr, x_points, y_points)
+    tangents = _tangent_lines_impl(x_expr, x_points, y_points, piece_mask)
     _add_signed_link(
         model,
         y_expr,
