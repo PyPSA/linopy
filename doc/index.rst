@@ -143,6 +143,7 @@ This package is published under MIT license.
    solve-on-remote
    solve-on-oetc
    gpu-acceleration
+   pips-installation
 
 .. toctree::
    :hidden:

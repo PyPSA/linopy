@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -72,6 +73,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_pips_files,
     to_xpress,
 )
 from linopy.matrices import MatrixAccessor
@@ -2019,7 +2021,7 @@ class Model:
             finally:
                 for fn in (problem_fn, solution_fn):
                     if fn is not None and (os.path.exists(fn) and not keep_files):
-                        os.remove(fn)
+                        shutil.rmtree(fn) if os.path.isdir(fn) else os.remove(fn)
 
             return self.assign_result(result)
 
@@ -2390,5 +2392,7 @@ class Model:
     to_xpress = to_xpress
 
     to_block_files = to_block_files
+
+    to_pips_files = to_pips_files
 
     dualize = dualize
