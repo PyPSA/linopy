@@ -89,7 +89,7 @@ benchmarks = [
     "numpy==2.4.6",
     "scipy==1.17.1",
     "xarray==2026.7.0",
-    "pandas==3.0.3",
+    "pandas==3.0.5",
     "polars==1.42.1",
     "dask==2026.6.0",
     "pytest==9.1.1",
