@@ -502,6 +502,19 @@ def test_xpress_gpu_feature_reflects_installed_version() -> None:
     ) == _installed_version_in("xpress", ">=9.8.0")
 
 
+@pytest.mark.skipif(
+    "xpress" not in set(solvers.licensed_solvers), reason="Xpress is not installed"
+)
+def test_xpress_direct_maximize() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_objective(x, sense="max")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(x.solution.values, 10)
+
+
 class TestValidateModelOnBuild:
     """Solver._build() runs solver-feature checks regardless of entry point."""
 
