@@ -91,7 +91,7 @@ benchmarks = [
     "xarray==2026.7.0",
     "pandas==3.0.5",
     "polars==1.42.1",
-    "dask==2026.6.0",
+    "dask==2026.7.1",
     "pytest==9.1.1",
     "pytest-benchmark==5.2.3",
     "pytest-memray==1.9.0",
