@@ -25,6 +25,7 @@ Upcoming Version
 
 **Performance**
 
+* ``LinearExpression.__matmul__``/``dot`` against a mostly-zero constant operand (e.g. a cycle-incidence matrix) no longer materializes one term per element of the contracted dimension. A sparse-aware kernel pairs each nonzero entry of the operand with its slice of the expression and group-sums the entries, so the result only holds contributing terms — on a Kirchhoff-voltage-law shaped contraction this shrinks the result by orders of magnitude. The represented expression is unchanged; only the term layout (count, order, padding) differs. The kernel engages when the operand's nonzero density is at most ``linopy.options["sparse_dot_max_density"]`` (default ``0.5``, ``0`` disables it) and the contracted labels match the expression exactly; all other cases keep the dense path unchanged. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
 * ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x. The kernel emits the grouped result in its final axis order in one contiguous allocation; on dask inputs the reduction now runs over a single chunk (it no longer parallelises over the surviving dimensions). (`#802 <https://github.com/PyPSA/linopy/pull/802>`__)
 
 **Deprecations**
