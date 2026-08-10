@@ -836,9 +836,6 @@ def tangent_lines(
         "entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
     )
-    # No mask to declare absence on this low-level helper, so a ragged curve
-    # can only be reported (§5), not resolved — say so here rather than let
-    # the generic user-NaN message surface from the chord arithmetic.
     if bool(_coerce_breaks(x_points).isnull().any()) or bool(
         _coerce_breaks(y_points).isnull().any()
     ):
@@ -997,16 +994,7 @@ def _paired_valid_points(*points: DataArray) -> DataArray:
 
 
 def _drop_absent(values: DataArray, mask: DataArray | None) -> DataArray:
-    """
-    Make a breakpoint table safe to use as a *constant* operand.
-
-    Absent slots are marked with ``NaN`` (§2), but as soon as the table
-    multiplies a variable it is an ordinary constant, and §5 rejects NaN
-    there — provenance is gone by that point. The absence is already
-    carried by the variable, which was created with ``mask=`` (§4), so it
-    propagates on its own (§6) and the coefficient at that slot is never
-    read. Replace it with a neutral zero.
-    """
+    """Zero out masked-absent slots; the variable's own mask already excludes them."""
     if mask is None:
         return values
     return values.where(mask, 0.0)
@@ -1019,14 +1007,12 @@ def _resolve_breakpoint_mask(
     Settle which slots hold a real breakpoint, and align the values to it.
 
     A ragged curve is stored densely along ``BREAKPOINT_DIM`` with the
-    surplus slots absent, which §2 encodes as ``NaN``. §5 forbids reading
-    that marker off *user* data — a shorter curve and a data error are
-    indistinguishable — so the caller declares the absence through §4's
-    ``mask=`` and this returns it. Without a declaration, v1 raises and
-    legacy keeps inferring from NaN placement.
-
-    The returned arrays carry ``NaN`` exactly where the mask says absent,
-    so ``isnull()`` stays the single predicate (§3) downstream.
+    surplus slots absent. A shorter curve and a data error are
+    indistinguishable from NaN alone, so the caller declares the absence
+    with ``mask=``; without a declaration v1 raises and legacy keeps
+    inferring from NaN placement. The returned arrays carry ``NaN``
+    exactly where the mask says absent, so ``isnull()`` stays the single
+    absence predicate downstream.
     """
     combined_null = bp_list[0].isnull()
     for bp in bp_list[1:]:
@@ -1263,22 +1249,13 @@ def add_piecewise_formulation(
     mask : MaskLike, optional
         Which breakpoint slots hold a real breakpoint — ``True`` where one
         exists, ``False`` where it is absent.  Shaped like the breakpoint
-        arrays (entity dims × ``_breakpoint``), or anything that broadcasts
-        against them.
-
-        Needed only for **ragged** curves, where entities have different
-        numbers of breakpoints.  These are stored densely with the surplus
-        slots left absent, and under v1 that absence has to be declared
-        rather than read off the data: a shorter curve and a stray NaN look
-        identical, so linopy refuses to guess (see the convention, §4/§5).
-        For breakpoints that are already NaN-padded, the declaration is
-        ``mask=x_pts.notnull()``.
-
-        Slots marked absent are excluded from the formulation: no auxiliary
-        variable is created for them and no constraint references them.
-        Passing a mask that hides a *present* value is allowed and drops
-        that breakpoint; a NaN at a slot the mask calls present is a data
-        error and raises.
+        arrays, or anything that broadcasts against them.  Needed for
+        **ragged** curves (entities with different numbers of breakpoints),
+        stored densely with the surplus slots left absent: under v1 that
+        absence must be declared rather than read off the NaN padding, e.g.
+        ``mask=x_pts.notnull()``.  Absent slots get no auxiliary variable
+        and no constraint.  A mask hiding a present value drops that
+        breakpoint; a NaN at a slot the mask calls present raises.
     name : str, optional
         Base name for generated variables/constraints.
 

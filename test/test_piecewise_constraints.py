@@ -2036,7 +2036,7 @@ class TestValidationEdgeCases:
         """
         Disjunctive with interior NaN raises ValueError.
 
-        Under v1 the §5 user-NaN check fires first — an interior NaN is
+        Under v1 the user-NaN check fires first — an interior NaN is
         exactly the data error it is there to catch. Legacy still reaches
         the layout check further in.
         """
@@ -2118,9 +2118,8 @@ def nan_padded_pwl_model() -> Callable[..., Model]:
     Factory: NaN-padded per-entity piecewise model parametrized by method.
 
     Entity ``b`` has one breakpoint fewer than ``a``, so its last slot is
-    padding. With ``declare=True`` that absence is passed as ``mask=`` —
-    the §4 declaration v1 requires — instead of being left for linopy to
-    infer from the NaN.
+    padding. With ``declare=True`` that absence is passed as ``mask=``, as
+    v1 requires, instead of being left for linopy to infer from the NaN.
     """
     from linopy.piecewise import breakpoints
 
@@ -3088,8 +3087,8 @@ class TestRaggedBreakpointMask:
     """
     Ragged curves must be *declared*, not inferred from NaN placement.
 
-    Under v1, §5 rejects a NaN linopy did not create itself; ``mask=`` is
-    §4's way to say "this slot is absent". Legacy keeps inferring, with a
+    Under v1 a NaN linopy did not create itself is rejected; ``mask=`` is
+    the way to say "this slot is absent". Legacy keeps inferring, with a
     deprecation warning. Regression for
     https://github.com/PyPSA/linopy/issues/884.
     """
@@ -3123,7 +3122,7 @@ class TestRaggedBreakpointMask:
 
     @pytest.mark.v1
     def test_error_names_the_remedy(self) -> None:
-        """The §5 message must point at mask=, not at the generic fillna advice."""
+        """The error message must point at mask=, not at the generic fillna advice."""
         with pytest.raises(ValueError) as excinfo:
             _build_ragged("lp", declare=False)
         message = str(excinfo.value)
