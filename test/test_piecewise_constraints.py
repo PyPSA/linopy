@@ -2032,8 +2032,14 @@ class TestValidationEdgeCases:
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
-    def test_disjunctive_interior_nan_raises(self) -> None:
-        """Disjunctive with interior NaN raises ValueError."""
+    def test_disjunctive_interior_nan_raises(self, semantics: str) -> None:
+        """
+        Disjunctive with interior NaN raises ValueError.
+
+        Under v1 the user-NaN check fires first — an interior NaN is
+        exactly the data error it is there to catch. Legacy still reaches
+        the layout check further in.
+        """
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
@@ -2046,7 +2052,10 @@ class TestValidationEdgeCases:
             [[0, np.nan, 5], [20, 50, 80]],
             dims=[SEGMENT_DIM, BREAKPOINT_DIM],
         )
-        with pytest.raises(ValueError, match="non-trailing NaN"):
+        expected = (
+            "NaN found in user-supplied" if semantics == "v1" else "non-trailing NaN"
+        )
+        with pytest.raises(ValueError, match=expected):
             m.add_piecewise_formulation((x, x_pts), (y, y_pts))
 
     def test_expression_name_fallback(self) -> None:
@@ -2104,22 +2113,31 @@ class TestValidationEdgeCases:
 
 
 @pytest.fixture
-def nan_padded_pwl_model() -> Callable[[Method], Model]:
-    """Factory: NaN-padded per-entity piecewise model parametrized by method."""
+def nan_padded_pwl_model() -> Callable[..., Model]:
+    """
+    Factory: NaN-padded per-entity piecewise model parametrized by method.
+
+    Entity ``b`` has one breakpoint fewer than ``a``, so its last slot is
+    padding. With ``declare=True`` that absence is passed as ``mask=``, as
+    v1 requires, instead of being left for linopy to infer from the NaN.
+    """
     from linopy.piecewise import breakpoints
 
-    def _build(method: Method) -> Model:
+    def _build(method: Method, declare: bool = False) -> Model:
         bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
         bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
+        y_pts = breakpoints(bp_y, dim="entity")
+        x_pts = breakpoints(bp_x, dim="entity")
 
         m = Model()
         coord = pd.Index(["a", "b"], name="entity")
         x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
         y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
         m.add_piecewise_formulation(
-            (y, breakpoints(bp_y, dim="entity"), "<="),
-            (x, breakpoints(bp_x, dim="entity")),
+            (y, y_pts, "<="),
+            (x, x_pts),
             method=method,
+            mask=(x_pts.notnull() & y_pts.notnull()) if declare else None,
         )
         m.add_constraints(x.sel(entity="b") == 10)
         m.add_objective(-y.sel(entity="b"))
@@ -2347,7 +2365,7 @@ class TestSignParameter:
 
     @pytest.mark.legacy
     def test_lp_per_entity_nan_padding(
-        self, nan_padded_pwl_model: Callable[[Method], Model]
+        self, nan_padded_pwl_model: Callable[..., Model]
     ) -> None:
         """
         Per-entity NaN-padded breakpoints with method='lp': padded
@@ -2366,7 +2384,7 @@ class TestSignParameter:
     @pytest.mark.parametrize(("solver", "io_api"), _SOS_PATHS)
     def test_sos2_per_entity_nan_padding(
         self,
-        nan_padded_pwl_model: Callable[[Method], Model],
+        nan_padded_pwl_model: Callable[..., Model],
         solver: str,
         io_api: str,
     ) -> None:
@@ -3018,6 +3036,223 @@ class TestLPEligibilityReasons:
         ok, reason = _lp_eligibility(inputs, None)
         assert ok
         assert reason == ""
+
+
+# ===========================================================================
+# Ragged breakpoints — declared absence via mask= (#884)
+# ===========================================================================
+
+
+def _ragged_pair() -> tuple[xr.DataArray, xr.DataArray, pd.Index]:
+    """x/y breakpoints where entity 'b' is one breakpoint short."""
+    names = pd.Index(["a", "b"], name="name")
+    dims = ["name", BREAKPOINT_DIM]
+    x_pts = xr.DataArray(
+        [[0.0, 50.0, 100.0], [0.0, 100.0, np.nan]], coords={"name": names}, dims=dims
+    )
+    y_pts = xr.DataArray(
+        [[0.0, 30.0, 100.0], [0.0, 60.0, np.nan]], coords={"name": names}, dims=dims
+    )
+    return x_pts, y_pts, names
+
+
+def _build_ragged(
+    method: Method,
+    *,
+    declare: bool,
+    y_values: list[list[float]] | None = None,
+    active: bool = False,
+) -> Model:
+    x_pts, y_pts, names = _ragged_pair()
+    if y_values is not None:
+        y_pts = xr.DataArray(
+            y_values, coords={"name": names}, dims=["name", BREAKPOINT_DIM]
+        )
+    m = Model()
+    x = m.add_variables(0, 100, coords=[names], name="x")
+    y = m.add_variables(coords=[names], name="y")
+    kwargs: dict[str, Any] = {"method": method}
+    if declare:
+        kwargs["mask"] = x_pts.notnull() & y_pts.notnull()
+    if active:
+        status = m.add_variables(binary=True, coords=[names], name="s")
+        kwargs["active"] = status.to_linexpr()
+    m.add_piecewise_formulation(
+        (y, breakpoints(y_pts), ">="), (x, breakpoints(x_pts)), name="pw", **kwargs
+    )
+    return m
+
+
+class TestRaggedBreakpointMask:
+    """
+    Ragged curves must be *declared*, not inferred from NaN placement.
+
+    Under v1 a NaN linopy did not create itself is rejected; ``mask=`` is
+    the way to say "this slot is absent". Legacy keeps inferring, with a
+    deprecation warning. Regression for
+    https://github.com/PyPSA/linopy/issues/884.
+    """
+
+    # Every formulation path reaches the padded slot through a different
+    # expression, and each one used to raise from deep inside arithmetic.
+    CASES: list[tuple[str, Method, dict[str, Any]]] = [
+        ("lp", "lp", {}),
+        ("sos2", "sos2", {"y_values": [[0.0, 70.0, 20.0], [0.0, 60.0, np.nan]]}),
+        (
+            "incremental",
+            "incremental",
+            {"y_values": [[0.0, 70.0, 100.0], [0.0, 60.0, np.nan]]},
+        ),
+        (
+            "incremental+active",
+            "incremental",
+            {"y_values": [[0.0, 70.0, 100.0], [0.0, 60.0, np.nan]], "active": True},
+        ),
+    ]
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize(
+        ("label", "method", "kwargs"), CASES, ids=[c[0] for c in CASES]
+    )
+    def test_undeclared_nan_raises(
+        self, label: str, method: Method, kwargs: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ValueError, match="NaN found in user-supplied breakpoints"):
+            _build_ragged(method, declare=False, **kwargs)
+
+    @pytest.mark.v1
+    def test_error_names_the_remedy(self) -> None:
+        """The error message must point at mask=, not at the generic fillna advice."""
+        with pytest.raises(ValueError) as excinfo:
+            _build_ragged("lp", declare=False)
+        message = str(excinfo.value)
+        assert "mask=" in message
+        assert "notnull()" in message
+
+    @pytest.mark.parametrize(
+        ("label", "method", "kwargs"), CASES, ids=[c[0] for c in CASES]
+    )
+    def test_declared_mask_builds(
+        self, label: str, method: Method, kwargs: dict[str, Any]
+    ) -> None:
+        """All formulation paths accept ragged input once it is declared."""
+        m = _build_ragged(method, declare=True, **kwargs)
+        assert len(m.constraints) > 0
+
+    @pytest.mark.legacy
+    def test_legacy_warns_but_still_builds(self) -> None:
+        from linopy.config import LinopySemanticsWarning
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", LinopySemanticsWarning)
+            _build_ragged("lp", declare=False)
+        assert any(issubclass(w.category, LinopySemanticsWarning) for w in caught)
+
+    def test_disjunctive_declared_mask(self) -> None:
+        names = pd.Index(["a", "b"], name="name")
+        sdims = ["name", SEGMENT_DIM, BREAKPOINT_DIM]
+        x_segs = xr.DataArray(
+            [[[0.0, 30.0], [50.0, 100.0]], [[0.0, 40.0], [np.nan, np.nan]]],
+            coords={"name": names},
+            dims=sdims,
+        )
+        y_segs = xr.DataArray(
+            [[[0.0, 10.0], [20.0, 60.0]], [[0.0, 15.0], [np.nan, np.nan]]],
+            coords={"name": names},
+            dims=sdims,
+        )
+        m = Model()
+        x = m.add_variables(0, 100, coords=[names], name="x")
+        y = m.add_variables(coords=[names], name="y")
+        m.add_piecewise_formulation(
+            (y, segments(y_segs)),
+            (x, segments(x_segs)),
+            mask=x_segs.notnull() & y_segs.notnull(),
+            name="pw",
+        )
+        assert len(m.constraints) > 0
+
+    def test_nan_under_a_present_mask_raises(self) -> None:
+        """A NaN the mask calls present is a data error, in both semantics."""
+        x_pts, y_pts, names = _ragged_pair()
+        m = Model()
+        x = m.add_variables(0, 100, coords=[names], name="x")
+        y = m.add_variables(coords=[names], name="y")
+        with pytest.raises(ValueError, match="marks as present"):
+            m.add_piecewise_formulation(
+                (y, breakpoints(y_pts), ">="),
+                (x, breakpoints(x_pts)),
+                mask=xr.ones_like(x_pts, dtype=bool),
+                name="pw",
+            )
+
+    def test_mask_may_hide_a_present_value(self) -> None:
+        """``mask=`` also drops breakpoints that carry a real value."""
+        names = pd.Index(["a", "b"], name="name")
+        dims = ["name", BREAKPOINT_DIM]
+        x_pts = xr.DataArray(
+            [[0.0, 50.0, 100.0], [0.0, 100.0, 200.0]], coords={"name": names}, dims=dims
+        )
+        y_pts = xr.DataArray(
+            [[0.0, 30.0, 100.0], [0.0, 60.0, 90.0]], coords={"name": names}, dims=dims
+        )
+        mask = xr.DataArray(
+            [[True, True, True], [True, True, False]], coords={"name": names}, dims=dims
+        )
+        m = Model()
+        x = m.add_variables(0, 100, coords=[names], name="x")
+        y = m.add_variables(coords=[names], name="y")
+        m.add_piecewise_formulation(
+            (y, breakpoints(y_pts), ">="),
+            (x, breakpoints(x_pts)),
+            mask=mask,
+            name="pw",
+        )
+        assert len(m.constraints) > 0
+
+    def test_non_broadcastable_mask_raises(self) -> None:
+        x_pts, y_pts, names = _ragged_pair()
+        m = Model()
+        x = m.add_variables(0, 100, coords=[names], name="x")
+        y = m.add_variables(coords=[names], name="y")
+        bad = xr.DataArray([True, False], dims=["other"])
+        with pytest.raises(ValueError, match="broadcastable"):
+            m.add_piecewise_formulation(
+                (y, breakpoints(y_pts), ">="),
+                (x, breakpoints(x_pts)),
+                mask=bad,
+                name="pw",
+            )
+
+    @pytest.mark.v1
+    def test_tangent_lines_reports_raggedness(self) -> None:
+        """
+        The low-level helper has no mask to declare absence with, so it can
+        only report — but it must name raggedness rather than let the
+        generic user-NaN message surface from the chord arithmetic.
+        """
+        x_pts, y_pts, names = _ragged_pair()
+        m = Model()
+        x = m.add_variables(0, 100, coords=[names], name="x")
+        with pytest.raises(ValueError, match="NaN found in user-supplied breakpoints"):
+            tangent_lines(x, x_pts, y_pts)
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("method", ["lp", "sos2"])
+    def test_declared_mask_matches_legacy_oracle(
+        self, nan_padded_pwl_model: Callable[..., Model], method: Method
+    ) -> None:
+        """
+        The declared model is the model legacy inferred.
+
+        Same oracle as the legacy-only ``test_*_per_entity_nan_padding``
+        tests: f_b(10) on the chord (5,10)→(15,15) is 12.5.
+        """
+        if method == "sos2" and not _SOS_PATHS:
+            pytest.skip("No SOS-capable solver installed")
+        m = nan_padded_pwl_model(method, True)
+        m.solve()
+        assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
 
 # ===========================================================================
