@@ -31,6 +31,7 @@ from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     assign_multiindex_safe,
+    assigned_labels,
     best_int,
     maybe_replace_signs,
     replace_by_map,
@@ -1354,7 +1355,7 @@ class Model:
         self.variables.remove(name)
 
         self.objective = self.objective.sel(
-            {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
+            {TERM_DIM: ~self.objective.vars.isin(assigned_labels(variable.labels))}
         )
 
     def remove_constraints(self, name: str | list[str]) -> None:

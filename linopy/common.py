@@ -471,6 +471,19 @@ def replace_by_map(ds: DataArray, mapping: np.ndarray) -> DataArray:
     )
 
 
+def assigned_labels(labels: np.ndarray | DataArray) -> np.ndarray:
+    """
+    Flatten labels and drop the -1 sentinels.
+
+    ``-1`` marks a masked entry in a variable's or constraint's labels, but an
+    empty term slot in the ``vars`` field of a constraint or expression.
+    Matching labels of one object against another must therefore ignore it,
+    otherwise every masked entry compares equal to every empty term slot.
+    """
+    flat = np.asarray(labels).ravel()
+    return flat[flat != -1]
+
+
 def to_path(path: str | Path | None) -> Path | None:
     """
     Convert a string to a Path object.

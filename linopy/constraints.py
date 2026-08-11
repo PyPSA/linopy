@@ -38,6 +38,7 @@ from linopy.common import (
     VariableLabelIndex,
     align_lines_by_delimiter,
     assign_multiindex_safe,
+    assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
     coords_from_dataset,
@@ -202,7 +203,12 @@ class ConstraintBase(ABC):
 
     @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
-        """Check if the constraint references any of the given variable labels."""
+        """
+        Check if the constraint references any of the given variable labels.
+
+        Masked variable entries (label -1) are ignored: they are not part of
+        the model and would otherwise match every empty term slot.
+        """
 
     @abstractmethod
     def sanitize_zeros(self) -> ConstraintBase:
@@ -943,7 +949,7 @@ class CSRConstraint(ConstraintBase):
     def has_variable(self, variable: variables.Variable) -> bool:
         vlabels = self._model.variables.label_index.vlabels
         return bool(
-            np.isin(vlabels[self._csr.indices], variable.labels.values.ravel()).any()
+            np.isin(vlabels[self._csr.indices], assigned_labels(variable.labels)).any()
         )
 
     def to_matrix_with_rhs(
@@ -1520,7 +1526,7 @@ class Constraint(ConstraintBase):
         self._data = assign_multiindex_safe(self.data, dual=value)
 
     def has_variable(self, variable: variables.Variable) -> bool:
-        return bool(self.data["vars"].isin(variable.labels.values.ravel()).any())
+        return bool(self.data["vars"].isin(assigned_labels(variable.labels)).any())
 
     def _matrix_export_data(
         self, label_index: VariableLabelIndex
