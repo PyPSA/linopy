@@ -81,10 +81,12 @@ def test_add_expressions_from_variable_and_tuples() -> None:
     expr = m.add_expressions(x, name="from_var")
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, x.to_linexpr())
+    assert_linequal(expr, m.expressions["from_var"])
 
     expr = m.add_expressions([(2, x)], name="from_tuples")
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, 2 * x)
+    assert_linequal(expr, m.expressions["from_tuples"])
 
 
 def test_add_expressions_quadratic(m: Model) -> None:
