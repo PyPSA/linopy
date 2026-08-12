@@ -6,6 +6,7 @@ Module containing all import/export functionalities.
 from __future__ import annotations
 
 import copy as _copy
+import dataclasses
 import json
 import logging
 import shutil
@@ -16,7 +17,7 @@ from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,7 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.common import to_polars
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.expressions import LazyExpression
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
@@ -919,7 +921,12 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
+def to_netcdf(
+    m: Model,
+    *args: Any,
+    lazy: Literal["evaluate", "skip", "raise"] = "evaluate",
+    **kwargs: Any,
+) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -929,6 +936,18 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Model to write out.
     *args
         Arguments passed to ``xarray.Dataset.to_netcdf``.
+    lazy : {"evaluate", "skip", "raise"}, default "evaluate"
+        What to do with :class:`linopy.LazyExpression` entries in ``m.expressions``,
+        which hold no data of their own and cannot be written as-is:
+
+        - ``"evaluate"``: run each lazy expression's evaluator and write the
+          result as an ordinary (linear or quadratic) expression. The
+          placeholder itself, and the fact that it was lazy, are not restored
+          by :func:`read_netcdf`.
+        - ``"skip"``: omit lazy expressions from the file entirely. A warning
+          names the dropped entries.
+        - ``"raise"``: raise a :class:`ValueError` naming the lazy entries
+          instead of writing the file.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
@@ -937,7 +956,13 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     Variables, constraints, the objective, parameters and named
     expressions (``Model.expressions``, including their linear/quadratic
     type) are all persisted and fully restored by
-    :func:`linopy.io.read_netcdf`.
+    :func:`linopy.io.read_netcdf`. :class:`LazyExpression` entries are the
+    exception: they are handled per the `lazy` parameter above, since nothing
+    in linopy today can serialize an arbitrary evaluator callable. A
+    lazy expression built from a serialisable description (e.g. an AST
+    produced by a declarative frontend, attached via `LazyExpression.source`)
+    could be persisted as such in the future; no such description exists yet,
+    so every lazy entry currently falls through to the `lazy` policy above.
 
     The SOS reformulation lifecycle token lives only on the in-memory
     Model and is not persisted. If the model has an active SOS
@@ -983,13 +1008,38 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(con.to_netcdf_ds(), f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
-    exprs = [
-        with_prefix(
-            expr.data.assign_attrs(name=name, _linopy_expr_type=expr.type),
-            f"expressions-{name}",
-        )
-        for name, expr in m.expressions.items()
+
+    lazy_names = [
+        name for name, expr in m.expressions.items() if isinstance(expr, LazyExpression)
     ]
+    if lazy_names:
+        if lazy == "raise":
+            raise ValueError(
+                f"Cannot write lazy expression(s) {lazy_names} to netcdf. "
+                "Pass lazy='evaluate' to materialise them or lazy='skip' to drop them."
+            )
+        if lazy == "skip":
+            logger.warning(
+                f"Dropping lazy expression(s) {lazy_names} from the netcdf file "
+                "(lazy='skip'); they will not be present after `read_netcdf`."
+            )
+
+    exprs = []
+    for name, expr in m.expressions.items():
+        if isinstance(expr, LazyExpression):
+            # Lazy expressions with a serialisable `source` (e.g. an AST produced by a
+            # declarative frontend) could be persisted here instead of being evaluated.
+            # Nothing in linopy produces a `source` yet, so every lazy entry falls
+            # through to the `lazy` policy below.
+            if lazy == "skip":
+                continue
+            expr = expr.evaluate()
+        exprs.append(
+            with_prefix(
+                expr.data.assign_attrs(name=name, _linopy_expr_type=expr.type),
+                f"expressions-{name}",
+            )
+        )
     objective = m.objective.data
     objective = objective.assign_attrs(sense=m.objective.sense)
     if m.objective.value is not None:
@@ -1107,9 +1157,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._variables = Variables(variables, m)
 
+    # Everything written by `to_netcdf` is eager: lazy expressions are either
+    # evaluated, skipped, or raised on before writing (see the `lazy` parameter
+    # there). A future `_linopy_lazy_source` attr, persisted from
+    # `LazyExpression.source`, would be rehydrated into a `LazyExpression` here
+    # instead of falling into the eager branch below.
     exprs = [str(k) for k in ds if str(k).startswith("expressions")]
     expr_names = list({str(k).rsplit("-", 1)[0] for k in exprs})
-    expressions: dict[str, LinearExpression | QuadraticExpression] = {}
+    expressions: dict[str, LinearExpression | QuadraticExpression | LazyExpression] = {}
     for k in sorted(expr_names):
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
@@ -1240,9 +1295,17 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     def _copy_expr(
-        name: str, expr: LinearExpression | QuadraticExpression
-    ) -> LinearExpression | QuadraticExpression:
+        name: str, expr: LinearExpression | QuadraticExpression | LazyExpression
+    ) -> LinearExpression | QuadraticExpression | LazyExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
+        if isinstance(expr, LazyExpression):
+            # The placeholder itself has no data to copy; just rebind it to the
+            # new model. `input_data` is the only field that could reasonably
+            # be deep-copied, since `evaluator`/`mask` are callables.
+            input_data = expr.input_data
+            if deep and input_data is not None:
+                input_data = input_data.copy(deep=True)
+            return dataclasses.replace(expr, model=new_model, input_data=input_data)
         new_expr = type(expr)(expr.data.copy(deep=deep), new_model)
         new_expr.attrs["name"] = name  # __init__ resets the name to None
         return new_expr

@@ -27,7 +27,12 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
-from linopy.expressions import LinearExpression, QuadraticExpression, merge
+from linopy.expressions import (
+    LazyExpression,
+    LinearExpression,
+    QuadraticExpression,
+    merge,
+)
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables
 from linopy.objective import Objective
@@ -56,6 +61,7 @@ __all__ = (
     "EvolvingAPIWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
+    "LazyExpression",
     "LinearExpression",
     "Model",
     "Objective",

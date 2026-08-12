@@ -21,6 +21,8 @@ Upcoming Version
 
 * ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
   Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
+* ``Model.add_expressions`` also accepts a callable for ``data``, in which case the expression is not built immediately: a ``LazyExpression`` placeholder is registered instead, and the callable (``data(model, **params)``) only runs when the expression is evaluated, via ``.evaluate()``, ``.promote()``, ``.solution``, or a comparison (``<=``, ``>=``, ``==``). ``mask`` accepts a callable too (resolved at the same time as `data`), in addition to a concrete array. Arithmetic between ``LazyExpression`` objects — and between a ``LazyExpression`` and anything else — stays lazy, returning a new, unnamed ``LazyExpression`` that composes the operands rather than evaluating them.
+  ``Model.to_netcdf`` gained a ``lazy={"evaluate", "skip", "raise"}`` parameter (default ``"evaluate"``) controlling what happens to lazy entries, since an arbitrary evaluator callable cannot itself be serialized to netcdf.
 
 *Other*
 

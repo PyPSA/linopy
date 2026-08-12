@@ -6,7 +6,12 @@ from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
 from linopy.constraints import ConstraintBase, _con_unwrap
-from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
+from linopy.expressions import (
+    LazyExpression,
+    LinearExpression,
+    QuadraticExpression,
+    _expr_unwrap,
+)
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
 
@@ -71,16 +76,34 @@ def assert_quadequal(
 
 
 def assert_exprequal(
-    a: LinearExpression | QuadraticExpression,
-    b: LinearExpression | QuadraticExpression,
+    a: LinearExpression | QuadraticExpression | LazyExpression,
+    b: LinearExpression | QuadraticExpression | LazyExpression,
     check_name: bool = True,
 ) -> None:
     """
-    Assert that two expressions are equal, dispatching on linear vs quadratic.
+    Assert that two expressions are equal, dispatching on linear vs quadratic vs lazy.
 
     xarray's assert_equal ignores attrs, so the stored name (which lives in
     ``attrs["name"]``) is compared explicitly unless ``check_name=False``.
+
+    If either side is a :class:`LazyExpression`, both must be: the placeholder's
+    `name` and `dims` are compared directly, and the underlying expressions are
+    compared after calling `.evaluate()` on each (without promoting either).
     """
+    if isinstance(a, LazyExpression) or isinstance(b, LazyExpression):
+        assert isinstance(a, LazyExpression) and isinstance(b, LazyExpression), (
+            f"expression types differ: {type(a)} != {type(b)}"
+        )
+        if check_name:
+            assert a.name == b.name, (
+                f"expression names differ: {a.name!r} != {b.name!r}"
+            )
+        assert a.dims == b.dims, (
+            f"lazy expression dims differ: {a.dims!r} != {b.dims!r}"
+        )
+        assert_exprequal(a.evaluate(), b.evaluate(), check_name=False)
+        return
+
     assert type(a) is type(b), f"expression types differ: {type(a)} != {type(b)}"
     if check_name:
         assert a.name == b.name, f"expression names differ: {a.name!r} != {b.name!r}"

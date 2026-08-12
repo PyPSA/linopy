@@ -247,6 +247,37 @@ Post-solve access
    expressions.Expressions.solution
 
 
+LazyExpression
+==============
+
+Placeholder for an expression that is built on demand. Returned by
+:meth:`Model.add_expressions <linopy.model.Model.add_expressions>` when
+`data` is a callable; arithmetic on a ``LazyExpression`` returns another
+``LazyExpression`` rather than evaluating immediately.
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.LazyExpression
+
+Evaluation
+----------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.LazyExpression.evaluate
+   expressions.LazyExpression.promote
+
+Post-solve access
+-----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.LazyExpression.solution
+
+
 LinearExpression
 ================
 

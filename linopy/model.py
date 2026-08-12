@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -58,6 +58,7 @@ from linopy.constraints import (
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
+    LazyExpression,
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
@@ -930,46 +931,99 @@ class Model:
         self.variables.add(variable)
         return variable
 
+    def _next_expression_name(self, name: str | None) -> str:
+        """Allocate (or validate) the reference name for a new expression."""
+        if name is None:
+            name = f"expr{self._exprnameCounter}"
+            self._exprnameCounter += 1
+
+        if name in self.expressions:
+            raise ValueError(f"Expression '{name}' already assigned to model")
+
+        return name
+
+    @overload
+    def add_expressions(
+        self,
+        data: Callable[..., LinearExpression | QuadraticExpression],
+        name: str | None = ...,
+        mask: MaskLike | Callable[..., MaskLike] | None = ...,
+        dims: tuple[Hashable, ...] = ...,
+        input_data: Dataset | None = ...,
+        **params: Any,
+    ) -> LazyExpression: ...
+
+    @overload
     def add_expressions(
         self,
         data: Variable
         | LinearExpression
         | QuadraticExpression
         | Sequence[tuple[ConstantLike, Variable | str]],
+        name: str | None = ...,
+        mask: MaskLike | None = ...,
+    ) -> LinearExpression | QuadraticExpression: ...
+
+    def add_expressions(
+        self,
+        data: Variable
+        | LinearExpression
+        | QuadraticExpression
+        | Sequence[tuple[ConstantLike, Variable | str]]
+        | Callable[..., LinearExpression | QuadraticExpression],
         name: str | None = None,
-        mask: MaskLike | None = None,
-    ) -> LinearExpression | QuadraticExpression:
+        mask: MaskLike | Callable[..., MaskLike] | None = None,
+        dims: tuple[Hashable, ...] = (),
+        input_data: Dataset | None = None,
+        **params: Any,
+    ) -> LinearExpression | QuadraticExpression | LazyExpression:
         """
         Assign a new, possibly multi-dimensional array of expressions to the
         model.
 
+        If `data` is a callable, the expression is not built now: `add_expressions`
+        registers a :class:`LazyExpression` placeholder that calls `data(self, **params)`
+        (and, if `mask` is callable, `mask(self, **params)`) only when the expression is
+        actually evaluated, via `.evaluate()`, `.promote()`, `.solution`, or a comparison.
+        Arithmetic on the returned `LazyExpression` (e.g. `lazy + 1`) stays lazy too.
+
         Parameters
         ----------
-        data : Variable, LinearExpression, QuadraticExpression, or Sequence of (constant, variable) tuples
-            The expression(s) to add.
-            This can be a Variable or LinearExpression, or a sequence of (constant, variable) tuples which will be summed up.
-        coords : list/xarray.Coordinates, optional
-            The coords of the expression array.
-            The default is None.
+        data : Variable, LinearExpression, QuadraticExpression, Sequence of (constant, variable) tuples, or Callable
+            The expression(s) to add. This can be a Variable or LinearExpression, a sequence
+            of (constant, variable) tuples which will be summed up, or a callable
+            `data(model, **params)` that builds and returns the expression on demand.
         name : str, optional
             Reference name of the added expressions. The default None results in
             a name like "expr1", "expr2" etc.
-        mask : array_like, optional
+        mask : array_like or Callable, optional
             Boolean mask with False values for expressions which are skipped.
             The shape of the mask has to match the shape the added expressions.
-            Default is None.
+            If `data` is callable, `mask` may also be a callable `mask(model, **params)`,
+            resolved at the same time as `data`; a callable `mask` is not accepted
+            together with a non-callable `data`. Default is None.
+        dims : tuple of Hashable, optional
+            Only used when `data` is callable. Dimensions of the eventual expression,
+            used solely for a cheap `repr` before the expression has been evaluated.
+        input_data : xr.Dataset, optional
+            Only used when `data` is callable. Pointer to the input data `data` reads,
+            kept for introspection only; never copied.
+        **params : Any
+            Only used when `data` is callable. Forwarded as keyword arguments to `data`
+            (and to `mask`, if callable) every time the expression is evaluated.
 
         Raises
         ------
         ValueError
             If neither lower bound and upper bound have coordinates, nor
             `coords` are directly given.
+        TypeError
+            If `mask` is callable but `data` is not.
 
         Returns
         -------
-        linopy.LinearExpression | linopy.QuadraticExpression
+        linopy.LinearExpression | linopy.QuadraticExpression | linopy.LazyExpression
             Expression which was added to the model.
-
 
         Examples
         --------
@@ -979,13 +1033,32 @@ class Model:
         >>> time = pd.RangeIndex(10, name="Time")
         >>> x = m.add_variables(lower=0, coords=[time], name="x")
         >>> expr = m.add_expressions(x + 1, name="expr")
-        """
-        if name is None:
-            name = f"expr{self._exprnameCounter}"
-            self._exprnameCounter += 1
 
-        if name in self.expressions:
-            raise ValueError(f"Expression '{name}' already assigned to model")
+        A lazily-evaluated expression:
+
+        >>> lazy = m.add_expressions(lambda m: m.variables["x"] + 1, name="lazy")
+        """
+        if callable(mask) and not callable(data):
+            raise TypeError(
+                "A callable mask can only be used with a callable expression; "
+                "pass a concrete mask or make `data` callable too."
+            )
+
+        if callable(data):
+            name = self._next_expression_name(name)
+            lazy = LazyExpression(
+                model=self,
+                evaluator=data,
+                name=name,
+                mask=mask,
+                params=params,
+                input_data=input_data,
+                dims=dims,
+            )
+            self.expressions.add(lazy)
+            return lazy
+
+        name = self._next_expression_name(name)
 
         expr: LinearExpression | QuadraticExpression
         if isinstance(data, Variable):

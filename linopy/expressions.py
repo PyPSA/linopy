@@ -103,6 +103,7 @@ from linopy.types import (
     ConstantLike,
     DimsLike,
     ExpressionLike,
+    MaskLike,
     SideLike,
     SignLike,
     VariableLike,
@@ -1980,6 +1981,8 @@ class LinearExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         if isinstance(other, QuadraticExpression):
             return other.__add__(self)
 
@@ -2039,6 +2042,8 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
 
@@ -2084,6 +2089,8 @@ class LinearExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         if not isinstance(other, LinearExpression | variables.Variable):
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
@@ -2496,6 +2503,8 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for *: "
@@ -2517,6 +2526,8 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         try:
             if isinstance(other, CONSTANT_TYPES):
                 return self._add_constant(other)
@@ -2566,6 +2577,8 @@ class QuadraticExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
+        if isinstance(other, LazyExpression):
+            return NotImplemented
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "Higher order non-linear expressions are not yet supported."
@@ -2853,13 +2866,232 @@ def merge(
     return cls(ds, model)
 
 
+@dataclass
+class LazyExpression:
+    """
+    A placeholder for an expression whose value is computed on demand.
+
+    Unlike :class:`LinearExpression` / :class:`QuadraticExpression`, a `LazyExpression` holds no expression data of its own.
+    Instead, it stores an `evaluator` callable that, given the model, builds and returns the real expression, and
+    optionally a `mask` that is resolved and applied at the same time as `evaluator`.
+
+    Arithmetic between `LazyExpression` objects (and between a `LazyExpression` and anything else) stays lazy: it
+    returns a new, unnamed `LazyExpression` whose evaluator composes the operands. Nothing is built until
+    `.evaluate()`, `.promote()`, `.solution`, or a comparison (`<=`, `>=`, `==`) is called.
+
+    Examples
+    --------
+    >>> from linopy import Model
+    >>> import pandas as pd
+    >>> m = Model()
+    >>> time = pd.RangeIndex(10, name="Time")
+    >>> x = m.add_variables(lower=0, coords=[time], name="x")
+    >>> lazy = m.add_expressions(lambda m: m.variables["x"] + 1, name="lazy")
+    >>> lazy.evaluate()  # doctest: +SKIP
+    """
+
+    # Guard attributes that make numpy/pandas defer arithmetic to LazyExpression's
+    # own dunders instead of broadcasting element-wise into an object array;
+    # mirrors `BaseExpression.__array_ufunc__` / `__array_priority__` above. Plain
+    # (unannotated) class attributes, so `@dataclass` does not treat them as fields.
+    __array_ufunc__ = None
+    __array_priority__ = 10000
+    __pandas_priority__ = 10000
+
+    model: Model
+    """Reference to the model the expression belongs to"""
+    evaluator: Callable[..., LinearExpression | QuadraticExpression]
+    """Callable that builds the expression, invoked as ``evaluator(model, **params)``."""
+    name: str | None = None
+    """Lazy Expression name. `None` for derived expressions produced by arithmetic, which are never
+    registered in `model.expressions`."""
+    mask: MaskLike | Callable[..., MaskLike] | None = None
+    """Boolean mask applied to the evaluated expression via `.where(mask)`.
+    A concrete array-like is applied as-is; a callable is invoked as ``mask(model, **params)`` at the
+    same time `evaluator` runs, so it can depend on data that is only known once the model exists.
+    A mask that leaves nothing valid produces an all-NaN expression rather than raising."""
+    params: dict[str, Any] = field(default_factory=dict)
+    """Keyword arguments forwarded to `evaluator` (and to `mask`, if callable)."""
+    input_data: Dataset | None = None
+    """Pointer to the input data the evaluator reads, kept for introspection only."""
+    dims: tuple[Hashable, ...] = ()
+    """Dimensions of the expression, if known in advance.
+    If not provided, the dimensions are inferred from the evaluated expression."""
+    attrs: dict[Any, Any] = field(default_factory=dict)
+    """Attributes to be assigned to the evaluated expression, if any."""
+    source: Any = None
+    """Optional serialisable description of `evaluator` (e.g. an expression AST produced by a
+    declarative frontend). Ignored by linopy itself; reserved so that IO can persist a lazy expression
+    instead of evaluating it, once a frontend that produces such a description exists."""
+    mask_source: Any = None
+    """As `source`, but describing `mask`."""
+
+    def evaluate(self) -> LinearExpression | QuadraticExpression:
+        """
+        Evaluate the expression using the provided evaluator and mask.
+
+        Note that nothing is cached, so calling this repeatedly will always re-evaluate from scratch.
+        """
+        expr = (
+            self.evaluator(self.model, **self.params)
+            if self.params
+            else self.evaluator(self.model)
+        )
+        if self.mask is not None:
+            mask = (
+                self.mask(self.model, **self.params)
+                if callable(self.mask)
+                else self.mask
+            )
+            mask = as_dataarray(mask, coords=expr.coords, dims=expr.dims).astype(bool)
+            expr = expr.where(mask)
+        return expr
+
+    def promote(self) -> LinearExpression | QuadraticExpression:
+        """
+        Materialise this expression in-place, replacing the placeholder.
+
+        If `self.name` no longer refers to this placeholder in `self.model.expressions` (i.e. it has already been promoted), the existing expression is returned unchanged.
+
+        Raises
+        ------
+        ValueError
+            If this is a derived expression (`self.name is None`), which is not registered in
+            `self.model.expressions` and therefore cannot be promoted in-place.
+        """
+        if self.name is None:
+            raise ValueError(
+                "Cannot promote a derived LazyExpression (name is None); it was produced by "
+                "arithmetic and is not registered in `model.expressions`. Call `.evaluate()` instead."
+            )
+        current = self.model.expressions.data.get(self.name)
+        if current is not self and isinstance(
+            current, LinearExpression | QuadraticExpression
+        ):
+            return current
+        expr = self.evaluate()
+        expr.attrs.update(self.attrs)
+        expr.attrs["name"] = self.name
+        self.model.expressions.data[self.name] = expr
+        return expr
+
+    @property
+    def solution(self) -> DataArray:
+        """
+        Get the optimal values of the expression, without promoting it.
+        """
+        return self.evaluate().solution
+
+    @property
+    def coords(self) -> DatasetCoordinates | dict[Hashable, Any]:
+        """Coordinates of the expression, if it has already been promoted."""
+        current = self.model.expressions.data.get(self.name) if self.name else None
+        if current is not None and current is not self:
+            return current.coords
+        return {}
+
+    @property
+    def type(self) -> str:
+        return "LazyExpression"
+
+    def __repr__(self) -> str:
+        dims = ", ".join(str(d) for d in self.dims)
+        name = self.name if self.name is not None else "<derived>"
+        return f"LazyExpression '{name}' [{dims}] (not yet evaluated)"
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for attributes not found on the instance/class, i.e.
+        # everything but the overrides above; forward to a fresh evaluation.
+        # Names starting with "_" are rejected outright so that pickling/copying
+        # (which probes dunder/private attributes before __dict__ is populated)
+        # cannot recurse into `evaluate()` -> `self.evaluator` -> `__getattr__` -> ...
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.evaluate(), name)
+
+    def _combine(
+        self, other: Any, op: Callable[[Any, Any], Any], swapped: bool = False
+    ) -> LazyExpression:
+        """
+        Build a new, unnamed `LazyExpression` that lazily applies `op` to `self` and `other`.
+
+        `other` is evaluated lazily too, if it is itself a `LazyExpression`.
+        """
+
+        def evaluator(model: Model) -> LinearExpression | QuadraticExpression:
+            left = self.evaluate()
+            right = other.evaluate() if isinstance(other, LazyExpression) else other
+            return op(right, left) if swapped else op(left, right)
+
+        return LazyExpression(model=self.model, evaluator=evaluator)
+
+    def __add__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.add)
+
+    def __radd__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.add)
+
+    def __sub__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.sub)
+
+    def __rsub__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.sub, swapped=True)
+
+    def __mul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.mul)
+
+    def __rmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.mul)
+
+    def __truediv__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        if isinstance(other, (LazyExpression, *SUPPORTED_EXPRESSION_TYPES)):
+            raise TypeError(
+                f"unsupported operand type(s) for /: {type(self)} and {type(other)}. "
+                "Expressions cannot be used as a divisor."
+            )
+        return self._combine(other, operator.truediv)
+
+    def __matmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.matmul)
+
+    def __rmatmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return self._combine(other, operator.matmul, swapped=True)
+
+    def __pow__(self, other: int) -> LazyExpression:
+        if other != 2:
+            raise ValueError("Power must be 2.")
+        return self._combine(self, operator.mul)
+
+    def __neg__(self) -> LazyExpression:
+        return self._combine(-1, operator.mul)
+
+    def __le__(self, other: SideLike) -> Constraint:
+        return self.evaluate() <= other
+
+    def __ge__(self, other: SideLike) -> Constraint:
+        return self.evaluate() >= other
+
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
+        return self.evaluate() == other
+
+    def __lt__(self, other: Any) -> NotImplementedType:
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __gt__(self, other: Any) -> NotImplementedType:
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+
 @dataclass(repr=False)
 class Expressions:
     """
     An expressions container used for storing multiple expression arrays.
     """
 
-    data: dict[str, LinearExpression | QuadraticExpression]
+    data: dict[str, LinearExpression | QuadraticExpression | LazyExpression]
     model: Model
 
     dataset_attrs = ["coeffs", "vars", "const"]
@@ -2873,19 +3105,23 @@ class Expressions:
         return {format_string_as_variable_name(n): n for n in self}
 
     @overload
-    def __getitem__(self, names: str) -> LinearExpression | QuadraticExpression: ...
+    def __getitem__(
+        self, names: str
+    ) -> LinearExpression | QuadraticExpression | LazyExpression: ...
 
     @overload
     def __getitem__(self, names: list[str]) -> Expressions: ...
 
     def __getitem__(
         self, names: str | list[str]
-    ) -> LinearExpression | QuadraticExpression | Expressions:
+    ) -> LinearExpression | QuadraticExpression | LazyExpression | Expressions:
         if isinstance(names, str):
             return self.data[names]
         return Expressions({name: self.data[name] for name in names}, self.model)
 
-    def __getattr__(self, name: str) -> LinearExpression | QuadraticExpression:
+    def __getattr__(
+        self, name: str
+    ) -> LinearExpression | QuadraticExpression | LazyExpression:
         # If name is an attribute of self (including methods and properties), return that
         if name in self.data:
             return self.data[name]
@@ -2943,7 +3179,9 @@ class Expressions:
     def __iter__(self) -> Iterator[str]:
         return self.data.__iter__()
 
-    def items(self) -> ItemsView[str, LinearExpression | QuadraticExpression]:
+    def items(
+        self,
+    ) -> ItemsView[str, LinearExpression | QuadraticExpression | LazyExpression]:
         return self.data.items()
 
     def _ipython_key_completions_(self) -> list[str]:
@@ -2956,15 +3194,22 @@ class Expressions:
         """
         return list(self)
 
-    def add(self, expression: LinearExpression | QuadraticExpression) -> None:
+    def add(
+        self, expression: LinearExpression | QuadraticExpression | LazyExpression
+    ) -> None:
         """
         Add an expression to the expressions container.
         """
+        if expression.name is None:
+            raise ValueError(
+                "Cannot add a derived LazyExpression (name is None) to `model.expressions`; "
+                "it was produced by arithmetic between lazy expressions, not by `add_expressions`."
+            )
         self.data[expression.name] = expression
 
     def remove(self, name: str) -> None:
         """
-        Remove variable `name` from the variables.
+        Remove expression `name` from the expressions.
         """
         self.data.pop(name)
 
@@ -2973,7 +3218,10 @@ class Expressions:
         """
         Get the solution of variables.
         """
-        return save_join(*[v.solution.rename(k) for k, v in self.items()])
+        # `list(...)` guards against mutation of `self.data` if a `LazyExpression`
+        # promotes itself while its `.solution` is being read (it does not, but
+        # `.solution` deliberately avoids promoting, so this is just a safeguard).
+        return save_join(*[v.solution.rename(k) for k, v in list(self.items())])
 
 
 class ScalarLinearExpression:
