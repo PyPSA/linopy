@@ -96,12 +96,14 @@ from linopy.semantics import (
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
+    check_join_fill_value,
     check_user_nan,
     conform_merge_dims,
     enforce_aux_conflict,
     first_mismatched_dim,
     is_nan_scalar,
     is_v1,
+    reindex_like_if_needed,
     warn_legacy,
 )
 from linopy.types import (
@@ -1026,22 +1028,36 @@ class BaseExpression(ABC):
             if mismatch is not None:
                 raise ValueError(_shared_dim_mismatch_message(*mismatch))
             return self.const, other, False
+        # §10: the positions a join creates are filled per side. ``fill_value``
+        # belongs to the constant operand alone; the expression contributes the
+        # zero expression there (const 0, no terms), whatever the operator.
+        # Filling both sides from one value is what made a missing numerator
+        # come out as ``1 / divisor``. ``xr.align`` and ``reindex_like`` only
+        # touch the new positions, so absence carried in by an operand (§6)
+        # still propagates untouched.
         self_const, aligned = xr.align(
             self.const,
             other,
             join=join,
             fill_value=fill_value,
         )
+        self_const = reindex_like_if_needed(self.const, self_const, fill_value=0)
         return self_const, aligned, True
 
     def _add_constant(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self:
+        fill_value = 0 if fill_value is None else fill_value
         if is_v1():
-            return self._add_constant_v1(other, join)
-        return self._add_constant_legacy(other, join)
+            return self._add_constant_v1(other, join, fill_value)
+        return self._add_constant_legacy(other, join, fill_value)
 
-    def _add_constant_v1(self, other: ConstantLike, join: JoinOptions | None) -> Self:
+    def _add_constant_v1(
+        self, other: ConstantLike, join: JoinOptions | None, fill_value: float = 0
+    ) -> Self:
         # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
         # §5: user NaN raised in check_user_nan; never reaches the math here.
         if np.isscalar(other) and join is None:
@@ -1054,7 +1070,7 @@ class BaseExpression(ABC):
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=0, join=join
+            da, fill_value=fill_value, join=join
         )
         if needs_data_reindex:
             return self.__class__(
@@ -1067,7 +1083,7 @@ class BaseExpression(ABC):
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _add_constant_legacy(
-        self, other: ConstantLike, join: JoinOptions | None
+        self, other: ConstantLike, join: JoinOptions | None, fill_value: float = 0
     ) -> Self:
         # NaN values in self.const or other are silently filled with 0
         # (additive identity) so missing data does not propagate through
@@ -1082,7 +1098,7 @@ class BaseExpression(ABC):
         if da.isnull().any():
             check_user_nan()
         self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=0, join=join
+            da, fill_value=fill_value, join=join
         )
         da = da.fillna(0)
         self_const = self_const.fillna(0)
@@ -1099,14 +1115,22 @@ class BaseExpression(ABC):
         self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
-        fill_value: float,
+        nan_fill: float,
+        join_fill: float,
         op_kind: str,
         join: JoinOptions | None = None,
     ) -> Self:
-        """Apply a constant operation (mul, div) to this expression."""
+        """
+        Apply a constant operation (mul, div) to this expression.
+
+        ``join_fill`` is what the factor takes at join-created positions;
+        ``nan_fill`` is legacy's silent fill for a NaN the factor carried in.
+        """
         if is_v1():
-            return self._apply_constant_op_v1(other, op, fill_value, op_kind, join)
-        return self._apply_constant_op_legacy(other, op, fill_value, op_kind, join)
+            return self._apply_constant_op_v1(other, op, join_fill, op_kind, join)
+        return self._apply_constant_op_legacy(
+            other, op, nan_fill, join_fill, op_kind, join
+        )
 
     def _apply_constant_op_v1(
         self,
@@ -1145,12 +1169,13 @@ class BaseExpression(ABC):
         self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
-        fill_value: float,
+        nan_fill: float,
+        join_fill: float,
         op_kind: str,
         join: JoinOptions | None,
     ) -> Self:
         # NaN values are silently filled with neutral elements before the op:
-        # factor → fill_value (0 for mul, 1 for div), coeffs/const → 0.
+        # factor → nan_fill (0 for mul, 1 for div), coeffs/const → 0.
         if is_nan_scalar(other):
             check_user_nan(op_kind=op_kind)
         factor = broadcast_to_coords(
@@ -1159,9 +1184,9 @@ class BaseExpression(ABC):
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=fill_value, join=join
+            factor, fill_value=join_fill, join=join
         )
-        factor = factor.fillna(fill_value)
+        factor = factor.fillna(nan_fill)
         self_const = self_const.fillna(0)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
@@ -1176,17 +1201,40 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self:
         return self._apply_constant_op(
-            other, operator.mul, fill_value=0, op_kind="mul", join=join
+            other,
+            operator.mul,
+            nan_fill=0,
+            join_fill=0 if fill_value is None else fill_value,
+            op_kind="mul",
+            join=join,
         )
 
     def _divide_by_constant(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self:
+        # §10: under v1 a missing divisor means the term does not apply, so the
+        # row is kept (the join's coords are unchanged) and evaluates to zero.
+        # Dividing by ``inf`` gets there without a division by zero;
+        # ``fill_value=1`` is how a caller keeps the term unscaled instead.
+        # Legacy keeps its own 1.
+        if fill_value is None:
+            fill_value = np.inf if is_v1() else 1
         return self._apply_constant_op(
-            other, operator.truediv, fill_value=1, op_kind="div", join=join
+            other,
+            operator.truediv,
+            nan_fill=1,
+            join_fill=fill_value,
+            op_kind="div",
+            join=join,
         )
 
     def __div__(self, other: SideLike) -> Self:
@@ -1228,6 +1276,7 @@ class BaseExpression(ABC):
         self,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self | QuadraticExpression:
         """
         Add an expression to others.
@@ -1242,11 +1291,21 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the constant operand takes at the positions the join creates.
+            Defaults to 0, the additive identity. Requires an explicit ``join``
+            and a constant ``other``.
         """
+        check_join_fill_value(fill_value, join)
         if join is None:
             return self.__add__(other)
         if isinstance(other, CONSTANT_TYPES):
-            return self._add_constant(other, join=join)
+            return self._add_constant(other, join=join, fill_value=fill_value)
+        if fill_value is not None:
+            raise ValueError(
+                "fill_value= applies to constant operands only. An expression "
+                "that is missing at a label contributes the zero expression."
+            )
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
             self, QuadraticExpression
@@ -1258,6 +1317,7 @@ class BaseExpression(ABC):
         self,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self | QuadraticExpression:
         """
         Subtract others from expression.
@@ -1272,13 +1332,19 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the subtrahend takes at the positions the join creates.
+            Defaults to 0. Requires an explicit ``join`` and a constant ``other``.
         """
-        return self.add(-other, join=join)
+        return self.add(
+            -other, join=join, fill_value=None if fill_value is None else -fill_value
+        )
 
     def mul(
         self,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -1293,19 +1359,25 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the factor takes at the positions the join creates. Defaults
+            to 0, so a term without a factor evaluates to zero. Requires an
+            explicit ``join``.
         """
+        check_join_fill_value(fill_value, join)
         if join is None:
             return self.__mul__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "join parameter is not supported for expression-expression multiplication"
             )
-        return self._multiply_by_constant(other, join=join)
+        return self._multiply_by_constant(other, join=join, fill_value=fill_value)
 
     def div(
         self,
         other: VariableLike | ConstantLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> Self | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -1320,7 +1392,12 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the divisor takes at the positions the join creates. By
+            default that term evaluates to zero; pass ``1`` to keep it unscaled.
+            Requires an explicit ``join``.
         """
+        check_join_fill_value(fill_value, join)
         if join is None:
             return self.__div__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
@@ -1329,7 +1406,7 @@ class BaseExpression(ABC):
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self._divide_by_constant(other, join=join)
+        return self._divide_by_constant(other, join=join, fill_value=fill_value)
 
     def le(
         self,
@@ -1477,7 +1554,8 @@ class BaseExpression(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        sizes = self.sizes
+        return {k: sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:

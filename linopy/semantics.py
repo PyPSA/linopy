@@ -381,6 +381,18 @@ def check_user_nan(*, op_kind: str = "add") -> None:
     warn_legacy(_legacy_nan_constant_message(op_kind), stacklevel=5)
 
 
+def check_join_fill_value(fill_value: float | None, join: str | None) -> None:
+    """
+    §7/§10: ``fill_value=`` fills what a join creates, so it needs a join.
+    """
+    if fill_value is not None and join is None:
+        raise ValueError(
+            "fill_value= fills the positions a join creates, so it requires an "
+            "explicit join= (e.g. join='outer'). To fill absent slots of an "
+            "operand, call `.fillna(...)` on it before the operation."
+        )
+
+
 def enforce_aux_conflict(datasets: Sequence[Any], *, stacklevel: int = 5) -> None:
     """
     Enforce §11 across the given operands: v1 raises on aux-coord

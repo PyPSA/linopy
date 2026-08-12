@@ -8,6 +8,7 @@ Created on Wed Mar 17 17:06:36 2021.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -3245,7 +3246,11 @@ class TestJoinParameter:
             assert list(result.coords["i"].values) == [0, 1, 2]
             np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
 
-        def test_div_constant_outer_fill_values(self, a: Variable) -> None:
+        @pytest.mark.legacy
+        def test_div_constant_outer_fill_values_legacy(self, a: Variable) -> None:
+            # Both semantics return the union of the coords. Legacy fills a
+            # missing divisor with 1, keeping the term unscaled; under v1 the
+            # row is there but zero (see TestOuterJoinFill).
             expr = 1 * a + 10
             other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
             result = expr.div(other, join="outer")
@@ -3254,6 +3259,17 @@ class TestJoinParameter:
             assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
             assert result.const.sel(i=0).item() == pytest.approx(10.0)
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
+
+        @pytest.mark.v1
+        def test_div_constant_outer_fill_values_v1(self, a: Variable) -> None:
+            expr = 1 * a + 10
+            other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
+            result = expr.div(other, join="outer")
+            assert set(result.coords["i"].values) == {0, 1, 2, 3}
+            assert result.const.sel(i=1).item() == pytest.approx(5.0)
+            assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
+            assert result.const.sel(i=0).item() == 0
+            assert result.coeffs.squeeze().sel(i=0).item() == 0
 
     class TestQuadratic:
         @pytest.mark.legacy
@@ -3281,3 +3297,191 @@ class TestJoinParameter:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
             assert list(result.indexes["i"]) == [1, 2, 3]
+
+
+@pytest.mark.v1
+class TestOuterJoinFill:
+    """
+    §10: a join fills the positions it creates — the expression side with the
+    zero expression, the constant side with ``fill_value`` (0 by default, so a
+    factor-less term evaluates to zero). The join's coords are unaffected —
+    every created label stays in the result. Absence carried in is untouched
+    and still propagates (§6).
+    """
+
+    @pytest.fixture
+    def operands(self) -> dict[str, Any]:
+        m = Model()
+        full = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="full")
+        part = m.add_variables(coords=[pd.Index([1], name="i")], name="part")
+        return {
+            "expr_full": 1 * full + 2,
+            "expr_part": 1 * part + 2,
+            "const_full": xr.DataArray([2.0, 2.0], dims=["i"], coords={"i": [0, 1]}),
+            "const_part": xr.DataArray([2.0], dims=["i"], coords={"i": [1]}),
+        }
+
+    @pytest.mark.parametrize(
+        ("op", "const", "coeffs"),
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(o["expr_part"], join="outer"),
+                2.0,
+                [1.0, np.nan],
+                id="add-expr-missing-right",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(o["expr_full"], join="outer"),
+                2.0,
+                [np.nan, 1.0],
+                id="add-expr-missing-left",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].add(o["const_part"], join="outer"),
+                2.0,
+                [1.0],
+                id="add-const-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(o["const_full"], join="outer"),
+                2.0,
+                [np.nan],
+                id="add-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(o["expr_part"], join="outer"),
+                2.0,
+                [1.0, np.nan],
+                id="sub-expr-missing-right",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].sub(o["expr_full"], join="outer"),
+                -2.0,
+                [np.nan, -1.0],
+                id="sub-expr-missing-left",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(o["const_part"], join="outer"),
+                2.0,
+                [1.0],
+                id="sub-const-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].sub(o["const_full"], join="outer"),
+                -2.0,
+                [np.nan],
+                id="sub-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(o["const_part"], join="outer"),
+                0.0,
+                [0.0],
+                id="mul-factor-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].mul(o["const_full"], join="outer"),
+                0.0,
+                [np.nan],
+                id="mul-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(o["const_part"], join="outer"),
+                0.0,
+                [0.0],
+                id="div-divisor-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].div(o["const_full"], join="outer"),
+                0.0,
+                [np.nan],
+                id="div-numerator-missing",
+            ),
+        ],
+    )
+    def test_value_at_created_position(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+        const: float,
+        coeffs: list[float],
+    ) -> None:
+        result = op(operands)
+        assert list(result.indexes["i"]) == [0, 1]
+        assert result.const.sel(i=0).item() == const
+        np.testing.assert_array_equal(result.coeffs.sel(i=0).values, coeffs)
+
+    @pytest.mark.parametrize(
+        ("op", "const", "coeff"),
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["const_part"], join="outer", fill_value=10
+                ),
+                12.0,
+                1.0,
+                id="add",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["const_part"], join="outer", fill_value=10
+                ),
+                -8.0,
+                1.0,
+                id="sub",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(
+                    o["const_part"], join="outer", fill_value=1
+                ),
+                2.0,
+                1.0,
+                id="mul",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(
+                    o["const_part"], join="outer", fill_value=1
+                ),
+                2.0,
+                1.0,
+                id="div",
+            ),
+        ],
+    )
+    def test_fill_value_overrides_the_default(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+        const: float,
+        coeff: float,
+    ) -> None:
+        result = op(operands)
+        assert result.const.sel(i=0).item() == const
+        assert result.coeffs.sel(i=0).item() == coeff
+
+    def test_fill_value_without_join_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="requires an explicit join="):
+            operands["expr_full"].mul(operands["const_full"], fill_value=1)
+
+    def test_fill_value_with_expression_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="constant operands only"):
+            operands["expr_full"].add(operands["expr_part"], join="outer", fill_value=1)
+
+    def test_carried_absence_still_propagates(self) -> None:
+        m = Model()
+        x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+        shifted = (1 * x).shift(i=1)
+        const = xr.DataArray([2.0, 2.0], dims=["i"], coords={"i": [1, 2]})
+        result = shifted.add(const, join="outer")
+        assert list(result.indexes["i"]) == [0, 1, 2]
+        assert np.isnan(result.const.sel(i=0).item())
+        assert result.const.sel(i=2).item() == 2.0
+
+
+@pytest.mark.legacy
+def test_join_fill_value_honoured_under_legacy() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+    const = xr.DataArray([2.0], dims=["i"], coords={"i": [1]})
+    result = (1 * x + 2).div(const, join="outer", fill_value=1)
+    assert result.coeffs.sel(i=0).item() == 1.0
+    assert result.const.sel(i=0).item() == 2.0
