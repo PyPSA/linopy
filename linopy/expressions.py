@@ -2862,6 +2862,8 @@ class Expressions:
     data: dict[str, LinearExpression | QuadraticExpression]
     model: Model
 
+    dataset_attrs = ["coeffs", "vars", "const"]
+
     def _formatted_names(self) -> dict[str, str]:
         """
         Get a dictionary of formatted names to the proper variable names.

@@ -42,6 +42,7 @@ Building a model
    model.Model.add_variables
    model.Model.add_constraints
    model.Model.add_objective
+   model.Model.add_expressions
    model.Model.add_sos_constraints
    model.Model.add_piecewise_formulation
 
@@ -53,6 +54,7 @@ Inspecting a model
 
    model.Model.variables
    model.Model.constraints
+   model.Model.expressions
    model.Model.objective
    model.Model.sense
    model.Model.type
@@ -67,6 +69,7 @@ Modifying a model
 
    model.Model.remove_variables
    model.Model.remove_constraints
+   model.Model.remove_expressions
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.copy
@@ -215,6 +218,35 @@ Inventory
    variables.Variables.sos
 
 
+Expressions
+===========
+
+Container for the collection of named expressions on a model. Accessed via
+``model.expressions``.
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions
+
+Modification
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions.add
+   expressions.Expressions.remove
+
+Post-solve access
+-----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions.solution
+
+
 LinearExpression
 ================
 
@@ -251,6 +283,7 @@ Structure
 .. autosummary::
    :toctree: generated/
 
+   expressions.LinearExpression.name
    expressions.LinearExpression.vars
    expressions.LinearExpression.coeffs
    expressions.LinearExpression.const
@@ -292,6 +325,7 @@ Structure
 .. autosummary::
    :toctree: generated/
 
+   expressions.QuadraticExpression.name
    expressions.QuadraticExpression.vars
    expressions.QuadraticExpression.coeffs
    expressions.QuadraticExpression.const

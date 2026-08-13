@@ -70,6 +70,26 @@ def assert_quadequal(
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
+def assert_exprequal(
+    a: LinearExpression | QuadraticExpression,
+    b: LinearExpression | QuadraticExpression,
+    check_name: bool = True,
+) -> None:
+    """
+    Assert that two expressions are equal, dispatching on linear vs quadratic.
+
+    xarray's assert_equal ignores attrs, so the stored name (which lives in
+    ``attrs["name"]``) is compared explicitly unless ``check_name=False``.
+    """
+    assert type(a) is type(b), f"expression types differ: {type(a)} != {type(b)}"
+    if check_name:
+        assert a.name == b.name, f"expression names differ: {a.name!r} != {b.name!r}"
+    if isinstance(a, QuadraticExpression):
+        assert_quadequal(a, b)
+    else:
+        assert_linequal(a, b)
+
+
 def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -> None:
     """
     Assert that two constraints are equal.
@@ -104,6 +124,11 @@ def assert_model_equal(a: Model, b: Model) -> None:
 
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
+
+    assert set(a.expressions) == set(b.expressions)
+
+    for e in a.expressions:
+        assert_exprequal(a.expressions[e], b.expressions[e])
 
     assert_linequal(a.objective.expression, b.objective.expression)
     assert a.objective.sense == b.objective.sense

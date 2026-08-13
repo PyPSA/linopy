@@ -1475,6 +1475,27 @@ class Model:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
 
+    def remove_expressions(self, name: str | list[str]) -> None:
+        """
+        Remove all expressions stored under reference name 'name' from the
+        model.
+
+        Parameters
+        ----------
+        name : str or list of str
+            Reference name(s) of the expressions to remove. If a single name is
+            provided, only that expression will be removed. If a list of names
+            is provided, all expressions with those names will be removed.
+
+        Returns
+        -------
+        None.
+        """
+        names = [name] if isinstance(name, str) else name
+        for n in names:
+            logger.debug(f"Removed expression: {n}")
+            self.expressions.remove(n)
+
     def remove_sos_constraints(self, variable: Variable) -> None:
         """
         Remove all sos constraints from a given variable.
