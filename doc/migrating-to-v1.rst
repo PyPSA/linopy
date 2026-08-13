@@ -99,6 +99,16 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
      - Raises (``join="exact"`` — no silent reindex).
      - ``.sortby(dim)`` / ``.reindex`` one side to match, or a reindexing
        ``join=`` (``"outer"`` / ``"inner"`` / ``"left"`` / ``"right"``).
+   * - A reindexing ``join=`` that **creates labels** neither operand had
+     - The join still returns the union of the coordinates; the created rows
+       are filled per side — the linopy operand contributes the zero
+       expression, the constant operand ``fill_value=`` (0 by default). A
+       missing divisor now zeroes that row instead of leaving the term
+       unscaled, and a missing numerator no longer comes out as
+       ``1 / divisor``.
+     - Pass ``fill_value=`` on ``.add`` / ``.sub`` / ``.mul`` / ``.div`` to
+       choose the value, e.g. ``.div(other, join="outer", fill_value=1)`` to
+       keep the term unscaled.
    * - An **unlabeled** operand (numpy array, list, polars ``Series``)
      - Pairs with the linopy operand's dimensions by *size*; an ambiguous
        match (a square array, or two dimensions of equal length) or no size

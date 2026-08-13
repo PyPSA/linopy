@@ -399,9 +399,9 @@ class Variable:
         Print the variable arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.sizes)
+        dims = list(self.coord_dims)
         dim_names = self.coord_names
-        dim_sizes = list(self.sizes.values())
+        dim_sizes = list(self.coord_sizes.values())
         masked_entries = (~self.mask).sum().values
         sos_type = self.attrs.get(SOS_TYPE_ATTR)
         sos_dim = self.attrs.get(SOS_DIM_ATTR)
@@ -617,7 +617,10 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: JoinOptions | None = None
+        self,
+        other: SideLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -632,11 +635,17 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the constant operand takes at the positions the join
+            creates. Defaults to 0. Requires an explicit ``join``.
         """
-        return self.to_linexpr().add(other, join=join)
+        return self.to_linexpr().add(other, join=join, fill_value=fill_value)
 
     def sub(
-        self, other: SideLike, join: JoinOptions | None = None
+        self,
+        other: SideLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -651,11 +660,17 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the subtrahend takes at the positions the join creates.
+            Defaults to 0. Requires an explicit ``join``.
         """
-        return self.to_linexpr().sub(other, join=join)
+        return self.to_linexpr().sub(other, join=join, fill_value=fill_value)
 
     def mul(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -670,11 +685,17 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the factor takes at the positions the join creates.
+            Defaults to 0, so a term without a factor evaluates to zero.
         """
-        return self.to_linexpr().mul(other, join=join)
+        return self.to_linexpr().mul(other, join=join, fill_value=fill_value)
 
     def div(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -689,8 +710,11 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
+        fill_value : float, optional
+            Value the divisor takes at the positions the join creates. By
+            default that term evaluates to zero; pass ``1`` to keep it unscaled.
         """
-        return self.to_linexpr().div(other, join=join)
+        return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
     def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
@@ -921,7 +945,7 @@ class Variable:
         """
         Get the coordinate sizes of the variable.
         """
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:

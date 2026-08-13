@@ -197,3 +197,24 @@ def test_label_position_too_high() -> None:
 
 def test_model_repr_empty() -> None:
     repr(Model())
+
+
+def test_repr_with_transposed_dataset_dim_order() -> None:
+    # the dataset dim order may deviate from the array layout, e.g. when the
+    # coordinate of a trailing dimension was inserted first
+    dims = ("dim_1", "dim_0", "_term")
+    labels = np.tile(x.labels.values, (2, 1))[..., None]
+    ds = xr.Dataset(
+        {
+            "coeffs": (dims, np.ones(labels.shape)),
+            "vars": (dims, labels),
+            "const": (dims[:2], np.zeros(labels.shape[:2])),
+        },
+        coords={"dim_0": lower.index, "dim_1": pd.Index([10, 20], name="dim_1")},
+    )
+    expr = LinearExpression(ds, m)
+
+    assert tuple(expr.data.sizes) != expr.vars.dims
+    assert expr.coord_sizes == {"dim_1": 2, "dim_0": 10}
+    assert repr(expr).startswith("LinearExpression [dim_1: 2, dim_0: 10]:")
+    repr(expr >= 0)

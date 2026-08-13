@@ -109,9 +109,10 @@ collapsing to ``0``, is what preserves the absent-vs-zero distinction of §1.
 Because §6 never fills, turning an absent slot into a value is the caller's
 explicit act, never linopy's. ``fillna(value)`` fills an expression's absent
 slots; ``.fillna(...)`` fills a constant before it enters the arithmetic;
-``fill_value=`` on a named method fills as part of the call. Filling at the call
-site documents the intent: ``x + y.shift(time=1).fillna(0)`` says "treat the
-missing earlier step as zero" exactly where it matters.
+``fill_value=`` on a named method fills the positions that method's join
+creates (§10). Filling at the call site documents the intent:
+``x + y.shift(time=1).fillna(0)`` says "treat the missing earlier step as zero"
+exactly where it matters.
 
 Coordinate alignment
 --------------------
@@ -193,6 +194,30 @@ A pure reorder (§8) is resolved the same way: a reindexing join
 (``.add(other, join="outer")`` / ``inner`` / ``left`` / ``right``) realigns both sides by
 label, or bring one side into the other's order first — ``other.sel(dim=…)``,
 ``other.reindex_like(self)``, or ``other.sortby(dim)`` on a plain-array operand.
+
+A reindexing join (``outer``, ``left``, ``right``) creates positions that
+neither operand held a value at. The join decides the *coordinates* — ``outer``
+returns the union, and every label it creates stays in the result whatever the
+values work out to. What the created positions are *worth* is decided
+separately. They were created by the caller's join rather than carried in by an
+operand, so §6 does not govern them and they are filled, each side with its own
+value.
+
+The linopy operand contributes the zero expression there: no terms, constant 0.
+The constant operand contributes ``fill_value=``, which defaults to "this
+operand does not apply here" — 0 for ``+`` and ``-``, 0 for ``*`` (a factor that
+was never given zeroes the term rather than scaling it by one), and the same
+zero row for ``/``. Pass the keyword to say otherwise:
+``expr.div(cost, join="outer", fill_value=1)`` keeps the term unscaled,
+``expr.add(price, join="outer", fill_value=10)`` treats an unpriced label as 10.
+It applies to constant operands only — an *expression* missing at a label always
+contributes the zero expression — and it requires an explicit ``join=``, since
+without one there are no created positions to fill.
+
+Absence an operand carries in — from ``mask=``, ``.where()``, ``.shift()``,
+``.reindex()`` — is untouched by the join and keeps propagating under §6. So
+``x.add(y.shift(time=1), join="outer")`` is absent at the shifted-in step and
+filled at the labels only ``y`` had.
 
 Because no operator silently drops coordinates, the associativity break
 (`#711 <https://github.com/PyPSA/linopy/issues/711>`__) cannot occur: the operation that used to drop coordinates now raises.

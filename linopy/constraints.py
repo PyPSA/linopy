@@ -316,7 +316,7 @@ class ConstraintBase(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:
@@ -357,7 +357,7 @@ class ConstraintBase(ABC):
     def __repr__(self) -> str:
         """Print the constraint arrays."""
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes.keys())
+        dims = list(self.coord_dims)
         ndim = len(dims)
         dim_names = self.coord_names
         dim_sizes = list(self.coord_sizes.values())
