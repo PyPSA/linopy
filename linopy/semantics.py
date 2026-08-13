@@ -383,7 +383,7 @@ def check_user_nan(*, op_kind: str = "add") -> None:
 
 def check_join_fill_value(fill_value: float | None, join: str | None) -> None:
     """
-    §7/§10: ``fill_value=`` fills what a join creates, so it needs a join.
+    ``fill_value=`` fills what a join creates, so it requires an explicit join.
     """
     if fill_value is not None and join is None:
         raise ValueError(

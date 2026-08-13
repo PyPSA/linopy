@@ -793,7 +793,7 @@ class BaseExpression(ABC):
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes)
+        dims = list(self.coord_dims)
         dim_names = self.coord_names
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
@@ -1028,13 +1028,6 @@ class BaseExpression(ABC):
             if mismatch is not None:
                 raise ValueError(_shared_dim_mismatch_message(*mismatch))
             return self.const, other, False
-        # §10: the positions a join creates are filled per side. ``fill_value``
-        # belongs to the constant operand alone; the expression contributes the
-        # zero expression there (const 0, no terms), whatever the operator.
-        # Filling both sides from one value is what made a missing numerator
-        # come out as ``1 / divisor``. ``xr.align`` and ``reindex_like`` only
-        # touch the new positions, so absence carried in by an operand (§6)
-        # still propagates untouched.
         self_const, aligned = xr.align(
             self.const,
             other,
@@ -1221,11 +1214,6 @@ class BaseExpression(ABC):
         join: JoinOptions | None = None,
         fill_value: float | None = None,
     ) -> Self:
-        # §10: under v1 a missing divisor means the term does not apply, so the
-        # row is kept (the join's coords are unchanged) and evaluates to zero.
-        # Dividing by ``inf`` gets there without a division by zero;
-        # ``fill_value=1`` is how a caller keeps the term unscaled instead.
-        # Legacy keeps its own 1.
         if fill_value is None:
             fill_value = np.inf if is_v1() else 1
         return self._apply_constant_op(
@@ -1554,8 +1542,7 @@ class BaseExpression(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        sizes = self.sizes
-        return {k: sizes[k] for k in self.coord_dims}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:

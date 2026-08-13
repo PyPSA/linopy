@@ -399,9 +399,9 @@ class Variable:
         Print the variable arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.sizes)
+        dims = list(self.coord_dims)
         dim_names = self.coord_names
-        dim_sizes = list(self.sizes.values())
+        dim_sizes = list(self.coord_sizes.values())
         masked_entries = (~self.mask).sum().values
         sos_type = self.attrs.get(SOS_TYPE_ATTR)
         sos_dim = self.attrs.get(SOS_DIM_ATTR)
@@ -945,8 +945,7 @@ class Variable:
         """
         Get the coordinate sizes of the variable.
         """
-        sizes = self.sizes
-        return {k: sizes[k] for k in self.coord_dims}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:

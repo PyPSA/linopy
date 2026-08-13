@@ -3301,14 +3301,6 @@ class TestJoinParameter:
 
 @pytest.mark.v1
 class TestOuterJoinFill:
-    """
-    §10: a join fills the positions it creates — the expression side with the
-    zero expression, the constant side with ``fill_value`` (0 by default, so a
-    factor-less term evaluates to zero). The join's coords are unaffected —
-    every created label stays in the result. Absence carried in is untouched
-    and still propagates (§6).
-    """
-
     @pytest.fixture
     def operands(self) -> dict[str, Any]:
         m = Model()
