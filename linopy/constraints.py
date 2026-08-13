@@ -316,7 +316,8 @@ class ConstraintBase(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        sizes = self.sizes
+        return {k: sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:

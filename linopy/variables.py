@@ -945,7 +945,8 @@ class Variable:
         """
         Get the coordinate sizes of the variable.
         """
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        sizes = self.sizes
+        return {k: sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:
