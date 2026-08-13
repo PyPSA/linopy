@@ -945,7 +945,14 @@ class Model:
     @overload
     def add_expressions(
         self,
-        data: Callable[..., LinearExpression | QuadraticExpression],
+        data: Callable[
+            ...,
+            LinearExpression
+            | QuadraticExpression
+            | Variable
+            | DataArray
+            | ConstantLike,
+        ],
         name: str | None = ...,
         mask: MaskLike | Callable[..., MaskLike] | None = ...,
         dims: tuple[Hashable, ...] = ...,
@@ -970,7 +977,14 @@ class Model:
         | LinearExpression
         | QuadraticExpression
         | Sequence[tuple[ConstantLike, Variable | str]]
-        | Callable[..., LinearExpression | QuadraticExpression],
+        | Callable[
+            ...,
+            LinearExpression
+            | QuadraticExpression
+            | Variable
+            | DataArray
+            | ConstantLike,
+        ],
         name: str | None = None,
         mask: MaskLike | Callable[..., MaskLike] | None = None,
         dims: tuple[Hashable, ...] = (),
@@ -993,6 +1007,12 @@ class Model:
             The expression(s) to add. This can be a Variable or LinearExpression, a sequence
             of (constant, variable) tuples which will be summed up, or a callable
             `data(model, **params)` that builds and returns the expression on demand.
+            A callable may also read post-solve-only data -- e.g. a constraint's `.dual`,
+            or a ratio that divides by a variable or another expression, which has no
+            linear/quadratic form -- and return a plain `DataArray`/constant, or a
+            :class:`LazyExpression` produced by such arithmetic. The result is then only
+            readable via `.solution`; `.evaluate()`, `.promote()` and constraint-building
+            raise :class:`~linopy.NonLinearOperationError`.
         name : str, optional
             Reference name of the added expressions. The default None results in
             a name like "expr1", "expr2" etc.
@@ -1037,6 +1057,13 @@ class Model:
         A lazily-evaluated expression:
 
         >>> lazy = m.add_expressions(lambda m: m.variables["x"] + 1, name="lazy")
+
+        A ratio that divides by a variable, only readable via `.solution` once solved:
+
+        >>> unit_cost = m.add_expressions(
+        ...     lambda m: m.variables["x"].sum() / m.variables["x"].sum(),
+        ...     name="unit_cost",
+        ... )  # doctest: +SKIP
         """
         if callable(mask) and not callable(data):
             raise TypeError(

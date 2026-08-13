@@ -39,7 +39,7 @@ import polars as pl
 import scipy
 import xarray as xr
 import xarray.core.groupby
-from numpy import array, nan, ndarray
+from numpy import array, nan
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -97,12 +97,15 @@ from linopy.constants import (
     LESS_EQUAL,
     STACKED_TERM_DIM,
     TERM_DIM,
+    NonLinearExpressionWarning,
+    NonLinearOperationError,
 )
 from linopy.types import (
     CONSTANT_TYPES,
     ConstantLike,
     DimsLike,
     ExpressionLike,
+    LazySideLike,
     MaskLike,
     SideLike,
     SignLike,
@@ -150,6 +153,34 @@ def _expr_unwrap(
         return maybe_expr.data
 
     return maybe_expr
+
+
+def _resolve_lazy(value: Any) -> Any:
+    """
+    Evaluate `value` if it is a `LazyExpression`, otherwise return it unchanged.
+    """
+    return value.evaluate() if isinstance(value, LazyExpression) else value
+
+
+def _solution_of(value: Any) -> Any:
+    """
+    Resolve `value` to a post-solve, numeric value.
+
+    A `LazyExpression`, `BaseExpression` or `Variable` is resolved via its `.solution`
+    property; anything else (a constant, array, or an already-numeric `DataArray` such as a
+    constraint's `.dual`) is returned unchanged. Used to compose the `.solution` of a derived
+    `LazyExpression` operand-wise, for operations (e.g. division by a variable) that have no
+    linear/quadratic form and therefore cannot go through `.evaluate()`.
+    """
+    if isinstance(value, LazyExpression | BaseExpression | variables.Variable):
+        return value.solution
+    return value
+
+
+def _as_solution_dataarray(value: Any) -> DataArray:
+    """Coerce a resolved solution value (a `DataArray`, e.g. a dual, or a plain constant/array) into a named "solution" `DataArray`, matching `BaseExpression.solution`."""
+    da = value if isinstance(value, DataArray) else as_dataarray(value)
+    return da.rename("solution")
 
 
 logger = logging.getLogger(__name__)
@@ -681,11 +712,213 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-class BaseExpression(ABC):
-    __slots__ = ("_data", "_model")
+class AbstractExpression(ABC):
+    """
+    Operator and constraint-building surface shared by eager expressions
+    (:class:`BaseExpression`) and deferred ones (:class:`LazyExpression`).
+
+    Holds no data and no Dataset machinery: only the numpy/pandas dispatch guards,
+    the arithmetic protocol and the comparison/constraint surface. `__eq__` returns
+    a `Constraint` rather than a bool, so instances are deliberately unhashable.
+    """
+
+    __slots__ = ()
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
+
+    @abstractmethod
+    def __add__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __radd__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __sub__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __rsub__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __mul__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __rmul__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __matmul__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __pow__(self, other: int) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __neg__(self) -> AbstractExpression: ...
+
+    @abstractmethod
+    def __truediv__(self, other: SideLike) -> AbstractExpression: ...
+
+    @abstractmethod
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
+    ) -> Constraint:
+        """
+        Turn this expression into a constraint against `rhs` with the given `sign`.
+        """
+        ...
+
+    @abstractmethod
+    def add(
+        self, other: SideLike, join: JoinOptions | None = None
+    ) -> AbstractExpression:
+        """
+        Add an expression to others.
+
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        ...
+
+    @abstractmethod
+    def mul(
+        self, other: SideLike, join: JoinOptions | None = None
+    ) -> AbstractExpression:
+        """
+        Multiply the expr by a factor.
+
+        Parameters
+        ----------
+        other : expression-like
+            The factor to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        ...
+
+    @abstractmethod
+    def div(
+        self, other: VariableLike | ConstantLike, join: JoinOptions | None = None
+    ) -> AbstractExpression:
+        """
+        Divide the expr by a factor.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        ...
+
+    @abstractmethod
+    def sub(
+        self, other: SideLike, join: JoinOptions | None = None
+    ) -> AbstractExpression:
+        """
+        Subtract others from expression.
+
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        ...
+
+    @abstractmethod
+    def pow(self, other: int) -> AbstractExpression:
+        """
+        Power of the expression with a coefficient.
+        """
+        ...
+
+    @abstractmethod
+    def dot(self, other: SideLike) -> AbstractExpression:
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        ...
+
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(LESS_EQUAL, rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(GREATER_EQUAL, rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(EQUAL, rhs, join=join)
+
+    def __le__(self, rhs: SideLike) -> Constraint:
+        return self.to_constraint(LESS_EQUAL, rhs)
+
+    def __ge__(self, rhs: SideLike) -> Constraint:
+        return self.to_constraint(GREATER_EQUAL, rhs)
+
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
+        return self.to_constraint(EQUAL, rhs)
+
+    def __gt__(self, other: Any) -> NotImplementedType:
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other: Any) -> NotImplementedType:
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+
+class BaseExpression(AbstractExpression):
+    __slots__ = ("_data", "_model")
 
     _fill_value = FILL_VALUE
     _data: Dataset
@@ -830,6 +1063,11 @@ class BaseExpression(ABC):
             )
             print(self)
 
+    # Narrower redeclarations of the ABC's abstract dunders: still abstract (no
+    # body), but pin the return type to what every BaseExpression subclass
+    # actually guarantees, so methods below (e.g. `add`, `mul`) that call
+    # `self.__add__`/`self.__mul__` type-check against `Self | QuadraticExpression`
+    # rather than the ABC's generic `AbstractExpression`.
     @abstractmethod
     def __add__(self, other: SideLike) -> Self | QuadraticExpression: ...
 
@@ -1002,38 +1240,23 @@ class BaseExpression(ABC):
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
     def __div__(self, other: SideLike) -> Self:
+        # Return NotImplemented (rather than raising) so a lazy divisor gets a chance
+        # to handle this via its own reflected `__rtruediv__`, deferring to solve time.
+        if isinstance(other, LazyExpression):
+            return NotImplemented
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
+            raise NonLinearOperationError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
         try:
-            if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-                raise TypeError(
-                    "unsupported operand type(s) for /: "
-                    f"{type(self)} and {type(other)}"
-                    "Non-linear expressions are not yet supported."
-                )
             return self._divide_by_constant(other)
         except TypeError:
             return NotImplemented
 
     def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
-
-    def __le__(self, rhs: SideLike) -> Constraint:
-        return self.to_constraint(LESS_EQUAL, rhs)
-
-    def __ge__(self, rhs: SideLike) -> Constraint:
-        return self.to_constraint(GREATER_EQUAL, rhs)
-
-    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
-        return self.to_constraint(EQUAL, rhs)
-
-    def __gt__(self, other: Any) -> NotImplementedType:
-        raise NotImplementedError(
-            "Inequalities only ever defined for >= rather than >."
-        )
-
-    def __lt__(self, other: Any) -> NotImplementedType:
-        raise NotImplementedError(
-            "Inequalities only ever defined for >= rather than >."
-        )
 
     def add(
         self,
@@ -1062,25 +1285,6 @@ class BaseExpression(ABC):
         ):
             other = other.to_quadexpr()
         return merge([self, other], cls=self.__class__, join=join)
-
-    def sub(
-        self,
-        other: SideLike,
-        join: JoinOptions | None = None,
-    ) -> Self | QuadraticExpression:
-        """
-        Subtract others from expression.
-
-        Parameters
-        ----------
-        other : expression-like
-            The expression to subtract.
-        join : str, optional
-            How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
-        """
-        return self.add(-other, join=join)
 
     def mul(
         self,
@@ -1127,69 +1331,31 @@ class BaseExpression(ABC):
         if join is None:
             return self.__div__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-            raise TypeError(
+            raise NonLinearOperationError(
                 "unsupported operand type(s) for /: "
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
         return self._divide_by_constant(other, join=join)
 
-    def le(
+    def sub(
         self,
-        rhs: SideLike,
+        other: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> Self | QuadraticExpression:
         """
-        Less than or equal constraint.
+        Subtract others from expression.
 
         Parameters
         ----------
-        rhs : expression-like
-            Right-hand side of the constraint.
+        other : expression-like
+            The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
         """
-        return self.to_constraint(LESS_EQUAL, rhs, join=join)
-
-    def ge(
-        self,
-        rhs: SideLike,
-        join: JoinOptions | None = None,
-    ) -> Constraint:
-        """
-        Greater than or equal constraint.
-
-        Parameters
-        ----------
-        rhs : expression-like
-            Right-hand side of the constraint.
-        join : str, optional
-            How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
-        """
-        return self.to_constraint(GREATER_EQUAL, rhs, join=join)
-
-    def eq(
-        self,
-        rhs: SideLike,
-        join: JoinOptions | None = None,
-    ) -> Constraint:
-        """
-        Equality constraint.
-
-        Parameters
-        ----------
-        rhs : expression-like
-            Right-hand side of the constraint.
-        join : str, optional
-            How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
-        """
-        return self.to_constraint(EQUAL, rhs, join=join)
+        return self.add(-other, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """
@@ -1197,7 +1363,7 @@ class BaseExpression(ABC):
         """
         return self.__pow__(other)
 
-    def dot(self, other: ndarray) -> Self | QuadraticExpression:
+    def dot(self, other: SideLike) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
@@ -2467,9 +2633,6 @@ class QuadraticExpression(BaseExpression):
     """
 
     __slots__ = ("_data", "_model")
-    __array_ufunc__ = None
-    __array_priority__ = 10000
-    __pandas_priority__ = 10000
 
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
@@ -2503,10 +2666,14 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        # Must run before the SUPPORTED_EXPRESSION_TYPES check below, since
+        # LazyExpression is now also a member of that tuple: this guard is what
+        # lets `lazy * quadratic` defer to `LazyExpression.__rmul__` instead of
+        # hitting the "non-linear expressions" TypeError meant for other cases.
         if isinstance(other, LazyExpression):
             return NotImplemented
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-            raise TypeError(
+            raise NonLinearOperationError(
                 "unsupported operand type(s) for *: "
                 f"{type(self)} and {type(other)}. "
                 "Higher order non-linear expressions are not yet supported."
@@ -2569,7 +2736,9 @@ class QuadraticExpression(BaseExpression):
             return NotImplemented
 
     def __pow__(self, other: SideLike) -> QuadraticExpression:
-        raise TypeError("Higher order non-linear expressions are not yet supported.")
+        raise NonLinearOperationError(
+            "Higher order non-linear expressions are not yet supported."
+        )
 
     def __matmul__(
         self, other: ConstantLike | VariableLike | ExpressionLike
@@ -2577,10 +2746,12 @@ class QuadraticExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
+        # See the matching comment in __mul__ above: this guard must run first,
+        # now that LazyExpression is also in SUPPORTED_EXPRESSION_TYPES.
         if isinstance(other, LazyExpression):
             return NotImplemented
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-            raise TypeError(
+            raise NonLinearOperationError(
                 "Higher order non-linear expressions are not yet supported."
             )
 
@@ -2866,8 +3037,8 @@ def merge(
     return cls(ds, model)
 
 
-@dataclass
-class LazyExpression:
+@dataclass(eq=False, repr=False)
+class LazyExpression(AbstractExpression):
     """
     A placeholder for an expression whose value is computed on demand.
 
@@ -2878,6 +3049,11 @@ class LazyExpression:
     Arithmetic between `LazyExpression` objects (and between a `LazyExpression` and anything else) stays lazy: it
     returns a new, unnamed `LazyExpression` whose evaluator composes the operands. Nothing is built until
     `.evaluate()`, `.promote()`, `.solution`, or a comparison (`<=`, `>=`, `==`) is called.
+
+    `LazyExpression` shares its arithmetic and constraint-building protocol with the eager
+    expression classes via :class:`AbstractExpression`: the named counterparts (`add`, `sub`,
+    `mul`, `div`, `pow`, `dot`, `le`, `ge`, `eq`) and comparisons all work the same way as on
+    `LinearExpression`/`QuadraticExpression`, forcing evaluation only where they must.
 
     Examples
     --------
@@ -2890,18 +3066,20 @@ class LazyExpression:
     >>> lazy.evaluate()  # doctest: +SKIP
     """
 
-    # Guard attributes that make numpy/pandas defer arithmetic to LazyExpression's
-    # own dunders instead of broadcasting element-wise into an object array;
-    # mirrors `BaseExpression.__array_ufunc__` / `__array_priority__` above. Plain
-    # (unannotated) class attributes, so `@dataclass` does not treat them as fields.
-    __array_ufunc__ = None
-    __array_priority__ = 10000
-    __pandas_priority__ = 10000
+    # `eq=False` on the dataclass decorator keeps the inherited `__eq__` (which builds a
+    # Constraint, see AbstractExpression) instead of a generated field-comparison `__eq__`;
+    # it also leaves `__hash__` alone, so `AbstractExpression.__hash__ = None` applies -
+    # LazyExpression is deliberately unhashable, just like the eager expression classes.
 
     model: Model
     """Reference to the model the expression belongs to"""
-    evaluator: Callable[..., LinearExpression | QuadraticExpression]
-    """Callable that builds the expression, invoked as ``evaluator(model, **params)``."""
+    evaluator: Callable[
+        ...,
+        LinearExpression | QuadraticExpression | variables.Variable | DataArray | Any,
+    ]
+    """Callable that builds the expression, invoked as ``evaluator(model, **params)``.
+    May also return a plain ``Variable``, ``DataArray`` or constant -- e.g. a constraint's
+    ``.dual`` -- for an expression that is only ever read via `.solution`; see `.promote`."""
     name: str | None = None
     """Lazy Expression name. `None` for derived expressions produced by arithmetic, which are never
     registered in `model.expressions`."""
@@ -2925,12 +3103,28 @@ class LazyExpression:
     instead of evaluating it, once a frontend that produces such a description exists."""
     mask_source: Any = None
     """As `source`, but describing `mask`."""
+    _solution_evaluator: Callable[[], Any] | None = None
+    """Internal. Set by arithmetic (`_combine`, `__neg__`, `__pow__`) on derived expressions:
+    composes `.solution` operand-wise, as a fallback for operations that have no linear/quadratic
+    form and so cannot go through `evaluator`/`.evaluate()`. Not part of the public API."""
+    _static_nonlinear: bool = False
+    """Internal. True when this derived expression is already known, at construction time, to
+    have no linear/quadratic form (e.g. division by an expression). Backs `is_evaluatable`."""
 
-    def evaluate(self) -> LinearExpression | QuadraticExpression:
+    def evaluate(
+        self,
+    ) -> LinearExpression | QuadraticExpression | variables.Variable | DataArray | Any:
         """
         Evaluate the expression using the provided evaluator and mask.
 
         Note that nothing is cached, so calling this repeatedly will always re-evaluate from scratch.
+
+        Raises
+        ------
+        NonLinearOperationError
+            If the underlying operation (e.g. division by a variable or another expression)
+            has no linear/quadratic form. Such an expression can still be read via
+            `.solution` once the model has been solved.
         """
         expr = (
             self.evaluator(self.model, **self.params)
@@ -2969,18 +3163,58 @@ class LazyExpression:
             current, LinearExpression | QuadraticExpression
         ):
             return current
-        expr = self.evaluate()
+        try:
+            expr = self.evaluate()
+        except NonLinearOperationError as e:
+            raise NonLinearOperationError(
+                f"Cannot promote LazyExpression '{self.name}': {e} "
+                "It can still be read via `.solution` once the model has been solved."
+            ) from e
+        if not isinstance(expr, LinearExpression | QuadraticExpression):
+            raise NonLinearOperationError(
+                f"Cannot promote LazyExpression '{self.name}': its evaluator returned "
+                f"{type(expr)}, not a LinearExpression or QuadraticExpression. "
+                "It can still be read via `.solution` once the model has been solved."
+            )
         expr.attrs.update(self.attrs)
         expr.attrs["name"] = self.name
         self.model.expressions.data[self.name] = expr
         return expr
 
     @property
+    def is_evaluatable(self) -> bool:
+        """
+        Whether `.evaluate()` can be expected to succeed.
+
+        False once this expression is already known, at construction time, to have no
+        linear/quadratic form (e.g. built from division by an expression, or from raising
+        to a power other than 2). A leaf expression whose own `evaluator` callable happens
+        to build a non-linear result -- or return something other than a `LinearExpression`
+        / `QuadraticExpression`, e.g. a constraint's `.dual` -- is not detected here; that
+        only surfaces when `.evaluate()` is actually called.
+        """
+        return not self._static_nonlinear
+
+    @property
     def solution(self) -> DataArray:
         """
         Get the optimal values of the expression, without promoting it.
+
+        Tries `.evaluate()` first, so a linear/quadratic expression behaves exactly as
+        before (mask/NaN semantics included). If that fails because the underlying
+        operation has no linear/quadratic form (e.g. it divides by a variable or another
+        expression), falls back to composing `.solution` operand-wise instead -- valid once
+        the model has a solution, since every operand is then just a number. If the
+        evaluator itself returns something other than an expression (e.g. a constraint's
+        `.dual`), that value is used as-is.
         """
-        return self.evaluate().solution
+        try:
+            expr = self.evaluate()
+        except (NonLinearOperationError, ValueError):
+            if self._solution_evaluator is None:
+                raise
+            return _as_solution_dataarray(self._solution_evaluator())
+        return _as_solution_dataarray(_solution_of(expr))
 
     @property
     def coords(self) -> DatasetCoordinates | dict[Hashable, Any]:
@@ -3010,79 +3244,172 @@ class LazyExpression:
         return getattr(self.evaluate(), name)
 
     def _combine(
-        self, other: Any, op: Callable[[Any, Any], Any], swapped: bool = False
+        self,
+        other: Any,
+        op: Callable[[Any, Any], Any],
+        swapped: bool = False,
+        nonlinear_reason: str | None = None,
     ) -> LazyExpression:
         """
         Build a new, unnamed `LazyExpression` that lazily applies `op` to `self` and `other`.
 
-        `other` is evaluated lazily too, if it is itself a `LazyExpression`.
-        """
+        `other` is resolved lazily too, if it is itself a `LazyExpression`.
 
-        def evaluator(model: Model) -> LinearExpression | QuadraticExpression:
+        A parallel, `.solution`-only closure is always attached (see `_solution_of`), used as
+        a fallback wherever `op` turns out to have no linear/quadratic form. When that is
+        already known at construction time (`nonlinear_reason` given), a
+        `NonLinearExpressionWarning` is raised immediately instead of waiting for a failed
+        `.evaluate()` to discover it.
+        """
+        if nonlinear_reason is not None:
+            warn(
+                f"This LazyExpression involves {nonlinear_reason}, which has no "
+                "linear/quadratic form. It can only be read via `.solution` once the "
+                "model has been solved; `.evaluate()`, `.promote()` and constraint-building "
+                "will raise.",
+                NonLinearExpressionWarning,
+                stacklevel=3,
+            )
+
+        def evaluator(model: Model) -> Any:
             left = self.evaluate()
-            right = other.evaluate() if isinstance(other, LazyExpression) else other
+            right = _resolve_lazy(other)
             return op(right, left) if swapped else op(left, right)
 
-        return LazyExpression(model=self.model, evaluator=evaluator)
+        def solution_evaluator() -> Any:
+            left = _solution_of(self)
+            right = _solution_of(other)
+            return op(right, left) if swapped else op(left, right)
 
-    def __add__(self, other: SideLike | LazyExpression) -> LazyExpression:
+        return LazyExpression(
+            model=self.model,
+            evaluator=evaluator,
+            _solution_evaluator=solution_evaluator,
+            _static_nonlinear=nonlinear_reason is not None,
+        )
+
+    def __add__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.add)
 
-    def __radd__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __radd__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.add)
 
-    def __sub__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __sub__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.sub)
 
-    def __rsub__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __rsub__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.sub, swapped=True)
 
-    def __mul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __mul__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.mul)
 
-    def __rmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __rmul__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.mul)
 
-    def __truediv__(self, other: SideLike | LazyExpression) -> LazyExpression:
-        if isinstance(other, (LazyExpression, *SUPPORTED_EXPRESSION_TYPES)):
-            raise TypeError(
-                f"unsupported operand type(s) for /: {type(self)} and {type(other)}. "
-                "Expressions cannot be used as a divisor."
-            )
-        return self._combine(other, operator.truediv)
+    def __truediv__(self, other: LazySideLike) -> LazyExpression:
+        reason = (
+            "division by an expression"
+            if isinstance(other, SUPPORTED_EXPRESSION_TYPES)
+            else None
+        )
+        return self._combine(other, operator.truediv, nonlinear_reason=reason)
 
-    def __matmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __rtruediv__(self, other: LazySideLike) -> LazyExpression:
+        # Only a constant/array numerator defers here: an eager expression/variable
+        # numerator returns NotImplemented so the overall operation still raises, matching
+        # eager-only division (`variable / other_variable`, etc.).
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
+            return NotImplemented
+        return self._combine(
+            other,
+            operator.truediv,
+            swapped=True,
+            nonlinear_reason="division by an expression",
+        )
+
+    def __matmul__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.matmul)
 
-    def __rmatmul__(self, other: SideLike | LazyExpression) -> LazyExpression:
+    def __rmatmul__(self, other: LazySideLike) -> LazyExpression:
         return self._combine(other, operator.matmul, swapped=True)
 
     def __pow__(self, other: int) -> LazyExpression:
-        if other != 2:
-            raise ValueError("Power must be 2.")
-        return self._combine(self, operator.mul)
+        # Evaluate the root once and let the eager `__pow__` do the squaring,
+        # rather than passing `self` as `other` to `_combine` (which would
+        # evaluate the root twice: once as `left`, once as `right`).
+        reason = None if other == 2 else f"raising to the power {other}"
+        return self._combine(other, operator.pow, nonlinear_reason=reason)
 
     def __neg__(self) -> LazyExpression:
-        return self._combine(-1, operator.mul)
+        # `operator.neg` matches eager `BaseExpression.__neg__` (negates
+        # `coeffs`/`const`, preserving NaN), unlike `* -1` which goes through
+        # `_apply_constant_op` and fills NaN with 0 first.
+        def evaluator(model: Model) -> Any:
+            return -self.evaluate()
 
-    def __le__(self, other: SideLike) -> Constraint:
-        return self.evaluate() <= other
+        def solution_evaluator() -> Any:
+            return -_solution_of(self)
 
-    def __ge__(self, other: SideLike) -> Constraint:
-        return self.evaluate() >= other
-
-    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
-        return self.evaluate() == other
-
-    def __lt__(self, other: Any) -> NotImplementedType:
-        raise NotImplementedError(
-            "Inequalities only ever defined for >= rather than >."
+        return LazyExpression(
+            model=self.model,
+            evaluator=evaluator,
+            _solution_evaluator=solution_evaluator,
         )
 
-    def __gt__(self, other: Any) -> NotImplementedType:
-        raise NotImplementedError(
-            "Inequalities only ever defined for >= rather than >."
+    def to_constraint(
+        self, sign: SignLike, rhs: LazySideLike, join: JoinOptions | None = None
+    ) -> Constraint:
+        """
+        Turn this expression into a constraint against `rhs` with the given `sign`.
+
+        Forces evaluation of both `self` and (if lazy) `rhs`.
+
+        Raises
+        ------
+        NonLinearOperationError
+            If `.evaluate()` fails (see `.evaluate`), or its result is not a
+            `LinearExpression`/`QuadraticExpression` (e.g. it is a constraint's `.dual`).
+        """
+        expr = self.evaluate()
+        if not isinstance(expr, LinearExpression | QuadraticExpression):
+            raise NonLinearOperationError(
+                f"Cannot build a constraint from this LazyExpression: its evaluator "
+                f"returned {type(expr)}, not a LinearExpression or QuadraticExpression."
+            )
+        return expr.to_constraint(sign, _resolve_lazy(rhs), join=join)
+
+    def add(
+        self, other: LazySideLike, join: JoinOptions | None = None
+    ) -> LazyExpression:
+        return self._combine(other, lambda expr, rhs: expr.add(rhs, join=join))
+
+    def mul(
+        self, other: LazySideLike, join: JoinOptions | None = None
+    ) -> LazyExpression:
+        return self._combine(other, lambda expr, rhs: expr.mul(rhs, join=join))
+
+    def div(
+        self, other: LazySideLike, join: JoinOptions | None = None
+    ) -> LazyExpression:
+        reason = (
+            "division by an expression"
+            if isinstance(other, SUPPORTED_EXPRESSION_TYPES)
+            else None
         )
+        return self._combine(
+            other, lambda expr, rhs: expr.div(rhs, join=join), nonlinear_reason=reason
+        )
+
+    def sub(
+        self, other: LazySideLike, join: JoinOptions | None = None
+    ) -> LazyExpression:
+        return self.add(-other, join=join)
+
+    def pow(self, other: int) -> LazyExpression:
+        return self.__pow__(other)
+
+    def dot(self, other: LazySideLike) -> LazyExpression:
+        return self.__matmul__(other)
 
 
 @dataclass(repr=False)
@@ -3384,6 +3711,7 @@ class ScalarLinearExpression:
 
 SUPPORTED_EXPRESSION_TYPES = (
     BaseExpression,
+    LazyExpression,
     ScalarLinearExpression,
     variables.Variable,
     variables.ScalarVariable,

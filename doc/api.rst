@@ -268,6 +268,30 @@ Evaluation
 
    expressions.LazyExpression.evaluate
    expressions.LazyExpression.promote
+   expressions.LazyExpression.is_evaluatable
+
+Arithmetic and constraints
+---------------------------
+
+Named counterparts of the arithmetic dunders, shared with
+``LinearExpression``/``QuadraticExpression`` via
+:class:`AbstractExpression <linopy.expressions.AbstractExpression>`. These
+stay lazy where possible; ``to_constraint``/``le``/``ge``/``eq`` (and the
+comparison operators) force evaluation and return a ``Constraint``.
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.LazyExpression.add
+   expressions.LazyExpression.sub
+   expressions.LazyExpression.mul
+   expressions.LazyExpression.div
+   expressions.LazyExpression.pow
+   expressions.LazyExpression.dot
+   expressions.LazyExpression.le
+   expressions.LazyExpression.ge
+   expressions.LazyExpression.eq
+   expressions.LazyExpression.to_constraint
 
 Post-solve access
 -----------------
@@ -718,3 +742,13 @@ These warning classes can be silenced or filtered via
 
    EvolvingAPIWarning
    PerformanceWarning
+   NonLinearExpressionWarning
+
+
+Exceptions
+==========
+
+.. autosummary::
+   :toctree: generated/
+
+   NonLinearOperationError

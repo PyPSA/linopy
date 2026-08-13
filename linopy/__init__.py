@@ -19,6 +19,8 @@ from linopy.constants import (
     GREATER_EQUAL,
     LESS_EQUAL,
     EvolvingAPIWarning,
+    NonLinearExpressionWarning,
+    NonLinearOperationError,
     PerformanceWarning,
 )
 from linopy.constraints import (
@@ -64,6 +66,8 @@ __all__ = (
     "LazyExpression",
     "LinearExpression",
     "Model",
+    "NonLinearExpressionWarning",
+    "NonLinearOperationError",
     "Objective",
     "OetcHandler",
     "PiecewiseFormulation",

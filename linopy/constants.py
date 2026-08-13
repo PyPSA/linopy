@@ -22,6 +22,30 @@ class PerformanceWarning(UserWarning):
     """Warning raised when an operation triggers expensive Dataset reconstruction."""
 
 
+class NonLinearOperationError(TypeError):
+    """
+    Raised when an operation would require a non-linear/non-quadratic expression.
+
+    Subclasses :class:`TypeError` so existing ``except TypeError`` handlers (including
+    Python's own operator dispatch, which relies on ``NotImplemented``/``TypeError``)
+    keep working unchanged. A :class:`~linopy.expressions.LazyExpression` built from such
+    an operation can still be read via its ``.solution`` property once the model has been
+    solved; it just cannot be materialised into a :class:`LinearExpression` or
+    :class:`QuadraticExpression`.
+    """
+
+
+class NonLinearExpressionWarning(UserWarning):
+    """
+    Warned when a :class:`~linopy.expressions.LazyExpression` is built from an operation
+    that is already known, at construction time, to be non-linear/non-quadratic.
+
+    The resulting expression is still usable through ``.solution`` once the model is
+    solved; ``.evaluate()``, ``.promote()`` and constraint-building will raise
+    :class:`NonLinearOperationError`.
+    """
+
+
 long_EQUAL = "=="
 short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"

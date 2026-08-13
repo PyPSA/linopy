@@ -14,6 +14,7 @@ _LINOPY_TYPES = (
     expressions.LinearExpression,
     expressions.ScalarLinearExpression,
     expressions.QuadraticExpression,
+    expressions.LazyExpression,
 )
 
 

@@ -62,6 +62,7 @@ from linopy.constants import (
     STASHED_LOWER,
     STASHED_UPPER,
     TERM_DIM,
+    NonLinearOperationError,
 )
 from linopy.types import (
     ConstantLike,
@@ -466,8 +467,19 @@ class Variable:
         """
         Divide variables with a coefficient.
         """
-        if isinstance(other, expressions.LinearExpression | Variable):
-            raise TypeError(
+        # Return NotImplemented (rather than raising) so a lazy divisor gets a chance
+        # to handle this via its own reflected `__rtruediv__`, deferring to solve time.
+        if isinstance(other, expressions.LazyExpression):
+            return NotImplemented
+        if isinstance(
+            other,
+            expressions.LinearExpression
+            | expressions.QuadraticExpression
+            | expressions.ScalarLinearExpression
+            | Variable
+            | ScalarVariable,
+        ):
+            raise NonLinearOperationError(
                 "unsupported operand type(s) for /: "
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
@@ -482,6 +494,8 @@ class Variable:
         """
         try:
             return self.__div__(coefficient)
+        except NonLinearOperationError:
+            raise
         except TypeError:
             return NotImplemented
 

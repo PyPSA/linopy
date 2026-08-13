@@ -27,8 +27,14 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import to_polars
-from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.expressions import LazyExpression
+from linopy.constants import (
+    CONCAT_DIM,
+    FACTOR_DIM,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+    NonLinearOperationError,
+)
+from linopy.expressions import LazyExpression, LinearExpression, QuadraticExpression
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
@@ -943,7 +949,12 @@ def to_netcdf(
         - ``"evaluate"``: run each lazy expression's evaluator and write the
           result as an ordinary (linear or quadratic) expression. The
           placeholder itself, and the fact that it was lazy, are not restored
-          by :func:`read_netcdf`.
+          by :func:`read_netcdf`. Raises if a lazy expression has no
+          linear/quadratic form (e.g. it divides by a variable or another
+          expression) or its evaluator returns something other than an
+          expression (e.g. a constraint's ``.dual``) -- such expressions can
+          only be read via their ``.solution``, so use ``lazy="skip"`` for
+          models that hold them.
         - ``"skip"``: omit lazy expressions from the file entirely. A warning
           names the dropped entries.
         - ``"raise"``: raise a :class:`ValueError` naming the lazy entries
@@ -1025,15 +1036,32 @@ def to_netcdf(
             )
 
     exprs = []
-    for name, expr in m.expressions.items():
-        if isinstance(expr, LazyExpression):
+    for name, expr_or_lazy in m.expressions.items():
+        expr: LinearExpression | QuadraticExpression
+        if isinstance(expr_or_lazy, LazyExpression):
             # Lazy expressions with a serialisable `source` (e.g. an AST produced by a
             # declarative frontend) could be persisted here instead of being evaluated.
             # Nothing in linopy produces a `source` yet, so every lazy entry falls
             # through to the `lazy` policy below.
             if lazy == "skip":
                 continue
-            expr = expr.evaluate()
+            try:
+                evaluated = expr_or_lazy.evaluate()
+            except NonLinearOperationError as e:
+                raise NonLinearOperationError(
+                    f"Cannot write lazy expression '{name}' to netcdf with lazy='evaluate': "
+                    f"{e} Pass lazy='skip' to drop it, or read it via `.solution` instead."
+                ) from e
+            if not isinstance(evaluated, LinearExpression | QuadraticExpression):
+                raise TypeError(
+                    f"Cannot write lazy expression '{name}' to netcdf with lazy='evaluate': "
+                    f"its evaluator returned {type(evaluated)}, not a LinearExpression or "
+                    "QuadraticExpression. Pass lazy='skip' to drop it, or read it via "
+                    "`.solution` instead."
+                )
+            expr = evaluated
+        else:
+            expr = expr_or_lazy
         exprs.append(
             with_prefix(
                 expr.data.assign_attrs(name=name, _linopy_expr_type=expr.type),
@@ -1265,7 +1293,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         A deep or shallow copy of the model.
     """
     from linopy.constraints import Constraint, ConstraintBase, Constraints
-    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
+    from linopy.expressions import Expressions, LinearExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
