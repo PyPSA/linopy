@@ -194,11 +194,8 @@ def reformulate_sos2(
         x_mid = x_expr.isel({sos_dim: mid_slice})
         M_mid = M.isel({sos_dim: mid_slice})
 
-        z_left_coords = var.coords[sos_dim].values[: n - 2]
-        z_right_coords = var.coords[sos_dim].values[1 : n - 1]
-
-        z_left = z_expr.sel({sos_dim: z_left_coords})
-        z_right = z_expr.sel({sos_dim: z_right_coords})
+        z_left = z_expr.isel({sos_dim: slice(0, n - 2)})
+        z_right = z_expr.isel({sos_dim: slice(1, n - 1)})
 
         z_left_aligned = z_left.assign_coords({sos_dim: M_mid.coords[sos_dim].values})
         z_right_aligned = z_right.assign_coords({sos_dim: M_mid.coords[sos_dim].values})
@@ -276,17 +273,11 @@ def reformulate_sos_constraints(
 
             result.saved_attrs[var_name] = dict(var.attrs)
 
-            sort_idx = np.argsort(var.coords[sos_dim].values)
-            if not np.all(sort_idx[:-1] <= sort_idx[1:]):
-                sorted_var = var.isel({sos_dim: sort_idx})
-                M = M.isel({sos_dim: sort_idx})
-            else:
-                sorted_var = var
-
+            # The array order is already the order to reformulate along.
             if sos_type == 1:
-                added_vars, added_cons = reformulate_sos1(model, sorted_var, prefix, M)
+                added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
             elif sos_type == 2:
-                added_vars, added_cons = reformulate_sos2(model, sorted_var, prefix, M)
+                added_vars, added_cons = reformulate_sos2(model, var, prefix, M)
             else:
                 raise ValueError(
                     f"Unknown sos_type={sos_type} on variable '{var_name}'"

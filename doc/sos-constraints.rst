@@ -34,7 +34,7 @@ In an SOS1 constraint, **at most one** variable in the ordered set can be non-ze
 SOS Type 2 (SOS2)
 ~~~~~~~~~~~~~~~~~~
 
-In an SOS2 constraint, **at most two adjacent** variables in the ordered set can be non-zero. The adjacency is determined by the ordering weights (coordinates) of the variables.
+In an SOS2 constraint, **at most two adjacent** variables in the ordered set can be non-zero. Adjacency follows the order the members are declared in (see :ref:`sos-ordering`).
 
 **Example use cases:**
 - Piecewise linear approximation of nonlinear functions
@@ -91,8 +91,22 @@ Method Signature
 **Requirements:**
 
 - The specified dimension must exist in the variable
-- The coordinates for the SOS dimension must be numeric (used as weights for ordering)
 - Only one SOS constraint can be applied per variable
+
+.. _sos-ordering:
+
+Ordering
+~~~~~~~~
+
+A set runs in the order its members are declared along ``sos_dim``. For
+``sos_type=2`` that decides which members are adjacent; an SOS1 set is
+unordered, so it does not apply.
+
+The coordinates need not be numeric. Where they are numeric but neither
+ascend nor descend, linopy warns: such a set was previously ordered by
+coordinate value, so its meaning changes. Sort the index to keep that
+ordering. Descending coordinates are left alone, reversing a set being
+the one reordering that leaves its adjacencies intact.
 
 Examples
 --------

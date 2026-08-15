@@ -11,6 +11,14 @@ Upcoming Version
 * ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
   Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
 
+*SOS constraints*
+
+* ``Model.add_sos_constraints`` no longer requires the SOS dimension to have numeric coordinates.
+
+**Breaking Changes**
+
+* An SOS set is ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates state the same order, so a model whose SOS dimension is sorted is unaffected, every piecewise formulation among them; descending ones reverse it, which leaves an SOS set's meaning intact. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning, and it now emits a ``UserWarning``; sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
+
 
 Version v0.9.0
 --------------

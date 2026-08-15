@@ -2,8 +2,7 @@
 Which order an SOS set runs in: the declared one, or the one its labels imply.
 
 Where the labels ascend the two coincide — the common case, and every piecewise
-model. Where they do not, the labels still win; those tests are ``xfail``
-until the following commit makes the declaration authoritative.
+model. Where they do not, the declared order wins.
 """
 
 from __future__ import annotations
@@ -118,7 +117,6 @@ def test_monotonic_labels_do_not_warn(
     assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
 
 
-@pytest.mark.xfail(strict=True, reason="labels still order the set")
 @pytest.mark.parametrize(
     "sos_type", [pytest.param(1, id="sos1"), pytest.param(2, id="sos2")]
 )
@@ -131,7 +129,6 @@ def test_string_labels_are_accepted(
 
 
 @needs_highs
-@pytest.mark.xfail(strict=True, reason="labels still order the set")
 @pytest.mark.parametrize(
     "labels",
     [
@@ -145,7 +142,6 @@ def test_declaration_order_governs_adjacency(
     assert optimum(labels) == pytest.approx(2.0)
 
 
-@pytest.mark.xfail(strict=True, reason="labels still order the set")
 @pytest.mark.parametrize(
     "labels",
     [
@@ -165,7 +161,6 @@ def test_weights_are_positions_where_labels_do_not_ascend(
     assert "x2:2" in section
 
 
-@pytest.mark.xfail(strict=True, reason="the reinterpretation is silent")
 def test_labels_that_regroup_the_set_warn(sos_model: Callable[..., Model]) -> None:
     with pytest.warns(UserWarning, match="order"):
         sos_model([30, 10, 20])

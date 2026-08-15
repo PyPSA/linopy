@@ -1257,3 +1257,24 @@ def values_to_lookup_array(
     arr = np.full(size, nan, dtype=float)
     arr[labels[mask]] = values[mask]
     return arr
+
+
+def labels_state_order(labels: np.ndarray) -> bool:
+    """Whether ``labels`` are numeric and strictly increasing."""
+    return bool(
+        pd.api.types.is_numeric_dtype(labels.dtype)
+        and (labels.size < 2 or np.all(np.diff(labels) > 0))
+    )
+
+
+def sos_weights(labels: np.ndarray) -> np.ndarray:
+    """
+    SOS member weights spelling out the declared order of ``labels``.
+
+    Ascending labels already spell it and are passed through, which keeps the
+    LP file unchanged; anything else is weighted by position.
+    """
+    labels = np.asarray(labels)
+    if labels_state_order(labels):
+        return labels
+    return np.arange(labels.size)

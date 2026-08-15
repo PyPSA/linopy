@@ -32,6 +32,7 @@ from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     assign_multiindex_safe,
     best_int,
+    labels_state_order,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -1017,7 +1018,8 @@ class Model:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
 
-        The dimension values are used as SOS.
+        The set runs in the order its members are declared along ``sos_dim``,
+        which for ``sos_type=2`` decides which members are adjacent.
 
         Parameters
         ----------
@@ -1050,11 +1052,22 @@ class Model:
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
 
-        # Validate that sos_dim coordinates are numeric (needed for weights)
-        if not pd.api.types.is_numeric_dtype(variable.coords[sos_dim]):
-            raise ValueError(
-                f"SOS constraint requires numeric coordinates for dimension '{sos_dim}', "
-                f"but got {variable.coords[sos_dim].dtype}"
+        # Only sos_type=2 can change meaning, and only where the labels group
+        # the members differently: an sos1 set is unordered, and reversing an
+        # ordered one leaves which of its members are adjacent unchanged.
+        labels = np.asarray(variable.coords[sos_dim].values)
+        if (
+            sos_type == 2
+            and pd.api.types.is_numeric_dtype(labels.dtype)
+            and not (labels_state_order(labels) or labels_state_order(labels[::-1]))
+        ):
+            warn(
+                f"The coordinates of SOS dimension '{sos_dim}' neither ascend "
+                "nor descend. This set is ordered by the positions its members "
+                "are declared in, which decides which of them are adjacent. "
+                "Sort the index to order it by coordinate value instead.",
+                UserWarning,
+                stacklevel=2,
             )
 
         attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
