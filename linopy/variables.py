@@ -65,6 +65,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.semantics import (
+    FillValueLike,
     _legacy_coord_mismatch_message,
     _legacy_masked_variable_message,
     _shared_dim_mismatch_message,
@@ -620,7 +621,7 @@ class Variable:
         self,
         other: SideLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -635,9 +636,10 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join
-            creates. Defaults to 0. Requires an explicit ``join``.
+            creates. Defaults to 0; ``linopy.ABSENT`` keeps them absent.
+            Requires an explicit ``join``.
         """
         return self.to_linexpr().add(other, join=join, fill_value=fill_value)
 
@@ -645,7 +647,7 @@ class Variable:
         self,
         other: SideLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -660,9 +662,10 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
-            Defaults to 0. Requires an explicit ``join``.
+            Defaults to 0; ``linopy.ABSENT`` keeps them absent. Requires an
+            explicit ``join``.
         """
         return self.to_linexpr().sub(other, join=join, fill_value=fill_value)
 
@@ -670,7 +673,7 @@ class Variable:
         self,
         other: ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -685,9 +688,10 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates.
-            Defaults to 0, so a term without a factor evaluates to zero.
+            Defaults to 0, so a term without a factor evaluates to zero;
+            ``linopy.ABSENT`` keeps them absent instead.
         """
         return self.to_linexpr().mul(other, join=join, fill_value=fill_value)
 
@@ -695,7 +699,7 @@ class Variable:
         self,
         other: ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -710,9 +714,10 @@ class Variable:
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
-            default that term evaluates to zero; pass ``1`` to keep it unscaled.
+            default that term evaluates to zero; pass ``1`` to keep it
+            unscaled, or ``linopy.ABSENT`` to keep it absent.
         """
         return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 

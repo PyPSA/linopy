@@ -108,7 +108,8 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
        ``1 / divisor``.
      - Pass ``fill_value=`` on ``.add`` / ``.sub`` / ``.mul`` / ``.div`` to
        choose the value, e.g. ``.div(other, join="outer", fill_value=1)`` to
-       keep the term unscaled.
+       keep the term unscaled, or ``fill_value=linopy.ABSENT`` to keep the
+       created rows absent so the constraint drops there.
    * - An **unlabeled** operand (numpy array, list, polars ``Series``)
      - Pairs with the linopy operand's dimensions by *size*; an ambiguous
        match (a square array, or two dimensions of equal length) or no size
