@@ -350,6 +350,44 @@ def test_model_deepcopy_protocol(copy_test_model: Model) -> None:
     assert m.objective.sense == original_sense
 
 
+@pytest.fixture(scope="module")
+def copy_test_model_with_expressions() -> Model:
+    """Representative model with named linear and quadratic expressions."""
+    m: Model = Model()
+
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_expressions(x + 1, name="lin")
+    m.add_expressions(x * y, name="quad")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_objective((10 * x + 5 * y).sum())
+
+    return m
+
+
+def test_copy_model_with_expressions(
+    copy_test_model_with_expressions: Model,
+) -> None:
+    """Model.copy(), copy.copy() and copy.deepcopy() all preserve expressions."""
+    m = copy_test_model_with_expressions.copy(deep=True)
+
+    for c in (m.copy(), pycopy.copy(m), pycopy.deepcopy(m)):
+        assert_model_equal(m, c)
+        assert c.expressions["lin"].model is c
+        assert c.expressions["quad"].model is c
+
+    deep = pycopy.deepcopy(m)
+    original_coeff = m.expressions["lin"].coeffs.values.flat[0].item()
+    deep.expressions["lin"].coeffs.values.flat[0] = original_coeff + 42
+    assert m.expressions["lin"].coeffs.values.flat[0] == original_coeff
+
+
 @pytest.mark.skipif(not available_solvers, reason="No solver installed")
 class TestModelCopySolved:
     def test_model_deepcopy_protocol_excludes_solution(

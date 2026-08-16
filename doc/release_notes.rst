@@ -6,6 +6,17 @@ Upcoming Version
 
 **Features**
 
+*Named expressions*
+
+* ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
+  Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
+
+
+Version v0.9.0
+--------------
+
+**Features**
+
 
 *In-place solver updates (persistent re-solve)*
 
@@ -16,6 +27,7 @@ Upcoming Version
 *Improved IO*
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged. (`#780 <https://github.com/PyPSA/linopy/pull/780>`__)
+
 
 *Other*
 
