@@ -162,7 +162,10 @@ def test_remove_variable() -> None:
 
 
 @pytest.mark.parametrize("freeze", [False, True])
-def test_remove_masked_variable_keeps_unrelated_constraints(freeze: bool) -> None:
+@pytest.mark.parametrize("quadratic", [False, True])
+def test_remove_masked_variable_keeps_unrelated_constraints(
+    freeze: bool, quadratic: bool
+) -> None:
     # https://github.com/PyPSA/linopy/issues/883
     m: Model = Model(freeze_constraints=freeze)
 
@@ -180,7 +183,10 @@ def test_remove_masked_variable_keeps_unrelated_constraints(freeze: bool) -> Non
     with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
     assert with_a.has_variable(a)
 
-    m.add_objective((1 * a).sum() + (1 * c).sum())
+    if quadratic:
+        m.add_objective((a * c).sum() + (c * c).sum())
+    else:
+        m.add_objective((1 * a).sum() + (1 * c).sum())
 
     with pytest.warns(UserWarning, match="with_a"):
         m.remove_variables("a")

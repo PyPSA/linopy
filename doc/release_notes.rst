@@ -11,6 +11,11 @@ Upcoming Version
 * ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
   Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
 
+**Bug fixes**
+
+* ``Model.remove_variables`` no longer removes constraints that never reference the removed variable. A masked variable carries ``-1`` label entries, which matched the ``-1`` that marks an empty term slot in a constraint, so any masked variable looked like it was used by any constraint with padded terms. Models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+* ``Model.remove_variables`` now also works on a model with a quadratic objective, where it raised an ``IndexError`` because the term mask was built over the factor dimension as well. Quadratic terms are dropped when any of their factors references the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+
 
 Version v0.9.0
 --------------
@@ -56,7 +61,6 @@ Version v0.9.0
 * ``linopy.testing.assert_linequal`` now aligns dimension order before comparing, so mathematically identical expressions built in different orders (e.g. ``x + y`` versus ``y + x``, which inherit different dimension orders from xarray broadcasting) are correctly treated as equal. Genuinely different expressions still fail. (`#801 <https://github.com/PyPSA/linopy/pull/801>`__)
 * Summing an expression over a dimension that carries an auxiliary (non-dimension) coordinate no longer leaks that coordinate onto the internal term dimension, where it broke later arithmetic with a ``CoordinateValidationError``. Auxiliary coordinates on the remaining dimensions still propagate. (`#295 <https://github.com/PyPSA/linopy/issues/295>`__)
 * ``Solver.close()`` (also triggered by ``model.solver = None`` and the next ``solve()`` call) now explicitly disposes the ``gurobipy`` model before the environment. Previously the model was only dereferenced, so a user-held ``model.solver_model`` reference silently kept the Gurobi license acquired after ``close()``. (`#459 <https://github.com/PyPSA/linopy/issues/459>`__)
-* ``Model.remove_variables`` no longer removes constraints that never reference the removed variable. A masked variable carries ``-1`` label entries, which matched the ``-1`` that marks an empty term slot in a constraint, so any masked variable looked like it was used by any constraint with padded terms. Models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
 
 Version 0.8.0
 -------------

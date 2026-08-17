@@ -38,6 +38,7 @@ from linopy.common import (
     to_path,
 )
 from linopy.constants import (
+    FACTOR_DIM,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
@@ -1432,9 +1433,9 @@ class Model:
 
         self._relaxed_registry.pop(name, None)
 
-        to_remove = [
-            k for k, con in self.constraints.items() if con.has_variable(variable)
-        ]
+        labels = assigned_labels(variable.labels)
+
+        to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
         if to_remove:
             warnings.warn(
@@ -1448,9 +1449,11 @@ class Model:
 
         self.variables.remove(name)
 
-        self.objective = self.objective.sel(
-            {TERM_DIM: ~self.objective.vars.isin(assigned_labels(variable.labels))}
-        )
+        referenced = self.objective.vars.isin(labels)
+        if FACTOR_DIM in referenced.dims:
+            referenced = referenced.any(FACTOR_DIM)
+
+        self.objective = self.objective.sel({TERM_DIM: ~referenced})
 
     def remove_constraints(self, name: str | list[str]) -> None:
         """
