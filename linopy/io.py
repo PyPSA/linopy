@@ -26,7 +26,7 @@ import xarray as xr
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import to_polars
+from linopy.common import sos_weights, to_polars
 from linopy.constants import (
     CONCAT_DIM,
     FACTOR_DIM,
