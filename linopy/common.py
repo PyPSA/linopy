@@ -1326,3 +1326,33 @@ def values_to_lookup_array(
     arr = np.full(size, nan, dtype=float)
     arr[labels[mask]] = values[mask]
     return arr
+
+
+def coords_ascend(coords: np.ndarray) -> bool:
+    """Whether ``coords`` are real numbers in strictly ascending order."""
+    return bool(coords.dtype.kind in "iuf" and np.all(coords[1:] > coords[:-1]))
+
+
+def coords_reorder_set(coords: np.ndarray) -> bool:
+    """
+    Whether ``coords`` order a set differently than the order it is declared in.
+
+    Ascending coords state the declared order and descending ones reverse it,
+    which leaves which members are adjacent unchanged. Non-numeric coords state
+    no order at all.
+    """
+    if coords.dtype.kind not in "iuf":
+        return False
+    return not (coords_ascend(coords) or coords_ascend(coords[::-1]))
+
+
+def sos_weights(coords: np.ndarray) -> np.ndarray:
+    """
+    SOS member weights stating the order ``coords`` is declared in.
+
+    Ascending coords already state it and are passed through, which keeps the LP
+    file unchanged. Anything else is weighted by position.
+    """
+    if coords_ascend(coords):
+        return coords
+    return np.arange(coords.size)

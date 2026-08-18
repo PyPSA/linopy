@@ -34,7 +34,7 @@ from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
 
 import linopy.io
-from linopy.common import count_initial_letters, values_to_lookup_array
+from linopy.common import count_initial_letters, sos_weights, values_to_lookup_array
 from linopy.constants import (
     EQUAL,
     SOS_DIM_ATTR,
@@ -135,7 +135,7 @@ def _iter_sos_sets(model: Model) -> Iterator[tuple[int, np.ndarray, np.ndarray]]
         sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         labels = var.labels.transpose(sos_dim, ...)
-        weights = labels.coords[sos_dim].values
+        weights = sos_weights(labels.coords[sos_dim].values)
         arr = labels.values.reshape(labels.shape[0], -1)
 
         for i in range(arr.shape[1]):

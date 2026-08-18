@@ -56,6 +56,14 @@ Upcoming Version
 * ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
   Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
 
+*SOS constraints*
+
+* ``Model.add_sos_constraints`` no longer requires the SOS dimension to have numeric coordinates.
+
+**Breaking Changes**
+
+* An SOS set is now ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates give the same order as before, so a model whose SOS dimension is sorted is unaffected, including every piecewise formulation. Descending coordinates now run in reverse, which does not change which members of a ``sos_type=2`` set are adjacent. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning; it now emits a ``UserWarning``, and sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
+
 **Bug fixes**
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
