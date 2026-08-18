@@ -456,12 +456,13 @@ def sos_to_file(
         sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+        weights = sos_weights(var.coords[sos_dim].values)
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
             # Per-set id = max member label: unique per set (labels are globally
             # unique); a fully-masked set reduces to -1 and is dropped below.
             ds["sos_labels"] = ds["labels"].max(sos_dim)
-            ds["weights"] = ds.coords[sos_dim]
+            ds["weights"] = ((sos_dim,), weights)
             df = to_polars(ds)
 
             # Drop masked members

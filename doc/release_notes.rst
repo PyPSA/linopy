@@ -4,6 +4,45 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+*Named expressions*
+
+* ``Model.add_expressions`` also accepts a callable for ``data``, in which case the expression is not built immediately: a ``LazyExpression`` placeholder is registered instead, and the callable (``data(model, **params)``) only runs when the expression is evaluated, via ``.evaluate()``, ``.promote()``, ``.solution``, or a comparison (``<=``, ``>=``, ``==``). ``mask`` accepts a callable too (resolved at the same time as `data`), in addition to a concrete array. Arithmetic between ``LazyExpression`` objects — and between a ``LazyExpression`` and anything else — stays lazy, returning a new, unnamed ``LazyExpression`` that composes the operands rather than evaluating them.
+  ``Model.to_netcdf`` gained a ``lazy={"evaluate", "skip", "raise"}`` parameter (default ``"evaluate"``) controlling what happens to lazy entries, since an arbitrary evaluator callable cannot itself be serialized to netcdf.
+* ``LazyExpression`` now shares its arithmetic/constraint protocol with ``LinearExpression``/``QuadraticExpression`` via a common ``AbstractExpression`` base, and gained the named counterparts (``add``, ``sub``, ``mul``, ``div``, ``pow``, ``dot``, ``le``, ``ge``, ``eq``, ``to_constraint``) that were previously eager-only — a ``LazyExpression`` is now a drop-in substitute for an eager expression wherever those are called, including with a ``join`` argument. ``lazy ** 2`` no longer evaluates the underlying evaluator twice, and ``-lazy`` now matches eager negation exactly (previously it filled masked/NaN coefficients with 0 before negating, like ``lazy * -1`` does).
+* Dividing a ``LazyExpression`` by a variable or another expression (e.g. ``cost / output`` for a unit cost), and other operations with no linear/quadratic form (e.g. ``lazy ** 3``), no longer raise immediately: they build a ``LazyExpression`` that is only readable via ``.solution`` once the model has been solved, since every operand is then just a number. ``.evaluate()``, ``.promote()`` and constraint-building still raise — now a dedicated ``linopy.NonLinearOperationError`` (a ``TypeError`` subclass, so existing ``except TypeError`` code keeps working) — pointing at ``.solution`` instead. Where this is already decidable at construction time (as opposed to only inside a leaf callable's body), a ``linopy.NonLinearExpressionWarning`` is raised immediately, and ``LazyExpression.is_evaluatable`` reports it without forcing evaluation.
+* A lazy expression's callable may also read post-solve-only data that is not itself an expression — most notably a constraint's ``.dual`` — and return a plain ``DataArray``/constant, or a ``LazyExpression`` built from one. It is then only readable via ``.solution``; ``.promote()`` raises since there is nothing to store as a named expression.
+
+
+Version 0.9.1
+-------------
+
+**Features**
+
+*Named expressions*
+
+* You can now store expressions in the model and get them back by name. ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-named ``expr0``, ``expr1``, ... if you don't pass one). Registered expressions live in ``Model.expressions``, a container that works like ``Model.variables`` and ``Model.constraints``, and are removed with ``Model.remove_expressions``. They survive ``Model.to_netcdf``/``linopy.read_netcdf``, ``Model.copy``, ``copy.copy``, ``copy.deepcopy`` and pickling. (`#882 <https://github.com/PyPSA/linopy/pull/882>`__)
+
+*SOS constraints*
+
+* ``Model.add_sos_constraints`` now works with any coordinates on the SOS dimension, not only numeric ones. (`#893 <https://github.com/PyPSA/linopy/pull/893>`__)
+
+**Performance**
+
+* ``Model.remove_variables`` is 2-5x faster. The masked labels are filtered once per removal instead of once per constraint group, membership is tested against the contiguous label range rather than by a sort-based ``isin``, and CSR-backed constraints are matched on term positions instead of gathering their labels. (`#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+
+**Bug fixes**
+
+* An SOS set is now ordered by declaration, not by the values of its coordinates. Labels are names, but they were handed to the solver as SOS weights, so element-for-element identical models could reach different optima — silently changing who is adjacent in a ``sos_type=2`` set — just because their coordinates were named differently. **Behaviour change:** ascending coordinates are unaffected (this covers every piecewise formulation), descending ones now run in reverse with the same adjacency, and only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning — that case now warns, and sorting the index restores the old order. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__, `#893 <https://github.com/PyPSA/linopy/pull/893>`__)
+* ``Model.remove_variables`` now ignores the removed variable's masked entries. A masked variable has no label, stored as ``-1`` — the same marker a constraint uses for an unused term slot — so it looked used by every constraint with a free slot, and models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__, `#886 <https://github.com/PyPSA/linopy/pull/886>`__, `#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+* ``Model.remove_variables`` no longer raises an ``IndexError`` on a quadratic objective. A quadratic term is dropped when any of its factors uses the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__, `#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+* The Xpress interface no longer calls API functions deprecated in Xpress 9.8. (`#880 <https://github.com/PyPSA/linopy/pull/880>`__)
+* The ``docs`` extra no longer pins ``numpy<2``. (`#869 <https://github.com/PyPSA/linopy/pull/869>`__)
+
+
+Version v0.9.0
+--------------
+
 **Features**
 
 
@@ -16,16 +55,6 @@ Upcoming Version
 *Improved IO*
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged. (`#780 <https://github.com/PyPSA/linopy/pull/780>`__)
-
-*Named expressions*
-
-* ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
-  Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
-* ``Model.add_expressions`` also accepts a callable for ``data``, in which case the expression is not built immediately: a ``LazyExpression`` placeholder is registered instead, and the callable (``data(model, **params)``) only runs when the expression is evaluated, via ``.evaluate()``, ``.promote()``, ``.solution``, or a comparison (``<=``, ``>=``, ``==``). ``mask`` accepts a callable too (resolved at the same time as `data`), in addition to a concrete array. Arithmetic between ``LazyExpression`` objects — and between a ``LazyExpression`` and anything else — stays lazy, returning a new, unnamed ``LazyExpression`` that composes the operands rather than evaluating them.
-  ``Model.to_netcdf`` gained a ``lazy={"evaluate", "skip", "raise"}`` parameter (default ``"evaluate"``) controlling what happens to lazy entries, since an arbitrary evaluator callable cannot itself be serialized to netcdf.
-* ``LazyExpression`` now shares its arithmetic/constraint protocol with ``LinearExpression``/``QuadraticExpression`` via a common ``AbstractExpression`` base, and gained the named counterparts (``add``, ``sub``, ``mul``, ``div``, ``pow``, ``dot``, ``le``, ``ge``, ``eq``, ``to_constraint``) that were previously eager-only — a ``LazyExpression`` is now a drop-in substitute for an eager expression wherever those are called, including with a ``join`` argument. ``lazy ** 2`` no longer evaluates the underlying evaluator twice, and ``-lazy`` now matches eager negation exactly (previously it filled masked/NaN coefficients with 0 before negating, like ``lazy * -1`` does).
-* Dividing a ``LazyExpression`` by a variable or another expression (e.g. ``cost / output`` for a unit cost), and other operations with no linear/quadratic form (e.g. ``lazy ** 3``), no longer raise immediately: they build a ``LazyExpression`` that is only readable via ``.solution`` once the model has been solved, since every operand is then just a number. ``.evaluate()``, ``.promote()`` and constraint-building still raise — now a dedicated ``linopy.NonLinearOperationError`` (a ``TypeError`` subclass, so existing ``except TypeError`` code keeps working) — pointing at ``.solution`` instead. Where this is already decidable at construction time (as opposed to only inside a leaf callable's body), a ``linopy.NonLinearExpressionWarning`` is raised immediately, and ``LazyExpression.is_evaluatable`` reports it without forcing evaluation.
-* A lazy expression's callable may also read post-solve-only data that is not itself an expression — most notably a constraint's ``.dual`` — and return a plain ``DataArray``/constant, or a ``LazyExpression`` built from one. It is then only readable via ``.solution``; ``.promote()`` raises since there is nothing to store as a named expression.
 
 *Other*
 

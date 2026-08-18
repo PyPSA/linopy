@@ -34,7 +34,7 @@ from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
 
 import linopy.io
-from linopy.common import count_initial_letters, values_to_lookup_array
+from linopy.common import count_initial_letters, sos_weights, values_to_lookup_array
 from linopy.constants import (
     EQUAL,
     SOS_DIM_ATTR,
@@ -135,7 +135,7 @@ def _iter_sos_sets(model: Model) -> Iterator[tuple[int, np.ndarray, np.ndarray]]
         sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         labels = var.labels.transpose(sos_dim, ...)
-        weights = labels.coords[sos_dim].values
+        weights = sos_weights(labels.coords[sos_dim].values)
         arr = labels.values.reshape(labels.shape[0], -1)
 
         for i in range(arr.shape[1]):
@@ -2664,16 +2664,27 @@ class Xpress(Solver[None]):
         lb = np.where(np.isneginf(lower), -xpress.infinity, lower)
         ub = np.where(np.isposinf(upper), xpress.infinity, upper)
         vals = np.concatenate([lb, ub]).astype(float, copy=False)
-        ctx.chgbounds(cols.tolist(), btypes, vals.tolist())
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgBounds(cols.tolist(), btypes, vals.tolist())
+        except AttributeError:  # Fallback to old API
+            ctx.chgbounds(cols.tolist(), btypes, vals.tolist())
 
     def _apply_var_types(
         self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
     ) -> None:
         coltypes = [self._XPRESS_VTYPE_MAP[k] for k in kinds]
-        ctx.chgcoltype(positions.tolist(), coltypes)
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgColType(positions.tolist(), coltypes)
+        except AttributeError:  # Fallback to old API
+            ctx.chgcoltype(positions.tolist(), coltypes)
 
     def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
-        ctx.chgrhs(_int_list(diff.con_rhs_indices), _float_list(diff.con_rhs_values))
+        indices = _int_list(diff.con_rhs_indices)
+        values = _float_list(diff.con_rhs_values)
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgRHS(indices, values)
+        except AttributeError:  # Fallback to old API
+            ctx.chgrhs(indices, values)
 
     def _apply_con_signs(
         self, ctx: Any, indices: np.ndarray, signs: np.ndarray
@@ -2684,25 +2695,44 @@ class Xpress(Solver[None]):
             if s_str not in self._XPRESS_ROWTYPE_MAP:
                 raise UnsupportedUpdate(f"unknown sign {s_str!r}")
             rowtypes.append(self._XPRESS_ROWTYPE_MAP[s_str])
-        ctx.chgrowtype(_int_list(indices), rowtypes)
+        row_indices = _int_list(indices)
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgRowType(row_indices, rowtypes)
+        except AttributeError:  # Fallback to old API
+            ctx.chgrowtype(row_indices, rowtypes)
 
     def _apply_con_coefs(
         self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
     ) -> None:
-        ctx.chgmcoef(_int_list(rows), _int_list(cols), _float_list(vals))
+        row_indices = _int_list(rows)
+        col_indices = _int_list(cols)
+        values = _float_list(vals)
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgMCoef(row_indices, col_indices, values)
+        except AttributeError:  # Fallback to old API
+            ctx.chgmcoef(row_indices, col_indices, values)
 
     def _apply_obj_linear(
         self, ctx: Any, indices: np.ndarray, values: np.ndarray
     ) -> None:
-        ctx.chgobj(_int_list(indices), _float_list(values))
+        idx = _int_list(indices)
+        vals = _float_list(values)
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgObj(idx, vals)
+        except AttributeError:  # Fallback to old API
+            ctx.chgobj(idx, vals)
 
     def _apply_obj_sense(self, ctx: Any, sense: str) -> None:
         if sense == "max":
-            ctx.chgobjsense(xpress.maximize)
+            direction = xpress.maximize
         elif sense == "min":
-            ctx.chgobjsense(xpress.minimize)
+            direction = xpress.minimize
         else:
             raise UnsupportedUpdate(f"unknown obj sense {sense!r}")
+        try:  # Try new API first (Xpress 9.8+)
+            ctx.chgObjSense(direction)
+        except AttributeError:  # Fallback to old API
+            ctx.chgobjsense(direction)
 
     def _build_direct(
         self,
@@ -2870,7 +2900,10 @@ class Xpress(Solver[None]):
             )
 
         if model.objective.sense == "max":
-            problem.chgobjsense(xpress.maximize)
+            try:  # Try new API first (Xpress 9.8+)
+                problem.chgObjSense(xpress.maximize)
+            except AttributeError:  # Fallback to old API
+                problem.chgobjsense(xpress.maximize)
 
         if set_names:
             print_variable, print_constraint = linopy.io.get_printers_scalar(

@@ -471,6 +471,40 @@ def replace_by_map(ds: DataArray, mapping: np.ndarray) -> DataArray:
     )
 
 
+def assigned_labels(labels: np.ndarray | DataArray) -> np.ndarray:
+    """
+    Flatten labels and drop the -1 sentinels.
+
+    ``-1`` marks a masked entry in a variable's or constraint's labels, but an
+    empty term slot in the ``vars`` field of a constraint or expression.
+    Matching labels of one object against another must therefore ignore it,
+    otherwise every masked entry compares equal to every empty term slot.
+    """
+    flat = np.asarray(labels).ravel()
+    return flat[flat != -1]
+
+
+def contains_labels(values: np.ndarray, labels: np.ndarray) -> bool:
+    """
+    Whether any entry of ``values`` is one of ``labels``.
+
+    ``labels`` must not contain the ``-1`` sentinel, see :func:`assigned_labels`.
+    Labels are handed out in ascending blocks, so restricting ``values`` to the
+    label range is both a cheap prefilter and, whenever the block is gap-free, the
+    complete answer.
+    """
+    if not labels.size:
+        return False
+    low, high = labels.min(), labels.max()
+    candidates = values[(values >= low) & (values <= high)]
+    if not candidates.size:
+        return False
+    is_gap_free = bool((np.diff(labels) == 1).all())
+    if is_gap_free:
+        return True
+    return bool(np.isin(candidates, labels).any())
+
+
 def to_path(path: str | Path | None) -> Path | None:
     """
     Convert a string to a Path object.
@@ -1257,3 +1291,33 @@ def values_to_lookup_array(
     arr = np.full(size, nan, dtype=float)
     arr[labels[mask]] = values[mask]
     return arr
+
+
+def coords_ascend(coords: np.ndarray) -> bool:
+    """Whether ``coords`` are real numbers in strictly ascending order."""
+    return bool(coords.dtype.kind in "iuf" and np.all(coords[1:] > coords[:-1]))
+
+
+def coords_reorder_set(coords: np.ndarray) -> bool:
+    """
+    Whether ``coords`` order a set differently than the order it is declared in.
+
+    Ascending coords state the declared order and descending ones reverse it,
+    which leaves which members are adjacent unchanged. Non-numeric coords state
+    no order at all.
+    """
+    if coords.dtype.kind not in "iuf":
+        return False
+    return not (coords_ascend(coords) or coords_ascend(coords[::-1]))
+
+
+def sos_weights(coords: np.ndarray) -> np.ndarray:
+    """
+    SOS member weights stating the order ``coords`` is declared in.
+
+    Ascending coords already state it and are passed through, which keeps the LP
+    file unchanged. Anything else is weighted by position.
+    """
+    if coords_ascend(coords):
+        return coords
+    return np.arange(coords.size)
