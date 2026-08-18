@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Bug fixes**
+
+* ``Solver.close()`` now drops the native solver model before closing the environment that owns it. The reverse order left the model pointing at freed memory, so collecting it later crashed the interpreter — a ``Fatal Python error: Aborted`` or a Windows access violation, usually from a garbage collection pass in unrelated code. Solvers registering their model on the environment's ``ExitStack`` (Gurobi, Xpress, Mosek) were already safe; HiGHS, SCIP, COPT and MindOpt were not.
+* The COPT interface no longer closes its environment while returning the solver model built in it. The environment now lives on the solver's ``ExitStack`` and is released by ``Solver.close()``, so ``model.solver_model`` stays usable after ``model.solve("copt")``.
+
 
 Version 0.9.1
 -------------
