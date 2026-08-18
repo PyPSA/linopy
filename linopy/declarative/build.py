@@ -92,6 +92,29 @@ def _topological_order(
     return ordered
 
 
+def _is_post_solve(references: dict[str, dict[str, list[str]]], name: str) -> bool:
+    """
+    Return True if any math component references a given expression.
+
+    Post-solve-only components are those that are not built into the model
+    (e.g., expressions that are not referenced by any constraint or objective).
+    """
+    post_solve = {
+        group: {name_ for name_, refs in group_refs.items() if name in refs}
+        for group, group_refs in references.items()
+    }
+
+    # Check whether referenced expressions themselves are post-solve-only, recursively.
+    if other_exprs := post_solve.pop("expressions"):
+        for expr in other_exprs:
+            sub_is_post_solve = _is_post_solve(references, expr)
+            if not sub_is_post_solve:
+                return False
+    if set().union(*post_solve.values()):
+        return False
+    return True
+
+
 def declarative_model(
     math_def: dict,
     input_data: xr.Dataset,
@@ -350,6 +373,13 @@ class DeclarativeModelBuilder(_DeclarativeBase):
     def add_expression(self, name: str, definition: ExpressionDef) -> None:
         """Add a named expression to the model, merging its equation variants."""
         parsed = self.parsed["expressions"][name]
+        # TODO: implement a post-solve evaluator
+        if _is_post_solve(self.references, name):
+            LOGGER.info(
+                f"expressions:{name} | No references found in the math; "
+                "only its solution will be available, post-solve."
+            )
+            return
         mask = parsing.component_mask(
             "expressions", name, definition, parsed.mask, self._ctx
         )
