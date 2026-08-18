@@ -4,6 +4,14 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Bug fixes**
+
+* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+
+
+Version 0.9.1
+-------------
+
 **Features**
 
 *Strict "v1" arithmetic semantics (opt-in)*
@@ -53,22 +61,23 @@ Upcoming Version
 
 *Named expressions*
 
-* ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
-  Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
+* You can now store expressions in the model and get them back by name. ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-named ``expr0``, ``expr1``, ... if you don't pass one). Registered expressions live in ``Model.expressions``, a container that works like ``Model.variables`` and ``Model.constraints``, and are removed with ``Model.remove_expressions``. They survive ``Model.to_netcdf``/``linopy.read_netcdf``, ``Model.copy``, ``copy.copy``, ``copy.deepcopy`` and pickling. (`#882 <https://github.com/PyPSA/linopy/pull/882>`__)
 
 *SOS constraints*
 
-* ``Model.add_sos_constraints`` no longer requires the SOS dimension to have numeric coordinates.
+* ``Model.add_sos_constraints`` now works with any coordinates on the SOS dimension, not only numeric ones. (`#893 <https://github.com/PyPSA/linopy/pull/893>`__)
 
-**Breaking Changes**
+**Performance**
 
-* An SOS set is now ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates give the same order as before, so a model whose SOS dimension is sorted is unaffected, including every piecewise formulation. Descending coordinates now run in reverse, which does not change which members of a ``sos_type=2`` set are adjacent. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning; it now emits a ``UserWarning``, and sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
+* ``Model.remove_variables`` is 2-5x faster. The masked labels are filtered once per removal instead of once per constraint group, membership is tested against the contiguous label range rather than by a sort-based ``isin``, and CSR-backed constraints are matched on term positions instead of gathering their labels. (`#895 <https://github.com/PyPSA/linopy/pull/895>`__)
 
 **Bug fixes**
 
-* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
-* ``Model.remove_variables`` no longer removes constraints that never reference the removed variable. A masked variable carries ``-1`` label entries, which matched the ``-1`` that marks an empty term slot in a constraint, so any masked variable looked like it was used by any constraint with padded terms. Models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
-* ``Model.remove_variables`` now also works on a model with a quadratic objective, where it raised an ``IndexError`` because the term mask was built over the factor dimension as well. Quadratic terms are dropped when any of their factors references the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+* An SOS set is now ordered by declaration, not by the values of its coordinates. Labels are names, but they were handed to the solver as SOS weights, so element-for-element identical models could reach different optima — silently changing who is adjacent in a ``sos_type=2`` set — just because their coordinates were named differently. **Behaviour change:** ascending coordinates are unaffected (this covers every piecewise formulation), descending ones now run in reverse with the same adjacency, and only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning — that case now warns, and sorting the index restores the old order. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__, `#893 <https://github.com/PyPSA/linopy/pull/893>`__)
+* ``Model.remove_variables`` now ignores the removed variable's masked entries. A masked variable has no label, stored as ``-1`` — the same marker a constraint uses for an unused term slot — so it looked used by every constraint with a free slot, and models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__, `#886 <https://github.com/PyPSA/linopy/pull/886>`__, `#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+* ``Model.remove_variables`` no longer raises an ``IndexError`` on a quadratic objective. A quadratic term is dropped when any of its factors uses the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__, `#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+* The Xpress interface no longer calls API functions deprecated in Xpress 9.8. (`#880 <https://github.com/PyPSA/linopy/pull/880>`__)
+* The ``docs`` extra no longer pins ``numpy<2``. (`#869 <https://github.com/PyPSA/linopy/pull/869>`__)
 
 
 Version v0.9.0
