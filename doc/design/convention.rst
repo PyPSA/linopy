@@ -210,9 +210,24 @@ was never given zeroes the term rather than scaling it by one), and the same
 zero row for ``/``. Pass the keyword to say otherwise:
 ``expr.div(cost, join="outer", fill_value=1)`` keeps the term unscaled,
 ``expr.add(price, join="outer", fill_value=10)`` treats an unpriced label as 10.
-It applies to constant operands only — an *expression* missing at a label always
-contributes the zero expression — and it requires an explicit ``join=``, since
-without one there are no created positions to fill.
+A numeric ``fill_value=`` applies to constant operands only — an *expression*
+missing at a label always contributes the zero expression — and it requires an
+explicit ``join=``, since without one there are no created positions to fill.
+
+The one value that is not a number is ``linopy.ABSENT``: create the labels, but
+leave what they create absent. It is the way to say "combine these where both
+sides are defined, and still return the result on the joint index" without the
+zero-fill silently rewriting the model at the labels only one side had::
+
+    gen.add(imp, join="outer", fill_value=linopy.ABSENT)
+
+Every position the join creates then comes out absent, whichever side was
+missing there, so §6 absorbs it and §12 drops the row from a constraint. Unlike
+a numeric fill it is accepted for expression operands too — including
+``linopy.merge(..., join=…, fill_value=linopy.ABSENT)`` — because absence is
+something both kinds of operand can carry. It cannot be spelled ``np.nan``
+(§5 raises on a user NaN) or ``None`` (already "the operator's default"), and it
+is a v1 concept: under legacy it raises.
 
 Absence an operand carries in — from ``mask=``, ``.where()``, ``.shift()``,
 ``.reindex()`` — is untouched by the join and keeps propagating under §6. So

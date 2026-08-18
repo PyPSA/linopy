@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeAlias
 from warnings import warn
 
 import numpy as np
@@ -381,15 +381,68 @@ def check_user_nan(*, op_kind: str = "add") -> None:
     warn_legacy(_legacy_nan_constant_message(op_kind), stacklevel=5)
 
 
-def check_join_fill_value(fill_value: float | None, join: str | None) -> None:
+class AbsentType:
+    """
+    Sentinel for ``fill_value=``: create the label, leave the slot absent.
+
+    A reindexing join otherwise fills what it creates (§10). Passing
+    ``linopy.ABSENT`` instead keeps the join's coordinates but makes every
+    created position absent, so §6 absorbs it and §12 drops the row. It is a
+    dedicated object rather than ``np.nan`` because a user-supplied NaN raises
+    under §5, and rather than ``None`` because that already means "the
+    operator's default fill".
+    """
+
+    def __repr__(self) -> str:
+        return "linopy.ABSENT"
+
+    def __neg__(self) -> AbsentType:
+        return self
+
+
+ABSENT = AbsentType()
+
+FillValueLike: TypeAlias = float | AbsentType | None
+
+
+def join_fill(fill_value: FillValueLike, default: float) -> float:
+    """Numeric fill a join applies — ``ABSENT`` fills with NaN, ``None`` with ``default``."""
+    if fill_value is None:
+        return default
+    if isinstance(fill_value, AbsentType):
+        return np.nan
+    return fill_value
+
+
+def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
     """
     ``fill_value=`` fills what a join creates, so it requires an explicit join.
+
+    ``ABSENT`` additionally requires v1 — legacy fills absent slots with the
+    operator's identity, so there is nothing for it to mean there. A NaN fill
+    is rejected under v1 for the §5 reason a NaN constant is: absence has a
+    name of its own.
     """
-    if fill_value is not None and join is None:
+    if fill_value is None:
+        return
+    if join is None:
         raise ValueError(
             "fill_value= fills the positions a join creates, so it requires an "
             "explicit join= (e.g. join='outer'). To fill absent slots of an "
             "operand, call `.fillna(...)` on it before the operation."
+        )
+    if not is_v1():
+        if isinstance(fill_value, AbsentType):
+            raise ValueError(
+                "fill_value=ABSENT expresses absence, which only the v1 "
+                "convention carries. Set linopy.options['semantics'] = 'v1' "
+                "to use it."
+            )
+        return
+    if is_nan_scalar(fill_value):
+        raise ValueError(
+            "fill_value=NaN is ambiguous: pass linopy.ABSENT to leave the "
+            "positions the join creates absent, or a number to fill them."
         )
 
 

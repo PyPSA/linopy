@@ -21,6 +21,7 @@ from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import (
+    ABSENT,
     LinearExpression,
     LinopySemanticsWarning,
     Model,
@@ -3458,6 +3459,119 @@ class TestOuterJoinFill:
         with pytest.raises(ValueError, match="constant operands only"):
             operands["expr_full"].add(operands["expr_part"], join="outer", fill_value=1)
 
+    @pytest.mark.parametrize(
+        "op",
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["expr_part"], join="outer", fill_value=ABSENT
+                ),
+                id="add-expr",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["expr_part"], join="outer", fill_value=ABSENT
+                ),
+                id="sub-expr",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="add-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(
+                    o["const_full"], join="outer", fill_value=ABSENT
+                ),
+                id="add-const-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="sub-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="mul-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="div-const",
+            ),
+        ],
+    )
+    def test_absent_keeps_created_position_absent(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+    ) -> None:
+        result = op(operands)
+        assert list(result.indexes["i"]) == [0, 1]
+        assert np.isnan(result.const.sel(i=0).item())
+        assert np.isnan(result.coeffs.sel(i=0).values).all()
+        assert not np.isnan(result.const.sel(i=1).item())
+
+    def test_absent_drops_the_row_from_the_constraint(
+        self, operands: dict[str, Any]
+    ) -> None:
+        lhs = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        con = lhs.model.add_constraints(lhs >= 10, name="joint")
+        np.testing.assert_array_equal(con.mask.values, [False, True])
+
+    def test_absent_matches_the_reindex_workaround(
+        self, operands: dict[str, Any]
+    ) -> None:
+        union = pd.Index([0, 1], name="i")
+        expected = operands["expr_full"].reindex(i=union) + operands[
+            "expr_part"
+        ].reindex(i=union)
+        result = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        assert_linequal(result, expected)
+
+    def test_absent_slot_reports_isnull(self, operands: dict[str, Any]) -> None:
+        result = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        np.testing.assert_array_equal(result.isnull().values, [True, False])
+        np.testing.assert_array_equal((result * 3).isnull().values, [True, False])
+        filled = operands["expr_full"].add(operands["expr_part"], join="outer")
+        np.testing.assert_array_equal(filled.isnull().values, [False, False])
+
+    def test_nan_fill_value_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="fill_value=NaN is ambiguous"):
+            operands["expr_full"].add(
+                operands["const_part"], join="outer", fill_value=np.nan
+            )
+
+    def test_absent_via_merge(self, operands: dict[str, Any]) -> None:
+        merged = merge(
+            [operands["expr_full"], operands["expr_part"]],
+            join="outer",
+            fill_value=ABSENT,
+        )
+        expected = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        assert_linequal(merged, expected)
+
+    def test_merge_rejects_a_numeric_fill_value(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="only accepts fill_value=linopy.ABSENT"):
+            merge(
+                [operands["expr_full"], operands["expr_part"]],
+                join="outer",
+                fill_value=1,
+            )
+
     def test_carried_absence_still_propagates(self) -> None:
         m = Model()
         x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
@@ -3467,6 +3581,15 @@ class TestOuterJoinFill:
         assert list(result.indexes["i"]) == [0, 1, 2]
         assert np.isnan(result.const.sel(i=0).item())
         assert result.const.sel(i=2).item() == 2.0
+
+
+@pytest.mark.legacy
+def test_absent_fill_value_rejected_under_legacy() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+    y = m.add_variables(coords=[pd.Index([1], name="i")], name="y")
+    with pytest.raises(ValueError, match="only the v1 convention carries"):
+        x.add(y, join="outer", fill_value=ABSENT)
 
 
 @pytest.mark.legacy
