@@ -17,7 +17,7 @@ Upcoming Version
 
 **Breaking Changes**
 
-* An SOS set is ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates state the same order, so a model whose SOS dimension is sorted is unaffected, every piecewise formulation among them; descending ones reverse it, which leaves an SOS set's meaning intact. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning, and it now emits a ``UserWarning``; sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
+* An SOS set is now ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates give the same order as before, so a model whose SOS dimension is sorted is unaffected, including every piecewise formulation. Descending coordinates now run in reverse, which does not change which members of a ``sos_type=2`` set are adjacent. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning; it now emits a ``UserWarning``, and sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
 
 **Bug fixes**
 

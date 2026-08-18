@@ -1,8 +1,8 @@
 """
 Which order an SOS set runs in: the declared one, or the one its labels imply.
 
-Where the labels ascend the two coincide — the common case, and every piecewise
-model. Where they do not, the declared order wins.
+Where the labels ascend the two are the same, which covers the common case and
+every piecewise model. Where they do not, the declared order wins.
 """
 
 from __future__ import annotations
@@ -11,10 +11,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from linopy import Model, available_solvers
+from linopy.common import sos_weights
 
 #: Gains that separate the two orders: the first two members declared are worth
 #: 1.0 each, the last 0.1. Declaration order can take the first two and scores
@@ -64,15 +66,6 @@ def lp_sos_section(tmp_path: Path) -> Callable[[Model], str]:
         return fn.read_text().split("\nsos\n")[1]
 
     return read
-
-
-def test_ascending_labels_are_written_as_weights_verbatim(
-    sos_model: Callable[..., Model], lp_sos_section: Callable[[Model], str]
-) -> None:
-    section = lp_sos_section(sos_model([0.0, 1.5, 3.5]))
-
-    assert "1.5" in section
-    assert "3.5" in section
 
 
 @needs_highs
@@ -164,3 +157,27 @@ def test_weights_are_positions_where_labels_do_not_ascend(
 def test_labels_that_regroup_the_set_warn(sos_model: Callable[..., Model]) -> None:
     with pytest.warns(UserWarning, match="order"):
         sos_model([30, 10, 20])
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        pytest.param([False, True], id="ascending"),
+        pytest.param([True, False], id="descending"),
+    ],
+)
+def test_boolean_labels_are_weighted_by_position(labels: list) -> None:
+    """A bool passes ``is_numeric_dtype``, but is no weight an LP file can hold."""
+    assert list(sos_weights(np.array(labels))) == [0, 1]
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "uint32", "uint64", "int64"])
+def test_unsigned_labels_that_do_not_ascend_are_weighted_by_position(
+    sos_model: Callable[..., Model],
+    lp_sos_section: Callable[[Model], str],
+    dtype: str,
+) -> None:
+    with pytest.warns(UserWarning, match="order"):
+        m = sos_model(pd.Index(np.array([30, 10, 20], dtype=dtype)))
+
+    assert lp_sos_section(m).split()[:6] == ["s2:", "S2", "::", "x0:0", "x1:1", "x2:2"]

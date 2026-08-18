@@ -1293,22 +1293,31 @@ def values_to_lookup_array(
     return arr
 
 
-def labels_state_order(labels: np.ndarray) -> bool:
-    """Whether ``labels`` are numeric and strictly increasing."""
-    return bool(
-        pd.api.types.is_numeric_dtype(labels.dtype)
-        and (labels.size < 2 or np.all(np.diff(labels) > 0))
-    )
+def coords_ascend(coords: np.ndarray) -> bool:
+    """Whether ``coords`` are real numbers in strictly ascending order."""
+    return bool(coords.dtype.kind in "iuf" and np.all(coords[1:] > coords[:-1]))
 
 
-def sos_weights(labels: np.ndarray) -> np.ndarray:
+def coords_reorder_set(coords: np.ndarray) -> bool:
     """
-    SOS member weights spelling out the declared order of ``labels``.
+    Whether ``coords`` order a set differently than the order it is declared in.
 
-    Ascending labels already spell it and are passed through, which keeps the
-    LP file unchanged; anything else is weighted by position.
+    Ascending coords state the declared order and descending ones reverse it,
+    which leaves which members are adjacent unchanged. Non-numeric coords state
+    no order at all.
     """
-    labels = np.asarray(labels)
-    if labels_state_order(labels):
-        return labels
-    return np.arange(labels.size)
+    if coords.dtype.kind not in "iuf":
+        return False
+    return not (coords_ascend(coords) or coords_ascend(coords[::-1]))
+
+
+def sos_weights(coords: np.ndarray) -> np.ndarray:
+    """
+    SOS member weights stating the order ``coords`` is declared in.
+
+    Ascending coords already state it and are passed through, which keeps the LP
+    file unchanged. Anything else is weighted by position.
+    """
+    if coords_ascend(coords):
+        return coords
+    return np.arange(coords.size)

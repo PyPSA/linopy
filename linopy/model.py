@@ -33,7 +33,7 @@ from linopy.common import (
     assign_multiindex_safe,
     assigned_labels,
     best_int,
-    labels_state_order,
+    coords_reorder_set,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -1054,15 +1054,7 @@ class Model:
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
 
-        # Only sos_type=2 can change meaning, and only where the labels group
-        # the members differently: an sos1 set is unordered, and reversing an
-        # ordered one leaves which of its members are adjacent unchanged.
-        labels = np.asarray(variable.coords[sos_dim].values)
-        if (
-            sos_type == 2
-            and pd.api.types.is_numeric_dtype(labels.dtype)
-            and not (labels_state_order(labels) or labels_state_order(labels[::-1]))
-        ):
+        if sos_type == 2 and coords_reorder_set(variable.coords[sos_dim].values):
             warn(
                 f"The coordinates of SOS dimension '{sos_dim}' neither ascend "
                 "nor descend. This set is ordered by the positions its members "

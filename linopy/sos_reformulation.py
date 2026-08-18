@@ -273,7 +273,6 @@ def reformulate_sos_constraints(
 
             result.saved_attrs[var_name] = dict(var.attrs)
 
-            # The array order is already the order to reformulate along.
             if sos_type == 1:
                 added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
             elif sos_type == 2:

@@ -105,8 +105,12 @@ unordered, so it does not apply.
 The coordinates need not be numeric. Where they are numeric but neither
 ascend nor descend, linopy warns: such a set was previously ordered by
 coordinate value, so its meaning changes. Sort the index to keep that
-ordering. Descending coordinates are left alone, reversing a set being
-the one reordering that leaves its adjacencies intact.
+ordering. Descending coordinates are not warned about, because reversing a
+set does not change which of its members are adjacent.
+
+The weights written to an LP file, or passed to a solver that supports SOS
+sets natively, are the coordinates themselves where they ascend, and member
+positions otherwise.
 
 Examples
 --------

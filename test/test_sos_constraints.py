@@ -37,7 +37,6 @@ def test_add_sos_constraints_validation() -> None:
     with pytest.raises(ValueError, match="dimension"):
         m.add_sos_constraints(variable, sos_type=1, sos_dim="missing")
 
-    # A set is ordered by declaration, so a string label is no obstacle.
     m.add_sos_constraints(variable, sos_type=1, sos_dim="strings")
     assert "string_var" in list(m.variables.sos)
 
