@@ -38,8 +38,10 @@ from linopy.common import (
     VariableLabelIndex,
     align_lines_by_delimiter,
     assign_multiindex_safe,
+    assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
+    contains_labels,
     coords_from_dataset,
     coords_to_dataset_vars,
     filter_nulls_polars,
@@ -201,9 +203,23 @@ class ConstraintBase(ABC):
         base = list(Constraints.dataset_attrs)
         return base + ["binary_var", "binary_val"] if self.is_indicator else base
 
-    @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
-        """Check if the constraint references any of the given variable labels."""
+        """
+        Check if the constraint references any of the given variable labels.
+
+        Masked variable entries (label -1) are ignored: they are not part of
+        the model and would otherwise match every empty term slot.
+        """
+        return self.has_labels(assigned_labels(variable.labels))
+
+    @abstractmethod
+    def has_labels(self, labels: np.ndarray) -> bool:
+        """
+        Check if the constraint references any of the given variable labels.
+
+        ``labels`` must not contain the ``-1`` sentinel, see
+        :func:`linopy.common.assigned_labels`.
+        """
 
     @abstractmethod
     def sanitize_zeros(self) -> ConstraintBase:
@@ -939,11 +955,9 @@ class CSRConstraint(ConstraintBase):
             binval=binval,
         )
 
-    def has_variable(self, variable: variables.Variable) -> bool:
-        vlabels = self._model.variables.label_index.vlabels
-        return bool(
-            np.isin(vlabels[self._csr.indices], variable.labels.values.ravel()).any()
-        )
+    def has_labels(self, labels: np.ndarray) -> bool:
+        label_to_pos = self._model.variables.label_index.label_to_pos
+        return contains_labels(self._csr.indices, label_to_pos[labels])
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
@@ -1518,8 +1532,8 @@ class Constraint(ConstraintBase):
         value = DataArray(value).broadcast_like(self.labels)
         self._data = assign_multiindex_safe(self.data, dual=value)
 
-    def has_variable(self, variable: variables.Variable) -> bool:
-        return bool(self.data["vars"].isin(variable.labels.values.ravel()).any())
+    def has_labels(self, labels: np.ndarray) -> bool:
+        return contains_labels(self.data["vars"].values.ravel(), labels)
 
     def _matrix_export_data(
         self, label_index: VariableLabelIndex

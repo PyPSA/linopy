@@ -18,8 +18,10 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
+from linopy.constants import FACTOR_DIM
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import signed_number
-from linopy.testing import assert_model_equal
+from linopy.testing import assert_exprequal, assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -74,6 +76,37 @@ def model_with_multiindex() -> Model:
     m.add_constraints(x + y, LESS_EQUAL, 10, name="constraint-1")
 
     m.add_objective(2 * x + 3 * y)
+
+    return m
+
+
+@pytest.fixture
+def model_with_expressions() -> Model:
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y")
+
+    m.add_expressions(x + 1, name="lin")
+    m.add_expressions(x * y, name="quad")
+    m.add_expressions(2 * x + 3 * y, name="mixed-dims-expr")
+
+    m.add_constraints(x + y, LESS_EQUAL, 10)
+    m.add_objective(m.expressions["mixed-dims-expr"])
+
+    return m
+
+
+@pytest.fixture
+def model_with_masked_expression() -> Model:
+    m = Model()
+
+    idx = pd.RangeIndex(6, name="i")
+    x = m.add_variables(coords=[idx], name="x")
+    mask = xr.DataArray([True, True, True, False, False, False], coords=[idx])
+    m.add_expressions(x + 1, name="masked", mask=mask)
+
+    m.add_objective(x.sum())
 
     return m
 
@@ -204,6 +237,179 @@ def test_model_to_netcdf_with_multiindex_scipy_engine(
         assert isinstance(v, str), f"{k!r}: {v!r}"
 
     assert_model_equal(m, read_netcdf(fn))
+
+
+def test_model_to_netcdf_with_expressions(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert set(p.expressions) == {"lin", "quad", "mixed-dims-expr"}
+    assert_model_equal(m, p)
+
+
+def test_model_to_netcdf_linear_expression(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.expressions["lin"], LinearExpression)
+    assert not isinstance(p.expressions["lin"], QuadraticExpression)
+    assert_exprequal(m.expressions["lin"], p.expressions["lin"])
+
+
+def test_model_to_netcdf_quadratic_expression(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.expressions["quad"], QuadraticExpression)
+    assert p.expressions["quad"].data.sizes[FACTOR_DIM] == 2
+    assert_exprequal(m.expressions["quad"], p.expressions["quad"])
+
+
+def test_model_to_netcdf_expression_dash_name(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert "mixed-dims-expr" in p.expressions
+    assert p.expressions["mixed-dims-expr"].name == "mixed-dims-expr"
+
+
+def test_model_to_netcdf_masked_expression(
+    model_with_masked_expression: Model, tmp_path: Path
+) -> None:
+    m = model_with_masked_expression
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+
+    masked = p.expressions["masked"]
+    np.testing.assert_array_equal(
+        masked.vars.values, m.expressions["masked"].vars.values
+    )
+    assert np.isnan(masked.coeffs.values[3:]).all()
+
+
+def test_model_to_netcdf_expression_with_multiindex(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    m = model_with_multiindex
+    x = m.variables["x-var"]
+    y = m.variables["y-var"]
+    m.add_expressions(x + y, name="mi-expr")
+
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+    index = p.expressions["mi-expr"].indexes["dim_0"]
+    assert isinstance(index, pd.MultiIndex)
+    assert list(index.names) == ["first", "second"]
+
+
+def test_model_to_netcdf_expression_with_multiindex_scipy_engine(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    m = model_with_multiindex
+    x = m.variables["x-var"]
+    y = m.variables["y-var"]
+    m.add_expressions(x + y, name="mi-expr")
+
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, engine="scipy")
+
+    raw_attrs = xr.load_dataset(fn).attrs
+    expr_multiindex_attrs = {
+        k: v
+        for k, v in raw_attrs.items()
+        if k.startswith("expressions-mi-expr") and k.endswith("_multiindex")
+    }
+    assert expr_multiindex_attrs
+    for k, v in expr_multiindex_attrs.items():
+        assert isinstance(v, str), f"{k!r}: {v!r}"
+
+    assert_model_equal(m, read_netcdf(fn))
+
+
+def test_model_to_netcdf_expression_labels_stay_valid(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    valid_labels = set(p.variables.flat.labels)
+    labels = p.expressions["lin"].vars.values.ravel()
+    assert all(label == -1 or label in valid_labels for label in labels)
+
+    # "lin" is `x + 1`, so its single term per element should equal x's own labels.
+    x_labels = p.variables["x"].labels
+    lin_labels = p.expressions["lin"].vars.isel(_term=0)
+    xr.testing.assert_equal(lin_labels.rename(None), x_labels.rename(None))
+
+
+def test_model_to_netcdf_empty_expressions(model: Model, tmp_path: Path) -> None:
+    m = model
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert len(p.expressions) == 0
+    assert_model_equal(m, p)
+
+    raw = xr.load_dataset(fn)
+    assert not any(str(k).startswith("expressions") for k in raw)
+
+
+def test_model_to_netcdf_preserves_exprname_counter(
+    model: Model, tmp_path: Path
+) -> None:
+    m = model
+    x = m.variables["x"]
+    m.add_expressions(x + 1)
+    m.add_expressions(x + 2)
+
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert p._exprnameCounter == m._exprnameCounter == 2
+    new_expr = p.add_expressions(p.variables["x"] + 3)
+    assert new_expr.name == "expr2"
+
+
+def test_pickle_model_with_expressions(
+    model_with_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_expressions
+    fn = tmp_path / "test.pkl"
+
+    with open(fn, "wb") as f:
+        pickle.dump(m, f)
+
+    with open(fn, "rb") as f:
+        p = pickle.load(f)
+
+    assert_model_equal(m, p)
+    assert p.expressions["lin"].model is p
 
 
 @pytest.mark.skipif(not HAS_NETCDF4, reason="legacy format requires netCDF4 backend")
