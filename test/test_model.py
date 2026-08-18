@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import gettempdir
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -158,6 +159,42 @@ def test_remove_variable() -> None:
     assert "con0" not in m.constraints
 
     assert not m.objective.vars.isin(x.labels).any()
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+@pytest.mark.parametrize("quadratic", [False, True])
+def test_remove_masked_variable_keeps_unrelated_constraints(
+    freeze: bool, quadratic: bool
+) -> None:
+    # https://github.com/PyPSA/linopy/issues/883
+    m: Model = Model(freeze_constraints=freeze)
+
+    i = pd.Index(range(3), name="i")
+    mask = [True, False, True]
+    a = m.add_variables(coords=[i], name="a", mask=mask)
+    b = m.add_variables(coords=[i], name="b", mask=mask)
+    c = m.add_variables(coords=[i], name="c")
+
+    # `b` is masked, so the constraint carries empty term slots (-1), but it
+    # never references `a`
+    without_a = m.add_constraints(b.sum() + c, EQUAL, 0, name="without_a")
+    assert not without_a.has_variable(a)
+
+    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
+    assert with_a.has_variable(a)
+
+    if quadratic:
+        m.add_objective((a * c).sum() + (c * c).sum())
+    else:
+        m.add_objective((1 * a).sum() + (1 * c).sum())
+
+    with pytest.warns(UserWarning, match="with_a"):
+        m.remove_variables("a")
+
+    assert "without_a" in m.constraints
+    assert "with_a" not in m.constraints
+    assert not m.objective.vars.isin(a.labels[a.labels != -1]).any()
+    assert m.objective.vars.isin(c.labels).any()
 
 
 def test_remove_constraint() -> None:

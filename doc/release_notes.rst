@@ -11,6 +11,11 @@ Upcoming Version
 * ``Model.add_expressions`` registers a ``LinearExpression`` or ``QuadraticExpression`` under a name (auto-generated as ``expr0``, ``expr1``, ... if omitted), accessible afterwards via ``Model.expressions`` (an ``Expressions`` container mirroring ``Model.variables``/``Model.constraints``) and removable via ``Model.remove_expressions``.
   Named expressions are persisted by ``Model.to_netcdf``/``linopy.read_netcdf`` and preserved by ``Model.copy``, ``copy.copy``, ``copy.deepcopy``, and pickling.
 
+**Bug fixes**
+
+* ``Model.remove_variables`` no longer removes constraints that never reference the removed variable. A masked variable carries ``-1`` label entries, which matched the ``-1`` that marks an empty term slot in a constraint, so any masked variable looked like it was used by any constraint with padded terms. Models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+* ``Model.remove_variables`` now also works on a model with a quadratic objective, where it raised an ``IndexError`` because the term mask was built over the factor dimension as well. Quadratic terms are dropped when any of their factors references the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+
 
 Version v0.9.0
 --------------
