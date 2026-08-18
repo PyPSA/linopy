@@ -81,7 +81,6 @@ from linopy.common import (
     forward_as_properties,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_index_map,
     get_printout_labels,
     group_terms_polars,
     has_optimized_model,
@@ -376,24 +375,25 @@ def _check_grouper_alignment(group: Any, data: Dataset) -> None:
 
 def _encode_multikey_group(
     frame: pd.DataFrame,
-) -> tuple[pd.Series, tuple[dict, pd.Index]]:
+) -> tuple[pd.Series, pd.MultiIndex]:
     """
     Encode a multi-key group frame as a single integer-coded Series.
 
     ``_grouped_sum`` groups by one key, so each row's tuple of key values is
-    mapped to an integer. The frame is already aligned to the data (see
-    :func:`_check_grouper_alignment`), so no reindexing is needed. The returned
-    ``(int_map, columns)`` lets :func:`_restore_multikey_index` rebuild the
-    MultiIndex on the result.
+    mapped to an integer. The codes are sorted by key tuple, so the group order
+    of the result matches the single-key path, which sorts as well. The frame is
+    already aligned to the data (see :func:`_check_grouper_alignment`), so no
+    reindexing is needed. The returned uniques let
+    :func:`_restore_multikey_index` rebuild the MultiIndex on the result.
     """
-    int_map = get_index_map(*frame.values.T)
-    coded = frame.apply(tuple, axis=1).map(int_map)
-    return coded, (int_map, frame.columns)
+    codes, uniques = pd.factorize(pd.MultiIndex.from_frame(frame), sort=True)
+    coded = pd.Series(codes, index=frame.index)
+    return coded, uniques.set_names([str(col) for col in frame.columns])
 
 
 def _restore_multikey_index(
     ds: Dataset,
-    decode: tuple[dict, pd.Index],
+    uniques: pd.MultiIndex,
     stacked_survives: bool,
 ) -> Dataset:
     """
@@ -406,10 +406,8 @@ def _restore_multikey_index(
     where a *surviving* ``group`` MultiIndex additionally warns about the
     deprecated result, whichever grouper minted it.
     """
-    int_map, columns = decode
-    index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
-    level_names = [str(col) for col in columns]
-    index.names = level_names
+    index = uniques.take(ds.indexes[GROUP_DIM])
+    level_names = list(index.names)
     index.name = GROUP_DIM
     if stacked_survives and is_v1():
         return ds.assign_coords(

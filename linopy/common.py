@@ -522,16 +522,6 @@ def best_int(max_value: int) -> type[signedinteger[Any]]:
     raise ValueError(f"Value {max_value} is too large for int64.")
 
 
-def get_index_map(*arrays: Sequence[Hashable]) -> dict[tuple, int]:
-    """
-    Given arrays of hashable objects, create a map from unique combinations to unique integers.
-    """
-    # Create unique combinations
-    unique_combinations = set(zip(*arrays))
-
-    return {combination: i for i, combination in enumerate(unique_combinations)}
-
-
 def generate_indices_for_printout(
     dim_sizes: Sequence[int], max_lines: int
 ) -> Generator[tuple[int | np.signedinteger[Any], ...] | None, None, None]:

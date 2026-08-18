@@ -2052,6 +2052,16 @@ def test_linear_expression_groupby_with_dataframe_with_same_group_name_v1(
     assert grouped.nterm == 3
 
 
+def test_linear_expression_groupby_multikey_is_sorted(v: Variable) -> None:
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [2, 1, 3, 1] * 5, "b": list("yxxy") * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(groups).sum()
+    keys = list(zip(grouped.data["a"].values, grouped.data["b"].values))
+    assert keys == [(1, "x"), (1, "y"), (2, "y"), (3, "x")]
+
+
 @pytest.mark.legacy
 def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> None:
     expr = 1 * u
