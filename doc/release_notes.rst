@@ -19,6 +19,11 @@ Upcoming Version
 
 * An SOS set is ordered by the positions its members are declared in, rather than by the values of its coordinates. Ascending coordinates state the same order, so a model whose SOS dimension is sorted is unaffected, every piecewise formulation among them; descending ones reverse it, which leaves an SOS set's meaning intact. Only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning, and it now emits a ``UserWarning``; sorting the index restores the previous behaviour. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__)
 
+**Bug fixes**
+
+* ``Model.remove_variables`` no longer removes constraints that never reference the removed variable. A masked variable carries ``-1`` label entries, which matched the ``-1`` that marks an empty term slot in a constraint, so any masked variable looked like it was used by any constraint with padded terms. Models built with ``mask=`` could silently lose constraints and solve to a wrong optimum. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+* ``Model.remove_variables`` now also works on a model with a quadratic objective, where it raised an ``IndexError`` because the term mask was built over the factor dimension as well. Quadratic terms are dropped when any of their factors references the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__)
+
 
 Version v0.9.0
 --------------
