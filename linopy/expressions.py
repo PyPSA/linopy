@@ -110,15 +110,14 @@ from linopy.semantics import (
     AbsentType,
     FillValueLike,
     _legacy_coord_mismatch_message,
-    _legacy_coord_reorder_message,
     _legacy_group_multiindex_message,
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
     check_join_fill_value,
     check_user_nan,
-    conform_merge_dims,
     enforce_aux_conflict,
+    enforce_merge_dims,
     first_mismatched_dim,
     is_nan_scalar,
     is_v1,
@@ -193,6 +192,28 @@ def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
     """
     dims = set(dims)
     return ds.drop_vars(k for k, c in ds.coords.items() if dims & set(c.dims))
+
+
+def _check_override_sizes(left: DataArray, right: DataArray) -> None:
+    """
+    Reject ``join="override"`` when a shared dim has different sizes.
+
+    ``override`` is the explicit form of positional alignment (§10), so pairing
+    mismatched sizes would relabel one operand's data onto the other's labels —
+    the silent-wrong-answer hazard the join is meant to make explicit.
+    """
+    shared = set(left.dims) & set(right.dims)
+    bad = sorted((d for d in shared if left.sizes[d] != right.sizes[d]), key=str)
+    if not bad:
+        return
+    sizes = ", ".join(
+        f"{d!r}: left={left.sizes[d]}, right={right.sizes[d]}" for d in bad
+    )
+    raise ValueError(
+        f"join='override' requires matching sizes on shared dimensions, but "
+        f"sizes differ on {sizes}. Use join='inner' / 'outer' / 'left' / "
+        f"'right' to combine by label, or reshape one side first."
+    )
 
 
 def _resolve_group(group: Any, data: Dataset) -> Any:
@@ -416,7 +437,7 @@ def _restore_multikey_index(
         return ds.assign_coords(
             {n: (GROUP_DIM, index.get_level_values(n)) for n in level_names}
         )
-    if stacked_survives:  # legacy: the group MultiIndex survives into the result
+    if stacked_survives:
         warn_legacy(_legacy_group_multiindex_message(level_names))
     return ds.assign_coords(Coordinates.from_pandas_multiindex(index, GROUP_DIM))
 
@@ -929,14 +950,6 @@ class BaseExpression(ABC):
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
         res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
-        # deal with cross terms c1 * v2 + c2 * v1. The ``const`` factors
-        # are internal §6-propagated fields — NaN at absent slots, not
-        # user-supplied data. ``fillna(0)`` makes them safe to pass back
-        # through the public-API ``*`` (which §5-checks user NaN); the
-        # zeroed cross-term contribution at an absent slot adds nothing,
-        # and ``res`` already carries the absence marker from the
-        # FACTOR_DIM merge above (NaN + 0 = NaN), so absence survives
-        # and ``absorb_absence`` enforces the storage invariant.
         if self.has_constant:
             res = res + other.reset_const() * self.const.fillna(0)
         if other.has_constant:
@@ -967,10 +980,10 @@ class BaseExpression(ABC):
             ``ABSENT`` fills both sides with NaN, so the created position
             comes out absent instead of carrying either operand's value.
         join : str, optional
-            Alignment method. If None, the default is determined by
-            ``options["semantics"]`` — under ``v1`` shared dimensions must
-            carry identical labels (same order; a reorder raises), the
-            legacy size-aware behavior under ``legacy``.
+            Alignment method. When None, follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally
+            (size-aware).
 
         Returns
         -------
@@ -979,26 +992,26 @@ class BaseExpression(ABC):
         aligned : DataArray
             The aligned constant.
         needs_data_reindex : bool
-            Whether the expression's data needs reindexing. ``False`` whenever the
-            shared-dim indexes already agree — the ``override`` / ``left`` paths
-            and ``exact`` join once ``first_mismatched_dim`` confirms the match —
-            so the caller skips a full-dataset ``reindex_like`` deepcopy on the
-            hot multiply/add path. Only the label-changing joins (inner / outer /
-            right) return ``True``.
+            Whether the expression's data needs reindexing. ``False`` whenever
+            the shared-dim indexes already agree (``override`` / ``left`` /
+            ``exact``), so the caller skips a full-dataset ``reindex_like``
+            deepcopy on the hot multiply/add path; only the label-changing
+            joins (inner / outer / right) return ``True``.
+
+        Notes
+        -----
+        The §11 aux-coord check runs on every join path — gating it behind
+        ``join is None`` would let ``join="override"`` silently drop a
+        conflicting coord (#295). The ``exact`` mismatch is detected here
+        rather than by ``xr.align(join="exact")``, whose wording is not
+        API-stable across xarray releases.
         """
-        # §11: aux-coord conflict is independent of dim alignment — fires
-        # on every join path. Gating it behind ``join is None`` (alongside
-        # the §8 dim check) would leave ``join="override"`` etc. silently
-        # dropping the conflicting coord, which is the #295 bug v1 is
-        # meant to close. v1 raises; legacy warns.
         enforce_aux_conflict([self.const, other], stacklevel=4)
         other_fill = join_fill(fill_value, 0)
-        self_fill = np.nan if isinstance(fill_value, AbsentType) else 0
         if join is None:
             if is_v1():
                 join = "exact"
-            else:
-                # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
+            else:  # LEGACY: remove at 1.0
                 mismatch = first_mismatched_dim(self.const, other)
                 if mismatch is not None:
                     warn_legacy(
@@ -1007,67 +1020,57 @@ class BaseExpression(ABC):
                         ),
                         stacklevel=4,
                     )
-                # Legacy default: positional when sizes match, else left-join.
                 if other.sizes == self.const.sizes:
-                    aligned = other.assign_coords(coords=self.coords)
-                else:
-                    aligned = other.reindex_like(self.const, fill_value=other_fill)
+                    return self.const, other.assign_coords(coords=self.coords), False
+                aligned = other.reindex_like(self.const, fill_value=other_fill)
                 return self.const, aligned, False
 
         if join == "override":
-            # §10: ``override`` is the *explicit* form of the legacy
-            # positional alignment. Positional pairing requires the
-            # shared dims to have matching sizes on both sides — without
-            # that the labels we're about to ``assign_coords`` on would
-            # be a coord-rename of mismatched data, which is exactly the
-            # silent-wrong-answer hazard ``override`` was tightened up
-            # to prevent. Raise with a clear message instead of letting
-            # xarray broadcast / error opaquely downstream.
-            shared = set(self.const.dims) & set(other.dims)
-            bad = sorted(
-                (d for d in shared if self.const.sizes[d] != other.sizes[d]),
-                key=str,
-            )
-            if bad:
-                sizes = ", ".join(
-                    f"{d!r}: left={self.const.sizes[d]}, right={other.sizes[d]}"
-                    for d in bad
-                )
-                raise ValueError(
-                    f"join='override' requires matching sizes on shared "
-                    f"dimensions, but sizes differ on {sizes}. Use "
-                    f"join='inner' / 'outer' / 'left' / 'right' to combine "
-                    f"by label, or reshape one side first."
-                )
+            _check_override_sizes(self.const, other)
             return self.const, other.assign_coords(coords=self.coords), False
         if join == "left":
-            return (
-                self.const,
-                other.reindex_like(self.const, fill_value=other_fill),
-                False,
-            )
-        # ``xr.align(..., join="exact")`` raises with a wording that's not
-        # API-stable across xarray releases; matching on ``"exact" in str(e)``
-        # would silently degrade if upstream rephrases. Do the §8 check
-        # ourselves and raise the canonical ``_shared_dim_mismatch_message``
-        # (same text as the v1-default and merge paths). Other joins
-        # (inner / outer / right) handle coord mismatches via the join
-        # mode and don't error here.
+            aligned = other.reindex_like(self.const, fill_value=other_fill)
+            return self.const, aligned, False
         if join == "exact":
             mismatch = first_mismatched_dim(self.const, other)
             if mismatch is not None:
                 raise ValueError(_shared_dim_mismatch_message(*mismatch))
             return self.const, other, False
         self_const, aligned = xr.align(
-            self.const,
-            other,
-            join=join,
-            fill_value=other_fill,
+            self.const, other, join=join, fill_value=other_fill
         )
-        self_const = reindex_like_if_needed(
-            self.const, self_const, fill_value=self_fill
-        )
+        self_fill = np.nan if isinstance(fill_value, AbsentType) else 0
+        self_const = reindex_like_if_needed(self.const, self_const, self_fill)
         return self_const, aligned, True
+
+    def _broadcast_and_align(
+        self,
+        other: ConstantLike,
+        fill_value: FillValueLike,
+        join: JoinOptions | None,
+        op_kind: str = "add",
+    ) -> tuple[DataArray, DataArray, bool]:
+        """
+        Broadcast a constant operand, enforce §5 on its NaN, and align it.
+
+        The scalar check is not covered by the array check below: an expression
+        with an empty dimension has no position for a NaN scalar to show up in.
+        """
+        if is_nan_scalar(other):
+            check_user_nan(op_kind=op_kind)
+        da = broadcast_to_coords(
+            other, coords=self.coords, strict=False, warn_reorder=True
+        )
+        if da.isnull().any():
+            check_user_nan(op_kind=op_kind)
+        return self._align_constant(da, fill_value=fill_value, join=join)
+
+    def _reindexed_to(self, const: DataArray, needs_data_reindex: bool) -> Self:
+        """Reindex the terms onto ``const`` when the join moved labels."""
+        if not needs_data_reindex:
+            return self
+        data = self.data.reindex_like(const, fill_value=self._fill_value)
+        return self.__class__(data, self.model)
 
     def _add_constant(
         self,
@@ -1086,30 +1089,15 @@ class BaseExpression(ABC):
         join: JoinOptions | None,
         fill_value: FillValueLike = 0,
     ) -> Self:
-        # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
-        # §5: user NaN raised in check_user_nan; never reaches the math here.
         if np.isscalar(other) and join is None:
             if is_nan_scalar(other):
                 check_user_nan()
             return self.assign(const=self.const + other)
-        da = broadcast_to_coords(
-            other, coords=self.coords, strict=False, warn_reorder=True
+        self_const, da, needs_reindex = self._broadcast_and_align(
+            other, fill_value, join
         )
-        if da.isnull().any():
-            check_user_nan()
-        self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=fill_value, join=join
-        )
-        if needs_data_reindex:
-            result = self.__class__(
-                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
-                    const=self_const + da
-                ),
-                self.model,
-            )
-        else:
-            result = self.assign(const=self_const + da)
-        return result._absorb_join_absence(fill_value)
+        expr = self._reindexed_to(self_const, needs_reindex)
+        return expr.assign(const=self_const + da)._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _add_constant_legacy(
@@ -1118,31 +1106,15 @@ class BaseExpression(ABC):
         join: JoinOptions | None,
         fill_value: FillValueLike = 0,
     ) -> Self:
-        # NaN values in self.const or other are silently filled with 0
-        # (additive identity) so missing data does not propagate through
-        # arithmetic. ``check_user_nan`` only warns under legacy.
         if np.isscalar(other) and join is None:
             if is_nan_scalar(other):
                 check_user_nan()
             return self.assign(const=self.const.fillna(0) + other)
-        da = broadcast_to_coords(
-            other, coords=self.coords, strict=False, warn_reorder=True
+        self_const, da, needs_reindex = self._broadcast_and_align(
+            other, fill_value, join
         )
-        if da.isnull().any():
-            check_user_nan()
-        self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=fill_value, join=join
-        )
-        da = da.fillna(0)
-        self_const = self_const.fillna(0)
-        if needs_data_reindex:
-            return self.__class__(
-                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
-                    const=self_const + da
-                ),
-                self.model,
-            )
-        return self.assign(const=self_const + da)
+        expr = self._reindexed_to(self_const, needs_reindex)
+        return expr.assign(const=self_const.fillna(0) + da.fillna(0))
 
     def _apply_constant_op(
         self,
@@ -1173,32 +1145,13 @@ class BaseExpression(ABC):
         op_kind: str,
         join: JoinOptions | None,
     ) -> Self:
-        # §6: NaN in coeffs/const propagates through op (NaN * x = NaN).
-        # §5: user NaN raised before we get here.
-        if is_nan_scalar(other):
-            check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(
-            other, coords=self.coords, strict=False, warn_reorder=True
+        self_const, factor, needs_reindex = self._broadcast_and_align(
+            other, fill_value, join, op_kind
         )
-        if factor.isnull().any():
-            check_user_nan(op_kind=op_kind)
-        self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=fill_value, join=join
+        expr = self._reindexed_to(self_const, needs_reindex)
+        result = expr.assign(
+            coeffs=op(expr.coeffs, factor), const=op(self_const, factor)
         )
-        if needs_data_reindex:
-            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            result = self.__class__(
-                assign_multiindex_safe(
-                    data,
-                    coeffs=op(data.coeffs, factor),
-                    const=op(self_const, factor),
-                ),
-                self.model,
-            )
-        else:
-            result = self.assign(
-                coeffs=op(self.coeffs, factor), const=op(self_const, factor)
-            )
         return result._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
@@ -1211,31 +1164,15 @@ class BaseExpression(ABC):
         op_kind: str,
         join: JoinOptions | None,
     ) -> Self:
-        # NaN values are silently filled with neutral elements before the op:
-        # factor → nan_fill (0 for mul, 1 for div), coeffs/const → 0.
-        if is_nan_scalar(other):
-            check_user_nan(op_kind=op_kind)
-        factor = broadcast_to_coords(
-            other, coords=self.coords, strict=False, warn_reorder=True
-        )
-        if factor.isnull().any():
-            check_user_nan(op_kind=op_kind)
-        self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=factor_fill, join=join
+        self_const, factor, needs_reindex = self._broadcast_and_align(
+            other, factor_fill, join, op_kind
         )
         factor = factor.fillna(nan_fill)
         self_const = self_const.fillna(0)
-        if needs_data_reindex:
-            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            coeffs = data.coeffs.fillna(0)
-            return self.__class__(
-                assign_multiindex_safe(
-                    data, coeffs=op(coeffs, factor), const=op(self_const, factor)
-                ),
-                self.model,
-            )
-        coeffs = self.coeffs.fillna(0)
-        return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
+        expr = self._reindexed_to(self_const, needs_reindex)
+        return expr.assign(
+            coeffs=op(expr.coeffs.fillna(0), factor), const=op(self_const, factor)
+        )
 
     def _multiply_by_constant(
         self,
@@ -1319,10 +1256,9 @@ class BaseExpression(ABC):
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join creates.
             Defaults to 0, the additive identity. ``linopy.ABSENT`` keeps those
@@ -1364,10 +1300,9 @@ class BaseExpression(ABC):
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
             Defaults to 0; ``linopy.ABSENT`` keeps them absent, for a constant
@@ -1392,10 +1327,9 @@ class BaseExpression(ABC):
             The factor to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates. Defaults
             to 0, so a term without a factor evaluates to zero;
@@ -1426,10 +1360,9 @@ class BaseExpression(ABC):
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
             default that term evaluates to zero; pass ``1`` to keep it
@@ -1461,10 +1394,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         """
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
@@ -1482,10 +1414,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         """
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
@@ -1503,10 +1434,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
         """
         return self.to_constraint(EQUAL, rhs, join=join)
 
@@ -1773,16 +1703,24 @@ class BaseExpression(ABC):
             raise a ValueError. NaN entries in the RHS mean "no constraint".
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), follows
+            ``linopy.options["semantics"]``: v1 requires identical labels in
+            identical order on shared dims, legacy aligns positionally.
 
         Returns
         -------
         Constraint with strict separation of the linear expressions of variables
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
+
+        Notes
+        -----
+        Under v1 the RHS is a user-supplied constant like any other operand: its
+        NaN raises (§5) and ``sub`` does the §8 alignment, rather than a silent
+        ``reindex_like``-pad that would mask a coordinate mismatch. An absent
+        slot propagated into the RHS reads as "no constraint at this row" (§12).
+        Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
+        after the subtraction filled it with 0.
         """
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
@@ -1790,78 +1728,48 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
+        rhs_nan_mask = None
         if is_v1():
-            # §5 + §12: the RHS is a user-supplied constant just like any
-            # operand in arithmetic. Validate NaN here (raise) and let
-            # ``self.sub(rhs)`` do the §8 alignment — no silent
-            # reindex_like-pad that would mask a coordinate mismatch.
-            # An absent slot in ``self.const`` (propagated from §6) flows
-            # through ``sub`` into the RHS and reaches downstream
-            # auto-mask handling as "no constraint at this row" (§12).
             if isinstance(rhs, CONSTANT_TYPES):
-                rhs = broadcast_to_coords(
-                    rhs, coords=self.coords, strict=False, warn_reorder=True
-                )
-                extra_dims = set(rhs.dims) - set(self.coord_dims)
-                if extra_dims:
-                    logger.warning(
-                        f"Constant RHS contains dimensions {extra_dims} not present "
-                        f"in the expression, which might lead to inefficiencies. "
-                        f"Consider collapsing the dimensions by taking min/max."
-                    )
+                rhs = self._broadcast_rhs(rhs)
                 if rhs.isnull().any():
                     check_user_nan()
-            all_to_lhs = self.sub(rhs, join=join).data
-            computed_rhs = -all_to_lhs.const
-            data = assign_multiindex_safe(
-                all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
-            )
-            return constraints.Constraint(data, model=self.model)
-
-        # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
-        # Legacy auto-mask path: NaN RHS is silently preserved as "no
-        # constraint at this row" (the legacy reindex_like-pad fills
-        # subset coords with NaN, then `sub` would fill them with 0 as
-        # part of normal arithmetic, so we restore the original NaN mask
-        # afterward).
-        if isinstance(rhs, CONSTANT_TYPES):
-            rhs = broadcast_to_coords(
-                rhs, coords=self.coords, strict=False, warn_reorder=True
-            )
-
-            extra_dims = set(rhs.dims) - set(self.coord_dims)
-            if extra_dims:
-                logger.warning(
-                    f"Constant RHS contains dimensions {extra_dims} not present "
-                    f"in the expression, which might lead to inefficiencies. "
-                    f"Consider collapsing the dimensions by taking min/max."
-                )
-            # Two legacy paths can introduce NaN into ``rhs`` and the
-            # ``rhs_nan_mask`` below treats both the same (auto-mask drops
-            # the row). The fix-hints differ though, so check each cause
-            # before the reindex obscures them, and warn the right one.
-            mismatch = first_mismatched_dim(self.const, rhs)
-            if mismatch is not None:
-                warn_legacy(_legacy_coord_mismatch_message("constraint RHS", *mismatch))
-            if bool(rhs.isnull().any()):
-                warn_legacy(_legacy_nan_rhs_constraint_message())
-            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-
-        if isinstance(rhs, DataArray):
-            rhs_nan_mask = rhs.isnull()
-        else:
-            rhs_nan_mask = None
+        else:  # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
+            if isinstance(rhs, CONSTANT_TYPES):
+                rhs = self._broadcast_rhs(rhs)
+                mismatch = first_mismatched_dim(self.const, rhs)
+                if mismatch is not None:
+                    warn_legacy(
+                        _legacy_coord_mismatch_message("constraint RHS", *mismatch)
+                    )
+                if bool(rhs.isnull().any()):
+                    warn_legacy(_legacy_nan_rhs_constraint_message())
+                rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+            if isinstance(rhs, DataArray):
+                rhs_nan_mask = rhs.isnull()
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
-
         if rhs_nan_mask is not None and rhs_nan_mask.any():
             computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
-
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
+
+    def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
+        """Broadcast a constant RHS onto the expression's coordinates."""
+        rhs = broadcast_to_coords(
+            rhs, coords=self.coords, strict=False, warn_reorder=True
+        )
+        extra_dims = set(rhs.dims) - set(self.coord_dims)
+        if extra_dims:
+            logger.warning(
+                f"Constant RHS contains dimensions {extra_dims} not present "
+                f"in the expression, which might lead to inefficiencies. "
+                f"Consider collapsing the dimensions by taking min/max."
+            )
+        return rhs
 
     def reset_const(self) -> Self:
         """
@@ -1873,15 +1781,13 @@ class BaseExpression(ABC):
         """
         Get a boolean mask reporting which slots are absent.
 
-        Under v1 (§3), a slot is absent iff ``const`` is NaN — every
-        operator propagates const NaN whenever an operand is absent, so
-        this is the universal signal. A term with ``vars == -1`` is a
-        *dead term* (contributes nothing), not a slot-level absence
-        signal; ``fillna(value)`` can revive an absent slot to a present
-        constant while leaving the dead sentinel term in place. The
-        legacy convention has no real absence concept (``const`` is
-        always filled with 0); the historical AND of "all vars
-        sentinel" and "const NaN" is preserved verbatim under legacy.
+        Under v1 (§3) a slot is absent iff ``const`` is NaN — every operator
+        propagates const NaN from an absent operand, so this is the universal
+        signal. A term with ``vars == -1`` is a *dead term* (contributes
+        nothing), not a slot-level absence: ``fillna(value)`` revives an absent
+        slot to a present constant while leaving the sentinel term in place.
+        Legacy has no absence concept (``const`` is always filled with 0), so
+        its historical "all vars sentinel and const NaN" is kept verbatim.
         """
         if is_v1():
             return self.const.isnull()
@@ -3169,6 +3075,12 @@ def merge(
     Returns
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
+
+    Notes
+    -----
+    Under v1 an absent slot of any operand stays absent in the result (§6), so
+    the term reduction runs with ``skipna=False`` instead of collapsing NaN to
+    the additive (or, for the quadratic build, multiplicative) identity.
     """
     check_join_fill_value(fill_value, join)
     if fill_value is not None and not isinstance(fill_value, AbsentType):
@@ -3212,25 +3124,9 @@ def merge(
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
-    # §8: v1 raises on a set-mismatch or reorder, legacy warns. Runs before the
-    # §11 aux check so a MultiIndex mismatch isn't read as a coord conflict.
     if join is None:
-        data, mismatch, reorder = conform_merge_dims(data, concat_dim=dim)
-        if is_v1():
-            if mismatch is not None:
-                raise ValueError(_shared_dim_mismatch_message(*mismatch))
-            if reorder is not None:
-                raise ValueError(_shared_dim_mismatch_message(*reorder))
-        elif mismatch is not None:  # LEGACY: remove at 1.0
-            warn_legacy(
-                _legacy_coord_mismatch_message(f"merge along dim {dim!r}", *mismatch)
-            )
-        elif reorder is not None:  # LEGACY: remove at 1.0
-            warn_legacy(
-                _legacy_coord_reorder_message(f"merge along dim {dim!r}", *reorder)
-            )
-
-    enforce_aux_conflict(data)  # §11
+        enforce_merge_dims(data, concat_dim=dim, context=f"merge along dim {dim!r}")
+    enforce_aux_conflict(data)
 
     if join is not None:
         override = join == "override"
@@ -3259,26 +3155,16 @@ def merge(
         else:
             kwargs.setdefault("join", "outer")
 
+    skipna = not is_v1()
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        # §10: the join fills what it creates with the zero expression, unless
-        # the caller asked for ``ABSENT`` — then the created const is NaN and
-        # ``absorb_absence`` below strips the terms the other operand held.
         subkwargs = {**kwargs, "fill_value": join_fill(fill_value, 0)}
-        # Under v1, §6 requires that an absent slot in any operand stays
-        # absent in the result; ``sum(skipna=False)`` propagates NaN
-        # rather than collapsing it to 0.
-        skipna = not is_v1()
         const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
             TERM_DIM, skipna=skipna
         )
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        # §6 also applies to the quadratic build: an absent factor must
-        # stay absent (``prod(skipna=False)`` → NaN) rather than collapse
-        # to multiplicative identity 1. Matches the TERM_DIM branch above.
-        skipna = not is_v1()
         coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
             FACTOR_DIM, skipna=skipna
         )

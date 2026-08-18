@@ -931,8 +931,6 @@ class TestAddVariablesMultiIndexCoords:
         self, model: "Model", midx: pd.MultiIndex
     ) -> None:
         bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        # Implicit level projection is legacy-only (scenario B): warns under
-        # legacy semantics, raises under v1.
         with pytest.warns(
             linopy.LinopySemanticsWarning, match=r"broadcasting level subset"
         ):

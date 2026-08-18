@@ -327,7 +327,7 @@ class Variable:
         self,
         coefficient: ConstantLike = 1,
         *,
-        _warn_absence: bool = True,  # LEGACY: remove at 1.0 — gates the legacy absence warning
+        _warn_absence: bool = True,  # LEGACY: remove at 1.0
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
@@ -342,10 +342,17 @@ class Variable:
         -------
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
+
+        Notes
+        -----
+        The §8 shared-dim check runs on the raw coefficient, before the
+        broadcast aligns it away — the reindex below only fills absence and
+        broadcasts non-shared dims. A NaN coefficient is user data, so it
+        raises under v1 (§5). Under v1 the expression carries the variable's
+        absence as NaN so that §6 propagates it through downstream arithmetic;
+        legacy contributes 0 there instead and warns, that being the most
+        common legacy↔v1 divergence and one no other warn site catches.
         """
-        # §8: check on the raw coefficient, before broadcast aligns it away.
-        # A reorder is a mismatch like any other (v1 exact); only the
-        # reindex_like below fills absence / broadcasts non-shared dims.
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
@@ -360,33 +367,18 @@ class Variable:
                     stacklevel=4,
                 )
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
-        # §5: user-supplied NaN in the coefficient must raise (v1) / warn
-        # (legacy) — it's the multiplicative analogue of ``x + nan_data``
-        # and otherwise enters the expression silently. The default
-        # coefficient ``1`` carries no NaN, so the check is a no-op there.
         if coefficient.isnull().any():
             check_user_nan(op_kind="mul")
+        absent = self.labels == -1
+        has_absence = bool(absent.any())
         if is_v1():
-            # Under v1 the LinearExpression must carry absence (NaN at
-            # `labels == -1`) so §6 propagation through downstream
-            # arithmetic works. A dense variable has none, so the
-            # mask/where/const collapse to no-ops (skipped below).
-            has_absence = bool((self.labels == -1).any())
             coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
             if has_absence:
-                absent = self.labels == -1
                 coefficient = coefficient.where(~absent)
-        else:
-            # LEGACY: warn if the variable carries absent slots — those
-            # silently contribute 0 here, but v1 will propagate the
-            # absence and produce a different result downstream. This is
-            # the origin of the most common legacy↔v1 divergence (masked
-            # variables in arithmetic) that no other warn-site catches.
-            has_absence = bool((self.labels == -1).any())
+        else:  # LEGACY: remove at 1.0
             if has_absence and _warn_absence:
                 warn_legacy(_legacy_masked_variable_message(self.name))
-            coefficient = reindex_like_if_needed(coefficient, self.labels, 0)
-            coefficient = coefficient.fillna(0)
+            coefficient = reindex_like_if_needed(coefficient, self.labels, 0).fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -1348,14 +1340,18 @@ class Variable:
         ----------
         fill_value : numeric, Variable, or ScalarVariable
             Value to fill the absent slots with.
+
+        Notes
+        -----
+        Legacy ``to_linexpr`` marks an absent const as 0 rather than NaN, so
+        :meth:`LinearExpression.fillna` finds nothing to fill there; the value
+        is placed directly instead, to match v1. The absence warning is skipped
+        because this method is its documented resolution.
         """
         if isinstance(fill_value, int | float | np.integer | np.floating):
             if is_v1():
                 return self.to_linexpr().fillna(fill_value)
-            # LEGACY: remove at 1.0 — legacy to_linexpr marks absent const as 0
-            # (not NaN), so LinearExpression.fillna can't fill it and the fill is
-            # silently dropped. Place fill_value directly to match v1, and skip
-            # the absence warning fillna is itself the documented resolution for.
+            # LEGACY: remove at 1.0
             lin = self.to_linexpr(_warn_absence=False)
             return lin.assign(const=lin.const.where(self.labels != -1, fill_value))
         return self.where(~self.isnull(), fill_value)
@@ -1525,9 +1521,6 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
-    # ``fill_value=_fill_value`` so missing (region, year) combinations end up
-    # as the absent-slot sentinel (labels=-1, lower=upper=NaN) instead of as
-    # NaN labels — §2 storage invariant + §4 absence-creation guarantee.
     unstack = varwrap(Dataset.unstack, fill_value=_fill_value)
 
     iterate_slices = iterate_slices

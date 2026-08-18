@@ -274,7 +274,7 @@ class TestUnlabeledPairing:
 
     @pytest.fixture
     def xy(self) -> Variable:
-        # dims of distinct sizes so a 1-d operand pairs unambiguously
+        """Dims of distinct sizes so a 1-d operand pairs unambiguously."""
         m = Model()
         return m.add_variables(
             coords=[pd.RangeIndex(3, name="a"), pd.RangeIndex(4, name="b")], name="xy"
@@ -282,7 +282,7 @@ class TestUnlabeledPairing:
 
     @pytest.fixture
     def square(self) -> Variable:
-        # both dims size 4 → a 1-d length-4 operand is ambiguous
+        """Both dims size 4 → a 1-d length-4 operand is ambiguous."""
         m = Model()
         return m.add_variables(
             coords=[pd.RangeIndex(4, name="p"), pd.RangeIndex(4, name="q")], name="sq"
@@ -290,7 +290,7 @@ class TestUnlabeledPairing:
 
     @pytest.fixture
     def wide(self) -> Variable:
-        # four dims of distinct sizes — a lower-rank operand pairs a subset
+        """Four dims of distinct sizes — a lower-rank operand pairs a subset."""
         m = Model()
         return m.add_variables(
             coords=[
@@ -304,8 +304,10 @@ class TestUnlabeledPairing:
 
     @pytest.fixture
     def ambig_higher(self) -> Variable:
-        # (a: 4, b: 4, c: 5) — the length-4 axis of a lower-rank operand is
-        # ambiguous even when another axis is unique
+        """
+        (a: 4, b: 4, c: 5) — the length-4 axis of a lower-rank operand is ambiguous even
+        when another axis is unique.
+        """
         m = Model()
         return m.add_variables(
             coords=[
@@ -321,7 +323,7 @@ class TestUnlabeledPairing:
     @pytest.mark.v1
     @pytest.mark.parametrize("make", UNLABELED_1D)
     def test_v1_pairs_by_size(self, xy: Variable, make: Any) -> None:
-        # length-4 array pairs with dim "b" (size 4), not the leading "a" (3)
+        """Length-4 array pairs with dim "b" (size 4), not the leading "a" (3)."""
         result = (1 * xy) + make(range(4))
         assert set(result.const.dims) == {"a", "b"}
         assert result.const.sizes == {"a": 3, "b": 4}
@@ -350,7 +352,7 @@ class TestUnlabeledPairing:
         assert str(e.value) == expected
 
     def test_dataarray_wrapping_resolves_ambiguity(self, square: Variable) -> None:
-        # the documented escape hatch: name the axis with a DataArray
+        """The documented escape hatch: name the axis with a DataArray."""
         result = (1 * square) + xr.DataArray(np.arange(4.0), dims=["p"])
         assert set(result.const.dims) == {"p", "q"}
 
@@ -358,7 +360,7 @@ class TestUnlabeledPairing:
 
     @pytest.mark.v1
     def test_v1_size_order_independent(self, xy: Variable) -> None:
-        # a 2-d (4, 3) operand pairs (b, a) by size regardless of axis order.
+        """A 2-d (4, 3) operand pairs (b, a) by size regardless of axis order."""
         result = (1 * xy) + np.ones((4, 3))
         assert result.const.sizes == {"a": 3, "b": 4}
 
@@ -388,8 +390,10 @@ class TestUnlabeledPairing:
     def test_v1_lower_rank_operand_pairs_subset_and_broadcasts(
         self, wide: Variable
     ) -> None:
-        # a 2-d (4, 5) operand against four dims pairs its axes with (b, c) by
-        # size and broadcasts over the unpaired (a, d).
+        """
+        A 2-d (4, 5) operand against four dims pairs its axes with (b, c) by size and
+        broadcasts over the unpaired (a, d).
+        """
         result = (1 * wide) + np.ones((4, 5))
         assert result.const.sizes == {"a": 3, "b": 4, "c": 5, "d": 6}
 
@@ -398,7 +402,7 @@ class TestUnlabeledPairing:
     @pytest.mark.v1
     @pytest.mark.parametrize("make", UNLABELED_1D)
     def test_v1_matmul_pairs_by_size(self, xy: Variable, make: Any) -> None:
-        # matmul contracts the paired dim: length-4 array pairs with "b"
+        """Matmul contracts the paired dim: length-4 array pairs with "b"."""
         result = (1 * xy) @ make(range(4))
         assert set(result.coord_dims) == {"a"}
 
@@ -406,9 +410,11 @@ class TestUnlabeledPairing:
 
     @pytest.mark.v1
     def test_v1_add_variables_bound_pairs_by_size(self) -> None:
-        # The rule is the same for construction inputs: a bare-numpy bound
-        # pairs with the matching dim by size, not positionally (where the
-        # length-5 array would hit the leading dim "a" and conflict).
+        """
+        The rule is the same for construction inputs: a bare-numpy bound pairs with the
+        matching dim by size, not positionally (where the length-5 array would hit the
+        leading dim "a" and conflict).
+        """
         m = Model()
         x = m.add_variables(
             coords=[pd.RangeIndex(4, name="a"), pd.RangeIndex(5, name="time")],
@@ -433,9 +439,11 @@ class TestUnlabeledPairing:
     def test_legacy_no_divergence_is_silent(
         self, xy: Variable, unsilenced: None
     ) -> None:
-        # length-3 array: legacy pairs positionally with the leading dim "a";
-        # v1 would pair it with "a" too (only "a" is size 3), so there is no
-        # divergence and no warning. Pins the silent case.
+        """
+        Length-3 array: legacy pairs positionally with the leading dim "a"; v1 would
+        pair it with "a" too (only "a" is size 3), so there is no divergence and no
+        warning. Pins the silent case.
+        """
         with warnings.catch_warnings():
             warnings.simplefilter("error", LinopySemanticsWarning)
             result = (1 * xy) + np.arange(3.0)
@@ -458,9 +466,11 @@ class TestUnlabeledPairing:
     def test_legacy_ambiguous_pairs_positionally_with_warning(
         self, square: Variable, unsilenced: None
     ) -> None:
-        # The square (p:4, q:4) case where v1 *raises* — legacy must instead
-        # pair positionally with the leading dim and warn, never raise. This is
-        # the biggest legacy/v1 divergence and the strongest no-regression guard.
+        """
+        The square (p:4, q:4) case where v1 *raises* — legacy must instead pair
+        positionally with the leading dim and warn, never raise. This is the biggest
+        legacy/v1 divergence and the strongest no-regression guard.
+        """
         captured: dict[str, Any] = {}
 
         def _op() -> None:
@@ -474,9 +484,11 @@ class TestUnlabeledPairing:
 
     @pytest.mark.legacy
     def test_legacy_add_variables_bound_positional(self, unsilenced: None) -> None:
-        # Regression guard for the unification: legacy add_variables still
-        # assigns an unlabeled bound positionally (here unambiguous — only "a"
-        # is size 5 — so it is also silent), producing the pre-#736 result.
+        """
+        Regression guard for the unification: legacy add_variables still assigns an
+        unlabeled bound positionally (here unambiguous — only "a" is size 5 — so it is
+        also silent), producing the pre-#736 result.
+        """
         m = Model()
         with warnings.catch_warnings():
             warnings.simplefilter("error", LinopySemanticsWarning)
@@ -832,7 +844,7 @@ class TestLegacyWarning:
         y = m.add_variables(lower=0, coords=[time], name="y", mask=mask)
         with warnings.catch_warnings(record=True) as ws:
             warnings.simplefilter("always")
-            _ = 2 * x + y  # this is the user's call site
+            _ = 2 * x + y
         relevant = [w for w in ws if issubclass(w.category, LinopySemanticsWarning)]
         assert relevant, "expected the masked-variable warning to fire"
         assert relevant[0].filename == __file__, (
@@ -849,7 +861,7 @@ class TestLegacyWarning:
 class TestExactAlignmentMerge:
     @pytest.fixture
     def x_other(self, m: Model) -> Variable:
-        # Same shape, different labels — legacy uses positional override.
+        """Same shape, different labels — legacy uses positional override."""
         return m.add_variables(
             lower=0,
             coords=[pd.Index([10, 11, 12, 13, 14], name="time")],
@@ -858,7 +870,7 @@ class TestExactAlignmentMerge:
 
     @pytest.fixture
     def x_subset(self, m: Model) -> Variable:
-        # Subset coords on the same dim — legacy outer-joins (and pads).
+        """Subset coords on the same dim — legacy outer-joins (and pads)."""
         return m.add_variables(
             lower=0,
             coords=[pd.Index([1, 3], name="time")],
@@ -933,8 +945,10 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.v1
     def test_var_plus_var_reordered_labels_raises(self, m: Model) -> None:
-        # §8 exact: same labels in a different order is a mismatch, not a
-        # silent reindex — the reorder must be resolved explicitly.
+        """
+        §8 exact: same labels in a different order is a mismatch, not a silent reindex —
+        the reorder must be resolved explicitly.
+        """
         a = m.add_variables(coords=[pd.Index(["costs", "penalty"], name="e")], name="a")
         b = m.add_variables(coords=[pd.Index(["penalty", "costs"], name="e")], name="b")
         with pytest.raises(ValueError) as e:
@@ -947,8 +961,10 @@ class TestExactAlignmentMerge:
     def test_var_plus_var_duplicate_differing_labels_raises_cleanly(
         self, m: Model
     ) -> None:
-        # A non-unique shared index gives a clean §8 mismatch, not an opaque
-        # InvalidIndexError from get_indexer.
+        """
+        A non-unique shared index gives a clean §8 mismatch, not an opaque
+        InvalidIndexError from get_indexer.
+        """
         a = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="a")
         b = m.add_variables(coords=[pd.Index(["a", "b", "b"], name="d")], name="b")
         with pytest.raises(ValueError, match="Coordinate mismatch"):
@@ -1009,8 +1025,10 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.v1
     def test_reordered_escape_hatches_work(self, m: Model) -> None:
-        # §10: a reorder is resolved explicitly — via an aligning named join,
-        # or by selecting one side back into the other's order.
+        """
+        §10: a reorder is resolved explicitly — via an aligning named join, or by
+        selecting one side back into the other's order.
+        """
         ea = pd.Index(["costs", "penalty"], name="e")
         eb = pd.Index(["penalty", "costs"], name="e")
         a = m.add_variables(coords=[ea], name="a") + pd.Series([100.0, 200.0], index=ea)
@@ -1022,7 +1040,7 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.v1
     def test_coeff_times_var_reordered_raises(self, m: Model) -> None:
-        # §8 exact: a reordered coefficient raises like +/-/merge, not reindexed.
+        """§8 exact: a reordered coefficient raises like +/-/merge, not reindexed."""
         ea = pd.Index(["costs", "penalty"], name="e")
         er = pd.Index(["penalty", "costs"], name="e")
         x = m.add_variables(coords=[ea], name="x")
@@ -1034,7 +1052,7 @@ class TestExactAlignmentMerge:
 
     @pytest.mark.v1
     def test_coeff_times_var_label_set_mismatch_raises(self, m: Model) -> None:
-        # A differing label *set* (not a pure reorder) still raises under v1.
+        """A differing label *set* (not a pure reorder) still raises under v1."""
         ea = pd.Index(["costs", "penalty"], name="e")
         bad = pd.Index(["costs", "revenue"], name="e")
         x = m.add_variables(coords=[ea], name="x")
@@ -1080,9 +1098,11 @@ class TestExactAlignmentMerge:
     def test_reordered_constant_warns_and_reindexes_legacy(
         self, m: Model, unsilenced: None
     ) -> None:
-        # The const path reindexes a reordered constant *by label* under legacy
-        # (unlike the positional merge path), so the result is unchanged — but v1
-        # raises on it, so legacy must warn about the divergence.
+        """
+        The const path reindexes a reordered constant *by label* under legacy (unlike
+        the positional merge path), so the result is unchanged — but v1 raises on it, so
+        legacy must warn about the divergence.
+        """
         e = pd.Index(["costs", "penalty"], name="e")
         er = pd.Index(["penalty", "costs"], name="e")
         x = m.add_variables(coords=[e], name="x")
@@ -1190,7 +1210,7 @@ class TestExactAlignmentMerge:
 class TestAbsencePropagation:
     @pytest.fixture
     def xs(self, x: Variable) -> Variable:
-        # x.shift(time=1) → absent at time=0, present elsewhere.
+        """``x.shift(time=1)`` is absent at time=0, present elsewhere."""
         return x.shift(time=1)
 
     @pytest.fixture
@@ -1258,7 +1278,6 @@ class TestAbsencePropagation:
         assert np.isnan(result.const.values[0])
         assert np.isnan(result.coeffs.values[0, 0])
         assert bool(result.isnull().values[0])
-        # And the present slots carry the expected per-op value.
         assert (result.const.values[1:] == self._SCALAR_CONST[op]).all()
 
     @pytest.mark.v1
@@ -1301,7 +1320,6 @@ class TestAbsencePropagation:
         result = (1 * x) + (1 * y) + xs
         assert np.isnan(result.coeffs.values[0]).all()
         assert (result.vars.values[0] == -1).all()
-        # And the present rows still carry all three live terms.
         assert (~np.isnan(result.coeffs.values[1:])).all()
 
     @pytest.mark.v1
@@ -1329,9 +1347,7 @@ class TestAbsencePropagation:
         plus the downstream operators on the resulting quadratic.
         """
         quad = self._build_quad(xs, x, build)
-        # absent slot stays absent in the resulting quadratic
         assert bool(quad.isnull().values[0])
-        # and §1/§2: every term at the absent slot has coeffs NaN and vars -1.
         assert np.isnan(quad.coeffs.values[0]).all()
         assert (quad.vars.values[0] == -1).all()
         # And the present slots stay present (cross-term storage may carry
@@ -1503,7 +1519,7 @@ class TestFillnaResolves:
         self, xs: Variable
     ) -> None:
         result = xs.fillna(0)
-        assert isinstance(result, LinearExpression)  # numeric fill → expression
+        assert isinstance(result, LinearExpression)
         assert not bool(result.isnull().values[0])
         assert result.const.values[0] == 0.0
 
@@ -1544,7 +1560,6 @@ class TestFillnaResolves:
         m.add_constraints(y, ">=", 0)
         m.add_objective(2 * x + y)
 
-        # The constraint x + y.fillna(0) >= 10 binds at every slot.
         rhs = m.constraints["con0"].rhs.values
         assert not np.isnan(rhs).any()
 
@@ -1618,9 +1633,7 @@ class TestVariableReindex:
         extended = pd.RangeIndex(8, name="time")
         result = x.reindex(time=extended)
         assert result.sizes["time"] == 8
-        # Original slots 0..4 are preserved
         assert int(result.labels.values[0]) == int(x.labels.values[0])
-        # New slots 5..7 are absent
         assert (result.labels.values[5:] == -1).all()
         assert np.isnan(result.lower.values[5:]).all()
         assert np.isnan(result.upper.values[5:]).all()
@@ -1698,9 +1711,7 @@ class TestVariableReindex:
         v = m.add_variables(coords=[idx], name="v")
         unstacked = v.unstack("dim_0")
         assert unstacked.sizes == {"region": 2, "year": 2}
-        # (FR, 2040) missing → absent
         assert int(unstacked.labels.sel(region="FR", year=2040).item()) == -1
-        # The three present cells stay present
         assert int(unstacked.labels.sel(region="DE", year=2030).item()) != -1
 
     @pytest.mark.parametrize("method", ["roll", "sel", "isel"])
@@ -1849,7 +1860,7 @@ class TestNamedMethodJoin:
         accept the once-mismatched operand without ``join=``.
         """
         aligned = relabelled.reindex_like(x.labels, fill_value=0)
-        result = x + aligned  # bare + succeeds because coords now match
+        result = x + aligned
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
     def test_assign_coords_resolves_mismatch_before_bare_op(
@@ -1861,7 +1872,7 @@ class TestNamedMethodJoin:
         check passes.
         """
         aligned = relabelled.assign_coords(time=x.coords["time"])
-        result = x + aligned  # bare + succeeds after relabel
+        result = x + aligned
         assert list(result.coords["time"].values) == [0, 1, 2, 3, 4]
 
 
@@ -1960,8 +1971,6 @@ class TestConstraintRHS:
         constraint here".
         """
         xs = x.shift(time=1)
-        # xs is absent at time=0; the constraint's RHS at that slot
-        # should be NaN (no constraint), not 10.
         constraint = _SIGNS[sign](xs, 10)
         rhs = constraint.rhs.values
         assert np.isnan(rhs[0])
@@ -2248,7 +2257,7 @@ class TestAuxCoordConflict:
         v = m.add_variables(lower=0, coords=[A], name="v")
         a0 = (1 * v).isel({"A": 0}, drop=True)
         a1 = (1 * v).isel({"A": 1}, drop=True)
-        result = a0 + a1  # no aux coord → no conflict
+        result = a0 + a1
         assert "A" not in result.coords
 
     def test_assign_coords_resolves_conflict(
@@ -2403,7 +2412,6 @@ class TestAuxCoordPropagation:
         for expr in (x * a, x + a, x / a):
             assert "B" in expr.coords
             assert expr.coords["B"].values.tolist() == [10, 20, 30]
-        # And into the constraint
         c = x <= a
         assert "B" in c.coords
 
@@ -2695,7 +2703,7 @@ class TestObjectScope:
         The one type-decided footnote: a constant can be a divisor, an
         expression cannot — even one holding only constants.
         """
-        x / da  # works: dividing by a constant
+        x / da
         with pytest.raises(TypeError):
             x / LinearExpression(da, m)
 

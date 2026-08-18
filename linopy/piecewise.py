@@ -1802,6 +1802,13 @@ def _add_incremental(
     """
     Incremental formulation.  ``links.eq_expr`` is the equality side;
     ``links.signed_expr`` (if any) is the output-side link.
+
+    ``piece_dim`` relates each piece to the next-higher one *positionally*, so
+    the two ``isel`` slices carry different labels for the same dim, which v1
+    §8 rejects. The high slice is relabelled onto the low slice's labels —
+    §10's explicit-positional path. Scalar ``isel`` uses ``drop=True`` so a
+    leftover breakpoint coord does not become a §11 aux-coord conflict against
+    the constraint LHS.
     """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
@@ -1845,12 +1852,6 @@ def _add_incremental(
     )
 
     if n_pieces >= 2:
-        # ``piece_dim`` is a *positional* relation here: the constraint pairs
-        # each lower piece with the next-higher one. The two ``isel`` slices
-        # share the dim but carry different labels (first n-1 vs last n-1 of
-        # piece_index), which v1 §8 rejects. Relabel the high slice onto the
-        # low slice's labels so alignment-by-label gives the intended
-        # positional pairing — convention §10's explicit-positional path.
         delta_lo = delta_var.isel({piece_dim: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True).assign_coords(
             {piece_dim: delta_lo.coords[piece_dim]}
@@ -1869,9 +1870,6 @@ def _add_incremental(
         steps = bp.diff(dim).rename({dim: piece_dim})
         steps[piece_dim] = piece_index
         steps = _drop_absent(steps, delta_mask)
-        # ``drop=True`` keeps the breakpoint coord from sticking around as a
-        # scalar on ``bp0_term`` — otherwise §11 rejects it as an aux-coord
-        # conflict against the constraint LHS.
         bp0 = bp.isel({dim: 0}, drop=True)
         bp0_term: DataArray | LinearExpression = bp0
         if active is not None:

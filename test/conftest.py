@@ -89,7 +89,6 @@ def semantics(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     ``LinopySemanticsWarning`` is suppressed so test output stays clean;
     ``test_convention.py`` verifies the warnings are actually emitted.
     """
-    # Deferred import (see top-of-file comment).
     from linopy.config import LinopySemanticsWarning, options
 
     item = request.node

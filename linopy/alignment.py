@@ -21,6 +21,7 @@ combinations* (its elements — one tuple per position, e.g. ``(2030, 't1')``).
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
@@ -411,9 +412,6 @@ def as_dataarray(
         if isinstance(arr, np.number):
             arr = float(arr)
         if dims is None:
-            # A scalar broadcasts over the coords' dims, but never over a
-            # helper dim (e.g. ``_term``) — those are storage book-keeping,
-            # not user axes.
             if isinstance(coords, Coordinates):
                 dims = [d for d in coords.dims if d not in HELPER_DIMS]
             elif is_dict_like(coords) and np.ndim(arr) == 0:
@@ -550,8 +548,6 @@ def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
     The strict path raises on coverage gaps before reaching here, so only
     partial levels arrive there; the non-strict path sees both.
     """
-    # Deferred import: linopy.semantics imports xarray/pandas machinery that
-    # in turn may import this module's consumers; keep the seam lazy.
     from linopy.semantics import is_v1, warn_legacy
 
     for p in projections:
@@ -595,11 +591,7 @@ def _pair_axes_by_size(
     for d, n in sizes.items():
         by_size.setdefault(n, []).append(d)
 
-    axes_per_size: dict[int, int] = {}
-    for s in shape:
-        axes_per_size[s] = axes_per_size.get(s, 0) + 1
-
-    for s, n_axes in axes_per_size.items():
+    for s, n_axes in Counter(shape).items():
         candidates = by_size.get(s, [])
         if len(candidates) < n_axes:
             return None, (
@@ -629,47 +621,46 @@ def _dims_for_unlabeled_operand(
     size; ambiguity or a missing match raises, with wrap-in-a-DataArray as
     the documented resolution. Legacy: axes pair with the leading dims
     positionally; a deprecation warning fires whenever the v1 pairing would
-    differ from or reject the positional one.
+    differ from or reject the positional one. A 0-d operand has no axes to
+    pair and broadcasts over every dim, like a bare scalar; helper dims
+    (``_term``) are storage book-keeping and never pairing candidates.
     """
     from linopy.semantics import is_v1, warn_legacy
 
-    # A 0-d operand has no axes to pair — it broadcasts over every dim, so it
-    # carries no dim names (matching a bare scalar).
     if len(shape) == 0:
         return []
 
-    # Helper dims (e.g. ``_term``) are storage book-keeping, never user axes,
-    # so they are not pairing candidates.
     candidates = {d: v for d, v in expected.items() if d not in HELPER_DIMS}
     sizes = {d: len(_as_index(v)) for d, v in candidates.items()}
     paired, problem = _pair_axes_by_size(shape, sizes)
     positional = list(candidates)[: len(shape)]
 
     if is_v1():
-        if problem is not None:
+        if paired is None:
             raise ValueError(
                 f"Cannot pair an unlabeled array of shape {tuple(shape)} with "
                 f"the operand's dimensions: {problem} Wrap the array in an "
                 f"xarray.DataArray with explicit dims to name its axes."
             )
-        assert paired is not None
         return paired
 
-    # LEGACY: remove at 1.0 — positional pairing plus the transition warning.
+    # LEGACY: remove at 1.0
+    paired_by_position = (
+        f"An unlabeled array of shape {tuple(shape)} was paired with the "
+        f"operand's leading dimension(s) {positional} by position. Under "
+    )
     if problem is not None:
         warn_legacy(
-            f"An unlabeled array of shape {tuple(shape)} was paired with the "
-            f"operand's leading dimension(s) {positional} by position. Under "
-            f"the v1 convention this raises: {problem} Wrap the array in an "
-            f"xarray.DataArray with explicit dims to keep it working."
+            paired_by_position + f"the v1 convention this raises: {problem} Wrap "
+            f"the array in an xarray.DataArray with explicit dims to keep it "
+            f"working."
         )
     elif paired != positional:
         warn_legacy(
-            f"An unlabeled array of shape {tuple(shape)} was paired with the "
-            f"operand's leading dimension(s) {positional} by position. Under "
-            f"the v1 convention it pairs by size instead — with {paired} — "
-            f"which gives a different result. Wrap the array in an "
-            f"xarray.DataArray with explicit dims to make the pairing explicit."
+            paired_by_position + f"the v1 convention it pairs by size instead — "
+            f"with {paired} — which gives a different result. Wrap the array in "
+            f"an xarray.DataArray with explicit dims to make the pairing "
+            f"explicit."
         )
     return positional
 
@@ -718,12 +709,12 @@ def _label_input(
     The converter is handed ``expected`` (the normalized name→values dict),
     not the raw sequence-form coords, so it selects coords by name — a
     sequence would zip dims to coords by position, which is wrong once
-    size-pairing has chosen a non-leading dim.
+    size-pairing has chosen a non-leading dim. A MultiIndex coord is not
+    re-assigned: the conversion already used it, and re-assigning emits a
+    FutureWarning.
     """
     dims = _dims_for_positional_input(arr, expected, dims)
     arr = as_dataarray(arr, expected, dims=dims, **kwargs)
-    # Re-assign non-MultiIndex coords from ``expected`` (a MultiIndex coord
-    # re-assignment emits a FutureWarning and the conversion already used it).
     return arr.assign_coords(
         {
             d: expected[d]
@@ -840,7 +831,9 @@ def _broadcast_to_coords(
     projections performed along the way, so the public entry points can
     apply their own policy (warn or raise) to partial projections and
     coverage gaps. Unlabeled inputs pair their axes with the coords dims by
-    size (#736); see :func:`_label_input`.
+    size (#736); see :func:`_label_input`. ``reindex_reordered`` is False on
+    the v1 arithmetic path, so a reorder reaches the §8 exact check instead of
+    being conformed here.
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
@@ -858,7 +851,7 @@ def _broadcast_to_coords(
         arr = _label_input(arr, expected, dims, **kwargs)
 
     arr, projections = _project_onto_multiindex_levels(arr, expected)
-    if reindex_reordered:  # False on the v1 arithmetic path, so a reorder hits §8 exact
+    if reindex_reordered:
         arr = _reindex_reordered_dims(arr, expected, warn=warn_reorder)
     arr = _expand_missing_dims(arr, expected)
     arr = _order_like_coords(arr, expected)
@@ -952,7 +945,7 @@ def broadcast_to_coords(
     DataArray
         Broadcast against ``coords``.
     """
-    if not strict:  # arithmetic operands
+    if not strict:
         from linopy.semantics import is_v1
 
         da, projections = _broadcast_to_coords(

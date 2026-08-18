@@ -200,8 +200,10 @@ def test_model_repr_empty() -> None:
 
 
 def test_repr_with_transposed_dataset_dim_order() -> None:
-    # the dataset dim order may deviate from the array layout, e.g. when the
-    # coordinate of a trailing dimension was inserted first
+    """
+    The dataset dim order may deviate from the array layout, e.g. when the
+    coordinate of a trailing dimension was inserted first.
+    """
     dims = ("dim_1", "dim_0", "_term")
     labels = np.tile(x.labels.values, (2, 1))[..., None]
     ds = xr.Dataset(

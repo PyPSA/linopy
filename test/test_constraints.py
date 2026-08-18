@@ -169,8 +169,7 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
 
 @pytest.mark.legacy
 def test_constraint_rhs_unlabeled_lower_dim_legacy() -> None:
-    # An unlabeled array rhs pairs positionally with the leading dim under
-    # legacy; both dims are size 10 so the pairing is a size-coincidence.
+    """An unlabeled rhs pairs with the leading dim; both dims are size 10."""
     m = Model()
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
@@ -183,8 +182,7 @@ def test_constraint_rhs_unlabeled_lower_dim_legacy() -> None:
 
 @pytest.mark.v1
 def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises_v1() -> None:
-    # v1: both dims are size 10, so an unlabeled length-10 rhs cannot be
-    # paired by size — it raises (wrap in a DataArray to disambiguate).
+    """Both dims are size 10, so a length-10 rhs cannot be paired by size."""
     m = Model()
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
@@ -214,8 +212,7 @@ def test_constraint_rhs_higher_dim_constant_warns(
 
 @pytest.mark.legacy
 def test_constraint_rhs_unlabeled_higher_dim_warns_legacy(caplog: Any) -> None:
-    # Legacy: an unlabeled (5, 3) rhs pairs axis 0 with dim_0 positionally and
-    # broadcasts the extra axis, warning about the extra dimension.
+    """An unlabeled (5, 3) rhs pairs axis 0 with dim_0 and broadcasts axis 1."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
@@ -226,8 +223,7 @@ def test_constraint_rhs_unlabeled_higher_dim_warns_legacy(caplog: Any) -> None:
 
 @pytest.mark.v1
 def test_constraint_rhs_unlabeled_higher_dim_raises_v1() -> None:
-    # v1: the (5, 3) rhs has an axis of length 3 matching no dim of x — it
-    # cannot be paired by size and raises.
+    """The (5, 3) rhs has an axis of length 3 matching no dim of x."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 

@@ -3090,11 +3090,10 @@ class TestRaggedBreakpointMask:
     Under v1 a NaN linopy did not create itself is rejected; ``mask=`` is
     the way to say "this slot is absent". Legacy keeps inferring, with a
     deprecation warning. Regression for
-    https://github.com/PyPSA/linopy/issues/884.
+    https://github.com/PyPSA/linopy/issues/884. Every formulation path reaches
+    the padded slot through a different expression, so each is covered.
     """
 
-    # Every formulation path reaches the padded slot through a different
-    # expression, and each one used to raise from deep inside arithmetic.
     CASES: list[tuple[str, Method, dict[str, Any]]] = [
         ("lp", "lp", {}),
         ("sos2", "sos2", {"y_values": [[0.0, 70.0, 20.0], [0.0, 60.0, np.nan]]}),

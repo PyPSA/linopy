@@ -7,8 +7,8 @@ with ``period``/``timestep`` as auxiliary level coords? Each test below is an
 explicit equality check (MI form vs flat+aux form), run under both legacy and v1
 semantics.
 
-The matrix, findings, and pinned PyPSA call sites live in the discussion
-artifact: ``arithmetics-design/multiindex-feasibility.md``.
+The matrix, findings, and pinned PyPSA call sites live in the discussion on
+https://github.com/PyPSA/linopy/issues/744.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from linopy.testing import assert_linequal
 
 PERIODS = [2020, 2030]
 N = 6  # 2 periods x 3 timesteps
-PERIOD_OF = np.repeat(PERIODS, 3)  # period per flat snapshot
+PERIOD_OF = np.repeat(PERIODS, 3)
 STEP_OF = np.tile(["t1", "t2", "t3"], 2)
 DEMAND = {2020: 5.0, 2030: 7.0}
 
@@ -58,7 +58,7 @@ def test_entry_normalize() -> None:
         np.arange(N), coords={"snapshot": _mi()}, dims="snapshot"
     ).reset_index("snapshot")
     assert list(r.coords) == ["period", "timestep"]
-    assert "snapshot" not in r.indexes  # coordinate-less; xarray virtualizes 0..N-1
+    assert "snapshot" not in r.indexes
     assert np.array_equal(r["snapshot"].values, np.arange(N))
 
 
@@ -121,17 +121,13 @@ def _solve(
 def test_per_period_lp_equivalent() -> None:
     """Same per-period-demand LP, MI vs flat+aux -> identical optimum."""
 
-    def mi_demand(
-        m: Model, x: Variable
-    ) -> None:  # select by position -- MI tuple-sel is not forwarded
+    def mi_demand(m: Model, x: Variable) -> None:
         for p, d in DEMAND.items():
             m.add_constraints(
                 x.isel(snapshot=np.flatnonzero(PERIOD_OF == p)).sum() >= d
             )
 
-    def flat_demand(
-        m: Model, x: Variable
-    ) -> None:  # level rides as aux coord -> groupby
+    def flat_demand(m: Model, x: Variable) -> None:
         e = (1.0 * x).assign_coords(period=_flat()["period"])
         rhs = xr.DataArray(
             list(DEMAND.values()), dims="period", coords={"period": PERIODS}
@@ -161,11 +157,9 @@ def test_output_restacks_to_mi() -> None:
     m.add_objective((np.arange(1.0, N + 1.0) * x).sum())
     m.solve(solver_name="highs", output_flag=False)
 
-    sol = m.solution["x"]  # bare flat dim, no level coords carried through solve
-    coords = xr.Coordinates.from_pandas_multiindex(
-        _mi(), "snapshot"
-    )  # explicit-index API
-    restacked = sol.assign_coords(coords)  # caller's own snapshot mapping
+    sol = m.solution["x"]
+    coords = xr.Coordinates.from_pandas_multiindex(_mi(), "snapshot")
+    restacked = sol.assign_coords(coords)
     assert isinstance(restacked.indexes["snapshot"], pd.MultiIndex)
     assert np.array_equal(restacked.values, sol.values)
     assert list(restacked.to_dataframe().index.names) == ["period", "timestep"]
@@ -188,8 +182,10 @@ def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
     * ``ramp`` -- drop the whole *row* (no previous to ramp from): the
       ``_period_start_mask`` used as a constraint ``mask`` (L838).
 
-    ``flat`` builds the previous SOC with ``groupby("period").roll``; ``oracle`` with
-    an explicit per-period positional roll. A byte-equal LP file is the whole proof.
+    ``flat`` builds the previous SOC with ``groupby("period").roll`` (legacy keeps
+    the ``period`` aux coord on the result, v1 consumes it); ``oracle`` with an
+    explicit per-period positional roll; ``global`` with a period-unaware roll,
+    the wrong build. A byte-equal LP file is the whole proof.
 
     Teeth: each boundary differs from the ``cyclic`` baseline (mask/wrap/row-drop is
     not a no-op); and for ``cyclic`` a period-unaware global roll diverges at the
@@ -204,7 +200,7 @@ def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
     is_start = xr.DataArray(
         np.isin(np.arange(N), starts), dims="snapshot", coords={"snapshot": s}
     )
-    prev_pos = np.empty(N, int)  # per-period cyclic-previous position
+    prev_pos = np.empty(N, int)
     for p in PERIODS:
         pos = np.flatnonzero(PERIOD_OF == p)
         prev_pos[pos] = np.roll(pos, 1)
@@ -213,19 +209,19 @@ def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
         m = Model()
         soc = m.add_variables(lower=0, coords=[s], name="soc")
         charge = m.add_variables(lower=0, coords=[s], name="charge")
-        if kind == "flat":  # per-period roll falls out of groupby
+        if kind == "flat":
             prev = (1.0 * soc).assign_coords(period=period).groupby("period")
             prev = prev.roll(snapshot=1)
-            if "period" in prev.coords:  # legacy keeps the aux coord, v1 consumes it
+            if "period" in prev.coords:
                 prev = prev.drop_vars("period")
-        elif kind == "oracle":  # explicit per-period positional roll
+        elif kind == "oracle":
             prev = (1.0 * soc).isel(snapshot=prev_pos).assign_coords(snapshot=s)
-        else:  # period-unaware global roll -- the wrong build
+        else:
             prev = (1.0 * soc).roll(snapshot=1)
-        if bnd == "non-cyclic":  # drop the previous term, keep the row (PyPSA .where)
+        if bnd == "non-cyclic":
             prev = prev.where(~is_start)
         con = 1.0 * soc - prev - 1.0 * charge == -demand
-        if bnd == "ramp":  # drop the whole row at the period start (constraint mask)
+        if bnd == "ramp":
             m.add_constraints(con, name="soc", mask=~is_start)
         else:
             m.add_constraints(con, name="soc")
@@ -234,9 +230,9 @@ def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
         return path.read_text()
 
     contrast = {"cyclic": "non-cyclic", "non-cyclic": "cyclic", "ramp": "cyclic"}
-    assert lp("flat", boundary) == lp("oracle", boundary)  # flat+aux == explicit roll
-    assert lp("flat", boundary) != lp("flat", contrast[boundary])  # boundary is real
-    if boundary == "cyclic":  # period-unaware roll diverges (masked away otherwise)
+    assert lp("flat", boundary) == lp("oracle", boundary)
+    assert lp("flat", boundary) != lp("flat", contrast[boundary])
+    if boundary == "cyclic":
         assert lp("global", "cyclic") != lp("oracle", "cyclic")
 
 
@@ -253,22 +249,22 @@ def test_snapshots_param_flat_rebuild() -> None:
     """
     mi = _mi()
 
-    # MI way (PyPSA today): the MI lives inside model.parameters, read back verbatim
+    # MI way (PyPSA today): the MI lives inside model.parameters
     m = Model()
-    m.parameters = m.parameters.assign(snapshots=mi)  # optimize.py L689
+    m.parameters = m.parameters.assign(snapshots=mi)
     assert isinstance(m.parameters.indexes["snapshots"], pd.MultiIndex)
-    assert m.parameters.snapshots.to_index().equals(mi)  # optimize.py L905
+    assert m.parameters.snapshots.to_index().equals(mi)
 
-    # flat+aux way: park flat snapshot + level vars; no MI inside the object
+    # flat+aux way: park flat snapshot + level vars
     m2 = Model()
     flat = _flat()
     m2.parameters = m2.parameters.assign(
         period=flat["period"], timestep=flat["timestep"]
     )
     assert isinstance(m2.parameters.indexes["snapshot"], pd.RangeIndex)
-    assert "snapshots" not in m2.parameters  # no MI parked inside the linopy object
+    assert "snapshots" not in m2.parameters
     rebuilt = pd.MultiIndex.from_arrays(
         [m2.parameters.period.values, m2.parameters.timestep.values],
         names=["period", "timestep"],
     )
-    assert rebuilt.equals(mi)  # same index, rebuilt from the aux vars
+    assert rebuilt.equals(mi)

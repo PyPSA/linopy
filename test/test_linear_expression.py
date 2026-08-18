@@ -435,8 +435,7 @@ def test_linear_expression_substraction(
 def test_linear_expression_sum(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
-    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
-    # (forbidden by v1 §8).
+    """Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords (v1 §8)."""
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -460,8 +459,7 @@ def test_linear_expression_sum(
 def test_linear_expression_sum_with_const(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
-    # Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords
-    # (forbidden by v1 §8).
+    """Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords (v1 §8)."""
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
 
@@ -1517,17 +1515,17 @@ class TestMultiKeyFastPath:
 
     @pytest.mark.legacy
     def test_dataframe_grouper_stays_compact(self) -> None:
-        # legacy: the DataFrame grouper keeps the stacked observed-only group MI
+        """Legacy keeps the stacked, observed-only `group` MultiIndex."""
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
         with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
             grouped = expr.groupby(df).sum()
         assert isinstance(grouped.indexes["group"], pd.MultiIndex)
-        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+        assert grouped.sizes["group"] == 3
 
     @pytest.mark.v1
     def test_dataframe_grouper_stays_compact_v1(self) -> None:
-        # v1: flat `group` dim + period/season aux coords, still observed-only
+        """v1 gives a flat `group` dim with aux coords, still observed-only."""
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
         grouped = expr.groupby(df).sum()
@@ -1537,9 +1535,11 @@ class TestMultiKeyFastPath:
 
     @pytest.mark.legacy
     def test_namelist_observed_warns_legacy(self) -> None:
-        # `groupby([names]).sum(observed=True)` keeps the stacked `group` MI under
-        # legacy exactly like a DataFrame grouper — so it must warn too (v1 gives
-        # a flat dim, a silent divergence otherwise).
+        """
+        A name list with ``observed=True`` keeps the stacked `group` MultiIndex
+        under legacy, exactly like a DataFrame grouper, so it must warn too —
+        v1 gives a flat dim, a silent divergence otherwise.
+        """
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
@@ -1554,9 +1554,10 @@ class TestMultiKeyFastPath:
 
     @pytest.mark.legacy
     def test_group_multiindex_reset_index_matches_v1(self) -> None:
-        # The warning tells legacy users `.reset_index('group')` yields the v1
-        # shape — pin that it produces exactly the v1 flat result (same expr, so
-        # variable labels line up).
+        """
+        The warning points legacy users at ``.reset_index('group')``; pin that
+        it produces exactly the v1 flat result.
+        """
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -1591,14 +1592,11 @@ class TestMultiKeyFastPath:
         grouped = expr.groupby(["period", "season"]).sum(observed=True)
 
         assert_linequal(grouped, expr.groupby(df).sum())
-        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+        assert grouped.sizes["group"] == 3
 
     def test_observed_silences_blowup_warning(self) -> None:
         expr = self._expr(list(range(200)), list(range(200)))
 
-        # ``observed=True`` silences the dense-grid blowup warning; under legacy
-        # it still emits the deprecated-`group`-MultiIndex warning, which is not
-        # what this test is about, so assert on the blowup warning specifically.
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
@@ -2711,9 +2709,6 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
-    # ``drop=True`` so the scalar ``dim_0`` coord doesn't survive each .sel
-    # and trip §11's aux-coord-conflict check (the two picks pin dim_0=0
-    # vs dim_0=1).
     expr1 = z.sel(dim_0=0, drop=True).sum("dim_1")
     expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
@@ -3008,8 +3003,7 @@ class TestJoinParameter:
         def test_add_join_none_preserves_default(
             self, a: Variable, b: Variable
         ) -> None:
-            # Legacy-only: a and b have different coords on dim ``i``;
-            # under v1 both arithmetic forms raise (see convention.md §8).
+            """Legacy-only: a and b disagree on dim ``i``, which v1 §8 rejects."""
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
@@ -3259,9 +3253,11 @@ class TestJoinParameter:
 
         @pytest.mark.legacy
         def test_div_constant_outer_fill_values_legacy(self, a: Variable) -> None:
-            # Both semantics return the union of the coords. Legacy fills a
-            # missing divisor with 1, keeping the term unscaled; under v1 the
-            # row is there but zero (see TestOuterJoinFill).
+            """
+            Both semantics return the union of the coords, but legacy fills a
+            missing divisor with 1, keeping the term unscaled; under v1 the row
+            is there but zero (see TestOuterJoinFill).
+            """
             expr = 1 * a + 10
             other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
             result = expr.div(other, join="outer")
@@ -3287,7 +3283,7 @@ class TestJoinParameter:
         def test_quadratic_add_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
-            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
+            """Legacy-only: a*b has misaligned coords on ``i`` (v1 §8 raises)."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
@@ -3303,7 +3299,7 @@ class TestJoinParameter:
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
-            # Legacy-only: a*b has misaligned coords on ``i`` (§8 raises in v1).
+            """Legacy-only: a*b has misaligned coords on ``i`` (v1 §8 raises)."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")

@@ -279,7 +279,7 @@ def test_get_dims_with_index_levels() -> None:
     ds5 = xr.Dataset()
     assert get_dims_with_index_levels(ds5) == []
 
-    # Case 6: flat dim carrying a decomposed MultiIndex as aux level coords
+    # Test case 6: Flat dim with a decomposed multi-index as level coords
     mi = pd.MultiIndex.from_product([["a", "b"], [1, 2]], names=["region", "tech"])
     ds6 = (
         xr.DataArray(np.zeros(4), coords=[mi], dims=["node"])

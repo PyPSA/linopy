@@ -79,13 +79,6 @@ def _aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Legacy-deprecation warnings — actionable, per-site (goal #2 in goals.md:
-# tell the user *what* will change for the op they just ran).
-# Each helper returns the message; ``warn_legacy(msg)`` issues it.
-# ---------------------------------------------------------------------------
-
-
 _OPT_IN_HINT = (
     "\n  Opt in:    linopy.options['semantics'] = 'v1'"
     "\n  Silence:   warnings.filterwarnings('ignore', "
@@ -93,9 +86,6 @@ _OPT_IN_HINT = (
 )
 
 
-# Per-op opening clause for ``_legacy_nan_constant_message`` — operand
-# noun and the historical fill value (`+`/`*` filled with 0; `/` filled
-# with 1, a different fill that's worth calling out at the warn site).
 _LEGACY_NAN_FILL_CLAUSE = {
     "add": (
         "NaN in the constant operand was silently treated as 0 by legacy"
@@ -431,15 +421,13 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
             "explicit join= (e.g. join='outer'). To fill absent slots of an "
             "operand, call `.fillna(...)` on it before the operation."
         )
-    if not is_v1():
-        if isinstance(fill_value, AbsentType):
-            raise ValueError(
-                "fill_value=ABSENT expresses absence, which only the v1 "
-                "convention carries. Set linopy.options['semantics'] = 'v1' "
-                "to use it."
-            )
-        return
-    if is_nan_scalar(fill_value):
+    if isinstance(fill_value, AbsentType) and not is_v1():
+        raise ValueError(
+            "fill_value=ABSENT expresses absence, which only the v1 "
+            "convention carries. Set linopy.options['semantics'] = 'v1' "
+            "to use it."
+        )
+    if is_v1() and is_nan_scalar(fill_value):
         raise ValueError(
             "fill_value=NaN is ambiguous: pass linopy.ABSENT to leave the "
             "positions the join creates absent, or a number to fill them."
@@ -463,22 +451,13 @@ def enforce_no_multiindex(
     obj: Any, *, context: str = "input", stacklevel: int = 4
 ) -> None:
     """Reject (v1) / deprecate (legacy) any MultiIndex dimension on ``obj``."""
-    indexes = getattr(obj, "indexes", None)
-    if not indexes:
+    indexes = getattr(obj, "indexes", None) or {}
+    dim = next((d for d, i in indexes.items() if isinstance(i, pd.MultiIndex)), None)
+    if dim is None:
         return
-    for dim, idx in indexes.items():
-        if isinstance(idx, pd.MultiIndex):
-            if is_v1():
-                raise ValueError(_v1_multiindex_message(str(dim), context))
-            warn_legacy(
-                _legacy_multiindex_message(str(dim), context), stacklevel=stacklevel
-            )
-            return
-
-
-def dim_coords_differ(a: DataArray, b: DataArray) -> bool:
-    """True if a and b share a dimension whose coordinate labels disagree."""
-    return first_mismatched_dim(a, b) is not None
+    if is_v1():
+        raise ValueError(_v1_multiindex_message(str(dim), context))
+    warn_legacy(_legacy_multiindex_message(str(dim), context), stacklevel=stacklevel)
 
 
 def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | None:
@@ -521,56 +500,65 @@ def reindex_like_if_needed(
     return arr.reindex_like(ref, fill_value=fill_value)
 
 
-def conform_merge_dims(
+def shared_dim_mismatches(
     datasets: Sequence[Dataset], concat_dim: str
-) -> tuple[list[Dataset], tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:
+) -> tuple[tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:
     """
-    Inspect shared user dims for a merge, in a single pass over the operands.
+    Report the shared user dims that disagree, in a single pass over the operands.
 
-    Returns ``(data, mismatch, reorder)``. A shared user dim whose labels are
-    the first operand's in a different order (same set, including a stacked
-    MultiIndex's tuples) is a *reorder*; one whose label set differs is a
-    *mismatch* — each reported as ``(dim, first_labels, other_labels)`` (first
-    found). Nothing is aligned in the returned data (§8: v1 treats a pure
-    reorder as a mismatch, exactly like `join="exact"`); the caller raises on
-    either under v1, and warns on either under legacy. Helper dims (``_term``,
-    ``_factor``) and the concat dim are excluded; bare dimension indexes are
-    compared, so auxiliary coords stay §11's job.
+    Returns ``(mismatch, reorder)``, each either ``None`` or
+    ``(dim, first_labels, other_labels)`` for the first offending dim. A dim
+    carrying the first operand's labels in a different order (same set,
+    including a stacked MultiIndex's tuples) is a *reorder*; a differing label
+    set is a *mismatch*. Nothing is aligned — §8 treats both as
+    ``join="exact"`` failures. Helper dims (``_term``, ``_factor``) and the
+    concat dim are excluded; bare dimension indexes are compared, so auxiliary
+    coords stay §11's job.
 
-    A non-unique shared index can't be resolved to a permutation (``get_indexer``
-    requires uniqueness), so it is classified as a *mismatch* rather than a
-    reorder — harmless, since both raise under v1 and warn under legacy.
+    A non-unique shared index cannot be resolved to a permutation
+    (``get_indexer`` requires uniqueness) and so counts as a mismatch —
+    harmless, since both raise under v1 and warn under legacy.
     """
-    datasets = list(datasets)
     if len(datasets) < 2:
-        return datasets, None, None
+        return None, None
     skip = set(HELPER_DIMS) | {concat_dim}
     indexed = [
         {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
         for d in datasets
     ]
     shared = set.intersection(*(set(p) for p in indexed))
-    if not shared:
-        return datasets, None, None
-
-    # §8: nothing is aligned — reorder and set-mismatch are only reported.
     mismatch: tuple[str, Any, Any] | None = None
     reorder: tuple[str, Any, Any] | None = None
-    for i in range(1, len(datasets)):
+    for other in indexed[1:]:
         for d in shared:
-            ref, idx = indexed[0][d], indexed[i][d]
+            ref, idx = indexed[0][d], other[d]
             if ref.equals(idx):
                 continue
-            # Non-unique index → mismatch (see docstring).
-            positions = (
-                idx.get_indexer(ref) if len(idx) == len(ref) and idx.is_unique else None
-            )
+            permutable = len(idx) == len(ref) and idx.is_unique
+            positions = idx.get_indexer(ref) if permutable else None
             if positions is not None and (positions >= 0).all():
-                if reorder is None:
-                    reorder = (str(d), ref.values, idx.values)
-            elif mismatch is None:
-                mismatch = (str(d), ref.values, idx.values)
-    return datasets, mismatch, reorder
+                reorder = reorder or (str(d), ref.values, idx.values)
+            else:
+                mismatch = mismatch or (str(d), ref.values, idx.values)
+    return mismatch, reorder
+
+
+def enforce_merge_dims(
+    datasets: Sequence[Dataset], *, concat_dim: str, context: str
+) -> None:
+    """
+    Enforce §8 across the operands of a merge: v1 raises on a differing label
+    set or a pure reorder, legacy warns and leaves the alignment to the merge.
+    """
+    mismatch, reorder = shared_dim_mismatches(datasets, concat_dim)
+    if is_v1():
+        problem = mismatch or reorder
+        if problem is not None:
+            raise ValueError(_shared_dim_mismatch_message(*problem))
+    elif mismatch is not None:
+        warn_legacy(_legacy_coord_mismatch_message(context, *mismatch))
+    elif reorder is not None:
+        warn_legacy(_legacy_coord_reorder_message(context, *reorder))
 
 
 def conflicting_aux_coord(
@@ -604,8 +592,6 @@ def conflicting_aux_coord(
             for d in datasets
             if name in d.coords and name not in d.dims
         ]
-        # §11 asymmetric-presence: when only one operand carries the coord,
-        # it propagates unchanged — no conflict to surface.
         if len(present) < 2:
             continue
         ref = present[0]

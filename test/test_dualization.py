@@ -491,16 +491,14 @@ def test_strong_duality_array_variable() -> None:
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(n)], name="x")
 
-    # Label the matrix: the column axis shares x's dim, the row axis is the
-    # constraint index.
     A_da = xr.DataArray(
         A,
         dims=["con", "dim_0"],
         coords={"con": pd.RangeIndex(4), "dim_0": x.indexes["dim_0"]},
     )
-    lhs = (A_da * x).sum("dim_0")  # expression indexed by `con`
+    lhs = (A_da * x).sum("dim_0")
     # Bounded because x >= 0 and A x <= b with A > 0.
-    m.add_constraints(lhs <= b, name="c")  # raw numpy `b` pairs with `con` by size
+    m.add_constraints(lhs <= b, name="c")
 
     c_da = xr.DataArray(c_obj, dims=["dim_0"], coords={"dim_0": x.indexes["dim_0"]})
     m.add_objective((c_da * x).sum(), sense="max")

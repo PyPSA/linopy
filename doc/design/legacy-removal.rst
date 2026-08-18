@@ -25,12 +25,13 @@ Implementation
 -  Delete ``is_v1()`` (always true). Inline ``True`` at the four import sites
    in ``expressions.py``/``variables.py`` or, better, delete the import and
    the now-dead ``else`` branches alongside it.
--  Drop the legacy-warn branch from ``check_user_nan_scalar`` /
-   ``check_user_nan_array`` — both become a single ``raise ValueError(...)``.
--  Delete ``dim_coords_differ``: only the legacy ``_align_constant`` default
-   path uses it.
--  ``merge_shared_user_coords_differ``, ``conflicting_aux_coord``,
-   ``absorb_absence`` stay — they're v1 enforcement helpers.
+-  Drop the legacy-warn branch from ``check_user_nan`` /
+   ``check_user_nan_breakpoints`` — both become a single ``raise ValueError(...)``.
+-  ``enforce_merge_dims``: drop its two ``warn_legacy`` branches; the v1 raise
+   on a mismatch or reorder is all that is left.
+-  Delete every ``_legacy_*_message`` helper and ``warn_legacy`` itself.
+-  ``shared_dim_mismatches``, ``conflicting_aux_coord``, ``absorb_absence``
+   stay — they're v1 enforcement helpers.
 
 ``linopy/expressions.py``
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -42,15 +43,15 @@ Implementation
 -  ``_align_constant``: delete the ``else`` branch under ``if join is None:``
    that handles the legacy size-aware default (``other.sizes == self.const.sizes``
    positional + ``reindex_like`` left-join paths). The explicit-join code
-   below stays.
--  ``to_constraint``: drop the ``if is_v1(): ... return ...`` wrapper and
-   keep its body; delete the legacy auto-mask fallthrough that follows
-   (the ``rhs_nan_mask`` plumbing plus the ``rhs.reindex_like(..., fill_value=np.nan)`` pad).
+   below stays, as do the ``_broadcast_and_align`` / ``_reindexed_to`` helpers.
+-  ``to_constraint``: keep the ``if is_v1():`` body and delete the ``else``
+   branch (the legacy auto-mask: the ``rhs_nan_mask`` plumbing plus the
+   ``rhs.reindex_like(..., fill_value=np.nan)`` pad).
 -  ``LinearExpression.isnull``: drop the legacy ``(self.vars == -1).all(...) & self.const.isnull()`` branch — ``self.const.isnull()`` is the v1 answer.
 -  ``merge``:
 
-   -  Drop the ``if differ: warn(...)`` line and the ``if aux_conflict: warn(...)`` line — these are the §8 / §11 legacy warns. The raises
-      above stay.
+   -  The §8 / §11 legacy warns live in ``enforce_merge_dims`` /
+      ``enforce_aux_conflict``; both calls stay, only their legacy branches go.
    -  The ``skipna = not is_v1()`` simplifies to ``skipna = False`` (v1's
       propagation rule).
    -  The trailing ``if is_v1(): ds = absorb_absence(ds)`` becomes
@@ -76,8 +77,9 @@ Implementation
    full-coverage full-level projections remain legal under v1 (they are
    the same coordinate spelled differently, §8).
 -  ``_dims_for_unlabeled_operand``: drop the legacy positional-pairing
-   fallback (the ``warn_legacy(...)`` branches plus the ``return list(candidates)``); the v1 size-pairing — the ``is_v1()`` block that
-   raises on ambiguity / no-match — becomes the whole function. The
+   fallback (the ``warn_legacy(...)`` branches plus ``return positional``); the
+   v1 size-pairing — the ``is_v1()`` block that raises on ambiguity / no-match
+   — becomes the whole function. The
    ``as_constant`` / ``_pair_axes_by_size`` helpers stay (v1-clean).
 
 ``linopy/piecewise.py`` / ``linopy/sos_reformulation.py``
@@ -170,8 +172,8 @@ A safe sequence (each step compiles and tests pass):
    anyway once the legacy paths are gone — delete or update each).
 3. Delete legacy implementation branches in ``expressions.py`` /
    ``variables.py``.
-4. Delete ``semantics.py`` legacy bits (``is_v1``, the warn branches in
-   ``check_user_nan_*``, ``dim_coords_differ``).
+4. Delete ``semantics.py`` legacy bits (``is_v1``, ``warn_legacy``, the
+   ``_legacy_*_message`` helpers and the warn branches that call them).
 5. Delete ``config.py`` symbols (``LEGACY_SEMANTICS``, the warning class,
    the option key).
 6. Update ``doc/design/goals.rst`` and ``doc/design/convention.rst``.

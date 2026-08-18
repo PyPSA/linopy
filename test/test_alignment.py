@@ -656,14 +656,11 @@ class TestBroadcastToCoords:
         size-pairing would otherwise be ambiguous (both coords dims size 4).
         Pins the "infer order only when the user didn't name it" rule.
         """
-        coords = {"a": [0, 1, 2, 3], "b": [4, 5, 6, 7]}  # both size 4
+        coords = {"a": [0, 1, 2, 3], "b": [4, 5, 6, 7]}
 
-        # No dims → size-pairing can't decide → raises.
         with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
             broadcast_to_coords(np.arange(4), coords=coords, strict=False)
 
-        # Explicit dims=['a'] → the axis is labeled 'a' positionally, no
-        # pairing, no raise (matches xarray's positional dims assignment).
         da = broadcast_to_coords(np.arange(4), coords=coords, dims=["a"], strict=False)
         assert set(da.dims) == {"a", "b"}
         assert (da.sel(b=4).values == np.arange(4)).all()
@@ -964,11 +961,9 @@ class TestBroadcastToCoordsMultiIndexProjection:
         )
         weights = pd.Series([10.0, 20.0], index=subset)
 
-        # Broadcast rung: the implicit projection itself is rejected.
         with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
             broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
 
-        # Strict rung: the coverage gap is rejected before the projection policy.
         with pytest.raises(ValueError, match=r"no value for .* level combination"):
             broadcast_to_coords(weights, mi_coords, dims=["dim_3"], label="lower bound")
 
