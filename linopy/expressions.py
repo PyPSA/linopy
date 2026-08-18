@@ -107,6 +107,8 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.semantics import (
+    AbsentType,
+    FillValueLike,
     _legacy_coord_mismatch_message,
     _legacy_coord_reorder_message,
     _legacy_group_multiindex_message,
@@ -120,6 +122,7 @@ from linopy.semantics import (
     first_mismatched_dim,
     is_nan_scalar,
     is_v1,
+    join_fill,
     reindex_like_if_needed,
     warn_legacy,
 )
@@ -940,10 +943,16 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const.fillna(0)
         return cast(QuadraticExpression, res)
 
+    def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
+        """A position the join left absent (§10 ``ABSENT``) carries no term."""
+        if not isinstance(fill_value, AbsentType):
+            return self
+        return self.__class__(absorb_absence(self.data), self.model)
+
     def _align_constant(
         self,
         other: DataArray,
-        fill_value: float = 0,
+        fill_value: FillValueLike = 0,
         join: JoinOptions | None = None,
     ) -> tuple[DataArray, DataArray, bool]:
         """
@@ -953,8 +962,10 @@ class BaseExpression(ABC):
         ----------
         other : DataArray
             The constant to align.
-        fill_value : float, default: 0
-            Fill value for missing coordinates.
+        fill_value : float or ABSENT, default: 0
+            Value the constant takes at the positions the join creates.
+            ``ABSENT`` fills both sides with NaN, so the created position
+            comes out absent instead of carrying either operand's value.
         join : str, optional
             Alignment method. If None, the default is determined by
             ``options["semantics"]`` — under ``v1`` shared dimensions must
@@ -981,6 +992,8 @@ class BaseExpression(ABC):
         # dropping the conflicting coord, which is the #295 bug v1 is
         # meant to close. v1 raises; legacy warns.
         enforce_aux_conflict([self.const, other], stacklevel=4)
+        other_fill = join_fill(fill_value, 0)
+        self_fill = np.nan if isinstance(fill_value, AbsentType) else 0
         if join is None:
             if is_v1():
                 join = "exact"
@@ -998,7 +1011,7 @@ class BaseExpression(ABC):
                 if other.sizes == self.const.sizes:
                     aligned = other.assign_coords(coords=self.coords)
                 else:
-                    aligned = other.reindex_like(self.const, fill_value=fill_value)
+                    aligned = other.reindex_like(self.const, fill_value=other_fill)
                 return self.const, aligned, False
 
         if join == "override":
@@ -1030,7 +1043,7 @@ class BaseExpression(ABC):
         if join == "left":
             return (
                 self.const,
-                other.reindex_like(self.const, fill_value=fill_value),
+                other.reindex_like(self.const, fill_value=other_fill),
                 False,
             )
         # ``xr.align(..., join="exact")`` raises with a wording that's not
@@ -1049,16 +1062,18 @@ class BaseExpression(ABC):
             self.const,
             other,
             join=join,
-            fill_value=fill_value,
+            fill_value=other_fill,
         )
-        self_const = reindex_like_if_needed(self.const, self_const, fill_value=0)
+        self_const = reindex_like_if_needed(
+            self.const, self_const, fill_value=self_fill
+        )
         return self_const, aligned, True
 
     def _add_constant(
         self,
         other: ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self:
         fill_value = 0 if fill_value is None else fill_value
         if is_v1():
@@ -1066,7 +1081,10 @@ class BaseExpression(ABC):
         return self._add_constant_legacy(other, join, fill_value)
 
     def _add_constant_v1(
-        self, other: ConstantLike, join: JoinOptions | None, fill_value: float = 0
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None,
+        fill_value: FillValueLike = 0,
     ) -> Self:
         # §6: absence propagates — self.const NaN stays NaN, no fillna(0).
         # §5: user NaN raised in check_user_nan; never reaches the math here.
@@ -1083,17 +1101,22 @@ class BaseExpression(ABC):
             da, fill_value=fill_value, join=join
         )
         if needs_data_reindex:
-            return self.__class__(
+            result = self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
                     const=self_const + da
                 ),
                 self.model,
             )
-        return self.assign(const=self_const + da)
+        else:
+            result = self.assign(const=self_const + da)
+        return result._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _add_constant_legacy(
-        self, other: ConstantLike, join: JoinOptions | None, fill_value: float = 0
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None,
+        fill_value: FillValueLike = 0,
     ) -> Self:
         # NaN values in self.const or other are silently filled with 0
         # (additive identity) so missing data does not propagate through
@@ -1126,27 +1149,27 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         nan_fill: float,
-        join_fill: float,
+        factor_fill: FillValueLike,
         op_kind: str,
         join: JoinOptions | None = None,
     ) -> Self:
         """
         Apply a constant operation (mul, div) to this expression.
 
-        ``join_fill`` is what the factor takes at join-created positions;
+        ``factor_fill`` is what the factor takes at join-created positions;
         ``nan_fill`` is legacy's silent fill for a NaN the factor carried in.
         """
         if is_v1():
-            return self._apply_constant_op_v1(other, op, join_fill, op_kind, join)
+            return self._apply_constant_op_v1(other, op, factor_fill, op_kind, join)
         return self._apply_constant_op_legacy(
-            other, op, nan_fill, join_fill, op_kind, join
+            other, op, nan_fill, factor_fill, op_kind, join
         )
 
     def _apply_constant_op_v1(
         self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
-        fill_value: float,
+        fill_value: FillValueLike,
         op_kind: str,
         join: JoinOptions | None,
     ) -> Self:
@@ -1164,7 +1187,7 @@ class BaseExpression(ABC):
         )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            return self.__class__(
+            result = self.__class__(
                 assign_multiindex_safe(
                     data,
                     coeffs=op(data.coeffs, factor),
@@ -1172,7 +1195,11 @@ class BaseExpression(ABC):
                 ),
                 self.model,
             )
-        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
+        else:
+            result = self.assign(
+                coeffs=op(self.coeffs, factor), const=op(self_const, factor)
+            )
+        return result._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _apply_constant_op_legacy(
@@ -1180,7 +1207,7 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         nan_fill: float,
-        join_fill: float,
+        factor_fill: FillValueLike,
         op_kind: str,
         join: JoinOptions | None,
     ) -> Self:
@@ -1194,7 +1221,7 @@ class BaseExpression(ABC):
         if factor.isnull().any():
             check_user_nan(op_kind=op_kind)
         self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=join_fill, join=join
+            factor, fill_value=factor_fill, join=join
         )
         factor = factor.fillna(nan_fill)
         self_const = self_const.fillna(0)
@@ -1214,13 +1241,13 @@ class BaseExpression(ABC):
         self,
         other: ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self:
         return self._apply_constant_op(
             other,
             operator.mul,
             nan_fill=0,
-            join_fill=0 if fill_value is None else fill_value,
+            factor_fill=0 if fill_value is None else fill_value,
             op_kind="mul",
             join=join,
         )
@@ -1229,7 +1256,7 @@ class BaseExpression(ABC):
         self,
         other: ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self:
         if fill_value is None:
             fill_value = np.inf if is_v1() else 1
@@ -1237,7 +1264,7 @@ class BaseExpression(ABC):
             other,
             operator.truediv,
             nan_fill=1,
-            join_fill=fill_value,
+            factor_fill=fill_value,
             op_kind="div",
             join=join,
         )
@@ -1281,7 +1308,7 @@ class BaseExpression(ABC):
         self,
         other: SideLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self | QuadraticExpression:
         """
         Add an expression to others.
@@ -1296,33 +1323,37 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join creates.
-            Defaults to 0, the additive identity. Requires an explicit ``join``
-            and a constant ``other``.
+            Defaults to 0, the additive identity. ``linopy.ABSENT`` keeps those
+            positions absent instead of filling them, for a constant or an
+            expression ``other`` alike. Requires an explicit ``join``.
         """
         check_join_fill_value(fill_value, join)
         if join is None:
             return self.__add__(other)
         if isinstance(other, CONSTANT_TYPES):
             return self._add_constant(other, join=join, fill_value=fill_value)
-        if fill_value is not None:
+        if fill_value is not None and not isinstance(fill_value, AbsentType):
             raise ValueError(
-                "fill_value= applies to constant operands only. An expression "
-                "that is missing at a label contributes the zero expression."
+                "A numeric fill_value= applies to constant operands only. An "
+                "expression that is missing at a label contributes the zero "
+                "expression, or nothing at all with fill_value=linopy.ABSENT."
             )
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)
+        return merge(
+            [self, other], cls=self.__class__, join=join, fill_value=fill_value
+        )
 
     def sub(
         self,
         other: SideLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self | QuadraticExpression:
         """
         Subtract others from expression.
@@ -1337,9 +1368,10 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
-            Defaults to 0. Requires an explicit ``join`` and a constant ``other``.
+            Defaults to 0; ``linopy.ABSENT`` keeps them absent, for a constant
+            or an expression ``other`` alike. Requires an explicit ``join``.
         """
         return self.add(
             -other, join=join, fill_value=None if fill_value is None else -fill_value
@@ -1349,7 +1381,7 @@ class BaseExpression(ABC):
         self,
         other: SideLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -1364,10 +1396,11 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates. Defaults
-            to 0, so a term without a factor evaluates to zero. Requires an
-            explicit ``join``.
+            to 0, so a term without a factor evaluates to zero;
+            ``linopy.ABSENT`` keeps them absent instead. Requires an explicit
+            ``join``.
         """
         check_join_fill_value(fill_value, join)
         if join is None:
@@ -1382,7 +1415,7 @@ class BaseExpression(ABC):
         self,
         other: VariableLike | ConstantLike,
         join: JoinOptions | None = None,
-        fill_value: float | None = None,
+        fill_value: FillValueLike = None,
     ) -> Self | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -1397,10 +1430,11 @@ class BaseExpression(ABC):
             semantics setting: under v1, shared dimensions must carry
             identical labels (same labels, same order) — a reorder or a
             differing set raises; under legacy, positional alignment.
-        fill_value : float, optional
+        fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
-            default that term evaluates to zero; pass ``1`` to keep it unscaled.
-            Requires an explicit ``join``.
+            default that term evaluates to zero; pass ``1`` to keep it
+            unscaled, or ``linopy.ABSENT`` to keep it absent. Requires an
+            explicit ``join``.
         """
         check_join_fill_value(fill_value, join)
         if join is None:
@@ -3076,6 +3110,7 @@ def merge(
     dim: str = ...,
     cls: type[GenericExpression],
     join: JoinOptions | None = None,
+    fill_value: FillValueLike = None,
     **kwargs: Any,
 ) -> GenericExpression: ...
 
@@ -3087,6 +3122,7 @@ def merge(
     dim: str = ...,
     cls: None = ...,
     join: JoinOptions | None = None,
+    fill_value: FillValueLike = None,
     **kwargs: Any,
 ) -> BaseExpression: ...
 
@@ -3097,6 +3133,7 @@ def merge(
     dim: str = TERM_DIM,
     cls: type[BaseExpression] | None = None,
     join: JoinOptions | None = None,
+    fill_value: FillValueLike = None,
     **kwargs: Any,
 ) -> BaseExpression:
     """
@@ -3120,6 +3157,10 @@ def merge(
         How to align coordinates. One of "outer", "inner", "left", "right",
         "exact", "override". When None (default), auto-detects based on
         expression shapes.
+    fill_value : ABSENT, optional
+        Pass ``linopy.ABSENT`` to leave the positions the join creates absent
+        instead of contributing the zero expression there. Requires an
+        explicit ``join`` and the v1 semantics.
     **kwargs
         Additional keyword arguments passed to xarray.concat. Defaults to
         {coords: "minimal", compat: "override"} or, in the special case described
@@ -3129,6 +3170,16 @@ def merge(
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
+    check_join_fill_value(fill_value, join)
+    if fill_value is not None and not isinstance(fill_value, AbsentType):
+        raise ValueError(
+            "merge only accepts fill_value=linopy.ABSENT — an expression that "
+            "is missing at a label contributes the zero expression or nothing."
+        )
+    if isinstance(fill_value, AbsentType) and dim != TERM_DIM:
+        raise ValueError(
+            f"fill_value=ABSENT is only defined for a merge along {TERM_DIM!r}."
+        )
     if not isinstance(exprs, Sequence):
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
@@ -3210,7 +3261,10 @@ def merge(
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        subkwargs = {**kwargs, "fill_value": 0}
+        # §10: the join fills what it creates with the zero expression, unless
+        # the caller asked for ``ABSENT`` — then the created const is NaN and
+        # ``absorb_absence`` below strips the terms the other operand held.
+        subkwargs = {**kwargs, "fill_value": join_fill(fill_value, 0)}
         # Under v1, §6 requires that an absent slot in any operand stays
         # absent in the result; ``sum(skipna=False)`` propagates NaN
         # rather than collapsing it to 0.

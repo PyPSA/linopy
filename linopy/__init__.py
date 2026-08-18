@@ -39,6 +39,7 @@ from linopy.piecewise import (
     tangent_lines,
 )
 from linopy.remote import RemoteHandler
+from linopy.semantics import ABSENT
 from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
 try:
@@ -47,6 +48,7 @@ except ImportError:
     pass
 
 __all__ = (
+    "ABSENT",
     "CSRConstraint",
     "ConstraintBase",
     "Constraints",
