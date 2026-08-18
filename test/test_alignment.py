@@ -572,6 +572,17 @@ class TestCoordsToDict:
 class TestAddVariablesCoords:
     """End-to-end: each coords / dims form sets the variable's dimensions."""
 
+    @staticmethod
+    def _datetime_coordinates(timezone: str | None) -> xr.Coordinates:
+        time = pd.date_range(
+            "2025-10-26 00:00",
+            periods=5,
+            freq="h",
+            tz=timezone,
+            name="time",
+        )
+        return xr.Coordinates({"time": time})
+
     @pytest.mark.parametrize(
         "coords, dims, expected_dims",
         [
@@ -586,6 +597,9 @@ class TestAddVariablesCoords:
             ([np.array([0, 1, 2])], None, ("dim_0",)),
             ([pd.Index([0, 1, 2])], None, ("dim_0",)),
             ([("origin", ["a", "b"]), ("dest", ["x", "y"])], None, ("origin", "dest")),
+            (_datetime_coordinates(None), None, ("time",)),
+            (_datetime_coordinates("UTC"), None, ("time",)),
+            (_datetime_coordinates("Europe/Berlin"), None, ("time",)),
         ],
         ids=[
             "tuple",
@@ -599,6 +613,9 @@ class TestAddVariablesCoords:
             "ndarray",
             "unnamed-index",
             "multiple-tuples",
+            "xarray-datetime-naive",
+            "xarray-datetime-utc",
+            "xarray-datetime-dst",
         ],
     )
     def test_coords_set_variable_dims(
