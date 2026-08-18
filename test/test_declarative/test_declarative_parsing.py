@@ -647,13 +647,6 @@ class TestBuilder:
         with pytest.raises(ValueError, match="Only one active objective"):
             declarative_model(math, inputs, {})
 
-    def test_references_are_sorted_lists(self, math: dict, inputs: xr.Dataset) -> None:
-        model = declarative_model(math, inputs, {})
-        refs = model.constraints["cap"].attrs["references"]
-        assert refs == sorted(refs)
-        assert isinstance(refs, list)
-        assert set(refs) == {"cap_max", "flow"}
-
     def test_dtype_coercion(self, math: dict, inputs: xr.Dataset) -> None:
         math["lookups"] = {
             "flag": {"dtype": "bool", "default": False},

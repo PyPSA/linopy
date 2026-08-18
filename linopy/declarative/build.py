@@ -346,10 +346,6 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             lower=definition.bounds.lower,
             integer=definition.domain == "integer",
         )
-        # Variable.attrs values are typed Hashable, but a sorted list serializes best.
-        self.model.variables[name].attrs["references"] = self.references["variables"][
-            name
-        ]  # type: ignore[assignment]
 
     def add_expression(self, name: str, definition: ExpressionDef) -> None:
         """Add a named expression to the model, merging its equation variants."""
@@ -378,9 +374,6 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             LOGGER.info(f"expressions:{name} | {_SKIP_MESSAGE}")
             return
         self.model.add_expressions(name=name, data=expr, mask=mask)
-        self.model.expressions[name].attrs["references"] = self.references[
-            "expressions"
-        ][name]
 
     def add_constraint(self, name: str, definition: ConstraintDef) -> None:
         """Add a constraint to the model, merging its equation variants."""
@@ -421,10 +414,8 @@ class DeclarativeModelBuilder(_DeclarativeBase):
             sign=sign.fillna("=="),
             rhs=rhs,
             mask=mask,
+            freeze=True,
         )
-        self.model.constraints[name].attrs["references"] = self.references[
-            "constraints"
-        ][name]
 
     def add_objective(self, name: str, definition: ObjectiveDef) -> None:
         """Set the model objective, merging its equation variants."""
@@ -457,7 +448,6 @@ class DeclarativeModelBuilder(_DeclarativeBase):
         if len(pieces) > 1:
             expr = merge([piece.where(sub_mask) for piece, sub_mask in pieces])
         self.model.add_objective(expr=expr, sense=definition.sense)
-        self.model.objective.attrs["references"] = self._references(parsed)
 
     def build(self) -> Model:
         """
