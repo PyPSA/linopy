@@ -3564,6 +3564,7 @@ class TestOuterJoinFill:
             [operands["expr_full"], operands["expr_part"]],
             join="outer",
             fill_value=ABSENT,
+            cls=LinearExpression,
         )
         expected = operands["expr_full"].add(
             operands["expr_part"], join="outer", fill_value=ABSENT
