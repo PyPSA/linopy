@@ -263,6 +263,16 @@ A common source is a *scalar* coordinate left behind by positional indexing:
 ``x.isel(time=0) == x.isel(time=-1)`` conflicts on ``time`` (first vs last). Drop
 it at the source with ``.isel(..., drop=True)`` / ``.sel(..., drop=True)``.
 
+**Concatenation exempts the coords it concatenates.** In a merge along a
+dimension (``linopy.merge(exprs, dim=...)``), an aux coord that lies solely
+along that dimension is concatenated with it, one segment per operand, so
+differing values are no conflict — they are different positions, not
+disagreeing labels for the same position. This is the shape ``groupby`` emits
+(a flat ``group`` dim carrying the grouping keys as aux coords on it), which
+makes concatenating grouped expressions the natural next step. Every other
+aux coord — on a shared non-concat dimension, or scalar — is checked as
+above.
+
 **Stacked MultiIndex dimensions.** A stacked MultiIndex dim (e.g. PyPSA's
 ``(period, timestep)`` ``snapshot``) stores its *levels* as auxiliary
 coordinates — ``period`` and ``timestep`` are non-dimension coords on

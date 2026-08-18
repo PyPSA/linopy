@@ -3126,7 +3126,7 @@ def merge(
 
     if join is None:
         enforce_merge_dims(data, concat_dim=dim, context=f"merge along dim {dim!r}")
-    enforce_aux_conflict(data)
+    enforce_aux_conflict(data, concat_dim=dim)
 
     if join is not None:
         override = join == "override"

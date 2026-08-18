@@ -434,12 +434,14 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
         )
 
 
-def enforce_aux_conflict(datasets: Sequence[Any], *, stacklevel: int = 5) -> None:
+def enforce_aux_conflict(
+    datasets: Sequence[Any], *, concat_dim: str | None = None, stacklevel: int = 5
+) -> None:
     """
     Enforce §11 across the given operands: v1 raises on aux-coord
     conflict, legacy warns (xarray would silently drop it).
     """
-    conflict = conflicting_aux_coord(datasets)
+    conflict = conflicting_aux_coord(datasets, concat_dim=concat_dim)
     if conflict is None:
         return
     if is_v1():
@@ -563,6 +565,8 @@ def enforce_merge_dims(
 
 def conflicting_aux_coord(
     datasets: Sequence[Any],
+    *,
+    concat_dim: str | None = None,
 ) -> tuple[str, Any, Any, str] | None:
     """
     Find an auxiliary (non-dim) coord that two or more operands carry with
@@ -580,18 +584,23 @@ def conflicting_aux_coord(
     and is what this check intercepts under v1. When only one operand
     carries the coord (``len(present) < 2``), it propagates from that
     operand unchanged.
+
+    ``concat_dim`` names the dimension a merge concatenates along. A coord
+    that lies solely along that dim is concatenated with it rather than
+    reconciled, so differing values are no conflict.
     """
     if not datasets:
         return None
     all_names: set[str] = set()
     for d in datasets:
         all_names.update(d.coords)
-    for name in all_names:
-        present = [
-            d.coords[name].values
-            for d in datasets
-            if name in d.coords and name not in d.dims
-        ]
+    for name in sorted(all_names):
+        carriers = [d for d in datasets if name in d.coords and name not in d.dims]
+        if concat_dim is not None and all(
+            d.coords[name].dims == (concat_dim,) for d in carriers
+        ):
+            continue
+        present = [d.coords[name].values for d in carriers]
         if len(present) < 2:
             continue
         ref = present[0]

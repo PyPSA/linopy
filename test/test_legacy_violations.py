@@ -2331,6 +2331,50 @@ class TestAuxCoordConflict:
             linopy.merge([1 * v, 1 * w], join=join)
         assert str(exc.value) == self.AUX_VALUE_MSG
 
+    def test_merge_concatenates_aux_coords_of_the_concat_dim(self, m: Model) -> None:
+        """
+        Aux coords lying solely along the concat dim are concatenated, not
+        reconciled — the ``groupby`` output shape (#896).
+        """
+        import linopy
+
+        gens = pd.Index(["g0", "g1"], name="name")
+        links = pd.Index(["l0", "l1"], name="name")
+        p = m.add_variables(coords=[gens], name="p")
+        f = m.add_variables(coords=[links], name="f")
+        per_gen = p.to_linexpr().groupby(
+            pd.DataFrame(
+                {"bus": ["b0", "b1"], "carrier": ["wind", "solar"]}, index=gens
+            )
+        )
+        per_link = f.to_linexpr().groupby(
+            pd.DataFrame({"bus": ["b1", "b2"], "carrier": ["dc", "dc"]}, index=links)
+        )
+        merged = linopy.merge([per_gen.sum(), per_link.sum()], dim="group")
+        assert merged.coords["bus"].values.tolist() == ["b0", "b1", "b1", "b2"]
+        assert merged.coords["carrier"].values.tolist() == [
+            "wind",
+            "solar",
+            "dc",
+            "dc",
+        ]
+        assert merged.groupby("bus").sum().coords["bus"].values.tolist() == [
+            "b0",
+            "b1",
+            "b2",
+        ]
+
+    @pytest.mark.v1
+    def test_merge_still_raises_for_aux_coord_off_the_concat_dim(
+        self, v: Variable, w: Variable
+    ) -> None:
+        """The exemption is scoped to the concat dim; 'B' lives on 'A' and conflicts."""
+        import linopy
+
+        with pytest.raises(ValueError) as exc:
+            linopy.merge([1 * v, 1 * w], dim="scenario")
+        assert str(exc.value) == self.AUX_VALUE_MSG
+
     @pytest.mark.legacy
     def test_aux_conflict_silently_keeps_left(
         self, v: Variable, const: xr.DataArray
