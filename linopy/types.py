@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         ConstraintBase,
     )
     from linopy.expressions import (
+        LazyExpression,
         LinearExpression,
         QuadraticExpression,
         ScalarLinearExpression,
@@ -51,3 +52,4 @@ ExpressionLike: TypeAlias = Union[
 ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
 LinExprLike = Union["Variable", "LinearExpression"]
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007
+LazySideLike = Union[SideLike, "LazyExpression"]  # noqa: UP007

@@ -5,6 +5,15 @@ Upcoming Version
 ----------------
 
 
+*Named expressions*
+
+* ``Model.add_expressions`` also accepts a callable for ``data``, in which case the expression is not built immediately: a ``LazyExpression`` placeholder is registered instead, and the callable (``data(model, **params)``) only runs when the expression is evaluated, via ``.evaluate()``, ``.promote()``, ``.solution``, or a comparison (``<=``, ``>=``, ``==``). ``mask`` accepts a callable too (resolved at the same time as `data`), in addition to a concrete array. Arithmetic between ``LazyExpression`` objects — and between a ``LazyExpression`` and anything else — stays lazy, returning a new, unnamed ``LazyExpression`` that composes the operands rather than evaluating them.
+  ``Model.to_netcdf`` gained a ``lazy={"evaluate", "skip", "raise"}`` parameter (default ``"evaluate"``) controlling what happens to lazy entries, since an arbitrary evaluator callable cannot itself be serialized to netcdf.
+* ``LazyExpression`` now shares its arithmetic/constraint protocol with ``LinearExpression``/``QuadraticExpression`` via a common ``AbstractExpression`` base, and gained the named counterparts (``add``, ``sub``, ``mul``, ``div``, ``pow``, ``dot``, ``le``, ``ge``, ``eq``, ``to_constraint``) that were previously eager-only — a ``LazyExpression`` is now a drop-in substitute for an eager expression wherever those are called, including with a ``join`` argument. ``lazy ** 2`` no longer evaluates the underlying evaluator twice, and ``-lazy`` now matches eager negation exactly (previously it filled masked/NaN coefficients with 0 before negating, like ``lazy * -1`` does).
+* Dividing a ``LazyExpression`` by a variable or another expression (e.g. ``cost / output`` for a unit cost), and other operations with no linear/quadratic form (e.g. ``lazy ** 3``), no longer raise immediately: they build a ``LazyExpression`` that is only readable via ``.solution`` once the model has been solved, since every operand is then just a number. ``.evaluate()``, ``.promote()`` and constraint-building still raise — now a dedicated ``linopy.NonLinearOperationError`` (a ``TypeError`` subclass, so existing ``except TypeError`` code keeps working) — pointing at ``.solution`` instead. Where this is already decidable at construction time (as opposed to only inside a leaf callable's body), a ``linopy.NonLinearExpressionWarning`` is raised immediately, and ``LazyExpression.is_evaluatable`` reports it without forcing evaluation.
+* A lazy expression's callable may also read post-solve-only data that is not itself an expression — most notably a constraint's ``.dual`` — and return a plain ``DataArray``/constant, or a ``LazyExpression`` built from one. It is then only readable via ``.solution``; ``.promote()`` raises since there is nothing to store as a named expression.
+
+
 Version 0.9.1
 -------------
 
@@ -46,7 +55,6 @@ Version v0.9.0
 *Improved IO*
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged. (`#780 <https://github.com/PyPSA/linopy/pull/780>`__)
-
 
 *Other*
 

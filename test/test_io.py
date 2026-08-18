@@ -18,7 +18,7 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
-from linopy.constants import FACTOR_DIM
+from linopy.constants import FACTOR_DIM, NonLinearOperationError
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import signed_number
 from linopy.testing import assert_exprequal, assert_model_equal
@@ -390,6 +390,65 @@ def test_model_to_netcdf_preserves_exprname_counter(
     assert p._exprnameCounter == m._exprnameCounter == 2
     new_expr = p.add_expressions(p.variables["x"] + 3)
     assert new_expr.name == "expr2"
+
+
+@pytest.fixture
+def model_with_lazy_expressions() -> Model:
+    m = Model()
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    m.add_expressions(lambda m: m.variables["x"] + 1, name="lazy_lin")
+    # The division happens inside the callable body, not via LazyExpression
+    # arithmetic, so it is not statically decidable and only fails at `.evaluate()`.
+    m.add_expressions(lambda m: m.variables["x"] / m.variables["x"], name="ratio")
+    m.add_objective(x.sum())
+    return m
+
+
+def test_model_to_netcdf_lazy_evaluate(
+    model_with_lazy_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_lazy_expressions
+    m.remove_expressions("ratio")
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, lazy="evaluate")
+    p = read_netcdf(fn)
+
+    assert "lazy_lin" in p.expressions
+    assert_exprequal(
+        p.expressions["lazy_lin"],
+        m.expressions["lazy_lin"].evaluate(),
+        check_name=False,
+    )
+
+
+def test_model_to_netcdf_lazy_evaluate_raises_for_nonlinear_ratio(
+    model_with_lazy_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_lazy_expressions
+    fn = tmp_path / "test.nc"
+    with pytest.raises(NonLinearOperationError, match="ratio"):
+        m.to_netcdf(fn, lazy="evaluate")
+
+
+def test_model_to_netcdf_lazy_skip(
+    model_with_lazy_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_lazy_expressions
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, lazy="skip")
+    p = read_netcdf(fn)
+
+    assert "lazy_lin" not in p.expressions
+    assert "ratio" not in p.expressions
+
+
+def test_model_to_netcdf_lazy_raise(
+    model_with_lazy_expressions: Model, tmp_path: Path
+) -> None:
+    m = model_with_lazy_expressions
+    fn = tmp_path / "test.nc"
+    with pytest.raises(ValueError, match="lazy_lin"):
+        m.to_netcdf(fn, lazy="raise")
 
 
 def test_pickle_model_with_expressions(

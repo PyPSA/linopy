@@ -4,9 +4,14 @@ import numpy as np
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy.constants import TERM_DIM
+from linopy.constants import TERM_DIM, NonLinearOperationError
 from linopy.constraints import ConstraintBase, _con_unwrap
-from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
+from linopy.expressions import (
+    LazyExpression,
+    LinearExpression,
+    QuadraticExpression,
+    _expr_unwrap,
+)
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
 
@@ -71,16 +76,56 @@ def assert_quadequal(
 
 
 def assert_exprequal(
-    a: LinearExpression | QuadraticExpression,
-    b: LinearExpression | QuadraticExpression,
+    a: LinearExpression | QuadraticExpression | LazyExpression,
+    b: LinearExpression | QuadraticExpression | LazyExpression,
     check_name: bool = True,
 ) -> None:
     """
-    Assert that two expressions are equal, dispatching on linear vs quadratic.
+    Assert that two expressions are equal, dispatching on linear vs quadratic vs lazy.
 
     xarray's assert_equal ignores attrs, so the stored name (which lives in
     ``attrs["name"]``) is compared explicitly unless ``check_name=False``.
+
+    If either side is a :class:`LazyExpression`, both must be: the placeholder's
+    `name` and `dims` are compared directly, and the underlying expressions are
+    compared after calling `.evaluate()` on each (without promoting either). If both
+    sides raise :class:`NonLinearOperationError` (e.g. both divide by a variable or
+    another expression), the `name`/`dims` comparison above is treated as sufficient;
+    if only one side raises, that is a real mismatch and fails.
     """
+    if isinstance(a, LazyExpression) or isinstance(b, LazyExpression):
+        assert isinstance(a, LazyExpression) and isinstance(b, LazyExpression), (
+            f"expression types differ: {type(a)} != {type(b)}"
+        )
+        if check_name:
+            assert a.name == b.name, (
+                f"expression names differ: {a.name!r} != {b.name!r}"
+            )
+        assert a.dims == b.dims, (
+            f"lazy expression dims differ: {a.dims!r} != {b.dims!r}"
+        )
+        try:
+            a_evaluated = a.evaluate()
+        except NonLinearOperationError as a_error:
+            try:
+                b.evaluate()
+            except NonLinearOperationError:
+                return
+            raise AssertionError(
+                f"only one side raised NonLinearOperationError on `.evaluate()`: {a_error}"
+            ) from a_error
+        b_evaluated = b.evaluate()
+        assert isinstance(a_evaluated, LinearExpression | QuadraticExpression), (
+            f"side 'a' evaluated to {type(a_evaluated)}, not a LinearExpression or "
+            "QuadraticExpression; compare its `.solution` instead"
+        )
+        assert isinstance(b_evaluated, LinearExpression | QuadraticExpression), (
+            f"side 'b' evaluated to {type(b_evaluated)}, not a LinearExpression or "
+            "QuadraticExpression; compare its `.solution` instead"
+        )
+        assert_exprequal(a_evaluated, b_evaluated, check_name=False)
+        return
+
     assert type(a) is type(b), f"expression types differ: {type(a)} != {type(b)}"
     if check_name:
         assert a.name == b.name, f"expression names differ: {a.name!r} != {b.name!r}"
