@@ -37,8 +37,8 @@ def test_add_sos_constraints_validation() -> None:
     with pytest.raises(ValueError, match="dimension"):
         m.add_sos_constraints(variable, sos_type=1, sos_dim="missing")
 
-    with pytest.raises(ValueError, match="numeric"):
-        m.add_sos_constraints(variable, sos_type=1, sos_dim="strings")
+    m.add_sos_constraints(variable, sos_type=1, sos_dim="strings")
+    assert "string_var" in list(m.variables.sos)
 
     numeric = m.add_variables(coords=[pd.Index([0, 1], name="dim")], name="num")
     m.add_sos_constraints(numeric, sos_type=1, sos_dim="dim")
