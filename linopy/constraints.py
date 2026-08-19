@@ -52,6 +52,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
+    get_printout_labels,
     has_optimized_model,
     iterate_slices,
     maybe_group_terms_polars,
@@ -331,7 +332,7 @@ class ConstraintBase(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:
@@ -372,7 +373,7 @@ class ConstraintBase(ABC):
     def __repr__(self) -> str:
         """Print the constraint arrays."""
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes.keys())
+        dims = list(self.coord_dims)
         ndim = len(dims)
         dim_names = self.coord_names
         dim_sizes = list(self.coord_sizes.values())
@@ -383,14 +384,12 @@ class ConstraintBase(ABC):
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
 
         if size > 1 or ndim > 0:
+            row_labels = get_printout_labels(self.data, dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord = [
-                        self.data.indexes[dims[i]][int(ind)]
-                        for i, ind in enumerate(indices)
-                    ]
+                    coord = [row_labels[i][int(ind)] for i, ind in enumerate(indices)]
                     if self.mask is None or self.mask.values[indices]:
                         expr = format_single_expression(
                             self.coeffs.values[indices],

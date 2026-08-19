@@ -8,6 +8,7 @@ Created on Wed Mar 17 17:06:36 2021.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,12 +21,14 @@ from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import (
-    EvolvingAPIWarning,
+    ABSENT,
     LinearExpression,
+    LinopySemanticsWarning,
     Model,
     QuadraticExpression,
     Variable,
     merge,
+    options,
 )
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
@@ -297,6 +300,7 @@ def test_linear_expression_multi_indexed(u: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
 
+@pytest.mark.legacy
 def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     Expression over a MultiIndex dim times a single-level constant.
@@ -308,7 +312,7 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     """
     by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-    with pytest.warns(EvolvingAPIWarning, match=r"broadcasting level subset"):
+    with pytest.warns(LinopySemanticsWarning, match=r"broadcasting level subset"):
         expr = (1 * u) * by_level1
 
     coeffs = expr.coeffs.squeeze("_term")
@@ -316,6 +320,15 @@ def test_multiply_expression_by_multiindex_level_constant(u: Variable) -> None:
     assert coeffs.sel(dim_3=(1, "b")).item() == 10.0
     assert coeffs.sel(dim_3=(2, "a")).item() == 20.0
     assert coeffs.sel(dim_3=(2, "b")).item() == 20.0
+
+
+@pytest.mark.v1
+def test_multiply_expression_by_level_aux_coord_v1(u: Variable) -> None:
+    """v1: weight each entry by its `level1` explicitly via the aux coord."""
+    by_level1 = xr.DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
+    weights = by_level1.sel(level1=u.coords["level1"])
+    coeffs = ((1 * u) * weights).coeffs.squeeze("_term")
+    assert coeffs.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
 
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
@@ -418,9 +431,11 @@ def test_linear_expression_substraction(
     assert res.data.notnull().all().to_array().all()
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    """Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords (v1 §8)."""
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -440,9 +455,11 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.legacy
 def test_linear_expression_sum_with_const(
     x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
+    """Legacy-only: ``v.loc[:9] + v.loc[10:]`` merges disjoint coords (v1 §8)."""
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
 
@@ -661,7 +678,17 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
+@pytest.mark.legacy
 class TestCoordinateAlignment:
+    """
+    Documents legacy positional/left-join alignment and silent NaN fill.
+
+    The whole block is legacy-only: v1 raises on these cases (see
+    `test_legacy_violations.py` and convention.md §5/§8). Once later slices
+    flesh out v1's equivalent coverage, individual tests here can be
+    reclassified or removed.
+    """
+
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "da":
@@ -1474,7 +1501,7 @@ class TestMultiKeyFastPath:
 
         assert {"period", "season"} <= set(grouped.dims)
         assert "group" not in grouped.dims
-        assert not isinstance(grouped.data.indexes.get("period"), pd.MultiIndex)
+        assert not isinstance(grouped.indexes.get("period"), pd.MultiIndex)
 
     def test_sparse_combination_filled(self) -> None:
         # (2020, "s") never occurs -> empty term in the grid
@@ -1486,16 +1513,61 @@ class TestMultiKeyFastPath:
         assert (cell.vars == -1).all()
         assert cell.coeffs.isnull().all()
 
+    @pytest.mark.legacy
     def test_dataframe_grouper_stays_compact(self) -> None:
-        # the DataFrame grouper keeps the stacked observed-only group dim
+        """Legacy keeps the stacked, observed-only `group` MultiIndex."""
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(df).sum()
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert grouped.sizes["group"] == 3
 
+    @pytest.mark.v1
+    def test_dataframe_grouper_stays_compact_v1(self) -> None:
+        """v1 gives a flat `group` dim with aux coords, still observed-only."""
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
         grouped = expr.groupby(df).sum()
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
+        assert grouped.sizes["group"] == 3
 
-        assert "group" in grouped.dims
-        assert isinstance(grouped.data.indexes["group"], pd.MultiIndex)
-        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+    @pytest.mark.legacy
+    def test_namelist_observed_warns_legacy(self) -> None:
+        """
+        A name list with ``observed=True`` keeps the stacked `group` MultiIndex
+        under legacy, exactly like a DataFrame grouper, so it must warn too —
+        v1 gives a flat dim, a silent divergence otherwise.
+        """
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+            grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+
+    @pytest.mark.v1
+    def test_namelist_observed_flat_v1(self) -> None:
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        grouped = expr.groupby(["period", "season"]).sum(observed=True)
+        assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+        assert {"period", "season"} <= set(grouped.coords)
+
+    @pytest.mark.legacy
+    def test_group_multiindex_reset_index_matches_v1(self) -> None:
+        """
+        The warning points legacy users at ``.reset_index('group')``; pin that
+        it produces exactly the v1 flat result.
+        """
+        expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            legacy_mi = expr.groupby(["period", "season"]).sum(observed=True)
+        converted = legacy_mi.reset_index("group")
+        with options as o:
+            o.set_value(semantics="v1")
+            v1_flat = expr.groupby(["period", "season"]).sum(observed=True)
+        assert not isinstance(converted.indexes["group"], pd.MultiIndex)
+        assert_linequal(converted, v1_flat)
 
     def test_blowup_warns_when_sparse(self) -> None:
         # 200 observed combos, 200x200 grid -> nudge toward observed=True
@@ -1520,15 +1592,16 @@ class TestMultiKeyFastPath:
         grouped = expr.groupby(["period", "season"]).sum(observed=True)
 
         assert_linequal(grouped, expr.groupby(df).sum())
-        assert grouped.sizes["group"] == 3  # observed, not the 2x2=4 grid
+        assert grouped.sizes["group"] == 3
 
     def test_observed_silences_blowup_warning(self) -> None:
         expr = self._expr(list(range(200)), list(range(200)))
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
             grouped = expr.groupby(["period", "season"]).sum(observed=True)
 
+        assert not any("dense" in str(w.message) for w in record)
         assert grouped.sizes["group"] == 200
 
     def test_observed_with_fallback_raises(self) -> None:
@@ -1703,6 +1776,7 @@ class TestGroupbyByAttachedCoordinate:
             ("timestep", ["t1", "t2", "t3"], [[0, 3], [1, 4], [2, 5]]),
         ],
     )
+    @pytest.mark.legacy
     def test_multiindex_level(
         self, level: str, values: list, vars_: list, use_fallback: bool
     ) -> None:
@@ -1908,89 +1982,135 @@ def test_linear_expression_groupby_with_series_on_multiindex(
     assert grouped.nterm == len_grouped_dim
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe(v: Variable) -> None:
     expr = 1 * v
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_v1(v: Variable) -> None:
+    """v1: a frame grouper yields a flat `group` dim with the keys as aux coords."""
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.legacy
 def test_linear_expression_groupby_with_dataframe_with_same_group_name(
-    v: Variable, use_fallback: bool
+    v: Variable,
 ) -> None:
-    """
-    Test that the group by works with a dataframe whose column name is the same as
-    the dimension to group.
-    """
+    """A frame grouper whose column name equals the grouped dimension."""
     expr = 1 * v
     groups = pd.DataFrame(
         {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
         index=v.indexes["dim_2"],
     )
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(groups)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(
+        pd.MultiIndex.from_frame(groups).values
+    )
     assert grouped.nterm == 3
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataframe_on_multiindex(
-    u: Variable, use_fallback: bool
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_with_same_group_name_v1(
+    v: Variable,
 ) -> None:
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"dim_2": [1] * 10 + [2] * 10, "b": list(range(4)) * 5},
+        index=v.indexes["dim_2"],
+    )
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data["dim_2"].values, grouped.data["b"].values))
+    assert keys == set(pd.MultiIndex.from_frame(groups).values)
+    assert grouped.nterm == 3
+
+
+def test_linear_expression_groupby_multikey_is_sorted(v: Variable) -> None:
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [2, 1, 3, 1] * 5, "b": list("yxxy") * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(groups).sum()
+    keys = list(zip(grouped.data["a"].values, grouped.data["b"].values))
+    assert keys == [(1, "x"), (1, "y"), (2, "y"), (3, "x")]
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> None:
     expr = 1 * u
-    len_grouped_dim = len(u.data["dim_3"])
-    groups = pd.DataFrame({"a": [1] * len_grouped_dim}, index=u.indexes["dim_3"])
-
-    if use_fallback:
-        with pytest.raises(ValueError):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    assert "group" in grouped.dims
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    with pytest.raises(ValueError, match="only supported for"):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
     assert isinstance(grouped.indexes["group"], pd.MultiIndex)
-    assert grouped.nterm == len_grouped_dim
+    assert grouped.nterm == n
 
 
-@pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_dataarray(
-    v: Variable, use_fallback: bool
-) -> None:
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataframe_on_multiindex_v1(u: Variable) -> None:
+    expr = 1 * u
+    n = len(u.data["dim_3"])
+    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    grouped = expr.groupby(groups).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    assert set(grouped.data.a.values) == {1}
+    assert grouped.nterm == n
+
+
+@pytest.mark.legacy
+def test_linear_expression_groupby_with_dataarray(v: Variable) -> None:
     expr = 1 * v
     df = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
     groups = xr.DataArray(df)
-
     # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
-    if use_fallback:
-        with pytest.raises((KeyError, IndexError)):
-            expr.groupby(groups).sum(use_fallback=use_fallback)
-        return
+    with pytest.raises((KeyError, IndexError)):
+        expr.groupby(groups).sum(use_fallback=True)
+    with pytest.warns(LinopySemanticsWarning, match=r"stacked `group` MultiIndex"):
+        grouped = expr.groupby(groups).sum()
+    assert set(grouped.data.group.values) == set(pd.MultiIndex.from_frame(df).values)
+    assert grouped.nterm == 3
 
-    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
-    index = pd.MultiIndex.from_frame(df)
-    assert "group" in grouped.dims
-    assert set(grouped.data.group.values) == set(index.values)
+
+@pytest.mark.v1
+def test_linear_expression_groupby_with_dataarray_v1(v: Variable) -> None:
+    expr = 1 * v
+    df = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(xr.DataArray(df)).sum()
+    assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
+    keys = set(zip(grouped.data.a.values, grouped.data.b.values))
+    assert keys == set(pd.MultiIndex.from_frame(df).values)
     assert grouped.nterm == 3
 
 
@@ -2100,8 +2220,8 @@ def groupby_ctx() -> SimpleNamespace:
             coords=[idx], name="mx", mask=xr.DataArray(np.arange(60) % 4 != 0, [idx])
         ),
         const=const,
-        nan_const=const.where(rng.random((3, 60)) > 0.3),
         nan_vec=np.where(np.arange(60) % 3, np.nan, 5.0),
+        cond2d=xr.DataArray(rng.random((3, 60)) > 0.3, coords=[other, idx]),
         stacked=stacked,
         skewed=skewed,
         one_group=pd.Series(1, index=idx, name="g"),
@@ -2111,21 +2231,32 @@ def groupby_ctx() -> SimpleNamespace:
 
 
 # (expr, groups) builders keyed by structure; `c` is the groupby_ctx fixture.
-# Cases the old use_fallback=True engine also reproduces.
+# Cases the old use_fallback=True engine also reproduces, valid under both
+# semantics. ``where_absent`` scatters NaN constants (with their variables
+# dropped) over a 2-D const through ``.where`` — the construction v1 sanctions
+# for intended absence — so the kernel's NaN-skip path stays covered there.
 FALLBACK_SUM_CASES = {
     "skewed_int_groups": lambda c: (3 * c.x - 2 * c.x + 7, c.skewed),
     "multidim_with_const": lambda c: (2 * c.y + 1 * c.y + c.const, c.skewed),
-    "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
+    "where_absent": lambda c: (
+        (2 * c.y - 3 * c.y + 1 * c.y + c.const).where(c.cond2d),
+        c.skewed,
+    ),
     "masked_vars": lambda c: (1 * c.mx, c.skewed),
     "single_group": lambda c: (1 * c.x, c.one_group),
     "identity_groups": lambda c: (1 * c.x, c.identity),
-    "multidim_const_nan": lambda c: (
-        2 * c.y - 3 * c.y + 1 * c.y + c.nan_const,
-        c.skewed,
-    ),
     "three_dims": lambda c: (4 * c.y3 + 1 * c.y3, c.skewed),
     "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
+
+# Legacy-only: builds a NaN constant next to live variables directly in
+# arithmetic, which legacy silently fills as 0 while v1 rejects it with
+# ValueError at construction — a layout no v1 construction can produce.
+LEGACY_FALLBACK_SUM_CASES = {
+    "nan_const": lambda c: (1 * c.x + c.nan_vec, c.skewed),
+}
+
+ALL_FALLBACK_SUM_CASES = {**FALLBACK_SUM_CASES, **LEGACY_FALLBACK_SUM_CASES}
 
 
 def _grouped_sum_on_backend(
@@ -2315,7 +2446,16 @@ class TestGroupbySumKernel:
         assert dict(grouped.sizes) == {"g": 0, "_term": 0}
 
     @pytest.mark.parametrize("backend", ["numpy", "dask"])
-    @pytest.mark.parametrize("case", FALLBACK_SUM_CASES)
+    @pytest.mark.parametrize(
+        "case",
+        [
+            *FALLBACK_SUM_CASES,
+            *(
+                pytest.param(name, marks=pytest.mark.legacy)
+                for name in LEGACY_FALLBACK_SUM_CASES
+            ),
+        ],
+    )
     def test_grouped_sum_matches_fallback(
         self, groupby_ctx: SimpleNamespace, case: str, backend: str
     ) -> None:
@@ -2324,7 +2464,7 @@ class TestGroupbySumKernel:
         kernel must match ``use_fallback=True``, on both numpy and dask backends.
         The fallback oracle always runs on numpy.
         """
-        expr, groups = FALLBACK_SUM_CASES[case](groupby_ctx)
+        expr, groups = ALL_FALLBACK_SUM_CASES[case](groupby_ctx)
         fallback = expr.groupby(groups).sum(use_fallback=True)
         scatter = _grouped_sum_on_backend(expr, groups, backend)
         assert_linequal(scatter, fallback)
@@ -2569,15 +2709,15 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
-    expr1 = z.sel(dim_0=0).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    expr1 = z.sel(dim_0=0, drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
-    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
-    expr2 = z.sel(dim_0=1).sum("dim_1")
+    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1), drop=True).sum("dim_1")
+    expr2 = z.sel(dim_0=1, drop=True).sum("dim_1")
 
     res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
@@ -2805,15 +2945,6 @@ def test_variable_names() -> None:
     assert expr.nterm == 2
     assert expr.variable_names == {"a", "b"}
 
-    mask = xr.DataArray(False, coords=[time])
-    expr = a + (b * 1).where(mask)
-    assert expr.nterm == 2
-    assert expr.variable_names == {"a"}
-
-    expr = (b * 1).where(mask)
-    assert expr.nterm == 1
-    assert expr.variable_names == set()
-
     expr = LinearExpression.from_constant(model=m, constant=5)
     assert expr.nterm == 0
     assert expr.variable_names == set()
@@ -2845,9 +2976,6 @@ def test_nterm() -> None:
     expr = a + b.where(all_false)
     assert expr.nterm == 2
 
-    expr = expr.simplify()
-    assert expr.nterm == 1
-
 
 class TestJoinParameter:
     @pytest.fixture
@@ -2871,9 +2999,11 @@ class TestJoinParameter:
         return m2.variables["c"]
 
     class TestAddition:
+        @pytest.mark.legacy
         def test_add_join_none_preserves_default(
             self, a: Variable, b: Variable
         ) -> None:
+            """Legacy-only: a and b disagree on dim ``i``, which v1 §8 rejects."""
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
@@ -3121,7 +3251,13 @@ class TestJoinParameter:
             assert list(result.coords["i"].values) == [0, 1, 2]
             np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
 
-        def test_div_constant_outer_fill_values(self, a: Variable) -> None:
+        @pytest.mark.legacy
+        def test_div_constant_outer_fill_values_legacy(self, a: Variable) -> None:
+            """
+            Both semantics return the union of the coords, but legacy fills a
+            missing divisor with 1, keeping the term unscaled; under v1 the row
+            is there but zero (see TestOuterJoinFill).
+            """
             expr = 1 * a + 10
             other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
             result = expr.div(other, join="outer")
@@ -3131,10 +3267,23 @@ class TestJoinParameter:
             assert result.const.sel(i=0).item() == pytest.approx(10.0)
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
+        @pytest.mark.v1
+        def test_div_constant_outer_fill_values_v1(self, a: Variable) -> None:
+            expr = 1 * a + 10
+            other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
+            result = expr.div(other, join="outer")
+            assert set(result.coords["i"].values) == {0, 1, 2, 3}
+            assert result.const.sel(i=1).item() == pytest.approx(5.0)
+            assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
+            assert result.const.sel(i=0).item() == 0
+            assert result.coeffs.squeeze().sel(i=0).item() == 0
+
     class TestQuadratic:
+        @pytest.mark.legacy
         def test_quadratic_add_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            """Legacy-only: a*b has misaligned coords on ``i`` (v1 §8 raises)."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
@@ -3146,10 +3295,315 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.indexes["i"]) == [0, 1]
 
+        @pytest.mark.legacy
         def test_quadratic_mul_constant_join_inner(
             self, a: Variable, b: Variable
         ) -> None:
+            """Legacy-only: a*b has misaligned coords on ``i`` (v1 §8 raises)."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
             assert list(result.indexes["i"]) == [1, 2, 3]
+
+
+@pytest.mark.v1
+class TestOuterJoinFill:
+    @pytest.fixture
+    def operands(self) -> dict[str, Any]:
+        m = Model()
+        full = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="full")
+        part = m.add_variables(coords=[pd.Index([1], name="i")], name="part")
+        return {
+            "expr_full": 1 * full + 2,
+            "expr_part": 1 * part + 2,
+            "const_full": xr.DataArray([2.0, 2.0], dims=["i"], coords={"i": [0, 1]}),
+            "const_part": xr.DataArray([2.0], dims=["i"], coords={"i": [1]}),
+        }
+
+    @pytest.mark.parametrize(
+        ("op", "const", "coeffs"),
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(o["expr_part"], join="outer"),
+                2.0,
+                [1.0, np.nan],
+                id="add-expr-missing-right",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(o["expr_full"], join="outer"),
+                2.0,
+                [np.nan, 1.0],
+                id="add-expr-missing-left",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].add(o["const_part"], join="outer"),
+                2.0,
+                [1.0],
+                id="add-const-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(o["const_full"], join="outer"),
+                2.0,
+                [np.nan],
+                id="add-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(o["expr_part"], join="outer"),
+                2.0,
+                [1.0, np.nan],
+                id="sub-expr-missing-right",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].sub(o["expr_full"], join="outer"),
+                -2.0,
+                [np.nan, -1.0],
+                id="sub-expr-missing-left",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(o["const_part"], join="outer"),
+                2.0,
+                [1.0],
+                id="sub-const-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].sub(o["const_full"], join="outer"),
+                -2.0,
+                [np.nan],
+                id="sub-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(o["const_part"], join="outer"),
+                0.0,
+                [0.0],
+                id="mul-factor-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].mul(o["const_full"], join="outer"),
+                0.0,
+                [np.nan],
+                id="mul-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(o["const_part"], join="outer"),
+                0.0,
+                [0.0],
+                id="div-divisor-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].div(o["const_full"], join="outer"),
+                0.0,
+                [np.nan],
+                id="div-numerator-missing",
+            ),
+        ],
+    )
+    def test_value_at_created_position(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+        const: float,
+        coeffs: list[float],
+    ) -> None:
+        result = op(operands)
+        assert list(result.indexes["i"]) == [0, 1]
+        assert result.const.sel(i=0).item() == const
+        np.testing.assert_array_equal(result.coeffs.sel(i=0).values, coeffs)
+
+    @pytest.mark.parametrize(
+        ("op", "const", "coeff"),
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["const_part"], join="outer", fill_value=10
+                ),
+                12.0,
+                1.0,
+                id="add",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["const_part"], join="outer", fill_value=10
+                ),
+                -8.0,
+                1.0,
+                id="sub",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(
+                    o["const_part"], join="outer", fill_value=1
+                ),
+                2.0,
+                1.0,
+                id="mul",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(
+                    o["const_part"], join="outer", fill_value=1
+                ),
+                2.0,
+                1.0,
+                id="div",
+            ),
+        ],
+    )
+    def test_fill_value_overrides_the_default(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+        const: float,
+        coeff: float,
+    ) -> None:
+        result = op(operands)
+        assert result.const.sel(i=0).item() == const
+        assert result.coeffs.sel(i=0).item() == coeff
+
+    def test_fill_value_without_join_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="requires an explicit join="):
+            operands["expr_full"].mul(operands["const_full"], fill_value=1)
+
+    def test_fill_value_with_expression_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="constant operands only"):
+            operands["expr_full"].add(operands["expr_part"], join="outer", fill_value=1)
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["expr_part"], join="outer", fill_value=ABSENT
+                ),
+                id="add-expr",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["expr_part"], join="outer", fill_value=ABSENT
+                ),
+                id="sub-expr",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].add(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="add-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_part"].add(
+                    o["const_full"], join="outer", fill_value=ABSENT
+                ),
+                id="add-const-expr-missing",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].sub(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="sub-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].mul(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="mul-const",
+            ),
+            pytest.param(
+                lambda o: o["expr_full"].div(
+                    o["const_part"], join="outer", fill_value=ABSENT
+                ),
+                id="div-const",
+            ),
+        ],
+    )
+    def test_absent_keeps_created_position_absent(
+        self,
+        operands: dict[str, Any],
+        op: Callable[[dict[str, Any]], LinearExpression],
+    ) -> None:
+        result = op(operands)
+        assert list(result.indexes["i"]) == [0, 1]
+        assert np.isnan(result.const.sel(i=0).item())
+        assert np.isnan(result.coeffs.sel(i=0).values).all()
+        assert not np.isnan(result.const.sel(i=1).item())
+
+    def test_absent_drops_the_row_from_the_constraint(
+        self, operands: dict[str, Any]
+    ) -> None:
+        lhs = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        con = lhs.model.add_constraints(lhs >= 10, name="joint")
+        np.testing.assert_array_equal(con.mask.values, [False, True])
+
+    def test_absent_matches_the_reindex_workaround(
+        self, operands: dict[str, Any]
+    ) -> None:
+        union = pd.Index([0, 1], name="i")
+        expected = operands["expr_full"].reindex(i=union) + operands[
+            "expr_part"
+        ].reindex(i=union)
+        result = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        assert_linequal(result, expected)
+
+    def test_absent_slot_reports_isnull(self, operands: dict[str, Any]) -> None:
+        result = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        np.testing.assert_array_equal(result.isnull().values, [True, False])
+        np.testing.assert_array_equal((result * 3).isnull().values, [True, False])
+        filled = operands["expr_full"].add(operands["expr_part"], join="outer")
+        np.testing.assert_array_equal(filled.isnull().values, [False, False])
+
+    def test_nan_fill_value_raises(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="fill_value=NaN is ambiguous"):
+            operands["expr_full"].add(
+                operands["const_part"], join="outer", fill_value=np.nan
+            )
+
+    def test_absent_via_merge(self, operands: dict[str, Any]) -> None:
+        merged = merge(
+            [operands["expr_full"], operands["expr_part"]],
+            join="outer",
+            fill_value=ABSENT,
+            cls=LinearExpression,
+        )
+        expected = operands["expr_full"].add(
+            operands["expr_part"], join="outer", fill_value=ABSENT
+        )
+        assert_linequal(merged, expected)
+
+    def test_merge_rejects_a_numeric_fill_value(self, operands: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="only accepts fill_value=linopy.ABSENT"):
+            merge(
+                [operands["expr_full"], operands["expr_part"]],
+                join="outer",
+                fill_value=1,
+            )
+
+    def test_carried_absence_still_propagates(self) -> None:
+        m = Model()
+        x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+        shifted = (1 * x).shift(i=1)
+        const = xr.DataArray([2.0, 2.0], dims=["i"], coords={"i": [1, 2]})
+        result = shifted.add(const, join="outer")
+        assert list(result.indexes["i"]) == [0, 1, 2]
+        assert np.isnan(result.const.sel(i=0).item())
+        assert result.const.sel(i=2).item() == 2.0
+
+
+@pytest.mark.legacy
+def test_absent_fill_value_rejected_under_legacy() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+    y = m.add_variables(coords=[pd.Index([1], name="i")], name="y")
+    with pytest.raises(ValueError, match="only the v1 convention carries"):
+        x.add(y, join="outer", fill_value=ABSENT)
+
+
+@pytest.mark.legacy
+def test_join_fill_value_honoured_under_legacy() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.Index([0, 1], name="i")], name="x")
+    const = xr.DataArray([2.0], dims=["i"], coords={"i": [1]})
+    result = (1 * x + 2).div(const, join="outer", fill_value=1)
+    assert result.coeffs.sel(i=0).item() == 1.0
+    assert result.const.sel(i=0).item() == 2.0

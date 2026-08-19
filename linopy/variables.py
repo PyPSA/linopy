@@ -31,7 +31,7 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
-from linopy.alignment import broadcast_to_coords
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
@@ -46,6 +46,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
+    get_printout_labels,
     has_optimized_model,
     iterate_slices,
     save_join,
@@ -62,6 +63,18 @@ from linopy.constants import (
     STASHED_LOWER,
     STASHED_UPPER,
     TERM_DIM,
+)
+from linopy.semantics import (
+    FillValueLike,
+    _legacy_coord_mismatch_message,
+    _legacy_masked_variable_message,
+    _shared_dim_mismatch_message,
+    check_user_nan,
+    enforce_aux_conflict,
+    first_mismatched_dim,
+    is_v1,
+    reindex_like_if_needed,
+    warn_legacy,
 )
 from linopy.types import (
     ConstantLike,
@@ -313,6 +326,8 @@ class Variable:
     def to_linexpr(
         self,
         coefficient: ConstantLike = 1,
+        *,
+        _warn_absence: bool = True,  # LEGACY: remove at 1.0
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
@@ -327,15 +342,49 @@ class Variable:
         -------
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
+
+        Notes
+        -----
+        The §8 shared-dim check runs on the raw coefficient, before the
+        broadcast aligns it away — the reindex below only fills absence and
+        broadcasts non-shared dims. A NaN coefficient is user data, so it
+        raises under v1 (§5). Under v1 the expression carries the variable's
+        absence as NaN so that §6 propagates it through downstream arithmetic;
+        legacy contributes 0 there instead and warns, that being the most
+        common legacy↔v1 divergence and one no other warn site catches.
         """
-        coefficient = broadcast_to_coords(
-            coefficient, coords=self.coords, dims=self.dims, strict=False
-        )
-        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
-        coefficient = coefficient.fillna(0)
+        if not np.isscalar(coefficient):
+            coeff_da = as_dataarray(coefficient)
+            enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
+            mismatch = first_mismatched_dim(self.labels, coeff_da)
+            if mismatch is not None:
+                if is_v1():
+                    raise ValueError(_shared_dim_mismatch_message(*mismatch))
+                warn_legacy(
+                    _legacy_coord_mismatch_message(
+                        "this operator's constant operand", *mismatch
+                    ),
+                    stacklevel=4,
+                )
+        coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
+        if coefficient.isnull().any():
+            check_user_nan(op_kind="mul")
+        absent = self.labels == -1
+        has_absence = bool(absent.any())
+        if is_v1():
+            coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
+            if has_absence:
+                coefficient = coefficient.where(~absent)
+        else:  # LEGACY: remove at 1.0
+            if has_absence and _warn_absence:
+                warn_legacy(_legacy_masked_variable_message(self.name))
+            coefficient = reindex_like_if_needed(coefficient, self.labels, 0).fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
+        if is_v1() and has_absence:
+            const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
+            ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
@@ -343,22 +392,21 @@ class Variable:
         Print the variable arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.sizes)
+        dims = list(self.coord_dims)
         dim_names = self.coord_names
-        dim_sizes = list(self.sizes.values())
+        dim_sizes = list(self.coord_sizes.values())
         masked_entries = (~self.mask).sum().values
         sos_type = self.attrs.get(SOS_TYPE_ATTR)
         sos_dim = self.attrs.get(SOS_DIM_ATTR)
         lines = []
 
         if dims:
+            row_labels = get_printout_labels(self.data, dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord = [
-                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
-                    ]
+                    coord = [row_labels[i][ind] for i, ind in enumerate(indices)]
                     label = self.labels.values[indices]
                     line = (
                         format_coord(coord)
@@ -417,7 +465,6 @@ class Variable:
         try:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
-
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
@@ -563,7 +610,10 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: JoinOptions | None = None
+        self,
+        other: SideLike,
+        join: JoinOptions | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -574,13 +624,22 @@ class Variable:
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
+        fill_value : float or ABSENT, optional
+            Value the constant operand takes at the positions the join
+            creates. Defaults to 0; ``linopy.ABSENT`` keeps them absent.
+            Requires an explicit ``join``.
         """
-        return self.to_linexpr().add(other, join=join)
+        return self.to_linexpr().add(other, join=join, fill_value=fill_value)
 
     def sub(
-        self, other: SideLike, join: JoinOptions | None = None
+        self,
+        other: SideLike,
+        join: JoinOptions | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -591,13 +650,22 @@ class Variable:
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
+        fill_value : float or ABSENT, optional
+            Value the subtrahend takes at the positions the join creates.
+            Defaults to 0; ``linopy.ABSENT`` keeps them absent. Requires an
+            explicit ``join``.
         """
-        return self.to_linexpr().sub(other, join=join)
+        return self.to_linexpr().sub(other, join=join, fill_value=fill_value)
 
     def mul(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -608,13 +676,22 @@ class Variable:
             The coefficient to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
+        fill_value : float or ABSENT, optional
+            Value the factor takes at the positions the join creates.
+            Defaults to 0, so a term without a factor evaluates to zero;
+            ``linopy.ABSENT`` keeps them absent instead.
         """
-        return self.to_linexpr().mul(other, join=join)
+        return self.to_linexpr().mul(other, join=join, fill_value=fill_value)
 
     def div(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: FillValueLike = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -625,10 +702,16 @@ class Variable:
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
+        fill_value : float or ABSENT, optional
+            Value the divisor takes at the positions the join creates. By
+            default that term evaluates to zero; pass ``1`` to keep it
+            unscaled, or ``linopy.ABSENT`` to keep it absent.
         """
-        return self.to_linexpr().div(other, join=join)
+        return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
     def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
@@ -640,8 +723,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_linexpr().le(rhs, join=join)
 
@@ -655,8 +740,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_linexpr().ge(rhs, join=join)
 
@@ -670,8 +757,10 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), uses the
-            current default behavior.
+            "right", "exact", "override". When None (default), follows the
+            semantics setting: under v1, shared dimensions must carry
+            identical labels (same labels, same order) — a reorder or a
+            differing set raises; under legacy, positional alignment.
         """
         return self.to_linexpr().eq(rhs, join=join)
 
@@ -853,7 +942,7 @@ class Variable:
         """
         Get the coordinate sizes of the variable.
         """
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:
@@ -1232,19 +1321,39 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
-    ) -> Variable:
+        fill_value: int
+        | float
+        | ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset,
+    ) -> Variable | expressions.LinearExpression:
         """
-        Fill missing values with a variable.
+        Fill missing (absent) slots.
 
-        This operation call ``xarray.DataArray.fillna`` but ensures preserving
-        the linopy.Variable type.
+        A numeric ``fill_value`` substitutes a *constant* for the absent
+        variable slots, so the result is a :class:`LinearExpression` (a
+        constant is not a variable). A Variable / ScalarVariable
+        ``fill_value`` keeps the result a Variable.
 
         Parameters
         ----------
-        fill_value : Variable/ScalarVariable
-            Variable to use for filling.
+        fill_value : numeric, Variable, or ScalarVariable
+            Value to fill the absent slots with.
+
+        Notes
+        -----
+        Legacy ``to_linexpr`` marks an absent const as 0 rather than NaN, so
+        :meth:`LinearExpression.fillna` finds nothing to fill there; the value
+        is placed directly instead, to match v1. The absence warning is skipped
+        because this method is its documented resolution.
         """
+        if isinstance(fill_value, int | float | np.integer | np.floating):
+            if is_v1():
+                return self.to_linexpr().fillna(fill_value)
+            # LEGACY: remove at 1.0
+            lin = self.to_linexpr(_warn_absence=False)
+            return lin.assign(const=lin.const.where(self.labels != -1, fill_value))
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
@@ -1360,6 +1469,48 @@ class Variable:
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        **indexers_kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to a new set of coordinates.
+
+        New positions are marked absent (``labels = -1``,
+        ``lower = upper = NaN``); existing positions are preserved. This
+        is one of the named mechanisms in convention.md §4 for creating
+        absence.
+        """
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=self._fill_value, **indexers_kwargs),
+            self.model,
+            self.name,
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        **kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable to another object's coordinates.
+
+        New positions are marked absent with the sentinel fill values
+        (see :meth:`reindex`).
+        """
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
+        return self.__class__(
+            self.data.reindex_like(ref, fill_value=self._fill_value, **kwargs),
+            self.model,
+            self.name,
+        )
+
     swap_dims = varwrap(Dataset.swap_dims)
 
     set_index = varwrap(Dataset.set_index)
@@ -1370,7 +1521,7 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
-    unstack = varwrap(Dataset.unstack)
+    unstack = varwrap(Dataset.unstack, fill_value=_fill_value)
 
     iterate_slices = iterate_slices
 

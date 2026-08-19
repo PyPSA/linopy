@@ -597,6 +597,7 @@ def test_duplicated_variables(
     assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=tol))
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_non_aligned_variables(
     model_with_non_aligned_variables: Model,
@@ -604,6 +605,10 @@ def test_non_aligned_variables(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
+    """
+    Legacy-only: var+var on the same dim with different coords (see
+    convention.md §8). Under v1, the model construction itself raises.
+    """
     status, condition = model_with_non_aligned_variables.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
@@ -985,6 +990,7 @@ def test_modified_model(
     assert (modified_model.solution.y == 10).all()
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_masked_variable_model(
     masked_variable_model: Model,
@@ -992,6 +998,14 @@ def test_masked_variable_model(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
+    """
+    Legacy-only: asserts that ``x + y >= 10`` with ``y`` masked still
+    binds ``x >= 10`` at the masked slots — which only works because
+    legacy collapses the absent ``y`` to 0. Under v1 §6 the absence in
+    ``y`` propagates into the constraint and the constraint is dropped
+    at the masked slots, so ``x`` is free to be 0 there. The v1 way to
+    express the legacy intent is ``x + y.fillna(0) >= 10``.
+    """
     masked_variable_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
@@ -1004,6 +1018,70 @@ def test_masked_variable_model(
     assert (np.isclose(x.solution[-2:], 10, rtol=tol)).all()
     # Squeeze in solution getter for expressions with masked variables
     assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
+
+
+@pytest.mark.v1
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_masked_variable_model_v1_drops_constraint(
+    masked_variable_model: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """
+    v1 counterpart of ``test_masked_variable_model``. Under §6 the
+    absence of ``y`` at the last two slots propagates into ``x + y``
+    and from there into the constraint, so the constraint drops at
+    those slots — ``x`` is no longer pinned to 10 there and the
+    objective ``2x + y`` drives it to 0 where it's still bound.
+
+    Pin two things together:
+    1. Model structure: con0 is masked at the absent slots (its label
+       is -1, no row emitted to the solver). This is the v1 invariant
+       that distinguishes us from legacy and is solver-independent.
+    2. Solver outcome on the bound slots: ``x[:8]`` solves to 0 (the
+       constraint binds via ``y[:8] = 10``). ``x[-2:]`` is solver-
+       dependent — some solvers presolve away free variables and the
+       solution comes back as NaN — so we don't pin it here.
+    """
+    con = masked_variable_model.constraints["con0"]
+    assert (con.labels.values[-2:] == -1).all()
+    assert (con.labels.values[:-2] != -1).all()
+
+    masked_variable_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    x = masked_variable_model.variables.x
+    y = masked_variable_model.variables.y
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert y.solution[-2:].isnull().all()
+    assert (np.isclose(x.solution[:-2], 0, atol=tol)).all()
+
+
+@pytest.mark.v1
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_masked_variable_model_v1_fillna_binds(
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """
+    §7 escape hatch under v1: ``x + y.fillna(0) >= 10`` revives the
+    masked slots as a present zero, so the constraint binds and the
+    legacy outcome (``x[-2:] == 10``) is recovered. The placement of
+    ``fillna`` is the caller's explicit statement of intent.
+    """
+    m = Model()
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    mask = pd.Series([True] * 8 + [False, False])
+    y = m.add_variables(lower, name="y", mask=mask)
+    m.add_constraints(x + y.fillna(0), GREATER_EQUAL, 10)
+    m.add_constraints(y, GREATER_EQUAL, 0)
+    m.add_objective(2 * x + y)
+    m.solve(solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names)
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert (np.isclose(m.variables.x.solution[-2:], 10, rtol=tol)).all()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -1273,6 +1351,7 @@ def test_auto_mask_variable_model(
     assert y.solution[:-2].notnull().all()
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_auto_mask_constraint_model(
     auto_mask_constraint_model: Model,
@@ -1280,7 +1359,11 @@ def test_auto_mask_constraint_model(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    """Test that auto_mask=True correctly masks constraints with NaN RHS."""
+    """
+    Test that auto_mask=True correctly masks constraints with NaN RHS.
+
+    Legacy-only: v1 forbids NaN constraint RHS (see convention.md §5/§12).
+    """
     auto_mask_constraint_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )

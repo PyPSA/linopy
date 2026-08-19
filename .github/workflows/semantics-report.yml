@@ -1,0 +1,121 @@
+name: Semantics report (v1 vs legacy)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    name: Build cost — v1 vs legacy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+    - name: Install package and benchmark dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -e ".[dev,benchmarks]"
+    - name: Build under each semantics (memray peak + time)
+      run: |
+        pytest benchmarks/drivers/test_build.py \
+          --benchmark-only --benchmark-memory --benchmark-json=legacy.json
+        LINOPY_BENCH_SEMANTICS=v1 pytest benchmarks/drivers/test_build.py \
+          --benchmark-only --benchmark-memory --benchmark-json=v1.json
+    - name: Render plots + table
+      run: |
+        mkdir -p semantics-report
+        benchmem plot legacy.json v1.json --columns peak --view scatter -o semantics-report/peak-relative.html
+        benchmem plot legacy.json v1.json --columns peak --view compare -o semantics-report/peak-absolute.html
+        benchmem plot legacy.json v1.json --columns time --view scatter -o semantics-report/time-relative.html
+        benchmem plot legacy.json v1.json --columns peak --view scatter -o semantics-report/peak-relative.svg
+        benchmem plot legacy.json v1.json --columns time --view scatter -o semantics-report/time-relative.svg
+        benchmem compare legacy.json v1.json --columns time,peak --stat mean --sort change \
+          --csv semantics-report/comparison.csv \
+          | sed 's/\x1b\[[0-9;]*m//g' > semantics-report/comparison.txt
+        run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        {
+          echo '## Build cost — v1 vs legacy (peak + time, mean)'
+          echo ''
+          echo '_v1 build cost relative to legacy on this commit — not a comparison against master (that is CodSpeed)._'
+          echo ''
+          echo '```'
+          cat semantics-report/comparison.txt
+          echo '```'
+          echo ''
+          echo "📊 Plots + CSV: the **semantics-report-v1-vs-legacy** artifact on [this run]($run_url)."
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      with:
+        name: semantics-report-v1-vs-legacy
+        path: semantics-report/
+    - name: Publish plot image + compose comment
+      if: >-
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        ASSETS_BRANCH: ci-assets-semantics-report-v1-vs-legacy-plot-images
+      run: |
+        remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        tmp="$(mktemp -d)"
+        git clone --depth=1 --branch "$ASSETS_BRANCH" "$remote" "$tmp" 2>/dev/null || {
+          git clone --depth=1 "$remote" "$tmp"
+          git -C "$tmp" checkout --orphan "$ASSETS_BRANCH"
+          git -C "$tmp" rm -rf . >/dev/null 2>&1 || true
+        }
+        mkdir -p "$tmp/pr-$PR"
+        cp semantics-report/peak-relative.svg semantics-report/time-relative.svg "$tmp/pr-$PR/"
+        git -C "$tmp" config user.name "github-actions[bot]"
+        git -C "$tmp" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git -C "$tmp" add "pr-$PR"
+        git -C "$tmp" commit -m "semantics-report plot for pr-$PR" || echo "no image change"
+        git -C "$tmp" push origin "$ASSETS_BRANCH"
+        base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${ASSETS_BRANCH}/pr-$PR"
+        peak_img="$base/peak-relative.svg?$HEAD_SHA"
+        time_img="$base/time-relative.svg?$HEAD_SHA"
+        run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        {
+          echo '## Build cost — v1 vs legacy'
+          echo ''
+          echo '_v1 build peak & time relative to legacy, on this commit — not a comparison against master (that is CodSpeed)._'
+          echo ''
+          echo '| peak — v1 / legacy | time — v1 / legacy |'
+          echo '| :---: | :---: |'
+          echo "| <img src=\"$peak_img\" width=\"100%\" alt=\"peak v1/legacy\"> | <img src=\"$time_img\" width=\"100%\" alt=\"time v1/legacy\"> |"
+          echo ''
+          echo '<details><summary>Full table (time + peak, mean)</summary>'
+          echo ''
+          echo '```'
+          cat semantics-report/comparison.txt
+          echo '```'
+          echo '</details>'
+          echo ''
+          echo "📊 Interactive plots + CSV: download the **semantics-report-v1-vs-legacy** artifact from [this run]($run_url)."
+          echo ''
+          echo '<sub>Report-only · not a gate · refreshed on every push · obsolete once legacy is dropped.</sub>'
+        } > report.md
+    - name: Sticky PR comment
+      if: >-
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0
+      with:
+        header: semantics-report
+        path: report.md

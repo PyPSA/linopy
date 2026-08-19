@@ -599,6 +599,7 @@ def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
     assert (con.rhs.sel(i=1) == 2.0).all()
 
 
+@pytest.mark.legacy
 def test_constraint_rhs_setter_projects_multiindex_level() -> None:
     """
     Rhs indexed by one MultiIndex level is projected onto the stacked dim.
@@ -617,7 +618,7 @@ def test_constraint_rhs_setter_projects_multiindex_level() -> None:
     rhs_by_level = xr.DataArray(
         [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
     )
-    with pytest.warns(linopy.EvolvingAPIWarning, match="broadcasting level subset"):
+    with pytest.warns(linopy.LinopySemanticsWarning, match="broadcasting level subset"):
         con.rhs = rhs_by_level
 
     assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0

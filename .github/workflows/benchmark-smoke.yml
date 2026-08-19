@@ -1,7 +1,7 @@
 name: Benchmark smoke
 
-# Builds every spec and fires every phase once (--benchmark-disable):
-# a "did a refactor break a spec?" check, not timing.
+# Builds every spec and fires every phase once (--benchmark-disable) under both
+# arithmetic conventions: a "did a refactor break a spec?" check, not timing.
 
 on:
   push:
@@ -15,8 +15,14 @@ concurrency:
 
 jobs:
   smoke:
-    name: Benchmark smoke (quick)
+    name: Benchmark smoke (${{ matrix.semantics }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        semantics: [legacy, v1]
+    env:
+      LINOPY_BENCH_SEMANTICS: ${{ matrix.semantics }}
 
     steps:
     - uses: actions/checkout@v7
