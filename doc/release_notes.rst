@@ -80,7 +80,7 @@ Version 0.9.1
 * ``Model.remove_variables`` no longer raises an ``IndexError`` on a quadratic objective. A quadratic term is dropped when any of its factors uses the removed variable. (`#883 <https://github.com/PyPSA/linopy/issues/883>`__, `#895 <https://github.com/PyPSA/linopy/pull/895>`__)
 * The Xpress interface no longer calls API functions deprecated in Xpress 9.8. (`#880 <https://github.com/PyPSA/linopy/pull/880>`__)
 * The ``docs`` extra no longer pins ``numpy<2``. (`#869 <https://github.com/PyPSA/linopy/pull/869>`__)
-
+* Using timezone-aware ``DatetimeIndex`` coordinates in a model no longer raises a ``ValueError``. The index is now retrieved directly via ``DataArray.to_index()`` instead of rebuilding it with ``pd.Index()``, which dropped the timezone info and failed during alignment. (`#898 <https://github.com/PyPSA/linopy/issues/898>`__)
 
 Version v0.9.0
 --------------
