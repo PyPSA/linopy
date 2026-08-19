@@ -4,11 +4,60 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Bug fixes**
+
+* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+
 
 Version 0.9.1
 -------------
 
 **Features**
+
+*Strict "v1" arithmetic semantics (opt-in)*
+
+* A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
+
+  * shared dimensions align by label with ``join="exact"`` — a differing label set *or* a pure reorder (same labels, different order) raises instead of silently filling, dropping, or pairing by position. Resolve explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass an explicit ``join=`` to the named ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq`` methods.
+  * an *unlabeled* operand (a numpy array, list, or polars ``Series``) pairs with the linopy operand's dimensions by size; an ambiguous match (a square array, or two equal-length dimensions) or no size match raises instead of guessing. Wrap it in a ``DataArray`` to name the dimensions. (https://github.com/PyPSA/linopy/issues/736)
+  * a ``NaN`` in a user-supplied constant raises, rather than being silently filled (with a value that used to differ per operator).
+  * *absence* — masked, reindexed, or shifted-in slots — is a first-class state that propagates through every operator, instead of collapsing to zero.
+  * conflicting auxiliary coordinates raise, instead of being silently dropped.
+  * a reindexing ``join=`` fills the positions it creates per side: the linopy operand contributes the zero expression, the constant operand contributes ``fill_value=`` (new on ``.add`` / ``.sub`` / ``.mul`` / ``.div``), which defaults to "does not apply here" — so a missing divisor zeroes the term instead of leaving it unscaled, and a missing numerator no longer comes out as ``1 / divisor``. Absence carried in by an operand is untouched and still propagates. Pass ``fill_value=linopy.ABSENT`` to opt out of the fill altogether — the join's coordinates are kept but every position it creates stays absent, on constant and expression operands alike (``linopy.merge`` included). (https://github.com/PyPSA/linopy/issues/890)
+  * a first-class ``pd.MultiIndex`` dimension is rejected in favour of a flat dimension with the levels as auxiliary coordinates.
+  * a ``groupby`` grouper aligns to the grouped dimension by label — a grouper whose labels differ in set or order from the dimension raises instead of being matched positionally, and a multi-key grouper yields a flat ``group`` dimension (keys as aux coords) rather than a stacked ``group`` MultiIndex. (https://github.com/PyPSA/linopy/issues/827)
+
+* Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
+
+*In-place solver updates (persistent re-solve)*
+
+* A built solver can now be re-solved against a mutated ``Model`` without a full rebuild. Construct with ``Solver.from_name(..., track_updates=True)`` and re-call ``solver.solve(model)`` after edits — the diff against the previous build is applied in place when the backend supports it, falling back to a rebuild otherwise. Supported on HiGHS, Gurobi, Xpress, and Mosek (``io_api="direct"``).
+* Pass ``disallow_rebuild=True`` to ``solve(model, ...)`` to guarantee an in-place update or raise ``RebuildRequiredError``. Inspect ``solver._last_rebuild_reason`` (a ``RebuildReason``, or ``None`` after an in-place update) to understand why a rebuild was triggered.
+* New ``linopy.persistent`` module exposes ``ModelSnapshot``, ``ModelDiff``, and ``RebuildReason`` for users who want to introspect or build the diff themselves. ``ModelDiff.from_snapshot`` / ``from_models`` return the ``RebuildReason`` directly when the change cannot be applied in place.
+
+*Improved IO*
+
+* ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
+
+*Other*
+
+* Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).
+* ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
+* ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
+* ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
+
+*Documentation*
+
+* The example notebooks now opt into the v1 arithmetic convention (``linopy.options["semantics"] = "v1"``). The coordinate-alignment and expression tutorials were reworked to teach strict label-based alignment: a mismatch on a shared dimension raises rather than silently filling or pairing by position, and is resolved explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords`` or an explicit ``join=`` on the named ``.add`` / ``.mul`` / ``.le`` / … methods.
+
+**Performance**
+
+* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x. The kernel emits the grouped result in its final axis order in one contiguous allocation; on dask inputs the reduction now runs over a single chunk (it no longer parallelises over the surviving dimensions).
+
+**Deprecations**
+
+* Mutation via assignment to ``Variable.lower`` / ``Variable.upper`` / ``Constraint.coeffs`` / ``Constraint.vars`` / ``Constraint.lhs`` / ``Constraint.sign`` / ``Constraint.rhs`` is deprecated and emits a ``DeprecationWarning``. Use ``Variable.update(...)`` / ``Constraint.update(...)`` instead — the canonical mutation API with one validation path and one place that flips the persistent-solver dirty flag. Read access to these properties is unchanged. The setters will be removed in a future release.
+* Passing a raw ``DataArray`` of integer labels to ``Constraint.vars = ...`` setter is deprecated and emits a ``FutureWarning``. Pass a ``Variable`` to ``Constraint.update()`` instead — it is the supported input. The ``DataArray`` path will be removed in a future release.
 
 *Named expressions*
 

@@ -2,6 +2,7 @@
 This module contains examples of linear programming models using the linopy library.
 """
 
+import xarray as xr
 from numpy import arange
 
 from linopy import Model
@@ -73,7 +74,7 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
         naxis, maxis = [arange(n, dtype=float), arange(n).astype(str)]
     x = m.add_variables(coords=[naxis, maxis])
     y = m.add_variables(coords=[naxis, maxis])
-    m.add_constraints(x - y >= naxis)
+    m.add_constraints(x - y >= xr.DataArray(naxis, dims=["dim_0"]))
     m.add_constraints(x + y >= 0)
     m.add_objective((2 * x).sum() + y.sum())
     return m
