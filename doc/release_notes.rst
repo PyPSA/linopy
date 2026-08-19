@@ -4,17 +4,6 @@ Release Notes
 Upcoming Version
 ----------------
 
-**Bug fixes**
-
-* ``Solver.close()`` now drops the native solver model before closing the environment that owns it. The reverse order left the model pointing at freed memory, so collecting it later crashed the interpreter, typically during an unrelated garbage collection pass. This affected HiGHS, SCIP, COPT and MindOpt; solvers registering their model on the environment's ``ExitStack`` (Gurobi, Xpress, Mosek) were already safe. COPT additionally kept its environment alive, so ``model.solver_model`` stays usable after ``model.solve("copt")``. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
-* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
-
-
-Version 0.9.1
--------------
-
-**Features**
-
 *Strict "v1" arithmetic semantics (opt-in)*
 
 * A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
@@ -59,6 +48,17 @@ Version 0.9.1
 
 * Mutation via assignment to ``Variable.lower`` / ``Variable.upper`` / ``Constraint.coeffs`` / ``Constraint.vars`` / ``Constraint.lhs`` / ``Constraint.sign`` / ``Constraint.rhs`` is deprecated and emits a ``DeprecationWarning``. Use ``Variable.update(...)`` / ``Constraint.update(...)`` instead — the canonical mutation API with one validation path and one place that flips the persistent-solver dirty flag. Read access to these properties is unchanged. The setters will be removed in a future release.
 * Passing a raw ``DataArray`` of integer labels to ``Constraint.vars = ...`` setter is deprecated and emits a ``FutureWarning``. Pass a ``Variable`` to ``Constraint.update()`` instead — it is the supported input. The ``DataArray`` path will be removed in a future release.
+
+
+**Bug fixes**
+
+* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+* ``Solver.close()`` now drops the native solver model before closing the environment that owns it. The reverse order left the model pointing at freed memory, so collecting it later crashed the interpreter, typically during an unrelated garbage collection pass. This affected HiGHS, SCIP, COPT and MindOpt; solvers registering their model on the environment's ``ExitStack`` (Gurobi, Xpress, Mosek) were already safe. COPT additionally kept its environment alive, so ``model.solver_model`` stays usable after ``model.solve("copt")``. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+
+Version 0.9.1
+-------------
+
+**Features**
 
 *Named expressions*
 
