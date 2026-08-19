@@ -4,7 +4,6 @@ Release Notes
 Upcoming Version
 ----------------
 
-
 *Strict "v1" arithmetic semantics (opt-in)*
 
 * A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
@@ -54,7 +53,7 @@ Upcoming Version
 **Bug fixes**
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
-
+* ``Solver.close()`` now drops the native solver model before closing the environment that owns it. The reverse order left the model pointing at freed memory, so collecting it later crashed the interpreter, typically during an unrelated garbage collection pass. This affected HiGHS, SCIP, COPT and MindOpt; solvers registering their model on the environment's ``ExitStack`` (Gurobi, Xpress, Mosek) were already safe. COPT additionally kept its environment alive, so ``model.solver_model`` stays usable after ``model.solve("copt")``. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
 Version 0.9.1
 -------------

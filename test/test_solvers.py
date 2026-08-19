@@ -204,6 +204,15 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
     assert isinstance(simple_model.solver_model.NumVars, int)
 
 
+@pytest.mark.skipif(
+    "copt" not in set(solvers.licensed_solvers), reason="COPT is not installed"
+)
+def test_copt_env_persists_after_solve(simple_model: Model) -> None:
+    simple_model.solve("copt")
+    assert simple_model.solver is not None
+    assert isinstance(simple_model.solver_model.getVars(), list)
+
+
 @pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
