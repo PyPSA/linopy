@@ -26,6 +26,10 @@ Upcoming Version
 * Pass ``disallow_rebuild=True`` to ``solve(model, ...)`` to guarantee an in-place update or raise ``RebuildRequiredError``. Inspect ``solver._last_rebuild_reason`` (a ``RebuildReason``, or ``None`` after an in-place update) to understand why a rebuild was triggered.
 * New ``linopy.persistent`` module exposes ``ModelSnapshot``, ``ModelDiff``, and ``RebuildReason`` for users who want to introspect or build the diff themselves. ``ModelDiff.from_snapshot`` / ``from_models`` return the ``RebuildReason`` directly when the change cannot be applied in place.
 
+*New solver: NVIDIA cuOpt*
+
+* Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear and mixed-integer problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). On a machine without a usable GPU, cuOpt is omitted from ``linopy.available_solvers``. See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
+
 *Improved IO*
 
 * ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
