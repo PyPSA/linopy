@@ -70,6 +70,7 @@ from linopy.io import (
     deepcopy,
     shallowcopy,
     to_block_files,
+    to_cuopt,
     to_cupdlpx,
     to_file,
     to_gurobipy,
@@ -2513,6 +2514,8 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_cuopt = to_cuopt
 
     to_cupdlpx = to_cupdlpx
 
