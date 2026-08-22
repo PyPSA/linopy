@@ -560,6 +560,7 @@ def test_solver_time_limit_options(
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
         "cupdlpx": {"TimeLimit": 1},
+        "cuopt": {"time_limit": 1},
     }
     status, condition = model.solve(
         solver,
@@ -1107,8 +1108,12 @@ def test_basis_and_warmstart(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    if solver == "cupdlpx":
-        pytest.skip("cuPDLPx does not yet support warmstart in the Python API.")
+    if solver in ("cupdlpx", "cuopt"):
+        pytest.skip(
+            "cuPDLPx does not yet support warmstart in the Python API. cuOpt's own "
+            "warm start needs three simultaneous non-default settings and a payload "
+            "in presolved coordinates, so linopy does not offer it either."
+        )
 
     basis_fn = tmp_path / "basis.bas"
     model.solve(
