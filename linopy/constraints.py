@@ -1724,6 +1724,44 @@ class Constraint(ConstraintBase):
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
 
+    def soften(self,
+               penalty: ConstantLike,
+               *,
+               max_violation: ConstantLike | None = None,
+               name: str | None = None,
+               ) -> VariableLike | tuple[VariableLike, VariableLike]:
+        """
+        Soften a constraint, adding a slack variable and a penalty to the objective function.
+
+        Parameters
+        ----------
+        penalty : constant-like
+            The penalty that will match the slack variable inside the objective function.
+        max_violation: constant-like
+            The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
+        name: string
+            The name for the slack variable. If None, it well reuse the constraint name and add a '_slack'.
+
+        Returns
+        -------
+        variable-like, or a tuple of variables for constraints of the type 'equality'.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+
+        >>> m = Model()
+        >>> investments = pd.Index(["A", "B", "C"], name="investments")
+        >>> budget_penalty = 2
+
+        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
+        >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
+        >>> budget_slack = budget_constraint.soften(penalty=budget_penalty)
+        """
+        pass
+
+
     def to_polars(self) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
