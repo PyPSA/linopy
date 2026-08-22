@@ -4549,7 +4549,7 @@ class cuOpt(Solver[None]):
     """
     Solver subclass for the NVIDIA cuOpt solver. cuOpt must be installed
     with working GPU support for usage. Install it with
-    ``pip install "linopy[cuopt]"`` (Linux only, CUDA 12 driver >= 525.60.13,
+    ``pip install "linopy[gpu]"`` (Linux only, CUDA 12 driver >= 525.60.13,
     compute capability >= 7.0).
 
     The full list of solver options is documented at

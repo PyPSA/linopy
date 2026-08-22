@@ -60,7 +60,7 @@ To run the test suite:
 GPU Testing
 -----------
 
-Tests for GPU-accelerated solvers (e.g., cuPDLPx) are automatically skipped by default since CI machines and most development environments don't have GPU hardware. This ensures tests pass in all environments.
+Tests for GPU-accelerated solvers (e.g., cuOpt and cuPDLPx) are automatically skipped by default since CI machines and most development environments don't have GPU hardware. This ensures tests pass in all environments.
 
 To run GPU tests locally (requires GPU hardware and CUDA):
 
@@ -73,6 +73,8 @@ To run GPU tests locally (requires GPU hardware and CUDA):
     pytest -m gpu --run-gpu
 
 GPU tests are automatically detected based on solver capabilities - no manual marking is required. When you add a new GPU solver to linopy, tests using that solver will automatically be marked as GPU tests.
+
+Solver-specific tests for cuOpt live in ``test/test_cuopt.py`` and also require ``--run-gpu``.
 
 See the :doc:`gpu-acceleration` guide for more information about GPU solver setup and usage.
 
