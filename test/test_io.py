@@ -554,6 +554,13 @@ def test_to_cupdlpx(model: Model) -> None:
     assert cu is not None
 
 
+@pytest.mark.skipif("cuopt" not in available_solvers, reason="cuOpt not installed")
+def test_to_cuopt(model: Model) -> None:
+    dm = model.to_cuopt()
+    assert len(dm.get_objective_coefficients()) > 0
+    assert len(dm.get_constraint_lower_bounds()) > 0
+
+
 def test_model_set_names_in_solver_io_default() -> None:
     assert Model().set_names_in_solver_io is True
 

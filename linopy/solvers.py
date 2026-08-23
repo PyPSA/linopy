@@ -274,6 +274,11 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
     leaks per-thread OpenMP state, so solves arriving on new threads abort the
     process (``kmp_alloc.cpp`` assertion) from the third solve onwards. Reusing
     one worker is the only known workaround for that upstream bug.
+
+    Every cuOpt native object is therefore created, used and released on this
+    one worker, the solver settings included: building them inside the job
+    rather than on the calling thread keeps that invariant whole, and was
+    measured not to change any observed failure rate.
     """
     jobs: queue.SimpleQueue[_CuoptJob] = queue.SimpleQueue()
 
@@ -293,6 +298,14 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
 
     threading.Thread(target=_worker, name="linopy-cuopt-solve", daemon=True).start()
     return jobs
+
+
+if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt itself is Linux-only
+    # A forked child inherits the cached queue but not its daemon worker, so a
+    # cuOpt solve in the child would wait on `job.done` forever. Clearing the
+    # cache starts a fresh worker there, which fails fast with CUDA's real
+    # "cannot re-initialise after fork" error instead of hanging.
+    os.register_at_fork(after_in_child=_cuopt_solve_queue.cache_clear)
 
 
 def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
@@ -4566,22 +4579,24 @@ class cuOpt(Solver[None]):
     * log_to_console : True by default.
     * absolute_primal_tolerance, relative_primal_tolerance, ... : 1e-4 by default.
 
+    Attributes
+    ----------
+    **solver_options
+        options for the given solver
+
     Notes
     -----
     Duals are returned in linopy's (HiGHS's) sign convention without
     transformation. Maximisation problems are handed to cuOpt as the equivalent
     minimisation, because cuOpt 26.08 returns negated duals for maximised
     models that its presolve solves outright; the objective, the duals and the
-    MIP bound are negated back here.
+    MIP bound are negated back here. Handing cuOpt a maximisation through
+    ``set_maximize(True)`` is the only route onto the presolve path that
+    returns those negated duals, which is why it is never used.
 
     cuOpt's own default method (0, Concurrent) segfaults on the second or third
     solve in one process for models above roughly 1300 variables, so linopy
     defaults to method 3 (Barrier) instead.
-
-    Attributes
-    ----------
-    **solver_options
-        options for the given solver
     """
 
     display_name: ClassVar[str] = "cuOpt"
@@ -4617,20 +4632,24 @@ class cuOpt(Solver[None]):
         cuopt.linear_programming.SolverSettings()
 
     def _build_file(self, **build_kwargs: Any) -> None:
-        # The file io_apis are excluded, not merely unimplemented: solution-file
-        # output and linopy's explicit coordinate names are unverified against
-        # cuOpt's parser, and the file path inverts the Q convention (triangular
-        # .lp vs symmetric .mps). To solve an existing .mps/.lp file directly,
-        # use cuOpt's own API (`cuopt.linear_programming`); linopy support is a
-        # planned follow-up.
+        """
+        Redirect a file-based build onto the direct API.
+
+        The file io_apis are excluded, not merely unimplemented: solution-file
+        output and linopy's explicit coordinate names are unverified against
+        cuOpt's parser, and the file path inverts the Q convention (triangular
+        ``.lp`` vs symmetric ``.mps``). To solve an existing ``.mps``/``.lp``
+        file directly, use cuOpt's own API (``cuopt.linear_programming``);
+        linopy support is a planned follow-up.
+        """
         if self.io_api is not None and self.io_api not in FILE_IO_APIS:
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
         logger.warning(
             "cuOpt does not support file IO. Building the model through the "
-            "direct API instead; pass io_api='direct' to skip creating the "
-            "problem file."
+            "direct API instead; pass io_api='direct' to skip this warning. "
+            "An empty temporary problem file is created and removed either way."
         )
         # Model.solve creates the problem file before building and unlinks only
         # what it gets back through `_problem_fn`, so hand the unused file back
@@ -4668,14 +4687,11 @@ class cuOpt(Solver[None]):
         self._cache_model_labels(model)
 
     @staticmethod
-    def _build_solver_model(model: Model) -> Any:
+    def _build_solver_model(model: Model) -> cuopt.linear_programming.DataModel:
         """Build a cuopt DataModel that mirrors the linopy `model`."""
         M = model.matrices
-        # cuOpt is always handed a minimisation: set_maximize(True) is the only
-        # route onto a presolve path that returns negated duals. `_solve`
-        # negates the results back. This is NOT a dual-convention fix --
-        # cuOpt's duals already match HiGHS, which is linopy's convention. Do
-        # not replace it with cuPDLPx's `if MAXIMIZE: dual = -dual`.
+        # Not a dual-convention fix (see the class Notes): do not replace it
+        # with cuPDLPx's `if MAXIMIZE: dual = -dual`.
         sign = -1.0 if model.objective.sense == "max" else 1.0
 
         lower = np.where(
@@ -4753,7 +4769,7 @@ class cuOpt(Solver[None]):
 
     def _solve(
         self,
-        dm: Any,
+        dm: cuopt.linear_programming.DataModel,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -4784,14 +4800,23 @@ class cuOpt(Solver[None]):
         Returns
         -------
         Result
+
+        Notes
+        -----
+        cuOpt's LP and MILP status enums are distinct IntEnums whose members
+        compare and hash equal by value (``LP.PrimalInfeasible ==
+        MILP.Infeasible == 2``), so one dict keyed on the enum members would
+        silently merge them. The maps below are therefore keyed on the status
+        name, and the map itself is picked from the problem category.
+        ``NoTermination`` is deliberately not ``unknown``: the ``unknown``
+        branch of ``safe_get_solution`` parses the solution anyway and reports
+        an unsolved model as ok.
+
+        cuOpt does not always detect MILP unboundedness: an unbounded MILP can
+        terminate ``Optimal`` and come back as ``('ok', 'optimal')`` with a
+        ``nan`` objective, ``mip_gap = 0.0`` and an infinite dual bound.
         """
-        # cuOpt's LP and MILP status enums are distinct IntEnums whose members
-        # compare and hash equal by value (LP.PrimalInfeasible ==
-        # MILP.Infeasible == 2), so one dict keyed on the enum members would
-        # silently merge them. Key on the status name and pick the map from the
-        # problem category. `NoTermination` is deliberately not `unknown`: the
-        # `unknown` branch of `safe_get_solution` parses the solution anyway
-        # and reports an unsolved model as ok.
+        # Keyed on the status name, not the enum member -- see Notes.
         LP_CONDITION_MAP: dict[str, TerminationCondition] = {
             "NoTermination": TerminationCondition.internal_solver_error,
             "Optimal": TerminationCondition.optimal,
@@ -4830,11 +4855,8 @@ class cuOpt(Solver[None]):
                 "Solution file output is not yet implemented for cuOpt."
             )
 
-        # Every cuOpt native object is created, used and released on the single
-        # solve worker, because cuOpt's per-thread state is not thread-safe
-        # (https://github.com/NVIDIA/cuopt/issues/1768). Building the settings
-        # inside the job rather than on the calling thread keeps that invariant
-        # whole; it was measured not to change any observed failure rate.
+        # Settings are built inside the job so that every native object lives
+        # on the solve worker -- see `_cuopt_solve_queue`.
         def solve() -> Any:
             settings = cuopt.linear_programming.SolverSettings()
             try:
@@ -4927,7 +4949,11 @@ class cuOpt(Solver[None]):
             ),
         )
 
-    def _set_solver_params(self, settings: Any, log_fn: Path | None = None) -> None:
+    def _set_solver_params(
+        self,
+        settings: cuopt.linear_programming.SolverSettings,
+        log_fn: Path | None = None,
+    ) -> None:
         """
         Set solver options on a cuopt SolverSettings object.
 

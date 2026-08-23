@@ -40,7 +40,7 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
     m.solve("cuopt")
 
-    # the same solve, without creating an unused problem file
+    # the same solve, without the file IO warning
     m.solve("cuopt", io_api="direct")
 
     # solver options are passed on as keyword arguments
@@ -52,13 +52,13 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 - Linear Programming (LP) and Mixed-Integer Programming (MIP)
 - Convex quadratic objectives (QP), solved with the GPU barrier method
 - Continuous, binary, integer and semi-continuous variables
-- Inequality, equality and ranged constraints
+- Inequality and equality constraints
 - Duals for LP models; MIP gap and dual bound reported via ``model.solver.report``
 - Open source (Apache 2.0 license)
 
 **Limitations:**
 
-- Only the direct API is supported. Passing ``io_api=None`` or a file ``io_api`` (``lp``, ``lp-polars``, ``mps``) still solves, but the model is built through the direct API and a warning is emitted; the problem file is written, never read, and removed again. Pass ``io_api="direct"`` to skip writing it.
+- Only the direct API is supported. Passing ``io_api=None`` or a file ``io_api`` (``lp``, ``lp-polars``, ``mps``) still solves, but the model is built through the direct API and a warning is emitted. An empty temporary problem file is created and removed either way; ``io_api="direct"`` only skips the warning.
 - ``keep_files=True`` is not supported: it makes linopy ask the solver for a solution file, which cuOpt cannot write, so the solve raises ``NotImplementedError``
 - Quadratic objectives combined with integer variables (MIQP) are not supported and are rejected with a ``NotImplementedError`` before the solve. cuOpt does not refuse such a model itself — it returns an empty solution, which is indistinguishable from a failed solve — so linopy checks up front.
 - A quadratic objective must be convex for minimisation (concave for maximisation). cuOpt detects a Hessian that is not positive semi-definite and reports ``NumericalError``, which linopy surfaces as the ``internal_solver_error`` termination condition rather than a wrong answer. The same applies to a quadratic objective on an unbounded model.
@@ -130,14 +130,14 @@ Hardware Requirements
 
 GPU solvers require:
 
-- NVIDIA GPU with CUDA support (compute capability 6.0 or higher recommended)
+- NVIDIA GPU with CUDA support (compute capability 6.0 or higher recommended; cuOpt requires compute capability 7.0 or higher — see above)
 - Sufficient GPU memory for your problem size (varies by problem)
 - PCIe 3.0 or higher for optimal data transfer
 
 Software Requirements
 ---------------------
 
-1. **CUDA Toolkit**: Most GPU solvers require CUDA 11.0 or later
+1. **CUDA Toolkit**: Most GPU solvers require CUDA 11.0 or later (cuOpt requires a CUDA 12 driver, version 525.60.13 or newer — see above)
 2. **Compatible GPU drivers**: Match your CUDA version
 
 Verifying Installation

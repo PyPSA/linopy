@@ -1114,12 +1114,15 @@ def test_basis_and_warmstart(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    if solver in ("cupdlpx", "cuopt"):
-        pytest.skip(
-            "cuPDLPx does not yet support warmstart in the Python API. cuOpt's own "
-            "warm start needs three simultaneous non-default settings and a payload "
-            "in presolved coordinates, so linopy does not offer it either."
-        )
+    no_warmstart_reasons = {
+        "cupdlpx": "cuPDLPx does not yet support warmstart in the Python API.",
+        "cuopt": (
+            "cuOpt's own warm start needs three simultaneous non-default settings "
+            "and a payload in presolved coordinates, so linopy does not offer it."
+        ),
+    }
+    if solver in no_warmstart_reasons:
+        pytest.skip(no_warmstart_reasons[solver])
 
     basis_fn = tmp_path / "basis.bas"
     model.solve(

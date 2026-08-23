@@ -78,6 +78,9 @@ pulls in several GB of CUDA packages:
 
     uv pip install "linopy[gpu]"
 
+The extra installs ``cuopt-cu12``, the build for CUDA 12 drivers; the bare
+``cuopt`` package on PyPI is an unrelated project.
+
 cuPDLPx is installed on its own:
 
 .. code:: bash
