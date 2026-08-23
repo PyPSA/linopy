@@ -4585,6 +4585,8 @@ class cuOpt(Solver[None]):
     """
 
     display_name: ClassVar[str] = "cuOpt"
+    # SOS and indicator constraints are absent from cuOpt itself, so their flags
+    # are omitted below and `_validate_model` refuses such models outright.
     features: ClassVar[frozenset[SolverFeature]] = frozenset(
         {
             SolverFeature.DIRECT_API,
@@ -4615,6 +4617,12 @@ class cuOpt(Solver[None]):
         cuopt.linear_programming.SolverSettings()
 
     def _build_file(self, **build_kwargs: Any) -> None:
+        # The file io_apis are excluded, not merely unimplemented: solution-file
+        # output and linopy's explicit coordinate names are unverified against
+        # cuOpt's parser, and the file path inverts the Q convention (triangular
+        # .lp vs symmetric .mps). To solve an existing .mps/.lp file directly,
+        # use cuOpt's own API (`cuopt.linear_programming`); linopy support is a
+        # planned follow-up.
         if self.io_api is not None and self.io_api not in FILE_IO_APIS:
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
@@ -4637,6 +4645,9 @@ class cuOpt(Solver[None]):
     def _build_direct(self, **kwargs: Any) -> None:
         model = self.model
         assert model is not None
+        # Guarded here rather than left to cuOpt: handed a quadratic objective
+        # together with integer variables it silently mis-solves the MIQP
+        # instead of reporting an error.
         if model.type in ("MIQP", "IQP"):
             msg = (
                 "cuOpt does not support quadratic objectives together with "
@@ -4804,6 +4815,10 @@ class cuOpt(Solver[None]):
             "UnboundedOrInfeasible": TerminationCondition.infeasible_or_unbounded,
         }
 
+        # A usable PDLP warm start needs method=1, pdlp_solver_mode=1 and
+        # presolve=0 set simultaneously, because the payload is in presolved
+        # coordinates. `set_initial_primal_solution` must never be called: it
+        # crashes and poisons the CUDA context for the process (upstream bug).
         if warmstart_fn is not None:
             raise NotImplementedError("Warmstarting is not yet implemented for cuOpt.")
 
@@ -4873,8 +4888,8 @@ class cuOpt(Solver[None]):
                 dual = _solution_from_labels(dual[:n_rows], self._clabels, self._n_cons)
             primal = _solution_from_labels(primal, self._vlabels, self._n_vars)
             # Reduced costs are deliberately not read: linopy has no surface
-            # for them, and cuOpt returns `-c - A'y` for maximised models with
-            # `<=` rows.
+            # for them, and cuOpt's reduced cost sign is wrong upstream for
+            # maximised models with `<=` rows (it returns `-c - A'y`).
             return Solution(primal, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
