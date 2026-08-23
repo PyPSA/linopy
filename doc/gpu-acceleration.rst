@@ -58,9 +58,9 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
 **Limitations:**
 
-- Only the direct API is supported. Passing ``io_api=None`` or a file ``io_api`` (``lp``, ``lp-polars``, ``mps``) still solves, but the model is built through the direct API and a warning is emitted. An empty temporary problem file is created and removed either way; ``io_api="direct"`` only skips the warning.
+- Only the direct API is supported. Passing ``io_api=None`` or a file ``io_api`` (``lp``, ``lp-polars``, ``mps``) still solves, but the model is built through the direct API — with an informational log message for the default ``io_api=None`` and a warning for an explicitly requested file ``io_api``. An empty temporary problem file is created and removed either way; ``io_api="direct"`` only skips the message.
 - ``keep_files=True`` is not supported: it makes linopy ask the solver for a solution file, which cuOpt cannot write, so the solve raises ``NotImplementedError``
-- Quadratic objectives combined with integer variables (MIQP) are not supported and are rejected with a ``NotImplementedError`` before the solve. cuOpt does not refuse such a model itself — it returns an empty solution, which is indistinguishable from a failed solve — so linopy checks up front.
+- Quadratic objectives combined with integer or semi-continuous variables (MIQP) are not supported and are rejected with a ``NotImplementedError`` before the solve. cuOpt does not refuse such a model itself — it returns an empty solution, which is indistinguishable from a failed solve — so linopy checks up front.
 - A quadratic objective must be convex for minimisation (concave for maximisation). cuOpt detects a Hessian that is not positive semi-definite and reports ``NumericalError``, which linopy surfaces as the ``internal_solver_error`` termination condition rather than a wrong answer. The same applies to a quadratic objective on an unbounded model.
 - Quadratic *constraints* are not supported
 - SOS and indicator constraints are not supported

@@ -590,7 +590,8 @@ def test_model_without_constraints() -> None:
     A padded constraint row keeps cuOpt happy and must not leak into the result.
 
     cuOpt rejects a model without constraint nonzeros, so linopy pads one row
-    that repeats a variable's own bounds -- not ``(-inf, +inf)``, which makes a
+    restating a variable's own bounds (widened to include 0 for the
+    semi-continuous off state) -- not ``(-inf, +inf)``, which makes a
     quadratic objective fail with ``NumericalError`` (the shared
     ``test_quadratic_model_wo_constraint`` exercises that shape). The row
     leaves the feasible set untouched and its dual is sliced off again before
@@ -610,6 +611,25 @@ def test_model_without_constraints() -> None:
     assert model.solver is not None
     assert model.solver.solution is not None
     assert model.solver.solution.dual.size == 0
+
+
+def test_model_without_constraints_semi_continuous() -> None:
+    """
+    The pad row must keep 0 feasible for a semi-continuous variable.
+
+    A pad row restating the variable's own bounds ``[1, 10]`` would cut off
+    the semi-continuous off state and turn the optimum from 0 into 1,
+    reported ``Optimal``; the row is widened to include 0 instead.
+    """
+    model = Model(chunk=None)
+    x = model.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    model.add_objective(1 * x)
+
+    status, condition = model.solve("cuopt", io_api="direct", log_to_console=False)
+
+    assert status == "ok"
+    assert condition == "optimal"
+    assert model.objective.value == pytest.approx(0.0, abs=CUOPT_OBJ_ATOL)
 
 
 def test_model_without_constraints_or_bounds_raises() -> None:

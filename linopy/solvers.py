@@ -272,8 +272,10 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
     One persistent worker, never a thread per solve: cuOpt's mixed-integer
     path leaks per-thread OpenMP state and aborts the process when solves
     arrive on fresh threads (https://github.com/NVIDIA/cuopt/issues/1768).
-    Every cuOpt native object must be created, used and released on this
-    worker.
+    Only solves are affected -- creating a ``DataModel`` and reading a
+    solution on the caller's thread are fine -- but the same defect bites
+    native teardown from unpredictable threads, so ``close`` routes the
+    ``DataModel`` release here via ``_dispose_on_cuopt_worker``.
     """
     jobs: queue.SimpleQueue[_CuoptJob] = queue.SimpleQueue()
 
@@ -316,19 +318,22 @@ def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
     return job.result
 
 
-def _dispose_on_cuopt_worker(native: Any) -> None:
+def _dispose_on_cuopt_worker(box: list[Any]) -> None:
     """
-    Release a cuOpt native object on the solve worker.
+    Release the cuOpt native objects in ``box`` on the solve worker.
 
     GC finalizes objects on whatever thread it runs on, and cuOpt's native
     teardown has the same per-thread OpenMP defect as its solves (see
     `_cuopt_solve_queue`), so teardown on a foreign thread aborts the process.
-    Never waits: callers include ``__del__`` and the worker itself. If no
-    worker is reachable (interpreter shutdown), the reference is just dropped.
+    The caller keeps no reference outside ``box``, so for the reference the
+    solver owns the worker's ``clear`` is the final decref. Best-effort only:
+    a ``DataModel`` retained elsewhere (``Result.solver_model``, ``to_cuopt``)
+    is torn down wherever its holder drops it. Never waits: callers include
+    ``__del__`` and the worker itself. If no worker is reachable (interpreter
+    shutdown), the references are just dropped.
     """
     with contextlib.suppress(Exception):
-        # [native].clear runs on the worker, dropping the last reference there
-        _cuopt_solve_queue().put(_CuoptJob([native].clear))
+        _cuopt_solve_queue().put(_CuoptJob(box.clear))
 
 
 # xpress.Namespaces was added in xpress 9.6. Importing xpress is pure-Python
@@ -420,7 +425,8 @@ def _cuda_device_available() -> bool:
             timeout=60,
             check=False,
         )
-    except (OSError, sub.SubprocessError):
+    except (OSError, sub.SubprocessError) as exc:
+        logger.warning("The CUDA device probe failed to run: %r", exc)
         return False
     if completed.returncode:
         logger.warning(
@@ -428,6 +434,11 @@ def _cuda_device_available() -> bool:
             "not available. It requires an NVIDIA GPU of compute capability "
             "7.0 or higher and driver 525.60.13 or newer."
         )
+        if completed.stderr:
+            logger.debug(
+                "CUDA device probe stderr: %s",
+                completed.stderr.decode(errors="replace"),
+            )
         return False
     return True
 
@@ -4544,7 +4555,7 @@ class cuOpt(Solver[None]):
 
     The full list of solver options is documented at
     https://docs.nvidia.com/cuopt/ and can be listed at runtime with
-    ``cuopt.linear_programming.solver_settings.solver_settings.get_solver_parameter_names()``.
+    ``cuopt.linear_programming.solver_settings.get_solver_parameter_names()``.
     Option names are lower-case and snake_case.
 
     Some example options are:
@@ -4613,9 +4624,12 @@ class cuOpt(Solver[None]):
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
-        logger.warning(
+        # Only an explicitly requested file io_api warns; the default
+        # io_api=None gets an informational note.
+        log = logger.info if self.io_api is None else logger.warning
+        log(
             "cuOpt does not support file IO. Building the model through the "
-            "direct API instead; pass io_api='direct' to skip this warning. "
+            "direct API instead; pass io_api='direct' to skip this message. "
             "An empty temporary problem file is created and removed either way."
         )
         # Model.solve unlinks only the file it gets back through `_problem_fn`,
@@ -4633,8 +4647,8 @@ class cuOpt(Solver[None]):
         if model.type in ("MIQP", "IQP"):
             msg = (
                 "cuOpt does not support quadratic objectives together with "
-                "integer variables. Use a solver that supports MIQP "
-                "(gurobi, xpress, mosek)."
+                "integer or semi-continuous variables. Use a solver that "
+                "supports MIQP (gurobi, xpress, mosek)."
             )
             raise NotImplementedError(msg)
         if kwargs.get("explicit_coordinate_names"):
@@ -4670,10 +4684,11 @@ class cuOpt(Solver[None]):
         A = None if M.A is None else M.A.tocsr()
         if A is None or A.nnz == 0:
             # cuOpt returns NoTermination for a constraint matrix without
-            # nonzeros, so pad with a redundant copy of one variable's own
-            # bounds -- unlike a (-inf, inf) row, this does not make a
-            # quadratic objective fail with NumericalError. The pad is the
-            # last row; `_solve` slices its dual off again.
+            # nonzeros, so pad with a redundant restatement of one variable's
+            # own bounds -- unlike a (-inf, inf) row, this does not make a
+            # quadratic objective fail with NumericalError. Widened to include
+            # 0 so a semi-continuous variable keeps its off state. The pad is
+            # the last row; `_solve` slices its dual off again.
             finite = np.flatnonzero(np.isfinite(M.lb) | np.isfinite(M.ub))
             if not finite.size:
                 msg = (
@@ -4685,8 +4700,8 @@ class cuOpt(Solver[None]):
             j = int(finite[0])
             pad = csr_array(([1.0], ([0], [j])), shape=(1, len(M.c)))
             A = pad if A is None else vstack([A, pad], format="csr")
-            lower = np.append(lower, M.lb[j])
-            upper = np.append(upper, M.ub[j])
+            lower = np.append(lower, min(M.lb[j], 0.0))
+            upper = np.append(upper, max(M.ub[j], 0.0))
 
         dm = cuopt.linear_programming.DataModel()
         dm.set_csr_constraint_matrix(A.data, A.indices, A.indptr)
@@ -4855,6 +4870,11 @@ class cuOpt(Solver[None]):
                 dual = np.array([], dtype=float)
             else:
                 dual = sign * np.asarray(sol.get_dual_solution(), dtype=float)
+                if dual.size < n_rows:
+                    raise ValueError(
+                        f"cuOpt returned {dual.size} dual values for {n_rows} "
+                        f"constraints ({sol.get_termination_reason()})."
+                    )
                 # slices off the padded row's dual, if any
                 dual = _solution_from_labels(dual[:n_rows], self._clabels, self._n_cons)
             primal = _solution_from_labels(primal, self._vlabels, self._n_vars)
@@ -4933,9 +4953,10 @@ class cuOpt(Solver[None]):
     def close(self) -> None:
         # __del__ may run this on any thread; cuOpt teardown must happen on
         # the solve worker (see `_dispose_on_cuopt_worker`)
-        dm, self.solver_model = self.solver_model, None
-        if dm is not None:
-            _dispose_on_cuopt_worker(dm)
+        box = [self.solver_model]
+        self.solver_model = None
+        if box[0] is not None:
+            _dispose_on_cuopt_worker(box)
         super().close()
 
 
@@ -5027,6 +5048,7 @@ class _AvailableSolvers(Sequence[str]):
 
     def refresh(self) -> None:
         self.__dict__.pop("_names", None)
+        _cuda_device_available.cache_clear()  # cuOpt's GPU probe caches separately
         seen: set[int] = set()
         for name in _SOLVER_PROBE_ORDER:
             cls = _solver_class_for(name)
