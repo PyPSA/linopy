@@ -15,6 +15,7 @@ from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
+    NamedTuple,
     overload,
 )
 from warnings import warn
@@ -1151,6 +1152,18 @@ class CSRConstraint(ConstraintBase):
         )
 
 
+class Slack(NamedTuple):
+    """
+    Slack variable(s) added by :meth:`Constraint.soften`.
+
+    `negative` is None for inequality constraints, since those only
+    need one slack variable to absorb a violation in a single direction.
+    """
+
+    positive: VariableLike
+    negative: VariableLike | None
+
+
 class Constraint(ConstraintBase):
     """
     Constraint backed by an xarray Dataset.
@@ -1729,7 +1742,7 @@ class Constraint(ConstraintBase):
                *,
                max_violation: ConstantLike | None = None,
                name: str | None = None,
-               ) -> VariableLike | tuple[VariableLike, VariableLike]:
+               ) -> Slack:
         """
         Soften a constraint, adding a slack variable and a penalty to the objective function.
 
@@ -1744,7 +1757,9 @@ class Constraint(ConstraintBase):
 
         Returns
         -------
-        variable-like, or a tuple of variables for constraints of type 'equality'.
+        Slack
+            Named tuple with the ``positive`` slack variable, and the ``negative`` one
+            for equality constraints (``None`` for inequality constraints).
 
         Examples
         --------
@@ -1759,7 +1774,7 @@ class Constraint(ConstraintBase):
         >>> budget_penalty = 2
 
         >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
-        >>> budget_positive_slack, budget_negative_slack = budget_constraint.soften(penalty=budget_penalty)
+        >>> slack = budget_constraint.soften(penalty=budget_penalty)
         """
         # Verify valid penalty to continue:
         assert (penalty >= 0).all() if hasattr(penalty, "all") else penalty >= 0, "Penalty is not positive."
@@ -1780,7 +1795,7 @@ class Constraint(ConstraintBase):
                                              mask=self.mask,
                                              name=f"{name}_pos",
                                              )
-        slack = positive_slack
+        negative_slack = None
 
         # Update left hand side depending on the sign of the constraint:
         if self.sign == "<=":
@@ -1791,14 +1806,13 @@ class Constraint(ConstraintBase):
             negative_slack = model.add_variables(lower=0, upper=upper, coords=self.lhs.coords, mask=self.mask,
                                                  name=f"{name}_neg")
             self.lhs = self.lhs - positive_slack + negative_slack
-            slack = (positive_slack, negative_slack)
 
         # Update objective function:
-        constraint_violation = slack[0] + slack[1] if isinstance(slack, tuple) else slack
+        constraint_violation = positive_slack + negative_slack if negative_slack is not None else positive_slack
         direction = 1 if model.sense == "min" else -1
         model.objective += direction * (penalty * constraint_violation).sum()
 
-        return slack
+        return Slack(positive=positive_slack, negative=negative_slack)
 
 
 
