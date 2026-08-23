@@ -1813,13 +1813,7 @@ class Constraint(ConstraintBase):
         model.objective += direction * (penalty * constraint_violation).sum()
 
         return Slack(positive=positive_slack, negative=negative_slack)
-
-
-
-
-
-
-
+    
     def to_polars(self) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
