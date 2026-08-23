@@ -269,16 +269,11 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
     """
     Inbox of the single daemon thread that runs every cuOpt solve.
 
-    Deliberately not the fresh thread per call that
-    :func:`_run_highs_with_keyboard_interrupt` uses: cuOpt's mixed-integer path
-    leaks per-thread OpenMP state, so solves arriving on new threads abort the
-    process (``kmp_alloc.cpp`` assertion) from the third solve onwards. Reusing
-    one worker is the only known workaround for that upstream bug.
-
-    Every cuOpt native object is therefore created, used and released on this
-    one worker, the solver settings included: building them inside the job
-    rather than on the calling thread keeps that invariant whole, and was
-    measured not to change any observed failure rate.
+    One persistent worker, never a thread per solve: cuOpt's mixed-integer
+    path leaks per-thread OpenMP state and aborts the process when solves
+    arrive on fresh threads (https://github.com/NVIDIA/cuopt/issues/1768).
+    Every cuOpt native object must be created, used and released on this
+    worker.
     """
     jobs: queue.SimpleQueue[_CuoptJob] = queue.SimpleQueue()
 
@@ -291,33 +286,26 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
                 job.error = exc
             finally:
                 job.done.set()
-                # The thread outlives every solve, so drop the job before
-                # blocking again -- holding it would pin the model, the
-                # solution and their GPU memory until the next solve arrives.
-                del job
+                del job  # drop job to free thread & GPU resources
 
     threading.Thread(target=_worker, name="linopy-cuopt-solve", daemon=True).start()
     return jobs
 
 
-if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt itself is Linux-only
-    # A forked child inherits the cached queue but not its daemon worker, so a
-    # cuOpt solve in the child would wait on `job.done` forever. Clearing the
-    # cache starts a fresh worker there, which fails fast with CUDA's real
-    # "cannot re-initialise after fork" error instead of hanging.
+if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt is Linux-only
+    # A forked child inherits the cached queue but not its worker; clearing
+    # the cache starts a fresh worker there, so a solve in the child fails
+    # fast with CUDA's real fork error instead of hanging on `job.done`.
     os.register_at_fork(after_in_child=_cuopt_solve_queue.cache_clear)
 
 
 def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
     """
-    Run a cuOpt solve while keeping Ctrl-C responsive.
+    Run a cuOpt solve on the worker while keeping Ctrl-C responsive.
 
-    cuOpt exposes no cancel API and defers SIGINT for the entire duration of
-    the C++ solve, so the call is handed to the worker thread while the main
-    thread waits. Note that the GPU work continues in the background until the
-    process exits; ``time_limit`` is the only hard bound cuOpt offers. A solve
-    abandoned by a ``KeyboardInterrupt`` therefore runs to completion on the
-    worker, which then picks up the next one.
+    cuOpt has no cancel API and defers SIGINT for the whole C++ solve, so the
+    main thread only waits. An interrupted solve runs to completion on the
+    worker; ``time_limit`` is the only hard bound cuOpt offers.
     """
     job = _CuoptJob(solve)
     _cuopt_solve_queue().put(job)
@@ -330,19 +318,16 @@ def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
 
 def _dispose_on_cuopt_worker(native: Any) -> None:
     """
-    Release a cuOpt native object on the worker thread that solved with it.
+    Release a cuOpt native object on the solve worker.
 
-    Garbage collection finalizes a dead solver on whatever thread it runs on,
-    and cuOpt's native teardown carries the same per-thread OpenMP defect as
-    its solves (https://github.com/NVIDIA/cuopt/issues/1768), so a collection
-    on a foreign thread -- a dask worker, say -- aborts the process. Never
-    waits: the caller is usually ``__del__``, and may be the worker itself. If
-    no worker can be reached, e.g. during interpreter shutdown, the reference
-    is simply dropped here.
+    GC finalizes objects on whatever thread it runs on, and cuOpt's native
+    teardown has the same per-thread OpenMP defect as its solves (see
+    `_cuopt_solve_queue`), so teardown on a foreign thread aborts the process.
+    Never waits: callers include ``__del__`` and the worker itself. If no
+    worker is reachable (interpreter shutdown), the reference is just dropped.
     """
     with contextlib.suppress(Exception):
-        # The list keeps `native` alive until the worker clears it, so the last
-        # reference dies on the worker rather than on this thread.
+        # [native].clear runs on the worker, dropping the last reference there
         _cuopt_solve_queue().put(_CuoptJob([native].clear))
 
 
@@ -396,9 +381,6 @@ mosek = _LazyModule("mosek")
 mindoptpy = _LazyModule("mindoptpy")
 coptpy = _LazyModule("coptpy")
 cupdlpx = _LazyModule("cupdlpx")
-# Only cuopt.linear_programming is ever touched: importing cuopt.routing
-# installs a global sys.excepthook that writes error_log.txt into the cwd
-# (routing/vehicle_routing_wrapper.pyx:144-160).
 cuopt = _LazyModule("cuopt")
 
 
@@ -424,17 +406,12 @@ def _cuda_device_available() -> bool:
     """
     True if a usable CUDA device is visible.
 
-    ``import cuopt`` succeeds on hosts without a GPU by design -- its
-    ``__init__`` defers every device-touching import so a remote solve can be
-    configured -- so an import probe alone would advertise cuOpt on machines
-    where every solve fails with a remote-execution error.
-
-    The probe runs in a subprocess on purpose. Any in-process CUDA call
-    initialises a CUDA context in the caller, and a context created before
-    ``fork()`` makes every cuOpt solve in the child fail. ``is_available`` runs
-    on first access to ``linopy.available_solvers``, so an in-process probe
-    would break cuOpt -- and every other CUDA library -- in multiprocessing and
-    dask workers.
+    ``import cuopt`` succeeds on GPU-less hosts by design (remote solves), so
+    an import probe alone is not enough. The probe must run in a subprocess:
+    an in-process CUDA call creates a CUDA context in the caller, and a
+    context created before ``fork()`` breaks CUDA in every child -- fatal for
+    multiprocessing/dask, since this runs on first access to
+    ``linopy.available_solvers``.
     """
     try:
         completed = sub.run(
@@ -4573,8 +4550,8 @@ class cuOpt(Solver[None]):
     Some example options are:
 
     * method : 3 (Barrier) by default in linopy - 0 (Concurrent), 1 (PDLP) and
-      2 (DualSimplex) are alternatives. linopy does not use cuOpt's own default
-      of 0, which crashes the process on repeated solves (see Notes).
+      2 (DualSimplex) are alternatives. cuOpt's own default of 0 crashes the
+      process on repeated solves and is not used.
     * time_limit : inf by default.
     * log_to_console : True by default.
     * absolute_primal_tolerance, relative_primal_tolerance, ... : 1e-4 by default.
@@ -4586,22 +4563,14 @@ class cuOpt(Solver[None]):
 
     Notes
     -----
-    Duals are returned in linopy's (HiGHS's) sign convention without
-    transformation. Maximisation problems are handed to cuOpt as the equivalent
-    minimisation, because cuOpt 26.08 returns negated duals for maximised
-    models that its presolve solves outright; the objective, the duals and the
-    MIP bound are negated back here. Handing cuOpt a maximisation through
-    ``set_maximize(True)`` is the only route onto the presolve path that
-    returns those negated duals, which is why it is never used.
-
-    cuOpt's own default method (0, Concurrent) segfaults on the second or third
-    solve in one process for models above roughly 1300 variables, so linopy
-    defaults to method 3 (Barrier) instead.
+    Maximisation problems are handed to cuOpt as the equivalent minimisation
+    (objective, duals and MIP bound negated back here), never via
+    ``set_maximize(True)``: on that path cuOpt's presolve returns negated
+    duals for models it solves outright. Duals therefore arrive in linopy's
+    (HiGHS's) sign convention without transformation.
     """
 
     display_name: ClassVar[str] = "cuOpt"
-    # SOS and indicator constraints are absent from cuOpt itself, so their flags
-    # are omitted below and `_validate_model` refuses such models outright.
     features: ClassVar[frozenset[SolverFeature]] = frozenset(
         {
             SolverFeature.DIRECT_API,
@@ -4613,12 +4582,11 @@ class cuOpt(Solver[None]):
             SolverFeature.QUADRATIC_OBJECTIVE,
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
-    )
+    )  # no SOS or indicator constraints
 
-    # cuOpt's own default (0 = Concurrent) segfaults on the 2nd-3rd solve in a
-    # process for models above ~1300 variables. Barrier is GPU-resident, stable
-    # across repeated solves, the most accurate of the single methods, and the
-    # method cuOpt forces for quadratic objectives anyway.
+    # Default to Barrier instead of cuOpt's default (0 = Concurrent), which
+    # segfaults on the 2nd-3rd solve. Barrier is GPU-resident, stable across
+    # repeated solves, and broadly most accurate.
     _DEFAULT_METHOD: ClassVar[int] = 3
 
     @classmethod
@@ -4639,8 +4607,7 @@ class cuOpt(Solver[None]):
         output and linopy's explicit coordinate names are unverified against
         cuOpt's parser, and the file path inverts the Q convention (triangular
         ``.lp`` vs symmetric ``.mps``). To solve an existing ``.mps``/``.lp``
-        file directly, use cuOpt's own API (``cuopt.linear_programming``);
-        linopy support is a planned follow-up.
+        file directly, use cuOpt's own API (``cuopt.linear_programming``).
         """
         if self.io_api is not None and self.io_api not in FILE_IO_APIS:
             raise ValueError(
@@ -4651,9 +4618,8 @@ class cuOpt(Solver[None]):
             "direct API instead; pass io_api='direct' to skip this warning. "
             "An empty temporary problem file is created and removed either way."
         )
-        # Model.solve creates the problem file before building and unlinks only
-        # what it gets back through `_problem_fn`, so hand the unused file back
-        # rather than leaving it in solver_dir.
+        # Model.solve unlinks only the file it gets back through `_problem_fn`,
+        # so hand the unused problem file back rather than leaving it behind.
         problem_fn = build_kwargs.pop("problem_fn", None)
         if problem_fn is not None:
             self._problem_fn = Path(problem_fn)
@@ -4664,9 +4630,6 @@ class cuOpt(Solver[None]):
     def _build_direct(self, **kwargs: Any) -> None:
         model = self.model
         assert model is not None
-        # Guarded here rather than left to cuOpt: handed a quadratic objective
-        # together with integer variables it silently mis-solves the MIQP
-        # instead of reporting an error.
         if model.type in ("MIQP", "IQP"):
             msg = (
                 "cuOpt does not support quadratic objectives together with "
@@ -4690,8 +4653,8 @@ class cuOpt(Solver[None]):
     def _build_solver_model(model: Model) -> cuopt.linear_programming.DataModel:
         """Build a cuopt DataModel that mirrors the linopy `model`."""
         M = model.matrices
-        # Not a dual-convention fix (see the class Notes): do not replace it
-        # with cuPDLPx's `if MAXIMIZE: dual = -dual`.
+        # Always-minimise transform (see class Notes) -- not a dual-sign fix;
+        # do not replace with cuPDLPx's `if MAXIMIZE: dual = -dual`.
         sign = -1.0 if model.objective.sense == "max" else 1.0
 
         lower = np.where(
@@ -4706,12 +4669,11 @@ class cuOpt(Solver[None]):
         )
         A = None if M.A is None else M.A.tocsr()
         if A is None or A.nnz == 0:
-            # cuOpt returns NoTermination and an empty solution for a
-            # constraint matrix without nonzeros. Repeat one variable's own
-            # bounds as a redundant row: it leaves the feasible set untouched,
-            # and unlike a row with two infinite bounds it does not make a
-            # quadratic objective fail with NumericalError. The pad row is the
-            # last one, so its dual is sliced off again in `_solve`.
+            # cuOpt returns NoTermination for a constraint matrix without
+            # nonzeros, so pad with a redundant copy of one variable's own
+            # bounds -- unlike a (-inf, inf) row, this does not make a
+            # quadratic objective fail with NumericalError. The pad is the
+            # last row; `_solve` slices its dual off again.
             finite = np.flatnonzero(np.isfinite(M.lb) | np.isfinite(M.ub))
             if not finite.size:
                 msg = (
@@ -4735,16 +4697,14 @@ class cuOpt(Solver[None]):
         dm.set_objective_coefficients(sign * M.c)
         Q = M.Q
         if Q is not None:
-            # cuOpt minimises `c'x + x'Qx` and symmetrises Q to `Q + Q'`, while
-            # `M.Q` is the Hessian of `0.5 x'Qx`. Halving it, full-symmetric,
-            # is the only correct form: passing `M.Q` returns `Optimal` with
-            # half the solution vector, and a triangular form is off by the
-            # diagonal. Non-PSD Q comes back as NumericalError, not silently.
+            # cuOpt minimises `c'x + x'Qx` and symmetrises Q to `Q + Q'`;
+            # `M.Q` is the Hessian of `0.5 x'Qx`, so pass it halved and
+            # full-symmetric. Anything else returns `Optimal` with a wrong
+            # solution (unhalved: scaled; triangular: off by the diagonal).
             Qc = (sign * 0.5 * Q).tocsr()
             dm.set_quadratic_objective_matrix(Qc.data, Qc.indices, Qc.indptr)
-        # cuOpt knows 'C', 'I' and 'S'; every other character is silently taken
-        # as continuous, so linopy's 'B' must be mapped explicitly. Binary
-        # bounds are already 0/1 in M.lb/M.ub -- cuOpt does not clamp 'B'.
+        # cuOpt knows 'C', 'I', 'S' and silently treats anything else as
+        # continuous, so map 'B' to 'I' (binary bounds are already in M.lb/ub)
         dm.set_variable_types(np.where(M.vtypes == "B", "I", M.vtypes).astype("<U1"))
         return dm
 
@@ -4808,15 +4768,11 @@ class cuOpt(Solver[None]):
         MILP.Infeasible == 2``), so one dict keyed on the enum members would
         silently merge them. The maps below are therefore keyed on the status
         name, and the map itself is picked from the problem category.
-        ``NoTermination`` is deliberately not ``unknown``: the ``unknown``
-        branch of ``safe_get_solution`` parses the solution anyway and reports
-        an unsolved model as ok.
-
-        cuOpt does not always detect MILP unboundedness: an unbounded MILP can
-        terminate ``Optimal`` and come back as ``('ok', 'optimal')`` with a
-        ``nan`` objective, ``mip_gap = 0.0`` and an infinite dual bound.
+        ``NoTermination`` must not map to ``unknown``: that branch of
+        ``safe_get_solution`` parses the solution anyway and reports an
+        unsolved model as ok.
         """
-        # Keyed on the status name, not the enum member -- see Notes.
+        # keyed on the status name, not the enum member -- see Notes
         LP_CONDITION_MAP: dict[str, TerminationCondition] = {
             "NoTermination": TerminationCondition.internal_solver_error,
             "Optimal": TerminationCondition.optimal,
@@ -4840,10 +4796,9 @@ class cuOpt(Solver[None]):
             "UnboundedOrInfeasible": TerminationCondition.infeasible_or_unbounded,
         }
 
-        # A usable PDLP warm start needs method=1, pdlp_solver_mode=1 and
-        # presolve=0 set simultaneously, because the payload is in presolved
-        # coordinates. `set_initial_primal_solution` must never be called: it
-        # crashes and poisons the CUDA context for the process (upstream bug).
+        # A PDLP warm start needs method=1, pdlp_solver_mode=1 and presolve=0
+        # at once. Never call `set_initial_primal_solution`: it crashes and
+        # poisons the process's CUDA context (upstream bug).
         if warmstart_fn is not None:
             raise NotImplementedError("Warmstarting is not yet implemented for cuOpt.")
 
@@ -4855,18 +4810,13 @@ class cuOpt(Solver[None]):
                 "Solution file output is not yet implemented for cuOpt."
             )
 
-        # Settings are built inside the job so that every native object lives
-        # on the solve worker -- see `_cuopt_solve_queue`.
         def solve() -> Any:
+            # built inside the job so every native object lives on the worker
             settings = cuopt.linear_programming.SolverSettings()
             try:
                 self._set_solver_params(settings, log_fn)
                 return cuopt.linear_programming.Solve(dm, settings)
             finally:
-                # `Solve` keeps no reference to the settings, so dropping this
-                # local is enough to free them here -- also on the error path,
-                # whose traceback would otherwise carry the frame, and with it
-                # the settings, back to the calling thread.
                 del settings
 
         sol = _run_cuopt_with_keyboard_interrupt(solve)
@@ -4900,18 +4850,14 @@ class cuOpt(Solver[None]):
                 return Solution()
             objective = sign * float(sol.get_primal_objective())
             if is_mip:
-                # get_dual_solution() raises for a MIP solution, and an empty
-                # array cannot be scattered, so return it unscattered.
-                # Model.assign_result guards with `if len(result.solution.dual)`.
+                # get_dual_solution() raises for a MIP; return an empty array
+                # unscattered (Model.assign_result guards on its length)
                 dual = np.array([], dtype=float)
             else:
                 dual = sign * np.asarray(sol.get_dual_solution(), dtype=float)
                 # slices off the padded row's dual, if any
                 dual = _solution_from_labels(dual[:n_rows], self._clabels, self._n_cons)
             primal = _solution_from_labels(primal, self._vlabels, self._n_vars)
-            # Reduced costs are deliberately not read: linopy has no surface
-            # for them, and cuOpt's reduced cost sign is wrong upstream for
-            # maximised models with `<=` rows (it returns `-c - A'y`).
             return Solution(primal, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -4976,10 +4922,8 @@ class cuOpt(Solver[None]):
                     "Consider method=3 (Barrier) or method=1 (PDLP)."
                 )
         for k, v in options.items():
-            # cuOpt types most parameters as int and rejects a Python bool for
-            # them inside Solve(); the bool-typed ones accept 0/1.
             if isinstance(v, bool):
-                v = int(v)
+                v = int(v)  # cuopt rejects Python bools, convert to int
             try:
                 settings.set_parameter(k, v)
             except ValueError as e:
@@ -4987,9 +4931,8 @@ class cuOpt(Solver[None]):
                 raise ValueError(msg) from e
 
     def close(self) -> None:
-        # Called from __del__, so garbage collection can run this on any
-        # thread; cuOpt's native teardown must not run on a foreign one
-        # (https://github.com/NVIDIA/cuopt/issues/1768).
+        # __del__ may run this on any thread; cuOpt teardown must happen on
+        # the solve worker (see `_dispose_on_cuopt_worker`)
         dm, self.solver_model = self.solver_model, None
         if dm is not None:
             _dispose_on_cuopt_worker(dm)

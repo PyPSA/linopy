@@ -74,7 +74,10 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
 - linopy defaults to ``method=3`` (Barrier) instead of cuOpt's own default ``method=0`` (Concurrent), which can crash the process on repeated solves of models with more than about 1300 variables. For very large sparse LPs, try ``method=1`` (PDLP).
 - On a model with a quadratic objective, cuOpt always solves with the barrier method: it silently overrides ``method`` and ``crossover``, so passing either has no effect on a QP.
-- ``log_file`` (or linopy's ``log_fn``) writes cuOpt's log to a file, truncating it; ``log_to_console`` controls the console output
+- Solver options are checked on the way in: an unrecognised option raises ``ValueError`` naming the offending parameter (cuOpt's own message does not say which one it rejected), and Python booleans are converted for cuOpt's integer-typed parameters, so ``presolve=False`` works as expected.
+- A limit termination (``time_limit``, ``iteration_limit``, ``node_limit``, ``first_primal_feasible``) returns status ``ok`` with the matching termination condition — ``time_limit``, ``iteration_limit``, or ``suboptimal`` for an unproven incumbent. A limit *setting* never implies a limit *status*: cuOpt may still finish ``optimal`` within the limit. If the limit expires before any feasible point is found, linopy returns an empty solution rather than scattering cuOpt's empty primal; a termination status linopy does not recognise maps to the ``unknown`` condition.
+- ``log_file`` (or linopy's ``log_fn``) writes cuOpt's log to a file, truncating it; if both are given, ``log_fn`` wins. ``log_to_console`` controls the console output.
+- linopy imports only ``cuopt.linear_programming``. Importing ``cuopt.routing`` yourself installs a global ``sys.excepthook`` that writes an ``error_log.txt`` into the current working directory.
 - ``Ctrl-C`` returns control to Python, but the GPU solve runs to completion in the background. ``time_limit`` is the only hard bound on solve time.
 - On a machine without a usable GPU, cuOpt is simply absent from ``linopy.available_solvers``
 

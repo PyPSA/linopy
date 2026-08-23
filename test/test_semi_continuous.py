@@ -1,5 +1,6 @@
 """Tests for semi-continuous variable support."""
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,11 @@ import pandas as pd
 import pytest
 
 from linopy import Model, available_solvers
+
+requires_cuopt_gpu = pytest.mark.skipif(
+    not os.environ.get("LINOPY_RUN_GPU_TESTS") or "cuopt" not in available_solvers,
+    reason="need --run-gpu and an installed cuOpt with a usable GPU",
+)
 
 
 def test_add_semi_continuous_variable() -> None:
@@ -176,5 +182,42 @@ def test_semi_continuous_solve_highs_active() -> None:
     m.add_constraints(x <= 5, name="ub")
     m.add_objective(x, sense="max")
     m.solve(solver_name="highs")
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 5, atol=1e-6)
+
+
+@pytest.mark.gpu
+@requires_cuopt_gpu
+def test_semi_continuous_solve_cuopt() -> None:
+    """
+    Semi-continuous variable solves correctly with cuOpt.
+
+    Maximize x subject to x <= 0.5, x semi-continuous in [1, 10].
+    Since x can be 0 or in [1, 10], and x <= 0.5 prevents [1, 10],
+    the optimal x should be 0.
+    """
+    m = Model()
+    x = m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    m.add_constraints(x <= 0.5, name="ub")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="cuopt", io_api="direct", log_to_console=False)
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 0, atol=1e-6)
+
+
+@pytest.mark.gpu
+@requires_cuopt_gpu
+def test_semi_continuous_solve_cuopt_active() -> None:
+    """
+    Semi-continuous variable takes value in [lb, ub] when beneficial with cuOpt.
+
+    Maximize x subject to x <= 5, x semi-continuous in [1, 10].
+    Optimal x should be 5.
+    """
+    m = Model()
+    x = m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    m.add_constraints(x <= 5, name="ub")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="cuopt", io_api="direct", log_to_console=False)
     assert m.objective.value is not None
     assert np.isclose(m.objective.value, 5, atol=1e-6)
