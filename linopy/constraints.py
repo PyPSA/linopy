@@ -1736,7 +1736,7 @@ class Constraint(ConstraintBase):
         Parameters
         ----------
         penalty : constant-like
-            The penalty that will match the slack variable inside the objective function.
+            The penalty that will match the slack variable inside the objective function. Must be bigger than 0.
         max_violation: constant-like
             The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
         name: string
@@ -1744,7 +1744,7 @@ class Constraint(ConstraintBase):
 
         Returns
         -------
-        variable-like, or a tuple of variables for constraints of the type 'equality'.
+        variable-like, or a tuple of variables for constraints of type 'equality'.
 
         Examples
         --------
@@ -1753,13 +1753,57 @@ class Constraint(ConstraintBase):
 
         >>> m = Model()
         >>> investments = pd.Index(["A", "B", "C"], name="investments")
+        >>> expected_return = pd.Series([0.08, 0.03, 0.1], index=investments, name="expected_return")
+        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
+        >>> m.add_objective((expected_return * w).sum(), sense="max")
         >>> budget_penalty = 2
 
-        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
         >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
-        >>> budget_slack = budget_constraint.soften(penalty=budget_penalty)
+        >>> budget_positive_slack, budget_negative_slack = budget_constraint.soften(penalty=budget_penalty)
         """
-        pass
+        # Verify valid penalty to continue:
+        assert (penalty >= 0).all() if hasattr(penalty, "all") else penalty >= 0, "Penalty is not positive."
+
+        # Assert the existence of the objective function before using soften method (this is to avoid
+        # `add_objective` overwriting the penalty term added below, since it replaces rather than merges):
+        model = self.model
+        assert not model.objective.expression.empty, (
+            "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
+        )
+
+        name = name or f"{self.name}_slack"
+        upper = np.inf if max_violation is None else max_violation
+
+        positive_slack = model.add_variables(lower=0,
+                                             upper=upper,
+                                             coords=self.lhs.coords,
+                                             mask=self.mask,
+                                             name=f"{name}_pos",
+                                             )
+        slack = positive_slack
+
+        # Update left hand side depending on the sign of the constraint:
+        if self.sign == "<=":
+            self.lhs = self.lhs - positive_slack
+        elif self.sign == ">=":
+            self.lhs = self.lhs + positive_slack
+        else:
+            negative_slack = model.add_variables(lower=0, upper=upper, coords=self.lhs.coords, mask=self.mask,
+                                                 name=f"{name}_neg")
+            self.lhs = self.lhs - positive_slack + negative_slack
+            slack = (positive_slack, negative_slack)
+
+        # Update objective function:
+        constraint_violation = slack[0] + slack[1] if isinstance(slack, tuple) else slack
+        direction = 1 if model.sense == "min" else -1
+        model.objective += direction * (penalty * constraint_violation).sum()
+
+        return slack
+
+
+
+
+
 
 
     def to_polars(self) -> pl.DataFrame:
