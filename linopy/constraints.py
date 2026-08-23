@@ -1737,12 +1737,13 @@ class Constraint(ConstraintBase):
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
 
-    def soften(self,
-               penalty: ConstantLike,
-               *,
-               max_violation: ConstantLike | None = None,
-               name: str | None = None,
-               ) -> Slack:
+    def soften(
+        self,
+        penalty: ConstantLike,
+        *,
+        max_violation: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> Slack:
         """
         Soften a constraint, adding a slack variable and a penalty to the objective function.
 
@@ -1768,7 +1769,9 @@ class Constraint(ConstraintBase):
 
         >>> m = Model()
         >>> investments = pd.Index(["A", "B", "C"], name="investments")
-        >>> expected_return = pd.Series([0.08, 0.03, 0.1], index=investments, name="expected_return")
+        >>> expected_return = pd.Series(
+        ...     [0.08, 0.03, 0.1], index=investments, name="expected_return"
+        ... )
         >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
         >>> m.add_objective((expected_return * w).sum(), sense="max")
         >>> budget_penalty = 2
@@ -1777,7 +1780,9 @@ class Constraint(ConstraintBase):
         >>> slack = budget_constraint.soften(penalty=budget_penalty)
         """
         # Verify valid penalty to continue:
-        assert (penalty >= 0).all() if hasattr(penalty, "all") else penalty >= 0, "Penalty is not positive."
+        assert (penalty >= 0).all() if hasattr(penalty, "all") else penalty >= 0, (
+            "Penalty is not positive."
+        )
 
         # Assert the existence of the objective function before using soften method (this is to avoid
         # `add_objective` overwriting the penalty term added below, since it replaces rather than merges):
@@ -1789,12 +1794,13 @@ class Constraint(ConstraintBase):
         name = name or f"{self.name}_slack"
         upper = np.inf if max_violation is None else max_violation
 
-        positive_slack = model.add_variables(lower=0,
-                                             upper=upper,
-                                             coords=self.lhs.coords,
-                                             mask=self.mask,
-                                             name=f"{name}_pos",
-                                             )
+        positive_slack = model.add_variables(
+            lower=0,
+            upper=upper,
+            coords=self.lhs.coords,
+            mask=self.mask,
+            name=f"{name}_pos",
+        )
         negative_slack = None
 
         # Update left hand side depending on the sign of the constraint:
@@ -1803,17 +1809,26 @@ class Constraint(ConstraintBase):
         elif self.sign == ">=":
             self.lhs = self.lhs + positive_slack
         else:
-            negative_slack = model.add_variables(lower=0, upper=upper, coords=self.lhs.coords, mask=self.mask,
-                                                 name=f"{name}_neg")
+            negative_slack = model.add_variables(
+                lower=0,
+                upper=upper,
+                coords=self.lhs.coords,
+                mask=self.mask,
+                name=f"{name}_neg",
+            )
             self.lhs = self.lhs - positive_slack + negative_slack
 
         # Update objective function:
-        constraint_violation = positive_slack + negative_slack if negative_slack is not None else positive_slack
+        constraint_violation = (
+            positive_slack + negative_slack
+            if negative_slack is not None
+            else positive_slack
+        )
         direction = 1 if model.sense == "min" else -1
         model.objective += direction * (penalty * constraint_violation).sum()
 
         return Slack(positive=positive_slack, negative=negative_slack)
-    
+
     def to_polars(self) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
