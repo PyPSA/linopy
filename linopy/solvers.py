@@ -4593,6 +4593,7 @@ class cuOpt(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.INTEGER_VARIABLES,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
@@ -4705,6 +4706,15 @@ class cuOpt(Solver[None]):
         dm.set_variable_lower_bounds(M.lb)
         dm.set_variable_upper_bounds(M.ub)
         dm.set_objective_coefficients(sign * M.c)
+        Q = M.Q
+        if Q is not None:
+            # cuOpt minimises `c'x + x'Qx` and symmetrises Q to `Q + Q'`, while
+            # `M.Q` is the Hessian of `0.5 x'Qx`. Halving it, full-symmetric,
+            # is the only correct form: passing `M.Q` returns `Optimal` with
+            # half the solution vector, and a triangular form is off by the
+            # diagonal. Non-PSD Q comes back as NumericalError, not silently.
+            Qc = (sign * 0.5 * Q).tocsr()
+            dm.set_quadratic_objective_matrix(Qc.data, Qc.indices, Qc.indptr)
         # cuOpt knows 'C', 'I' and 'S'; every other character is silently taken
         # as continuous, so linopy's 'B' must be mapped explicitly. Binary
         # bounds are already 0/1 in M.lb/M.ub -- cuOpt does not clamp 'B'.

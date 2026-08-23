@@ -50,6 +50,7 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
 - GPU-accelerated solving for large-scale linear programs
 - Linear Programming (LP) and Mixed-Integer Programming (MIP)
+- Convex quadratic objectives (QP), solved with the GPU barrier method
 - Continuous, binary, integer and semi-continuous variables
 - Inequality, equality and ranged constraints
 - Duals for LP models; MIP gap and dual bound reported via ``model.solver.report``
@@ -59,7 +60,9 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
 - Only the direct API is supported. Passing ``io_api=None`` or a file ``io_api`` (``lp``, ``lp-polars``, ``mps``) still solves, but the model is built through the direct API and a warning is emitted; the problem file is written, never read, and removed again. Pass ``io_api="direct"`` to skip writing it.
 - ``keep_files=True`` is not supported: it makes linopy ask the solver for a solution file, which cuOpt cannot write, so the solve raises ``NotImplementedError``
-- Quadratic objectives are not supported, and quadratic objectives combined with integer variables (MIQP) are rejected with a ``NotImplementedError`` rather than solved
+- Quadratic objectives combined with integer variables (MIQP) are not supported and are rejected with a ``NotImplementedError`` before the solve. cuOpt does not refuse such a model itself — it returns an empty solution, which is indistinguishable from a failed solve — so linopy checks up front.
+- A quadratic objective must be convex for minimisation (concave for maximisation). cuOpt detects a Hessian that is not positive semi-definite and reports ``NumericalError``, which linopy surfaces as the ``internal_solver_error`` termination condition rather than a wrong answer. The same applies to a quadratic objective on an unbounded model.
+- Quadratic *constraints* are not supported
 - SOS and indicator constraints are not supported
 - No warm start and no basis files: a basis file is ignored with a warning, a warmstart file raises ``NotImplementedError``. cuOpt's own PDLP warm start requires ``method=1``, ``pdlp_solver_mode=1`` and ``presolve=0`` at the same time, and its payload is not a file, so it is not wired up.
 - No solution files — cuOpt is called through its Python API and the solution is read from memory
@@ -70,6 +73,7 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 **Notes:**
 
 - linopy defaults to ``method=3`` (Barrier) instead of cuOpt's own default ``method=0`` (Concurrent), which can crash the process on repeated solves of models with more than about 1300 variables. For very large sparse LPs, try ``method=1`` (PDLP).
+- On a model with a quadratic objective, cuOpt always solves with the barrier method: it silently overrides ``method`` and ``crossover``, so passing either has no effect on a QP.
 - ``log_file`` (or linopy's ``log_fn``) writes cuOpt's log to a file, truncating it; ``log_to_console`` controls the console output
 - ``Ctrl-C`` returns control to Python, but the GPU solve runs to completion in the background. ``time_limit`` is the only hard bound on solve time.
 - On a machine without a usable GPU, cuOpt is simply absent from ``linopy.available_solvers``

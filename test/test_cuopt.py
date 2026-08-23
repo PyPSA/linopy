@@ -1,11 +1,12 @@
 """
 Tests for the NVIDIA cuOpt solver.
 
-Every numeric expectation in this module comes from solving a deep copy of the
-identical model with HiGHS, live and in the same process. No expected value is
-copied in from an earlier run: a differential test with a baked-in expectation
-is a regression test with an unverified baseline, which is how a systematic
-sign error survives a green suite.
+Every numeric expectation in this module comes from solving the identical model
+with HiGHS, live and in the same process -- from a deep copy for linear models,
+from a second build for quadratic ones (see ``solve_qp_with_both``). No expected
+value is copied in from an earlier run: a differential test with a baked-in
+expectation is a regression test with an unverified baseline, which is how a
+systematic sign error survives a green suite.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from scipy.sparse import csr_array
 import linopy
 from linopy import Model, solvers
 from linopy.solver_capabilities import SOLVER_REGISTRY
-from linopy.solvers import SolverName, licensed_solvers
+from linopy.solvers import SolverName, licensed_solvers, quadratic_solvers
 
 pytestmark = [
     pytest.mark.gpu,
@@ -54,8 +55,16 @@ CUOPT_OBJ_RTOL: float = 1e-6
 CUOPT_OBJ_ATOL: float = 1e-6
 CUOPT_PRIMAL_RTOL: float = 1e-6
 CUOPT_PRIMAL_ATOL: float = 1e-6
+# For the singular QP below, where HiGHS itself reports a primal-dual objective
+# error of 1e-4: both solvers are only ~1e-4-accurate there, and 1e-4 is also
+# cuOpt's own absolute_primal_tolerance default. Not for use anywhere else.
+CUOPT_PRIMAL_ATOL_DEGENERATE: float = 1e-4
 CUOPT_DUAL_RTOL: float = 1e-6
 CUOPT_DUAL_ATOL: float = 1e-7
+# QP duals of a non-binding row come back as ~1e-10 where HiGHS returns an
+# exact 0, so the comparison needs an absolute tolerance one decade looser
+# than the LP one -- a relative tolerance against 0 can never pass.
+CUOPT_DUAL_ATOL_QP: float = 1e-6
 # cuOpt's own mip_integrality_tolerance default; asserting tighter would test
 # the solver's tolerance rather than linopy.
 CUOPT_INTEGRALITY_ATOL: float = 1e-5
@@ -159,6 +168,86 @@ def semi_continuous_model(capacity: float) -> Model:
     return m
 
 
+# The coefficients the three-variable QP below has to produce. cuOpt minimises
+# `c'x + x'Qx` and symmetrises Q to `Q + Q'`, while linopy's `M.Q` is the
+# Hessian of `0.5 x'Qx`, so the solver class halves it. Pinning both matrices
+# is what turns the differential into a convention guard: if linopy ever hands
+# over a different form, the test says so instead of drifting quietly.
+QP_C: np.ndarray = np.array([-3.0, -1.0, 2.0])
+QP_Q: np.ndarray = np.array([[2.0, 1.0, 0.0], [1.0, 4.0, 0.0], [0.0, 0.0, 1.0]])
+
+
+def three_variable_qp(sense: str = "min") -> Model:
+    """
+    Dense-Hessian QP with a cross term, an off-diagonal zero and free signs.
+
+    Its unconstrained optimum ``(11/7, -1/7, -2)`` lies strictly inside the box
+    and inside both rows, so the primal is unique, the duals are zero and every
+    component is determined -- unlike the degenerate fixtures below. ``max``
+    negates the whole objective rather than only ``c``: maximising the same
+    convex form is non-concave and neither solver would accept it.
+    """
+    m = Model(chunk=None)
+    x0 = m.add_variables(lower=-10.0, upper=10.0, name="x0")
+    x1 = m.add_variables(lower=-10.0, upper=10.0, name="x1")
+    x2 = m.add_variables(lower=-10.0, upper=10.0, name="x2")
+    m.add_constraints(x0 + x1 + x2, ">=", -5.0, name="con0")
+    m.add_constraints(x0 + 2 * x1, "<=", 8.0, name="con1")
+    objective = (
+        x0 * x0 + 2 * x1 * x1 + 0.5 * x2 * x2 + x0 * x1 - 3 * x0 - 1 * x1 + 2 * x2
+    )
+    m.add_objective(objective if sense == "min" else -objective, sense=sense)
+    return m
+
+
+def degenerate_qp() -> Model:
+    """
+    ``test_optimization.py``'s ``quadratic_model`` fixture, built locally.
+
+    The objective is ``x * x`` only, so each ``y_i`` has zero cost, zero
+    curvature, ``lb = 0`` and ``ub = +inf``: the optimal face is unbounded in
+    ``y`` and only the ``x`` block and the objective are determined.
+    """
+    m = Model(chunk=None)
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+    m.add_constraints(x + y, ">=", 10, name="con0")
+    m.add_objective(x * x)
+    return m
+
+
+def cross_terms_qp() -> Model:
+    """
+    ``test_optimization.py``'s ``quadratic_model_cross_terms`` fixture.
+
+    Here ``y`` carries a ``+1`` objective coefficient, which pins the optimum
+    at ``x = 1.5``, ``y = 8.5`` -- so unlike ``degenerate_qp`` the full primal
+    is a legitimate quantity to compare against an oracle.
+    """
+    m = Model(chunk=None)
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+    m.add_constraints(x + y, ">=", 10, name="con0")
+    m.add_objective(-2 * x + y + x * x)
+    return m
+
+
+def integer_quadratic_model(mixed: bool) -> Model:
+    """MIQP (``mixed``) or pure-integer QP, both of which cuOpt must refuse."""
+    m = Model(chunk=None)
+    x = m.add_variables(lower=0, upper=10, name="x", integer=True)
+    m.add_constraints(1 * x, ">=", 1, name="con0")
+    objective = x * x
+    if mixed:
+        y = m.add_variables(lower=0, upper=10, name="y")
+        m.add_constraints(1 * y, ">=", 1, name="con1")
+        objective = objective + 1 * y
+    m.add_objective(objective)
+    return m
+
+
 def solve_with_both(model: Model, **cuopt_options: Any) -> tuple[Model, Model]:
     """
     Solve two deep copies of ``model`` -- one with cuOpt, one with HiGHS.
@@ -170,6 +259,25 @@ def solve_with_both(model: Model, **cuopt_options: Any) -> tuple[Model, Model]:
     model.solve("cuopt", io_api="direct", log_to_console=False, **cuopt_options)
     with_highs.solve("highs", output_flag=False)
     return model, with_highs
+
+
+def solve_qp_with_both(
+    build: Callable[[], Model], **cuopt_options: Any
+) -> tuple[Model, Model]:
+    """
+    ``solve_with_both`` for quadratic models: build the oracle, never copy it.
+
+    ``Model.copy`` rebuilds the objective as a ``LinearExpression``
+    (``linopy/io.py:1270``), so a copied QP silently loses its quadratic term
+    and the "oracle" solves the LP relaxation instead -- a wrong expectation
+    that no assertion here could distinguish from a solver bug. Building the
+    model twice is the only way to compare the same problem.
+    """
+    with_cuopt = build()
+    with_highs = build()
+    with_cuopt.solve("cuopt", io_api="direct", log_to_console=False, **cuopt_options)
+    with_highs.solve("highs", output_flag=False)
+    return with_cuopt, with_highs
 
 
 def assert_objectives_match(cuopt_model: Model, highs_model: Model) -> None:
@@ -673,6 +781,180 @@ def test_semi_continuous_differential(capacity: float) -> None:
     assert float(with_cuopt.solution.x) == pytest.approx(
         float(with_highs.solution.x), rel=CUOPT_PRIMAL_RTOL, abs=CUOPT_PRIMAL_ATOL
     )
+
+
+# ---------------------------------------------------------------------------
+# quadratic objectives
+# ---------------------------------------------------------------------------
+
+
+def test_quadratic_objective_is_registered() -> None:
+    assert solvers.cuOpt.supports(solvers.SolverFeature.QUADRATIC_OBJECTIVE)
+    assert "cuopt" in quadratic_solvers
+
+
+@pytest.mark.parametrize("sense", ["min", "max"])
+def test_quadratic_differential(sense: str) -> None:
+    """
+    Objective, primal and duals of a determined QP, against live HiGHS.
+
+    This is the guard on the ``0.5 * M.Q`` convention: the naive ``M.Q`` also
+    returns ``Optimal``, with half the solution vector and an objective off by
+    50% -- see ``test_naive_hessian_changes_the_answer``, which measures
+    exactly that.
+    """
+    sign = 1.0 if sense == "min" else -1.0
+    matrices = three_variable_qp(sense).matrices
+    assert np.allclose(matrices.c, sign * QP_C)
+    assert matrices.Q is not None
+    assert np.allclose(matrices.Q.toarray(), sign * QP_Q)
+
+    with_cuopt, with_highs = solve_qp_with_both(lambda: three_variable_qp(sense))
+
+    assert with_cuopt.status == "ok"
+    assert_objectives_match(with_cuopt, with_highs)
+    for name in ("x0", "x1", "x2"):
+        assert float(with_cuopt.solution[name]) == pytest.approx(
+            float(with_highs.solution[name]),
+            rel=CUOPT_PRIMAL_RTOL,
+            abs=CUOPT_PRIMAL_ATOL,
+        )
+    # Neither row binds at the optimum, so both duals are zero and
+    # ``assert_duals_match``'s non-vacuity guard cannot apply here. What is
+    # being checked is that a QP returns duals at all, aligned and not scaled:
+    # the LP sign matrix covers the sign.
+    for name in ("con0", "con1"):
+        assert np.allclose(
+            np.asarray(with_cuopt.constraints[name].dual),
+            np.asarray(with_highs.constraints[name].dual),
+            rtol=CUOPT_DUAL_RTOL,
+            atol=CUOPT_DUAL_ATOL_QP,
+        )
+
+
+def test_naive_hessian_changes_the_answer() -> None:
+    """
+    The deliberate failure that makes the convention guard above a guard.
+
+    Handing cuOpt ``M.Q`` where the solver class hands ``0.5 * M.Q`` is the
+    classic factor-of-two error, and cuOpt reports it as ``Optimal``: only a
+    differential catches it. Reproduced here through the production status
+    mapping so it is provable that the wrong answer is reachable and that the
+    tolerances above would reject it.
+    """
+    reference = three_variable_qp("min")
+    reference.solve("cuopt", io_api="direct", log_to_console=False)
+    expected = reference.objective.value
+    assert expected is not None
+
+    model = three_variable_qp("min")
+    data_model = solvers.cuOpt._build_solver_model(model)
+    assert model.matrices.Q is not None
+    naive = csr_array(model.matrices.Q.tocsr())
+    data_model.set_quadratic_objective_matrix(naive.data, naive.indices, naive.indptr)
+
+    result = raw_result(model, data_model)
+
+    assert result.status.termination_condition.value == "optimal"
+    assert abs(result.solution.objective - expected) / abs(expected) > 1e-3
+
+
+def test_degenerate_quadratic_differential() -> None:
+    """
+    ``quadratic_model``: the objective and the ``x`` block only.
+
+    The 10 ``y`` variables have zero cost, zero curvature and no upper bound,
+    so the optimal face is unbounded in ``y``: cuOpt returns ~156 and HiGHS ~10
+    and both are optimal. Comparing them against an oracle would assert an
+    underdetermined quantity, which is why the shared suite asserts an
+    inequality on ``y`` instead. On the ``x`` block HiGHS itself is only
+    ~1e-4-accurate on this singular problem, hence the looser tolerance.
+    """
+    with_cuopt, with_highs = solve_qp_with_both(degenerate_qp)
+
+    assert with_cuopt.status == "ok"
+    assert_objectives_match(with_cuopt, with_highs)
+    assert np.allclose(
+        np.asarray(with_cuopt.solution.x),
+        np.asarray(with_highs.solution.x),
+        rtol=CUOPT_PRIMAL_RTOL,
+        atol=CUOPT_PRIMAL_ATOL_DEGENERATE,
+    )
+
+
+def test_cross_terms_quadratic_differential() -> None:
+    """``quadratic_model_cross_terms`` is determined, so the full primal counts."""
+    with_cuopt, with_highs = solve_qp_with_both(cross_terms_qp)
+
+    assert with_cuopt.status == "ok"
+    assert_objectives_match(with_cuopt, with_highs)
+    for name in ("x", "y"):
+        assert np.allclose(
+            np.asarray(with_cuopt.solution[name]),
+            np.asarray(with_highs.solution[name]),
+            rtol=CUOPT_PRIMAL_RTOL,
+            atol=CUOPT_PRIMAL_ATOL,
+        )
+
+
+def test_quadratic_model_without_constraint() -> None:
+    """
+    A QP whose only row was removed, i.e. the pad row carries the whole matrix.
+
+    This is the shape of ``test_quadratic_model_wo_constraint``, and the reason
+    the pad row repeats a variable's own bounds rather than spanning
+    ``(-inf, +inf)``: a doubly infinite pad row makes a quadratic objective
+    fail with ``NumericalError``. As in ``degenerate_qp`` the ``y`` block is
+    underdetermined -- here the optimal face is all of ``[0, inf)^10`` -- so
+    only the objective and the ``x`` block are compared.
+    """
+
+    def build() -> Model:
+        model = degenerate_qp()
+        model.constraints.remove("con0")
+        return model
+
+    with_cuopt, with_highs = solve_qp_with_both(build)
+
+    assert with_cuopt.termination_condition == "optimal"
+    assert (with_cuopt.solution.x.round(3) == 0).all()
+    assert round(with_cuopt.objective.value or 0, 3) == 0
+    assert_objectives_match(with_cuopt, with_highs)
+    assert np.allclose(
+        np.asarray(with_cuopt.solution.x),
+        np.asarray(with_highs.solution.x),
+        rtol=CUOPT_PRIMAL_RTOL,
+        atol=CUOPT_PRIMAL_ATOL_DEGENERATE,
+    )
+
+
+@pytest.mark.parametrize("mixed", [False, True], ids=["iqp", "miqp"])
+def test_integer_quadratic_is_refused(
+    mixed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    MIQP is rejected before cuOpt is touched, because cuOpt does not reject it.
+
+    Handed a quadratic objective with integer variables, cuOpt returns
+    ``NoTermination`` with ``obj=0.0`` and an empty solution -- indistinguishable
+    from a failed solve. A pre-check is the only honest answer, so this also
+    asserts that no call reaches the library.
+    """
+    calls: list[str] = []
+
+    class Recorder:
+        def __getattr__(self, name: str) -> Any:
+            calls.append(name)
+            raise AssertionError(f"cuOpt was reached ({name}) for an integer QP")
+
+    model = integer_quadratic_model(mixed)
+    assert model.type == ("MIQP" if mixed else "IQP")
+    monkeypatch.setattr(solvers, "cuopt", Recorder())
+
+    with pytest.raises(NotImplementedError, match="MIQP"):
+        model.solve("cuopt", io_api="direct")
+
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
