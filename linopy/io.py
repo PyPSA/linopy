@@ -992,7 +992,9 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         for name, expr in m.expressions.items()
     ]
     objective = m.objective.data
-    objective = objective.assign_attrs(sense=m.objective.sense)
+    objective = objective.assign_attrs(
+        sense=m.objective.sense, _linopy_expr_type=m.objective.expression.type
+    )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
@@ -1141,9 +1143,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    m.objective = Objective(
-        LinearExpression(objective, m), m, objective.attrs.pop("sense")
+    obj_type = objective.attrs.pop("_linopy_expr_type", None)
+    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
+        QuadraticExpression
+        if obj_type == "QuadraticExpression"
+        or (obj_type is None and FACTOR_DIM in objective.dims)
+        else LinearExpression
     )
+    m.objective = Objective(obj_cls(objective, m), m, objective.attrs.pop("sense"))
     m.objective._value = objective.attrs.pop("value", None)
 
     m.parameters = get_prefix(ds, "parameters")
