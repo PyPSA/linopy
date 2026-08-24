@@ -1267,7 +1267,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    obj_expr = type(m.objective.expression)(
+        m.objective.expression.data.copy(deep=deep), new_model
+    )
     new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
     new_model._objective._value = (
         float(m.objective.value)

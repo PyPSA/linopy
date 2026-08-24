@@ -400,9 +400,6 @@ def test_copy_model_with_expressions(
     [lambda m: m.copy(), pycopy.copy, pycopy.deepcopy],
     ids=["copy", "shallowcopy", "deepcopy"],
 )
-@pytest.mark.xfail(
-    strict=True, reason="issue #903: copy downgrades a quadratic objective to linear"
-)
 def test_model_copy_preserves_quadratic_objective(
     copy_fn: Callable[[Model], Model],
 ) -> None:

@@ -54,6 +54,7 @@ Upcoming Version
 **Bug fixes**
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+* ``Model.copy`` (and the ``copy.copy``/``copy.deepcopy`` protocols) no longer downgrades a quadratic objective to a linear one. The objective was rebuilt as a ``LinearExpression`` regardless of its type, so the copy silently solved a different problem. ``linopy.testing.assert_model_equal`` now compares the objective by expression type as well, which it could not do before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
 
 
 Version 0.9.1
