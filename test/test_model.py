@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy as pycopy
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -392,6 +393,29 @@ def test_copy_model_with_expressions(
     original_coeff = m.expressions["lin"].coeffs.values.flat[0].item()
     deep.expressions["lin"].coeffs.values.flat[0] = original_coeff + 42
     assert m.expressions["lin"].coeffs.values.flat[0] == original_coeff
+
+
+@pytest.mark.parametrize(
+    "copy_fn",
+    [lambda m: m.copy(), pycopy.copy, pycopy.deepcopy],
+    ids=["copy", "shallowcopy", "deepcopy"],
+)
+@pytest.mark.xfail(
+    strict=True, reason="issue #903: copy downgrades a quadratic objective to linear"
+)
+def test_model_copy_preserves_quadratic_objective(
+    copy_fn: Callable[[Model], Model],
+) -> None:
+    """Copying a model keeps its objective quadratic instead of linearizing it."""
+    m: Model = Model()
+    x = m.add_variables(lower=-5, upper=5, name="x")
+    m.add_objective(x * x + 2 * x)
+
+    c = copy_fn(m)
+
+    assert type(c.objective.expression) is type(m.objective.expression)
+    assert c.type == m.type == "QP"
+    assert_model_equal(m, c)
 
 
 @pytest.mark.skipif(not available_solvers, reason="No solver installed")
