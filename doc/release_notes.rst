@@ -55,7 +55,10 @@ Upcoming Version
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
 * ``Solver.close()`` now drops the native solver model before closing the environment that owns it, and the COPT and MindOpt file interfaces no longer return a solver model they have already disposed — ``model.solver_model`` is ``None`` after a file-based COPT or MindOpt solve instead of a handle into freed memory. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
-* ``Solver`` no longer disposes native solver handles from a finalizer. A solver is only ever reachable in a ``Model``/``Solver`` reference cycle, so its finalizer ran mid-collection and could abort the interpreter at an arbitrary point in an unrelated call stack. ``close()`` is unchanged and is still called when a new solve replaces the solver or ``model.solver`` is reassigned. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+
+**Breaking Changes**
+
+* A solver is no longer released when the model is garbage-collected, withdrawing a guarantee announced in 0.8.0. ``Solver`` disposed its native handles from a finalizer, but a solver is only ever reachable in a ``Model``/``Solver`` reference cycle, so that finalizer ran mid-collection and tore down native state at an arbitrary point in an unrelated call stack — enough to abort the interpreter inside code that never touched linopy. A ``Model`` that merely goes out of scope now leaves its solver, and any license it holds, open. Release it explicitly with ``model.solver.close()``, ``model.solver = None``, or ``contextlib.closing(model.solver)``. ``close()`` itself is unchanged and is still called when a new ``solve()`` replaces the solver, so a loop re-solving the same model is unaffected. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
 Version 0.9.1
 -------------
