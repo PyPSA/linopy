@@ -1759,8 +1759,8 @@ class Constraint(ConstraintBase):
         Returns
         -------
         Slack
-            Named tuple with the ``positive`` slack variable, and the ``negative`` one
-            for equality constraints (``None`` for inequality constraints).
+            Named tuple with the `positive` slack variable, and the `negative` one for equality
+            constraints (`None` for inequality constraints).
 
         Examples
         --------
@@ -1804,9 +1804,16 @@ class Constraint(ConstraintBase):
         negative_slack = None
 
         # Update left hand side depending on the sign of the constraint:
-        if self.sign == "<=":
+        sign_values = pd.unique(self.sign.values.ravel())
+        if len(sign_values) > 1:
+            raise NotImplementedError(
+                "Constraint.soften does not support constraints with mixed signs."
+            )
+        sign = sign_values.item()
+
+        if sign == "<=":
             self.lhs = self.lhs - positive_slack
-        elif self.sign == ">=":
+        elif sign == ">=":
             self.lhs = self.lhs + positive_slack
         else:
             negative_slack = model.add_variables(
