@@ -54,6 +54,7 @@ Upcoming Version
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
 * ``model.solver_model`` stays usable after ``model.solve("copt")``. COPT closed its environment as soon as the solve returned, leaving the returned model pointing at freed memory. The environment is now owned by the solver and released on ``Solver.close()``, which drops the native model before the environment that owns it. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+* The CPLEX file interface now owns the ``cplex.Cplex`` handle it hands back as ``model.solver_model`` and ends it on ``Solver.close()``. Every solve used to leave a live CPLEX environment behind for the garbage collector, which could re-enter the CPLEX library while another environment was being constructed and abort the interpreter. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 * ``Solver`` no longer disposes native solver handles from a finalizer. A solver is only ever reachable in a ``Model``/``Solver`` reference cycle, so its finalizer ran mid-collection and could abort the interpreter at an arbitrary point in an unrelated call stack. ``close()`` is unchanged and is still called when a new solve replaces the solver or ``model.solver`` is reassigned. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
 Version 0.9.1
