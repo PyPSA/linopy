@@ -4138,7 +4138,7 @@ class MindOpt(Solver[None]):
             solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
             self.io_api = io_api
-            return self._make_result(status, solution, solver_model=m)
+            return self._make_result(status, solution)
         finally:
             if m is not None:
                 m.dispose()
