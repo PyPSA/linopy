@@ -2406,10 +2406,7 @@ class Cplex(Solver[None]):
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
-        self.close()
-        self._env_stack = contextlib.ExitStack()
         m = cplex.Cplex()
-        self._env_stack.callback(m.end)
 
         if log_fn is not None:
             log_f = open(path_to_string(log_fn), "w")
