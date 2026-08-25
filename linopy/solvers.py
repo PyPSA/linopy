@@ -3935,73 +3935,74 @@ class COPT(Solver[None]):
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
-        self.close()
-        self._env_stack = contextlib.ExitStack()
-        env_ = coptpy.Envr()
-        self._env_stack.callback(env_.close)
+        if env is None:
+            env_ = coptpy.Envr()
 
-        m = env_.createModel()
+        try:
+            m = env_.createModel()
 
-        m.read(path_to_string(problem_fn))
+            m.read(path_to_string(problem_fn))
 
-        if log_fn is not None:
-            m.setLogFile(path_to_string(log_fn))
+            if log_fn is not None:
+                m.setLogFile(path_to_string(log_fn))
 
-        for k, v in self.solver_options.items():
-            m.setParam(k, v)
+            for k, v in self.solver_options.items():
+                m.setParam(k, v)
 
-        if warmstart_fn is not None:
-            m.readBasis(path_to_string(warmstart_fn))
+            if warmstart_fn is not None:
+                m.readBasis(path_to_string(warmstart_fn))
 
-        m.solve()
+            m.solve()
 
-        if basis_fn and m.HasBasis:
-            try:
-                m.write(path_to_string(basis_fn))
-            except coptpy.CoptError as err:
-                logger.warning("No model basis stored. Raised error: %s", err)
+            if basis_fn and m.HasBasis:
+                try:
+                    m.write(path_to_string(basis_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model basis stored. Raised error: %s", err)
 
-        if solution_fn:
-            try:
-                m.write(path_to_string(solution_fn))
-            except coptpy.CoptError as err:
-                logger.warning("No model solution stored. Raised error: %s", err)
+            if solution_fn:
+                try:
+                    m.write(path_to_string(solution_fn))
+                except coptpy.CoptError as err:
+                    logger.warning("No model solution stored. Raised error: %s", err)
 
-        # TODO: check if this suffices
-        condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, str(condition))
-        status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = str(condition)
-
-        def get_solver_solution() -> Solution:
             # TODO: check if this suffices
-            objective = m.BestObj if m.ismip else m.LpObjVal
+            condition = m.MipStatus if m.ismip else m.LpStatus
+            termination_condition = CONDITION_MAP.get(condition, str(condition))
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = str(condition)
 
-            vars_ = m.getVars()
-            sol = _solution_from_names(
-                np.array([v.x for v in vars_], dtype=float),
-                [v.name for v in vars_],
-                self._n_vars,
-            )
+            def get_solver_solution() -> Solution:
+                # TODO: check if this suffices
+                objective = m.BestObj if m.ismip else m.LpObjVal
 
-            try:
-                cons = m.getConstrs()
-                dual = _solution_from_names(
-                    np.array([c.pi for c in cons], dtype=float),
-                    [c.name for c in cons],
-                    self._n_cons,
+                vars_ = m.getVars()
+                sol = _solution_from_names(
+                    np.array([v.x for v in vars_], dtype=float),
+                    [v.name for v in vars_],
+                    self._n_vars,
                 )
-            except (coptpy.CoptError, AttributeError):
-                logger.warning("Dual values of MILP couldn't be parsed")
-                dual = np.array([], dtype=float)
 
-            return Solution(sol, dual, objective)
+                try:
+                    cons = m.getConstrs()
+                    dual = _solution_from_names(
+                        np.array([c.pi for c in cons], dtype=float),
+                        [c.name for c in cons],
+                        self._n_cons,
+                    )
+                except (coptpy.CoptError, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = np.array([], dtype=float)
 
-        solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+                return Solution(sol, dual, objective)
 
-        self.io_api = io_api
-        return self._make_result(status, solution, solver_model=m)
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+            self.io_api = io_api
+            return self._make_result(status, solution)
+        finally:
+            env_.close()
 
 
 class MindOpt(Solver[None]):

@@ -6,6 +6,7 @@ Created on Tue Jan 28 09:03:35 2025.
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -207,10 +208,30 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
 @pytest.mark.skipif(
     "copt" not in set(solvers.licensed_solvers), reason="COPT is not installed"
 )
-def test_copt_env_persists_after_solve(simple_model: Model) -> None:
+def test_copt_closes_env_per_solve(
+    simple_model: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The file interface closes its environment before returning, so it must not
+    hand back a solver model that outlives it. Keeping the environment open
+    instead would leak it: nothing closes a solver that is merely dropped.
+    """
+    import coptpy
+
+    closes: list[int] = []
+    original = coptpy.Envr.close
+
+    def close(self: Any, *args: Any, **kwargs: Any) -> Any:
+        closes.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(coptpy.Envr, "close", close)
+
     simple_model.solve("copt")
+
     assert simple_model.solver is not None
-    assert len(simple_model.solver_model.getVars()) == 2
+    assert simple_model.solver_model is None
+    assert closes
 
 
 def test_solver_defines_no_finalizer() -> None:
