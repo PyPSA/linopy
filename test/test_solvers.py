@@ -210,7 +210,7 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
 def test_copt_env_persists_after_solve(simple_model: Model) -> None:
     simple_model.solve("copt")
     assert simple_model.solver is not None
-    assert isinstance(simple_model.solver_model.getVars(), list)
+    assert len(simple_model.solver_model.getVars()) == 2
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
