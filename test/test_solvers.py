@@ -213,6 +213,14 @@ def test_copt_env_persists_after_solve(simple_model: Model) -> None:
     assert len(simple_model.solver_model.getVars()) == 2
 
 
+def test_solver_defines_no_finalizer() -> None:
+    """
+    A solver is only reachable in a Model/Solver reference cycle, so a
+    finalizer would tear down native handles mid-collection.
+    """
+    assert not hasattr(solvers.Solver, "__del__")
+
+
 @pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
