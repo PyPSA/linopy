@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+
 *Strict "v1" arithmetic semantics (opt-in)*
 
 * A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:

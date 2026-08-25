@@ -1119,16 +1119,12 @@ class Solver(ABC, Generic[EnvType]):
         user-supplied environment is left untouched.
 
         Idempotent, and called automatically when a new ``solve()`` replaces
-        this solver and when ``model.solver`` is reassigned (e.g. to
-        ``None``). It is deliberately not called from a finalizer: a solver is
-        only ever reachable in a ``Model``/``Solver`` reference cycle, so a
-        finalizer would run mid-collection and tear down native handles at an
-        arbitrary point in an unrelated call stack. Uncollected solvers are
-        left to the vendor wrappers, which dispose in their own finalizers.
-
-        After closing, post-solve introspection (``solver_model``,
-        ``compute_infeasibilities()``) and persistent re-solves are no longer
-        available.
+        this solver and when ``model.solver`` is reassigned (e.g. to ``None``).
+        Deliberately not called from a finalizer: a solver is only reachable in
+        a ``Model``/``Solver`` reference cycle, so that would tear down native
+        handles mid-collection. After closing, post-solve introspection
+        (``solver_model``, ``compute_infeasibilities()``) and persistent
+        re-solves are no longer available.
         """
         self.solver_model = None
         if self._env_stack is not None:

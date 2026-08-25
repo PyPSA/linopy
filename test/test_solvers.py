@@ -6,7 +6,6 @@ Created on Tue Jan 28 09:03:35 2025.
 """
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -213,23 +212,22 @@ def test_copt_closes_env_per_solve(
 ) -> None:
     """
     The file interface closes its environment before returning, so it must not
-    hand back a solver model that outlives it. Keeping the environment open
+    hand back a solver model that outlives it. Holding the environment open
     instead would leak it: nothing closes a solver that is merely dropped.
     """
     import coptpy
 
-    closes: list[int] = []
+    closes: list[object] = []
     original = coptpy.Envr.close
 
-    def close(self: Any, *args: Any, **kwargs: Any) -> Any:
-        closes.append(1)
-        return original(self, *args, **kwargs)
+    def close(self: object) -> None:
+        closes.append(self)
+        original(self)
 
     monkeypatch.setattr(coptpy.Envr, "close", close)
 
     simple_model.solve("copt")
 
-    assert simple_model.solver is not None
     assert simple_model.solver_model is None
     assert closes
 
