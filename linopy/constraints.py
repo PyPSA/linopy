@@ -1791,6 +1791,15 @@ class Constraint(ConstraintBase):
             "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
         )
 
+        # A detached copy of the constraint (e.g. from `.mutable()`, `.sel()`, `.isel()`) isn't in
+        # `model.constraints`, so .soften would silently do nothing on the real model. This check is to avoid that:
+        if model.constraints.data.get(self.name) is not self:
+            raise ValueError(
+                f"Constraint {self.name!r} is not the constraint registered in the model, so "
+                "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
+                "`.sel()`, or `.isel()`). Call `soften` on `model.constraints[name]` directly."
+            )
+
         name = name or f"{self.name}_slack"
         upper = np.inf if max_violation is None else max_violation
 

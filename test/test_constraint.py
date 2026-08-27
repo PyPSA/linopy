@@ -1059,3 +1059,15 @@ def test_mixed_sign_repr() -> None:
     r = repr(con)
     assert "≥" in r
     assert "=" in r
+
+
+def test_constraint_soften_raises_on_detached_mutable_constraint(
+    m: Model, x: linopy.Variable, mc: linopy.constraints.Constraint
+) -> None:
+    """`.mutable()` on a frozen constraint returns a detached copy that is not
+    registered in `model.constraints`; softening it would silently fail to
+    affect the actual model, so `soften` must raise instead."""
+    m.add_objective(x.sum(), sense="min")
+
+    with pytest.raises(ValueError, match="not the constraint registered"):
+        mc.soften(penalty=10)  # mc := m.constraints["c"].mutable(), detached from the model
