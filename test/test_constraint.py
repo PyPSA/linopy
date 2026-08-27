@@ -29,6 +29,7 @@ from linopy.constraints import (
     Constraint,
     ConstraintBase,
     Constraints,
+    Slack,
 )
 
 
@@ -1059,6 +1060,36 @@ def test_mixed_sign_repr() -> None:
     r = repr(con)
     assert "≥" in r
     assert "=" in r
+
+
+# Constraint.soften method's tests
+
+def test_constraint_soften_returns_slack_for_le_and_ge(m: Model, y: linopy.Variable) -> None:
+    """Checks that a constraint of type 'less or equal' or 'great and equal' returns one slack each."""
+    z = m.variables["z"]
+    m.add_objective((z + y).sum(), sense="min")
+
+    # create new constraint, and add slack for 'greater or equal'
+    z_constraint = m.add_constraints(z >= -10, name="constraint_over_z")
+    z_slack = z_constraint.soften(penalty=10)
+    assert isinstance(z_slack.positive, linopy.Variable)
+    assert z_slack.negative is None
+
+    # create new constraint, and add slack for 'less or equal':
+    y_constraint = m.add_constraints(y <= 0, name="constraint_over_y")
+    y_slack = y_constraint.soften(penalty=10)
+    assert isinstance(y_slack.positive, linopy.Variable)
+    assert y_slack.negative is None
+
+
+def test_constraint_soften_returns_slack_for_eq(m: Model, y: linopy.Variable) -> None:
+    """Checks that a constraint of type 'equal'' returns two slack variables"""
+    m.add_objective(y.sum(), sense="min")
+    y_contraint = m.add_constraints(y == 10, name="equality_contraint")
+    y_slack = y_contraint.soften(penalty=10)
+
+    assert isinstance(y_slack.positive, linopy.Variable)
+    assert isinstance(y_slack.negative, linopy.Variable)
 
 
 def test_constraint_soften_raises_on_detached_mutable_constraint(
