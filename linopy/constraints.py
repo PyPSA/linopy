@@ -1821,9 +1821,9 @@ class Constraint(ConstraintBase):
         sign = sign_values.item()
 
         if sign == "<=":
-            self.lhs = self.lhs - positive_slack
+            self.update(lhs=self.lhs - positive_slack)
         elif sign == ">=":
-            self.lhs = self.lhs + positive_slack
+            self.update(lhs=self.lhs + positive_slack)
         else:
             negative_slack = model.add_variables(
                 lower=0,
@@ -1832,7 +1832,7 @@ class Constraint(ConstraintBase):
                 mask=self.mask,
                 name=f"{name}_neg",
             )
-            self.lhs = self.lhs - positive_slack + negative_slack
+            self.update(lhs=self.lhs - positive_slack + negative_slack)
 
         # Update objective function:
         constraint_violation = (
