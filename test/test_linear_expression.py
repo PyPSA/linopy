@@ -455,21 +455,7 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
-@pytest.mark.parametrize(
-    "dim",
-    [
-        pytest.param(
-            "line",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=ValueError,
-                reason="https://github.com/PyPSA/linopy/issues/906",
-            ),
-        ),
-        ["line", "cycle"],
-        None,
-    ],
-)
+@pytest.mark.parametrize("dim", ["line", ["line", "cycle"], None])
 def test_linear_expression_sum_with_empty_sibling_dim(
     m: Model, dim: str | list[str] | None
 ) -> None:

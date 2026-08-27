@@ -53,6 +53,7 @@ Upcoming Version
 
 **Bug fixes**
 
+* ``sum()`` over a dimension no longer raises when another dimension of the expression has size 0; it returns an expression without terms over the kept coordinates, as summing over the empty dimension itself already did. (https://github.com/PyPSA/linopy/issues/906)
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
 
 

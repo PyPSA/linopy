@@ -182,8 +182,21 @@ logger = logging.getLogger(__name__)
 
 
 def _stack_into_term_dim(ds: Dataset, dims: list[Hashable]) -> Dataset:
-    """Stack ``dims`` into the term dimension."""
-    return ds.stack({TERM_DIM: dims}, create_index=False)
+    """
+    Stack ``dims`` into the term dimension.
+
+    ``Dataset.stack`` reshapes with an inferred ``-1`` that numpy cannot
+    resolve on zero-element data (https://github.com/PyPSA/linopy/issues/906),
+    so an empty dataset is stacked onto a term dimension of size 0 instead.
+    """
+    if ds.vars.size:
+        return ds.stack({TERM_DIM: dims}, create_index=False)
+
+    for name, da in ds.data_vars.items():
+        kept = [d for d in da.dims if d not in dims]
+        shape = [da.sizes[d] for d in kept] + [0]
+        ds[name] = DataArray(da.values.reshape(shape), dims=kept + [TERM_DIM])
+    return ds
 
 
 def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
