@@ -30,7 +30,7 @@ from linopy import (
     merge,
     options,
 )
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
@@ -453,6 +453,41 @@ def test_linear_expression_sum(
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
+
+
+@pytest.mark.parametrize(
+    "dim",
+    [
+        pytest.param(
+            "line",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=ValueError,
+                reason="https://github.com/PyPSA/linopy/issues/906",
+            ),
+        ),
+        ["line", "cycle"],
+        None,
+    ],
+)
+def test_linear_expression_sum_with_empty_sibling_dim(
+    m: Model, dim: str | list[str] | None
+) -> None:
+    coords = [
+        pd.RangeIndex(4, name="t"),
+        pd.Index([], name="cycle"),
+        pd.Index(["a", "b"], name="line"),
+    ]
+    x = m.add_variables(coords=coords, name="xe")
+    expr = 2 * x
+
+    summed = expr.sum(dim)
+    reduced = expr.const.sum(dim)
+    assert summed.sizes == {**reduced.sizes, TERM_DIM: summed.nterm}
+    assert_linequal(summed, LinearExpression.from_constant(m, reduced))
+    quad = (x * x).sum(dim)
+    assert quad.sizes == {**reduced.sizes, FACTOR_DIM: 2, TERM_DIM: quad.nterm}
+    assert quad.nterm == summed.nterm
 
 
 @pytest.mark.legacy
