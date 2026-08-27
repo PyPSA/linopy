@@ -181,6 +181,11 @@ def _expr_unwrap(
 logger = logging.getLogger(__name__)
 
 
+def _stack_into_term_dim(ds: Dataset, dims: list[Hashable]) -> Dataset:
+    """Stack ``dims`` into the term dimension."""
+    return ds.stack({TERM_DIM: dims}, create_index=False)
+
+
 def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
     """
     Drop every coordinate touching the given dimensions.
@@ -2135,11 +2140,10 @@ class BaseExpression(ABC):
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
         else:
             dim = [d for d in dim if d != TERM_DIM]
-            ds = (
-                _drop_coords_on_dims(data[["coeffs", "vars"]], dim)
-                .rename({TERM_DIM: STACKED_TERM_DIM})
-                .stack({TERM_DIM: [STACKED_TERM_DIM] + dim}, create_index=False)
+            ds = _drop_coords_on_dims(data[["coeffs", "vars"]], dim).rename(
+                {TERM_DIM: STACKED_TERM_DIM}
             )
+            ds = _stack_into_term_dim(ds, [STACKED_TERM_DIM] + dim)
             ds = assign_multiindex_safe(ds, const=data.const.sum(dim))
 
         return ds
