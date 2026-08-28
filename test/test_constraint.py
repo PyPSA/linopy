@@ -1187,7 +1187,6 @@ def test_constraint_soften_updates_objective_min_sense(
     assert_linequal(m.objective.expression, expected_objective)
 
 
-
 def test_constraint_soften_updates_objective_max_sense(
     m: Model, y: linopy.Variable
 ) -> None:
@@ -1205,4 +1204,39 @@ def test_constraint_soften_updates_objective_max_sense(
 def test_constraint_soften_max_violation_bounds_slack(
     m: Model, x: linopy.Variable
 ) -> None:
-    """Penalty * slack is added to the objective with the correct sign for sense='max'."""
+    """max_violation sets the slack variable's upper bound; default is unbounded (inf)."""
+    m.add_objective(x.sum(), sense="min")
+
+    bounded_constraint = m.add_constraints(x >= 0, name="bounded_constraint")
+    bounded_slack = bounded_constraint.soften(penalty=10, max_violation=5)
+    assert (bounded_slack.positive.upper == 5).all()
+
+    unbounded_constraint = m.add_constraints(x >= 0, name="unbounded_constraint")
+    unbounded_slack = unbounded_constraint.soften(penalty=10)
+    assert np.isinf(unbounded_slack.positive.upper).all()
+
+
+def test_constraint_soften_negative_penalty_raises(m: Model, y: linopy.Variable) -> None:
+    """Setting penalty < 0 raises AssertionError."""
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    with pytest.raises(AssertionError):
+        constraint.soften(penalty=-10)
+
+
+def test_constraint_soften_without_objective_raises(m: Model, y: linopy.Variable) -> None:
+    """Calling soften before model.add_objective raises AssertionError."""
+    constraint = m.add_constraints(y <= 10, name="constraint")
+    with pytest.raises(AssertionError):
+        constraint.soften(penalty=10)
+
+
+def test_constraint_soften_respects_mask(m: Model, x: linopy.Variable) -> None:
+    """Masked constraint entries produce masked slack variables (mask propagated)."""
+    m.add_objective(x.sum(), sense="min")
+    mask = pd.Series([False] * 5 + [True] * 5)
+    constraint = m.add_constraints(x >= 0, name="masked_constraint", mask=mask)
+    slack = constraint.soften(penalty=10)
+
+    assert_equal(slack.positive.mask, constraint.mask)
+    assert (constraint.mask.values == mask.values).all()
