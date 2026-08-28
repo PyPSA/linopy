@@ -34,18 +34,6 @@ The extra is **Linux-only** (there are no macOS or Windows wheels) and requires 
 
    The extra installs ``cuopt-cu12``, the build for CUDA 12 drivers. The ``cu13`` build requires a newer driver and linopy does not select between the two. Also note that the bare ``cuopt`` package on PyPI is an unrelated project — do not ``pip install cuopt``.
 
-**Usage:**
-
-.. code-block:: python
-
-    m.solve("cuopt")
-
-    # the same solve, without the file IO warning
-    m.solve("cuopt", io_api="direct")
-
-    # solver options are passed on as keyword arguments
-    m.solve("cuopt", io_api="direct", method=1, time_limit=60.0)
-
 **Features:**
 
 - GPU-accelerated solving for large-scale linear programs
@@ -146,7 +134,7 @@ Software Requirements
 Verifying Installation
 ======================
 
-To verify that the GPU solvers are properly installed and detected, check that they appear in the lists below — cuOpt only reports itself as available if a usable GPU is found, so a missing entry points at the driver or the hardware rather than at the installation:
+To verify that the GPU solvers are properly installed and detected, check that they appear in the lists below:
 
 .. code-block:: python
 

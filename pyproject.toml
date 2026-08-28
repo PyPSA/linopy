@@ -132,6 +132,7 @@ testpaths = ["test"]
 norecursedirs = ["dev-scripts", "doc", "examples", "benchmark", "benchmarks"]
 markers = [
     "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
+    "slow: marks tests with a high runtime cost (deselect with '-m \"not slow\"')",
 ]
 filterwarnings = [
     # Silence our own EvolvingAPIWarning inside the test suite so the

@@ -459,6 +459,7 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
         (solvers.cuPDLPx, SolverFeature.GPU_ONLY, True),
         (solvers.cuPDLPx, SolverFeature.QUADRATIC_OBJECTIVE, False),
         (solvers.cuOpt, SolverFeature.DIRECT_API, True),
+        (solvers.cuOpt, SolverFeature.GPU_ACCELERATION, True),
         (solvers.cuOpt, SolverFeature.GPU_ONLY, True),
         (solvers.cuOpt, SolverFeature.INTEGER_VARIABLES, True),
         (solvers.cuOpt, SolverFeature.SEMI_CONTINUOUS_VARIABLES, True),

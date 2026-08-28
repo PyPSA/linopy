@@ -113,38 +113,33 @@ def sign_matrix_model(sense: str, row_sign: str, **model_kwargs: Any) -> Model:
 SIGN_MATRIX_X: np.ndarray = np.array([1.6, 1.2, 0.0])
 
 
-def square_equality_model(n: int, sense: str) -> Model:
+def square_equality_model(sense: str) -> Model:
     """
     Model that cuOpt's presolve solves outright (``solved_by == Unset``).
 
-    ``n / 2`` equality rows, each pinning one pair of variables, so the system
-    is square and presolve finishes it without calling a method. Handing such a
-    model to cuOpt as a maximisation returns negated duals, which is why the
-    solver class always minimises instead.
+    One equality row pinning two variables, so the system is square and
+    presolve finishes it without calling a method. Handing such a model to
+    cuOpt as a maximisation returns negated duals, which is why the solver
+    class always minimises instead.
 
-    For ``n = 2`` the optimum is analytic: one row ``x0 + 2 x1 = 10`` with
-    positive costs ``c = 1 + rng(5).random(2)`` maximised at ``x = (10, 0)``,
-    so the objective is ``10 * c[0]`` and the row's dual is ``c[0]``.
+    The optimum is analytic: the row ``x0 + 2 x1 = 10`` with positive costs
+    ``c = (1.8, 1.3)`` is maximised at ``x = (10, 0)``, so the objective is
+    ``10 * c[0] = 18`` and the row's dual is ``c[0] = 1.8``.
     """
     m = Model(chunk=None)
-    rng = np.random.default_rng(5)
-    variables = pd.RangeIndex(n, name="i")
-    rows = pd.RangeIndex(n // 2, name="row")
+    variables = pd.RangeIndex(2, name="i")
+    rows = pd.RangeIndex(1, name="row")
     x = m.add_variables(lower=0.0, upper=100.0, coords=[variables], name="x")
-    A = np.zeros((n // 2, n))
-    for i in range(n // 2):
-        A[i, 2 * i] = i + 1.0
-        A[i, 2 * i + 1] = i + 2.0
-    b = 10.0 + np.arange(n // 2, dtype=float)
+    A = xr.DataArray([[1.0, 2.0]], coords=[rows, variables])
     m.add_constraints(
-        (xr.DataArray(A, coords=[rows, variables]) * x).sum("i"),
-        "=",
-        xr.DataArray(b, coords=[rows]),
-        name="con0",
+        (A * x).sum("i"), "=", xr.DataArray([10.0], coords=[rows]), name="con0"
     )
-    coeffs = xr.DataArray(1.0 + rng.random(n), coords=[variables])
+    coeffs = xr.DataArray([1.8, 1.3], coords=[variables])
     m.add_objective((coeffs * x).sum(), sense=sense)
     return m
+
+
+SQUARE_EQUALITY_DUAL: float = 1.8
 
 
 def random_lp(n: int, m_rows: int, seed: int = 0) -> Model:
@@ -329,8 +324,8 @@ def test_presolve_max_duals() -> None:
     class avoids the branch by always handing cuOpt a minimisation; without
     that, these duals are off by ``2 * |dual|``.
     """
-    expected_dual = 1.0 + np.random.default_rng(5).random(2)[0]
-    model = square_equality_model(2, "max")
+    expected_dual = SQUARE_EQUALITY_DUAL
+    model = square_equality_model("max")
     status, condition = model.solve("cuopt", io_api="direct", log_to_console=False)
 
     assert status == "ok"
@@ -352,7 +347,7 @@ def test_presolve_branch_still_reached() -> None:
     ``test_presolve_max_duals`` has to be re-established on another model. It
     never means the always-minimise transformation should be removed.
     """
-    model = square_equality_model(2, "max")
+    model = square_equality_model("max")
     M = model.matrices
     assert M.A is not None
     A = M.A.tocsr()
@@ -739,6 +734,7 @@ def test_integer_quadratic_is_refused(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_repeated_solves_of_a_medium_model() -> None:
     """
     Twenty sequential solves in one process, above the size that used to crash.
@@ -752,8 +748,13 @@ def test_repeated_solves_of_a_medium_model() -> None:
     supposed to catch: the fresh-thread OpenMP abort reported upstream
     (NVIDIA/cuopt#1768) was measured appearing only after 5 to 13 LP solves, so
     a three-solve run would have passed on defective code. Twenty clears that
-    measured upper bound of 13 with a margin of 1.54x. The ~135 s this costs is
-    the price of the check; shrinking the count to save suite time weakens it.
+    measured upper bound of 13 with a margin of 1.54x.
+
+    Marked ``slow``: the ~135 s is intrinsic -- almost all of it is cuOpt's
+    Barrier solve itself (~5.7 s per solve), not model building -- so the cost
+    cannot be engineered away. Deselect with ``-m "not slow"`` during
+    development; shrinking the solve count or the model to save suite time
+    weakens the check.
     """
     result = run_in_subprocess(
         """
@@ -936,7 +937,7 @@ def test_solve_queue_starts_a_fresh_worker_after_fork() -> None:
     A forked child inherits the cached queue but not its daemon worker.
 
     Without the at-fork ``cache_clear`` the child hands its job to a queue
-    nobody reads and waits on ``job.done`` forever; it then never writes to the
+    nobody reads and waits on the future forever; it then never writes to the
     pipe and the parent's ``select`` timeout below fails the test.
     """
     assert _run_cuopt_with_keyboard_interrupt(lambda: "parent") == "parent"

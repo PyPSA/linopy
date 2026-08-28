@@ -28,7 +28,7 @@ Upcoming Version
 
 *New solver: NVIDIA cuOpt*
 
-* Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). On a machine without a usable GPU, cuOpt is omitted from ``linopy.available_solvers``. See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
+* Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
 
 *Improved IO*
 

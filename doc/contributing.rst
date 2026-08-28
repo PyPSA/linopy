@@ -74,8 +74,6 @@ To run GPU tests locally (requires GPU hardware and CUDA):
 
 GPU tests are automatically detected based on solver capabilities - no manual marking is required. When you add a new GPU solver to linopy, tests using that solver will automatically be marked as GPU tests.
 
-Solver-specific tests for cuOpt live in ``test/test_cuopt.py`` and also require ``--run-gpu``.
-
 See the :doc:`gpu-acceleration` guide for more information about GPU solver setup and usage.
 
 Performance Benchmarks

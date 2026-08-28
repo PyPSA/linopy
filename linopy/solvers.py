@@ -21,6 +21,7 @@ import warnings
 from abc import ABC
 from collections import namedtuple
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -254,41 +255,31 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
             h.HandleUserInterrupt = old_handle_user_interrupt
 
 
-@dataclass
-class _CuoptJob:
-    """One queued cuOpt solve and the slot its worker writes back into."""
-
-    solve: Callable[[], Any]
-    done: threading.Event = field(default_factory=threading.Event)
-    result: Any = None
-    error: BaseException | None = None
-
-
 @functools.cache
-def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
+def _cuopt_solve_queue() -> queue.SimpleQueue[Callable[[], None]]:
     """
     Inbox of the single daemon thread that runs every cuOpt solve.
 
-    One persistent worker, never a thread per solve: cuOpt's mixed-integer
-    path leaks per-thread OpenMP state and aborts the process when solves
-    arrive on fresh threads (https://github.com/NVIDIA/cuopt/issues/1768).
-    Only solves are affected -- creating a ``DataModel`` and reading a
-    solution on the caller's thread are fine -- but the same defect bites
-    native teardown from unpredictable threads, so ``close`` routes the
-    ``DataModel`` release here via ``_dispose_on_cuopt_worker``.
+    One persistent worker, never a thread per solve: cuOpt leaks per-thread
+    OpenMP state and aborts the process once enough fresh threads have run
+    solves (https://github.com/NVIDIA/cuopt/issues/1768). Every solve is
+    routed here, LP and MIP alike -- the trigger is cuOpt's bundled OpenMP
+    runtime, not the problem class or ``method``. Native teardown has the
+    same defect, so ``close`` releases the ``DataModel`` here too, via
+    `_dispose_on_cuopt_worker`; building a model and reading a solution stay
+    on the caller's thread. All cuOpt solves therefore serialize here.
     """
-    jobs: queue.SimpleQueue[_CuoptJob] = queue.SimpleQueue()
+    jobs: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
 
     def _worker() -> None:
         while True:
             job = jobs.get()
-            try:
-                job.result = job.solve()
-            except BaseException as exc:  # noqa: BLE001
-                job.error = exc
-            finally:
-                job.done.set()
-                del job  # drop job to free thread & GPU resources
+            # A job reports failure through its future rather than raising,
+            # but the worker must outlive one that raises anyway: losing it
+            # strands every later solve on a queue nobody reads.
+            with contextlib.suppress(BaseException):
+                job()
+            del job  # drop job to free thread & GPU resources
 
     threading.Thread(target=_worker, name="linopy-cuopt-solve", daemon=True).start()
     return jobs
@@ -297,43 +288,54 @@ def _cuopt_solve_queue() -> queue.SimpleQueue[_CuoptJob]:
 if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt is Linux-only
     # A forked child inherits the cached queue but not its worker; clearing
     # the cache starts a fresh worker there, so a solve in the child fails
-    # fast with CUDA's real fork error instead of hanging on `job.done`.
+    # fast with CUDA's real fork error instead of hanging on the future.
     os.register_at_fork(after_in_child=_cuopt_solve_queue.cache_clear)
+
+
+def _on_cuopt_worker(fn: Callable[[], Any]) -> Future[Any]:
+    """
+    Queue ``fn`` on the solve worker and return its pending future.
+
+    Never waits: the future carries ``fn``'s return value, or re-raises its
+    exception, to whoever waits on it.
+    """
+    future: Future[Any] = Future()
+
+    def job() -> None:
+        try:
+            future.set_result(fn())
+        except BaseException as exc:  # noqa: BLE001
+            future.set_exception(exc)
+
+    _cuopt_solve_queue().put(job)
+    return future
 
 
 def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
     """
     Run a cuOpt solve on the worker while keeping Ctrl-C responsive.
 
-    cuOpt has no cancel API and defers SIGINT for the whole C++ solve, so the
-    main thread only waits. An interrupted solve runs to completion on the
-    worker; ``time_limit`` is the only hard bound cuOpt offers.
+    cuOpt has no cancel API and defers SIGINT for the whole solve, so only
+    the wait here is interruptible: an interrupted solve runs to completion
+    on the worker, and ``time_limit`` is the only hard bound on it.
     """
-    job = _CuoptJob(solve)
-    _cuopt_solve_queue().put(job)
-    while not job.done.wait(0.1):
-        pass
-    if job.error is not None:
-        raise job.error
-    return job.result
+    return _on_cuopt_worker(solve).result()
 
 
 def _dispose_on_cuopt_worker(box: list[Any]) -> None:
     """
     Release the cuOpt native objects in ``box`` on the solve worker.
 
-    GC finalizes objects on whatever thread it runs on, and cuOpt's native
-    teardown has the same per-thread OpenMP defect as its solves (see
-    `_cuopt_solve_queue`), so teardown on a foreign thread aborts the process.
-    The caller keeps no reference outside ``box``, so for the reference the
-    solver owns the worker's ``clear`` is the final decref. Best-effort only:
-    a ``DataModel`` retained elsewhere (``Result.solver_model``, ``to_cuopt``)
-    is torn down wherever its holder drops it. Never waits: callers include
-    ``__del__`` and the worker itself. If no worker is reachable (interpreter
-    shutdown), the references are just dropped.
+    Native teardown has the same per-thread OpenMP defect as a solve (see
+    `_cuopt_solve_queue`) and GC runs on whatever thread it lands on, so
+    dropping the last reference off the worker aborts the process. The caller
+    keeps none of its own, leaving the worker's ``clear`` as the final decref.
+    Never waits, and best-effort: an object still held elsewhere is torn down
+    wherever its holder drops it, and with no reachable worker the references
+    are simply dropped.
     """
     with contextlib.suppress(Exception):
-        _cuopt_solve_queue().put(_CuoptJob(box.clear))
+        _on_cuopt_worker(box.clear)
 
 
 # xpress.Namespaces was added in xpress 9.6. Importing xpress is pure-Python
@@ -411,11 +413,10 @@ def _cuda_device_available() -> bool:
     """
     True if a usable CUDA device is visible.
 
-    ``import cuopt`` succeeds on GPU-less hosts by design (remote solves), so
-    an import probe alone is not enough. The probe must run in a subprocess:
-    an in-process CUDA call creates a CUDA context in the caller, and a
-    context created before ``fork()`` breaks CUDA in every child -- fatal for
-    multiprocessing/dask, since this runs on first access to
+    ``import cuopt`` succeeds on GPU-less hosts by design, so an import probe
+    is not enough. The probe runs in a subprocess: an in-process CUDA call
+    creates a CUDA context in the caller, and a context created before
+    ``fork()`` breaks CUDA in every child -- and this runs on first access to
     ``linopy.available_solvers``.
     """
     try:
@@ -4596,8 +4597,8 @@ class cuOpt(Solver[None]):
     )  # no SOS or indicator constraints
 
     # Default to Barrier instead of cuOpt's default (0 = Concurrent), which
-    # segfaults on the 2nd-3rd solve. Barrier is GPU-resident, stable across
-    # repeated solves, and broadly most accurate.
+    # segfaults on successive large solves. Barrier is GPU-resident, stable
+    # across repeated solves, and broadly most accurate.
     _DEFAULT_METHOD: ClassVar[int] = 3
 
     @classmethod
@@ -4624,8 +4625,6 @@ class cuOpt(Solver[None]):
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
-        # Only an explicitly requested file io_api warns; the default
-        # io_api=None gets an informational note.
         log = logger.info if self.io_api is None else logger.warning
         log(
             "cuOpt does not support file IO. Building the model through the "
@@ -4703,6 +4702,17 @@ class cuOpt(Solver[None]):
             lower = np.append(lower, min(M.lb[j], 0.0))
             upper = np.append(upper, max(M.ub[j], 0.0))
 
+        # cuOpt's DataModel casts CSR indices/indptr to int32 without warning,
+        # so beyond int32 nnz the matrix is silently corrupted, not rejected.
+        if A.nnz > np.iinfo(np.int32).max:
+            msg = (
+                f"Model has {A.nnz} nonzeros; cuOpt stores CSR indices as "
+                "int32 and silently truncates beyond 2**31 - 1, producing "
+                "wrong results. Use a CPU solver (highs, gurobi)."
+            )
+            raise NotImplementedError(msg)
+
+        # build cuOpt DataModel from matrices
         dm = cuopt.linear_programming.DataModel()
         dm.set_csr_constraint_matrix(A.data, A.indices, A.indptr)
         dm.set_constraint_lower_bounds(lower)
@@ -5048,7 +5058,7 @@ class _AvailableSolvers(Sequence[str]):
 
     def refresh(self) -> None:
         self.__dict__.pop("_names", None)
-        _cuda_device_available.cache_clear()  # cuOpt's GPU probe caches separately
+        _cuda_device_available.cache_clear()  # GPU probe caches separately
         seen: set[int] = set()
         for name in _SOLVER_PROBE_ORDER:
             cls = _solver_class_for(name)
