@@ -29,7 +29,6 @@ from linopy.constraints import (
     Constraint,
     ConstraintBase,
     Constraints,
-    Slack,
 )
 
 
@@ -1064,10 +1063,14 @@ def test_mixed_sign_repr() -> None:
 
 # Constraint.soften method's tests
 
-def test_constraint_soften_returns_slack_for_le_and_ge(m: Model,
-                                                       y: linopy.Variable) -> None:
-    """Checks that a constraint of type 'less or equal' or 'great and equal' returns
-    one slack each."""
+
+def test_constraint_soften_returns_slack_for_le_and_ge(
+    m: Model, y: linopy.Variable
+) -> None:
+    """
+    Checks that a constraint of type 'less or equal' or 'great and equal' returns
+    one slack each.
+    """
     z = m.variables["z"]
     m.add_objective((z + y).sum(), sense="min")
 
@@ -1097,9 +1100,11 @@ def test_constraint_soften_returns_slack_for_eq(m: Model, y: linopy.Variable) ->
 def test_constraint_soften_raises_on_detached_mutable_constraint(
     m: Model, x: linopy.Variable, mc: linopy.constraints.Constraint
 ) -> None:
-    """`.mutable()` on a frozen constraint returns a detached copy that is not
+    """
+    `.mutable()` on a frozen constraint returns a detached copy that is not
     registered in `model.constraints`; softening it would silently fail to
-    affect the actual model, so `soften` must raise instead."""
+    affect the actual model, so `soften` must raise instead.
+    """
     m.add_objective(x.sum(), sense="min")
 
     with pytest.raises(ValueError, match="not the constraint registered"):
@@ -1108,8 +1113,10 @@ def test_constraint_soften_raises_on_detached_mutable_constraint(
 
 
 def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
-    """Tests that the left hand side gains the slack term(s) with the expected sign
-    per constraint direction."""
+    """
+    Tests that the left hand side gains the slack term(s) with the expected sign
+    per constraint direction.
+    """
     m.add_objective(y.sum(), sense="min")
 
     # '<=' : lhs -> lhs - positive_slack
@@ -1175,4 +1182,3 @@ def test_constraint_soften_updates_objective_max_sense(
     m: Model, x: linopy.Variable
 ) -> None:
     """Penalty * slack is added to the objective with the correct sign for sense='max'."""
-
