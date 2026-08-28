@@ -30,6 +30,7 @@ from linopy.constraints import (
     ConstraintBase,
     Constraints,
 )
+from linopy.testing import assert_linequal
 
 
 @pytest.fixture
@@ -1098,7 +1099,7 @@ def test_constraint_soften_returns_slack_for_eq(m: Model, y: linopy.Variable) ->
 
 
 def test_constraint_soften_raises_on_detached_mutable_constraint(
-    m: Model, x: linopy.Variable, mc: linopy.constraints.Constraint
+    m: Model, x: linopy.Variable, mc: linopy.Constraint
 ) -> None:
     """
     `.mutable()` on a frozen constraint returns a detached copy that is not
@@ -1173,12 +1174,35 @@ def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
 
 
 def test_constraint_soften_updates_objective_min_sense(
-    m: Model, x: linopy.Variable
+    m: Model, y: linopy.Variable
 ) -> None:
-    """Penalty * slack is added to the objective with the correct sign for sense='min'."""
+    penalty_coeff = 10
+    original_objective = y.sum()
+    m.add_objective(original_objective, sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    slack = constraint.soften(penalty=penalty_coeff)
+
+    # For sense='min', the penalty must added with positive sign:
+    expected_objective = original_objective + penalty_coeff * slack.positive.sum()
+    assert_linequal(m.objective.expression, expected_objective)
+
 
 
 def test_constraint_soften_updates_objective_max_sense(
+    m: Model, y: linopy.Variable
+) -> None:
+    penalty_coeff = 10
+    original_objective = y.sum()
+    m.add_objective(original_objective, sense="max")
+    constraint = m.add_constraints(y <= 10, name="constraint")
+    slack = constraint.soften(penalty=penalty_coeff)
+
+    # For sense='max', the penalty must added with negative sign:
+    expected_objective = original_objective - penalty_coeff * slack.positive.sum()
+    assert_linequal(m.objective.expression, expected_objective)
+
+
+def test_constraint_soften_max_violation_bounds_slack(
     m: Model, x: linopy.Variable
 ) -> None:
     """Penalty * slack is added to the objective with the correct sign for sense='max'."""
