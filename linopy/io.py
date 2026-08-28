@@ -964,6 +964,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+        if any(v is None for v in ds.attrs.values()):
+            breakpoint()
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
 
         # Flatten multiindexes
