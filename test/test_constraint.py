@@ -1064,8 +1064,10 @@ def test_mixed_sign_repr() -> None:
 
 # Constraint.soften method's tests
 
-def test_constraint_soften_returns_slack_for_le_and_ge(m: Model, y: linopy.Variable) -> None:
-    """Checks that a constraint of type 'less or equal' or 'great and equal' returns one slack each."""
+def test_constraint_soften_returns_slack_for_le_and_ge(m: Model,
+                                                       y: linopy.Variable) -> None:
+    """Checks that a constraint of type 'less or equal' or 'great and equal' returns
+    one slack each."""
     z = m.variables["z"]
     m.add_objective((z + y).sum(), sense="min")
 
@@ -1101,4 +1103,76 @@ def test_constraint_soften_raises_on_detached_mutable_constraint(
     m.add_objective(x.sum(), sense="min")
 
     with pytest.raises(ValueError, match="not the constraint registered"):
-        mc.soften(penalty=10)  # mc := m.constraints["c"].mutable(), detached from the model
+        # mc := m.constraints["c"].mutable(), detached from the model
+        mc.soften(penalty=10)
+
+
+def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
+    """Tests that the left hand side gains the slack term(s) with the expected sign
+    per constraint direction."""
+    m.add_objective(y.sum(), sense="min")
+
+    # '<=' : lhs -> lhs - positive_slack
+    le_constraint = m.add_constraints(y <= 10, name="le_constraint")
+    le_slack = le_constraint.soften(penalty=10)
+
+    # Assert that the new lhs has 1 extra term:
+    assert le_constraint.lhs.nterm == 2
+
+    # Assert tht the label for the constraint's new variable is the same as the slack:
+    assert_equal(
+        le_constraint.vars.isel({le_constraint.term_dim: -1}),
+        le_slack.positive.labels,
+    )
+
+    # Since the it's less or equal, we expect the coeff of the variable to be -1
+    assert (le_constraint.coeffs.isel({le_constraint.term_dim: -1}) == -1).all()
+
+    # '>=' : lhs -> lhs + positive_slack
+    ge_constraint = m.add_constraints(y >= -10, name="ge_constraint")
+    ge_slack = ge_constraint.soften(penalty=10)
+
+    assert ge_constraint.lhs.nterm == 2
+
+    assert_equal(
+        ge_constraint.vars.isel({ge_constraint.term_dim: -1}),
+        ge_slack.positive.labels,
+    )
+    assert (ge_constraint.coeffs.isel({ge_constraint.term_dim: -1}) == 1).all()
+
+    # '==' : lhs -> lhs - positive_slack + negative_slack
+    eq_constraint = m.add_constraints(y == 0, name="eq_constraint")
+    eq_slack = eq_constraint.soften(penalty=10)
+
+    # Assert there's two extra terms:
+    assert eq_constraint.lhs.nterm == 3
+
+    # The positive slack is added first to the lhs, therefore, it should be on position
+    # -2 of the lhs:
+    assert_equal(
+        eq_constraint.vars.isel({eq_constraint.term_dim: -2}),
+        eq_slack.positive.labels,
+    )
+
+    # The negative slack is added next to the lhs, therefore, it should be on position
+    # -1 of the lhs:
+    assert_equal(
+        eq_constraint.vars.isel({eq_constraint.term_dim: -1}),
+        eq_slack.negative.labels,
+    )
+
+    assert (eq_constraint.coeffs.isel({eq_constraint.term_dim: -2}) == -1).all()
+    assert (eq_constraint.coeffs.isel({eq_constraint.term_dim: -1}) == 1).all()
+
+
+def test_constraint_soften_updates_objective_min_sense(
+    m: Model, x: linopy.Variable
+) -> None:
+    """Penalty * slack is added to the objective with the correct sign for sense='min'."""
+
+
+def test_constraint_soften_updates_objective_max_sense(
+    m: Model, x: linopy.Variable
+) -> None:
+    """Penalty * slack is added to the objective with the correct sign for sense='max'."""
+
