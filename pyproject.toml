@@ -94,7 +94,7 @@ benchmarks = [
     "dask==2026.7.1",
     "pytest==9.1.1",
     "pytest-benchmark==5.2.3",
-    "pytest-benchmem[plot-static]==0.4.7",
+    "pytest-benchmem[plot-static]==0.5.5",
     "pytest-memray==1.9.0",
     "pytest-codspeed==5.0.3",
 ]
