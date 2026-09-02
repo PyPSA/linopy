@@ -21,6 +21,10 @@ Upcoming Version
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
 
+*Numerical scaling*
+
+* Variables, constraints and the objective accept a ``scaling`` factor that rewrites the problem into better-behaved units for the solver, without changing the answer. Variable scaling is column-like, constraint and objective scaling are row-like, and primal values, duals and the objective are transformed back to the original units after solving. See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.
+
 *New solver: NVIDIA cuOpt*
 
 * Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.

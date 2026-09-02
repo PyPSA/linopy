@@ -80,6 +80,7 @@ dev = [
     "gurobipy",
     "highspy",
     "jupyter",
+    "matplotlib",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.

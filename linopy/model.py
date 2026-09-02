@@ -85,6 +85,7 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
+from linopy.scaling import validate_scaling
 from linopy.semantics import enforce_no_multiindex
 
 try:
@@ -677,11 +678,12 @@ class Model:
         -------
         None.
         """
-        unsupported_dim_names = ["labels", "coeffs", "vars", "sign", "rhs"]
+        unsupported_dim_names = ["labels", "coeffs", "vars", "sign", "rhs", "scaling"]
         if any(dim in unsupported_dim_names for dim in ds.dims):
             raise ValueError(
                 "Added data contains unsupported dimension names. "
-                "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign' or 'rhs'."
+                "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign', "
+                "'rhs' or 'scaling'."
             )
 
     def add_variables(
@@ -694,6 +696,7 @@ class Model:
         binary: bool = False,
         integer: bool = False,
         semi_continuous: bool = False,
+        scaling: Any = 1,
         **kwargs: Any,
     ) -> Variable:
         """
@@ -741,6 +744,13 @@ class Model:
             Boolean mask with False values for variables which are skipped.
             The shape of the mask has to match the shape the added variables.
             Default is None.
+        scaling : float/array_like, optional
+            Positive finite scaling factor(s) used when exporting the model to
+            a solver. Continuous and semi-continuous solver variables are
+            represented as ``scaling * variable``, so coefficients in those
+            columns are divided by ``scaling`` and bounds are multiplied by it.
+            Binary and integer variables keep their ordinary discrete solver
+            columns. The default is 1.
         binary : bool
             Whether the new variable is a binary variable which are used for
             Mixed-Integer problems.
@@ -878,10 +888,17 @@ class Model:
 
         lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
         upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
+        if np.isscalar(scaling):
+            scaling_da = DataArray(scaling)
+        else:
+            scaling_da = broadcast_to_coords(
+                scaling, coords, label="variable scaling", **kwargs
+            )
         data = Dataset(
             {
                 "lower": lower_da,
                 "upper": upper_da,
+                "scaling": validate_scaling(scaling_da, "variable scaling"),
                 "labels": -1,
             }
         )
@@ -1163,6 +1180,7 @@ class Model:
         coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
+        scaling: ConstantLike = ...,
     ) -> Constraint: ...
 
     @overload
@@ -1179,6 +1197,7 @@ class Model:
         coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
+        scaling: ConstantLike = ...,
     ) -> CSRConstraint: ...
 
     def add_constraints(
@@ -1194,6 +1213,7 @@ class Model:
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
         freeze: bool | None = None,
+        scaling: ConstantLike = 1,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1232,6 +1252,10 @@ class Model:
             If True, convert the constraint to an immutable CSR-backed CSRConstraint
             for better memory efficiency. If None, uses the model default
             ``Model.freeze_constraints`` setting (default False).
+        scaling : float/array_like, optional
+            Positive finite scaling factor(s) for constraint rows. Solver-side
+            left-hand-side coefficients and right-hand-side values are multiplied
+            by this factor. The default is 1.
 
         Returns
         -------
@@ -1276,6 +1300,14 @@ class Model:
 
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+        row_coords = data.labels.coords
+        data = assign_multiindex_safe(
+            data,
+            scaling=validate_scaling(
+                broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
+                "constraint scaling",
+            ),
+        )
 
         if mask is not None:
             mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
@@ -1322,6 +1354,7 @@ class Model:
         sign: SignLike | None = None,
         rhs: ConstantLike | None = None,
         name: str | None = None,
+        scaling: ConstantLike = 1,
     ) -> ConstraintBase:
         """
         Add indicator constraints to the model.
@@ -1349,6 +1382,10 @@ class Model:
             Right-hand side. Required when ``lhs`` is an expression.
         name : str, optional
             Name for the indicator constraint group.
+        scaling : float/array_like, optional
+            Positive finite scaling factor(s) for indicator rows. Solver-side
+            left-hand-side coefficients and right-hand-side values are multiplied
+            by this factor. The default is 1.
 
         Returns
         -------
@@ -1375,6 +1412,16 @@ class Model:
 
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+        row_coords = data.labels.coords
+        data = assign_multiindex_safe(
+            data,
+            scaling=validate_scaling(
+                broadcast_to_coords(
+                    scaling, row_coords, label="indicator constraint scaling"
+                ),
+                "indicator constraint scaling",
+            ),
+        )
 
         data = self._allocate_constraint_labels(data, name)
 
@@ -1397,6 +1444,7 @@ class Model:
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
+        scaling: float = 1,
     ) -> None:
         """
         Add an objective function to the model.
@@ -1407,6 +1455,12 @@ class Model:
             Expression describing the objective function.
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
+        sense : "min" or "max", optional
+            Objective sense. The default is "min".
+        scaling : float, optional
+            Positive finite scaling factor for the objective. Solver-side
+            objective coefficients are multiplied by this factor and reported
+            objective values are divided back. The default is 1.
 
         Returns
         -------
@@ -1423,6 +1477,7 @@ class Model:
         enforce_no_multiindex(expr, context="objective")
         self.objective.expression = expr
         self.objective.sense = sense
+        self.objective.scaling = scaling
 
     def remove_variables(self, name: str) -> None:
         """
@@ -2185,7 +2240,7 @@ class Model:
         result.info()
 
         if result.solution is not None:
-            self.objective._value = result.solution.objective
+            self.objective._value = result.solution.objective / self.objective.scaling
 
         status_value = result.status.status.value
         termination_condition = result.status.termination_condition.value
@@ -2201,9 +2256,8 @@ class Model:
         primal = result.solution.primal
         for _, var in self.variables.items():
             start, end = var.range
-            var.solution = xr.DataArray(
-                primal[start:end].reshape(var.shape), var.coords, dims=var.dims
-            )
+            values = primal[start:end].reshape(var.shape) / var.solver_scaling.values
+            var.solution = xr.DataArray(values, var.coords, dims=var.dims)
 
         if len(result.solution.dual):
             dual = result.solution.dual
@@ -2212,9 +2266,12 @@ class Model:
                     continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
-                con.dual = xr.DataArray(
-                    dual[start:end].reshape(con.shape), coords, dims=con.coord_dims
+                values = (
+                    dual[start:end].reshape(con.shape)
+                    * con.scaling.values
+                    / self.objective.scaling
                 )
+                con.dual = xr.DataArray(values, coords, dims=con.coord_dims)
 
         return status_value, termination_condition
 
