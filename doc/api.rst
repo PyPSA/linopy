@@ -634,6 +634,7 @@ Implementations
    solvers.Mosek
    solvers.SCIP
    solvers.Xpress
+   solvers.cuOpt
    solvers.cuPDLPx
 
 

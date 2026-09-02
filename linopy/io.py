@@ -30,6 +30,7 @@ from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
+    from cuopt.linear_programming import DataModel as cuoptDataModel
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
@@ -793,6 +794,18 @@ def to_xpress(
 def to_cupdlpx(m: Model) -> cupdlpxModel:
     """Build the cupdlpx.Model for `m`."""
     solver = solvers.cuPDLPx.from_model(m, io_api="direct")
+    return solver.solver_model
+
+
+def to_cuopt(m: Model) -> cuoptDataModel:
+    """
+    Build the cuopt DataModel for `m`.
+
+    For a maximisation model the returned DataModel is the equivalent
+    minimisation (negated objective coefficients, `maximize` unset); see
+    :class:`linopy.solvers.cuOpt`.
+    """
+    solver = solvers.cuOpt.from_model(m, io_api="direct")
     return solver.solver_model
 
 
