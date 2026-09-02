@@ -20,40 +20,18 @@ Upcoming Version
 
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
-*In-place solver updates (persistent re-solve)*
-
-* A built solver can now be re-solved against a mutated ``Model`` without a full rebuild. Construct with ``Solver.from_name(..., track_updates=True)`` and re-call ``solver.solve(model)`` after edits — the diff against the previous build is applied in place when the backend supports it, falling back to a rebuild otherwise. Supported on HiGHS, Gurobi, Xpress, and Mosek (``io_api="direct"``).
-* Pass ``disallow_rebuild=True`` to ``solve(model, ...)`` to guarantee an in-place update or raise ``RebuildRequiredError``. Inspect ``solver._last_rebuild_reason`` (a ``RebuildReason``, or ``None`` after an in-place update) to understand why a rebuild was triggered.
-* New ``linopy.persistent`` module exposes ``ModelSnapshot``, ``ModelDiff``, and ``RebuildReason`` for users who want to introspect or build the diff themselves. ``ModelDiff.from_snapshot`` / ``from_models`` return the ``RebuildReason`` directly when the change cannot be applied in place.
 
 *New solver: NVIDIA cuOpt*
 
 * Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
 
-*Improved IO*
-
-* ``Model.to_netcdf`` now records the writing linopy version in the ``_linopy_version`` dataset attribute. Files written by older versions (without the attribute) continue to read unchanged.
-
 *Other*
 
-* Default internal integer labels to ``int32``, cutting memory ~25% and speeding up model build 10-35%. Models exceeding the int32 maximum (~2.1 billion labels) widen to ``int64`` automatically with a ``UserWarning``; pass ``Model(dtypes={"labels": np.int64})`` upfront to avoid the mid-build upcast (exposed read-only via ``Model.dtypes``).
-* ``add_variables(binary=True, ...)`` now accepts ``lower``/``upper`` bounds, as long as they are 0 or 1. Previously binary bounds could only be set via the ``.lower``/``.upper`` setters after creation. (https://github.com/PyPSA/linopy/issues/776)
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
-* ``add_piecewise_formulation`` gained an ``active_fill`` parameter that gates a partial ``active`` (defined over a subset of the indexed dimension, or masked) as always-active (``1``) or always-off (``0``); without it, a partial ``active`` — which was previously zeroed silently — now raises. Useful when one formulation mixes gated and ungated entities (e.g. committable and non-committable units sharing a ``status``). ``active_fill`` is transitional and will be removed once v1 semantics make ``active.reindex(coords).fillna(value)`` sufficient. (https://github.com/PyPSA/linopy/issues/796)
 
 *Documentation*
 
 * The example notebooks now opt into the v1 arithmetic convention (``linopy.options["semantics"] = "v1"``). The coordinate-alignment and expression tutorials were reworked to teach strict label-based alignment: a mismatch on a shared dimension raises rather than silently filling or pairing by position, and is resolved explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords`` or an explicit ``join=`` on the named ``.add`` / ``.mul`` / ``.le`` / … methods.
-
-**Performance**
-
-* ``LinearExpression.groupby(...).sum()`` now scatters terms directly into the padded result arrays via ``xarray.apply_ufunc``, avoiding intermediate copies and speeding up the grouping. A single kernel covers both numpy and chunked (dask) data, the latter staying lazy. On representative models this lowers build and export peak memory by up to ~3x. The kernel emits the grouped result in its final axis order in one contiguous allocation; on dask inputs the reduction now runs over a single chunk (it no longer parallelises over the surviving dimensions).
-
-**Deprecations**
-
-* Mutation via assignment to ``Variable.lower`` / ``Variable.upper`` / ``Constraint.coeffs`` / ``Constraint.vars`` / ``Constraint.lhs`` / ``Constraint.sign`` / ``Constraint.rhs`` is deprecated and emits a ``DeprecationWarning``. Use ``Variable.update(...)`` / ``Constraint.update(...)`` instead — the canonical mutation API with one validation path and one place that flips the persistent-solver dirty flag. Read access to these properties is unchanged. The setters will be removed in a future release.
-* Passing a raw ``DataArray`` of integer labels to ``Constraint.vars = ...`` setter is deprecated and emits a ``FutureWarning``. Pass a ``Variable`` to ``Constraint.update()`` instead — it is the supported input. The ``DataArray`` path will be removed in a future release.
-
 
 **Bug fixes**
 
