@@ -285,13 +285,21 @@ def raw_result(model: Model, data_model: Any) -> Any:
     ],
     ids=["min-le", "min-ge", "min-eq", "max-le", "max-ge", "max-eq"],
 )
-def test_sign_matrix(
+def test_dual_signs_and_always_minimise_round_trip(
     sense: str,
     row_sign: str,
     expected_objective: float,
     expected_duals: tuple[float, float],
 ) -> None:
-    """Duals, primals and objective match the KKT values in all six cells."""
+    """
+    Duals, primals and objective match the KKT values in all six cells.
+
+    The ``max`` cells double as the guard on the always-minimise round
+    trip: their baked values only come back if ``_build_solver_model``
+    negates the objective and ``_solve`` negates objective and duals
+    back. Breaking either half fails those cells, six orders above
+    tolerance.
+    """
     model = sign_matrix_model(sense, row_sign)
     status, condition = model.solve("cuopt", io_api="direct", log_to_console=False)
 

@@ -4447,11 +4447,11 @@ class cuOpt(Solver[None]):
 
     Notes
     -----
-    Maximisation problems are handed to cuOpt as the equivalent minimisation
-    (objective, duals and MIP bound negated back here), never via
-    ``set_maximize(True)``: on that path cuOpt's presolve returns negated
-    duals for models it solves outright. Duals therefore arrive in linopy's
-    (HiGHS's) sign convention without transformation.
+    Maximisation problems are handed to cuOpt as the equivalent minimisation,
+    never via ``set_maximize(True)``: on that path cuOpt's presolve returns
+    negated duals for models it solves outright. The sign flip in ``_solve``
+    (objective, duals and MIP bound) is thus a pure sense conversion; no
+    dual-convention fix-up is needed.
     """
 
     display_name: ClassVar[str] = "cuOpt"
@@ -4638,8 +4638,10 @@ class cuOpt(Solver[None]):
     def _build_solver_model(model: Model) -> cuopt.linear_programming.DataModel:
         """Build a cuopt DataModel that mirrors the linopy `model`."""
         M = model.matrices
-        # Always-minimise transform (see class Notes) -- not a dual-sign fix;
-        # do not replace with cuPDLPx's `if MAXIMIZE: dual = -dual`.
+        # Always transform to minimize problem: `min -obj`. Don't use cuOpt's
+        # `set_maximize(True)`, whose presolve path returns negated duals
+        # (see class Notes). `_solve` flips back the sign when needed
+        # (negates objective, duals and MIP bound - primal untouched).
         sign = -1.0 if model.objective.sense == "max" else 1.0
 
         lower = np.where(
@@ -4828,6 +4830,7 @@ class cuOpt(Solver[None]):
         if sol.get_error_status():  # ErrorStatus.Success == 0
             logger.error(f"cuOpt reported an error: {sol.get_error_message()}")
 
+        # undo the always-minimise transform applied in `_build_solver_model`
         sign = -1.0 if sense == "max" else 1.0
         n_cols = 0 if self._vlabels is None else int(self._vlabels.size)
         n_rows = 0 if self._clabels is None else int(self._clabels.size)
