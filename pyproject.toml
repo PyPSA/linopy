@@ -60,7 +60,7 @@ docs = [
     "sphinx==9.0.4",
     "sphinx_book_theme==1.2.0",
     "sphinx-copybutton==0.5.2",
-    "nbsphinx==0.9.4",
+    "nbsphinx==0.9.8",
     "nbsphinx-link==1.4.1",
     "docutils<0.24",
     "gurobipy>=13.0.0",
