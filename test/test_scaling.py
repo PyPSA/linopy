@@ -255,6 +255,14 @@ def test_scaling_validation() -> None:
         m.add_objective(x, scaling=[1, 2], overwrite=True)  # type: ignore[arg-type]
 
 
+def test_default_scaling_does_not_expand_variable_dims() -> None:
+    m = Model()
+    x = m.add_variables(coords=[range(4), range(4)], dims=["i", "j"], name="x")
+    assert x.labels.shape == (4, 4)
+    assert x.scaling.shape == (4, 4)
+    assert m._xCounter == 16
+
+
 def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
