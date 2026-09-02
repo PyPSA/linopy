@@ -113,6 +113,13 @@ def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
     return scaling
 
 
+def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
+    """Default-fill and validate the ``scaling`` field of a data set."""
+    if "scaling" not in data:
+        data = assign_multiindex_safe(data, scaling=DataArray(1.0).broadcast_like(like))
+    return assign_multiindex_safe(data, scaling=validate_scaling(data.scaling, label))
+
+
 def variable_solver_scaling(variable: Variable) -> DataArray:
     """
     Return solver-side scaling for a variable.
@@ -125,14 +132,19 @@ def variable_solver_scaling(variable: Variable) -> DataArray:
     return variable.scaling
 
 
+def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:
+    """Scatter ``values`` into ``target`` at active (non ``-1``) label positions."""
+    mask = labels != -1
+    if mask.any():
+        target[labels[mask]] = values[mask]
+
+
 def variable_scaling_lookup(model: Model) -> np.ndarray:
     """Return solver-side variable scaling indexed by raw variable label."""
     scaling = np.ones(model._xCounter, dtype=float)
     for var in model.variables.data.values():
         labels = var.labels.values.ravel()
-        mask = labels != -1
-        if mask.any():
-            scaling[labels[mask]] = variable_solver_scaling(var).values.ravel()[mask]
+        _scatter_active(scaling, labels, variable_solver_scaling(var).values.ravel())
     return scaling
 
 
@@ -149,9 +161,7 @@ def constraint_scaling_lookup(model: Model) -> np.ndarray:
             continue
 
         labels = con.labels.values.ravel()
-        mask = labels != -1
-        if mask.any():
-            scaling[labels[mask]] = con.scaling.values.ravel()[mask]
+        _scatter_active(scaling, labels, con.scaling.values.ravel())
     return scaling
 
 

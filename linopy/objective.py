@@ -70,7 +70,7 @@ class Objective:
         expression: expressions.LinearExpression | expressions.QuadraticExpression,
         model: Model,
         sense: str = "min",
-        scaling: ConstantLike = 1,
+        scaling: float = 1,
     ) -> None:
         self._model: Model = model
         self._value: float | None = None
@@ -231,7 +231,7 @@ class Objective:
         return self._scaling
 
     @scaling.setter
-    def scaling(self, scaling: ConstantLike) -> None:
+    def scaling(self, scaling: float) -> None:
         if not isinstance(scaling, int | float | np.floating | np.integer):
             raise TypeError("Objective scaling must be a numeric scalar.")
         scaling = float(scaling)

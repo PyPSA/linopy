@@ -45,6 +45,7 @@ from linopy.common import (
     contains_labels,
     coords_from_dataset,
     coords_to_dataset_vars,
+    ensure_scaling,
     filter_nulls_polars,
     format_coord,
     format_single_constraint,
@@ -574,7 +575,6 @@ class CSRConstraint(ConstraintBase):
         con_labels: np.ndarray,
         rhs: np.ndarray,
         sign: str | np.ndarray,
-        scaling: np.ndarray | None,
         coords: list[pd.Index],
         model: Model,
         name: str = "",
@@ -582,6 +582,7 @@ class CSRConstraint(ConstraintBase):
         dual: np.ndarray | None = None,
         binvar_labels: np.ndarray | None = None,
         binval: int | np.ndarray | None = None,
+        scaling: np.ndarray | None = None,
     ) -> None:
         self._csr = csr
         self._con_labels = con_labels
@@ -729,6 +730,12 @@ class CSRConstraint(ConstraintBase):
     def scaling(self) -> DataArray:
         """Get row scaling DataArray, shape (*coord_dims)."""
         return self._active_to_dataarray(self._scaling, fill=1.0)
+
+    @scaling.setter
+    def scaling(self, value: ConstantLike) -> None:
+        raise AttributeError(
+            "CSRConstraint.scaling is read-only; call .mutable() to modify."
+        )
 
     @property
     def lhs(self) -> expressions.LinearExpression:
@@ -978,7 +985,6 @@ class CSRConstraint(ConstraintBase):
             con_labels,
             rhs,
             sign,
-            scaling,
             coords,
             model,
             name,
@@ -986,6 +992,7 @@ class CSRConstraint(ConstraintBase):
             dual=dual,
             binvar_labels=binvar_labels,
             binval=binval,
+            scaling=scaling,
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
@@ -1177,7 +1184,6 @@ class CSRConstraint(ConstraintBase):
             con_labels,
             rhs,
             sign,
-            scaling,
             coords,
             con.model,
             con.name,
@@ -1185,6 +1191,7 @@ class CSRConstraint(ConstraintBase):
             dual=dual,
             binvar_labels=binvar_labels,
             binval=binval,
+            scaling=scaling,
         )
 
 
@@ -1220,14 +1227,7 @@ class Constraint(ConstraintBase):
 
         if not skip_broadcast:
             (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        if "scaling" not in data:
-            data = assign_multiindex_safe(
-                data, scaling=DataArray(1.0).broadcast_like(data.rhs)
-            )
-        data = assign_multiindex_safe(
-            data,
-            scaling=validate_scaling(data.scaling, f"scaling for constraint '{name}'"),
-        )
+        data = ensure_scaling(data, data.rhs, f"scaling for constraint '{name}'")
 
         self._assigned = "labels" in data
         self._data = data
@@ -2322,12 +2322,12 @@ class Constraints:
                         c._con_labels,
                         c._rhs,
                         c._sign,
-                        c._scaling,
                         c._coords,
                         c._model,
                         c._name,
                         cindex=c._cindex,
                         dual=None,
+                        scaling=c._scaling,
                     )
             elif isinstance(c, Constraint):
                 if "dual" in c.data:

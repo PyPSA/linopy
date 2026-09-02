@@ -58,6 +58,11 @@ class MatrixAccessor:
     All arrays are compact — only active (non-masked) entries are included.
     Position i in variable-side arrays corresponds to vlabels[i].
     Position i in constraint-side arrays corresponds to clabels[i].
+
+    The matrix members (``A``, ``b``, ``c``, ``Q``, ``lb``, ``ub``) are in
+    solver-scaled units while the read-back members (``sol``, ``dual``) are in
+    user units, so ``A @ sol`` and ``c @ sol`` do not reconstruct ``b`` or the
+    objective when scaling factors differ from 1.
     """
 
     def __init__(self, model: Model) -> None:

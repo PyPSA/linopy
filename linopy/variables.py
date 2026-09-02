@@ -39,6 +39,7 @@ from linopy.common import (
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
+    ensure_scaling,
     filter_nulls_polars,
     format_coord,
     format_single_variable,
@@ -210,14 +211,7 @@ class Variable:
         data = data.assign_attrs(name=name)
         if not skip_broadcast:
             (data,) = broadcast(data)
-        if "scaling" not in data:
-            data = assign_multiindex_safe(
-                data, scaling=DataArray(1.0).broadcast_like(data.labels)
-            )
-        data = assign_multiindex_safe(
-            data,
-            scaling=validate_scaling(data.scaling, f"scaling for variable '{name}'"),
-        )
+        data = ensure_scaling(data, data.labels, f"scaling for variable '{name}'")
         for attr in ("lower", "upper"):
             # convert to float, important for  operations like "shift"
             if not issubdtype(data[attr].dtype, floating):

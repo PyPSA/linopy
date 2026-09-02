@@ -7,6 +7,7 @@ import xarray as xr
 
 from linopy import Model, read_netcdf
 from linopy.constants import Result, Solution, Status
+from linopy.constraints import CSRConstraint
 from linopy.solvers import available_solvers
 
 
@@ -92,6 +93,79 @@ def test_indicator_constraint_scaling_in_matrix() -> None:
     )
 
 
+def test_frozen_constraint_scaling_in_matrix() -> None:
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
+
+    row_scaling = xr.DataArray([2.0, 4.0], coords=[i])
+    con = m.add_constraints(
+        2 * x >= xr.DataArray([20.0, 40.0], coords=[i]),
+        name="c",
+        scaling=row_scaling,
+        freeze=True,
+    )
+
+    assert isinstance(con, CSRConstraint)
+    np.testing.assert_allclose(m.matrices.b, [40.0, 160.0])
+    np.testing.assert_allclose(
+        m.matrices.A.toarray(),
+        [
+            [2 / 10 * 2, 0.0],
+            [0.0, 2 / 100 * 4],
+        ],
+    )
+
+
+def test_quadratic_objective_lp_export_uses_scaled_values(tmp_path) -> None:
+    m = Model()
+    i = pd.Index([0, 1], name="i")
+    x = m.add_variables(coords=[i], name="x", scaling=[2.0, 4.0])
+    m.add_objective((x * x).sum() + (3 * x).sum(), scaling=10.0)
+
+    path = tmp_path / "quadratic.lp"
+    m.to_file(path, io_api="lp", progress=False)
+    text = path.read_text()
+
+    np.testing.assert_allclose(
+        m.matrices.Q.toarray(), np.diag([2 / 2 / 2 * 10, 2 / 4 / 4 * 10])
+    )
+
+    assert "+15.0 x0" in text
+    assert "+7.5 x1" in text
+    assert "+5.0 x0 * x0" in text
+    assert "+1.25 x1 * x1" in text
+
+
+def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path) -> None:
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
+    b = m.add_variables(binary=True, name="b")
+
+    rhs = xr.DataArray([20.0, 40.0], coords=[i])
+    scaling = xr.DataArray([2.0, 4.0], coords=[i])
+    m.add_indicator_constraints(
+        b,
+        1,
+        2 * x,
+        "<=",
+        rhs,
+        name="ic",
+        scaling=scaling,
+    )
+    m.add_objective(x.sum())
+
+    path = tmp_path / "indicator.lp"
+    m.to_file(path, io_api="lp", progress=False)
+    text = path.read_text()
+
+    assert f"+{2 / 10 * 2} x0" in text
+    assert f"<= {20.0 * 2}" in text
+    assert f"+{2 / 100 * 4} x1" in text
+    assert f"<= {40.0 * 4}" in text
+
+
 def test_assign_result_unscales_solution_objective_and_dual() -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
@@ -162,6 +236,9 @@ def test_scaling_validation() -> None:
 
     with pytest.raises(ValueError, match="finite and positive"):
         m.add_objective(x, scaling=np.inf)
+
+    with pytest.raises(TypeError, match="numeric scalar"):
+        m.add_objective(x, scaling=[1, 2], overwrite=True)
 
 
 def test_constraint_scaling_setter_broadcasts_to_rows() -> None:

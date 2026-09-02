@@ -1441,7 +1441,7 @@ class Model:
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
-        scaling: ConstantLike = 1,
+        scaling: float = 1,
     ) -> None:
         """
         Add an objective function to the model.
