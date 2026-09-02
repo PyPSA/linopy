@@ -85,7 +85,7 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
-from linopy.scaling import validate_scaling, variable_solver_scaling
+from linopy.scaling import validate_scaling
 from linopy.semantics import enforce_no_multiindex
 
 try:
@@ -2256,10 +2256,7 @@ class Model:
         primal = result.solution.primal
         for _, var in self.variables.items():
             start, end = var.range
-            values = (
-                primal[start:end].reshape(var.shape)
-                / variable_solver_scaling(var).values
-            )
+            values = primal[start:end].reshape(var.shape) / var.solver_scaling.values
             var.solution = xr.DataArray(values, var.coords, dims=var.dims)
 
         if len(result.solution.dual):

@@ -342,6 +342,18 @@ class Variable:
         value = validate_scaling(value, f"scaling for variable '{self.name}'")
         self._data = assign_multiindex_safe(self.data, scaling=value)
 
+    @property
+    def solver_scaling(self) -> DataArray:
+        """
+        Effective scaling seen by the solver.
+
+        Discrete variables keep ordinary solver columns, so their supplied
+        scaling is metadata only and the solver value is ``1.0``.
+        """
+        if self.attrs.get("binary", False) or self.attrs.get("integer", False):
+            return DataArray(1.0).broadcast_like(self.labels)
+        return self.scaling
+
     def to_linexpr(
         self,
         coefficient: ConstantLike = 1,

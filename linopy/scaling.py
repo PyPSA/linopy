@@ -17,7 +17,6 @@ from linopy.common import assign_multiindex_safe
 
 if TYPE_CHECKING:
     from linopy.model import Model
-    from linopy.variables import Variable
 
 
 def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
@@ -42,18 +41,6 @@ def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
     return assign_multiindex_safe(data, scaling=validate_scaling(data.scaling, label))
 
 
-def variable_solver_scaling(variable: Variable) -> DataArray:
-    """
-    Return solver-side scaling for a variable.
-
-    Discrete variables keep ordinary solver columns, so their supplied scaling
-    is metadata only.
-    """
-    if variable.attrs.get("binary", False) or variable.attrs.get("integer", False):
-        return DataArray(1.0).broadcast_like(variable.labels)
-    return variable.scaling
-
-
 def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:
     """Scatter ``values`` into ``target`` at active (non ``-1``) label positions."""
     mask = labels != -1
@@ -65,7 +52,7 @@ def variable_scaling_lookup(model: Model) -> np.ndarray:
     scaling = np.ones(model._xCounter, dtype=float)
     for var in model.variables.data.values():
         labels = var.labels.values.ravel()
-        _scatter_active(scaling, labels, variable_solver_scaling(var).values.ravel())
+        _scatter_active(scaling, labels, var.solver_scaling.values.ravel())
     return scaling
 
 
