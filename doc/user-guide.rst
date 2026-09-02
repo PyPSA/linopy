@@ -68,6 +68,9 @@ objective scaling once globally.
     m.add_constraints(2 * x >= 10, scaling=10, name="demand")
     m.add_objective(5 * x, scaling=100)
 
+For a worked example that builds a badly-scaled model and applies each of the
+three variants step by step, see the :doc:`numerical-scaling` tutorial.
+
 
 Working with an existing model
 ------------------------------
