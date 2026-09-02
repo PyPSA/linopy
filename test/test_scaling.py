@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,6 +12,11 @@ from linopy import Model, read_netcdf
 from linopy.constants import Result, Solution, Status
 from linopy.constraints import CSRConstraint
 from linopy.solvers import available_solvers
+
+
+def _dense(matrix: Any) -> np.ndarray:
+    assert matrix is not None
+    return matrix.toarray()
 
 
 def test_variable_constraint_and_objective_scaling_in_matrices() -> None:
@@ -40,11 +48,13 @@ def test_variable_constraint_and_objective_scaling_in_matrices() -> None:
     np.testing.assert_allclose(matrices.ub, [30.0, 400.0, 1.0])
     np.testing.assert_allclose(matrices.b, [40.0, 160.0])
     np.testing.assert_allclose(
-        matrices.A.toarray(),
-        [
-            [2 / 10 * 2, 0.0, 3 * 2],
-            [0.0, 2 / 100 * 4, 3 * 4],
-        ],
+        _dense(matrices.A),
+        np.array(
+            [
+                [2 / 10 * 2, 0.0, 3 * 2],
+                [0.0, 2 / 100 * 4, 3 * 4],
+            ]
+        ),
     )
     np.testing.assert_allclose(matrices.c, [5 / 10 * 10, 5 / 100 * 10, 7 * 10])
 
@@ -59,7 +69,7 @@ def test_quadratic_objective_scaling_in_matrix() -> None:
     m.add_objective((x * x).sum(), scaling=10.0)
 
     np.testing.assert_allclose(
-        m.matrices.Q.toarray(),
+        _dense(m.matrices.Q),
         np.diag([2 / 2 / 2 * 10, 2 / 4 / 4 * 10]),
     )
 
@@ -85,11 +95,13 @@ def test_indicator_constraint_scaling_in_matrix() -> None:
     np.testing.assert_allclose(con.scaling.values, [2.0, 4.0])
     np.testing.assert_allclose(m.matrices.indicator_b, [40.0, 160.0])
     np.testing.assert_allclose(
-        m.matrices.indicator_A.toarray(),
-        [
-            [2 / 10 * 2, 0.0, 0.0],
-            [0.0, 2 / 100 * 4, 0.0],
-        ],
+        _dense(m.matrices.indicator_A),
+        np.array(
+            [
+                [2 / 10 * 2, 0.0, 0.0],
+                [0.0, 2 / 100 * 4, 0.0],
+            ]
+        ),
     )
 
 
@@ -109,15 +121,17 @@ def test_frozen_constraint_scaling_in_matrix() -> None:
     assert isinstance(con, CSRConstraint)
     np.testing.assert_allclose(m.matrices.b, [40.0, 160.0])
     np.testing.assert_allclose(
-        m.matrices.A.toarray(),
-        [
-            [2 / 10 * 2, 0.0],
-            [0.0, 2 / 100 * 4],
-        ],
+        _dense(m.matrices.A),
+        np.array(
+            [
+                [2 / 10 * 2, 0.0],
+                [0.0, 2 / 100 * 4],
+            ]
+        ),
     )
 
 
-def test_quadratic_objective_lp_export_uses_scaled_values(tmp_path) -> None:
+def test_quadratic_objective_lp_export_uses_scaled_values(tmp_path: Path) -> None:
     m = Model()
     i = pd.Index([0, 1], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[2.0, 4.0])
@@ -128,7 +142,7 @@ def test_quadratic_objective_lp_export_uses_scaled_values(tmp_path) -> None:
     text = path.read_text()
 
     np.testing.assert_allclose(
-        m.matrices.Q.toarray(), np.diag([2 / 2 / 2 * 10, 2 / 4 / 4 * 10])
+        _dense(m.matrices.Q), np.diag([2 / 2 / 2 * 10, 2 / 4 / 4 * 10])
     )
 
     assert "+15.0 x0" in text
@@ -137,7 +151,7 @@ def test_quadratic_objective_lp_export_uses_scaled_values(tmp_path) -> None:
     assert "+1.25 x1 * x1" in text
 
 
-def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path) -> None:
+def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path: Path) -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
@@ -194,7 +208,7 @@ def test_assign_result_unscales_solution_objective_and_dual() -> None:
     np.testing.assert_allclose(m.constraints["c"].dual.values, [0.8, 3.2])
 
 
-def test_scaling_is_preserved_in_netcdf(tmp_path) -> None:
+def test_scaling_is_preserved_in_netcdf(tmp_path: Path) -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
@@ -210,7 +224,7 @@ def test_scaling_is_preserved_in_netcdf(tmp_path) -> None:
     assert restored.objective.scaling == 5.0
 
 
-def test_lp_export_uses_scaled_values(tmp_path) -> None:
+def test_lp_export_uses_scaled_values(tmp_path: Path) -> None:
     m = Model()
     x = m.add_variables(lower=0, upper=10, name="x", scaling=10.0)
     m.add_constraints(2 * x >= 20, name="c", scaling=2.0)
@@ -238,7 +252,7 @@ def test_scaling_validation() -> None:
         m.add_objective(x, scaling=np.inf)
 
     with pytest.raises(TypeError, match="numeric scalar"):
-        m.add_objective(x, scaling=[1, 2], overwrite=True)
+        m.add_objective(x, scaling=[1, 2], overwrite=True)  # type: ignore[arg-type]
 
 
 def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
