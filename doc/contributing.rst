@@ -60,7 +60,7 @@ To run the test suite:
 GPU Testing
 -----------
 
-Tests for GPU-accelerated solvers (e.g., cuPDLPx) are automatically skipped by default since CI machines and most development environments don't have GPU hardware. This ensures tests pass in all environments.
+Tests for GPU-accelerated solvers (e.g., cuOpt and cuPDLPx) are automatically skipped by default since CI machines and most development environments don't have GPU hardware. This ensures tests pass in all environments.
 
 To run GPU tests locally (requires GPU hardware and CUDA):
 

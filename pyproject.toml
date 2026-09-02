@@ -58,9 +58,9 @@ docs = [
     "numpydoc==1.10.0",
     "sphinx_rtd_theme==3.1.0",
     "sphinx==9.0.4",
-    "sphinx_book_theme==1.2.0",
+    "sphinx_book_theme==1.4.0",
     "sphinx-copybutton==0.5.2",
-    "nbsphinx==0.9.4",
+    "nbsphinx==0.9.8",
     "nbsphinx-link==1.4.1",
     "docutils<0.24",
     "gurobipy>=13.0.0",
@@ -90,11 +90,11 @@ benchmarks = [
     "scipy==1.17.1",
     "xarray==2026.7.0",
     "pandas==3.0.5",
-    "polars==1.42.1",
+    "polars==1.44.1",
     "dask==2026.7.1",
     "pytest==9.1.1",
     "pytest-benchmark==5.3.0",
-    "pytest-benchmem[plot-static]==0.4.7",
+    "pytest-benchmem[plot-static]==0.5.5",
     "pytest-memray==1.10.0",
     "pytest-codspeed==5.0.3",
 ]
@@ -109,8 +109,18 @@ solvers = [
     "xpress; platform_system != 'Darwin'",
     "pyscipopt; platform_system != 'Darwin'",
     "knitro>=15.1.0",
-    # "cupdlpx>=0.1.2", pip package currently unstable
 ]
+# GPU-only solvers kept separate to avoid env clutter.
+# Requires a CUDA 12 driver (>= 525.60.13) and GPU of compute capability >= 7.0.
+gpu = [
+    "cuopt-cu12>=26.8; platform_system == 'Linux'",
+    # "cupdlpx>=0.1.2", pip package currently unstable, install manually
+]
+
+[tool.uv]
+# cuopt-cu12 pulls cudf-cu12, which pins pandas<3.0.4, while benchmarks pins
+# pandas==3.0.5. Resolve the two extras in separate forks instead of together.
+conflicts = [[{ extra = "gpu" }, { extra = "benchmarks" }]]
 
 [tool.setuptools.packages.find]
 include = ["linopy", "linopy.*"]
@@ -127,6 +137,7 @@ testpaths = ["test"]
 norecursedirs = ["dev-scripts", "doc", "examples", "benchmark", "benchmarks"]
 markers = [
     "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
+    "slow: marks tests with a high runtime cost (deselect with '-m \"not slow\"')",
 ]
 filterwarnings = [
     # Silence our own EvolvingAPIWarning inside the test suite so the

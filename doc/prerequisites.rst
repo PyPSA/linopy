@@ -64,9 +64,24 @@ GPU-accelerated solvers
 
 For large-scale optimization problems, GPU-accelerated solvers can provide significant performance improvements:
 
+-  `cuOpt <https://docs.nvidia.com/cuopt/>`__ - open source, GPU-accelerated LP and MIP solver by NVIDIA
 -  `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ - open source, GPU-accelerated first-order solver
 
 **Note:** GPU solvers require compatible NVIDIA GPU hardware and CUDA installation. See the :doc:`gpu-acceleration` guide for detailed setup instructions.
+
+The ``linopy[gpu]`` extra installs cuOpt. It is **Linux-only** and requires an
+NVIDIA GPU of **compute capability 7.0 or higher** with a **CUDA 12 driver,
+version 525.60.13 or newer**. It is not part of ``linopy[solvers]``, because it
+pulls in several GB of CUDA packages:
+
+.. code:: bash
+
+    uv pip install "linopy[gpu]"
+
+The extra installs ``cuopt-cu12``, the build for CUDA 12 drivers; the bare
+``cuopt`` package on PyPI is an unrelated project.
+
+cuPDLPx is installed on its own:
 
 .. code:: bash
 

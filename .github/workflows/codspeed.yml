@@ -30,7 +30,7 @@ jobs:
       with:
         fetch-depth: 0  # setuptools_scm
     - name: Set up Python 3.13
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: "3.13"
     - name: Install pinned benchmark environment
@@ -38,7 +38,7 @@ jobs:
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"
     - name: Run benchmarks under CodSpeed (memory)
-      uses: CodSpeedHQ/action@v4
+      uses: CodSpeedHQ/action@v5
       with:
         mode: memory
         run: |
@@ -61,7 +61,7 @@ jobs:
       with:
         fetch-depth: 0  # setuptools_scm
     - name: Set up Python 3.13
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: "3.13"
     - name: Install pinned benchmark environment
@@ -69,7 +69,7 @@ jobs:
         python -m pip install uv
         uv pip install --system -e ".[dev,benchmarks]"
     - name: Run benchmarks under CodSpeed (walltime)
-      uses: CodSpeedHQ/action@v4
+      uses: CodSpeedHQ/action@v5
       with:
         mode: walltime
         run: |
