@@ -115,29 +115,37 @@ def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarra
 
 
 def _scale_objective_dataframe(
-    df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
+    df: pl.DataFrame, variable_scaling: np.ndarray | None, objective_scaling: float
 ) -> pl.DataFrame:
-    """Apply column scaling and row-like objective scaling to objective terms."""
-    if df.is_empty():
+    """
+    Apply column scaling and row-like objective scaling to objective terms.
+
+    A ``None`` lookup (see :func:`linopy.scaling.variable_scaling_lookup`) and a
+    unit objective factor leave the frame untouched, so an unscaled model does
+    not allocate a scaling column per slice.
+    """
+    if df.is_empty() or (variable_scaling is None and objective_scaling == 1):
         return df
 
-    if "vars" in df.columns:
-        scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    else:
-        scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
-        scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
-        scales = scale1 * scale2
-
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(scales) * objective_scaling).alias("coeffs")
-    )
+    coeffs = pl.col("coeffs")
+    if variable_scaling is not None:
+        if "vars" in df.columns:
+            scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        else:
+            scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
+            scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
+            scales = scale1 * scale2
+        coeffs = coeffs / pl.Series(scales)
+    if objective_scaling != 1:
+        coeffs = coeffs * objective_scaling
+    return df.with_columns(coeffs.alias("coeffs"))
 
 
 def _scale_bounds_dataframe(
-    df: pl.DataFrame, variable_scaling: np.ndarray
+    df: pl.DataFrame, variable_scaling: np.ndarray | None
 ) -> pl.DataFrame:
     """Multiply bounds by solver-side variable scaling factors."""
-    if df.is_empty():
+    if df.is_empty() or variable_scaling is None:
         return df
     scales = _lookup_positive_labels(variable_scaling, df["labels"].to_numpy())
     scale_series = pl.Series(scales)
@@ -149,19 +157,25 @@ def _scale_bounds_dataframe(
 
 def _scale_constraint_dataframe(
     df: pl.DataFrame,
-    variable_scaling: np.ndarray,
-    constraint_scaling: np.ndarray,
+    variable_scaling: np.ndarray | None,
+    constraint_scaling: np.ndarray | None,
 ) -> pl.DataFrame:
     """Divide by column scaling and multiply by row scaling."""
-    if df.is_empty():
+    if df.is_empty() or (variable_scaling is None and constraint_scaling is None):
         return df
-    row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
-    var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    row_scale_series = pl.Series(row_scales)
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(var_scales) * row_scale_series).alias("coeffs"),
-        (pl.col("rhs") * row_scale_series).alias("rhs"),
-    )
+
+    coeffs = pl.col("coeffs")
+    columns = []
+    if variable_scaling is not None:
+        var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        coeffs = coeffs / pl.Series(var_scales)
+    if constraint_scaling is not None:
+        row_scales = pl.Series(
+            _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
+        )
+        coeffs = coeffs * row_scales
+        columns.append((pl.col("rhs") * row_scales).alias("rhs"))
+    return df.with_columns(coeffs.alias("coeffs"), *columns)
 
 
 def format_coord(coord: str) -> str:
@@ -606,7 +620,9 @@ def indicator_constraints_to_file(
             for coeff, var_label, var_name in zip(
                 coeffs_flat[i][valid], vars_flat[i][valid], var_names
             ):
-                coeff = float(coeff) / variable_scaling[int(var_label)] * row_scale
+                coeff = float(coeff) * row_scale
+                if variable_scaling is not None:
+                    coeff = coeff / variable_scaling[int(var_label)]
                 prefix = "+" if coeff >= 0 else ""
                 terms.append(f"{prefix}{coeff} {var_name}")
 

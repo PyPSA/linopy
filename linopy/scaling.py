@@ -49,27 +49,63 @@ def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
     return assign_multiindex_safe(data, scaling=scaling)
 
 
+def is_trivial(scaling: np.ndarray | DataArray | float) -> bool:
+    """
+    Whether every factor equals 1, i.e. the scaling is a no-op.
+
+    Checked with ``min``/``max`` rather than an equality mask so that an
+    unscaled model does not pay a temporary array per variable/constraint.
+    """
+    values = np.asarray(scaling)
+    if values.size == 0:
+        return True
+    return bool(values.min() == 1.0 and values.max() == 1.0)
+
+
 def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:
     """Scatter ``values`` into ``target`` at active (non ``-1``) label positions."""
     mask = labels != -1
     target[labels[mask]] = values[mask]
 
 
-def variable_scaling_lookup(model: Model) -> np.ndarray:
-    """Return solver-side variable scaling indexed by raw variable label."""
+def variable_scaling_lookup(model: Model) -> np.ndarray | None:
+    """
+    Return solver-side variable scaling indexed by raw variable label.
+
+    ``None`` is returned when no variable is scaled. Export paths then skip
+    the rescaling altogether instead of allocating a full lookup of ones and
+    multiplying every coefficient by 1.
+    """
+    variables = list(model.variables.data.values())
+    if all(is_trivial(var.solver_scaling.values) for var in variables):
+        return None
+
     scaling = np.ones(model._xCounter, dtype=float)
-    for var in model.variables.data.values():
-        labels = var.labels.values.ravel()
-        _scatter_active(scaling, labels, var.solver_scaling.values.ravel())
+    for var in variables:
+        labels = var.labels.values
+        values = np.broadcast_to(var.solver_scaling.values, labels.shape)
+        _scatter_active(scaling, labels.ravel(), values.ravel())
     return scaling
 
 
-def constraint_scaling_lookup(model: Model) -> np.ndarray:
-    """Return constraint scaling indexed by raw constraint label."""
+def constraint_scaling_lookup(model: Model) -> np.ndarray | None:
+    """
+    Return constraint scaling indexed by raw constraint label.
+
+    ``None`` is returned when no constraint row is scaled, see
+    :func:`variable_scaling_lookup`.
+    """
     from linopy.constraints import CSRConstraint
 
+    constraints = list(model.constraints.data.values())
+    if all(
+        is_trivial(con._scaling if isinstance(con, CSRConstraint) else con.scaling)
+        for con in constraints
+    ):
+        return None
+
     scaling = np.ones(model._cCounter, dtype=float)
-    for con in model.constraints.data.values():
+    for con in constraints:
         if isinstance(con, CSRConstraint):
             scaling[con._con_labels] = con._scaling
             continue

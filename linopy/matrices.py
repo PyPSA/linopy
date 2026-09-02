@@ -62,7 +62,8 @@ class MatrixAccessor:
     The matrix members (``A``, ``b``, ``c``, ``Q``, ``lb``, ``ub``) are in
     solver-scaled units while the read-back members (``sol``, ``dual``) are in
     user units, so ``A @ sol`` and ``c @ sol`` do not reconstruct ``b`` or the
-    objective when scaling factors differ from 1.
+    objective when scaling factors differ from 1. ``var_scaling`` holds the
+    column factors that were applied, or ``None`` for an unscaled model.
     """
 
     def __init__(self, model: Model) -> None:
@@ -75,10 +76,12 @@ class MatrixAccessor:
         label_index = m.variables.label_index
         self.vlabels: ndarray = label_index.vlabels
         var_scaling_by_label = variable_scaling_lookup(m)
-        self.var_scaling: ndarray = (
+        # ``None`` means every factor is 1 — the unscaled model then skips all
+        # rescaling instead of paying for a no-op multiplication per entry.
+        self.var_scaling: ndarray | None = (
             var_scaling_by_label[self.vlabels]
-            if len(self.vlabels)
-            else np.array([], dtype=float)
+            if var_scaling_by_label is not None
+            else None
         )
 
         lb_list = []
@@ -103,8 +106,13 @@ class MatrixAccessor:
             vtypes_list.append(np.full(mask.sum(), vtype))
 
         if lb_list:
-            self.lb: ndarray = np.concatenate(lb_list) * self.var_scaling
-            self.ub: ndarray = np.concatenate(ub_list) * self.var_scaling
+            lb = np.concatenate(lb_list)
+            ub = np.concatenate(ub_list)
+            if self.var_scaling is not None:
+                lb = lb * self.var_scaling
+                ub = ub * self.var_scaling
+            self.lb: ndarray = lb
+            self.ub: ndarray = ub
             self.vtypes: ndarray = np.concatenate(vtypes_list)
         else:
             self.lb = np.array([])
@@ -117,24 +125,34 @@ class MatrixAccessor:
         label_to_pos = label_index.label_to_pos
         con_scaling_by_label = constraint_scaling_lookup(m)
 
+        var_scaling = self.var_scaling
+        unscaled = con_scaling_by_label is None and var_scaling is None
+
         def scale_rows_and_cols(
             csr: scipy.sparse.csr_array, con_labels: np.ndarray, b: np.ndarray
         ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
-            if csr.shape[0] == 0:
+            """
+            Apply row and column scaling to one constraint block.
+
+            With solver variables y = Scol * x, constraints A x = b become
+            Srow * A * Scol^-1 * y = Srow * b. Both factors are folded into a
+            single copy of the CSR value array — ``csr.multiply`` would
+            materialise a COO intermediate plus another CSR per factor, which
+            triples the peak memory of the matrix build.
+            """
+            if unscaled or csr.shape[0] == 0:
                 return csr, b
-            row_scaling = con_scaling_by_label[con_labels]
-            # With solver variables y = Scol * x, constraints A x = b become
-            # Srow * A * Scol^-1 * y = Srow * b.
-            csr = cast(
-                scipy.sparse.csr_array,
-                csr.multiply(row_scaling[:, np.newaxis]).tocsr(),
+            data = csr.data.copy()
+            if con_scaling_by_label is not None:
+                row_scaling = con_scaling_by_label[con_labels]
+                data *= np.repeat(row_scaling, np.diff(csr.indptr))
+                b = b * row_scaling
+            if var_scaling is not None and csr.shape[1]:
+                data /= var_scaling[csr.indices]
+            scaled = scipy.sparse.csr_array(
+                (data, csr.indices, csr.indptr), shape=csr.shape
             )
-            if csr.shape[1] and len(self.var_scaling):
-                csr = cast(
-                    scipy.sparse.csr_array,
-                    csr.multiply(1 / self.var_scaling[np.newaxis, :]).tocsr(),
-                )
-            return csr, b * row_scaling
+            return cast(scipy.sparse.csr_array, scaled), b
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
@@ -189,8 +207,11 @@ class MatrixAccessor:
 
         mask = var_labels != -1
         positions = label_to_pos[var_labels[mask]]
-        scaled_coeffs = coeffs[mask] / self.var_scaling[positions]
-        scaled_coeffs = scaled_coeffs * m.objective.scaling
+        scaled_coeffs = coeffs[mask]
+        if self.var_scaling is not None:
+            scaled_coeffs = scaled_coeffs / self.var_scaling[positions]
+        if m.objective.scaling != 1:
+            scaled_coeffs = scaled_coeffs * m.objective.scaling
         np.add.at(result, positions, scaled_coeffs)
         return result
 
@@ -203,10 +224,12 @@ class MatrixAccessor:
             return None
         q = expr.to_matrix()[self.vlabels][:, self.vlabels]
         if q.nnz:
-            # Quadratic coefficients get one inverse column scaling per factor.
-            q = q.multiply(1 / self.var_scaling[:, np.newaxis])
-            q = q.multiply(1 / self.var_scaling[np.newaxis, :])
-            q = q * self._parent.objective.scaling
+            if self.var_scaling is not None:
+                # Quadratic coefficients get one inverse column scaling per factor.
+                q = q.multiply(1 / self.var_scaling[:, np.newaxis])
+                q = q.multiply(1 / self.var_scaling[np.newaxis, :])
+            if m.objective.scaling != 1:
+                q = q * m.objective.scaling
         return q.tocsc()
 
     @cached_property

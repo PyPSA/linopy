@@ -11,6 +11,7 @@ import xarray as xr
 from linopy import Model, read_netcdf
 from linopy.constants import Result, Solution, Status
 from linopy.constraints import CSRConstraint
+from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 from linopy.solvers import available_solvers
 
 
@@ -273,6 +274,46 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
 
     np.testing.assert_allclose(con.scaling.values, [2.0, 2.0])
     np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
+
+
+def test_unscaled_model_skips_the_scaling_lookups() -> None:
+    """An unscaled model must not pay for the scaling machinery."""
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x")
+    m.add_variables(binary=True, name="b", scaling=50.0)  # metadata only
+    m.add_constraints(x >= 1, name="c")
+
+    assert variable_scaling_lookup(m) is None
+    assert constraint_scaling_lookup(m) is None
+    assert m.matrices.var_scaling is None
+
+    x.scaling = 10.0
+    assert variable_scaling_lookup(m) is not None
+
+
+def test_row_and_column_scaling_apply_independently() -> None:
+    """Only one of the two lookups is active — the other must stay a no-op."""
+    i = pd.Index(["a", "b"], name="i")
+    rhs = xr.DataArray([20.0, 40.0], coords=[i])
+
+    column_only = Model()
+    cx = column_only.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
+    column_only.add_constraints(2 * cx >= rhs, name="c")
+    np.testing.assert_allclose(column_only.matrices.b, [20.0, 40.0])
+    np.testing.assert_allclose(
+        _dense(column_only.matrices.A),
+        np.array([[2 / 10, 0.0], [0.0, 2 / 100]]),
+    )
+
+    row_only = Model()
+    rx = row_only.add_variables(coords=[i], name="x")
+    row_only.add_constraints(2 * rx >= rhs, name="c", scaling=[2.0, 4.0])
+    np.testing.assert_allclose(row_only.matrices.b, [40.0, 160.0])
+    np.testing.assert_allclose(
+        _dense(row_only.matrices.A),
+        np.array([[2 * 2, 0.0], [0.0, 2 * 4]]),
+    )
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")

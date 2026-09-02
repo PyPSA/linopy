@@ -348,10 +348,11 @@ class Variable:
         Effective scaling seen by the solver.
 
         Discrete variables keep ordinary solver columns, so their supplied
-        scaling is metadata only and the solver value is ``1.0``.
+        scaling is metadata only and the solver value is ``1.0``, returned as a
+        scalar that broadcasts against the labels instead of a full array.
         """
         if self.attrs.get("binary", False) or self.attrs.get("integer", False):
-            return DataArray(1.0).broadcast_like(self.labels)
+            return DataArray(1.0)
         return self.scaling
 
     def to_linexpr(
@@ -1231,13 +1232,15 @@ class Variable:
         Convert all variables to a single polars DataFrame.
 
         The resulting dataframe is a long format of the variables with columns
-        ``labels``, ``lower``, ``upper`` and ``scaling``.
+        ``labels``, ``lower`` and ``upper``. Scaling is left out: it is
+        per-variable export metadata rather than a bound, and the writers apply
+        the solver-side factors themselves. Use ``flat`` to get it.
 
         Returns
         -------
         pl.DataFrame
         """
-        ds = self.data.drop_vars(STASHED_ATTRS, errors="ignore")
+        ds = self.data.drop_vars([*STASHED_ATTRS, "scaling"], errors="ignore")
         df = to_polars(ds)
         df = filter_nulls_polars(df)
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
