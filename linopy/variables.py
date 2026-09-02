@@ -343,7 +343,6 @@ class Variable:
             value,
             coords=self.coords,
             dims=self.dims,
-            label=f"scaling for variable '{self.name}'",
             strict=False,
         )
         value = value.reindex_like(self.labels, fill_value=1.0)
