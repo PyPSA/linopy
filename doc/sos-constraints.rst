@@ -34,7 +34,7 @@ In an SOS1 constraint, **at most one** variable in the ordered set can be non-ze
 SOS Type 2 (SOS2)
 ~~~~~~~~~~~~~~~~~~
 
-In an SOS2 constraint, **at most two adjacent** variables in the ordered set can be non-zero. The adjacency is determined by the ordering weights (coordinates) of the variables.
+In an SOS2 constraint, **at most two adjacent** variables in the ordered set can be non-zero. Adjacency follows the order the members are declared in (see :ref:`sos-ordering`).
 
 **Example use cases:**
 - Piecewise linear approximation of nonlinear functions
@@ -91,8 +91,26 @@ Method Signature
 **Requirements:**
 
 - The specified dimension must exist in the variable
-- The coordinates for the SOS dimension must be numeric (used as weights for ordering)
 - Only one SOS constraint can be applied per variable
+
+.. _sos-ordering:
+
+Ordering
+~~~~~~~~
+
+A set runs in the order its members are declared along ``sos_dim``. For
+``sos_type=2`` that decides which members are adjacent; an SOS1 set is
+unordered, so it does not apply.
+
+The coordinates need not be numeric. Where they are numeric but neither
+ascend nor descend, linopy warns: such a set was previously ordered by
+coordinate value, so its meaning changes. Sort the index to keep that
+ordering. Descending coordinates are not warned about, because reversing a
+set does not change which of its members are adjacent.
+
+The weights written to an LP file, or passed to a solver that supports SOS
+sets natively, are the coordinates themselves where they ascend, and member
+positions otherwise.
 
 Examples
 --------
@@ -268,12 +286,13 @@ as binary + linear constraints using the Big-M method.
 
 .. code-block:: python
 
-    # Automatic reformulation during solve
+    # Automatic reformulation during solve (apply / undo bracketed by Model.solve)
     m.solve(solver_name="highs", reformulate_sos=True)
 
-    # Or reformulate manually
-    m.reformulate_sos_constraints()
+    # Or stage the reformulation manually — e.g. to inspect or export the MILP
+    m.apply_sos_reformulation()
     m.solve(solver_name="highs")
+    m.undo_sos_reformulation()
 
 **Requirements:**
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import xarray as xr
 
 import linopy
+from benchmarks.registry import BenchSpec, register
 
-SIZES = [10, 50, 100, 250, 500, 1000]
+SIZES = (10, 250)
 
 
 def build_expression_arithmetic(n: int) -> linopy.Model:
@@ -19,7 +21,11 @@ def build_expression_arithmetic(n: int) -> linopy.Model:
     z = m.add_variables(coords=[range(n)], dims=["j"], name="z")
 
     # Expression arithmetic: broadcasting y (dim i) and z (dim j) against x (dim i,j)
-    coeffs = np.linspace(-1, 1, n * n).reshape(n, n)
+    coeffs = xr.DataArray(
+        np.linspace(-1, 1, n * n).reshape(n, n),
+        dims=["i", "j"],
+        coords={"i": range(n), "j": range(n)},
+    )
     expr1 = x * coeffs + y - z
     expr2 = 2 * x - 3 * y + z
     combined = expr1 + expr2
@@ -28,3 +34,12 @@ def build_expression_arithmetic(n: int) -> linopy.Model:
     m.add_constraints(expr1.sum("j") >= -10, name="row_sum")
     m.add_objective(combined.sum())
     return m
+
+
+SPEC = register(
+    BenchSpec(
+        name="expression_arithmetic",
+        build=build_expression_arithmetic,
+        sweep=SIZES,
+    )
+)

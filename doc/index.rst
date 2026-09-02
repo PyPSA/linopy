@@ -43,6 +43,7 @@ flexible data-handling features:
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
    - `HiGHS <https://highs.dev/>`__
+   - `SCIP <https://www.scipopt.org/>`__
    - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
    - `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__
@@ -112,6 +113,7 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
+   migrating-to-v1
    manipulating-models
 
 .. toctree::
@@ -120,6 +122,8 @@ This package is published under MIT license.
    :caption: Examples
 
    transport-tutorial
+   energy-resource-build
+   sudoku
    migrating-from-pyomo
 
 .. toctree::
@@ -136,6 +140,7 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Solving
 
+   using-solvers
    solve-on-remote
    solve-on-oetc
    gpu-acceleration
@@ -164,3 +169,12 @@ This package is published under MIT license.
    api
    release_notes
    contributing
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Design & Internals
+
+   design/convention
+   design/goals
+   design/legacy-removal

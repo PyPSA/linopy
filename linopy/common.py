@@ -8,7 +8,6 @@ This module contains commonly used functions.
 from __future__ import annotations
 
 import operator
-import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import cached_property, reduce, wraps
 from pathlib import Path
@@ -19,6 +18,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import nan, signedinteger
+from numpy.typing import DTypeLike
 from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
@@ -215,12 +215,10 @@ def infer_schema_polars(ds: Dataset) -> dict[str, DataTypeClass]:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema: dict[str, DataTypeClass] = {}
-    np_major_version = int(np.__version__.split(".")[0])
-    use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
         name = str(name)
         if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if use_int32 else pl.Int64
+            schema[name] = pl.Int32 if array.dtype.itemsize <= 4 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[name] = pl.Float64
         elif np.issubdtype(array.dtype, np.bool_):
@@ -351,9 +349,12 @@ def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df.select(keys + ["coeffs"] + rest)
 
 
-def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
+def save_join(*dataarrays: DataArray, fill_dtype: DTypeLike | None = None) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
+
+    If ``fill_dtype`` is given, values filled in by an outer join are set to -1
+    and the arrays are cast to that dtype (used for integer label arrays).
     """
     try:
         arrs = xr_align(*dataarrays, join="exact")
@@ -363,8 +364,8 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
             UserWarning,
         )
         arrs = xr_align(*dataarrays, join="outer")
-        if integer_dtype:
-            arrs = tuple([ds.fillna(-1).astype(int) for ds in arrs])
+        if fill_dtype is not None:
+            arrs = tuple([ds.fillna(-1).astype(fill_dtype) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
 
 
@@ -526,6 +527,40 @@ def replace_by_map(ds: DataArray, mapping: np.ndarray) -> DataArray:
     )
 
 
+def assigned_labels(labels: np.ndarray | DataArray) -> np.ndarray:
+    """
+    Flatten labels and drop the -1 sentinels.
+
+    ``-1`` marks a masked entry in a variable's or constraint's labels, but an
+    empty term slot in the ``vars`` field of a constraint or expression.
+    Matching labels of one object against another must therefore ignore it,
+    otherwise every masked entry compares equal to every empty term slot.
+    """
+    flat = np.asarray(labels).ravel()
+    return flat[flat != -1]
+
+
+def contains_labels(values: np.ndarray, labels: np.ndarray) -> bool:
+    """
+    Whether any entry of ``values`` is one of ``labels``.
+
+    ``labels`` must not contain the ``-1`` sentinel, see :func:`assigned_labels`.
+    Labels are handed out in ascending blocks, so restricting ``values`` to the
+    label range is both a cheap prefilter and, whenever the block is gap-free, the
+    complete answer.
+    """
+    if not labels.size:
+        return False
+    low, high = labels.min(), labels.max()
+    candidates = values[(values >= low) & (values <= high)]
+    if not candidates.size:
+        return False
+    is_gap_free = bool((np.diff(labels) == 1).all())
+    if is_gap_free:
+        return True
+    return bool(np.isin(candidates, labels).any())
+
+
 def to_path(path: str | Path | None) -> Path | None:
     """
     Convert a string to a Path object.
@@ -541,16 +576,6 @@ def best_int(max_value: int) -> type[signedinteger[Any]]:
         if max_value <= np.iinfo(t).max:
             return t
     raise ValueError(f"Value {max_value} is too large for int64.")
-
-
-def get_index_map(*arrays: Sequence[Hashable]) -> dict[tuple, int]:
-    """
-    Given arrays of hashable objects, create a map from unique combinations to unique integers.
-    """
-    # Create unique combinations
-    unique_combinations = set(zip(*arrays))
-
-    return {combination: i for i, combination in enumerate(unique_combinations)}
 
 
 def generate_indices_for_printout(
@@ -591,31 +616,80 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
     return formatted_lines
 
 
+def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
+    """
+    Auxiliary (non-dimension) coords aligned solely to ``dim`` — under v1 the
+    levels a flattened ``pd.MultiIndex`` leaves behind, its flat-dim mirror.
+    """
+    return [
+        str(name)
+        for name, coord in ds.coords.items()
+        if name != dim and coord.dims == (dim,)
+    ]
+
+
+def dim_level_names(ds: Dataset, dim: Hashable) -> list[str]:
+    """Level names of ``dim`` — a MultiIndex's own levels, else its aux coords."""
+    index = ds.indexes.get(dim)
+    if isinstance(index, pd.MultiIndex):
+        return [str(name) for name in index.names]
+    return index_level_coords(ds, dim)
+
+
 def get_dims_with_index_levels(
     ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
 
-    Example usage with a dataset that has:
-    - regular dimension 'time'
-    - multi-indexed dimension 'station' with levels ['country', 'city']
-    The output would be: ['time', 'station (country, city)']
+    A multi-indexed 'station' with levels ['country', 'city'] and a flat 'node'
+    with aux level coords ['region', 'tech'] both render as "dim (l0, l1)":
+    ['time', 'station (country, city)', 'node (region, tech)'].
     """
-    dims_with_levels = []
     if dims is None:
         dims = list(ds.dims)
+    return [
+        f"{dim} ({', '.join(levels)})"
+        if (levels := dim_level_names(ds, dim))
+        else str(dim)
+        for dim in dims
+    ]
 
-    for dim in dims:
-        if isinstance(ds.indexes[dim], pd.MultiIndex):
-            # For multi-indexed dimensions, format as "dim (level0, level1, ...)"
-            names = ds.indexes[dim].names
-            dims_with_levels.append(f"{dim} ({', '.join(names)})")
+
+def label_coord(obj: Any, dims: Sequence[Hashable], index: Sequence[int]) -> dict:
+    """
+    Identifying coordinate for a single flat position, per dimension — a
+    decomposed MultiIndex identifies the same way a first-class one does:
+    several aux levels stack into a tuple, one level is its bare value.
+    """
+    coord = {}
+    for dim, i in zip(dims, index):
+        levels = index_level_coords(obj, dim)
+        if len(levels) > 1:
+            coord[dim] = tuple(obj.coords[level].values[i] for level in levels)
+        elif len(levels) == 1:
+            coord[dim] = obj.coords[levels[0]].values[i]
         else:
-            # For regular dimensions, just add the dimension name
-            dims_with_levels.append(str(dim))
+            coord[dim] = obj.indexes[dim][i]
+    return coord
 
-    return dims_with_levels
+
+def get_printout_labels(ds: Dataset, dims: Sequence[Hashable]) -> list[Any]:
+    """
+    Per-dim row-label sequences for a repr, indexable by dimension position —
+    the vectorised sibling of ``label_coord``: aux levels zipped into tuples,
+    one level as its bare values, else the bare dimension index.
+    """
+    labels: list[Any] = []
+    for dim in dims:
+        levels = index_level_coords(ds, dim)
+        if len(levels) > 1:
+            labels.append(list(zip(*(ds[level].values for level in levels))))
+        elif len(levels) == 1:
+            labels.append(ds[levels[0]].values)
+        else:
+            labels.append(ds.indexes[dim])
+    return labels
 
 
 class LabelPositionIndex:
@@ -688,7 +762,7 @@ class LabelPositionIndex:
 
         labels = val.labels
         index = np.unravel_index(value - start, labels.shape)
-        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        coord = label_coord(labels, labels.dims, index)
         return name, coord
 
     def find_single_with_index(
@@ -725,7 +799,7 @@ class LabelPositionIndex:
 
         labels = val.labels
         index = np.unravel_index(value - start, labels.shape)
-        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        coord = label_coord(labels, labels.dims, index)
         return name, coord, index
 
 
@@ -754,11 +828,7 @@ def _get_label_position_linear(
             if value >= start and value < stop:
                 index = np.unravel_index(value - start, labels.shape)
 
-                # Extract the coordinates from the indices
-                coord = {
-                    dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
-                }
-                # Add the name of the DataArray and the coordinates to the result list
+                coord = label_coord(labels, labels.dims, index)
                 return name, coord
         raise ValueError(f"Label {value} is not existent in the model.")
 
@@ -1312,3 +1382,33 @@ def values_to_lookup_array(
     arr = np.full(size, nan, dtype=float)
     arr[labels[mask]] = values[mask]
     return arr
+
+
+def coords_ascend(coords: np.ndarray) -> bool:
+    """Whether ``coords`` are real numbers in strictly ascending order."""
+    return bool(coords.dtype.kind in "iuf" and np.all(coords[1:] > coords[:-1]))
+
+
+def coords_reorder_set(coords: np.ndarray) -> bool:
+    """
+    Whether ``coords`` order a set differently than the order it is declared in.
+
+    Ascending coords state the declared order and descending ones reverse it,
+    which leaves which members are adjacent unchanged. Non-numeric coords state
+    no order at all.
+    """
+    if coords.dtype.kind not in "iuf":
+        return False
+    return not (coords_ascend(coords) or coords_ascend(coords[::-1]))
+
+
+def sos_weights(coords: np.ndarray) -> np.ndarray:
+    """
+    SOS member weights stating the order ``coords`` is declared in.
+
+    Ascending coords already state it and are passed through, which keeps the LP
+    file unchanged. Anything else is weighted by position.
+    """
+    if coords_ascend(coords):
+        return coords
+    return np.arange(coords.size)

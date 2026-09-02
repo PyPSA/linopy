@@ -204,6 +204,42 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
     assert isinstance(simple_model.solver_model.NumVars, int)
 
 
+@pytest.mark.skipif(
+    "copt" not in set(solvers.licensed_solvers), reason="COPT is not installed"
+)
+def test_copt_closes_env_per_solve(
+    simple_model: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The file interface closes its environment before returning, so it must not
+    hand back a solver model that outlives it. Holding the environment open
+    instead would leak it: nothing closes a solver that is merely dropped.
+    """
+    import coptpy
+
+    closes: list[object] = []
+    original = coptpy.Envr.close
+
+    def close(self: object) -> None:
+        closes.append(self)
+        original(self)
+
+    monkeypatch.setattr(coptpy.Envr, "close", close)
+
+    simple_model.solve("copt")
+
+    assert simple_model.solver_model is None
+    assert closes
+
+
+def test_solver_defines_no_finalizer() -> None:
+    """
+    A solver is only reachable in a Model/Solver reference cycle, so a
+    finalizer would tear down native handles mid-collection.
+    """
+    assert not hasattr(solvers.Solver, "__del__")
+
+
 @pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
@@ -212,6 +248,30 @@ def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     solver_instance.close()
     assert solver_instance.solver_model is None
     assert solver_instance.env is None
+
+
+@pytest.mark.skipif(
+    "gurobi" not in set(solvers.licensed_solvers), reason="Gurobi is not installed"
+)
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_gurobi_close_disposes_held_solver_model(
+    simple_model: Model, io_api: str
+) -> None:
+    """
+    close() must dispose the gurobipy model even while a reference to it is
+    held: a merely dereferenced model keeps the underlying env — and with it
+    the license — acquired until garbage collection.
+    """
+    import gurobipy
+
+    simple_model.solve("gurobi", io_api=io_api)
+    held = simple_model.solver_model
+    assert isinstance(held.NumVars, int)
+
+    simple_model.solver = None
+
+    with pytest.raises(gurobipy.GurobiError, match="freed"):
+        _ = held.NumVars
 
 
 free_mps_problem = """NAME               sample_mip
@@ -478,6 +538,19 @@ def test_xpress_gpu_feature_reflects_installed_version() -> None:
     ) == _installed_version_in("xpress", ">=9.8.0")
 
 
+@pytest.mark.skipif(
+    "xpress" not in set(solvers.licensed_solvers), reason="Xpress is not installed"
+)
+def test_xpress_direct_maximize() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_objective(x, sense="max")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(x.solution.values, 10)
+
+
 class TestValidateModelOnBuild:
     """Solver._build() runs solver-feature checks regardless of entry point."""
 
@@ -568,6 +641,41 @@ class TestAssignResultWiring:
         m.assign_result(result)  # no solver kwarg
 
         assert m.solver is None
+
+
+@pytest.mark.parametrize(
+    "objective_text, expected",
+    [
+        (" obj = 1234.56 (MINimum)", 1234.56),
+        (" obj = 0 (MINimum)", 0.0),
+        (" obj = -3.5 (MAXimum)", -3.5),
+        (" obj = +42 (MINimum)", 42.0),
+        (" obj = .5 (MINimum)", 0.5),
+        (" obj = 1.5e+06 (MAXimum)", 1.5e6),
+        (" obj = -2E-3 (MINimum)", -2e-3),
+        (" net_present_value = 1234.5 (MINimum)", 1234.5),
+        (" obj1 = 1234.56 (MINimum)", 1234.56),
+        (" c2e = -7.5e2 (MAXimum)", -750.0),
+        ("  3.5 (MINimum)", 3.5),
+        ("  -1.5e3 (MAXimum)", -1500.0),
+        ("  0 (MINimum)", 0.0),
+    ],
+)
+def test_parse_glpk_objective(objective_text: str, expected: float) -> None:
+    assert solvers.GLPK._parse_objective(objective_text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "objective_text",
+    [
+        " obj = (MINimum)",
+        " unbounded",
+        "",
+    ],
+)
+def test_parse_glpk_objective_no_value_raises(objective_text: str) -> None:
+    with pytest.raises(ValueError, match="Could not parse objective value"):
+        solvers.GLPK._parse_objective(objective_text)
 
 
 mosek_installed = pytest.importorskip("mosek", reason="Mosek is not installed")

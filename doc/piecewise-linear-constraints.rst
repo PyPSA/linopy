@@ -565,6 +565,24 @@ manual gating.
    variable: combined with the ``y ≤ 0`` constraint from deactivation,
    this forces ``y = 0`` automatically.
 
+Partial gates
+^^^^^^^^^^^^^
+
+``active`` must cover the formulation's full coordinate; a gate defined
+over only a subset (or with masked entries) is rejected unless
+``active_fill`` is set. ``active_fill`` gates the missing entries as
+always-active (``1``) or always-off (``0``) — handy when one formulation
+mixes committable and non-committable units sharing a single ``status``:
+
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, [30, 60, 100]), (fuel, [40, 90, 170]), active=status, active_fill=1
+    )
+
+``active_fill`` is transitional: under v1 semantics, pad ``active``
+explicitly with ``active.reindex(coords).fillna(value)`` instead.
+
 Auto-broadcasting
 ~~~~~~~~~~~~~~~~~
 

@@ -75,15 +75,14 @@ BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"
 PWL_LINK_DIM = "_pwl_var"
-GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
+GROUP_STACK_DIM = "_group_stack"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
 CV_DIM = "_cv"
 HELPER_DIMS: list[str] = [
     TERM_DIM,
     STACKED_TERM_DIM,
-    GROUPED_TERM_DIM,
     FACTOR_DIM,
     CONCAT_DIM,
     CV_DIM,

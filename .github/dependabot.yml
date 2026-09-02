@@ -12,3 +12,30 @@ updates:
     github-actions:
       patterns:
       - '*'
+
+# Pinned ``[benchmarks]`` extra in pyproject.toml. One PR per dep bump
+# → CodSpeed CI runs and attributes any perf delta to that specific
+# bump. Keeps the cross-version ``sweep`` baseline (lockfile-pinned)
+# stable while still surfacing upstream perf changes per-PR with
+# eyes-open review. Loose ``[project.dependencies]`` (numpy, scipy, ...)
+# have no version specifier so Dependabot leaves them alone — only the
+# ``==`` pins in ``[benchmarks]`` produce PRs.
+- package-ecosystem: pip
+  directory: /
+  schedule:
+    interval: monthly
+  open-pull-requests-limit: 5
+  groups:
+    # Measurement scaffolding + CLI/notebook tooling. Perf-irrelevant —
+    # they don't move CodSpeed signal, so batching into one PR cuts
+    # review noise. Perf-relevant deps (numpy, xarray, highspy, …) stay
+    # un-grouped so each gets its own attributed CodSpeed delta.
+    benchmark-tooling:
+      patterns:
+        - pytest
+        - pytest-benchmark
+        - pytest-memray
+        - pytest-codspeed
+        - nbconvert
+        - typer
+        - plotly

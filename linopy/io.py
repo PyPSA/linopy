@@ -12,6 +12,7 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable
+from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,10 +27,11 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.common import (
     constraint_scaling_lookup,
+    sos_weights,
     to_polars,
     variable_scaling_lookup,
 )
-from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
@@ -37,9 +39,13 @@ if TYPE_CHECKING:
     from highspy.highs import Highs
 
     from linopy.model import Model
+    from linopy.variables import Variable
 
 
 logger = logging.getLogger(__name__)
+
+NETCDF_VERSION_ATTR = "_linopy_version"
+EXPR_TYPE_ATTR = "_linopy_expr_type"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -307,6 +313,17 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
+def _binary_has_nondefault_bounds(var: Variable) -> bool:
+    """
+    Whether a binary variable carries bounds other than the implied (0, 1).
+
+    Scans the raw bound values (a single vectorised pass each), so masked
+    slots are tolerated: a false positive only routes the variable through
+    the bounds loop, where masked labels are dropped before writing.
+    """
+    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+
+
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
@@ -322,8 +339,10 @@ def bounds_to_file(
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
         + [
-            n for n in m.variables.binaries if m.variables[n].fixed
-        ]  # fixed binaries need bounds
+            n
+            for n in m.variables.binaries
+            if _binary_has_nondefault_bounds(m.variables[n])
+        ]
     )
     if not len(list(names)):
         return
@@ -505,12 +524,13 @@ def sos_to_file(
         sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+        weights = sos_weights(var.coords[sos_dim].values)
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
             # Per-set id = max member label: unique per set (labels are globally
             # unique); a fully-masked set reduces to -1 and is dropped below.
             ds["sos_labels"] = ds["labels"].max(sos_dim)
-            ds["weights"] = ds.coords[sos_dim]
+            ds["weights"] = ((sos_dim,), weights)
             df = to_polars(ds)
 
             # Drop masked members
@@ -824,7 +844,7 @@ def to_gurobipy(
         set_names=set_names,
         env=env,
     )
-    return solver.solver_model
+    return solver._detach_solver_model()
 
 
 def to_highspy(
@@ -1001,6 +1021,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
 
     Notes
     -----
+    Variables, constraints, the objective, parameters and named
+    expressions (``Model.expressions``, including their linear/quadratic
+    type) are all persisted and fully restored by
+    :func:`linopy.io.read_netcdf`.
+
     The SOS reformulation lifecycle token lives only on the in-memory
     Model and is not persisted. If the model has an active SOS
     reformulation at serialization time, the netcdf contains the
@@ -1045,9 +1070,18 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(con.to_netcdf_ds(), f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
+    exprs = [
+        with_prefix(
+            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            f"expressions-{name}",
+        )
+        for name, expr in m.expressions.items()
+    ]
     objective = m.objective.data
     objective = objective.assign_attrs(
-        sense=m.objective.sense, scaling=m.objective.scaling
+        sense=m.objective.sense,
+        scaling=m.objective.scaling,
+        **{EXPR_TYPE_ATTR: m.objective.expression.type},
     )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
@@ -1055,8 +1089,9 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
@@ -1107,7 +1142,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         Constraints,
         CSRConstraint,
     )
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable, Variables
 
@@ -1163,6 +1198,26 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._variables = Variables(variables, m)
 
+    exprs = [str(k) for k in ds if str(k).startswith("expressions")]
+    expr_names = list({str(k).rsplit("-", 1)[0] for k in exprs})
+    expressions: dict[str, LinearExpression | QuadraticExpression] = {}
+    for k in sorted(expr_names):
+        name = remove_prefix(k, "expressions")
+        expr_ds = get_prefix(ds, k)
+        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
+        expr_ds.attrs.pop("name", None)  # re-attached below, after construction
+        expr: LinearExpression | QuadraticExpression
+        if expr_type == "QuadraticExpression" or (
+            expr_type is None and FACTOR_DIM in expr_ds.dims
+        ):
+            expr = QuadraticExpression(expr_ds, m)
+        else:
+            expr = LinearExpression(expr_ds, m)
+        expr.attrs["name"] = name
+        expressions[name] = expr
+
+    m._expressions = Expressions(expressions, m)
+
     cons = [str(k) for k in ds if str(k).startswith("constraints")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints: dict[str, ConstraintBase] = {}
@@ -1176,8 +1231,15 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
+    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
+    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
+        QuadraticExpression
+        if obj_type == "QuadraticExpression"
+        or (obj_type is None and FACTOR_DIM in objective.dims)
+        else LinearExpression
+    )
     m.objective = Objective(
-        LinearExpression(objective, m),
+        obj_cls(objective, m),
         m,
         objective.attrs.pop("sense"),
         objective.attrs.pop("scaling", 1),
@@ -1189,6 +1251,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
+
+    if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
+        m._dtypes["labels"] = np.int64
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
@@ -1246,7 +1311,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         A deep or shallow copy of the model.
     """
     from linopy.constraints import Constraint, ConstraintBase, Constraints
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
@@ -1275,6 +1340,19 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
+    def _copy_expr(
+        name: str, expr: LinearExpression | QuadraticExpression
+    ) -> LinearExpression | QuadraticExpression:
+        # Expressions hold no solve artifacts, so include_solution is irrelevant.
+        new_expr = type(expr)(expr.data.copy(deep=deep), new_model)
+        new_expr.attrs["name"] = name  # __init__ resets the name to None
+        return new_expr
+
+    new_model._expressions = Expressions(
+        {name: _copy_expr(name, expr) for name, expr in m.expressions.items()},
+        new_model,
+    )
+
     def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
         d = con.mutable().data
         if include_solution:
@@ -1289,7 +1367,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    obj_expr = type(m.objective.expression)(
+        m.objective.expression.data.copy(deep=deep), new_model
+    )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )

@@ -13,7 +13,8 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import TYPE_CHECKING, Any, Literal, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -30,7 +31,9 @@ from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     assign_multiindex_safe,
+    assigned_labels,
     best_int,
+    coords_reorder_set,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -38,6 +41,7 @@ from linopy.common import (
     variable_solver_scaling,
 )
 from linopy.constants import (
+    FACTOR_DIM,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
@@ -58,6 +62,7 @@ from linopy.constraints import (
 )
 from linopy.dualization import dualize
 from linopy.expressions import (
+    Expressions,
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
@@ -81,6 +86,7 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
+from linopy.semantics import enforce_no_multiindex
 
 try:
     from linopy.remote import OetcHandler
@@ -113,6 +119,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DtypeKey = Literal["labels"]
+
 
 class Model:
     """
@@ -132,6 +140,7 @@ class Model:
 
     _solver: solvers.Solver | None
     _variables: Variables
+    _expressions: Expressions
     _constraints: Constraints
     _objective: Objective
     _parameters: Dataset
@@ -141,7 +150,9 @@ class Model:
     _termination_condition: str
     _xCounter: int
     _cCounter: int
+    _dtypes: dict[DtypeKey, type[np.signedinteger]]
     _varnameCounter: int
+    _exprnameCounter: int
     _connameCounter: int
     _pwlCounter: int
     _blocks: DataArray | None
@@ -153,6 +164,7 @@ class Model:
     __slots__ = (
         # containers
         "_variables",
+        "_expressions",
         "_constraints",
         "_objective",
         "_parameters",
@@ -164,7 +176,9 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
+        "_dtypes",
         "_varnameCounter",
+        "_exprnameCounter",
         "_connameCounter",
         "_pwlCounter",
         "_blocks",
@@ -182,6 +196,25 @@ class Model:
         "__weakref__",
     )
 
+    @staticmethod
+    def _resolve_dtypes(
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None,
+    ) -> dict[DtypeKey, type[np.signedinteger]]:
+        """Validate the ``dtypes`` argument and merge it onto the defaults."""
+        resolved: dict[DtypeKey, type[np.signedinteger]] = {"labels": np.int32}
+        for key, dtype in (dtypes or {}).items():
+            if key not in get_args(DtypeKey):
+                raise ValueError(
+                    f"dtypes only supports the keys {list(get_args(DtypeKey))}, "
+                    f"got unknown key {key!r}"
+                )
+            if dtype not in (np.int32, np.int64):
+                raise ValueError(
+                    f"dtypes[{key!r}] must be np.int32 or np.int64, got {dtype}"
+                )
+            resolved[key] = dtype
+        return resolved
+
     def __init__(
         self,
         solver_dir: str | None = None,
@@ -190,6 +223,7 @@ class Model:
         auto_mask: bool = False,
         freeze_constraints: bool = False,
         set_names_in_solver_io: bool = True,
+        dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
     ) -> None:
         """
         Initialize the linopy model.
@@ -219,12 +253,23 @@ class Model:
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
+        dtypes : mapping, optional
+            Integer dtypes for the model's data, exposed read-only as
+            ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
+            ``Model(dtypes={"labels": np.int64})``. The default ``np.int32``
+            halves label memory but caps the model at ~2.1 billion labels,
+            after which it widens to ``np.int64`` automatically; pass
+            ``np.int64`` upfront to avoid that mid-build upcast.
 
         Returns
         -------
         linopy.Model
         """
+        self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
+            dtypes
+        )
         self._variables: Variables = Variables({}, model=self)
+        self._expressions: Expressions = Expressions({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
@@ -234,6 +279,7 @@ class Model:
         self._xCounter: int = 0
         self._cCounter: int = 0
         self._varnameCounter: int = 0
+        self._exprnameCounter: int = 0
         self._connameCounter: int = 0
         self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
@@ -292,6 +338,13 @@ class Model:
         Variables assigned to the model.
         """
         return self._variables
+
+    @property
+    def expressions(self) -> Expressions:
+        """
+        Expressions assigned to the model.
+        """
+        return self._expressions
 
     @property
     def constraints(self) -> Constraints:
@@ -497,6 +550,37 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
+    def dtypes(self) -> Mapping[DtypeKey, type[np.signedinteger]]:
+        """
+        Read-only mapping of the model's integer dtypes.
+
+        Currently holds only ``"labels"``, the dtype of the variable and
+        constraint labels, which widens to ``int64`` automatically once the
+        labels outgrow int32.
+        """
+        return MappingProxyType(self._dtypes)
+
+    def _widen_label_dtype(self) -> None:
+        """Widen this model's label dtype to ``int64`` (monotonic, never narrows)."""
+        if self._dtypes["labels"] == np.int64:
+            return
+        self._dtypes["labels"] = np.int64
+        warnings.warn(
+            "The model exceeded the int32 label limit (~2.1 billion labels); "
+            "its label dtype was widened to int64. Pass "
+            'dtypes={"labels": np.int64} to Model() when building large models '
+            "to avoid the mid-build upcast.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+    def _allocate_labels(self, start: int, end: int) -> np.ndarray:
+        """Return the label range ``[start, end)``, widening the dtype on overflow."""
+        if end > np.iinfo(self._dtypes["labels"]).max:
+            self._widen_label_dtype()
+        return np.arange(start, end, dtype=self._dtypes["labels"])
+
+    @property
     def dataset_attrs(self) -> list[str]:
         return ["parameters"]
 
@@ -508,6 +592,7 @@ class Model:
             "_xCounter",
             "_cCounter",
             "_varnameCounter",
+            "_exprnameCounter",
             "_connameCounter",
             "_pwlCounter",
             "force_dim_names",
@@ -526,11 +611,13 @@ class Model:
         var_names, con_names = _get_piecewise_groups(self)
         var_string = self.variables._format_items(exclude=var_names)
         con_string = self.constraints._format_items(exclude=con_names)
+        expr_string = self.expressions._format_items()
         model_string = f"Linopy {self.type} model"
 
         return (
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
+            f"Expressions:\n------------\n{expr_string}\n"
             f"Constraints:\n------------\n{con_string}"
             f"{pwl_repr_summary(self)}"
             f"\nStatus:\n-------\n{self.status}"
@@ -624,11 +711,11 @@ class Model:
         Parameters
         ----------
         lower : float/array_like, optional
-            Lower bound of the variable(s). Ignored if `binary` is True.
-            The default is -inf.
+            Lower bound of the variable(s). For binary variables it
+            defaults to 0 and, if given, must be 0 or 1. The default is -inf.
         upper : TYPE, optional
-            Upper bound of the variable(s). Ignored if `binary` is True.
-            The default is inf.
+            Upper bound of the variable(s). For binary variables it
+            defaults to 1 and, if given, must be 0 or 1. The default is inf.
         coords : list/dict/xarray.Coordinates, optional
             The coords of the variable array. When provided with **named
             dimensions** (a ``Mapping``, ``xarray.Coordinates``, a
@@ -784,10 +871,14 @@ class Model:
             )
 
         if binary:
-            if (lower != -inf) or (upper != inf):
-                raise ValueError("Binary variables cannot have lower or upper bounds.")
-            else:
-                lower, upper = 0, 1
+            if np.isscalar(lower) and lower == -inf:
+                lower = 0
+            elif not (np.isin(lower, (0, 1)) | pd.isna(lower)).all():
+                raise ValueError("Binary variable lower bounds must be 0 or 1.")
+            if np.isscalar(upper) and upper == inf:
+                upper = 1
+            elif not (np.isin(upper, (0, 1)) | pd.isna(upper)).all():
+                raise ValueError("Binary variable upper bounds must be 0 or 1.")
 
         if semi_continuous:
             if not np.isscalar(lower) or float(lower) <= 0:  # type: ignore[arg-type]
@@ -835,7 +926,9 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        data.labels.values = self._allocate_labels(start, end).reshape(
+            data.labels.shape
+        )
         self._xCounter += data.labels.size
 
         if mask is not None:
@@ -852,9 +945,87 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
+        enforce_no_multiindex(data, context=f"variable {name!r}")
         variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
+
+    def add_expressions(
+        self,
+        data: Variable
+        | LinearExpression
+        | QuadraticExpression
+        | Sequence[tuple[ConstantLike, Variable | str]],
+        name: str | None = None,
+        mask: MaskLike | None = None,
+    ) -> LinearExpression | QuadraticExpression:
+        """
+        Assign a new, possibly multi-dimensional array of expressions to the
+        model.
+
+        Parameters
+        ----------
+        data : Variable, LinearExpression, QuadraticExpression, or Sequence of (constant, variable) tuples
+            The expression(s) to add.
+            This can be a Variable or LinearExpression, or a sequence of (constant, variable) tuples which will be summed up.
+        coords : list/xarray.Coordinates, optional
+            The coords of the expression array.
+            The default is None.
+        name : str, optional
+            Reference name of the added expressions. The default None results in
+            a name like "expr1", "expr2" etc.
+        mask : array_like, optional
+            Boolean mask with False values for expressions which are skipped.
+            The shape of the mask has to match the shape the added expressions.
+            Default is None.
+
+        Raises
+        ------
+        ValueError
+            If neither lower bound and upper bound have coordinates, nor
+            `coords` are directly given.
+
+        Returns
+        -------
+        linopy.LinearExpression | linopy.QuadraticExpression
+            Expression which was added to the model.
+
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
+        >>> time = pd.RangeIndex(10, name="Time")
+        >>> x = m.add_variables(lower=0, coords=[time], name="x")
+        >>> expr = m.add_expressions(x + 1, name="expr")
+        """
+        if name is None:
+            name = f"expr{self._exprnameCounter}"
+            self._exprnameCounter += 1
+
+        if name in self.expressions:
+            raise ValueError(f"Expression '{name}' already assigned to model")
+
+        expr: LinearExpression | QuadraticExpression
+        if isinstance(data, Variable):
+            expr = data.to_linexpr()
+        elif isinstance(data, Sequence):
+            expr = self.linexpr(*data)
+        else:
+            expr = data
+        self.check_force_dim_names(expr.data)
+        self._check_valid_dim_names(expr.data)
+
+        if mask is not None:
+            mask = as_dataarray(mask, coords=expr.coords, dims=expr.dims).astype(bool)
+            expr = expr.where(mask)
+        if self.chunk:
+            expr = expr.chunk(self.chunk)
+
+        expr.attrs["name"] = name
+        self.expressions.add(expr)
+        return expr
 
     def add_sos_constraints(
         self,
@@ -866,7 +1037,8 @@ class Model:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
 
-        The dimension values are used as SOS.
+        The set runs in the order its members are declared along ``sos_dim``,
+        which for ``sos_type=2`` decides which members are adjacent.
 
         Parameters
         ----------
@@ -899,11 +1071,14 @@ class Model:
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
 
-        # Validate that sos_dim coordinates are numeric (needed for weights)
-        if not pd.api.types.is_numeric_dtype(variable.coords[sos_dim]):
-            raise ValueError(
-                f"SOS constraint requires numeric coordinates for dimension '{sos_dim}', "
-                f"but got {variable.coords[sos_dim].dtype}"
+        if sos_type == 2 and coords_reorder_set(variable.coords[sos_dim].values):
+            warn(
+                f"The coordinates of SOS dimension '{sos_dim}' neither ascend "
+                "nor descend. This set is ordered by the positions its members "
+                "are declared in, which decides which of them are adjacent. "
+                "Sort the index to order it by coordinate value instead.",
+                UserWarning,
+                stacklevel=2,
             )
 
         attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
@@ -980,7 +1155,9 @@ class Model:
         """Assign label ranges from the constraint counter and apply an optional mask."""
         start = self._cCounter
         end = start + data.labels.size
-        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        data.labels.values = self._allocate_labels(start, end).reshape(
+            data.labels.shape
+        )
         self._cCounter += data.labels.size
         if mask is not None:
             data.labels.values = np.where(mask.values, data.labels.values, -1)
@@ -1160,6 +1337,7 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
+        enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         if freeze is None:
             freeze = self.freeze_constraints
@@ -1244,6 +1422,7 @@ class Model:
 
         data = self._allocate_constraint_labels(data, name)
 
+        enforce_no_multiindex(data, context=f"constraint {name!r}")
         con = Constraint(data, name=name, model=self, skip_broadcast=True)
         freeze = self.freeze_constraints
         return self.constraints.add(con, freeze=freeze and not self.chunk)
@@ -1292,6 +1471,7 @@ class Model:
             )
         if isinstance(expr, Variable):
             expr = 1 * expr
+        enforce_no_multiindex(expr, context="objective")
         self.objective.expression = expr
         self.objective.sense = sense
         self.objective.scaling = scaling
@@ -1316,9 +1496,9 @@ class Model:
 
         self._relaxed_registry.pop(name, None)
 
-        to_remove = [
-            k for k, con in self.constraints.items() if con.has_variable(variable)
-        ]
+        labels = assigned_labels(variable.labels)
+
+        to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
         if to_remove:
             warnings.warn(
@@ -1332,9 +1512,11 @@ class Model:
 
         self.variables.remove(name)
 
-        self.objective = self.objective.sel(
-            {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
-        )
+        referenced = self.objective.vars.isin(labels)
+        if FACTOR_DIM in referenced.dims:
+            referenced = referenced.any(FACTOR_DIM)
+
+        self.objective = self.objective.sel({TERM_DIM: ~referenced})
 
     def remove_constraints(self, name: str | list[str]) -> None:
         """
@@ -1359,6 +1541,27 @@ class Model:
         else:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
+
+    def remove_expressions(self, name: str | list[str]) -> None:
+        """
+        Remove all expressions stored under reference name 'name' from the
+        model.
+
+        Parameters
+        ----------
+        name : str or list of str
+            Reference name(s) of the expressions to remove. If a single name is
+            provided, only that expression will be removed. If a list of names
+            is provided, all expressions with those names will be removed.
+
+        Returns
+        -------
+        None.
+        """
+        names = [name] if isinstance(name, str) else name
+        for n in names:
+            logger.debug(f"Removed expression: {n}")
+            self.expressions.remove(n)
 
     def remove_sos_constraints(self, variable: Variable) -> None:
         """
@@ -1851,6 +2054,18 @@ class Model:
         status : tuple
             Tuple containing the status and termination condition of the
             optimization process.
+
+        Notes
+        -----
+        After solving, the solver stays attached as ``model.solver`` for
+        post-solve introspection (``model.solver_model``,
+        ``compute_infeasibilities()``) and reuse, e.g. persistent in-place
+        re-solves. For solvers with limited licenses (e.g. Gurobi) this
+        means the license remains acquired until the solver is released:
+        call ``model.solver.close()`` (or assign ``model.solver = None``)
+        to free it explicitly. It is also released on the next ``solve()``
+        call, but not by garbage collection: a model that merely goes out of
+        scope leaves its solver open.
         """
         if mock_solve:
             return self._mock_solve(
@@ -2042,7 +2257,7 @@ class Model:
                 primal[start:end].reshape(var.shape)
                 / variable_solver_scaling(var).values
             )
-            var.solution = xr.DataArray(values, var.coords)
+            var.solution = xr.DataArray(values, var.coords, dims=var.dims)
 
         if len(result.solution.dual):
             dual = result.solution.dual

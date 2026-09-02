@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
@@ -8,6 +9,22 @@ from linopy.constraints import ConstraintBase, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
+
+
+def _align_dim_order(target: xr.Dataset, other: xr.Dataset) -> xr.Dataset:
+    """
+    Reorder ``other``'s dimensions to match ``target`` when they share a dim set.
+
+    linopy expressions inherit xarray's broadcasting, whose dimension order
+    follows operand order (``x + y`` yields ``(x_dim, y_dim)`` while ``y + x``
+    yields ``(y_dim, x_dim)``). That difference is not semantically meaningful,
+    so it should not make two expressions compare unequal. If the dimension
+    sets differ the inputs are genuinely unequal; leave ``other`` untouched so
+    :func:`assert_equal` reports the real difference.
+    """
+    if set(target.dims) == set(other.dims):
+        return other.transpose(*target.dims)
+    return other
 
 
 def _sort_by_vars_along_term(expr: LinearExpression) -> LinearExpression:
@@ -35,15 +52,15 @@ def assert_linequal(
     """
     Assert that two linear expressions are semantically equal.
 
-    Terms are sorted by variable labels along _term before comparing,
-    so expressions with different term orderings but identical mathematical
-    meaning are considered equal.
+    Terms are sorted by variable labels along _term and dimension order is
+    aligned before comparing, so expressions with different term orderings or
+    dimension orderings but identical mathematical meaning are considered equal.
     """
     assert isinstance(a, LinearExpression)
     assert isinstance(b, LinearExpression)
-    a_sorted = _sort_by_vars_along_term(a)
-    b_sorted = _sort_by_vars_along_term(b)
-    return assert_equal(_expr_unwrap(a_sorted), _expr_unwrap(b_sorted))
+    a_ds = _expr_unwrap(_sort_by_vars_along_term(a))
+    b_ds = _expr_unwrap(_sort_by_vars_along_term(b))
+    return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
 
 
 def assert_quadequal(
@@ -51,6 +68,26 @@ def assert_quadequal(
 ) -> None:
     """Assert that two quadratic or linear expressions are equal."""
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
+
+
+def assert_exprequal(
+    a: LinearExpression | QuadraticExpression,
+    b: LinearExpression | QuadraticExpression,
+    check_name: bool = True,
+) -> None:
+    """
+    Assert that two expressions are equal, dispatching on linear vs quadratic.
+
+    xarray's assert_equal ignores attrs, so the stored name (which lives in
+    ``attrs["name"]``) is compared explicitly unless ``check_name=False``.
+    """
+    assert type(a) is type(b), f"expression types differ: {type(a)} != {type(b)}"
+    if check_name:
+        assert a.name == b.name, f"expression names differ: {a.name!r} != {b.name!r}"
+    if isinstance(a, QuadraticExpression):
+        assert_quadequal(a, b)
+    else:
+        assert_linequal(a, b)
 
 
 def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -> None:
@@ -88,7 +125,12 @@ def assert_model_equal(a: Model, b: Model) -> None:
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
 
-    assert_linequal(a.objective.expression, b.objective.expression)
+    assert set(a.expressions) == set(b.expressions)
+
+    for e in a.expressions:
+        assert_exprequal(a.expressions[e], b.expressions[e])
+
+    assert_exprequal(a.objective.expression, b.objective.expression, check_name=False)
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
 

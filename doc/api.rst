@@ -42,6 +42,7 @@ Building a model
    model.Model.add_variables
    model.Model.add_constraints
    model.Model.add_objective
+   model.Model.add_expressions
    model.Model.add_sos_constraints
    model.Model.add_piecewise_formulation
 
@@ -53,6 +54,7 @@ Inspecting a model
 
    model.Model.variables
    model.Model.constraints
+   model.Model.expressions
    model.Model.objective
    model.Model.sense
    model.Model.type
@@ -67,9 +69,12 @@ Modifying a model
 
    model.Model.remove_variables
    model.Model.remove_constraints
+   model.Model.remove_expressions
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.copy
+   model.Model.apply_sos_reformulation
+   model.Model.undo_sos_reformulation
    model.Model.reformulate_sos_constraints
 
 Solving
@@ -137,9 +142,14 @@ Attributes
 Modification
 ------------
 
+``Variable.update`` is the canonical mutation API. The legacy ``lower`` /
+``upper`` setters still forward to ``update`` but emit a
+``DeprecationWarning`` and will be removed in a future release.
+
 .. autosummary::
    :toctree: generated/
 
+   variables.Variable.update
    variables.Variable.fix
    variables.Variable.unfix
    variables.Variable.relax
@@ -210,6 +220,35 @@ Inventory
    variables.Variables.sos
 
 
+Expressions
+===========
+
+Container for the collection of named expressions on a model. Accessed via
+``model.expressions``.
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions
+
+Modification
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions.add
+   expressions.Expressions.remove
+
+Post-solve access
+-----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.Expressions.solution
+
+
 LinearExpression
 ================
 
@@ -246,6 +285,7 @@ Structure
 .. autosummary::
    :toctree: generated/
 
+   expressions.LinearExpression.name
    expressions.LinearExpression.vars
    expressions.LinearExpression.coeffs
    expressions.LinearExpression.const
@@ -287,6 +327,7 @@ Structure
 .. autosummary::
    :toctree: generated/
 
+   expressions.QuadraticExpression.name
    expressions.QuadraticExpression.vars
    expressions.QuadraticExpression.coeffs
    expressions.QuadraticExpression.const
@@ -334,6 +375,19 @@ Structure
    constraints.Constraint.scaling
    constraints.Constraint.coeffs
    constraints.Constraint.vars
+
+Modification
+------------
+
+``Constraint.update`` is the canonical mutation API. The legacy ``lhs`` /
+``sign`` / ``rhs`` / ``coeffs`` / ``vars`` setters still forward to
+``update`` but emit a ``DeprecationWarning`` and will be removed in a
+future release.
+
+.. autosummary::
+   :toctree: generated/
+
+   constraints.Constraint.update
 
 Post-solve access
 -----------------
@@ -506,10 +560,75 @@ Type aliases
 Solvers
 ========
 
+The stateful :class:`~linopy.solvers.Solver` instance owns the solver-side
+model and exposes a two-step :meth:`~linopy.solvers.Solver.from_name` /
+:meth:`~linopy.solvers.Solver.solve` workflow. :meth:`Model.solve` is a
+thin wrapper around it.
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver
+
+Construction
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.from_name
+   solvers.Solver.from_model
+
+Solving
+-------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.solve
+   solvers.Solver.update_solver_model
+   solvers.Solver.close
+
+Post-solve state
+----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.status
+   solvers.Solver.solution
+   solvers.Solver.report
+   solvers.Solver.solver_model
+
+Capabilities
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.is_available
+   solvers.Solver.license_status
+   solvers.Solver.supports
+   solvers.Solver.supported_features
+   solvers.Solver.runtime_features
+
+Discovery
+---------
+
 .. autosummary::
    :toctree: generated/
 
    solvers.available_solvers
+   solvers.licensed_solvers
+   solvers.SolverFeature
+   solvers.LicenseStatus
+
+Implementations
+---------------
+
+.. autosummary::
+   :toctree: generated/
+
    solvers.CBC
    solvers.COPT
    solvers.Cplex
@@ -537,7 +656,10 @@ Solver status and result types
 ==============================
 
 Types returned by or compared against :attr:`Model.status`,
-:attr:`Model.termination_condition`, and :attr:`Model.solution`.
+:attr:`Model.termination_condition`, and :attr:`Model.solution`, plus
+:class:`~linopy.constants.SolverReport` surfaced on
+:attr:`Solver.report <linopy.solvers.Solver.report>` and
+:attr:`Result.report <linopy.constants.Result.report>`.
 
 .. autosummary::
    :toctree: generated/
@@ -546,6 +668,7 @@ Types returned by or compared against :attr:`Model.status`,
    constants.TerminationCondition
    constants.Status
    constants.Solution
+   constants.SolverReport
    constants.Result
 
 
@@ -557,6 +680,7 @@ Utilities
 
    align
    options
+   ABSENT
 
 
 Warnings

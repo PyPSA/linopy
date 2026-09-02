@@ -186,6 +186,60 @@ def test_variable_lower_setter_with_array_invalid_dim(x: linopy.Variable) -> Non
         x.lower = lower
 
 
+def test_variable_update_bounds(z: linopy.Variable) -> None:
+    z.update(lower=2, upper=20)
+    assert z.lower.item() == 2
+    assert z.upper.item() == 20
+
+
+def test_variable_update_lower_only(z: linopy.Variable) -> None:
+    z.update(lower=3)
+    assert z.lower.item() == 3
+    assert z.upper.item() == 10  # unchanged from fixture default
+
+
+def test_variable_update_no_kwargs_is_noop(z: linopy.Variable) -> None:
+    old_lower, old_upper = z.lower.item(), z.upper.item()
+    z.update()
+    assert z.lower.item() == old_lower
+    assert z.upper.item() == old_upper
+
+
+def test_variable_update_rejects_inverted_bounds(z: linopy.Variable) -> None:
+    with pytest.raises(ValueError, match="lower > upper"):
+        z.update(lower=20, upper=5)
+
+
+def test_variable_update_rejects_non_constant(z: linopy.Variable) -> None:
+    with pytest.raises(TypeError, match="must be a constant"):
+        z.update(upper=z)
+
+
+def test_variable_update_returns_self(z: linopy.Variable) -> None:
+    out = z.update(lower=1)
+    assert out is z
+
+
+def test_variable_update_array_invalid_dim(x: linopy.Variable) -> None:
+    with pytest.raises(ValueError):
+        x.update(lower=pd.Series(range(15, 25)))
+
+
+def test_variable_update_upper_only(z: linopy.Variable) -> None:
+    """upper= alone changes upper; lower untouched."""
+    old_lower = z.lower.copy()
+    z.update(upper=25)
+    assert (z.upper == 25).all()
+    assert (z.lower == old_lower).all()
+
+
+def test_variable_update_with_array(x: linopy.Variable) -> None:
+    """Array bound that aligns on the variable's coord is accepted."""
+    lower = pd.Series(range(10, 20), index=pd.RangeIndex(10, name="first"))
+    x.update(lower=lower)
+    np.testing.assert_array_equal(x.lower.values, lower.values)
+
+
 def test_variable_sum(x: linopy.Variable) -> None:
     res = x.sum()
     assert res.nterm == 10
@@ -220,6 +274,15 @@ def test_variable_where(x: linopy.Variable) -> None:
 
     with pytest.raises(ValueError):
         x.where([True] * 4 + [False] * 6, 0)  # type: ignore
+
+
+def test_variable_where_with_solution(x: linopy.Variable) -> None:
+    x.solution = xr.DataArray(np.arange(10.0), coords=x.labels.coords)
+    cond = [True] * 4 + [False] * 6
+    filtered = x.where(cond)
+    assert filtered.labels[9] == x._fill_value["labels"]
+    assert filtered.data["solution"][0] == 0.0
+    assert np.isnan(filtered.data["solution"][9])
 
 
 def test_variable_shift(x: linopy.Variable) -> None:
@@ -812,8 +875,9 @@ class TestAddVariablesBoundsWithCoords:
             )
 
 
+@pytest.mark.legacy
 class TestAddVariablesMultiIndexCoords:
-    """MultiIndex-specific coord handling in add_variables."""
+    """MultiIndex-specific coord handling in add_variables (legacy; v1 rejects MI)."""
 
     @pytest.fixture
     def model(self) -> "Model":
@@ -862,14 +926,13 @@ class TestAddVariablesMultiIndexCoords:
         with pytest.raises(ValueError, match="MultiIndex.*does not match"):
             model.add_variables(upper=bound, coords=[midx], name="x")
 
+    @pytest.mark.legacy
     def test_single_level_bound_broadcasts(
         self, model: "Model", midx: pd.MultiIndex
     ) -> None:
         bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        # Implicit level projection is deprecated (scenario B) — warns until
-        # the v1 convention makes it an error.
         with pytest.warns(
-            linopy.EvolvingAPIWarning, match=r"broadcasting level subset"
+            linopy.LinopySemanticsWarning, match=r"broadcasting level subset"
         ):
             var = model.add_variables(upper=bound, coords=[midx], name="x")
         assert var.dims == ("multi",)
@@ -882,3 +945,25 @@ class TestAddVariablesMultiIndexCoords:
         bound = pd.Series([1, 2], index=subset)
         with pytest.raises(ValueError, match="no value for .* level combination"):
             model.add_variables(upper=bound, coords=[midx], name="x")
+
+
+@pytest.mark.v1
+def test_add_variables_multiindex_rejected_v1() -> None:
+    """v1: an MI dim-coord is rejected at construction with a reset_index hint."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    mi.name = "multi"
+    with pytest.raises(ValueError, match=r"v1 convention does not support"):
+        Model().add_variables(lower=0, upper=1, coords=[mi], name="x")
+
+
+@pytest.mark.v1
+def test_add_constraint_and_objective_multiindex_rejected_v1() -> None:
+    """v1: an MI forced onto an expression is rejected at the constraint/objective."""
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    mi.name = "d"
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
+    with pytest.raises(ValueError, match=r"constraint .* v1 convention does not"):
+        m.add_constraints((1 * x).assign_coords(d=mi) >= 0, name="c")
+    with pytest.raises(ValueError, match=r"objective .* v1 convention does not"):
+        m.add_objective((1 * x).assign_coords(d=mi))

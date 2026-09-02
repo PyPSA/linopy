@@ -144,7 +144,6 @@ def test_constraint_assignment_with_reindex() -> None:
 @pytest.mark.parametrize(
     "rhs_factory",
     [
-        pytest.param(lambda m, v: v, id="numpy"),
         pytest.param(lambda m, v: xr.DataArray(v, dims=["dim_0"]), id="dataarray"),
         pytest.param(lambda m, v: pd.Series(v, index=v), id="series"),
         pytest.param(
@@ -168,10 +167,35 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     assert c.shape == (10, 10)
 
 
+@pytest.mark.legacy
+def test_constraint_rhs_unlabeled_lower_dim_legacy() -> None:
+    """An unlabeled rhs pairs with the leading dim; both dims are size 10."""
+    m = Model()
+    naxis = np.arange(10, dtype=float)
+    maxis = np.arange(10).astype(str)
+    x = m.add_variables(coords=[naxis, maxis])
+    y = m.add_variables(coords=[naxis, maxis])
+
+    c = m.add_constraints(x - y >= naxis)
+    assert c.shape == (10, 10)
+
+
+@pytest.mark.v1
+def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises_v1() -> None:
+    """Both dims are size 10, so a length-10 rhs cannot be paired by size."""
+    m = Model()
+    naxis = np.arange(10, dtype=float)
+    maxis = np.arange(10).astype(str)
+    x = m.add_variables(coords=[naxis, maxis])
+    y = m.add_variables(coords=[naxis, maxis])
+
+    with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
+        m.add_constraints(x - y >= naxis)
+
+
 @pytest.mark.parametrize(
     "rhs_factory",
     [
-        pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
         pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
     ],
 )
@@ -184,6 +208,27 @@ def test_constraint_rhs_higher_dim_constant_warns(
     with caplog.at_level("WARNING", logger="linopy.expressions"):
         m.add_constraints(x >= rhs_factory(m))
     assert "dimensions" in caplog.text
+
+
+@pytest.mark.legacy
+def test_constraint_rhs_unlabeled_higher_dim_warns_legacy(caplog: Any) -> None:
+    """An unlabeled (5, 3) rhs pairs axis 0 with dim_0 and broadcasts axis 1."""
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+
+    with caplog.at_level("WARNING", logger="linopy.expressions"):
+        m.add_constraints(x >= np.ones((5, 3)))
+    assert "dimensions" in caplog.text
+
+
+@pytest.mark.v1
+def test_constraint_rhs_unlabeled_higher_dim_raises_v1() -> None:
+    """The (5, 3) rhs has an axis of length 3 matching no dim of x."""
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+
+    with pytest.raises(ValueError, match=r"no unambiguous dimension match"):
+        m.add_constraints(x >= np.ones((5, 3)))
 
 
 def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:
@@ -355,7 +400,13 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
+@pytest.mark.legacy
 class TestConstraintCoordinateAlignment:
+    """
+    Constraint-side counterpart of TestCoordinateAlignment — legacy-only;
+    v1 raises on subset/superset/NaN-RHS (see convention.md §5/§8/§12).
+    """
+
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "xarray":

@@ -50,12 +50,13 @@ from linopy.constants import (
     EvolvingAPIWarning,
     sign_replace_dict,
 )
+from linopy.semantics import check_user_nan_breakpoints
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model
-    from linopy.types import LinExprLike
+    from linopy.types import LinExprLike, MaskLike
     from linopy.variables import Variables
 
 logger = logging.getLogger(__name__)
@@ -736,12 +737,17 @@ def _tangent_lines_impl(
     x: LinExprLike,
     x_points: BreaksLike,
     y_points: BreaksLike,
+    piece_mask: DataArray | None = None,
 ) -> LinearExpression:
     """
     Chord-expression math — the body of ``tangent_lines`` without the
     :class:`EvolvingAPIWarning`.  Called internally by ``_add_lp`` so a
     single ``add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))``
     emits exactly one warning, not two.
+
+    ``piece_mask`` marks the pieces that exist.  A padded piece of a ragged
+    curve gets a neutral zero chord, which the caller is expected to mask
+    out of the resulting constraint.
     """
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
@@ -753,7 +759,7 @@ def _tangent_lines_impl(
     dy = y_points.diff(BREAKPOINT_DIM)
     piece_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    slopes = _rename_to_pieces(dy / dx, piece_index)
+    slopes = _drop_absent(_rename_to_pieces(dy / dx, piece_index), piece_mask)
     x_base = _rename_to_pieces(
         x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
@@ -761,7 +767,7 @@ def _tangent_lines_impl(
         y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
 
-    intercepts = y_base - slopes * x_base
+    intercepts = _drop_absent(y_base - slopes * x_base, piece_mask)
 
     if not isinstance(x, Variable | LinExpr):
         raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
@@ -830,12 +836,54 @@ def tangent_lines(
         "entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
     )
+    if bool(_coerce_breaks(x_points).isnull().any()) or bool(
+        _coerce_breaks(y_points).isnull().any()
+    ):
+        check_user_nan_breakpoints()
     return _tangent_lines_impl(x, x_points, y_points)
 
 
 # ---------------------------------------------------------------------------
 # Internal validation and utility functions
 # ---------------------------------------------------------------------------
+
+
+def _resolve_active(
+    active: LinearExpression, reference: DataArray, active_fill: int | None
+) -> LinearExpression:
+    """
+    Resolve a possibly-partial ``active`` gate against the formulation.
+
+    A gate defined over only a subset of the indexed dimension (or with
+    masked entries) would otherwise be gated as if ``active=0`` and forced
+    to zero. With ``active_fill is None`` such a gate is rejected; otherwise
+    the gaps are filled with ``active_fill`` (``1`` = always active, ``0`` =
+    always off). Dimensions absent from ``active`` broadcast and are left
+    untouched.
+    """
+    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    indexers = {
+        d: reference.indexes[d]
+        for d in active.coord_dims
+        if d in reference.indexes and d not in skip
+    }
+    aligned = active.reindex(indexers) if indexers else active
+
+    if active_fill is not None:
+        return aligned.where(aligned.has_terms, active_fill)
+
+    term_dims = [d for d in aligned.vars.dims if d not in aligned.coord_dims]
+    dangling = ((aligned.vars < 0) & aligned.coeffs.notnull()).any(term_dims)
+    covered = aligned.has_terms | (aligned.const.notnull() & ~dangling)
+    if not bool(covered.all()):
+        raise ValueError(
+            "`active` is not defined over the full coordinate of the "
+            "piecewise formulation: it is missing labels (a subset of the "
+            "coordinate) or has masked entries, which would be gated to "
+            "zero. Pass `active_fill=1` to treat those entries as always "
+            "active (or `0` as always off), or pass a fully-defined `active`."
+        )
+    return active
 
 
 def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
@@ -945,6 +993,58 @@ def _paired_valid_points(*points: DataArray) -> DataArray:
     return points[0].where(~invalid)
 
 
+def _drop_absent(values: DataArray, mask: DataArray | None) -> DataArray:
+    """Zero out masked-absent slots; the variable's own mask already excludes them."""
+    if mask is None:
+        return values
+    return values.where(mask, 0.0)
+
+
+def _resolve_breakpoint_mask(
+    bp_list: list[DataArray], mask: MaskLike | None
+) -> tuple[list[DataArray], DataArray | None]:
+    """
+    Settle which slots hold a real breakpoint, and align the values to it.
+
+    A ragged curve is stored densely along ``BREAKPOINT_DIM`` with the
+    surplus slots absent. A shorter curve and a data error are
+    indistinguishable from NaN alone, so the caller declares the absence
+    with ``mask=``; without a declaration v1 raises and legacy keeps
+    inferring from NaN placement. The returned arrays carry ``NaN``
+    exactly where the mask says absent, so ``isnull()`` stays the single
+    absence predicate downstream.
+    """
+    combined_null = bp_list[0].isnull()
+    for bp in bp_list[1:]:
+        combined_null = combined_null | bp.isnull()
+
+    if mask is None:
+        if not bool(combined_null.any()):
+            return bp_list, None
+        check_user_nan_breakpoints()
+        return bp_list, ~combined_null
+
+    declared = (mask if isinstance(mask, DataArray) else DataArray(mask)).astype(bool)
+    bp_dims = set().union(*(bp.dims for bp in bp_list))
+    extra = set(declared.dims) - bp_dims
+    if extra:
+        raise ValueError(
+            f"`mask` is not broadcastable against the breakpoints: it has "
+            f"dimension(s) {sorted(map(str, extra))} which the breakpoints "
+            f"({sorted(map(str, bp_dims))}) do not have."
+        )
+    _, declared = xr.broadcast(bp_list[0], declared)
+
+    if bool((combined_null & declared).any()):
+        raise ValueError(
+            "NaN at a breakpoint slot that `mask` marks as present. Either "
+            "widen the mask to cover those slots or fix the values with "
+            "`.fillna(...)`."
+        )
+
+    return [bp.where(declared) for bp in bp_list], declared
+
+
 def _validate_shared_coords(points: Sequence[DataArray]) -> None:
     skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
     for i, left in enumerate(points):
@@ -1035,6 +1135,8 @@ def add_piecewise_formulation(
     | tuple[LinExprLike, BreaksOrSlopes, Literal["==", "<=", ">="]],
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
+    active_fill: int | None = None,
+    mask: MaskLike | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
@@ -1118,6 +1220,11 @@ def add_piecewise_formulation(
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
 
+        ``active`` must cover the formulation's full coordinate.  A
+        *partial* gate — one defined over only a subset of the coordinate's
+        labels, or carrying masked entries — is rejected unless
+        ``active_fill`` is set (see below).
+
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
         only pushes the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
@@ -1129,6 +1236,26 @@ def add_piecewise_formulation(
         automatically.  For outputs that genuinely need both signs you
         must add the complementary bound yourself (e.g., a big-M
         coupling ``y`` with ``active``).
+    active_fill : int, optional
+        Fill value for the gap entries of a partial ``active`` — those where
+        ``active`` has no label (a subset of the coordinate) or is masked:
+        ``1`` treats them as always active (ungated), ``0`` as always off.
+        When ``None`` (the default) a partial ``active`` is rejected instead.
+        Useful when one formulation mixes gated and ungated entities (e.g.
+        committable and non-committable units sharing a ``status``).
+        Transitional convenience: under v1 semantics, pad ``active``
+        explicitly with ``active.reindex(coords).fillna(value)`` instead —
+        this parameter is slated for removal then.
+    mask : MaskLike, optional
+        Which breakpoint slots hold a real breakpoint — ``True`` where one
+        exists, ``False`` where it is absent.  Shaped like the breakpoint
+        arrays, or anything that broadcasts against them.  Needed for
+        **ragged** curves (entities with different numbers of breakpoints),
+        stored densely with the surplus slots left absent: under v1 that
+        absence must be declared rather than read off the NaN padding, e.g.
+        ``mask=x_pts.notnull()``.  Absent slots get no auxiliary variable
+        and no constraint.  A mask hiding a present value drops that
+        breakpoint; a NaN at a slot the mask calls present raises.
     name : str, optional
         Base name for generated variables/constraints.
 
@@ -1265,10 +1392,7 @@ def add_piecewise_formulation(
     _validate_shared_coords(bp_list)
     _validate_expr_coords(bp_list, lin_exprs)
 
-    combined_null = bp_list[0].isnull()
-    for bp in bp_list[1:]:
-        combined_null = combined_null | bp.isnull()
-    bp_mask = ~combined_null if bool(combined_null.any()) else None
+    bp_list, bp_mask = _resolve_breakpoint_mask(bp_list, mask)
 
     if name is None:
         name = f"pwl{model._pwlCounter}"
@@ -1285,7 +1409,12 @@ def add_piecewise_formulation(
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
 
-    active_expr = _to_linexpr(active) if active is not None else None
+    if active is None:
+        if active_fill is not None:
+            raise ValueError("`active_fill` has no effect without `active`.")
+        active_expr = None
+    else:
+        active_expr = _resolve_active(_to_linexpr(active), bp_list[0], active_fill)
 
     if signed_idx is None:
         inputs = _PwlInputs(
@@ -1646,13 +1775,15 @@ def _add_sos2(
     )
 
     if links.eq_expr is not None and links.eq_bp is not None:
-        input_weighted = (lambda_var * links.eq_bp).sum(dim=dim)
+        eq_bp = _drop_absent(links.eq_bp, links.bp_mask)
+        input_weighted = (lambda_var * eq_bp).sum(dim=dim)
         model.add_constraints(
             links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
         )
 
     if links.signed_expr is not None and links.signed_bp is not None:
-        output_weighted = (lambda_var * links.signed_bp).sum(dim=dim)
+        signed_bp = _drop_absent(links.signed_bp, links.bp_mask)
+        output_weighted = (lambda_var * signed_bp).sum(dim=dim)
         _add_signed_link(
             model,
             links.signed_expr,
@@ -1671,6 +1802,13 @@ def _add_incremental(
     """
     Incremental formulation.  ``links.eq_expr`` is the equality side;
     ``links.signed_expr`` (if any) is the output-side link.
+
+    ``piece_dim`` relates each piece to the next-higher one *positionally*, so
+    the two ``isel`` slices carry different labels for the same dim, which v1
+    §8 rejects. The high slice is relabelled onto the low slice's labels —
+    §10's explicit-positional path. Scalar ``isel`` uses ``drop=True`` so a
+    leftover breakpoint coord does not become a §11 aux-coord conflict against
+    the constraint LHS.
     """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
@@ -1715,11 +1853,15 @@ def _add_incremental(
 
     if n_pieces >= 2:
         delta_lo = delta_var.isel({piece_dim: slice(None, -1)}, drop=True)
-        delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True)
+        delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True).assign_coords(
+            {piece_dim: delta_lo.coords[piece_dim]}
+        )
         model.add_constraints(
             delta_hi <= delta_lo, name=f"{name}{PWL_FILL_ORDER_SUFFIX}"
         )
-        binary_hi = binary_var.isel({piece_dim: slice(1, None)}, drop=True)
+        binary_hi = binary_var.isel(
+            {piece_dim: slice(1, None)}, drop=True
+        ).assign_coords({piece_dim: delta_lo.coords[piece_dim]})
         model.add_constraints(
             binary_hi <= delta_lo, name=f"{name}{PWL_BINARY_ORDER_SUFFIX}"
         )
@@ -1727,7 +1869,8 @@ def _add_incremental(
     def _incremental_weighted(bp: DataArray) -> LinearExpression:
         steps = bp.diff(dim).rename({dim: piece_dim})
         steps[piece_dim] = piece_index
-        bp0 = bp.isel({dim: 0})
+        steps = _drop_absent(steps, delta_mask)
+        bp0 = bp.isel({dim: 0}, drop=True)
         bp0_term: DataArray | LinearExpression = bp0
         if active is not None:
             bp0_term = bp0 * active
@@ -1805,13 +1948,15 @@ def _add_disjunctive(
     )
 
     if links.eq_expr is not None and links.eq_bp is not None:
-        input_weighted = (lambda_var * links.eq_bp).sum(dim=[SEGMENT_DIM, dim])
+        eq_bp = _drop_absent(links.eq_bp, bp_mask)
+        input_weighted = (lambda_var * eq_bp).sum(dim=[SEGMENT_DIM, dim])
         model.add_constraints(
             links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
         )
 
     if links.signed_expr is not None and links.signed_bp is not None:
-        output_weighted = (lambda_var * links.signed_bp).sum(dim=[SEGMENT_DIM, dim])
+        signed_bp = _drop_absent(links.signed_bp, bp_mask)
+        output_weighted = (lambda_var * signed_bp).sum(dim=[SEGMENT_DIM, dim])
         _add_signed_link(
             model,
             links.signed_expr,
@@ -1867,7 +2012,7 @@ def _add_lp(
 
     # Use the internal impl so we don't fire a second EvolvingAPIWarning —
     # ``add_piecewise_formulation`` already warned on entry.
-    tangents = _tangent_lines_impl(x_expr, x_points, y_points)
+    tangents = _tangent_lines_impl(x_expr, x_points, y_points, piece_mask)
     _add_signed_link(
         model,
         y_expr,

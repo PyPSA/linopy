@@ -39,8 +39,10 @@ from linopy.common import (
     VariableLabelIndex,
     align_lines_by_delimiter,
     assign_multiindex_safe,
+    assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
+    contains_labels,
     coords_from_dataset,
     coords_to_dataset_vars,
     filter_nulls_polars,
@@ -51,12 +53,12 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
+    get_printout_labels,
     has_optimized_model,
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_signs,
     replace_by_map,
-    require_constant,
     save_join,
     to_dataframe,
     to_polars,
@@ -74,6 +76,7 @@ from linopy.constants import (
 )
 from linopy.types import (
     ConstantLike,
+    ConstraintLike,
     CoordsLike,
     ExpressionLike,
     SignLike,
@@ -214,9 +217,23 @@ class ConstraintBase(ABC):
         base = list(Constraints.dataset_attrs)
         return base + ["binary_var", "binary_val"] if self.is_indicator else base
 
-    @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
-        """Check if the constraint references any of the given variable labels."""
+        """
+        Check if the constraint references any of the given variable labels.
+
+        Masked variable entries (label -1) are ignored: they are not part of
+        the model and would otherwise match every empty term slot.
+        """
+        return self.has_labels(assigned_labels(variable.labels))
+
+    @abstractmethod
+    def has_labels(self, labels: np.ndarray) -> bool:
+        """
+        Check if the constraint references any of the given variable labels.
+
+        ``labels`` must not contain the ``-1`` sentinel, see
+        :func:`linopy.common.assigned_labels`.
+        """
 
     @abstractmethod
     def sanitize_zeros(self) -> ConstraintBase:
@@ -256,6 +273,10 @@ class ConstraintBase(ABC):
     @abstractmethod
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
+
+    @abstractmethod
+    def active_row_mask(self) -> np.ndarray:
+        """Boolean mask over raveled rows selecting active constraint rows."""
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
@@ -325,7 +346,7 @@ class ConstraintBase(ABC):
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
-        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+        return {k: self.sizes[k] for k in self.coord_dims}
 
     @property
     def coord_names(self) -> list[str]:
@@ -366,7 +387,7 @@ class ConstraintBase(ABC):
     def __repr__(self) -> str:
         """Print the constraint arrays."""
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes.keys())
+        dims = list(self.coord_dims)
         ndim = len(dims)
         dim_names = self.coord_names
         dim_sizes = list(self.coord_sizes.values())
@@ -377,14 +398,12 @@ class ConstraintBase(ABC):
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
 
         if size > 1 or ndim > 0:
+            row_labels = get_printout_labels(self.data, dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord = [
-                        self.data.indexes[dims[i]][int(ind)]
-                        for i, ind in enumerate(indices)
-                    ]
+                    coord = [row_labels[i][int(ind)] for i, ind in enumerate(indices)]
                     if self.mask is None or self.mask.values[indices]:
                         expr = format_single_expression(
                             self.coeffs.values[indices],
@@ -774,7 +793,7 @@ class CSRConstraint(ConstraintBase):
         # Map active row i -> flat position in full shape via con_labels
         active_positions = self.active_positions
         coeffs_2d = np.zeros((full_size, nterm), dtype=csr.dtype)
-        vars_2d = np.full((full_size, nterm), -1, dtype=np.int64)
+        vars_2d = np.full((full_size, nterm), -1, dtype=self._model._dtypes["labels"])
         if csr.nnz > 0:
             row_indices = np.repeat(active_positions, counts)
             term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
@@ -798,7 +817,7 @@ class CSRConstraint(ConstraintBase):
         )
         ds = Dataset({"coeffs": coeffs_da, "vars": vars_da})
         if self._cindex is not None:
-            labels_flat = np.full(full_size, -1, dtype=np.int64)
+            labels_flat = np.full(full_size, -1, dtype=self._model._dtypes["labels"])
             labels_flat[active_positions] = self._con_labels
             ds = assign_multiindex_safe(
                 ds,
@@ -969,11 +988,9 @@ class CSRConstraint(ConstraintBase):
             binval=binval,
         )
 
-    def has_variable(self, variable: variables.Variable) -> bool:
-        vlabels = self._model.variables.label_index.vlabels
-        return bool(
-            np.isin(vlabels[self._csr.indices], variable.labels.values.ravel()).any()
-        )
+    def has_labels(self, labels: np.ndarray) -> bool:
+        label_to_pos = self._model.variables.label_index.label_to_pos
+        return contains_labels(self._csr.indices, label_to_pos[labels])
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
@@ -988,10 +1005,23 @@ class CSRConstraint(ConstraintBase):
     def active_labels(self) -> np.ndarray:
         return self._con_labels
 
+    def active_row_mask(self) -> np.ndarray:
+        return np.ones(self._csr.shape[0], dtype=bool)
+
     def sanitize_zeros(self) -> CSRConstraint:
-        """Remove terms with zero or near-zero coefficients (mutates in-place)."""
-        self._csr.data[np.abs(self._csr.data) <= 1e-10] = 0
-        self._csr.eliminate_zeros()
+        """
+        Remove terms with zero or near-zero coefficients.
+
+        Copy-on-write: rebinds ``_csr`` instead of mutating its arrays, so
+        external holders of the previous arrays (e.g. a ModelSnapshot
+        sharing them) keep a valid baseline.
+        """
+        zeros = np.abs(self._csr.data) <= 1e-10
+        if zeros.any():
+            csr = self._csr.copy()
+            csr.data[zeros] = 0
+            csr.eliminate_zeros()
+            self._csr = csr
         return self
 
     def sanitize_missings(self) -> CSRConstraint:
@@ -1116,7 +1146,7 @@ class CSRConstraint(ConstraintBase):
         # Build active_mask aligned with con_labels (rows in csr)
         # Use same filter as to_matrix: label != -1 AND at least one var != -1
         labels_flat = con.labels.values.ravel()
-        vars_flat = con.vars.values.reshape(len(labels_flat), -1)
+        vars_flat = con.vars.values.reshape(len(labels_flat), con.nterm)
         active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
@@ -1165,7 +1195,7 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned")
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty")
 
     def __init__(
         self,
@@ -1202,6 +1232,7 @@ class Constraint(ConstraintBase):
         self._assigned = "labels" in data
         self._data = data
         self._model = model
+        self._coef_dirty = False
 
     @property
     def data(self) -> Dataset:
@@ -1249,8 +1280,14 @@ class Constraint(ConstraintBase):
 
     @coeffs.setter
     def coeffs(self, value: ConstantLike) -> None:
-        value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
-        self._data = assign_multiindex_safe(self.data, coeffs=value)
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.coeffs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(coeffs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(coeffs=value)
 
     @property
     def vars(self) -> DataArray:
@@ -1258,34 +1295,44 @@ class Constraint(ConstraintBase):
 
     @vars.setter
     def vars(self, value: variables.Variable | DataArray) -> None:
-        if isinstance(value, variables.Variable):
-            value = value.labels
-        if not isinstance(value, DataArray):
-            raise TypeError("Expected value to be of type DataArray or Variable")
-        value = value.broadcast_like(self.coeffs, exclude=[self.term_dim])
-        self._data = assign_multiindex_safe(self.data, vars=value)
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.vars setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(variables=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(variables=value)
 
     @property
     def sign(self) -> DataArray:
         return self.data.sign
 
     @sign.setter
-    @require_constant
     def sign(self, value: SignLike) -> None:
-        value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
-        self._data = assign_multiindex_safe(self.data, sign=value)
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.sign setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(sign=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.update(sign=value)
 
     @property
     def rhs(self) -> DataArray:
         return self.data.rhs
 
     @rhs.setter
-    def rhs(self, value: ExpressionLike) -> None:
-        value = expressions.as_expression(
-            value, self.model, coords=self.coords, dims=self.coord_dims
+    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.rhs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(rhs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        self.lhs = self.lhs - value.reset_const()
-        self._data = assign_multiindex_safe(self.data, rhs=value.const)
+        self.update(rhs=value)
 
     @property
     def scaling(self) -> DataArray:
@@ -1323,12 +1370,213 @@ class Constraint(ConstraintBase):
 
     @lhs.setter
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        value = expressions.as_expression(
-            value, self.model, coords=self.coords, dims=self.coord_dims
+        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
+        warn(
+            "Constraint.lhs setter is deprecated and will be removed in a "
+            "future release; use Constraint.update(lhs=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
         )
+        self.update(lhs=value)
+
+    def _assign_lhs(
+        self, expr: expressions.LinearExpression, rhs: DataArray | None = None
+    ) -> None:
+        """
+        Internal: replace coeffs/vars from ``expr``, adjusting rhs for
+        the expression's constant part. Sets ``_coef_dirty``.
+        """
+        base_rhs = self.rhs if rhs is None else rhs
         self._data = self.data.drop_vars(["coeffs", "vars"]).assign(
-            coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const
+            coeffs=expr.coeffs,
+            vars=expr.vars,
+            rhs=base_rhs - expr.const,
         )
+        self._coef_dirty = True
+
+    def _update_data(self, **fields: Any) -> None:
+        """
+        Internal: write ``fields`` into ``self._data`` and update dirty bookkeeping.
+
+        Writes that touch the lhs structure (``coeffs``, ``vars``) flip
+        ``_coef_dirty``. Other fields (``rhs``, ``sign``, …) leave it alone.
+        """
+        self._data = assign_multiindex_safe(self.data, **fields)
+        if "coeffs" in fields or "vars" in fields:
+            self._coef_dirty = True
+
+    def update(
+        self,
+        constraint: ConstraintLike | None = None,
+        *,
+        lhs: ExpressionLike | VariableLike | ConstantLike | None = None,
+        rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
+        sign: SignLike | None = None,
+        coeffs: ConstantLike | None = None,
+        variables: variables.Variable | DataArray | None = None,
+    ) -> Constraint:
+        """
+        Update the constraint in place.
+
+        The only mutation API; setters forward here. Two call shapes:
+
+        * ``c.update(x + 5 <= 3)`` — pass a complete constraint
+          expression (mirroring ``add_constraints``). Replaces lhs,
+          sign, and rhs at once.
+        * ``c.update(lhs=, rhs=, sign=, coeffs=, variables=)`` — pass
+          only what you want to change.
+
+        Use the keyword form for targeted changes — it skips the
+        unchanged attributes entirely. The positional form always
+        rewrites lhs / sign / rhs (and flips ``_coef_dirty``), so it
+        is the wrong shape for hot loops that only touch one part:
+
+        .. code-block:: python
+
+            # Hot loop, rhs is the only thing changing per iteration:
+            for k in scenarios:
+                c.update(rhs=rhs_k)  # ← targeted, cheap
+
+            # Same loop written positionally rebuilds lhs every
+            # iteration even though it never changes:
+            for k in scenarios:
+                c.update(big_lhs_expr <= rhs_k)  # ← avoid
+
+        Parameters
+        ----------
+        constraint : ConstraintLike, optional
+            A complete constraint expression (e.g. ``x + 5 <= 3``).
+            Mutually exclusive with the keyword arguments below.
+        lhs : ExpressionLike / VariableLike / ConstantLike, optional
+            Replace the LHS expression. Any constant part is moved to
+            ``rhs`` so ``c.lhs`` stays pure-variable. Cannot be combined
+            with ``coeffs`` / ``variables``. Sets the internal
+            ``_coef_dirty`` flag.
+        rhs : ExpressionLike / VariableLike / ConstantLike, optional
+            New right-hand side.
+
+            * Constant rhs (scalar, array, DataArray) → assigned directly
+              to ``c.rhs``; ``c.lhs`` is untouched.
+            * Variable / Expression rhs → rearranged onto the lhs to
+              preserve the invariant that ``c.rhs`` is constant-only,
+              matching ``add_constraints``. **This rewrites ``c.lhs``.**
+
+            Example — the two calls below produce the same final state::
+
+                # Form A: explicit, only changes rhs
+                c.update(rhs=5)
+
+                # Form B: rhs carries a variable, so lhs is rewritten too.
+                # Starting from `2*x <= 3`, this gives `2*x - y <= 5`:
+                c.update(rhs=y + 5)
+
+            If you want the rewrite to be loud, use the positional form
+            (``c.update(2*x - y <= 5)``) which makes both sides explicit.
+        sign : SignLike, optional
+            New sign. One of ``"<=" / "==" / ">="`` (or their ``< > =``
+            aliases).
+        coeffs : ConstantLike, optional
+            Replace coefficient values (same sparsity / term structure).
+            Lower-level than ``lhs=``; sets ``_coef_dirty``.
+        variables : Variable, optional
+            Replace variable label array (same sparsity / term
+            structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
+
+            A raw ``DataArray`` of integer labels is still accepted
+            for back-compat but emits a ``FutureWarning`` — pass a
+            ``Variable`` instead. The DataArray path will be removed
+            in a future release.
+
+        Returns
+        -------
+        Constraint
+            ``self`` for chaining.
+        """
+        if constraint is not None:
+            if any(x is not None for x in (lhs, rhs, sign, coeffs, variables)):
+                raise TypeError(
+                    "Constraint.update: positional `constraint` argument "
+                    "cannot be combined with keyword arguments."
+                )
+            con: ConstraintBase
+            if isinstance(constraint, AnonymousScalarConstraint):
+                con = constraint.to_constraint()
+            elif isinstance(constraint, ConstraintBase):
+                con = constraint
+            else:
+                raise TypeError(
+                    "Constraint.update: positional argument must be a "
+                    "ConstraintLike (e.g. `x + 5 <= 3`); got "
+                    f"{type(constraint).__name__}."
+                )
+            lhs, sign, rhs = con.lhs, con.sign, con.rhs
+
+        if all(v is None for v in (lhs, rhs, sign, coeffs, variables)):
+            return self
+
+        if lhs is not None and (coeffs is not None or variables is not None):
+            raise TypeError(
+                "Constraint.update: pass either `lhs=` (replace the whole "
+                "expression) or `coeffs=` / `variables=` (partial array "
+                "replacement), not both."
+            )
+
+        # 1. lhs replacement first so subsequent rhs= rearrangement sees the new lhs.
+        if lhs is not None:
+            expr = expressions.as_expression(
+                lhs, self.model, coords=self.coords, dims=self.coord_dims
+            )
+            if isinstance(expr, expressions.QuadraticExpression):
+                raise TypeError(
+                    "Constraint.update: lhs must be linear; got a quadratic expression."
+                )
+            self._assign_lhs(expr)
+
+        # 2. rhs (rearranges non-constant part onto lhs).
+        if rhs is not None:
+            expr = expressions.as_expression(
+                rhs, self.model, coords=self.coords, dims=self.coord_dims
+            )
+            residual = expr.reset_const()
+            if residual.nterm != 0:
+                self._assign_lhs(self.lhs - residual, rhs=expr.const)
+            else:
+                self._update_data(rhs=expr.const)
+
+        # 3. coeffs / variables partial updates (only valid without lhs=).
+        if coeffs is not None:
+            new_coeffs = DataArray(coeffs).broadcast_like(
+                self.vars, exclude=[self.term_dim]
+            )
+            self._update_data(coeffs=new_coeffs)
+        if variables is not None:
+            from linopy.variables import Variable as _Variable
+
+            if isinstance(variables, _Variable):
+                v = variables.labels
+            elif isinstance(variables, DataArray):
+                warnings.warn(
+                    "Passing a DataArray to Constraint.update(variables=...) "
+                    "is deprecated and will be removed in a future release; "
+                    "pass a Variable instead.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
+                v = variables
+            else:
+                raise TypeError(
+                    "Constraint.update(variables=...) expects a Variable; "
+                    f"got {type(variables).__name__}."
+                )
+            new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
+            self._update_data(vars=new_vars)
+
+        # 4. sign last so it composes cleanly with the rest.
+        if sign is not None:
+            new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
+            self._update_data(sign=new_sign)
+
+        return self
 
     @property
     @has_optimized_model
@@ -1344,8 +1592,8 @@ class Constraint(ConstraintBase):
         value = DataArray(value).broadcast_like(self.labels)
         self._data = assign_multiindex_safe(self.data, dual=value)
 
-    def has_variable(self, variable: variables.Variable) -> bool:
-        return bool(self.data["vars"].isin(variable.labels.values.ravel()).any())
+    def has_labels(self, labels: np.ndarray) -> bool:
+        return contains_labels(self.data["vars"].values.ravel(), labels)
 
     def _matrix_export_data(
         self, label_index: VariableLabelIndex
@@ -1363,9 +1611,8 @@ class Constraint(ConstraintBase):
         row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
         con_labels = labels_flat[row_mask]
         vars_final = vars_2d[row_mask]
-        valid_final = vars_final != -1
-
         coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
+        valid_final = (vars_final != -1) & (coeffs_final != 0)
         cols = label_to_pos[vars_final[valid_final]]
         data = coeffs_final[valid_final]
 
@@ -1398,7 +1645,8 @@ class Constraint(ConstraintBase):
         csr.sum_duplicates()
         return csr, con_labels
 
-    def active_labels(self) -> np.ndarray:
+    def active_row_mask(self) -> np.ndarray:
+        """Boolean mask over raveled rows: label set and at least one variable present."""
         labels_flat = self.labels.values.ravel()
         vars_vals = self.vars.values
         n_rows = len(labels_flat)
@@ -1407,8 +1655,10 @@ class Constraint(ConstraintBase):
             if n_rows > 0
             else vars_vals.reshape(0, max(1, vars_vals.size))
         )
-        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
-        return labels_flat[row_mask]
+        return (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+
+    def active_labels(self) -> np.ndarray:
+        return self.labels.values.ravel()[self.active_row_mask()]
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
@@ -1432,8 +1682,10 @@ class Constraint(ConstraintBase):
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
-        self.vars = self.vars.where(not_zero, -1)
-        self.coeffs = self.coeffs.where(not_zero)
+        self._update_data(
+            vars=self.vars.where(not_zero, -1),
+            coeffs=self.coeffs.where(not_zero),
+        )
         return self
 
     def sanitize_missings(self) -> Constraint:
@@ -1664,14 +1916,14 @@ class Constraints:
         return r
 
     @overload
-    def __getitem__(self, names: str) -> ConstraintBase: ...
+    def __getitem__(self, names: str) -> Constraint: ...
 
     @overload
     def __getitem__(self, names: list[str]) -> Constraints: ...
 
-    def __getitem__(self, names: str | list[str]) -> ConstraintBase | Constraints:
+    def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
         if isinstance(names, str):
-            return self.data[names]
+            return self.data[names]  # type: ignore[return-value]
         return Constraints({name: self.data[name] for name in names}, self.model)
 
     def __getattr__(self, name: str) -> ConstraintBase:
@@ -1755,7 +2007,7 @@ class Constraints:
         """
         return save_join(
             *[v.labels.rename(k) for k, v in self.items()],
-            integer_dtype=True,
+            fill_dtype=self.model._dtypes["labels"],
         )
 
     @property
@@ -1776,7 +2028,7 @@ class Constraints:
 
         return save_join(
             *[rename_term_dim(v.vars.rename(k)) for k, v in self.items()],
-            integer_dtype=True,
+            fill_dtype=self.model._dtypes["labels"],
         )
 
     @property
@@ -2019,7 +2271,10 @@ class Constraints:
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
         df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=self.model._dtypes["labels"]),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 

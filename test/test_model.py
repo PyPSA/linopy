@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import copy as pycopy
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import gettempdir
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -158,6 +160,42 @@ def test_remove_variable() -> None:
     assert "con0" not in m.constraints
 
     assert not m.objective.vars.isin(x.labels).any()
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+@pytest.mark.parametrize("quadratic", [False, True])
+def test_remove_masked_variable_keeps_unrelated_constraints(
+    freeze: bool, quadratic: bool
+) -> None:
+    # https://github.com/PyPSA/linopy/issues/883
+    m: Model = Model(freeze_constraints=freeze)
+
+    i = pd.Index(range(3), name="i")
+    mask = [True, False, True]
+    a = m.add_variables(coords=[i], name="a", mask=mask)
+    b = m.add_variables(coords=[i], name="b", mask=mask)
+    c = m.add_variables(coords=[i], name="c")
+
+    # `b` is masked, so the constraint carries empty term slots (-1), but it
+    # never references `a`
+    without_a = m.add_constraints(b.sum() + c, EQUAL, 0, name="without_a")
+    assert not without_a.has_variable(a)
+
+    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
+    assert with_a.has_variable(a)
+
+    if quadratic:
+        m.add_objective((a * c).sum() + (c * c).sum())
+    else:
+        m.add_objective((1 * a).sum() + (1 * c).sum())
+
+    with pytest.warns(UserWarning, match="with_a"):
+        m.remove_variables("a")
+
+    assert "without_a" in m.constraints
+    assert "with_a" not in m.constraints
+    assert not m.objective.vars.isin(a.labels[a.labels != -1]).any()
+    assert m.objective.vars.isin(c.labels).any()
 
 
 def test_remove_constraint() -> None:
@@ -317,6 +355,64 @@ def test_model_deepcopy_protocol(copy_test_model: Model) -> None:
     c.objective.sense = "max"
     assert c.objective.sense == "max"
     assert m.objective.sense == original_sense
+
+
+@pytest.fixture(scope="module")
+def copy_test_model_with_expressions() -> Model:
+    """Representative model with named linear and quadratic expressions."""
+    m: Model = Model()
+
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_expressions(x + 1, name="lin")
+    m.add_expressions(x * y, name="quad")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_objective((10 * x + 5 * y).sum())
+
+    return m
+
+
+def test_copy_model_with_expressions(
+    copy_test_model_with_expressions: Model,
+) -> None:
+    """Model.copy(), copy.copy() and copy.deepcopy() all preserve expressions."""
+    m = copy_test_model_with_expressions.copy(deep=True)
+
+    for c in (m.copy(), pycopy.copy(m), pycopy.deepcopy(m)):
+        assert_model_equal(m, c)
+        assert c.expressions["lin"].model is c
+        assert c.expressions["quad"].model is c
+
+    deep = pycopy.deepcopy(m)
+    original_coeff = m.expressions["lin"].coeffs.values.flat[0].item()
+    deep.expressions["lin"].coeffs.values.flat[0] = original_coeff + 42
+    assert m.expressions["lin"].coeffs.values.flat[0] == original_coeff
+
+
+@pytest.mark.parametrize(
+    "copy_fn",
+    [lambda m: m.copy(), pycopy.copy, pycopy.deepcopy],
+    ids=["copy", "shallowcopy", "deepcopy"],
+)
+def test_model_copy_preserves_quadratic_objective(
+    copy_fn: Callable[[Model], Model],
+) -> None:
+    """Copying a model keeps its objective quadratic instead of linearizing it."""
+    m: Model = Model()
+    x = m.add_variables(lower=-5, upper=5, name="x")
+    m.add_objective(x * x + 2 * x)
+
+    c = copy_fn(m)
+
+    assert type(c.objective.expression) is type(m.objective.expression)
+    assert c.type == m.type == "QP"
+    assert_model_equal(m, c)
 
 
 @pytest.mark.skipif(not available_solvers, reason="No solver installed")
