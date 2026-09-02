@@ -15,8 +15,8 @@ import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
-from linopy.common import constraint_scaling_lookup, variable_scaling_lookup
 from linopy.constraints import CSRConstraint
+from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 
 if TYPE_CHECKING:
     from linopy.model import Model

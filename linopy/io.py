@@ -26,13 +26,12 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import (
-    constraint_scaling_lookup,
     sos_weights,
     to_polars,
-    variable_scaling_lookup,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
+from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel

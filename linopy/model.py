@@ -37,8 +37,6 @@ from linopy.common import (
     maybe_replace_signs,
     replace_by_map,
     to_path,
-    validate_scaling,
-    variable_solver_scaling,
 )
 from linopy.constants import (
     FACTOR_DIM,
@@ -87,6 +85,7 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
+from linopy.scaling import validate_scaling, variable_solver_scaling
 from linopy.semantics import enforce_no_multiindex
 
 try:

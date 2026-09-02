@@ -45,7 +45,6 @@ from linopy.common import (
     contains_labels,
     coords_from_dataset,
     coords_to_dataset_vars,
-    ensure_scaling,
     filter_nulls_polars,
     format_coord,
     format_single_constraint,
@@ -63,7 +62,6 @@ from linopy.common import (
     save_join,
     to_dataframe,
     to_polars,
-    validate_scaling,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -75,6 +73,7 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
+from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.types import (
     ConstantLike,
     ConstraintLike,

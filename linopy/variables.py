@@ -39,7 +39,6 @@ from linopy.common import (
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
-    ensure_scaling,
     filter_nulls_polars,
     format_coord,
     format_single_variable,
@@ -54,7 +53,6 @@ from linopy.common import (
     set_int_index,
     to_dataframe,
     to_polars,
-    validate_scaling,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -66,6 +64,7 @@ from linopy.constants import (
     STASHED_UPPER,
     TERM_DIM,
 )
+from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
     _legacy_coord_mismatch_message,
