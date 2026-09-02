@@ -889,7 +889,7 @@ class Model:
         lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
         upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         if np.isscalar(scaling):
-            scaling_da = DataArray(float(scaling))
+            scaling_da = DataArray(scaling)
         else:
             scaling_da = broadcast_to_coords(
                 scaling, coords, label="variable scaling", **kwargs
