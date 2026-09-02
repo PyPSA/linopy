@@ -2012,7 +2012,8 @@ class Model:
         means the license remains acquired until the solver is released:
         call ``model.solver.close()`` (or assign ``model.solver = None``)
         to free it explicitly. It is also released on the next ``solve()``
-        call and when the model is garbage-collected.
+        call, but not by garbage collection: a model that merely goes out of
+        scope leaves its solver open.
         """
         if mock_solve:
             return self._mock_solve(

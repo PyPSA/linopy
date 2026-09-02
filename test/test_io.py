@@ -277,6 +277,20 @@ def test_model_to_netcdf_quadratic_expression(
     assert_exprequal(m.expressions["quad"], p.expressions["quad"])
 
 
+def test_model_to_netcdf_quadratic_objective(tmp_path: Path) -> None:
+    """A quadratic objective survives the round-trip as a QP, not an LP."""
+    m = Model()
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    m.add_objective((x * x + 2 * x).sum())
+
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.objective.expression, QuadraticExpression)
+    assert_model_equal(m, p)
+
+
 def test_model_to_netcdf_expression_dash_name(
     model_with_expressions: Model, tmp_path: Path
 ) -> None:

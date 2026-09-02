@@ -57,8 +57,15 @@ Upcoming Version
 
 **Bug fixes**
 
+* ``sum()`` over a dimension no longer raises when another dimension of the expression has size 0; it returns an expression without terms over the kept coordinates, as summing over the empty dimension itself already did. (https://github.com/PyPSA/linopy/issues/906)
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+* ``Model.copy`` (and the ``copy.copy``/``copy.deepcopy`` protocols) no longer downgrades a quadratic objective to a linear one. The objective was rebuilt as a ``LinearExpression`` regardless of its type, so the copy silently solved a different problem. ``linopy.testing.assert_model_equal`` now compares the objective by expression type as well, which it could not do before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
+* ``Model.to_netcdf``/``linopy.read_netcdf`` downgraded a quadratic objective the same way; the expression type is now stored alongside the objective and restored on read. Files written by earlier versions are read as before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
+* ``Solver.close()`` no longer leaves dangling native handles behind. The solver model is now dropped before the environment that owns it, instead of after. And the COPT and MindOpt file interfaces no longer hand back a model they already disposed: after a file-based COPT or MindOpt solve, ``model.solver_model`` is ``None`` rather than a handle into freed memory. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
+**Breaking Changes**
+
+* A solver is no longer released automatically when the model is garbage-collected, withdrawing a guarantee announced in 0.8.0. The finalizer that did so ran mid-collection and could tear down native state inside an unrelated call stack, aborting the interpreter. Release the solver explicitly instead, with ``model.solver.close()``, ``model.solver = None``, or ``contextlib.closing(model.solver)``. A new ``solve()`` still closes the solver it replaces, so a re-solve loop needs no change. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
 Version 0.9.1
 -------------

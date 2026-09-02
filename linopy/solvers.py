@@ -1124,20 +1124,18 @@ class Solver(ABC, Generic[EnvType]):
         user-supplied environment is left untouched.
 
         Idempotent, and called automatically when a new ``solve()`` replaces
-        this solver, when ``model.solver`` is reassigned (e.g. to ``None``),
-        and on garbage collection. After closing, post-solve introspection
+        this solver and when ``model.solver`` is reassigned (e.g. to ``None``).
+        Deliberately not called from a finalizer: a solver is only reachable in
+        a ``Model``/``Solver`` reference cycle, so that would tear down native
+        handles mid-collection. After closing, post-solve introspection
         (``solver_model``, ``compute_infeasibilities()``) and persistent
         re-solves are no longer available.
         """
+        self.solver_model = None
         if self._env_stack is not None:
             self._env_stack.close()
         self.env = None
-        self.solver_model = None
         self._env_stack = None
-
-    def __del__(self) -> None:
-        with contextlib.suppress(Exception):
-            self.close()
 
     def __getstate__(self) -> dict[str, Any]:
         drop = {"solver_model", "env", "_env_stack", "snapshot", "_lock"}
@@ -4003,7 +4001,7 @@ class COPT(Solver[None]):
             solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
             self.io_api = io_api
-            return self._make_result(status, solution, solver_model=m)
+            return self._make_result(status, solution)
         finally:
             env_.close()
 
@@ -4141,7 +4139,7 @@ class MindOpt(Solver[None]):
             solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
             self.io_api = io_api
-            return self._make_result(status, solution, solver_model=m)
+            return self._make_result(status, solution)
         finally:
             if m is not None:
                 m.dispose()

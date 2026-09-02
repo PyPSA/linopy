@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+EXPR_TYPE_ATTR = "_linopy_expr_type"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -999,13 +1000,15 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ]
     exprs = [
         with_prefix(
-            expr.data.assign_attrs(name=name, _linopy_expr_type=expr.type),
+            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
     ]
     objective = m.objective.data
-    objective = objective.assign_attrs(sense=m.objective.sense)
+    objective = objective.assign_attrs(
+        sense=m.objective.sense, **{EXPR_TYPE_ATTR: m.objective.expression.type}
+    )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
@@ -1127,7 +1130,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in sorted(expr_names):
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
-        expr_type = expr_ds.attrs.pop("_linopy_expr_type", None)
+        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
         expr_ds.attrs.pop("name", None)  # re-attached below, after construction
         expr: LinearExpression | QuadraticExpression
         if expr_type == "QuadraticExpression" or (
@@ -1154,9 +1157,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    m.objective = Objective(
-        LinearExpression(objective, m), m, objective.attrs.pop("sense")
+    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
+    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
+        QuadraticExpression
+        if obj_type == "QuadraticExpression"
+        or (obj_type is None and FACTOR_DIM in objective.dims)
+        else LinearExpression
     )
+    m.objective = Objective(obj_cls(objective, m), m, objective.attrs.pop("sense"))
     m.objective._value = objective.attrs.pop("value", None)
 
     m.parameters = get_prefix(ds, "parameters")
@@ -1280,7 +1288,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    obj_expr = type(m.objective.expression)(
+        m.objective.expression.data.copy(deep=deep), new_model
+    )
     new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
     new_model._objective._value = (
         float(m.objective.value)

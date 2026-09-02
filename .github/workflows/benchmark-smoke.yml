@@ -30,7 +30,7 @@ jobs:
         fetch-depth: 0  # setuptools_scm
 
     - name: Set up Python 3.13
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: "3.13"
 

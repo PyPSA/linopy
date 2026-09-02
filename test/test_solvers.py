@@ -204,6 +204,42 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
     assert isinstance(simple_model.solver_model.NumVars, int)
 
 
+@pytest.mark.skipif(
+    "copt" not in set(solvers.licensed_solvers), reason="COPT is not installed"
+)
+def test_copt_closes_env_per_solve(
+    simple_model: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The file interface closes its environment before returning, so it must not
+    hand back a solver model that outlives it. Holding the environment open
+    instead would leak it: nothing closes a solver that is merely dropped.
+    """
+    import coptpy
+
+    closes: list[object] = []
+    original = coptpy.Envr.close
+
+    def close(self: object) -> None:
+        closes.append(self)
+        original(self)
+
+    monkeypatch.setattr(coptpy.Envr, "close", close)
+
+    simple_model.solve("copt")
+
+    assert simple_model.solver_model is None
+    assert closes
+
+
+def test_solver_defines_no_finalizer() -> None:
+    """
+    A solver is only reachable in a Model/Solver reference cycle, so a
+    finalizer would tear down native handles mid-collection.
+    """
+    assert not hasattr(solvers.Solver, "__del__")
+
+
 @pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
