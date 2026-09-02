@@ -35,10 +35,18 @@ def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
 
 
 def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
-    """Default-fill and validate the ``scaling`` field of a data set."""
-    if "scaling" not in data:
-        data = assign_multiindex_safe(data, scaling=DataArray(1.0).broadcast_like(like))
-    return assign_multiindex_safe(data, scaling=validate_scaling(data.scaling, label))
+    """
+    Default-fill the ``scaling`` field of a data set when it is missing.
+
+    Present scaling is left untouched: it is validated at the user-facing
+    entry points (``add_variables``/``add_constraints`` and the ``scaling``
+    setters), and this internal reconstruction path must neither reorder the
+    dimensions nor reject the NaN-padded rows produced by ``sel``/``reindex``.
+    """
+    if "scaling" in data:
+        return data
+    scaling = validate_scaling(DataArray(1.0).broadcast_like(like), label)
+    return assign_multiindex_safe(data, scaling=scaling)
 
 
 def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:
