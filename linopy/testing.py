@@ -130,7 +130,7 @@ def assert_model_equal(a: Model, b: Model) -> None:
     for e in a.expressions:
         assert_exprequal(a.expressions[e], b.expressions[e])
 
-    assert_linequal(a.objective.expression, b.objective.expression)
+    assert_exprequal(a.objective.expression, b.objective.expression, check_name=False)
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
 
