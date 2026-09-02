@@ -41,8 +41,7 @@ from scipy.sparse import csr_array
 import linopy
 from linopy import Model, solvers
 from linopy.solvers import (
-    _cuopt_solve_queue,
-    _run_cuopt_with_keyboard_interrupt,
+    cuOpt,
     licensed_solvers,
 )
 
@@ -912,7 +911,7 @@ def test_run_cuopt_interrupt_reaches_the_main_thread() -> None:
 
     start = time.monotonic()
     with pytest.raises(KeyboardInterrupt):
-        _run_cuopt_with_keyboard_interrupt(dummy)
+        cuOpt._run_with_interrupt(dummy)
     elapsed = time.monotonic() - start
 
     assert elapsed < 1.0
@@ -920,7 +919,7 @@ def test_run_cuopt_interrupt_reaches_the_main_thread() -> None:
 
 
 def test_run_cuopt_returns_the_solve_result() -> None:
-    assert _run_cuopt_with_keyboard_interrupt(lambda: "solution") == "solution"
+    assert cuOpt._run_with_interrupt(lambda: "solution") == "solution"
 
 
 def test_run_cuopt_reraises_solver_errors() -> None:
@@ -928,7 +927,7 @@ def test_run_cuopt_reraises_solver_errors() -> None:
         raise RuntimeError("solver failed")
 
     with pytest.raises(RuntimeError, match="solver failed"):
-        _run_cuopt_with_keyboard_interrupt(boom)
+        cuOpt._run_with_interrupt(boom)
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX only")
@@ -940,7 +939,7 @@ def test_solve_queue_starts_a_fresh_worker_after_fork() -> None:
     nobody reads and waits on the future forever; it then never writes to the
     pipe and the parent's ``select`` timeout below fails the test.
     """
-    assert _run_cuopt_with_keyboard_interrupt(lambda: "parent") == "parent"
+    assert cuOpt._run_with_interrupt(lambda: "parent") == "parent"
 
     read_fd, write_fd = os.pipe()
     pid = os.fork()
@@ -948,8 +947,8 @@ def test_solve_queue_starts_a_fresh_worker_after_fork() -> None:
         exit_code = 1
         try:
             os.close(read_fd)
-            cleared = _cuopt_solve_queue.cache_info().currsize == 0
-            solved = _run_cuopt_with_keyboard_interrupt(lambda: "child") == "child"
+            cleared = cuOpt._solve_queue.cache_info().currsize == 0
+            solved = cuOpt._run_with_interrupt(lambda: "child") == "child"
             if cleared and solved:
                 os.write(write_fd, b"ok")
                 exit_code = 0

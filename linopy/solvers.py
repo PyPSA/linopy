@@ -255,89 +255,6 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
             h.HandleUserInterrupt = old_handle_user_interrupt
 
 
-@functools.cache
-def _cuopt_solve_queue() -> queue.SimpleQueue[Callable[[], None]]:
-    """
-    Inbox of the single daemon thread that runs every cuOpt solve.
-
-    One persistent worker, never a thread per solve: cuOpt leaks per-thread
-    OpenMP state and aborts the process once enough fresh threads have run
-    solves (https://github.com/NVIDIA/cuopt/issues/1768). Every solve is
-    routed here, LP and MIP alike -- the trigger is cuOpt's bundled OpenMP
-    runtime, not the problem class or ``method``. Native teardown has the
-    same defect, so ``close`` releases the ``DataModel`` here too, via
-    `_dispose_on_cuopt_worker`; building a model and reading a solution stay
-    on the caller's thread. All cuOpt solves therefore serialize here.
-    """
-    jobs: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
-
-    def _worker() -> None:
-        while True:
-            job = jobs.get()
-            # A job reports failure through its future rather than raising,
-            # but the worker must outlive one that raises anyway: losing it
-            # strands every later solve on a queue nobody reads.
-            with contextlib.suppress(BaseException):
-                job()
-            del job  # drop job to free thread & GPU resources
-
-    threading.Thread(target=_worker, name="linopy-cuopt-solve", daemon=True).start()
-    return jobs
-
-
-if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt is Linux-only
-    # A forked child inherits the cached queue but not its worker; clearing
-    # the cache starts a fresh worker there, so a solve in the child fails
-    # fast with CUDA's real fork error instead of hanging on the future.
-    os.register_at_fork(after_in_child=_cuopt_solve_queue.cache_clear)
-
-
-def _on_cuopt_worker(fn: Callable[[], Any]) -> Future[Any]:
-    """
-    Queue ``fn`` on the solve worker and return its pending future.
-
-    Never waits: the future carries ``fn``'s return value, or re-raises its
-    exception, to whoever waits on it.
-    """
-    future: Future[Any] = Future()
-
-    def job() -> None:
-        try:
-            future.set_result(fn())
-        except BaseException as exc:  # noqa: BLE001
-            future.set_exception(exc)
-
-    _cuopt_solve_queue().put(job)
-    return future
-
-
-def _run_cuopt_with_keyboard_interrupt(solve: Callable[[], Any]) -> Any:
-    """
-    Run a cuOpt solve on the worker while keeping Ctrl-C responsive.
-
-    cuOpt has no cancel API and defers SIGINT for the whole solve, so only
-    the wait here is interruptible: an interrupted solve runs to completion
-    on the worker, and ``time_limit`` is the only hard bound on it.
-    """
-    return _on_cuopt_worker(solve).result()
-
-
-def _dispose_on_cuopt_worker(box: list[Any]) -> None:
-    """
-    Release the cuOpt native objects in ``box`` on the solve worker.
-
-    Native teardown has the same per-thread OpenMP defect as a solve (see
-    `_cuopt_solve_queue`) and GC runs on whatever thread it lands on, so
-    dropping the last reference off the worker aborts the process. The caller
-    keeps none of its own, leaving the worker's ``clear`` as the final decref.
-    Never waits, and best-effort: an object still held elsewhere is torn down
-    wherever its holder drops it, and with no reachable worker the references
-    are simply dropped.
-    """
-    with contextlib.suppress(Exception):
-        _on_cuopt_worker(box.clear)
-
-
 # xpress.Namespaces was added in xpress 9.6. Importing xpress is pure-Python
 # and does not acquire a license, so this shim stays eager so downstream code
 # can ``from linopy.solvers import xpress_Namespaces``.
@@ -399,49 +316,6 @@ def _has_module(name: str) -> bool:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
         return False
-
-
-_CUDA_PROBE_SNIPPET = (
-    "from cuda.bindings import runtime;"
-    "e, c = runtime.cudaGetDeviceCount();"
-    "raise SystemExit(0 if (int(e) == 0 and bool(c)) else 1)"
-)
-
-
-@functools.cache
-def _cuda_device_available() -> bool:
-    """
-    True if a usable CUDA device is visible.
-
-    ``import cuopt`` succeeds on GPU-less hosts by design, so an import probe
-    is not enough. The probe runs in a subprocess: an in-process CUDA call
-    creates a CUDA context in the caller, and a context created before
-    ``fork()`` breaks CUDA in every child -- and this runs on first access to
-    ``linopy.available_solvers``.
-    """
-    try:
-        completed = sub.run(
-            [sys.executable, "-c", _CUDA_PROBE_SNIPPET],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, sub.SubprocessError) as exc:
-        logger.warning("The CUDA device probe failed to run: %r", exc)
-        return False
-    if completed.returncode:
-        logger.warning(
-            "cuOpt is installed but no usable CUDA device was found; cuOpt is "
-            "not available. It requires an NVIDIA GPU of compute capability "
-            "7.0 or higher and driver 525.60.13 or newer."
-        )
-        if completed.stderr:
-            logger.debug(
-                "CUDA device probe stderr: %s",
-                completed.stderr.decode(errors="replace"),
-            )
-        return False
-    return True
 
 
 @functools.cache
@@ -4601,10 +4475,110 @@ class cuOpt(Solver[None]):
     # across repeated solves, and broadly most accurate.
     _DEFAULT_METHOD: ClassVar[int] = 3
 
+    _CUDA_PROBE_SNIPPET: ClassVar[str] = (
+        "from cuda.bindings import runtime;"
+        "e, c = runtime.cudaGetDeviceCount();"
+        "raise SystemExit(0 if (int(e) == 0 and bool(c)) else 1)"
+    )
+
+    # cuOpt's bundled OpenMP runtime leaks per-thread state and aborts the
+    # process once enough fresh threads run solves or teardown
+    # (https://github.com/NVIDIA/cuopt/issues/1768). One persistent daemon
+    # thread owns every solve and native disposal; model build and solution read
+    # stay on the caller's thread.
+    @staticmethod
+    @functools.cache
+    def _solve_queue() -> queue.SimpleQueue[Callable[[], None]]:
+        """Inbox of the single daemon thread that runs every cuOpt solve."""
+        jobs: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
+
+        def _worker() -> None:
+            while True:
+                job = jobs.get()
+                # keep the worker alive past a raising job: it reports via its
+                # future, and losing the worker strands every later solve
+                with contextlib.suppress(BaseException):
+                    job()
+                del job  # free thread & GPU resources
+
+        threading.Thread(target=_worker, name="linopy-cuopt-solve", daemon=True).start()
+        return jobs
+
+    @staticmethod
+    def _on_worker(fn: Callable[[], Any]) -> Future[Any]:
+        """Queue ``fn`` on the solve worker; return its future without waiting."""
+        future: Future[Any] = Future()
+
+        def job() -> None:
+            try:
+                future.set_result(fn())
+            except BaseException as exc:  # noqa: BLE001
+                future.set_exception(exc)
+
+        cuOpt._solve_queue().put(job)
+        return future
+
+    @staticmethod
+    def _run_with_interrupt(solve: Callable[[], Any]) -> Any:
+        """
+        Run a solve on the worker, keeping Ctrl-C responsive.
+
+        cuOpt has no cancel API and defers SIGINT, so only the wait is
+        interruptible: an interrupted solve runs on, bounded only by
+        ``time_limit``.
+        """
+        return cuOpt._on_worker(solve).result()
+
+    @staticmethod
+    def _dispose(box: list[Any]) -> None:
+        """
+        Drop the cuOpt native objects in ``box`` on the worker.
+
+        Teardown has the same per-thread OpenMP defect as a solve, so the last
+        decref must land on the worker. Best-effort: with no worker the refs are
+        simply dropped.
+        """
+        with contextlib.suppress(Exception):
+            cuOpt._on_worker(box.clear)
+
+    @staticmethod
+    @functools.cache
+    def _cuda_device_available() -> bool:
+        """
+        True if a usable CUDA device is visible.
+
+        ``import cuopt`` succeeds on GPU-less hosts, so probe in a subprocess: an
+        in-process CUDA context created before ``fork()`` breaks CUDA in every
+        child, and this runs on first access to ``linopy.available_solvers``.
+        """
+        try:
+            completed = sub.run(
+                [sys.executable, "-c", cuOpt._CUDA_PROBE_SNIPPET],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except (OSError, sub.SubprocessError) as exc:
+            logger.warning("The CUDA device probe failed to run: %r", exc)
+            return False
+        if completed.returncode:
+            logger.warning(
+                "cuOpt is installed but no usable CUDA device was found; cuOpt is "
+                "not available. It requires an NVIDIA GPU of compute capability "
+                "7.0 or higher and driver 525.60.13 or newer."
+            )
+            if completed.stderr:
+                logger.debug(
+                    "CUDA device probe stderr: %s",
+                    completed.stderr.decode(errors="replace"),
+                )
+            return False
+        return True
+
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
-        return _has_module("cuopt") and _cuda_device_available()
+        return _has_module("cuopt") and cls._cuda_device_available()
 
     @classmethod
     def _license_probe(cls) -> None:
@@ -4844,7 +4818,7 @@ class cuOpt(Solver[None]):
             finally:
                 del settings
 
-        sol = _run_cuopt_with_keyboard_interrupt(solve)
+        sol = self._run_with_interrupt(solve)
 
         is_mip = sol.get_problem_category().name != "LP"
         condition_map = MILP_CONDITION_MAP if is_mip else LP_CONDITION_MAP
@@ -4962,12 +4936,20 @@ class cuOpt(Solver[None]):
 
     def close(self) -> None:
         # __del__ may run this on any thread; cuOpt teardown must happen on
-        # the solve worker (see `_dispose_on_cuopt_worker`)
+        # the solve worker (see `_dispose`)
         box = [self.solver_model]
         self.solver_model = None
         if box[0] is not None:
-            _dispose_on_cuopt_worker(box)
+            self._dispose(box)
         super().close()
+
+
+if hasattr(os, "register_at_fork"):  # POSIX only; cuOpt is Linux-only
+    # a child inherits the cached queue but not its worker; clearing the cache
+    # starts a fresh worker so a child solve fails fast on CUDA's fork error
+    # instead of hanging. Registered once here, not in the cached builder (which
+    # would stack a handler per child after each at-fork cache_clear).
+    os.register_at_fork(after_in_child=cuOpt._solve_queue.cache_clear)
 
 
 def _solver_class_for(name: str) -> type[Solver] | None:
@@ -5058,7 +5040,7 @@ class _AvailableSolvers(Sequence[str]):
 
     def refresh(self) -> None:
         self.__dict__.pop("_names", None)
-        _cuda_device_available.cache_clear()  # GPU probe caches separately
+        cuOpt._cuda_device_available.cache_clear()  # GPU probe caches separately
         seen: set[int] = set()
         for name in _SOLVER_PROBE_ORDER:
             cls = _solver_class_for(name)
