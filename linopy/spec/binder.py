@@ -180,6 +180,8 @@ def _report_closure(program: ms.Program) -> set[str]:
             names.add(node.offset)
         elif isinstance(node, ms.Window) and isinstance(node.width, str):
             names.add(node.width)
+        elif isinstance(node, ms.Power):
+            names |= ms.parameters_of(node.base, node.exponent)
         elif isinstance(node, ms.Cases):
             for region in node.regions:
                 names |= region.when.names_read
