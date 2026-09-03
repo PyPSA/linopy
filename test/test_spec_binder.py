@@ -127,6 +127,7 @@ COST_SHAPES = {
     "dataarray": xr.DataArray(COST),
     "dict": COST.to_dict(),
     "tidy-frame": COST.reset_index(name="value"),
+    "indexed-frame": COST.to_frame("value"),
 }
 
 
@@ -186,6 +187,7 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
     sparse = {
         **good,
         "cost": pd.Series({"a": 1.0}),
+        "lead": pd.Series({"a": 1}),
         "flag": pd.Series({"a": True}),
         "cap": CAP.sel(t=[0, 1]),
     }
@@ -193,6 +195,10 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
     cost = bound.parameter("cost")
     assert cost.sel(f="a").item() == 1.0
     assert cost.sel(f=["b", "c"]).isnull().all()
+    lead = bound.parameter("lead")
+    assert lead.dtype == np.float64
+    assert lead.sel(f="a").item() == 1.0
+    assert lead.sel(f=["b", "c"]).isnull().all()
     flag = bound.parameter("flag")
     assert flag.dtype == bool
     assert flag.values.tolist() == [False, True, False]
@@ -225,6 +231,23 @@ def test_scalar_parameter_stays_scalar(program: Any, good: dict[str, Any]) -> No
     assert got.item() == 0.5
 
 
+EMPTY_SOURCES = {
+    "dict": {},
+    "object-series": pd.Series(dtype=object),
+    "float-series": pd.Series(dtype=float),
+}
+
+
+@pytest.mark.parametrize("cost", EMPTY_SOURCES.values(), ids=EMPTY_SOURCES.keys())
+def test_empty_source_binds_as_all_nan(
+    program: Any, good: dict[str, Any], cost: Any
+) -> None:
+    got = bind(program, {**good, "cost": cost}).parameter("cost")
+    assert got.dtype == np.float64
+    assert got.isnull().all()
+    assert got.indexes["f"].equals(F)
+
+
 def test_missing_parameter_is_refused_when_read(
     program: Any, good: dict[str, Any]
 ) -> None:
@@ -232,6 +255,19 @@ def test_missing_parameter_is_refused_when_read(
     bound = bind(program, good)
     with pytest.raises(SpecDataError, match="no data provided for parameter 'cost'"):
         bound.parameter("cost")
+
+
+def test_undeclared_parameter_is_refused_with_a_hint(
+    program: Any, good: dict[str, Any]
+) -> None:
+    with pytest.raises(SpecDataError, match="unknown parameter 'csot'.*'cost'"):
+        bind(program, good).parameter("csot")
+
+
+def test_retain_is_validated_before_binding(program: Any, good: dict[str, Any]) -> None:
+    with pytest.raises(SpecDataError, match=r"'report', 'all', 'none'") as error:
+        bind(program, good, retain="reports")  # type: ignore[arg-type]
+    assert "Did you mean 'report'?" in str(error.value)
 
 
 REFUSALS = [
@@ -247,6 +283,16 @@ REFUSALS = [
         {"cap": CAP.assign_coords(t=[0, 1, 9])},
         r"parameter 'cap'.*'t'.*\b9\b",
         id="unknown-label-dense",
+    ),
+    pytest.param(
+        {"cap": CAP.assign_coords(t=[9, 0, 7])},
+        r"not coordinates of it: 9, 7\.",
+        id="unknown-labels-dense-in-source-order",
+    ),
+    pytest.param(
+        {"cap": CAP.to_series().reset_index(name="value").assign(t=[9, 0, 7] * 3)},
+        r"not coordinates of it: 9, 7\.",
+        id="unknown-labels-rows-in-source-order",
     ),
     pytest.param(
         {"cost": DUP_ROWS},
@@ -284,6 +330,16 @@ REFUSALS = [
         id="unsupported-shape",
     ),
     pytest.param(
+        {"cost": pd.DataFrame({"f": ["a"], "amount": [1.0]})},
+        r"parameter 'cost' arrived as a DataFrame with columns \['f', 'amount'\]",
+        id="frame-without-value-column",
+    ),
+    pytest.param(
+        {"cap": CAP.to_pandas().rename_axis(index="f", columns="q")},
+        r"parameter 'cap' arrived as a wide DataFrame with index 'f' and columns 'q'",
+        id="wide-frame-wrong-axis-names",
+    ),
+    pytest.param(
         {"cap": xr.DataArray(np.ones((3, 3)), dims=["f", "t"])},
         r"parameter 'cap' has no coordinate labels along 'f'",
         id="dense-without-labels",
@@ -316,6 +372,17 @@ REFUSALS = [
         {"flag": 1.0}, r"'flag' is declared 'bool'.*'float'", id="float-scalar-for-bool"
     ),
     pytest.param(
+        {"rate": "1.5"}, r"'rate' is declared 'float'.*'str'", id="numeric-str-scalar"
+    ),
+    pytest.param(
+        {"rate": True},
+        r"'rate' is declared 'float'.*'bool'",
+        id="bool-scalar-for-float",
+    ),
+    pytest.param(
+        {"rate": "abc"}, r"'rate' is declared 'float'.*'str'", id="str-scalar-for-float"
+    ),
+    pytest.param(
         {"cost": pd.Series(["x", "y", "z"], index=F)},
         r"'cost' is declared 'float'.*'str'",
         id="str-for-float",
@@ -328,6 +395,16 @@ REFUSALS = [
         {"f": {"a": 1}},
         r"index for dimension 'f': cannot read labels out of dict",
         id="dimension-shape",
+    ),
+    pytest.param(
+        {"f": np.ones((2, 2))},
+        r"index for dimension 'f' is 2-dimensional",
+        id="dimension-rank",
+    ),
+    pytest.param(
+        {"grp": xr.DataArray(["n"], coords={"t": [0]})},
+        r"lookup 'grp' arrived as a DataArray over \['t'\]",
+        id="lookup-wrong-dataarray-dim",
     ),
     pytest.param(
         {"grp": None}, r"no data provided for lookup 'grp'", id="missing-lookup"
@@ -446,12 +523,14 @@ def test_report_closure_reads_names_and_masks() -> None:
         "parameters": {
             "cost": {"dims": ["f"]},
             "lag": {"dims": ["f"], "dtype": "int"},
+            "span": {"dims": ["f"], "dtype": "int"},
             "on": {"dims": ["f"], "dtype": "bool"},
             "other": {"dims": ["f"]},
         },
         "variables": {"x": {"foreach": ["f", "t"], "bounds": {"lower": 0, "upper": 1}}},
         "objective": {"sense": "maximize", "expression": "sum(x * other)"},
         "expressions": {
+            "recent": "sum_back(x, over=t, within=span)",
             "late": {
                 "foreach": ["f", "t"],
                 "cases": {
@@ -461,7 +540,7 @@ def test_report_closure_reads_names_and_masks() -> None:
                     }
                 },
                 "otherwise": "x * cost",
-            }
+            },
         },
     }
     program = math_spec.to_program(spec)
@@ -471,10 +550,18 @@ def test_report_closure_reads_names_and_masks() -> None:
         "t": [0, 1],
         "cost": pd.Series([1.0], index=f),
         "lag": pd.Series([1], index=f),
+        "span": pd.Series([2], index=f),
         "on": pd.Series([True], index=f),
         "other": pd.Series([2.0], index=f),
     }
-    assert set(bind(program, sources).retained().data_vars) == {"cost", "lag", "on"}
+    retained = bind(program, sources).retained()
+    assert set(retained.data_vars) == {"cost", "lag", "span", "on"}
+
+
+def test_unreached_dimension_needs_no_source() -> None:
+    dimensions = {**PARITY_SPEC["dimensions"], "z": {"dtype": "int"}}
+    program = math_spec.to_program({**PARITY_SPEC, "dimensions": dimensions})
+    assert list(bind(program, GOOD).coords) == ["f"]
 
 
 @pytest.mark.parametrize("shape", ["dataarray", "dataarray-transposed", "wide-frame"])
@@ -485,6 +572,15 @@ def test_aligned_array_is_not_copied(
     bound = bind(program, {**good, "cap": source})
     assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
     assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
+
+
+def test_master_coordinate_dtype_wins_without_a_copy(
+    program: Any, good: dict[str, Any]
+) -> None:
+    source = CAP.assign_coords(t=T.astype("int32"))
+    got = bind(program, {**good, "cap": source}).parameter("cap")
+    assert got.indexes["t"].dtype == np.int64
+    assert np.shares_memory(np.asarray(source), got.values)
 
 
 def test_derived_parameter_is_not_bound_from_sources() -> None:
@@ -663,6 +759,41 @@ def test_a_lookup_defect_is_refused(override: dict[str, Any], match: str) -> Non
     program = math_spec.to_program(LOOKUP_SPEC)
     with pytest.raises(SpecDataError, match=match):
         read_all(program, sources_from(LOOKUP_GOOD, override))
+
+
+TAG_SPEC = {
+    **LOOKUP_SPEC,
+    "lookups": {"tag": {"over": "g", "dtype": "int"}},
+    "constraints": {"k": {"foreach": ["g"], "expression": "x <= 10"}},
+}
+TAG_GOOD = sources_from(LOOKUP_GOOD, {"gen_bus": None, "b": None})
+
+
+def test_a_label_space_lookup_is_padded_onto_the_dimension() -> None:
+    program = math_spec.to_program(TAG_SPEC)
+    bound = bind(program, {**TAG_GOOD, "tag": {"s": 7}})
+    tag = bound.lookups["g"]["tag"]
+    assert tag.dims == ("g",)
+    assert tag.indexes["g"].tolist() == ["w", "s"]
+    assert np.isnan(tag.sel(g="w").item())
+    assert tag.sel(g="s").item() == 7
+
+
+@pytest.mark.parametrize(
+    ("tag", "match"),
+    [
+        pytest.param({"w": None, "s": 7}, "null in 'tag': g='w'", id="a-null"),
+        pytest.param(
+            {"w": "x", "s": "y"}, "lookup 'tag' is declared 'int'.*'str'", id="a-str"
+        ),
+    ],
+)
+def test_a_label_space_lookup_defect_is_refused(
+    tag: dict[str, Any], match: str
+) -> None:
+    program = math_spec.to_program(TAG_SPEC)
+    with pytest.raises(SpecDataError, match=match):
+        bind(program, {**TAG_GOOD, "tag": tag})
 
 
 def test_a_stray_lookup_value_over_an_int_target_is_shown_as_written() -> None:

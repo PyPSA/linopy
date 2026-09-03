@@ -14,8 +14,8 @@ is the builder's question, not this module's.
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -26,12 +26,14 @@ from math_spec import program as ms
 from linopy.spec.errors import SpecDataError
 
 Retain = Literal["report", "all", "none"]
+_RETAIN: tuple[str, ...] = get_args(Retain)
 
 _ACCEPTED_KINDS: dict[str, frozenset[str]] = {
     "float": frozenset("fiu"),
     "int": frozenset("iu"),
     "bool": frozenset("b"),
     "str": frozenset("OUS"),
+    "datetime": frozenset("M"),
 }
 _KIND_NAMES: dict[str, str] = {
     "f": "float",
@@ -41,6 +43,13 @@ _KIND_NAMES: dict[str, str] = {
     "O": "str",
     "U": "str",
     "S": "str",
+    "M": "datetime",
+}
+_EMPTY_DTYPES: dict[str, Any] = {
+    "float": float,
+    "int": int,
+    "bool": bool,
+    "str": object,
 }
 _SCALARS = (bool, int, float, str, np.number, np.bool_)
 _DIMENSION_SHAPES = "a pandas Index, a list, a tuple, a 1-D numpy array, a pandas Series or a 1-D DataArray"
@@ -69,10 +78,15 @@ def bind(
         retain: Which parameters :meth:`Bound.retained` persists.
 
     Raises:
-        SpecDataError: A key naming nothing the spec declares, a reached
-            dimension or a lookup with no source, a duplicated dimension
-            member, or a lookup breaking the rules a map has.
+        SpecDataError: A ``retain`` outside its three values, a key naming
+            nothing the spec declares, a reached dimension or a lookup with
+            no source, a duplicated dimension member, or a lookup breaking
+            the rules a map has.
     """
+    if retain not in _RETAIN:
+        raise SpecDataError(
+            f"retain={retain!r} is not one of {_shown(_RETAIN)}. {did_you_mean(retain, _RETAIN)}"
+        )
     if isinstance(sources, xr.Dataset):
         sources = _dataset_sources(sources)
     keys = frozenset(sources.keys())
@@ -82,7 +96,7 @@ def bind(
     return Bound(program, coords, lookups, retain, sources, keys)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Bound:
     """
     A program bound to its data.
@@ -96,15 +110,14 @@ class Bound:
             dimension's master coordinates, NaN where a label is unmapped.
         retain: Which parameters :meth:`retained` persists.
         sources: The caller's data, read by key on demand.
-        keys: The keys ``sources`` carries, read once at bind time.
     """
 
     program: ms.Program
-    coords: dict[str, pd.Index]
-    lookups: dict[str, dict[str, xr.DataArray]]
+    coords: Mapping[str, pd.Index]
+    lookups: Mapping[str, Mapping[str, xr.DataArray]]
     retain: Retain
     sources: Mapping[str, Any]
-    keys: frozenset[str]
+    _keys: frozenset[str] = field(repr=False)
 
     def parameter(self, name: str) -> xr.DataArray:
         """
@@ -122,7 +135,7 @@ class Bound:
                 than declared.
         """
         declared = self._declaration(name)
-        if name not in self.keys:
+        if name not in self._keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         arr = _as_array(name, declared, self.sources[name], self.coords)
         onto = {d: self.coords[d] for d in declared.dims}
@@ -151,10 +164,11 @@ class Bound:
     def _retained_names(self) -> list[str]:
         if self.retain == "none":
             return []
-        all_names = set(self.program.parameters)
-        keep = all_names if self.retain == "all" else _report_closure(self.program)
-        items = self.program.parameters.items()
-        return [n for n, p in items if p.derivation is None and n in keep]
+        parameters = self.program.parameters
+        keep = (
+            set(parameters) if self.retain == "all" else _report_closure(self.program)
+        )
+        return [n for n, p in parameters.items() if p.derivation is None and n in keep]
 
 
 def _report_closure(program: ms.Program) -> set[str]:
@@ -341,6 +355,8 @@ def _check_lookup(
             f"none of them would place its terms nowhere, so it is a typo on one side or a label "
             f"missing from the other."
         )
+    if lk.dtype is not None:
+        _check_value_dtype(lk.name, lk.dtype, series.dtype, kind="lookup")
     if lk.target is None:
         return
     values = pd.Index(series.to_numpy())
@@ -401,9 +417,10 @@ def _from_scalar(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
             f"A number was meant, or the parameter has no data and should not be passed."
         )
-    dtype = float if declared.dtype == "float" else None
-    value = np.asarray(obj, dtype=dtype)
-    _check_value_dtype(name, declared, value.dtype)
+    value = np.asarray(obj)
+    _check_value_dtype(name, declared.dtype, value.dtype)
+    if declared.dtype == "float":
+        value = value.astype(float)
     arr = xr.DataArray(value, name=name)
     if declared.dims:
         arr = arr.expand_dims({d: coords[d] for d in declared.dims})
@@ -414,7 +431,7 @@ def _from_dense(
     name: str, declared: ms.ParameterDeclaration, arr: xr.DataArray
 ) -> xr.DataArray:
     dims = declared.dims
-    _check_value_dtype(name, declared, arr.dtype)
+    _check_value_dtype(name, declared.dtype, arr.dtype)
     if set(arr.dims) != set(dims) or len(arr.dims) != len(dims):
         raise SpecDataError(
             f"parameter '{name}' arrived as a DataArray over {list(arr.dims)}, and '{name}' is over "
@@ -437,7 +454,9 @@ def _from_frame(
     coords: Mapping[str, pd.Index],
 ) -> xr.DataArray:
     dims = declared.dims
-    tidy = df.reset_index() if set(dims) - set(df.columns) else df
+    tidy = df
+    if not set(dims) <= set(df.columns) and set(dims) <= _headers(df):
+        tidy = df.reset_index()
     if "value" in tidy.columns and set(dims) <= set(tidy.columns):
         indexed = tidy.set_index(list(dims)) if dims else tidy
         return _from_rows(name, declared, indexed["value"], coords)
@@ -447,6 +466,10 @@ def _from_frame(
         f"parameter '{name}' arrived as a DataFrame with columns {list(df.columns)}; a table for "
         f"'{name}' carries columns {[*dims, 'value']}."
     )
+
+
+def _headers(df: pd.DataFrame) -> set[Any]:
+    return set(df.columns) | set(df.index.names)
 
 
 def _wide(name: str, dims: tuple[str, ...], df: pd.DataFrame) -> pd.DataFrame:
@@ -478,6 +501,8 @@ def _from_rows(
             )
         return _from_scalar(name, declared, series.iloc[0], coords)
     series = _with_dims(name, dims, series)
+    if series.empty:
+        series = series.astype(_EMPTY_DTYPES[declared.dtype])
     holes = series.isna()
     if holes.any():
         raise SpecDataError(
@@ -486,11 +511,10 @@ def _from_rows(
             f"value is the absence of the row, and such a row says the coordinate exists and denies "
             f"it in the same breath. Drop those rows, or supply the values."
         )
-    _check_value_dtype(name, declared, series.dtype)
+    _check_value_dtype(name, declared.dtype, series.dtype)
     _refuse_duplicate_coordinates(name, dims, series.index)
     for d in dims:
-        labels = series.index.get_level_values(d)
-        _refuse_strangers(name, d, labels[~labels.isin(coords[d])].unique(), coords[d])
+        _refuse_strangers(name, d, series.index.get_level_values(d), coords[d])
     onto = [coords[d] for d in dims]
     full = onto[0] if len(dims) == 1 else pd.MultiIndex.from_product(onto, names=dims)
     values = series.reindex(full, fill_value=_fill(declared)).to_numpy()
@@ -536,14 +560,13 @@ def _refuse_duplicate_coordinates(
     )
 
 
-def _refuse_strangers(
-    name: str, dim: str, strangers: pd.Index, labels: pd.Index
-) -> None:
-    if len(strangers) == 0:
+def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) -> None:
+    strangers = labels[~labels.isin(known)].unique().tolist()
+    if not strangers:
         return
     raise SpecDataError(
         f"parameter '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
-        f"{_shown(strangers.tolist())}.\n  {dim} has: {_shown(labels.tolist(), 10)}\n"
+        f"{_shown(strangers)}.\n  {dim} has: {_shown(known.tolist(), 10)}\n"
         f"A missing row is a zero coefficient, but a label that is not a coordinate is a typo: its "
         f"row joins nothing, so the coordinate it was meant for silently reads as absent. Fix the "
         f"label, or add it to sources['{dim}']."
@@ -554,24 +577,24 @@ def _aligned(
     name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index], fill: Any
 ) -> xr.DataArray:
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
-        return arr
+        stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
+        return arr.assign_coords(stale) if stale else arr
     for d, index in onto.items():
-        _refuse_strangers(name, d, arr.indexes[d].difference(index), index)
+        _refuse_strangers(name, d, arr.indexes[d], index)
     return arr.reindex(onto, fill_value=fill)
 
 
 def _check_value_dtype(
-    name: str, declared: ms.ParameterDeclaration, dtype: Any
+    name: str, declared: str, dtype: Any, kind: str = "parameter"
 ) -> None:
-    kind = str(dtype.kind)
-    if kind in _ACCEPTED_KINDS[declared.dtype]:
+    if str(dtype.kind) in _ACCEPTED_KINDS[declared]:
         return
-    arrived = _KIND_NAMES.get(kind, str(dtype))
+    arrived = _KIND_NAMES.get(str(dtype.kind), str(dtype))
     raise SpecDataError(
-        f"parameter '{name}' is declared '{declared.dtype}' and its values arrived as '{arrived}'. "
+        f"{kind} '{name}' is declared '{declared}' and its values arrived as '{arrived}'. "
         f"A declared dtype is a claim about the values, and it is checked here: the file says what "
         f"the values are, or the values are not attached.\n"
-        f"  Cast the values to {declared.dtype}, if the declaration is what you meant\n"
+        f"  Cast the values to {declared}, if the declaration is what you meant\n"
         f"  Or declare what the data has: {{dtype: {arrived}}}"
     )
 
