@@ -50,6 +50,7 @@ flexible data-handling features:
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
    - `MOSEK <https://www.mosek.com/>`__
    - `COPT <https://www.shanshu.ai/copt>`__
+   - `cuOpt <https://docs.nvidia.com/cuopt/>`__ (GPU-accelerated)
    - `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ (GPU-accelerated)
 
 
@@ -133,6 +134,7 @@ This package is published under MIT license.
 
    sos-constraints
    piecewise-linear-constraints
+   numerical-scaling
    testing-framework
 
 .. toctree::

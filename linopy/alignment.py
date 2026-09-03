@@ -193,9 +193,11 @@ def _coords_to_dict(
 
 
 def _as_index(coord_values: Any) -> pd.Index:
-    return (
-        coord_values if isinstance(coord_values, pd.Index) else pd.Index(coord_values)
-    )
+    if isinstance(coord_values, DataArray):
+        return coord_values.to_index()
+    if isinstance(coord_values, pd.Index):
+        return coord_values
+    return pd.Index(coord_values)
 
 
 def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:

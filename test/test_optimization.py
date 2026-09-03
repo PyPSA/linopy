@@ -560,6 +560,7 @@ def test_solver_time_limit_options(
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
         "cupdlpx": {"TimeLimit": 1},
+        "cuopt": {"time_limit": 1},
     }
     status, condition = model.solve(
         solver,
@@ -962,7 +963,13 @@ def test_quadratic_model_unbounded(
         status, condition = quadratic_model_unbounded.solve(
             solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
         )
-        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+        expected = ["unbounded", "unknown", "infeasible_or_unbounded"]
+        if solver == "cuopt":
+            # cuOpt does not classify an unbounded QP: its barrier aborts with
+            # "Search direction computation failed" and returns NumericalError,
+            # which linopy maps to internal_solver_error. Measured 26.08.00.
+            expected.append("internal_solver_error")
+        assert condition in expected
     else:
         with pytest.raises(ValueError):
             quadratic_model_unbounded.solve(
@@ -1107,8 +1114,16 @@ def test_basis_and_warmstart(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    if solver == "cupdlpx":
-        pytest.skip("cuPDLPx does not yet support warmstart in the Python API.")
+    no_warmstart_reasons = {
+        "cupdlpx": "cuPDLPx does not yet support warmstart in the Python API.",
+        "cuopt": (
+            "cuOpt's own warm start needs three simultaneous non-default settings "
+            "and a non-file payload, and setting an initial solution crashes the "
+            "CUDA context, so linopy does not offer it. See doc/gpu-acceleration.rst."
+        ),
+    }
+    if solver in no_warmstart_reasons:
+        pytest.skip(no_warmstart_reasons[solver])
 
     basis_fn = tmp_path / "basis.bas"
     model.solve(
