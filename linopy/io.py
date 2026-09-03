@@ -1119,8 +1119,6 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     )
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
-    if m._spec is not None:
-        ds.attrs[SPEC_ATTR] = m._spec.text
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
