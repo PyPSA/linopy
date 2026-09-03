@@ -24,6 +24,7 @@ from math_spec import did_you_mean
 from math_spec import program as ms
 
 from linopy.spec.errors import SpecDataError
+from linopy.spec.nodes import parameters_of, walk
 
 Retain = Literal["report", "all", "none"]
 _RETAIN: tuple[str, ...] = get_args(Retain)
@@ -174,14 +175,12 @@ class Bound:
 def _report_closure(program: ms.Program) -> set[str]:
     """Every parameter a named expression reads, by node or by name."""
     bodies = tuple(program.named_expressions.values())
-    names = set(ms.parameters_of(*bodies))
-    for node in ms.walk(*bodies):
+    names = set(parameters_of(*bodies))
+    for node in walk(*bodies):
         if isinstance(node, ms.Translate) and isinstance(node.offset, str):
             names.add(node.offset)
         elif isinstance(node, ms.Window) and isinstance(node.width, str):
             names.add(node.width)
-        elif isinstance(node, ms.Power):
-            names |= ms.parameters_of(node.base, node.exponent)
         elif isinstance(node, ms.Cases):
             for region in node.regions:
                 names |= region.when.names_read

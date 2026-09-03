@@ -238,7 +238,7 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
             _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
             for region in node.regions
         )
-        return functools.reduce(operator.add, regions)
+        return functools.reduce(lambda a, b: _combine(operator.add, a, b), regions)
     assert_never(node)
 
 

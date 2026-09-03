@@ -129,8 +129,20 @@ class ModelSpec:
         parameter ``retain="report"`` did not keep. *sources* is read the way
         ``add_spec`` read it, and must describe the coordinates the model was
         built on.
+
+        Raises:
+            SpecDataError: *sources* label a dimension differently than the
+                model was built on.
         """
         bound = bind(self.program, sources, retain="none")
+        coords = self.coords
+        for dim, index in bound.coords.items():
+            if dim in coords and not index.equals(coords[dim]):
+                raise SpecDataError(
+                    f"sources describe dimension '{dim}' as {index.tolist()[:5]}, and the model "
+                    f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
+                    f"model holds, so the data must be bound on the same labels in the same order."
+                )
         return fold(name, self._context(bound.parameter))
 
     def _retained(self, name: str) -> xr.DataArray:
