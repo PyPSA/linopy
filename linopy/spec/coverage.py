@@ -19,6 +19,7 @@ from math_spec import program as ms
 from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
+from linopy.spec.nodes import children, parameters_of
 from linopy.spec.where import evaluate_where
 
 Rows = xr.DataArray | None
@@ -36,7 +37,7 @@ def check_bounds_cover(
     name: str, declared: ms.VariableDeclaration, ctx: Context, rows: Rows
 ) -> None:
     """A bound parameter must have a value at every coordinate the variable occupies."""
-    names = sorted(ms.parameters_of(declared.lower, declared.upper))
+    names = sorted(parameters_of(declared.lower, declared.upper))
     missing = sum(gaps_under(ctx.parameters[p], rows) for p in names)
     if missing:
         raise SpecDataError(
@@ -90,7 +91,7 @@ def check_divisors_cover(
         for quotient, region in _under_regions(expression, ctx, rows):
             if not isinstance(quotient, ms.Divide):
                 continue
-            params = ms.parameters_of(quotient.divisor)
+            params = parameters_of(quotient.divisor)
             if not params:
                 continue
             needed = region
@@ -121,5 +122,5 @@ def _under_regions(
                 region.value, ctx, inside if rows is None else rows & inside
             )
         return
-    for child in ms.children(node):
+    for child in children(node):
         yield from _under_regions(child, ctx, rows)

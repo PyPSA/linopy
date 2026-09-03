@@ -160,11 +160,7 @@ def sum_back(
     """
     if by is not None:
         within = _per_group(within, by)
-    asked = (
-        int(np.nanmax(np.asarray(within)))
-        if isinstance(within, xr.DataArray)
-        else int(within)
-    )
+    asked = _widest(within)
     widest = max(1, min(asked, int(array.sizes[over])))
     probe = _Edge(wrap=wrap, fill=None)
     groups = None if by is None else _grouped(over, np.asarray(array.indexes[over]), by)
@@ -184,15 +180,21 @@ def sum_back(
     return _merged(lagged_terms).where(reduce(operator.or_, reached))
 
 
+def _widest(within: Amount) -> int:
+    """The widest window the data asks for; a width no member carries is a window of nothing."""
+    if not isinstance(within, xr.DataArray):
+        return int(within)
+    widths = np.asarray(within, dtype=float)
+    return 0 if np.isnan(widths).all() else int(np.nanmax(widths))
+
+
 def _merged(values: list[Array]) -> Array:
     """The sum of *values* in one step: a running sum would re-concatenate the term axis once per lag."""
-    data = [value for value in values if isinstance(value, xr.DataArray)]
-    if len(data) == len(values):
-        return reduce(operator.add, data)
+    if isinstance(values[0], xr.DataArray):
+        return reduce(operator.add, values)
     from linopy import merge
 
-    held = [value for value in values if not isinstance(value, xr.DataArray)]
-    return cast(LinearExpression, merge(held))
+    return cast(LinearExpression, merge(cast(list[Term], values)))
 
 
 def _renamed(

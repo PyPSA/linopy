@@ -263,13 +263,6 @@ def test_retain_decides_what_the_fold_can_read(retain: str, kept: set[str]) -> N
             m.spec.expressions["spend"]
 
 
-def test_evaluate_refuses_data_on_other_labels_than_the_model() -> None:
-    m = solved(yaml_dict(), DISPATCH_DATA)
-    reordered = {**DISPATCH_DATA, "generator": GENERATOR[::-1]}
-    with pytest.raises(SpecDataError, match="not aligned on 'generator'"):
-        m.spec.evaluate("spend", reordered)
-
-
 def test_an_unknown_expression_is_a_key_error_with_a_hint() -> None:
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
     with pytest.raises(KeyError, match="unknown named expression 'spent'.*spend"):
@@ -1034,3 +1027,81 @@ def test_a_convex_hull_curve_may_bend_either_way_but_not_both() -> None:
     )
     with pytest.raises(SpecDataError, match="exact only for a single bend"):
         Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": mixed})
+
+
+# ---------------------------------------------------------------------------
+# a power hides nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("expression", "match"),
+    [
+        pytest.param(
+            "x <= c ** 2",
+            "constraint 'cap'.*covers 1 fewer",
+            id="constant-side-under-a-power",
+        ),
+        pytest.param(
+            "x / (c ** 2) <= 1", "constraint 'cap'.*divisor", id="divisor-under-a-power"
+        ),
+    ],
+)
+def test_a_parameter_under_a_power_is_still_checked_for_coverage(
+    expression: str, match: str
+) -> None:
+    spec = with_(
+        SPARSE_SPEC, constraints={"cap": {"foreach": ["t"], "expression": expression}}
+    )
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0})
+
+
+def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
+    spec = with_(
+        SPARSE_SPEC,
+        parameters={**SPARSE_SPEC["parameters"], "lag": {"dims": [], "dtype": "int"}},
+        expressions={"e": "shift(c, over=t, offset=lag, edge=0) ** 1"},
+    )
+    m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
+    assert {"c", "lag"} <= set(m.parameters.data_vars)
+    xr.testing.assert_allclose(
+        m.spec.expressions["e"],
+        xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),
+    )
+
+
+OTHER = pd.Index(["x", "y"], name="generator")
+
+
+@pytest.mark.parametrize(
+    ("generator", "match"),
+    [
+        pytest.param(GENERATOR[::-1], "as \\['gas', 'wind'\\]", id="reordered"),
+        pytest.param(OTHER, "as \\['x', 'y'\\]", id="relabelled"),
+    ],
+)
+def test_evaluate_refuses_sources_on_other_labels_than_the_model(
+    generator: pd.Index, match: str
+) -> None:
+    m = solved({**yaml_dict(), "expressions": {"twice": "cost * 2"}}, DISPATCH_DATA)
+    sources = {
+        **DISPATCH_DATA,
+        "generator": generator,
+        "p_max": pd.Series([100.0, 200.0], index=generator),
+        "cost": pd.Series([0.0, 50.0], index=generator),
+    }
+    with pytest.raises(SpecDataError, match=f"dimension 'generator' {match}"):
+        m.spec.evaluate("twice", sources)
+
+
+def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
+    data = {
+        **OPERATOR_DATA,
+        "season_of": pd.Series(
+            [], index=pd.Index([], name="t", dtype=int), dtype=object
+        ),
+    }
+    m = solved(operator_spec(), data, retain="all")
+    folded = m.spec.expressions["probe_sum_back_group_width"]
+    assert bool(folded.isnull().all())
