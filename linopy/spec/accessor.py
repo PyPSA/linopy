@@ -61,6 +61,11 @@ def attach(
     return ModelSpec(model, program, text)
 
 
+def restore(model: Model, text: str) -> ModelSpec:
+    """The accessor for *model*, with the program lowered afresh from *text*."""
+    return ModelSpec(model, to_program(yaml.safe_load(text)), text)
+
+
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
     """The spec as the YAML text kept on the model, and lowered."""
     if isinstance(spec, ms.Program):
@@ -95,6 +100,10 @@ class ModelSpec:
     def __repr__(self) -> str:
         names = list(self.program.named_expressions)
         return f"ModelSpec(expressions={names})"
+
+    def _rebound(self, model: Model) -> ModelSpec:
+        """The same spec, read off *model*."""
+        return ModelSpec(model, self.program, self.text)
 
     @property
     def parameters(self) -> xr.Dataset:
