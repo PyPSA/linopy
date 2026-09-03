@@ -26,6 +26,7 @@ yaml = pytest.importorskip("yaml")
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
 from linopy.spec import ModelSpec, SpecDataError  # noqa: E402
+from linopy.spec.testing import synthetic_sources  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
@@ -171,48 +172,6 @@ def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     )
     assert set(m.spec.parameters.data_vars) == {"cost", "p_max"}
     assert m.spec.coords["generator"].equals(GENERATOR)
-
-
-def synthetic_sources(program: Any, n: int = 3) -> dict[str, Any]:
-    """Dense data for every declaration: labels per dimension, a linear ramp per parameter, cyclic lookups."""
-    sources: dict[str, Any] = {}
-    for dim, decl in program.dimensions.items():
-        if decl.dtype == "int":
-            sources[dim] = pd.Index(range(n), name=dim)
-        elif decl.dtype == "datetime":
-            sources[dim] = pd.date_range("2030-01-01", periods=n, freq="h", name=dim)
-        else:
-            sources[dim] = pd.Index([f"{dim}{i}" for i in range(n)], name=dim)
-    for over, lk in program.lookups:
-        if lk.target is not None:
-            values = [sources[lk.target][i % n] for i in range(n)]
-        else:
-            values = (
-                list(range(n))
-                if lk.dtype == "int"
-                else [f"{lk.name}{i}" for i in range(n)]
-            )
-        sources[lk.name] = pd.Series(values, index=sources[over])
-    ramp = 1.0 + np.arange(n)
-    for name, p in program.parameters.items():
-        if p.derivation is not None:
-            continue
-        shape = [n] * len(p.dims)
-        if p.dtype == "float":
-            data = np.broadcast_to(ramp, shape).copy() if p.dims else np.array(1.0)
-        elif p.dtype == "int":
-            data = np.ones(shape, dtype=int)
-        elif p.dtype == "bool":
-            data = np.ones(shape, dtype=bool)
-        else:
-            data = np.full(shape, "a", dtype=object)
-        if not p.dims:
-            sources[name] = data.item()
-        else:
-            sources[name] = xr.DataArray(
-                data, coords={d: sources[d] for d in p.dims}, dims=p.dims
-            )
-    return sources
 
 
 EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")

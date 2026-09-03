@@ -111,10 +111,27 @@ def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -
         assert_equal(a.rhs, b.rhs)
 
 
+def _dtypes(ds: xr.Dataset) -> dict[str, str]:
+    """The dtype of every variable and coordinate, which assert_equal ignores."""
+    return {str(name): str(arr.dtype) for name, arr in {**ds.variables}.items()}
+
+
+def assert_datasetequal(a: xr.Dataset, b: xr.Dataset) -> None:
+    """
+    Assert that two datasets hold the same values at the same dtypes.
+
+    xarray's ``assert_equal`` compares values and labels but not dtypes, and a
+    netcdf engine is free to narrow an int64 or widen a bool, so the dtypes
+    are compared here on top of it.
+    """
+    assert_equal(a, b)
+    assert _dtypes(a) == _dtypes(b), f"dtypes differ: {_dtypes(a)} != {_dtypes(b)}"
+
+
 def assert_model_equal(a: Model, b: Model) -> None:
     """Assert that two models are equal."""
     for k in a.dataset_attrs:
-        assert_equal(getattr(a, k), getattr(b, k))
+        assert_datasetequal(getattr(a, k), getattr(b, k))
 
     assert set(a.variables) == set(b.variables)
     assert set(a.constraints) == set(b.constraints)
