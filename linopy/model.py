@@ -116,6 +116,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.spec import ModelSpec, Retain, SpecLike
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,7 @@ class Model:
         "_piecewise_formulations",
         "_solver",
         "_sos_reformulation_state",
+        "_spec",
         "__weakref__",
     )
 
@@ -296,6 +298,7 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
+        self._spec: ModelSpec | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -427,6 +430,84 @@ class Model:
         Solution calculated by the optimization.
         """
         return self.variables.solution
+
+    @property
+    def spec(self) -> ModelSpec:
+        """
+        The math-spec program this model was built from, see :meth:`add_spec`.
+
+        Raises
+        ------
+        AttributeError
+            If the model was not built from a spec.
+        """
+        if self._spec is None:
+            raise AttributeError(
+                "This model was not built from a spec. Use `Model.add_spec` or "
+                "`Model.from_spec` to build one."
+            )
+        return self._spec
+
+    def add_spec(
+        self,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        retain: Retain = "report",
+    ) -> Model:
+        """
+        Build a math-spec program with its data into this empty model.
+
+        Requires the ``math-spec`` package and linopy's v1 semantics
+        (``linopy.options["semantics"] = "v1"``). Variables, constraints and
+        the objective are added as the spec declares them; the spec text, the
+        parameters the named expressions read and the lookups are kept on the
+        model, and the named expressions are read back through ``model.spec``.
+
+        Parameters
+        ----------
+        spec : str, pathlib.Path, dict or math_spec.Spec
+            The spec. A ``str`` containing a newline is YAML text, any other
+            ``str`` is a path. A lowered ``math_spec.Program`` is refused,
+            since it has no YAML form to keep on the model.
+        sources : mapping or xarray.Dataset
+            Data keyed by declared name: dimension labels, parameters and
+            lookups. Read by key on demand and never iterated.
+        retain : {"report", "all", "none"}
+            Which parameters to keep in ``model.parameters``: those the named
+            expressions read, all of them, or none.
+
+        Returns
+        -------
+        linopy.Model
+            This model, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the model already holds variables or constraints, or runs
+            under legacy semantics.
+        linopy.spec.SpecDataError
+            If the data does not fit the spec.
+        """
+        from linopy.spec.accessor import attach
+
+        self._spec = attach(self, spec, sources, retain)
+        return self
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        retain: Retain = "report",
+        **model_kwargs: Any,
+    ) -> Model:
+        """
+        A new model built from a math-spec program, see :meth:`add_spec`.
+
+        ``model_kwargs`` are passed to :class:`Model`.
+        """
+        return cls(**model_kwargs).add_spec(spec, sources, retain=retain)
 
     @property
     def dual(self) -> Dataset:
