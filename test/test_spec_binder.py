@@ -14,7 +14,7 @@ math_spec = pytest.importorskip("math_spec")
 
 from linopy.spec import SpecDataError, bind  # noqa: E402
 
-SPEC = {
+SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}, "g": {"dtype": "str"}},
     "lookups": {"grp": {"over": "f", "into": "g"}},
     "parameters": {
@@ -622,7 +622,7 @@ def test_derived_parameter_is_not_bound_from_sources() -> None:
 # lpspec data-parity cases, eager representation
 # ---------------------------------------------------------------------------
 
-PARITY_SPEC = {
+PARITY_SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}},
     "parameters": {"cost": {"dims": ["f"]}, "cap": {"dims": ["f"]}},
     "variables": {"x": {"foreach": ["f"], "bounds": {"lower": 0, "upper": "cap"}}},
