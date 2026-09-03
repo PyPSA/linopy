@@ -151,13 +151,10 @@ class Bound:
     def _retained_names(self) -> list[str]:
         if self.retain == "none":
             return []
-        declared = [
-            n for n, p in self.program.parameters.items() if p.derivation is None
-        ]
-        if self.retain == "all":
-            return declared
-        closure = _report_closure(self.program)
-        return [n for n in declared if n in closure]
+        all_names = set(self.program.parameters)
+        keep = all_names if self.retain == "all" else _report_closure(self.program)
+        items = self.program.parameters.items()
+        return [n for n, p in items if p.derivation is None and n in keep]
 
 
 def _report_closure(program: ms.Program) -> set[str]:
@@ -200,11 +197,8 @@ def _check_keys(program: ms.Program, keys: frozenset[str]) -> None:
     unknown = sorted(keys - set(known))
     if not unknown:
         return
-    lead = (
-        f"source key {unknown[0]!r} names"
-        if len(unknown) == 1
-        else f"source keys {unknown} name"
-    )
+    one = len(unknown) == 1
+    lead = f"source key {unknown[0]!r} names" if one else f"source keys {unknown} name"
     raise SpecDataError(
         f"{lead} neither a parameter, a dimension nor a lookup this spec declares. "
         f"{did_you_mean(unknown[0], known)} Pass only what the spec takes."
@@ -218,18 +212,13 @@ def _check_keys(program: ms.Program, keys: frozenset[str]) -> None:
 
 def _reached(program: ms.Program) -> set[str]:
     dims: set[str] = set()
-    for p in program.parameters.values():
-        dims.update(p.dims)
-    for v in program.variables.values():
-        dims.update(v.dims)
-    for c in program.constraints.values():
-        dims.update(c.dims)
+    for declared in (program.parameters, program.variables, program.constraints):
+        dims.update(d for decl in declared.values() for d in decl.dims)
+    dims.update(pw.over for pw in program.piecewise.values())
     for over, lk in program.lookups:
         dims.add(over)
         if lk.target is not None:
             dims.add(lk.target)
-    for pw in program.piecewise.values():
-        dims.add(pw.over)
     return dims
 
 
@@ -296,10 +285,7 @@ def _lookups(
         series = _lookup_series(lk.name, over, sources[lk.name])
         _check_lookup(series, lk, over, coords)
         padded = series.reindex(coords[over])
-        array = xr.DataArray(
-            padded.to_numpy(), dims=[over], coords={over: coords[over]}, name=lk.name
-        )
-        out.setdefault(over, {})[lk.name] = array
+        out.setdefault(over, {})[lk.name] = xr.DataArray(padded, name=lk.name)
     return out
 
 
@@ -383,7 +369,6 @@ def _as_array(
     obj: Any,
     coords: Mapping[str, pd.Index],
 ) -> xr.DataArray:
-    dims = declared.dims
     if isinstance(obj, xr.DataArray):
         return _from_dense(name, declared, obj)
     if isinstance(obj, pd.DataFrame):
@@ -394,6 +379,7 @@ def _as_array(
         return _from_rows(name, declared, pd.Series(dict(obj)), coords)
     if isinstance(obj, _SCALARS):
         return _from_scalar(name, declared, obj, coords)
+    dims = declared.dims
     raise SpecDataError(
         f"parameter '{name}': cannot adapt {type(obj).__name__} to an array over {list(dims)}; "
         f"pass {_parameter_shapes(dims)}."
@@ -415,9 +401,8 @@ def _from_scalar(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
             f"A number was meant, or the parameter has no data and should not be passed."
         )
-    value = (
-        np.asarray(obj, dtype=float) if declared.dtype == "float" else np.asarray(obj)
-    )
+    dtype = float if declared.dtype == "float" else None
+    value = np.asarray(obj, dtype=dtype)
     _check_value_dtype(name, declared, value.dtype)
     arr = xr.DataArray(value, name=name)
     if declared.dims:
@@ -441,9 +426,7 @@ def _from_dense(
                 f"parameter '{name}' has no coordinate labels along '{d}'. A parameter is read for "
                 f"values against its labels, so every dimension needs an index coordinate."
             )
-        _refuse_duplicate_coordinates(
-            name, dims, arr.indexes[d].duplicated(), arr.indexes[d]
-        )
+        _refuse_duplicate_coordinates(name, (d,), arr.indexes[d])
     return arr.transpose(*dims)
 
 
@@ -456,9 +439,8 @@ def _from_frame(
     dims = declared.dims
     tidy = df.reset_index() if set(dims) - set(df.columns) else df
     if "value" in tidy.columns and set(dims) <= set(tidy.columns):
-        if not dims:
-            return _from_rows(name, declared, tidy["value"], coords)
-        return _from_rows(name, declared, tidy.set_index(list(dims))["value"], coords)
+        indexed = tidy.set_index(list(dims)) if dims else tidy
+        return _from_rows(name, declared, indexed["value"], coords)
     if len(dims) == 2:
         return _from_dense(name, declared, xr.DataArray(_wide(name, dims, df)))
     raise SpecDataError(
@@ -505,26 +487,24 @@ def _from_rows(
             f"it in the same breath. Drop those rows, or supply the values."
         )
     _check_value_dtype(name, declared, series.dtype)
-    _refuse_duplicate_coordinates(name, dims, series.index.duplicated(), series.index)
+    _refuse_duplicate_coordinates(name, dims, series.index)
     for d in dims:
         labels = series.index.get_level_values(d)
         _refuse_strangers(name, d, labels[~labels.isin(coords[d])].unique(), coords[d])
     onto = [coords[d] for d in dims]
     full = onto[0] if len(dims) == 1 else pd.MultiIndex.from_product(onto, names=dims)
     values = series.reindex(full, fill_value=_fill(declared)).to_numpy()
-    shape = tuple(len(index) for index in onto)
-    return xr.DataArray(
-        values.reshape(shape), dims=dims, coords=dict(zip(dims, onto)), name=name
-    )
+    dense = values.reshape(tuple(len(index) for index in onto))
+    return xr.DataArray(dense, dims=dims, coords=dict(zip(dims, onto)), name=name)
 
 
 def _with_dims(name: str, dims: tuple[str, ...], series: pd.Series) -> pd.Series:
     index = series.index
     if index.nlevels != len(dims):
-        said = "a Series or dict carries one label per level"
         raise SpecDataError(
-            f"parameter '{name}': {said}, and its index has {index.nlevels} level(s) where '{name}' "
-            f"is over {list(dims)}. Pass {_parameter_shapes(dims)}."
+            f"parameter '{name}': a Series or dict carries one label per level, and its index has "
+            f"{index.nlevels} level(s) where '{name}' is over {list(dims)}. "
+            f"Pass {_parameter_shapes(dims)}."
         )
     names = list(index.names)
     if all(n is None for n in names):
@@ -540,8 +520,9 @@ def _with_dims(name: str, dims: tuple[str, ...], series: pd.Series) -> pd.Series
 
 
 def _refuse_duplicate_coordinates(
-    name: str, dims: tuple[str, ...], duplicated: Any, index: pd.Index
+    name: str, dims: tuple[str, ...], index: pd.Index
 ) -> None:
+    duplicated = index.duplicated()
     if not duplicated.any():
         return
     counts = index[duplicated].value_counts()

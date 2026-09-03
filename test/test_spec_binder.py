@@ -50,6 +50,25 @@ T = pd.Index([0, 1, 2], name="t")
 CAP = xr.DataArray(np.arange(9.0).reshape(3, 3), coords={"f": F, "t": T}, name="cap")
 COST = pd.Series([1.0, 2.0, 3.0], index=F)
 
+DUP_ROWS = pd.Series([1.0, 9.0, 2.0], index=pd.Index(["a", "a", "b"], name="f"))
+NULL_ROW = pd.Series({"a": 1.0, "b": None})
+NAN_ROW = pd.Series({"a": 1.0, "b": np.nan})
+NULL_FRAME = pd.DataFrame({"f": ["a", "b"], "value": [1.0, None]})
+STRAY_ROW = pd.Series({"a": 1.0, "zz": 2.0})
+DEEP_INDEX = pd.MultiIndex.from_tuples([("a", 0), ("b", 0)], names=["f", "k"])
+DEEP_ROWS = pd.Series([5.0, 5.0], index=DEEP_INDEX)
+
+
+def sources_from(
+    base: Mapping[str, Any], override: Mapping[str, Any]
+) -> dict[str, Any]:
+    """*base* with *override* applied; a ``None`` value drops the key instead."""
+    merged = {**base, **override}
+    for key, value in override.items():
+        if value is None:
+            merged.pop(key)
+    return merged
+
 
 @pytest.fixture(scope="module")
 def program() -> Any:
@@ -222,9 +241,7 @@ REFUSALS = [
         id="duplicate-member",
     ),
     pytest.param(
-        {"cost": pd.Series({"a": 1.0, "zz": 2.0})},
-        r"parameter 'cost'.*'f'.*'zz'",
-        id="unknown-label",
+        {"cost": STRAY_ROW}, r"parameter 'cost'.*'f'.*'zz'", id="unknown-label"
     ),
     pytest.param(
         {"cap": CAP.assign_coords(t=[0, 1, 9])},
@@ -232,7 +249,7 @@ REFUSALS = [
         id="unknown-label-dense",
     ),
     pytest.param(
-        {"cost": pd.Series([1.0, 9.0, 2.0], index=pd.Index(["a", "a", "b"], name="f"))},
+        {"cost": DUP_ROWS},
         r"parameter 'cost' has more than one row for a coordinate: f='a' \(2 rows\)",
         id="duplicated-coordinate-row",
     ),
@@ -242,12 +259,8 @@ REFUSALS = [
         id="dense-wrong-dims",
     ),
     pytest.param(
-        {
-            "cap": xr.DataArray(
-                np.ones((2, 3)), coords={"f": ["a", "a"], "t": [0, 1, 2]}
-            )
-        },
-        r"parameter 'cap' has more than one row",
+        {"cap": xr.DataArray(np.ones((3, 3)), coords={"f": list(F), "t": [0, 0, 1]})},
+        r"parameter 'cap' has more than one row for a coordinate: t=0 \(2 rows\)",
         id="dense-duplicate-coordinate",
     ),
     pytest.param(
@@ -256,11 +269,7 @@ REFUSALS = [
         id="wrong-rank",
     ),
     pytest.param(
-        {
-            "cap": pd.Series(
-                [1.0], index=pd.MultiIndex.from_tuples([("a", 0)], names=["f", "q"])
-            )
-        },
+        {"cap": DEEP_ROWS.rename_axis(["f", "q"])},
         r"parameter 'cap' is indexed by \['f', 'q'\]",
         id="wrong-level-names",
     ),
@@ -280,19 +289,18 @@ REFUSALS = [
         id="dense-without-labels",
     ),
     pytest.param(
-        {"cost": pd.Series({"a": 1.0, "b": None})},
-        r"parameter 'cost' carries 1 row.*f='b'",
-        id="null-row",
+        {"cost": NULL_ROW}, r"parameter 'cost' carries 1 row.*f='b'", id="null-row"
     ),
-    pytest.param(
-        {"cost": pd.Series({"a": 1.0, "b": np.nan})},
-        r"parameter 'cost' carries 1 row",
-        id="nan-row",
-    ),
+    pytest.param({"cost": NAN_ROW}, r"parameter 'cost' carries 1 row", id="nan-row"),
     pytest.param(
         {"rate": float("nan")},
         r"parameter 'rate' is one value and that value is a hole",
         id="nan-scalar",
+    ),
+    pytest.param(
+        {"rate": pd.DataFrame({"value": [None]})},
+        r"parameter 'rate' is one value and that value is a hole",
+        id="nan-scalar-frame",
     ),
     pytest.param(
         {"lead": pd.Series([1.5, 0.0, 1.0], index=F)},
@@ -361,12 +369,8 @@ REFUSALS = [
 def test_malformed_data_is_refused_naming_the_symbol(
     program: Any, good: dict[str, Any], override: dict[str, Any], match: str
 ) -> None:
-    sources = {**good, **override}
-    for key, value in override.items():
-        if value is None:
-            sources.pop(key)
     with pytest.raises(SpecDataError, match=match):
-        read_all(program, sources)
+        read_all(program, sources_from(good, override))
 
 
 def test_int_labels_are_shown_as_written(program: Any, good: dict[str, Any]) -> None:
@@ -376,18 +380,9 @@ def test_int_labels_are_shown_as_written(program: Any, good: dict[str, Any]) -> 
 
 
 def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
-    ds = xr.Dataset(
-        {
-            "cost": xr.DataArray(COST),
-            "cap": CAP,
-            "flag": xr.DataArray(good["flag"]),
-            "rate": 0.5,
-            "lead": xr.DataArray(good["lead"]),
-            "grp": xr.DataArray(good["grp"]),
-        },
-        coords={"f": F, "t": T, "g": ["n", "e"]},
-    )
-    from_dataset = bind(program, ds)
+    dims = {"f": F, "t": T, "g": ["n", "e"]}
+    values = {k: xr.DataArray(v) for k, v in good.items() if k not in dims}
+    from_dataset = bind(program, xr.Dataset(values, coords=dims))
     from_mapping = bind(program, good)
     assert from_dataset.coords["f"].equals(from_mapping.coords["f"])
     for name in program.parameters:
@@ -482,19 +477,14 @@ def test_report_closure_reads_names_and_masks() -> None:
     assert set(bind(program, sources).retained().data_vars) == {"cost", "lag", "on"}
 
 
-def test_aligned_array_is_not_copied(program: Any, good: dict[str, Any]) -> None:
-    bound = bind(program, good)
-    assert np.shares_memory(CAP.values, bound.parameter("cap").values)
-    assert np.shares_memory(CAP.values, bound.parameter("cap").values)
-    permuted = CAP.transpose("t", "f")
-    assert np.shares_memory(
-        permuted.values,
-        bind(program, {**good, "cap": permuted}).parameter("cap").values,
-    )
-    wide = CAP.to_pandas()
-    assert np.shares_memory(
-        wide.values, bind(program, {**good, "cap": wide}).parameter("cap").values
-    )
+@pytest.mark.parametrize("shape", ["dataarray", "dataarray-transposed", "wide-frame"])
+def test_aligned_array_is_not_copied(
+    program: Any, good: dict[str, Any], shape: str
+) -> None:
+    source = CAP_SHAPES[shape]
+    bound = bind(program, {**good, "cap": source})
+    assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
+    assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
 
 
 def test_derived_parameter_is_not_bound_from_sources() -> None:
@@ -552,88 +542,30 @@ GOOD = {
 ACCEPTED = "accepted"
 
 PARITY_CASES = [
-    pytest.param(GOOD, ACCEPTED, id="valid"),
-    pytest.param(
-        {"f": ["a", "b"], "cost": GOOD["cost"]},
-        SpecDataError,
-        id="parameter-missing-entirely",
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.Series({"a": 1.0})}, ACCEPTED, id="coefficient-sparse"
-    ),
-    pytest.param(
-        {
-            **GOOD,
-            "cost": pd.Series(
-                [1.0, 9.0, 2.0], index=pd.Index(["a", "a", "b"], name="f")
-            ),
-        },
-        SpecDataError,
-        id="duplicated-coordinate-row",
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.Series({"a": 1.0, "zz": 2.0})},
-        SpecDataError,
-        id="label-the-dimension-does-not-have",
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.Series({"a": 1.0, "b": None})},
-        SpecDataError,
-        id="a-null-value",
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.Series({"a": 1.0, "b": float("nan")})},
-        SpecDataError,
-        id="a-nan-value",
-    ),
-    pytest.param(
-        {**GOOD, "cap": pd.Series({"a": 5.0, "b": None})},
-        SpecDataError,
-        id="a-hole-in-a-bound",
-    ),
-    pytest.param(
-        {**GOOD, "cost": float("nan")}, SpecDataError, id="a-hole-as-a-scalar"
-    ),
-    pytest.param(
-        {**GOOD, "cost": [1.0, float("nan")]}, SpecDataError, id="a-hole-in-a-sequence"
-    ),
-    pytest.param(
-        {**GOOD, "cost": {"a": 1.0, "b": None}}, SpecDataError, id="a-hole-in-a-dict"
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.DataFrame({"f": ["a", "b"], "value": [1.0, None]})},
-        SpecDataError,
-        id="a-hole-in-a-tidy-frame",
-    ),
-    pytest.param(
-        {**GOOD, "cost": pd.Series({"a": 1, "b": 2})},
-        ACCEPTED,
-        id="whole-numbers-serve-a-float-declaration",
-    ),
-    pytest.param(
-        {**GOOD, "csot": GOOD["cost"]},
-        SpecDataError,
-        id="a-source-key-the-model-does-not-declare",
-    ),
-    pytest.param(
-        {
-            **GOOD,
-            "cost": pd.Series(
-                [5.0, 5.0],
-                index=pd.MultiIndex.from_tuples([("a", 0), ("b", 0)], names=["f", "k"]),
-            ),
-        },
-        SpecDataError,
-        id="a-series-deeper-than-the-declared-dims",
-    ),
+    pytest.param({}, ACCEPTED, id="valid"),
+    pytest.param({"cap": None}, SpecDataError, id="parameter-missing-entirely"),
+    pytest.param({"cost": pd.Series({"a": 1.0})}, ACCEPTED, id="coefficient-sparse"),
+    pytest.param({"cost": DUP_ROWS}, SpecDataError, id="duplicated-coordinate-row"),
+    pytest.param({"cost": STRAY_ROW}, SpecDataError, id="label-not-in-the-dimension"),
+    pytest.param({"cost": NULL_ROW}, SpecDataError, id="a-null-value"),
+    pytest.param({"cost": NAN_ROW}, SpecDataError, id="a-nan-value"),
+    pytest.param({"cap": NULL_ROW}, SpecDataError, id="a-hole-in-a-bound"),
+    pytest.param({"cost": float("nan")}, SpecDataError, id="a-hole-as-a-scalar"),
+    pytest.param({"cost": [1.0, np.nan]}, SpecDataError, id="a-hole-in-a-sequence"),
+    pytest.param({"cost": {"a": 1.0, "b": None}}, SpecDataError, id="a-hole-in-a-dict"),
+    pytest.param({"cost": NULL_FRAME}, SpecDataError, id="a-hole-in-a-tidy-frame"),
+    pytest.param({"cost": pd.Series({"a": 1, "b": 2})}, ACCEPTED, id="whole-numbers"),
+    pytest.param({"csot": COST}, SpecDataError, id="an-undeclared-source-key"),
+    pytest.param({"cost": DEEP_ROWS}, SpecDataError, id="a-series-too-deep"),
 ]
 
 
-@pytest.mark.parametrize(("sources", "verdict"), PARITY_CASES)
+@pytest.mark.parametrize(("override", "verdict"), PARITY_CASES)
 def test_parity_with_lpspec_data_verdicts(
-    sources: dict[str, Any], verdict: Any
+    override: dict[str, Any], verdict: Any
 ) -> None:
     program = math_spec.to_program(PARITY_SPEC)
+    sources = sources_from(GOOD, override)
     if verdict is ACCEPTED:
         read_all(program, sources)
         return
@@ -644,29 +576,25 @@ def test_parity_with_lpspec_data_verdicts(
 def test_a_hole_is_named_where_it_sits() -> None:
     program = math_spec.to_program(PARITY_SPEC)
     with pytest.raises(SpecDataError, match="parameter 'cost'") as error:
-        read_all(program, {**GOOD, "cost": pd.Series({"a": 1.0, "b": None})})
+        read_all(program, {**GOOD, "cost": NULL_ROW})
     assert "divisor" not in str(error.value)
     assert "f='b'" in str(error.value)
 
 
-def test_a_hole_in_a_scalar_parameter_is_refused() -> None:
-    spec = {
-        "dimensions": {"f": {"dtype": "str"}},
-        "parameters": {"rate": {"dims": []}},
-        "variables": {"x": {"foreach": ["f"], "bounds": {"lower": 0, "upper": 1}}},
-        "objective": {"sense": "maximize", "expression": "sum(x * rate)"},
-    }
-    program = math_spec.to_program(spec)
-    with pytest.raises(SpecDataError, match="hole"):
-        read_all(program, {"f": ["a", "b"], "rate": pd.DataFrame({"value": [None]})})
+FLAG_SPEC = {
+    "dimensions": {"g": {"dtype": "str"}},
+    "parameters": {"active": {"dims": ["g"], "dtype": "bool"}},
+    "variables": {
+        "x": {"foreach": ["g"], "where": "active", "bounds": {"lower": 0, "upper": 1}}
+    },
+    "objective": {"sense": "maximize", "expression": "sum(x)"},
+}
 
 
 @pytest.mark.parametrize(
     ("column", "verdict"),
     [
-        pytest.param(
-            pd.Series({"a": True, "b": False}), ACCEPTED, id="a-boolean-column"
-        ),
+        pytest.param(pd.Series({"a": True, "b": False}), ACCEPTED, id="a-bool-column"),
         pytest.param(pd.Series({"a": 1, "b": 0}), SpecDataError, id="a-1-0-int-column"),
         pytest.param(
             pd.Series({"a": 1.0, "b": 0.0}), SpecDataError, id="a-1-0-float-column"
@@ -674,19 +602,7 @@ def test_a_hole_in_a_scalar_parameter_is_refused() -> None:
     ],
 )
 def test_a_flag_binds_by_its_declaration(column: pd.Series, verdict: Any) -> None:
-    spec = {
-        "dimensions": {"g": {"dtype": "str"}},
-        "parameters": {"active": {"dims": ["g"], "dtype": "bool"}},
-        "variables": {
-            "x": {
-                "foreach": ["g"],
-                "where": "active",
-                "bounds": {"lower": 0, "upper": 1},
-            }
-        },
-        "objective": {"sense": "maximize", "expression": "sum(x)"},
-    }
-    program = math_spec.to_program(spec)
+    program = math_spec.to_program(FLAG_SPEC)
     sources = {"g": ["a", "b"], "active": column}
     if verdict is ACCEPTED:
         assert bind(program, sources).parameter("active").dtype == bool
@@ -703,70 +619,58 @@ LOOKUP_SPEC = {
     "constraints": {"k": {"foreach": ["b"], "expression": "sum(x, by=gen_bus) <= 10"}},
     "objective": {"sense": "maximize", "expression": "sum(x)"},
 }
-P_MAX = {"p_max": pd.Series({"w": 5.0, "s": 5.0})}
-INDEX = {"g": ["w", "s"], "b": ["n", "e"]}
-MAP = {"gen_bus": pd.Series({"w": "n", "s": "e"})}
+G_TWICE = pd.Index(["w", "w", "s"], name="g")
+LOOKUP_GOOD = {
+    "p_max": pd.Series({"w": 5.0, "s": 5.0}),
+    "g": ["w", "s"],
+    "b": ["n", "e"],
+    "gen_bus": pd.Series({"w": "n", "s": "e"}),
+}
 
 
 @pytest.mark.parametrize(
-    ("sources", "match"),
+    ("override", "match"),
     [
         pytest.param(
-            {**P_MAX, **MAP}, "dimension 'g' has no index", id="a-map-and-no-labels"
+            {"g": None, "b": None}, "dimension 'g' has no index", id="a-map-no-labels"
         ),
         pytest.param(
-            {**P_MAX, **INDEX}, "no data provided for lookup", id="an-index-and-no-map"
+            {"gen_bus": None}, "no data provided for lookup", id="an-index-no-map"
         ),
         pytest.param(
-            {**P_MAX, **INDEX, "gen_bus": pd.Series({"w": "n", "s": "zz"})},
+            {"gen_bus": pd.Series({"w": "n", "s": "zz"})},
             "not 'b' labels",
             id="a-stray-value",
         ),
         pytest.param(
-            {
-                **P_MAX,
-                **INDEX,
-                "gen_bus": pd.Series(
-                    ["n", "e", "e"], index=pd.Index(["w", "w", "s"], name="g")
-                ),
-            },
+            {"gen_bus": pd.Series(["n", "e", "e"], index=G_TWICE)},
             "more than once",
             id="two-values-for-one-label",
         ),
         pytest.param(
-            {**P_MAX, **INDEX, "gen_bus": pd.Series({"w": None, "s": "e"})},
+            {"gen_bus": pd.Series({"w": None, "s": "e"})},
             "null in 'b'",
             id="mapping-a-label-to-nothing",
         ),
         pytest.param(
-            {
-                **P_MAX,
-                **INDEX,
-                "gen_bus": pd.Series(
-                    [None, "n", "n"], index=pd.Index(["w", "w", "s"], name="g")
-                ),
-            },
+            {"gen_bus": pd.Series([None, "n", "n"], index=G_TWICE)},
             "null in 'b'",
             id="a-label-held-twice-with-a-null",
         ),
     ],
 )
-def test_a_lookup_defect_is_refused(sources: dict[str, Any], match: str) -> None:
+def test_a_lookup_defect_is_refused(override: dict[str, Any], match: str) -> None:
     program = math_spec.to_program(LOOKUP_SPEC)
     with pytest.raises(SpecDataError, match=match):
-        read_all(program, sources)
+        read_all(program, sources_from(LOOKUP_GOOD, override))
 
 
 def test_a_stray_lookup_value_over_an_int_target_is_shown_as_written() -> None:
     program = math_spec.to_program(
         {**LOOKUP_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}}
     )
-    sources = {
-        **P_MAX,
-        "g": ["w", "s"],
-        "b": [1, 2],
-        "gen_bus": pd.Series({"w": 1, "s": 99}),
-    }
+    numbered = {"b": [1, 2], "gen_bus": pd.Series({"w": 1, "s": 99})}
+    sources = sources_from(LOOKUP_GOOD, numbered)
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:
         read_all(program, sources)
     assert "int64" not in str(error.value)
