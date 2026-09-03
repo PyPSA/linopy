@@ -54,6 +54,7 @@ Upcoming Version
 **Bug fixes**
 
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
+* The ``linopy.options`` context manager now restores the values that were active on entry instead of resetting all options to their defaults.
 
 
 Version 0.9.1
