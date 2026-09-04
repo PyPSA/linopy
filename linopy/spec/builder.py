@@ -65,8 +65,8 @@ def build(model: Model, bound: Bound) -> None:
         check_coefficients_cover(f"expression '{name}'", (body,), ctx, None)
 
 
-def fold(name: str, ctx: Context) -> xr.DataArray:
-    """The named expression *name* as data, folded over the solution and the parameters *ctx* holds."""
+def evaluate_named(name: str, ctx: Context) -> Value:
+    """The named expression *name* as its linopy term, array or number over *ctx*, its divisors checked first."""
     if name not in ctx.program.named_expressions:
         raise KeyError(
             f"unknown named expression '{name}'. "
@@ -75,14 +75,25 @@ def fold(name: str, ctx: Context) -> xr.DataArray:
     body = ctx.program.named_expressions[name]
     check_divisors_cover(f"expression '{name}'", (body,), ctx, None)
     value = evaluate(body, ctx)
+    return _named(value, name) if isinstance(value, xr.DataArray) else value
+
+
+def fold(name: str, ctx: Context) -> xr.DataArray:
+    """The named expression *name* as data, folded over the solution and the parameters *ctx* holds."""
+    value = evaluate_named(name, ctx)
     if isinstance(value, xr.DataArray):
-        stray = [c for c in value.coords if c not in value.dims]
-        return value.drop_vars(stray).rename(name)
+        return value
     if isinstance(value, float | int):
         return xr.DataArray(float(value), name=name)
     raise TypeError(
         f"expression '{name}' folded to a {type(value).__name__}, not to data"
     )
+
+
+def _named(value: xr.DataArray, name: str) -> xr.DataArray:
+    """*value* with its stray non-dimension coordinates dropped and renamed to *name*."""
+    stray = [c for c in value.coords if c not in value.dims]
+    return value.drop_vars(stray).rename(name)
 
 
 # ---------------------------------------------------------------------------

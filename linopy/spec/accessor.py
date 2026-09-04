@@ -9,6 +9,7 @@ reads ``model.parameters``.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -16,13 +17,22 @@ from typing import Any, TypeAlias
 import pandas as pd
 import xarray as xr
 import yaml
-from math_spec import Spec, to_program, to_spec
+from math_spec import (
+    Spec,
+    did_you_mean,
+    to_latex,
+    to_markdown,
+    to_program,
+    to_spec,
+    to_typst,
+)
 from math_spec import program as ms
 
 from linopy.model import Model
 from linopy.semantics import is_v1
+from linopy.spec import terms
 from linopy.spec.binder import Bound, Retain, bind
-from linopy.spec.builder import build, fold
+from linopy.spec.builder import build, evaluate_named, fold
 from linopy.spec.context import Context, Parameters, Resolve
 from linopy.spec.errors import SpecDataError
 
@@ -125,12 +135,32 @@ class ModelSpec:
 
     @property
     def expressions(self) -> NamedExpressions:
-        """Each named expression folded over the solution and the retained parameters."""
+        """Each named expression as a :class:`NamedExpression`: its math, its linopy fold and its solution."""
         return NamedExpressions(self)
+
+    def to_latex(self, **options: Any) -> str:
+        """The whole model typeset as a LaTeX document."""
+        return to_latex(self._schema, **options)
+
+    def to_markdown(self, **options: Any) -> str:
+        """The whole model typeset as Markdown, its equations in ``$$`` blocks."""
+        return to_markdown(self._schema, **options)
+
+    def to_typst(self, **options: Any) -> str:
+        """The whole model typeset as Typst."""
+        return to_typst(self._schema, **options)
+
+    def _repr_markdown_(self) -> str:
+        return self.to_markdown()
+
+    @property
+    def _schema(self) -> dict[str, Any]:
+        """The spec as the mapping the typesetter reads (a bare string it reads as a path)."""
+        return yaml.safe_load(self.text)
 
     def evaluate(
         self, name: str, sources: Mapping[str, Any] | xr.Dataset
-    ) -> xr.DataArray:
+    ) -> NamedExpression:
         """
         The named expression *name*, with its parameters bound afresh from *sources*.
 
@@ -152,7 +182,7 @@ class ModelSpec:
                     f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
                     f"model holds, so the data must be bound on the same labels in the same order."
                 )
-        return fold(name, self._context(bound.parameter))
+        return NamedExpression(self, name, self._context(bound.parameter))
 
     def _retained(self, name: str) -> xr.DataArray:
         if name not in self.parameters:
@@ -174,14 +204,21 @@ class ModelSpec:
         )
 
 
-class NamedExpressions(Mapping[str, xr.DataArray]):
-    """The named expressions of a spec, each folded to data on read."""
+class NamedExpressions(Mapping[str, "NamedExpression"]):
+    """The named expressions of a spec, each a :class:`NamedExpression` on read."""
 
     def __init__(self, spec: ModelSpec) -> None:
         self._spec = spec
 
-    def __getitem__(self, name: str) -> xr.DataArray:
-        return fold(name, self._spec._context(self._spec._retained))
+    def __getitem__(self, name: str) -> NamedExpression:
+        if name not in self._spec.program.named_expressions:
+            raise KeyError(
+                f"unknown named expression '{name}'. "
+                + did_you_mean(name, self._spec.program.named_expressions)
+            )
+        return NamedExpression(
+            self._spec, name, self._spec._context(self._spec._retained)
+        )
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._spec.program.named_expressions)
@@ -191,3 +228,58 @@ class NamedExpressions(Mapping[str, xr.DataArray]):
 
     def __repr__(self) -> str:
         return f"NamedExpressions({list(self)})"
+
+
+class NamedExpression:
+    """
+    One named expression, in three views: its math, its linopy fold and its solution.
+
+    The object pins the data sources it was made with for its lifetime, so the
+    three views agree. ``expressions[name]`` reads the retained parameters and
+    the solution the model holds; ``evaluate(name, sources)`` binds fresh data.
+
+    Attributes:
+        node: The lowered expression body, math-spec's own AST handle.
+    """
+
+    def __init__(self, spec: ModelSpec, name: str, ctx: Context) -> None:
+        self._spec = spec
+        self._name = name
+        self._ctx = ctx
+
+    @property
+    def node(self) -> ms.ExpressionNode:
+        """The expression body as lowered, math-spec's own AST handle."""
+        return self._spec.program.named_expressions[self._name]
+
+    @functools.cached_property
+    def expression(self) -> terms.Value:
+        """
+        The linopy symbolic expression, its variables unsolved.
+
+        A named expression is read affinely, so this is a ``LinearExpression``
+        where the body carries variables, a bare ``Variable``, a ``DataArray``
+        for a data-only body or a ``float`` for a constant. Not wrapped: a
+        degree-0 array can hold holes that ``from_constant`` would refuse.
+        """
+        return evaluate_named(self._name, self._ctx.unsolved)
+
+    @functools.cached_property
+    def solution(self) -> xr.DataArray:
+        """
+        The expression folded over the model's solution, as data.
+
+        Raises:
+            RuntimeError: The model reads a variable but holds no solution yet.
+            SpecDataError: A parameter the body reads was not retained.
+        """
+        return fold(self._name, self._ctx)
+
+    def __repr__(self) -> str:
+        value = self.__dict__.get("solution", self.__dict__.get("expression"))
+        if isinstance(value, xr.DataArray):
+            return f"NamedExpression('{self._name}', dims={tuple(value.dims)})"
+        return f"NamedExpression('{self._name}')"
+
+    def _repr_markdown_(self) -> str:
+        return self._spec.to_markdown()

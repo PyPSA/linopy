@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 import xarray as xr
@@ -63,3 +63,8 @@ class Context:
     lookups: Mapping[str, Mapping[str, xr.DataArray]]
     parameters: Parameters
     solved: bool = field(default=False)
+
+    @property
+    def unsolved(self) -> Context:
+        """The same context with the fold's switch off, so a variable enters as its linopy term."""
+        return replace(self, solved=False)

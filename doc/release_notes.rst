@@ -21,6 +21,15 @@ Upcoming Version
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
 
+*Build a model from a math-spec program*
+
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://pypi.org/project/math-spec/>`__ YAML program bound to data, and ``model.spec`` reads it back. Requires the ``math-spec`` package and v1 semantics.
+
+* ``model.spec.expressions[name]`` returns a ``NamedExpression`` with three views of a named expression: ``.node`` (the lowered formula), ``.expression`` (the unsolved linopy expression — a ``LinearExpression``, bare ``Variable``, array or scalar) and ``.solution`` (the expression folded over the solved model). ``model.spec.evaluate(name, sources)`` returns the same object with its parameters bound afresh.
+
+* ``model.spec.to_latex`` / ``.to_markdown`` / ``.to_typst`` typeset the whole model; a ``ModelSpec`` and a ``NamedExpression`` render as Markdown in a notebook.
+
+
 *Numerical scaling*
 
 * Variables, constraints and the objective accept a ``scaling`` factor that rewrites the problem into better-behaved units for the solver, without changing the answer. Variable scaling is column-like, constraint and objective scaling are row-like, and primal values, duals and the objective are transformed back to the original units after solving. See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.

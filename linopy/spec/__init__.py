@@ -16,13 +16,19 @@ if find_spec("math_spec") is None:
         "`pip install math-spec` (Python >= 3.12) and try again."
     )
 
-from linopy.spec.accessor import ModelSpec, NamedExpressions, SpecLike
+from linopy.spec.accessor import (
+    ModelSpec,
+    NamedExpression,
+    NamedExpressions,
+    SpecLike,
+)
 from linopy.spec.binder import Bound, Retain, bind
 from linopy.spec.errors import SpecDataError
 
 __all__ = [
     "Bound",
     "ModelSpec",
+    "NamedExpression",
     "NamedExpressions",
     "Retain",
     "SpecDataError",

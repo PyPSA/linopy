@@ -25,7 +25,7 @@ yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import ModelSpec, SpecDataError  # noqa: E402
+from linopy.spec import ModelSpec, NamedExpression, SpecDataError  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
 pytestmark = [
@@ -161,11 +161,11 @@ def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)
     assert m.objective.value == pytest.approx(2500.0)
     xr.testing.assert_allclose(m.solution["p"], DISPATCH_P)
-    spend = m.spec.expressions["spend"]
+    spend = m.spec.expressions["spend"].solution
     xr.testing.assert_allclose(
         spend, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
     )
-    usage = m.spec.expressions["usage"]
+    usage = m.spec.expressions["usage"].solution
     xr.testing.assert_allclose(usage, (DISPATCH_P / [100.0, 200.0]).rename("usage"))
     assert (
         set(m.spec.expressions) == {"spend", "usage"} and len(m.spec.expressions) == 2
@@ -214,12 +214,12 @@ def test_retain_decides_what_the_fold_can_read(retain: str, kept: set[str]) -> N
     m = solved(yaml_dict(), DISPATCH_DATA, retain=retain)
     assert set(m.parameters.data_vars) == kept
     want = (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
-    xr.testing.assert_allclose(m.spec.evaluate("spend", DISPATCH_DATA), want)
+    xr.testing.assert_allclose(m.spec.evaluate("spend", DISPATCH_DATA).solution, want)
     if "cost" in kept:
-        xr.testing.assert_allclose(m.spec.expressions["spend"], want)
+        xr.testing.assert_allclose(m.spec.expressions["spend"].solution, want)
     else:
         with pytest.raises(SpecDataError, match="not retained"):
-            m.spec.expressions["spend"]
+            m.spec.expressions["spend"].solution
 
 
 def test_an_unknown_expression_is_a_key_error_with_a_hint() -> None:
@@ -242,9 +242,73 @@ def test_a_fold_over_variables_needs_a_solution_and_one_over_data_does_not() -> 
         },
     }
     m = Model.from_spec(spec, {**DISPATCH_DATA, "rate": 1.05, "years": 3.0})
-    assert float(m.spec.expressions["growth"]) == pytest.approx(1.05**3)
+    assert float(m.spec.expressions["growth"].solution) == pytest.approx(1.05**3)
     with pytest.raises(RuntimeError, match="no solution yet"):
-        m.spec.expressions["spend"]
+        m.spec.expressions["spend"].solution
+
+
+# ---------------------------------------------------------------------------
+# three views: math, the linopy expression and the solution
+# ---------------------------------------------------------------------------
+
+VIEWS_SPEC: dict[str, Any] = {
+    **math_spec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict(),
+    "expressions": {
+        "spend": "sum(p * cost, over=generator)",
+        "bare": "p",
+        "levels": "cost * 2",
+        "answer": "6 * 7",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("spend", linopy.LinearExpression),
+        ("bare", linopy.Variable),
+        ("levels", xr.DataArray),
+        ("answer", float),
+    ],
+)
+def test_expression_is_the_unsolved_linopy_term(name: str, kind: type) -> None:
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
+    assert isinstance(m.spec.expressions[name].expression, kind)
+
+
+def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert isinstance(e.expression, linopy.LinearExpression)
+    with pytest.raises(RuntimeError, match="no solution yet"):
+        e.solution
+
+
+def test_the_named_expression_bundles_the_three_views() -> None:
+    m = solved(VIEWS_SPEC, DISPATCH_DATA)
+    e = m.spec.expressions["spend"]
+    assert e.node is m.spec.program.named_expressions["spend"]
+    assert isinstance(e.expression, linopy.LinearExpression)
+    xr.testing.assert_allclose(
+        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    )
+
+
+def test_evaluate_returns_a_named_expression() -> None:
+    m = solved(VIEWS_SPEC, DISPATCH_DATA, retain="none")
+    e = m.spec.evaluate("spend", DISPATCH_DATA)
+    assert isinstance(e, NamedExpression)
+    assert isinstance(e.expression, linopy.LinearExpression)
+    xr.testing.assert_allclose(
+        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    )
+
+
+def test_the_whole_model_typesets() -> None:
+    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+    assert "align" in spec.to_latex()
+    assert "$$" in spec.to_markdown()
+    assert spec.to_typst()
+    assert spec._repr_markdown_() == spec.to_markdown()
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +653,7 @@ def test_a_fold_reads_a_masked_slot_the_way_its_absence_says(
     spec["variables"]["p"]["absence"] = absence
     spec["expressions"] = {"spend_by_unit": "p * cost"}
     data = {**DISPATCH_DATA, "p_max": pd.Series([200.0, 0.0], index=GENERATOR)}
-    spend = solved(spec, data).spec.expressions["spend_by_unit"]
+    spend = solved(spec, data).spec.expressions["spend_by_unit"].solution
     masked = spend.sel(generator="gas")
     assert bool(masked.isnull().all()) is masked_reads_nan
     if not masked_reads_nan:
@@ -699,7 +763,7 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
     name = key.replace("-", "_")
     want = xr.DataArray(expected, coords={dims[0]: OPERATOR_DATA[dims[0]]}, dims=dims)
     built = operators_model.solution[f"y_{name}"]
-    folded = operators_model.spec.expressions[f"probe_{name}"]
+    folded = operators_model.spec.expressions[f"probe_{name}"].solution
     xr.testing.assert_allclose(built, want.rename(f"y_{name}"))
     xr.testing.assert_allclose(folded, want.rename(f"probe_{name}"))
 
@@ -805,7 +869,7 @@ def test_a_piecewise_cost_lands_on_the_curve(
     spec: dict[str, Any], data: dict[str, Any], spend: float
 ) -> None:
     m = solved(spec, {**CURVE_DATA, **data}, retain="all")
-    assert m.spec.expressions["spend"].item() == pytest.approx(spend)
+    assert m.spec.expressions["spend"].solution.item() == pytest.approx(spend)
     assert m.objective.value == pytest.approx(spend)
 
 
@@ -1001,7 +1065,7 @@ def test_a_member_a_lookup_sends_nowhere_reaches_nothing(key: str) -> None:
     m = solved(operator_spec(), data, retain="all")
     _, dims, _ = OPERATORS[key]
     name = key.replace("-", "_")
-    folded = m.spec.expressions[f"probe_{name}"]
+    folded = m.spec.expressions[f"probe_{name}"].solution
     want = xr.DataArray(
         PARTIAL_CASES[key], coords={dims[0]: OPERATOR_DATA[dims[0]]}, dims=dims
     )
@@ -1020,7 +1084,7 @@ def test_a_constant_on_the_left_is_the_same_row() -> None:
 
 def test_a_constant_expression_folds_to_a_scalar() -> None:
     spec = {**yaml_dict(), "expressions": {"answer": "6 * 7"}}
-    got = Model.from_spec(spec, DISPATCH_DATA).spec.expressions["answer"]
+    got = Model.from_spec(spec, DISPATCH_DATA).spec.expressions["answer"].solution
     assert got.ndim == 0 and float(got) == 42.0
 
 
@@ -1099,7 +1163,7 @@ def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
     assert {"c", "lag"} <= set(m.parameters.data_vars)
     xr.testing.assert_allclose(
-        m.spec.expressions["e"],
+        m.spec.expressions["e"].solution,
         xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),
     )
 
@@ -1136,5 +1200,5 @@ def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
         ),
     }
     m = solved(operator_spec(), data, retain="all")
-    folded = m.spec.expressions["probe_sum_back_group_width"]
+    folded = m.spec.expressions["probe_sum_back_group_width"].solution
     assert bool(folded.isnull().all())

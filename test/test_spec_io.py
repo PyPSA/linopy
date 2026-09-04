@@ -128,7 +128,9 @@ def test_a_spec_built_model_round_trips(
     assert p.spec.program.constraints == m.spec.program.constraints
     assert set(p.spec.expressions) == set(m.spec.expressions)
     for name in m.spec.expressions:
-        assert_arrayequal(m.spec.expressions[name], p.spec.expressions[name])
+        assert_arrayequal(
+            m.spec.expressions[name].solution, p.spec.expressions[name].solution
+        )
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -141,7 +143,8 @@ def test_a_retain_none_model_evaluates_after_a_round_trip(
     assert_model_equal(m, p)
     assert not p.spec.parameters.data_vars
     assert_arrayequal(
-        m.spec.evaluate("spend", DISPATCH_DATA), p.spec.evaluate("spend", DISPATCH_DATA)
+        m.spec.evaluate("spend", DISPATCH_DATA).solution,
+        p.spec.evaluate("spend", DISPATCH_DATA).solution,
     )
 
 
