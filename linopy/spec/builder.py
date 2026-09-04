@@ -25,6 +25,7 @@ from linopy.spec.binder import Bound
 from linopy.spec.context import Context, Parameters
 from linopy.spec.coverage import (
     check_bounds_cover,
+    check_coefficients_cover,
     check_constant_side_covers,
     check_divisors_cover,
 )
@@ -43,8 +44,9 @@ def build(model: Model, bound: Bound) -> None:
     Add every declaration of the bound program to *model*.
 
     Variables, special-ordered sets, constraints and the objective, in that
-    order; then every named expression is checked for divisor coverage, so a
-    body that cannot be folded is refused at build rather than at read.
+    order; then every named expression is checked for divisor and coefficient
+    coverage, so a body that cannot be folded is refused at build rather than
+    at read.
     """
     ctx = Context(
         model,
@@ -60,6 +62,7 @@ def build(model: Model, bound: Bound) -> None:
     _objective(ctx)
     for name, body in ctx.program.named_expressions.items():
         check_divisors_cover(f"expression '{name}'", (body,), ctx, None)
+        check_coefficients_cover(f"expression '{name}'", (body,), ctx, None)
 
 
 def fold(name: str, ctx: Context) -> xr.DataArray:
@@ -127,6 +130,7 @@ def _constraints(ctx: Context) -> None:
         mask = as_linopy_mask(rows)
         check_divisors_cover(f"constraint '{name}'", (row.lhs, row.rhs), ctx, mask)
         check_constant_side_covers(name, row, ctx, mask)
+        check_coefficients_cover(f"constraint '{name}'", (row.lhs, row.rhs), ctx, mask)
         lhs, rhs = evaluate(row.lhs, ctx), evaluate(row.rhs, ctx)
         if _term_free(lhs) and _term_free(rhs):
             continue
@@ -159,6 +163,7 @@ def _objective(ctx: Context) -> None:
     if declared is None:
         return
     check_divisors_cover("the objective", (declared.expression,), ctx, None)
+    check_coefficients_cover("the objective", (declared.expression,), ctx, None)
     expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Variable | LinearExpression | QuadraticExpression):
         raise SpecDataError(

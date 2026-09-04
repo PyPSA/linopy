@@ -272,38 +272,34 @@ def with_(spec: dict[str, Any], **sections: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@pytest.mark.parametrize(
-    ("spec", "data", "objective"),
-    [
-        pytest.param(
-            SPARSE_SPEC,
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            19.0,
-            id="coefficient-reads-as-zero",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                constraints={
-                    "cap": {**SPARSE_SPEC["constraints"]["cap"], "where": "c"}
-                },
-            ),
-            {"w": FULL_W, "c": HOLE_AT_0},
-            19.0,
-            id="constant-side-behind-a-where-is-no-row",
-        ),
-    ],
-)
-def test_a_missing_row_is_a_zero_coefficient_or_no_row(
-    spec: dict[str, Any], data: dict[str, Any], objective: float
-) -> None:
-    m = solved(spec, {"t": T, **data})
-    assert m.objective.value == pytest.approx(objective)
+NO_W_CONSTRAINT = {"cap": {"foreach": ["t"], "expression": "x <= c"}}
 
 
 @pytest.mark.parametrize(
     ("spec", "data", "match"),
     [
+        pytest.param(
+            SPARSE_SPEC,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "constraint 'cap'.*parameter 'w' is used as a coefficient",
+            id="coefficient-in-a-constraint",
+        ),
+        pytest.param(
+            with_(
+                SPARSE_SPEC,
+                constraints=NO_W_CONSTRAINT,
+                objective={"sense": "maximize", "expression": "sum(w * x, over=t)"},
+            ),
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "the objective.*parameter 'w' is used as a coefficient",
+            id="coefficient-in-the-objective",
+        ),
+        pytest.param(
+            with_(SPARSE_SPEC, constraints=NO_W_CONSTRAINT, expressions={"e": "w * x"}),
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "expression 'e'.*parameter 'w' is used as a coefficient",
+            id="coefficient-in-a-named-expression",
+        ),
         pytest.param(
             SPARSE_SPEC,
             {"w": FULL_W, "c": HOLE_AT_0},
@@ -333,6 +329,7 @@ def test_a_missing_row_is_a_zero_coefficient_or_no_row(
         pytest.param(
             with_(
                 SPARSE_SPEC,
+                constraints=NO_W_CONSTRAINT,
                 objective={"sense": "maximize", "expression": "sum(x / w, over=t)"},
             ),
             {"w": W_HOLE_AT_0, "c": FULL_C},
@@ -340,14 +337,18 @@ def test_a_missing_row_is_a_zero_coefficient_or_no_row(
             id="divisor-in-the-objective",
         ),
         pytest.param(
-            with_(SPARSE_SPEC, expressions={"ratio": "x / w"}),
+            with_(
+                SPARSE_SPEC,
+                constraints=NO_W_CONSTRAINT,
+                expressions={"ratio": "x / w"},
+            ),
             {"w": W_HOLE_AT_0, "c": FULL_C},
             "expression 'ratio'.*divisor",
             id="divisor-in-a-named-expression",
         ),
     ],
 )
-def test_a_missing_row_is_refused_as_bound_constant_side_or_divisor(
+def test_a_missing_row_is_refused_wherever_it_is_used(
     spec: dict[str, Any], data: dict[str, Any], match: str
 ) -> None:
     with pytest.raises(SpecDataError, match=match):
@@ -376,6 +377,79 @@ def test_a_masked_variable_bound_needs_no_row_where_it_is_masked() -> None:
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0, "live": live})
     assert int(m.variables["x"].labels.count()) == 3
     assert int((m.variables["x"].labels != -1).sum()) == 2
+
+
+# ---------------------------------------------------------------------------
+# a shift amount is a coefficient, and a where removes the row that would ask
+# ---------------------------------------------------------------------------
+
+
+AMOUNT_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "int"}},
+    "lookups": {"grp": {"over": "t", "into": "g"}},
+    "parameters": {"v": {"dims": ["t"]}, "lag": {"dims": ["g"], "dtype": "int"}},
+    "variables": {
+        "x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": 100}},
+        "y": {"foreach": ["t"], "bounds": {"lower": -100, "upper": 100}},
+    },
+    "constraints": {
+        "fix": {"foreach": ["t"], "expression": "x == v"},
+        "link": {
+            "foreach": ["t"],
+            "expression": "y == shift(x, over=t, offset=lag, edge=0, by=grp)",
+        },
+    },
+    "objective": {"sense": "minimize", "expression": "sum(x)"},
+}
+
+
+def test_a_missing_shift_amount_is_refused() -> None:
+    g = pd.Index([0, 1], name="g")
+    data = {
+        "t": T,
+        "g": g,
+        "grp": pd.Series([0, 0, 1], index=T),
+        "v": FULL_C,
+        "lag": pd.Series([1], index=g[:1]),
+    }
+    with pytest.raises(SpecDataError, match="parameter 'lag' is used as a coefficient"):
+        Model.from_spec(AMOUNT_SPEC, data)
+
+
+WHERE_MASKS = with_(
+    SPARSE_SPEC,
+    constraints={"cap": {**SPARSE_SPEC["constraints"]["cap"], "where": "w"}},
+)
+
+
+@pytest.mark.parametrize(
+    ("spec", "data", "objective"),
+    [
+        pytest.param(SPARSE_SPEC, {"w": FULL_W, "c": FULL_C}, 9.0, id="fully-covered"),
+        pytest.param(
+            WHERE_MASKS,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            19.0,
+            id="a-where-masks-a-coefficient-hole",
+        ),
+        pytest.param(
+            with_(
+                SPARSE_SPEC,
+                constraints={
+                    "cap": {**SPARSE_SPEC["constraints"]["cap"], "where": "c"}
+                },
+            ),
+            {"w": FULL_W, "c": HOLE_AT_0},
+            19.0,
+            id="a-where-masks-a-constant-side-hole",
+        ),
+    ],
+)
+def test_a_covered_or_masked_row_builds(
+    spec: dict[str, Any], data: dict[str, Any], objective: float
+) -> None:
+    m = solved(spec, {"t": T, **data})
+    assert m.objective.value == pytest.approx(objective)
 
 
 F = pd.Index(["a", "b"], name="f")

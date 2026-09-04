@@ -1,12 +1,13 @@
 """
-Is the data there where a declaration needs it? The positions that ask.
+Is the data there where a declaration needs it? Every position asks.
 
-Everywhere else an absent parameter row is a zero coefficient. Three
-positions have no answer for that reading: a bound, where zero is a bound
-rather than the absence of one; a constant side, where it binds; and a
-divisor, where zero is not a divisor at all. Each is decided against the rows
-the declaration actually builds, so a ``where`` that removed the coordinate
-has already answered.
+A parameter row that no source supplies is a hole, and the spec refuses it
+wherever the row is used: as a coefficient, where the missing row would
+silently drop its term; as a bound, where zero is a bound rather than the
+absence of one; as a constant side, where it binds; and as a divisor, where
+zero is not a divisor at all. Each is decided against the rows the declaration
+actually builds, so a ``where`` that removed the coordinate has already
+answered.
 """
 
 from __future__ import annotations
@@ -108,6 +109,45 @@ def check_divisors_cover(
                         f"and the row would silently stop constraining.\n"
                         f"  Supply the missing rows, or mask the coordinates out with a where."
                     )
+
+
+def check_coefficients_cover(
+    subject: str, expressions: tuple[ms.ExpressionNode, ...], ctx: Context, rows: Rows
+) -> None:
+    """
+    A coefficient parameter must reach every row it is built over.
+
+    A missing coefficient row would otherwise read as a zero, dropping its term
+    while the row stays. Decided against the rows the declaration builds,
+    narrowed at each ``cases:`` region exactly as the other checks are, so a
+    ``where`` that removed the coordinate has already answered. A shift offset
+    or window width given by name is a coefficient too, and stands or falls
+    over its own coordinates.
+    """
+    for expression in expressions:
+        for node, region in _under_regions(expression, ctx, rows):
+            for param, needed in _coefficient_uses(node, region):
+                missing = gaps_under(ctx.parameters[param], needed)
+                if missing:
+                    raise SpecDataError(
+                        f"{subject}: parameter '{param}' is used as a coefficient but leaves "
+                        f"{missing} of the rows built here uncovered. A missing row reads as a zero "
+                        f"coefficient, dropping the term while the row stays.\n"
+                        f"  Supply the missing rows, if a value other than 0 was meant.\n"
+                        f"  Mask them out with a where, if the row should not exist there."
+                    )
+
+
+def _coefficient_uses(
+    node: ms.ExpressionNode, region: Rows
+) -> Iterator[tuple[str, Rows]]:
+    """Each parameter *node* uses as a coefficient, with the rows it has to cover."""
+    if isinstance(node, ms.Parameter):
+        yield node.name, region
+    elif isinstance(node, ms.Translate) and isinstance(node.offset, str):
+        yield node.offset, None
+    elif isinstance(node, ms.Window) and isinstance(node.width, str):
+        yield node.width, None
 
 
 def _under_regions(
