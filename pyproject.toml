@@ -118,6 +118,14 @@ gpu = [
     # "cupdlpx>=0.1.2", pip package currently unstable, install manually
 ]
 
+[dependency-groups]
+# math-spec is not on PyPI yet and needs Python >= 3.12. A dependency group
+# keeps the git pin out of the published wheel metadata, which PyPI rejects.
+# Install with `uv sync --group spec` or `uv pip install --group spec`.
+spec = [
+    "math-spec @ git+https://github.com/energy-models/math-spec.git@1377f27b759cfbc42bb205338e79751542dabe84 ; python_version >= '3.12'",
+]
+
 [tool.uv]
 # cuopt-cu12 pulls cudf-cu12, which pins pandas<3.0.4, while benchmarks pins
 # pandas==3.0.5. Resolve the two extras in separate forks instead of together.
@@ -161,7 +169,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*']
+exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*', '^conftest\.py$']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true
