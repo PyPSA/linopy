@@ -1281,6 +1281,23 @@ class Model:
         scaling: ConstantLike = ...,
     ) -> CSRConstraint: ...
 
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: bool | None = ...,
+        scaling: ConstantLike = ...,
+    ) -> ConstraintBase: ...
+
     def add_constraints(
         self,
         lhs: VariableLike
@@ -1345,6 +1362,17 @@ class Model:
         """
 
         name = self._resolve_constraint_name(name)
+
+        resolved_freeze = self.freeze_constraints if freeze is None else freeze
+        if resolved_freeze and mask is None and not self.chunk:
+            from linopy.constraints import CSRConstraint, extract_csr_pending
+
+            extracted = extract_csr_pending(lhs, sign, rhs)
+            if extracted is not None:
+                payload, csr_sign, csr_rhs = extracted
+                con = CSRConstraint.from_payload(self, payload, csr_sign, csr_rhs, name)
+                return self.constraints.add(con)
+
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 

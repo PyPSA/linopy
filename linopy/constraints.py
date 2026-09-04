@@ -31,7 +31,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
-from linopy.alignment import broadcast_to_coords
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
     LabelPositionIndex,
@@ -55,8 +55,10 @@ from linopy.common import (
     get_label_position,
     get_printout_labels,
     has_optimized_model,
+    is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    maybe_replace_sign,
     maybe_replace_signs,
     replace_by_map,
     save_join,
@@ -74,6 +76,7 @@ from linopy.constants import (
     SIGNS_pretty,
 )
 from linopy.scaling import ensure_scaling, validate_scaling
+from linopy.semantics import check_user_nan
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -85,6 +88,7 @@ from linopy.types import (
 
 if TYPE_CHECKING:
     from linopy.model import Model
+    from linopy.sparse_expression import CSRPayload
 
 
 FILL_VALUE = {
@@ -1193,6 +1197,109 @@ class CSRConstraint(ConstraintBase):
             scaling=scaling,
         )
 
+    @classmethod
+    def from_payload(
+        cls,
+        model: Model,
+        payload: CSRPayload,
+        sign: str,
+        rhs: Any,
+        name: str,
+    ) -> CSRConstraint:
+        """
+        Staple sign and rhs onto a CSR-backed lhs to form a CSRConstraint.
+
+        The sparse counterpart of :meth:`from_mutable`: instead of converting a
+        dense :class:`Constraint`, it realizes a
+        :class:`~linopy.sparse_expression.CSRPayload` directly. Label columns
+        are mapped to dense variable positions, the payload's constant moves to
+        the rhs, labels are allocated as in
+        ``Model._allocate_constraint_labels``, and rows without terms or with a
+        NaN rhs are inactive — all as on the frozen dense path.
+        """
+        sign = maybe_replace_sign(sign)
+        full_size = payload.n_cells
+
+        label_index = model.variables.label_index
+        coo = payload.csr.tocoo()
+        csr = scipy.sparse.csr_array(
+            scipy.sparse.coo_array(
+                (coo.data, (coo.coords[0], label_index.label_to_pos[coo.coords[1]])),
+                shape=(full_size, label_index.n_active_vars),
+            )
+        )
+        has_terms = np.diff(csr.indptr) > 0
+        csr.eliminate_zeros()
+
+        rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
+
+        cindex = model._cCounter
+        model._cCounter += full_size
+        active = has_terms & ~np.isnan(rhs_flat)
+
+        return cls(
+            csr[active],
+            np.arange(cindex, cindex + full_size)[active],
+            rhs_flat[active],
+            sign,
+            coords=[payload.indexes[d] for d in payload.grid_dims],
+            model=model,
+            name=name,
+            cindex=cindex,
+        )
+
+
+def extract_csr_pending(
+    lhs: Any, sign: Any, rhs: Any
+) -> tuple[CSRPayload, str, Any] | None:
+    """Return (payload, sign, rhs) if lhs is a realizable CSR constraint."""
+    if (
+        isinstance(lhs, Constraint)
+        and lhs._pending is not None
+        and sign is None
+        and rhs is None
+    ):
+        lhs, sign, rhs = lhs._pending
+    if not (isinstance(lhs, expressions.LinearExpression) and lhs._payload is not None):
+        return None
+    if not isinstance(sign, str) or rhs is None or not is_constant(rhs):
+        return None
+    rhs_da = _as_rhs_dataarray(rhs)
+    if rhs_da is None or not set(rhs_da.dims) <= set(lhs._payload.grid_dims):
+        return None
+    return lhs._payload, sign, rhs
+
+
+def _as_rhs_dataarray(rhs: Any) -> DataArray | None:
+    try:
+        da = as_dataarray(rhs)
+    except (TypeError, ValueError):
+        return None
+    return None if set(da.dims) & set(HELPER_DIMS) else da
+
+
+def _rhs_grid_values(payload: CSRPayload, rhs: Any) -> np.ndarray:
+    """
+    Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
+    NaN in the rhs raises (§5) and a reordered or differing index on a
+    shared dim raises (§8), as on the dense path.
+    """
+    rhs_da = _as_rhs_dataarray(rhs)
+    assert rhs_da is not None
+    if bool(rhs_da.isnull().any()):
+        check_user_nan()
+    for d in rhs_da.dims:
+        if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
+            raise ValueError(
+                f"Coordinate mismatch on shared dimension {d!r} between "
+                "the rhs and the grouped result. Align the rhs with "
+                ".sel(...) / .reindex(...) before combining (§8)."
+            )
+    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs_da.dims}
+    if missing:
+        rhs_da = rhs_da.expand_dims(missing)
+    return rhs_da.transpose(*payload.grid_dims).to_numpy().reshape(-1)
+
 
 class Constraint(ConstraintBase):
     """
@@ -1201,7 +1308,9 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty")
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_pending")
+
+    _pending: tuple[expressions.LinearExpression, str, Any] | None
 
     def __init__(
         self,
@@ -1232,9 +1341,29 @@ class Constraint(ConstraintBase):
         self._data = data
         self._model = model
         self._coef_dirty = False
+        self._pending = None
+
+    @classmethod
+    def _from_pending(
+        cls, lhs: expressions.LinearExpression, sign: str, rhs: Any, model: Model
+    ) -> Constraint:
+        """Anonymous constraint over a still-sparse lhs (see linopy.sparse_expression)."""
+        obj = cls.__new__(cls)
+        obj._model = model
+        obj._data = None  # type: ignore[assignment]
+        obj._assigned = False
+        obj._coef_dirty = False
+        obj._pending = (lhs, sign, rhs)
+        return obj
 
     @property
     def data(self) -> Dataset:
+        if self._data is None and self._pending is not None:
+            lhs, sign, rhs = self._pending
+            dense = expressions.LinearExpression(lhs.data, lhs.model)
+            self._data = dense.to_constraint(sign, rhs).data
+            self._assigned = "labels" in self._data
+            self._pending = None
         return self._data
 
     @property
