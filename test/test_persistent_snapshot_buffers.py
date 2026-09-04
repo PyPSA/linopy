@@ -123,6 +123,34 @@ def test_csr_capture_deterministic(baseline_model: Model) -> None:
         np.testing.assert_array_equal(b1.data, b2.data)
 
 
+@pytest.fixture
+def frozen_model() -> Model:
+    m = Model()
+    x = m.add_variables(0, 10, coords=[range(3)], name="x")
+    y = m.add_variables(0, 5, coords=[range(2)], name="y")
+    m.add_constraints(2 * x >= 4, name="c1", freeze=True)
+    m.add_constraints(x.sum() + y.sum() <= 20, name="c2", freeze=True)
+    m.add_objective(x.sum())
+    return m
+
+
+def test_frozen_con_buffers_keep_data_identity(frozen_model: Model) -> None:
+    label_index = frozen_model.variables.label_index
+    for name, con in frozen_model.constraints.items():
+        b1 = _extract_con_buffers(con, label_index)
+        b2 = _extract_con_buffers(con, label_index)
+        assert b1.data is b2.data, name
+        assert b1.indptr is b2.indptr, name
+        np.testing.assert_array_equal(b1.indices, b2.indices)
+
+
+def test_untouched_frozen_constraint_needs_no_rebuild(frozen_model: Model) -> None:
+    snap = ModelSnapshot.capture(frozen_model)
+    diff = ModelDiff.from_snapshot(snap, frozen_model)
+    assert isinstance(diff, ModelDiff)
+    assert diff.is_empty
+
+
 def test_duplicate_variable_terms_summed() -> None:
     m1 = Model()
     x1 = m1.add_variables(0, 10, coords=[range(3)], name="x")

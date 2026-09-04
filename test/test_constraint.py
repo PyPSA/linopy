@@ -902,6 +902,54 @@ def test_freeze_mutable_roundtrip(m: Model) -> None:
     np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
 
 
+def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
+    frozen = m.constraints["c"]
+    assert isinstance(frozen, linopy.constraints.CSRConstraint)
+    np.testing.assert_array_equal(
+        np.unique(frozen._csr.indices), np.unique(x.labels.values)
+    )
+    assert frozen._csr.shape[1] == m._xCounter
+    csr, _ = frozen.to_matrix(m.variables.label_index)
+    assert csr.shape[1] == m.variables.label_index.n_active_vars
+
+
+def _model_with_frozen_and_mutation(freeze: bool, mutation: str) -> Model:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(2 * b >= 1, name="c1", freeze=freeze)
+    d = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="d")
+    m.add_constraints(d <= 5, name="c2", freeze=freeze)
+    if mutation == "remove":
+        m.remove_variables("a")
+    return m
+
+
+@pytest.mark.parametrize("mutation", ["add", "remove"])
+def test_frozen_matrices_after_variable_mutation(mutation: str) -> None:
+    frozen = _model_with_frozen_and_mutation(True, mutation)
+    mutable = _model_with_frozen_and_mutation(False, mutation)
+    np.testing.assert_array_equal(
+        frozen.matrices.A.toarray(), mutable.matrices.A.toarray()
+    )
+    np.testing.assert_array_equal(frozen.matrices.b, mutable.matrices.b)
+    np.testing.assert_array_equal(frozen.matrices.clabels, mutable.matrices.clabels)
+    np.testing.assert_array_equal(frozen.matrices.vlabels, mutable.matrices.vlabels)
+
+
+@pytest.mark.parametrize("freeze", [True, False])
+def test_constraint_removed_with_referenced_variable(freeze: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    a = m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(a + b >= 1, name="c", freeze=freeze)
+    with pytest.warns(UserWarning, match="also removes constraints"):
+        m.remove_variables("a")
+    assert "c" not in m.constraints
+
+
 def test_freeze_mutable_roundtrip_with_masking() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")

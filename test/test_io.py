@@ -137,6 +137,36 @@ def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) -> None:
+    """Files written before #926 stored dense positions as CSR columns."""
+    from linopy.constraints import CSRConstraint
+
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    mask = xr.DataArray([True, False, False], dims=["i"])
+    m.add_variables(coords=[i], name="a", mask=mask)
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(2 * b >= 1, name="c", freeze=True)
+
+    fn = tmp_path / "test_frozen_legacy.nc"
+    m.to_netcdf(fn)
+
+    ds = xr.load_dataset(fn)
+    label_to_pos = m.variables.label_index.label_to_pos
+    labels = ds["constraints-c-indices"].values
+    positions = label_to_pos[labels]
+    assert not np.array_equal(labels, positions)
+    ds["constraints-c-indices"] = xr.DataArray(positions, dims=["constraints-c-_nnz"])
+    del ds.attrs["constraints-c-_csr_columns"]
+    legacy_fn = tmp_path / "legacy.nc"
+    ds.to_netcdf(legacy_fn)
+
+    p = read_netcdf(legacy_fn)
+    assert isinstance(p.constraints["c"], CSRConstraint)
+    np.testing.assert_array_equal(p.matrices.A.toarray(), m.matrices.A.toarray())
+    assert_model_equal(m, p)
+
+
 def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
     from linopy.constraints import CSRConstraint
 

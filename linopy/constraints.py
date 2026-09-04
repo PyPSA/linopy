@@ -527,6 +527,46 @@ def _equal_nnz_slices(
         start = end
 
 
+def _csr_from_label_columns(
+    data: np.ndarray,
+    vlabel_cols: np.ndarray,
+    indptr: np.ndarray,
+    n_rows: int,
+    label_index: VariableLabelIndex,
+    name: str,
+) -> scipy.sparse.csr_array:
+    """
+    Build a CSR matrix from raw variable labels as column indices.
+
+    Labels are mapped to dense positions in the active variable array, so the
+    result is ``(n_rows, label_index.n_active_vars)`` wide regardless of when
+    the label columns were assembled. ``data`` and, where its dtype is wide
+    enough, ``indptr`` are the very arrays passed in, so callers can compare
+    buffers by identity.
+    """
+    n_cols = label_index.n_active_vars
+    cols = label_index.label_to_pos[vlabel_cols]
+    if cols.size and cols.min() < 0:
+        missing = vlabel_cols[cols < 0]
+        raise ValueError(
+            f"Constraint '{name}' references variable labels that are no longer "
+            f"part of the model, e.g. {missing[:5].tolist()}."
+        )
+    index_dtype = (
+        indptr.dtype if n_cols <= np.iinfo(indptr.dtype).max else np.dtype(np.int64)
+    )
+    csr = scipy.sparse.csr_array(
+        (
+            data,
+            cols.astype(index_dtype, copy=False),
+            indptr.astype(index_dtype, copy=False),
+        ),
+        shape=(n_rows, n_cols),
+    )
+    csr.data = data
+    return csr
+
+
 class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
@@ -534,8 +574,10 @@ class CSRConstraint(ConstraintBase):
     Parameters
     ----------
     csr : scipy.sparse.csr_array
-        Shape (n_flat, model._xCounter). Each row is a flat position in the
-        constraint grid (including masked/empty rows).
+        Shape (n_active_cons, model._xCounter). Rows are the active rows of
+        the constraint grid, column indices are raw variable labels. They are
+        mapped to dense positions in ``to_matrix``/``to_matrix_with_rhs``, so
+        adding or removing variables after freezing stays consistent.
     rhs : np.ndarray
         Shape (n_flat,). Right-hand-side values.
     sign : str or np.ndarray
@@ -803,9 +845,7 @@ class CSRConstraint(ConstraintBase):
         if csr.nnz > 0:
             row_indices = np.repeat(active_positions, counts)
             term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
-            # csr.indices are column positions into vlabels; map back to variable labels
-            vlabels = self._model.variables.label_index.vlabels
-            vars_2d[row_indices, term_cols] = vlabels[csr.indices]
+            vars_2d[row_indices, term_cols] = csr.indices
             coeffs_2d[row_indices, term_cols] = csr.data
 
         dim_names = self.coord_names
@@ -908,10 +948,24 @@ class CSRConstraint(ConstraintBase):
         return "\n".join(lines)
 
     def to_matrix(
-        self, label_index: VariableLabelIndex | None = None
+        self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
-        """Return the stored CSR matrix and con_labels."""
-        return self._csr, self._con_labels
+        """Return the CSR matrix with dense variable positions and con_labels."""
+        return self._to_positional_csr(label_index), self._con_labels
+
+    def _to_positional_csr(
+        self, label_index: VariableLabelIndex
+    ) -> scipy.sparse.csr_array:
+        """
+        Return the stored CSR with label columns replaced by dense positions.
+
+        Only ``indices`` is freshly allocated; ``indptr`` and ``data`` stay the
+        stored arrays, so identity comparisons against a snapshot still hold.
+        """
+        csr = self._csr
+        return _csr_from_label_columns(
+            csr.data, csr.indices, csr.indptr, csr.shape[0], label_index, self._name
+        )
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset with raw CSR components for netcdf serialization."""
@@ -932,6 +986,7 @@ class CSRConstraint(ConstraintBase):
         dim_names = [c.name for c in self._coords]
         attrs: dict[str, Any] = {
             "_linopy_format": "csr",
+            "_csr_columns": "labels",
             "cindex": self._cindex if self._cindex is not None else -1,
             "shape": list(csr.shape),
             "coord_dims": dim_names,
@@ -951,11 +1006,26 @@ class CSRConstraint(ConstraintBase):
 
     @classmethod
     def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> CSRConstraint:
-        """Reconstruct a Constraint from a netcdf Dataset (CSR format)."""
+        """
+        Reconstruct a Constraint from a netcdf Dataset (CSR format).
+
+        Files without the ``_csr_columns`` attribute were written before #926
+        and hold dense variable positions instead of labels.
+        """
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
+        indices = ds["indices"].values
+        columns = attrs.get("_csr_columns", "positions")
+        if columns == "positions":
+            vlabels = model.variables.label_index.vlabels
+            indices = vlabels[indices]
+            shape = (shape[0], int(vlabels[-1]) + 1 if len(vlabels) else 1)
+        elif columns != "labels":
+            raise ValueError(
+                f"Unknown CSR column format '{columns}' for constraint '{name}'."
+            )
         csr = scipy.sparse.csr_array(
-            (ds["data"].values, ds["indices"].values, ds["indptr"].values),
+            (ds["data"].values, indices, ds["indptr"].values),
             shape=shape,
         )
         rhs = ds["rhs"].values
@@ -995,18 +1065,22 @@ class CSRConstraint(ConstraintBase):
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
-        label_to_pos = self._model.variables.label_index.label_to_pos
-        return contains_labels(self._csr.indices, label_to_pos[labels])
+        return contains_labels(self._csr.indices, labels)
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
-        """Return (csr, con_labels, b, sense) — all pre-stored, no recomputation."""
+        """Return (csr, con_labels, b, sense); only the columns are recomputed."""
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
             sense = np.array([s[0] for s in self._sign])
-        return self._csr, self._con_labels, self._rhs, sense
+        return (
+            self._to_positional_csr(label_index),
+            self._con_labels,
+            self._rhs,
+            sense,
+        )
 
     def active_labels(self) -> np.ndarray:
         return self._con_labels
@@ -1082,12 +1156,11 @@ class CSRConstraint(ConstraintBase):
             )
 
         rows = np.repeat(np.arange(csr.shape[0]), np.diff(csr.indptr))
-        vlabels = self._model.variables.label_index.vlabels
 
         data: dict[str, Any] = {
             "labels": self._con_labels[rows],
             "coeffs": csr.data,
-            "vars": vlabels[csr.indices],
+            "vars": csr.indices,
             "rhs": self._rhs[rows],
         }
         sign_expr: pl.Expr | pl.Series = (
@@ -1145,8 +1218,12 @@ class CSRConstraint(ConstraintBase):
         cindex : int or None
             Starting label index, if assigned.
         """
-        label_index = con.model.variables.label_index
-        csr, con_labels = con.to_matrix(label_index)
+        con_labels, _, vlabel_cols, data, indptr = con._matrix_export_data()
+        csr = scipy.sparse.csr_array(
+            (data, vlabel_cols, indptr),
+            shape=(len(con_labels), con.model._xCounter),
+        )
+        csr.sum_duplicates()
         csr.eliminate_zeros()
         coords = [con.indexes[d] for d in con.coord_dims]
         # Build active_mask aligned with con_labels (rows in csr)
@@ -1595,9 +1672,9 @@ class Constraint(ConstraintBase):
         return contains_labels(self.data["vars"].values.ravel(), labels)
 
     def _matrix_export_data(
-        self, label_index: VariableLabelIndex
+        self,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        label_to_pos = label_index.label_to_pos
+        """Return (con_labels, row_mask, vlabel_cols, data, indptr) with raw labels."""
         labels_flat = self.labels.values.ravel()
         vars_vals = self.vars.values
         n_rows = len(labels_flat)
@@ -1612,14 +1689,14 @@ class Constraint(ConstraintBase):
         vars_final = vars_2d[row_mask]
         coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
         valid_final = (vars_final != -1) & (coeffs_final != 0)
-        cols = label_to_pos[vars_final[valid_final]]
+        vlabel_cols = vars_final[valid_final]
         data = coeffs_final[valid_final]
 
         counts = valid_final.sum(axis=1)
         indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
         indptr[0] = 0
         np.cumsum(counts, out=indptr[1:])
-        return con_labels, row_mask, cols, data, indptr
+        return con_labels, row_mask, vlabel_cols, data, indptr
 
     def to_matrix(
         self, label_index: VariableLabelIndex
@@ -1637,9 +1714,9 @@ class Constraint(ConstraintBase):
         con_labels : np.ndarray
             Active constraint labels in row order.
         """
-        con_labels, _, cols, data, indptr = self._matrix_export_data(label_index)
-        csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        con_labels, _, vlabel_cols, data, indptr = self._matrix_export_data()
+        csr = _csr_from_label_columns(
+            data, vlabel_cols, indptr, len(con_labels), label_index, self.name
         )
         csr.sum_duplicates()
         return csr, con_labels
@@ -1663,9 +1740,9 @@ class Constraint(ConstraintBase):
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) in one pass."""
-        con_labels, row_mask, cols, data, indptr = self._matrix_export_data(label_index)
-        csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        con_labels, row_mask, vlabel_cols, data, indptr = self._matrix_export_data()
+        csr = _csr_from_label_columns(
+            data, vlabel_cols, indptr, len(con_labels), label_index, self.name
         )
         csr.sum_duplicates()
 
@@ -2281,9 +2358,9 @@ class Constraints:
         """
         Construct a constraint matrix in sparse format by stacking per-constraint CSR matrices.
 
-        Each per-constraint CSR is already dense: rows are active constraints
-        only, column indices are dense variable positions (not raw labels).
-        Shape is ``(n_active_cons, n_active_vars)``.
+        Each per-constraint CSR has active constraint rows only and dense
+        variable positions as column indices. Shape is
+        ``(n_active_cons, n_active_vars)``.
 
         Returns
         -------
