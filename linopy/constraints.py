@@ -1203,6 +1203,8 @@ class Constraint(ConstraintBase):
 
     __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_pending")
 
+    _pending: tuple[expressions.LinearExpression, str, Any] | None
+
     def __init__(
         self,
         data: Dataset,
@@ -1241,7 +1243,7 @@ class Constraint(ConstraintBase):
         """Anonymous constraint over a still-sparse lhs (see linopy.csr)."""
         obj = cls.__new__(cls)
         obj._model = model
-        obj._data = None
+        obj._data = None  # type: ignore[assignment]
         obj._assigned = False
         obj._coef_dirty = False
         obj._pending = (lhs, sign, rhs)
@@ -1251,8 +1253,8 @@ class Constraint(ConstraintBase):
     def data(self) -> Dataset:
         if self._data is None and self._pending is not None:
             lhs, sign, rhs = self._pending
-            lhs.data  # noqa: B018
-            self._data = lhs.to_constraint(sign, rhs).data
+            dense = expressions.LinearExpression(lhs.data, lhs.model)
+            self._data = dense.to_constraint(sign, rhs).data
             self._assigned = "labels" in self._data
             self._pending = None
         return self._data

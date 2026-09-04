@@ -1200,6 +1200,23 @@ class Model:
         scaling: ConstantLike = ...,
     ) -> CSRConstraint: ...
 
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: bool | None = ...,
+        scaling: ConstantLike = ...,
+    ) -> ConstraintBase: ...
+
     def add_constraints(
         self,
         lhs: VariableLike

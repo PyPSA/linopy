@@ -587,6 +587,7 @@ class LinearExpressionGroupby:
             None if use_fallback else _multikey_value_frame(group, self.data)
         )
 
+        explicit_sparse = sparse is True
         if sparse is None:
             sparse = is_v1() and options["sparse_groupby"]
         elif sparse and not is_v1():
@@ -594,15 +595,28 @@ class LinearExpressionGroupby:
                 "sparse groupby-sum requires v1 semantics; opt in with "
                 "linopy.options['semantics'] = 'v1'."
             )
-        if sparse and not use_fallback and not observed and multikey_frame is None:
+        if sparse:
             series = group.to_pandas() if isinstance(group, DataArray) else group
-            if isinstance(series, pd.Series) and series.index.name in self.data.dims:
+            supported = (
+                not use_fallback
+                and not observed
+                and multikey_frame is None
+                and isinstance(series, pd.Series)
+                and series.index.name in self.data.dims
+            )
+            if supported:
                 from linopy.csr import CSRPayload
 
                 expr = LinearExpression(self.data, self.model)
-                group_name = str(getattr(series, "name", None) or "group")
+                group_name = str(series.name or "group")
                 payload = CSRPayload.from_grouper(expr, series, group_name)
                 return LinearExpression._from_csr(payload, self.model)
+            if explicit_sparse:
+                raise ValueError(
+                    "sparse=True supports only a single-key grouper (pandas "
+                    "Series or 1-D DataArray) over an existing dimension, "
+                    "without use_fallback or observed."
+                )
 
         if multikey_frame is not None:
             group = multikey_frame

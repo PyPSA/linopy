@@ -83,8 +83,8 @@ class CSRPayload:
         grid_dims = tuple(
             group_dim if d == member_dim else str(d) for d in expr.coord_dims
         )
-        indexes = {
-            d: expr.data.get_index(d).rename(d)
+        indexes: dict[str, pd.Index] = {
+            str(d): expr.data.get_index(d).rename(d)
             for d in expr.coord_dims
             if d != member_dim
         }
@@ -116,10 +116,21 @@ class CSRPayload:
         )
 
     def add(self, other: CSRPayload) -> CSRPayload:
-        """Sparse matrix addition == merge along the term dimension."""
-        width = max(self.csr.shape[1], other.csr.shape[1])
-        csr = _widen(self.csr, width) + _widen(other.csr, width)
-        return replace(self, csr=csr, const=self.const + other.const)
+        """
+        Sparse matrix addition == merge along the term dimension. Goes through
+        COO so explicit zero coefficients survive (scipy's ``+`` drops them),
+        keeping a cell with only zero-coefficient terms distinguishable from
+        an empty cell, as on the dense path.
+        """
+        a, b = self.csr.tocoo(), other.csr.tocoo()
+        shape = (self.n_cells, max(a.shape[1], b.shape[1]))
+        rows = np.concatenate([a.coords[0], b.coords[0]])
+        cols = np.concatenate([a.coords[1], b.coords[1]])
+        data = np.concatenate([a.data, b.data])
+        coo = scipy.sparse.coo_array((data, (rows, cols)), shape=shape)
+        return replace(
+            self, csr=scipy.sparse.csr_array(coo), const=self.const + other.const
+        )
 
     def materialize(self) -> LinearExpression:
         """
@@ -129,7 +140,6 @@ class CSRPayload:
         from linopy.expressions import LinearExpression
 
         csr = self.csr.copy()
-        csr.eliminate_zeros()
         csr.sort_indices()
         lengths = np.diff(csr.indptr)
         nterm = max(int(lengths.max()) if len(lengths) else 0, 1)
@@ -153,14 +163,6 @@ class CSRPayload:
             coords={d: self.indexes[d] for d in self.grid_dims},
         )
         return LinearExpression(ds, self.model)
-
-
-def _widen(csr: scipy.sparse.csr_array, width: int) -> scipy.sparse.csr_array:
-    if csr.shape[1] == width:
-        return csr
-    csr = csr.copy()
-    csr.resize((csr.shape[0], width))
-    return csr
 
 
 def _assemble(
@@ -195,7 +197,7 @@ def _assemble(
     coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
     vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
     rows = np.repeat(cell_rows, ds.sizes[TERM_DIM])
-    keep = (vars_ != -1) & (coeffs != 0) & ~np.isnan(coeffs)
+    keep = (vars_ != -1) & ~np.isnan(coeffs)
 
     full_size = int(np.prod(shape, dtype=np.int64)) if shape else 1
     coo = scipy.sparse.coo_array(
@@ -281,27 +283,23 @@ def _as_rhs_dataarray(rhs: Any) -> DataArray | None:
 
 def _rhs_grid_values(payload: CSRPayload, rhs: Any) -> np.ndarray:
     """
-    Align the rhs to the payload grid by label and flatten it, with v1
-    parity: NaN in the rhs raises (§5) and a reordered or differing index
-    on a shared dim raises (§8), as on the dense path.
+    Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
+    NaN in the rhs raises (§5) and a reordered or differing index on a
+    shared dim raises (§8), as on the dense path.
     """
-    from linopy.semantics import check_user_nan, is_v1
+    from linopy.semantics import check_user_nan
 
     rhs_da = _as_rhs_dataarray(rhs)
     assert rhs_da is not None
-    if is_v1():
-        if bool(rhs_da.isnull().any()):
-            check_user_nan()
-        for d in rhs_da.dims:
-            if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
-                raise ValueError(
-                    f"Coordinate mismatch on shared dimension {d!r} between "
-                    "the rhs and the grouped result. Align the rhs with "
-                    ".sel(...) / .reindex(...) before combining (§8)."
-                )
-    rhs_da = rhs_da.reindex(
-        {d: payload.indexes[str(d)] for d in rhs_da.dims}, fill_value=np.nan
-    )
+    if bool(rhs_da.isnull().any()):
+        check_user_nan()
+    for d in rhs_da.dims:
+        if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
+            raise ValueError(
+                f"Coordinate mismatch on shared dimension {d!r} between "
+                "the rhs and the grouped result. Align the rhs with "
+                ".sel(...) / .reindex(...) before combining (§8)."
+            )
     missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs_da.dims}
     if missing:
         rhs_da = rhs_da.expand_dims(missing)
@@ -333,13 +331,14 @@ def realize_csr_constraint(
             shape=(full_size, label_index.n_active_vars),
         )
     )
+    has_terms = np.diff(csr.indptr) > 0
     csr.eliminate_zeros()
 
     rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
 
     cindex = model._cCounter
     model._cCounter += full_size
-    active = (np.diff(csr.indptr) > 0) & ~np.isnan(rhs_flat)
+    active = has_terms & ~np.isnan(rhs_flat)
 
     return CSRConstraint(
         csr[active],
