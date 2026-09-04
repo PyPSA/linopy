@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
+SPEC_ATTR = "_linopy_spec"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -1038,6 +1039,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     type) are all persisted and fully restored by
     :func:`linopy.io.read_netcdf`.
 
+    A model built with :meth:`Model.add_spec` also persists its spec: the
+    YAML text, the master coordinates and the lookups. ``read_netcdf``
+    lowers the program from the text again, so reading such a file needs
+    the ``math-spec`` package; a file without a spec does not.
+
     The SOS reformulation lifecycle token lives only on the in-memory
     Model and is not persisted. If the model has an active SOS
     reformulation at serialization time, the netcdf contains the
@@ -1098,10 +1104,19 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "parameters")]
+    parameters = m.parameters
+    specs: list[xr.Dataset] = []
+    if m._spec is not None:
+        from linopy.spec.netcdf import encode
+
+        parameters, spec_ds = encode(m._spec)
+        specs = [spec_ds]
+    params = [with_prefix(parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(
+        vars + cons + exprs + obj + params + specs, combine_attrs="drop_conflicts"
+    )
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     if m._relaxed_registry:
@@ -1260,6 +1275,11 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m.parameters = get_prefix(ds, "parameters")
 
+    if SPEC_ATTR in ds.attrs:
+        from linopy.spec.netcdf import decode
+
+        m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
+
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
@@ -1392,6 +1412,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     new_model._parameters = m._parameters.copy(deep=deep)
+    if m._spec is not None:
+        new_model._spec = m._spec._rebound(new_model)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:

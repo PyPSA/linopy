@@ -44,6 +44,10 @@ jobs:
               echo "Skipping $name (requires credentials or special setup)"
               continue
               ;;
+            building-models-from-specs.ipynb)
+              echo "Skipping $name (requires math-spec, not yet on PyPI)"
+              continue
+              ;;
           esac
 
           echo "::group::Running $name"

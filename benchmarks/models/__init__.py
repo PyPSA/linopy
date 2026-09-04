@@ -21,5 +21,6 @@ from benchmarks.models import (  # noqa: F401
     qp,
     sos,
     sparse_network,
+    spec_pypsa,
     storage,
 )

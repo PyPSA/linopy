@@ -24,6 +24,7 @@ from math_spec import did_you_mean
 from math_spec import program as ms
 
 from linopy.spec.errors import SpecDataError
+from linopy.spec.nodes import parameters_of, walk
 
 Retain = Literal["report", "all", "none"]
 _RETAIN: tuple[str, ...] = get_args(Retain)
@@ -79,9 +80,9 @@ def bind(
 
     Raises:
         SpecDataError: A ``retain`` outside its three values, a key naming
-            nothing the spec declares, a reached dimension or a lookup with
-            no source, a duplicated dimension member, or a lookup breaking
-            the rules a map has.
+            nothing the spec declares, a reached dimension or a lookup with no
+            source, a duplicated dimension member, or a lookup breaking the
+            rules a map has.
     """
     if retain not in _RETAIN:
         raise SpecDataError(
@@ -174,8 +175,8 @@ class Bound:
 def _report_closure(program: ms.Program) -> set[str]:
     """Every parameter a named expression reads, by node or by name."""
     bodies = tuple(program.named_expressions.values())
-    names = set(ms.parameters_of(*bodies))
-    for node in ms.walk(*bodies):
+    names = set(parameters_of(*bodies))
+    for node in walk(*bodies):
         if isinstance(node, ms.Translate) and isinstance(node.offset, str):
             names.add(node.offset)
         elif isinstance(node, ms.Window) and isinstance(node.width, str):
@@ -567,9 +568,8 @@ def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) ->
     raise SpecDataError(
         f"parameter '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
         f"{_shown(strangers)}.\n  {dim} has: {_shown(known.tolist(), 10)}\n"
-        f"A missing row is a zero coefficient, but a label that is not a coordinate is a typo: its "
-        f"row joins nothing, so the coordinate it was meant for silently reads as absent. Fix the "
-        f"label, or add it to sources['{dim}']."
+        f"A label that is not a coordinate is a typo: its row joins nothing, so the coordinate it "
+        f"was meant for is left uncovered. Fix the label, or add it to sources['{dim}']."
     )
 
 
