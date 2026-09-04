@@ -1284,12 +1284,12 @@ class Model:
 
         resolved_freeze = self.freeze_constraints if freeze is None else freeze
         if resolved_freeze and mask is None and not self.chunk:
-            from linopy.csr import extract_pending, realize_csr_constraint
+            from linopy.constraints import CSRConstraint, extract_pending
 
             extracted = extract_pending(lhs, sign, rhs)
             if extracted is not None:
                 payload, csr_sign, csr_rhs = extracted
-                con = realize_csr_constraint(self, payload, csr_sign, csr_rhs, name)
+                con = CSRConstraint.from_payload(self, payload, csr_sign, csr_rhs, name)
                 return self.constraints.add(con)
 
         if sign is not None:

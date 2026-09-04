@@ -1,5 +1,5 @@
 """
-Tests for sparse groupby-sum (linopy.csr): type stability, transparent
+Tests for sparse groupby-sum (linopy.sparse_expression): type stability, transparent
 materialization, and direct CSR realization under freeze. v1-only feature.
 """
 
@@ -94,7 +94,7 @@ def test_csr_requires_v1() -> None:
         res = (c.eff * c.gen_p).groupby(c.gbus).sum()
     finally:
         linopy.options["sparse_groupby"] = False
-    assert res._csr is None
+    assert res._payload is None
 
 
 def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
@@ -118,7 +118,7 @@ def test_scalar_ops_stay_csr() -> None:
     require_v1()
     c = base_model()
     sparse = -2.0 * (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
-    assert sparse._csr is not None
+    assert sparse._payload is not None
     assert_linequal(sparse, -2.0 * (c.eff * c.gen_p).groupby(c.gbus).sum())
 
 

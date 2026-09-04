@@ -561,7 +561,7 @@ class LinearExpressionGroupby:
             becomes a CSRConstraint directly, other operations expand to
             the dense rectangle in canonical term layout. Single-key
             groupers only; requires v1 semantics. Defaults to
-            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
+            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.sparse_expression`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -605,12 +605,12 @@ class LinearExpressionGroupby:
                 and series.index.name in self.data.dims
             )
             if supported:
-                from linopy.csr import CSRPayload
+                from linopy.sparse_expression import CSRPayload
 
                 expr = LinearExpression(self.data, self.model)
                 group_name = str(series.name or "group")
                 payload = CSRPayload.from_grouper(expr, series, group_name)
-                return LinearExpression._from_csr(payload, self.model)
+                return LinearExpression._from_payload(payload, self.model)
             if explicit_sparse:
                 raise ValueError(
                     "sparse=True supports only a single-key grouper (pandas "
@@ -814,7 +814,7 @@ class LinearExpressionRolling:
 
 
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model", "_csr")
+    __slots__ = ("_data", "_model", "_payload")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -889,7 +889,7 @@ class BaseExpression(ABC):
         data = data.assign_attrs(name=None)
         self._model = model
         self._data = cast(Dataset, data)
-        self._csr = None
+        self._payload = None
 
     def __repr__(self) -> str:
         """
@@ -990,8 +990,8 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        if self._csr is not None:
-            return self._from_csr(self._csr.scaled(-1.0), self._model)
+        if self._payload is not None:
+            return self._from_payload(self._payload.scaled(-1.0), self._model)
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
@@ -1577,18 +1577,18 @@ class BaseExpression(ABC):
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._csr is not None:
-            self._data = self._csr.materialize().data
-            self._csr = None
+        if self._data is None and self._payload is not None:
+            self._data = self._payload.materialize().data
+            self._payload = None
         return self._data
 
     @classmethod
-    def _from_csr(cls, payload: Any, model: Model) -> Self:
+    def _from_payload(cls, payload: Any, model: Model) -> Self:
         """Construct an expression backed by a CSRPayload."""
         obj = cls.__new__(cls)
         obj._model = model
         obj._data = None  # type: ignore[assignment]
-        obj._csr = payload
+        obj._payload = payload
         return obj
 
     @property
@@ -1602,8 +1602,8 @@ class BaseExpression(ABC):
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._data is None and self._csr is not None:
-            return tuple(self._csr.grid_dims)
+        if self._data is None and self._payload is not None:
+            return tuple(self._payload.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -1800,7 +1800,7 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
-        if self._csr is not None and isinstance(sign, str) and is_constant(rhs):
+        if self._payload is not None and isinstance(sign, str) and is_constant(rhs):
             return constraints.Constraint._from_pending(self, sign, rhs, self.model)
 
         rhs = as_constant(rhs)
@@ -2407,8 +2407,10 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if self._csr is not None and isinstance(other, int | float | np.number):
-            return type(self)._from_csr(self._csr.scaled(float(other)), self._model)
+        if self._payload is not None and isinstance(other, int | float | np.number):
+            return type(self)._from_payload(
+                self._payload.scaled(float(other)), self._model
+            )
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -3204,7 +3206,7 @@ def merge(
     model = exprs[0].model
 
     if issubclass(cls, LinearExpression) and not has_quad_expression:
-        from linopy.csr import try_csr_merge
+        from linopy.sparse_expression import try_csr_merge
 
         csr_result = try_csr_merge(exprs, dim=dim, join=join, kwargs=kwargs)
         if csr_result is not None:

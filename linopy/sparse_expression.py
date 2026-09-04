@@ -1,5 +1,5 @@
 """
-CSR-backed expressions: a sparse internal representation for grouped sums.
+The sparse payload behind a LinearExpression: ``A @ x + c`` in CSR form.
 
 ``expr.groupby(g).sum(sparse=True)`` (or ``linopy.options["sparse_groupby"]``
 under v1) returns an ordinary :class:`~linopy.expressions.LinearExpression`
@@ -7,12 +7,14 @@ backed by a :class:`CSRPayload` instead of the dense dataset — same public
 type, different backing, akin to dask-backed xarray objects. The CSR form is
 canonical (duplicate variables summed, terms label-ordered) and ragged along
 ``_term``, so the group-size padding of issue #745 has no analog; grouping,
-``merge``/``+``/``-`` and scaling become sparse linear algebra, and
-``Model.add_constraints(..., freeze=True)`` staples sign and rhs on to form a
-:class:`~linopy.constraints.CSRConstraint` directly. Anything without a
-sparse branch expands through ``.data`` to the mathematically identical dense
-rectangle in canonical term layout — the reason the feature is v1-gated,
-where term layout is non-contractual.
+``merge``/``+``/``-`` and scaling become sparse linear algebra. Anything
+without a sparse branch expands through ``.data`` to the mathematically
+identical dense rectangle in canonical term layout — the reason the feature
+is v1-gated, where term layout is non-contractual.
+
+This module covers the expression layer only. Stapling sign and rhs onto a
+payload to form a :class:`~linopy.constraints.CSRConstraint` lives in
+:meth:`linopy.constraints.CSRConstraint.from_payload`.
 """
 
 from __future__ import annotations
@@ -23,12 +25,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import scipy.sparse
-from xarray import DataArray, Dataset
+from xarray import Dataset
 
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import TERM_DIM
 
 if TYPE_CHECKING:
-    from linopy.constraints import CSRConstraint
     from linopy.expressions import LinearExpression
     from linopy.model import Model
 
@@ -229,7 +230,7 @@ def try_csr_merge(
         return None
     if not all(type(e) is LinearExpression for e in exprs):
         return None
-    payloads = [e._csr for e in exprs if e._csr is not None]
+    payloads = [e._payload for e in exprs if e._payload is not None]
     if not payloads:
         return None
     template = payloads[0]
@@ -238,115 +239,9 @@ def try_csr_merge(
 
     combined: CSRPayload | None = None
     for e in exprs:
-        payload = e._csr or CSRPayload.from_expression(e, template)
+        payload = e._payload or CSRPayload.from_expression(e, template)
         if payload is None:
             return None
         combined = payload if combined is None else combined.add(payload)
     assert combined is not None
-    return LinearExpression._from_csr(combined, exprs[0].model)
-
-
-def extract_pending(
-    lhs: Any, sign: Any, rhs: Any
-) -> tuple[CSRPayload, str, Any] | None:
-    """Return (payload, sign, rhs) if lhs is a realizable CSR constraint."""
-    from linopy.common import is_constant
-    from linopy.constraints import Constraint
-    from linopy.expressions import LinearExpression
-
-    if (
-        isinstance(lhs, Constraint)
-        and lhs._pending is not None
-        and sign is None
-        and rhs is None
-    ):
-        lhs, sign, rhs = lhs._pending
-    if not (isinstance(lhs, LinearExpression) and lhs._csr is not None):
-        return None
-    if not isinstance(sign, str) or rhs is None or not is_constant(rhs):
-        return None
-    rhs_da = _as_rhs_dataarray(rhs)
-    if rhs_da is None or not set(rhs_da.dims) <= set(lhs._csr.grid_dims):
-        return None
-    return lhs._csr, sign, rhs
-
-
-def _as_rhs_dataarray(rhs: Any) -> DataArray | None:
-    from linopy.alignment import as_dataarray
-
-    try:
-        da = as_dataarray(rhs)
-    except (TypeError, ValueError):
-        return None
-    return None if set(da.dims) & set(HELPER_DIMS) else da
-
-
-def _rhs_grid_values(payload: CSRPayload, rhs: Any) -> np.ndarray:
-    """
-    Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
-    NaN in the rhs raises (§5) and a reordered or differing index on a
-    shared dim raises (§8), as on the dense path.
-    """
-    from linopy.semantics import check_user_nan
-
-    rhs_da = _as_rhs_dataarray(rhs)
-    assert rhs_da is not None
-    if bool(rhs_da.isnull().any()):
-        check_user_nan()
-    for d in rhs_da.dims:
-        if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
-            raise ValueError(
-                f"Coordinate mismatch on shared dimension {d!r} between "
-                "the rhs and the grouped result. Align the rhs with "
-                ".sel(...) / .reindex(...) before combining (§8)."
-            )
-    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs_da.dims}
-    if missing:
-        rhs_da = rhs_da.expand_dims(missing)
-    return rhs_da.transpose(*payload.grid_dims).to_numpy().reshape(-1)
-
-
-def realize_csr_constraint(
-    model: Model, payload: CSRPayload, sign: str, rhs: Any, name: str
-) -> CSRConstraint:
-    """
-    Staple sign and rhs onto a CSR-backed lhs to form a CSRConstraint.
-
-    Label columns are mapped to dense variable positions, the payload's
-    constant moves to the rhs, labels are allocated as in
-    ``Model._allocate_constraint_labels``, and rows without terms or with a
-    NaN rhs are inactive — all as on the frozen dense path.
-    """
-    from linopy.common import maybe_replace_sign
-    from linopy.constraints import CSRConstraint
-
-    sign = maybe_replace_sign(sign)
-    full_size = payload.n_cells
-
-    label_index = model.variables.label_index
-    coo = payload.csr.tocoo()
-    csr = scipy.sparse.csr_array(
-        scipy.sparse.coo_array(
-            (coo.data, (coo.coords[0], label_index.label_to_pos[coo.coords[1]])),
-            shape=(full_size, label_index.n_active_vars),
-        )
-    )
-    has_terms = np.diff(csr.indptr) > 0
-    csr.eliminate_zeros()
-
-    rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
-
-    cindex = model._cCounter
-    model._cCounter += full_size
-    active = has_terms & ~np.isnan(rhs_flat)
-
-    return CSRConstraint(
-        csr[active],
-        np.arange(cindex, cindex + full_size)[active],
-        rhs_flat[active],
-        sign,
-        coords=[payload.indexes[d] for d in payload.grid_dims],
-        model=model,
-        name=name,
-        cindex=cindex,
-    )
+    return LinearExpression._from_payload(combined, exprs[0].model)
