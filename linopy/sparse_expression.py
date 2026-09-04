@@ -90,7 +90,7 @@ class CSRPayload:
             if d != member_dim
         }
         indexes[group_dim] = pd.Index(uniques, name=group_dim)
-        return _assemble(expr, grid_dims, indexes, group_dim, member_dim, codes)
+        return cls._from_scatter(expr, grid_dims, indexes, group_dim, member_dim, codes)
 
     @classmethod
     def from_expression(
@@ -104,9 +104,59 @@ class CSRPayload:
                 return None
         first = template.grid_dims[0]
         codes = np.arange(len(template.indexes[first]))
-        return _assemble(
+        return cls._from_scatter(
             expr, template.grid_dims, template.indexes, first, first, codes
         )
+
+    @classmethod
+    def _from_scatter(
+        cls,
+        expr: LinearExpression,
+        grid_dims: tuple[str, ...],
+        indexes: dict[str, pd.Index],
+        scatter_dim: str,
+        member_dim: str,
+        codes: np.ndarray,
+    ) -> CSRPayload:
+        """
+        Scatter an expression's terms into grid rows (conceptually ``G @ A``):
+        ``member_dim`` lands in the grid dim ``scatter_dim`` at row positions
+        ``codes``, every other grid dim maps one-to-one, and the COO→CSR
+        conversion sums duplicates — which is the group sum. The constant is
+        reduced with the dense kernel's skipna semantics.
+        """
+        ds = expr.data
+        shape = tuple(len(indexes[d]) for d in grid_dims)
+        strides = [
+            int(np.prod(shape[i + 1 :], dtype=np.int64)) for i in range(len(shape))
+        ]
+
+        transposed = [member_dim if d == scatter_dim else d for d in grid_dims]
+        axis_positions = [
+            codes * stride if d == scatter_dim else np.arange(n) * stride
+            for d, n, stride in zip(grid_dims, shape, strides)
+        ]
+        cell_rows = axis_positions[0]
+        for pos in axis_positions[1:]:
+            cell_rows = cell_rows[..., None] + pos
+        cell_rows = cell_rows.reshape(-1)
+
+        coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
+        vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
+        rows = np.repeat(cell_rows, ds.sizes[TERM_DIM])
+        keep = (vars_ != -1) & ~np.isnan(coeffs)
+
+        full_size = int(np.prod(shape, dtype=np.int64)) if shape else 1
+        coo = scipy.sparse.coo_array(
+            (coeffs[keep], (rows[keep], vars_[keep])),
+            shape=(full_size, expr.model._xCounter),
+        )
+
+        const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
+        const = np.zeros(full_size)
+        np.add.at(const, cell_rows, np.where(np.isnan(const_vals), 0.0, const_vals))
+
+        return cls(scipy.sparse.csr_array(coo), const, grid_dims, indexes, expr.model)
 
     def scaled(self, factor: float) -> CSRPayload:
         return replace(self, csr=self.csr * factor, const=self.const * factor)
@@ -143,7 +193,7 @@ class CSRPayload:
         csr = self.csr.copy()
         csr.sort_indices()
         lengths = np.diff(csr.indptr)
-        nterm = max(int(lengths.max()) if len(lengths) else 0, 1)
+        nterm = max(int(lengths.max(initial=0)), 1)
 
         vars_flat = np.full(
             (self.n_cells, nterm), -1, dtype=self.model._dtypes["labels"]
@@ -164,55 +214,6 @@ class CSRPayload:
             coords={d: self.indexes[d] for d in self.grid_dims},
         )
         return LinearExpression(ds, self.model)
-
-
-def _assemble(
-    expr: LinearExpression,
-    grid_dims: tuple[str, ...],
-    indexes: dict[str, pd.Index],
-    scatter_dim: str,
-    member_dim: str,
-    codes: np.ndarray,
-) -> CSRPayload:
-    """
-    Scatter an expression's terms into grid rows (conceptually ``G @ A``):
-    ``member_dim`` lands in the grid dim ``scatter_dim`` at row positions
-    ``codes``, every other grid dim maps one-to-one, and the COO→CSR
-    conversion sums duplicates — which is the group sum. The constant is
-    reduced with the dense kernel's skipna semantics.
-    """
-    ds = expr.data
-    shape = tuple(len(indexes[d]) for d in grid_dims)
-    strides = [int(np.prod(shape[i + 1 :], dtype=np.int64)) for i in range(len(shape))]
-
-    transposed = [member_dim if d == scatter_dim else d for d in grid_dims]
-    axis_positions = [
-        codes * stride if d == scatter_dim else np.arange(n) * stride
-        for d, n, stride in zip(grid_dims, shape, strides)
-    ]
-    cell_rows = axis_positions[0]
-    for pos in axis_positions[1:]:
-        cell_rows = cell_rows[..., None] + pos
-    cell_rows = cell_rows.reshape(-1)
-
-    coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
-    vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
-    rows = np.repeat(cell_rows, ds.sizes[TERM_DIM])
-    keep = (vars_ != -1) & ~np.isnan(coeffs)
-
-    full_size = int(np.prod(shape, dtype=np.int64)) if shape else 1
-    coo = scipy.sparse.coo_array(
-        (coeffs[keep], (rows[keep], vars_[keep])),
-        shape=(full_size, expr.model._xCounter),
-    )
-
-    const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
-    const = np.zeros(full_size)
-    np.add.at(const, cell_rows, np.where(np.isnan(const_vals), 0.0, const_vals))
-
-    return CSRPayload(
-        scipy.sparse.csr_array(coo), const, grid_dims, indexes, expr.model
-    )
 
 
 def try_csr_merge(

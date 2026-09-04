@@ -1249,7 +1249,7 @@ class CSRConstraint(ConstraintBase):
         )
 
 
-def extract_pending(
+def extract_csr_pending(
     lhs: Any, sign: Any, rhs: Any
 ) -> tuple[CSRPayload, str, Any] | None:
     """Return (payload, sign, rhs) if lhs is a realizable CSR constraint."""
