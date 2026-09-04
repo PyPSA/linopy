@@ -661,7 +661,7 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def indexes(self) -> Indexes:
-        return Indexes({c.name: c for c in self._coords})
+        return Dataset(coords={c.name: c for c in self._coords}).indexes
 
     @property
     def nterm(self) -> int:
