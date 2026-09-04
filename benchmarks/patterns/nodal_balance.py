@@ -7,6 +7,12 @@ to the largest group's term count, so as generators concentrate on one hub the
 result's ``_term`` axis blows up — most of it fill. ``severity`` dials that
 skew; the build's peak memory is expected to climb steeply with it on the
 current (dense) kernel.
+
+``nodal_balance_sparse`` builds the identical constraint through the
+CSR-backed path (``sum(sparse=True)`` + ``freeze=True`` under v1): the
+grouped sum never materializes the padded rectangle and is realized directly
+as a CSRConstraint, so its peak memory should stay flat across the severity
+sweep — the pair makes the padding cost visible.
 """
 
 from __future__ import annotations
@@ -16,7 +22,14 @@ import pandas as pd
 import xarray as xr
 
 import linopy
-from benchmarks.registry import SEVERITIES, BenchSpec, register_pattern
+from benchmarks.registry import (
+    BUILD,
+    MATRICES,
+    SEVERITIES,
+    TO_LP,
+    BenchSpec,
+    register_pattern,
+)
 
 N_GEN = 2000
 N_BUS = 50
@@ -43,7 +56,7 @@ def _bus_of_gen(severity: int) -> np.ndarray:
     return bus
 
 
-def build_nodal_balance(severity: int) -> linopy.Model:
+def _build(severity: int, sparse: bool) -> linopy.Model:
     gens = pd.RangeIndex(N_GEN, name="gen")
     time = pd.RangeIndex(N_TIME, name="time")
     buses = pd.RangeIndex(N_BUS, name="bus")
@@ -53,13 +66,27 @@ def build_nodal_balance(severity: int) -> linopy.Model:
     gen = m.add_variables(lower=0, coords=[gens, time], name="gen")
 
     bus_of_gen = pd.Series(_bus_of_gen(severity), index=gens, name="bus")
-    supply = (1 * gen).groupby(bus_of_gen).sum()
+    supply = (1 * gen).groupby(bus_of_gen).sum(sparse=sparse)
     demand = xr.DataArray(
         rng.uniform(10.0, 100.0, size=(N_BUS, N_TIME)), coords=[buses, time]
     )
-    m.add_constraints(supply == demand, name="balance")
+    m.add_constraints(supply == demand, name="balance", freeze=sparse)
     m.add_objective(gen.sum())
     return m
+
+
+def build_nodal_balance(severity: int) -> linopy.Model:
+    return _build(severity, sparse=False)
+
+
+def build_nodal_balance_sparse(severity: int) -> linopy.Model:
+    """The same balance via the sparse groupby + frozen CSR path (v1-only)."""
+    previous = linopy.options["semantics"]
+    linopy.options["semantics"] = "v1"
+    try:
+        return _build(severity, sparse=True)
+    finally:
+        linopy.options["semantics"] = previous
 
 
 SPEC = register_pattern(
@@ -68,5 +95,15 @@ SPEC = register_pattern(
         build=build_nodal_balance,
         sweep=SEVERITIES,
         axis="severity",
+    )
+)
+
+SPARSE_SPEC = register_pattern(
+    BenchSpec(
+        name="nodal_balance_sparse",
+        build=build_nodal_balance_sparse,
+        sweep=SEVERITIES,
+        axis="severity",
+        phases=frozenset({BUILD, MATRICES, TO_LP}),
     )
 )

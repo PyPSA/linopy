@@ -537,7 +537,10 @@ class LinearExpressionGroupby:
         return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
 
     def sum(
-        self, use_fallback: bool = False, observed: bool = False
+        self,
+        use_fallback: bool = False,
+        observed: bool = False,
+        sparse: bool | None = None,
     ) -> LinearExpression:
         """
         Sum the expression over each group.
@@ -551,6 +554,14 @@ class LinearExpressionGroupby:
             Fall back to the previous, slower groupby-sum implementation, kept
             as an escape hatch. Leave at False unless the default misbehaves.
             Defaults to False.
+        sparse : bool, optional
+            Build the grouped sum in CSR form behind the ordinary
+            LinearExpression type — no group-size padding; a still-sparse
+            lhs reaching ``Model.add_constraints`` with ``freeze=True``
+            becomes a CSRConstraint directly, other operations expand to
+            the dense rectangle in canonical term layout. Single-key
+            groupers only; requires v1 semantics. Defaults to
+            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.sparse_expression`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -575,6 +586,38 @@ class LinearExpressionGroupby:
         multikey_frame = (
             None if use_fallback else _multikey_value_frame(group, self.data)
         )
+
+        explicit_sparse = sparse is True
+        if sparse is None:
+            sparse = is_v1() and options["sparse_groupby"]
+        elif sparse and not is_v1():
+            raise ValueError(
+                "sparse groupby-sum requires v1 semantics; opt in with "
+                "linopy.options['semantics'] = 'v1'."
+            )
+        if sparse:
+            series = group.to_pandas() if isinstance(group, DataArray) else group
+            supported = (
+                not use_fallback
+                and not observed
+                and multikey_frame is None
+                and isinstance(series, pd.Series)
+                and series.index.name in self.data.dims
+            )
+            if supported:
+                from linopy.sparse_expression import CSRPayload
+
+                expr = LinearExpression(self.data, self.model)
+                group_name = str(series.name or "group")
+                payload = CSRPayload.from_grouper(expr, series, group_name)
+                return LinearExpression._from_payload(payload, self.model)
+            if explicit_sparse:
+                raise ValueError(
+                    "sparse=True supports only a single-key grouper (pandas "
+                    "Series or 1-D DataArray) over an existing dimension, "
+                    "without use_fallback or observed."
+                )
+
         if multikey_frame is not None:
             group = multikey_frame
 
@@ -771,7 +814,7 @@ class LinearExpressionRolling:
 
 
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model")
+    __slots__ = ("_data", "_model", "_payload")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -846,6 +889,7 @@ class BaseExpression(ABC):
         data = data.assign_attrs(name=None)
         self._model = model
         self._data = cast(Dataset, data)
+        self._payload = None
 
     def __repr__(self) -> str:
         """
@@ -946,6 +990,8 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
+        if self._payload is not None:
+            return self._from_payload(self._payload.scaled(-1.0), self._model)
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
@@ -1531,7 +1577,19 @@ class BaseExpression(ABC):
 
     @property
     def data(self) -> Dataset:
+        if self._data is None and self._payload is not None:
+            self._data = self._payload.materialize().data
+            self._payload = None
         return self._data
+
+    @classmethod
+    def _from_payload(cls, payload: Any, model: Model) -> Self:
+        """Construct an expression backed by a CSRPayload."""
+        obj = cls.__new__(cls)
+        obj._model = model
+        obj._data = None  # type: ignore[assignment]
+        obj._payload = payload
+        return obj
 
     @property
     def model(self) -> Model:
@@ -1544,6 +1602,8 @@ class BaseExpression(ABC):
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        if self._data is None and self._payload is not None:
+            return tuple(self._payload.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -1740,6 +1800,9 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
+        if self._payload is not None and isinstance(sign, str) and is_constant(rhs):
+            return constraints.Constraint._from_pending(self, sign, rhs, self.model)
+
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
             raise ValueError(
@@ -2344,6 +2407,10 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        if self._payload is not None and isinstance(other, int | float | np.number):
+            return type(self)._from_payload(
+                self._payload.scaled(float(other)), self._model
+            )
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -3137,6 +3204,13 @@ def merge(
     linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
+
+    if issubclass(cls, LinearExpression) and not has_quad_expression:
+        from linopy.sparse_expression import try_csr_merge
+
+        csr_result = try_csr_merge(exprs, dim=dim, join=join, kwargs=kwargs)
+        if csr_result is not None:
+            return csr_result
 
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
