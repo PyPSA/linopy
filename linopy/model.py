@@ -1181,6 +1181,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> Constraint: ...
 
     @overload
@@ -1198,6 +1199,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
         scaling: ConstantLike = ...,
+        penalty: None = ...,
     ) -> CSRConstraint: ...
 
     @overload
@@ -1215,6 +1217,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: bool | None = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> ConstraintBase: ...
 
     def add_constraints(
@@ -1231,6 +1234,7 @@ class Model:
         mask: MaskLike | None = None,
         freeze: bool | None = None,
         scaling: ConstantLike = 1,
+        penalty: ConstantLike | None = None,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1273,6 +1277,12 @@ class Model:
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
             by this factor. The default is 1.
+        penalty : constant-like, optional
+            If given, soften the constraint right away by calling
+            :meth:`Constraint.soften` with this penalty, adding a slack variable
+            and a penalty term to the objective. Not allowed together with
+            ``freeze=True`` (or a model default of ``freeze_constraints=True``),
+            since softening requires a mutable, registered ``Constraint``.
 
         Returns
         -------
@@ -1283,6 +1293,11 @@ class Model:
         name = self._resolve_constraint_name(name)
 
         resolved_freeze = self.freeze_constraints if freeze is None else freeze
+        if penalty is not None and resolved_freeze:
+            raise ValueError(
+                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
+                "since `soften` is not supported on frozen constraints."
+            )
         if resolved_freeze and mask is None and not self.chunk:
             from linopy.constraints import CSRConstraint, extract_csr_pending
 
@@ -1372,7 +1387,10 @@ class Model:
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         if freeze is None:
             freeze = self.freeze_constraints
-        return self.constraints.add(constraint, freeze=freeze and not self.chunk)
+        added = self.constraints.add(constraint, freeze=freeze and not self.chunk)
+        if penalty is not None:
+            constraint.soften(penalty=penalty)
+        return added
 
     def add_indicator_constraints(
         self,

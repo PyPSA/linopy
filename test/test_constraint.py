@@ -96,6 +96,41 @@ def test_add_constraints_uses_model_freeze_default() -> None:
     )
 
 
+def test_add_constraints_penalty_softens_constraint(
+    m: Model, y: linopy.Variable
+) -> None:
+    """`penalty=` on add_constraints is a shortcut for calling `.soften()`."""
+    m.add_objective(y.sum(), sense="min")
+    penalty_coeff = 10
+    constraint = m.add_constraints(y >= 10, name="constraint", penalty=penalty_coeff)
+
+    assert isinstance(constraint, linopy.constraints.Constraint)
+    # The slack term was added to the lhs, same effect as calling .soften() directly:
+    assert constraint.lhs.nterm == 2
+    expected_objective = (
+        y.sum() + penalty_coeff * m.variables["constraint_slack_pos"].sum()
+    )
+    assert_linequal(m.objective.expression, expected_objective)
+
+
+def test_add_constraints_penalty_with_freeze_true_raises(
+    m: Model, x: linopy.Variable
+) -> None:
+    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
+        m.add_constraints(x >= 0, name="frozen_penalized", freeze=True, penalty=10)
+
+
+def test_add_constraints_penalty_with_model_freeze_default_raises() -> None:
+    """
+    `freeze=None` resolves to the model's `freeze_constraints` default, which must
+    also be checked against `penalty`, not just an explicit `freeze=True`.
+    """
+    m = Model(freeze_constraints=True)
+    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
+        m.add_constraints(x >= 0, name="frozen_by_default_penalized", penalty=10)
+
+
 def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
     assert c.name == "c"
 
