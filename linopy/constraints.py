@@ -1947,8 +1947,15 @@ class Constraint(ConstraintBase):
         Returns
         -------
         Slack
-            Named tuple with the `positive` slack variable, and the `negative` one for equality
-            constraints (`None` for inequality constraints).
+            Named tuple with the `positive` slack variable, and the `negative` one for equality constraints (`None`
+            for inequality constraints).
+
+        Notes
+        -----
+        Not supported on frozen constraints (e.g. a CSRConstraint from add_constraints(..., freeze=True) or
+        Model(freeze_constraints=True)). This method is only defined on Constraint and calling it on a CSRConstraint
+        raises AttributeError. Calling .mutable() first does not help either, since the resulting Constraint is a
+        detached copy not registered in model.constraints, so soften raises ValueError on it instead.
 
         Examples
         --------
