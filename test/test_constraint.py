@@ -1217,17 +1217,17 @@ def test_constraint_soften_max_violation_bounds_slack(
 
 
 def test_constraint_soften_negative_penalty_raises(m: Model, y: linopy.Variable) -> None:
-    """Setting penalty < 0 raises AssertionError."""
+    """Setting penalty < 0 raises ValueError."""
     m.add_objective(y.sum(), sense="min")
     constraint = m.add_constraints(y >= 10, name="constraint")
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Penalty is not positive"):
         constraint.soften(penalty=-10)
 
 
 def test_constraint_soften_without_objective_raises(m: Model, y: linopy.Variable) -> None:
-    """Calling soften before model.add_objective raises AssertionError."""
+    """Calling soften before model.add_objective raises ValueError."""
     constraint = m.add_constraints(y <= 10, name="constraint")
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Objective must be defined"):
         constraint.soften(penalty=10)
 
 

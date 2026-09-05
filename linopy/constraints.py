@@ -1968,16 +1968,16 @@ class Constraint(ConstraintBase):
         >>> slack = budget_constraint.soften(penalty=budget_penalty)
         """
         # Verify valid penalty to continue:
-        assert (penalty >= 0).all() if hasattr(penalty, "all") else penalty >= 0, (
-            "Penalty is not positive."
-        )
+        if not bool(np.all(np.asarray(penalty) >= 0)):
+            raise ValueError("Penalty is not positive.")
 
-        # Assert the existence of the objective function before using soften method (this is to avoid
+        # Require the objective function to exist before using soften method (this is to avoid
         # `add_objective` overwriting the penalty term added below, since it replaces rather than merges):
         model = self.model
-        assert not model.objective.expression.empty, (
-            "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
-        )
+        if model.objective.expression.empty:
+            raise ValueError(
+                "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
+            )
 
         # A detached copy of the constraint (e.g. from `.mutable()`, `.sel()`, `.isel()`) isn't in
         # `model.constraints`, so .soften would silently do nothing on the real model. This check is to avoid that:
