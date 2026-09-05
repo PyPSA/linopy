@@ -1151,6 +1151,7 @@ def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
     # '==' : lhs -> lhs - positive_slack + negative_slack
     eq_constraint = m.add_constraints(y == 0, name="eq_constraint")
     eq_slack = eq_constraint.soften(penalty=10)
+    assert eq_slack.negative is not None
 
     # Assert there's two extra terms:
     assert eq_constraint.lhs.nterm == 3
@@ -1243,4 +1244,5 @@ def test_constraint_soften_respects_mask(m: Model, x: linopy.Variable) -> None:
     slack = constraint.soften(penalty=10)
 
     assert_equal(slack.positive.mask, constraint.mask)
+    assert constraint.mask is not None
     assert (constraint.mask.values == mask.values).all()

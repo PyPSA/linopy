@@ -1310,8 +1310,8 @@ class Slack(NamedTuple):
     need one slack variable to absorb a violation in a single direction.
     """
 
-    positive: VariableLike
-    negative: VariableLike | None
+    positive: variables.Variable
+    negative: variables.Variable | None
 
 
 class Constraint(ConstraintBase):
