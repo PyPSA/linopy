@@ -25,11 +25,12 @@ class LinopySemanticsWarning(FutureWarning):
 
 
 class OptionSettings:
-    """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
+    """Runtime configuration knobs (e.g. display widths). Use as a context manager, which restores the values active on entry on exit, or set values directly via ``options(key=value)``."""
 
     def __init__(self, **kwargs: Any) -> None:
         self._defaults = kwargs
         self._current_values = kwargs.copy()
+        self._stack: list[dict[str, Any]] = []
 
     def __call__(self, **kwargs: Any) -> None:
         self.set_value(**kwargs)
@@ -61,6 +62,7 @@ class OptionSettings:
         self._current_values = self._defaults.copy()
 
     def __enter__(self) -> OptionSettings:
+        self._stack.append(self._current_values.copy())
         return self
 
     def __exit__(
@@ -69,7 +71,7 @@ class OptionSettings:
         exc_val: BaseException | None,
         exc_tb: Any | None,
     ) -> None:
-        self.reset()
+        self._current_values = self._stack.pop()
 
     def __repr__(self) -> str:
         settings = "\n ".join(
@@ -82,4 +84,5 @@ options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
     semantics=LEGACY_SEMANTICS,
+    sparse_groupby=False,
 )

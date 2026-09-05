@@ -135,6 +135,7 @@ Attributes
 
    variables.Variable.lower
    variables.Variable.upper
+   variables.Variable.scaling
    variables.Variable.type
    variables.Variable.solution
 
@@ -192,6 +193,7 @@ Attributes
 
    variables.Variables.lower
    variables.Variables.upper
+   variables.Variables.scaling
    variables.Variables.solution
 
 Modification
@@ -370,6 +372,7 @@ Structure
    constraints.Constraint.lhs
    constraints.Constraint.sign
    constraints.Constraint.rhs
+   constraints.Constraint.scaling
    constraints.Constraint.coeffs
    constraints.Constraint.vars
 
@@ -426,6 +429,7 @@ Structure
    constraints.CSRConstraint.vars
    constraints.CSRConstraint.sign
    constraints.CSRConstraint.rhs
+   constraints.CSRConstraint.scaling
    constraints.CSRConstraint.ncons
    constraints.CSRConstraint.nterm
 
@@ -476,6 +480,7 @@ Aggregate access
    constraints.Constraints.vars
    constraints.Constraints.sign
    constraints.Constraints.rhs
+   constraints.Constraints.scaling
    constraints.Constraints.dual
 
 Conversion
@@ -499,6 +504,7 @@ Wraps the objective expression on a model. Accessed via
    objective.Objective
    objective.Objective.expression
    objective.Objective.sense
+   objective.Objective.scaling
    objective.Objective.value
    objective.Objective.is_linear
    objective.Objective.is_quadratic
@@ -634,6 +640,7 @@ Implementations
    solvers.Mosek
    solvers.SCIP
    solvers.Xpress
+   solvers.cuOpt
    solvers.cuPDLPx
 
 

@@ -25,11 +25,16 @@ import xarray as xr
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import sos_weights, to_polars
+from linopy.common import (
+    sos_weights,
+    to_polars,
+)
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
+from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 
 if TYPE_CHECKING:
+    from cuopt.linear_programming import DataModel as cuoptDataModel
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
@@ -40,6 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+EXPR_TYPE_ATTR = "_linopy_expr_type"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -90,6 +96,71 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     return (
         pl.when(expr >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.when(expr == 0).then(pl.lit("0.0")).otherwise(expr.cast(pl.String)),
+    )
+
+
+def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """Return lookup values for non-negative labels, using 1 for sentinels/nulls."""
+    labels = np.asarray(labels).reshape(-1)
+    values = np.ones(len(labels), dtype=float)
+    valid = ~pd.isna(labels)
+    if not valid.any():
+        return values
+    valid_labels = labels[valid].astype(np.intp, copy=False)
+    positive = valid_labels >= 0
+    valid_positions = np.flatnonzero(valid)
+    if positive.any():
+        values[valid_positions[positive]] = lookup[valid_labels[positive]]
+    return values
+
+
+def _scale_objective_dataframe(
+    df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
+) -> pl.DataFrame:
+    """Apply column scaling and row-like objective scaling to objective terms."""
+    if df.is_empty():
+        return df
+
+    if "vars" in df.columns:
+        scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+    else:
+        scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
+        scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
+        scales = scale1 * scale2
+
+    return df.with_columns(
+        (pl.col("coeffs") / pl.Series(scales) * objective_scaling).alias("coeffs")
+    )
+
+
+def _scale_bounds_dataframe(
+    df: pl.DataFrame, variable_scaling: np.ndarray
+) -> pl.DataFrame:
+    """Multiply bounds by solver-side variable scaling factors."""
+    if df.is_empty():
+        return df
+    scales = _lookup_positive_labels(variable_scaling, df["labels"].to_numpy())
+    scale_series = pl.Series(scales)
+    return df.with_columns(
+        (pl.col("lower") * scale_series).alias("lower"),
+        (pl.col("upper") * scale_series).alias("upper"),
+    )
+
+
+def _scale_constraint_dataframe(
+    df: pl.DataFrame,
+    variable_scaling: np.ndarray,
+    constraint_scaling: np.ndarray,
+) -> pl.DataFrame:
+    """Divide by column scaling and multiply by row scaling."""
+    if df.is_empty():
+        return df
+    row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
+    var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+    row_scale_series = pl.Series(row_scales)
+    return df.with_columns(
+        (pl.col("coeffs") / pl.Series(var_scales) * row_scale_series).alias("coeffs"),
+        (pl.col("rhs") * row_scale_series).alias("rhs"),
     )
 
 
@@ -217,15 +288,18 @@ def objective_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
+    variable_scaling = variable_scaling_lookup(m)
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
 
     if m.is_linear:
+        df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
         objective_write_linear_terms(f, df, print_variable)
 
     elif m.is_quadratic:
+        df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
         linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
         linear_terms = linear_terms.with_columns(
             pl.when(pl.col("vars1").eq(-1))
@@ -276,6 +350,7 @@ def bounds_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
+    variable_scaling = variable_scaling_lookup(m)
 
     f.write(b"\n\nbounds\n\n")
     if progress:
@@ -289,6 +364,7 @@ def bounds_to_file(
         var = m.variables[name]
         for var_slice in var.iterate_slices(slice_size):
             df = var_slice.to_polars()
+            df = _scale_bounds_dataframe(df, variable_scaling)
 
             columns = [
                 *signed_number(pl.col("lower")),
@@ -500,6 +576,7 @@ def indicator_constraints_to_file(
     print_variable_scalar, _ = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
+    variable_scaling = variable_scaling_lookup(m)
 
     for con in m.constraints.indicator.data.values():
         ic_data = con.data
@@ -512,25 +589,31 @@ def indicator_constraints_to_file(
         vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
         sign_flat = np.broadcast_to(ic_data.sign.values, labels_flat.shape).flatten()
         rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
+        scaling_flat = np.broadcast_to(
+            ic_data.scaling.values, labels_flat.shape
+        ).flatten()
 
         for i in range(len(labels_flat)):
             if labels_flat[i] == -1:
                 continue
 
+            row_scale = float(scaling_flat[i])
             bvar_name = print_variable_scalar(binary_var_flat[i : i + 1])[0]
             valid = vars_flat[i] != -1
             var_names = print_variable_scalar(vars_flat[i][valid])
 
             terms = []
-            for coeff, var_name in zip(coeffs_flat[i][valid], var_names):
-                coeff = float(coeff)
+            for coeff, var_label, var_name in zip(
+                coeffs_flat[i][valid], vars_flat[i][valid], var_names
+            ):
+                coeff = float(coeff) / variable_scaling[int(var_label)] * row_scale
                 prefix = "+" if coeff >= 0 else ""
                 terms.append(f"{prefix}{coeff} {var_name}")
 
             lhs_str = " ".join(terms)
             line = (
                 f"ic{labels_flat[i]}: {bvar_name} = {int(binary_val_flat[i])} -> "
-                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i])}\n"
+                f"{lhs_str} {sign_flat[i]} {float(rhs_flat[i]) * row_scale}\n"
             )
             f.write(line.encode())
 
@@ -550,6 +633,8 @@ def constraints_to_file(
     print_variable, print_constraint = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
+    variable_scaling = variable_scaling_lookup(m)
+    constraint_scaling = constraint_scaling_lookup(m)
 
     f.write(b"\n\ns.t.\n\n")
     names = list(regular)
@@ -566,6 +651,7 @@ def constraints_to_file(
         con = regular[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
+            df = _scale_constraint_dataframe(df, variable_scaling, constraint_scaling)
 
             if df.height == 0:
                 continue
@@ -795,6 +881,18 @@ def to_cupdlpx(m: Model) -> cupdlpxModel:
     return solver.solver_model
 
 
+def to_cuopt(m: Model) -> cuoptDataModel:
+    """
+    Build the cuopt DataModel for `m`.
+
+    For a maximisation model the returned DataModel is the equivalent
+    minimisation (negated objective coefficients, `maximize` unset); see
+    :class:`linopy.solvers.cuOpt`.
+    """
+    solver = solvers.cuOpt.from_model(m, io_api="direct")
+    return solver.solver_model
+
+
 def to_block_files(m: Model, fn: Path) -> None:
     """
     Write out the linopy model to a block structured output.
@@ -986,13 +1084,17 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ]
     exprs = [
         with_prefix(
-            expr.data.assign_attrs(name=name, _linopy_expr_type=expr.type),
+            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
     ]
     objective = m.objective.data
-    objective = objective.assign_attrs(sense=m.objective.sense)
+    objective = objective.assign_attrs(
+        sense=m.objective.sense,
+        scaling=m.objective.scaling,
+        **{EXPR_TYPE_ATTR: m.objective.expression.type},
+    )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
@@ -1114,7 +1216,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in sorted(expr_names):
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
-        expr_type = expr_ds.attrs.pop("_linopy_expr_type", None)
+        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
         expr_ds.attrs.pop("name", None)  # re-attached below, after construction
         expr: LinearExpression | QuadraticExpression
         if expr_type == "QuadraticExpression" or (
@@ -1141,8 +1243,18 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
+    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
+    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
+        QuadraticExpression
+        if obj_type == "QuadraticExpression"
+        or (obj_type is None and FACTOR_DIM in objective.dims)
+        else LinearExpression
+    )
     m.objective = Objective(
-        LinearExpression(objective, m), m, objective.attrs.pop("sense")
+        obj_cls(objective, m),
+        m,
+        objective.attrs.pop("sense"),
+        objective.attrs.pop("scaling", 1),
     )
     m.objective._value = objective.attrs.pop("value", None)
 
@@ -1267,8 +1379,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
-    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    obj_expr = type(m.objective.expression)(
+        m.objective.expression.data.copy(deep=deep), new_model
+    )
+    new_model._objective = Objective(
+        obj_expr, new_model, m.objective.sense, m.objective.scaling
+    )
     new_model._objective._value = (
         float(m.objective.value)
         if (include_solution and m.objective.value is not None)
