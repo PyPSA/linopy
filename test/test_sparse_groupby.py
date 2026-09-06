@@ -132,6 +132,24 @@ def test_zero_coefficient_rows_stay_active(sparse: bool) -> None:
     assert len(con.active_labels()) == c.load.size
 
 
+def test_merge_keeps_absent_cell_absent() -> None:
+    require_v1()
+    c = base_model()
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum()
+    flow = (1.0 * c.flow).groupby(c.bus0).sum()
+    mask = xr.DataArray(np.arange(len(c.load.bus)) % 2 == 0, coords=[c.load.bus])
+    flow = flow.where(mask)
+
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    tot = linopy.merge([sparse, flow], join="outer")
+    assert tot._payload is not None
+    assert_linequal(tot, linopy.merge([dense, flow], join="outer"))
+
+    con = c.m.add_constraints(tot >= c.load, name="bal", freeze=True)
+    assert isinstance(con, CSRConstraint)
+    assert con.ncons == int(mask.sum()) * c.load.sizes["snapshot"]
+
+
 @pytest.mark.parametrize(
     "grouper, kwargs",
     [
