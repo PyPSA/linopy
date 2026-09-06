@@ -696,9 +696,14 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def active_positions(self) -> np.ndarray:
-        """Flat positions of active (non-masked) rows in the original coord shape."""
+        """
+        Flat positions of active (non-masked) rows in the original coord shape.
+
+        An unassigned constraint stores these positions in place of labels;
+        ``assign_labels`` offsets them by the starting label.
+        """
         if self._cindex is None:
-            return np.arange(self._csr.shape[0])
+            return self._con_labels
         return self._con_labels - self._cindex
 
     @property
@@ -716,6 +721,41 @@ class CSRConstraint(ConstraintBase):
     @property
     def coord_names(self) -> list[str]:
         return [str(c.name) for c in self._coords]
+
+    def _replace(self, **changes: Any) -> CSRConstraint:
+        """Copy with the given constructor arguments replaced."""
+        kwargs: dict[str, Any] = dict(
+            csr=self._csr,
+            con_labels=self._con_labels,
+            rhs=self._rhs,
+            sign=self._sign,
+            coords=self._coords,
+            model=self._model,
+            name=self._name,
+            cindex=self._cindex,
+            dual=self._dual,
+            binvar_labels=self._binvar_labels,
+            binval=self._binval,
+            scaling=self._scaling,
+        )
+        kwargs.update(changes)
+        return CSRConstraint(**kwargs)
+
+    def assign_labels(
+        self, cindex: int, name: str, scaling: np.ndarray | None = None
+    ) -> CSRConstraint:
+        """
+        Return a copy labelled ``cindex + flat position`` and named ``name``.
+
+        ``scaling`` is a row scaling over the full flat grid; only active rows
+        are kept.
+        """
+        changes: dict[str, Any] = dict(
+            con_labels=self.active_positions + cindex, cindex=cindex, name=name
+        )
+        if scaling is not None:
+            changes["scaling"] = scaling[self.active_positions]
+        return self._replace(**changes)
 
     def _active_to_dataarray(
         self, active_values: np.ndarray, fill: float | int | str = -1
@@ -844,7 +884,7 @@ class CSRConstraint(ConstraintBase):
 
         # Map active row i -> flat position in full shape via con_labels
         active_positions = self.active_positions
-        coeffs_2d = np.zeros((full_size, nterm), dtype=csr.dtype)
+        coeffs_2d = np.full((full_size, nterm), np.nan, dtype=csr.dtype)
         vars_2d = np.full((full_size, nterm), -1, dtype=self._model._dtypes["labels"])
         if csr.nnz > 0:
             row_indices = np.repeat(active_positions, counts)
@@ -1276,106 +1316,71 @@ class CSRConstraint(ConstraintBase):
 
     @classmethod
     def from_payload(
-        cls,
-        model: Model,
-        payload: CSRPayload,
-        sign: str,
-        rhs: Any,
-        name: str,
+        cls, payload: CSRPayload, sign: str, rhs: DataArray, name: str = ""
     ) -> CSRConstraint:
         """
-        Staple sign and rhs onto a CSR-backed lhs to form a CSRConstraint.
+        Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
         The sparse counterpart of :meth:`from_mutable`: instead of converting a
         dense :class:`Constraint`, it realizes a
-        :class:`~linopy.sparse_expression.CSRPayload` directly. Label columns
-        are mapped to dense variable positions, the payload's constant moves to
-        the rhs, labels are allocated as in
-        ``Model._allocate_constraint_labels``, and rows without terms or with a
-        NaN rhs are inactive — all as on the frozen dense path.
+        :class:`~linopy.sparse_expression.CSRPayload` directly. The payload's
+        label columns are kept as they are, its constant moves to the rhs, and
+        rows without terms or with a NaN rhs are inactive — all as on the
+        frozen dense path. ``rhs`` must come from :func:`csr_rhs`.
         """
         sign = maybe_replace_sign(sign)
-        full_size = payload.n_cells
-
-        label_index = model.variables.label_index
-        coo = payload.csr.tocoo()
-        csr = scipy.sparse.csr_array(
-            scipy.sparse.coo_array(
-                (coo.data, (coo.coords[0], label_index.label_to_pos[coo.coords[1]])),
-                shape=(full_size, label_index.n_active_vars),
-            )
-        )
-        has_terms = np.diff(csr.indptr) > 0
-        csr.eliminate_zeros()
-
         rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
-
-        cindex = model._cCounter
-        model._cCounter += full_size
-        active = has_terms & ~np.isnan(rhs_flat)
-
+        has_terms = np.diff(payload.csr.indptr) > 0
+        active = np.flatnonzero(has_terms & ~np.isnan(rhs_flat))
+        csr = payload.csr[active]
+        csr.eliminate_zeros()
         return cls(
-            csr[active],
-            np.arange(cindex, cindex + full_size)[active],
+            csr,
+            active,
             rhs_flat[active],
             sign,
             coords=[payload.indexes[d] for d in payload.grid_dims],
-            model=model,
+            model=payload.model,
             name=name,
-            cindex=cindex,
         )
 
 
-def extract_csr_pending(
-    lhs: Any, sign: Any, rhs: Any
-) -> tuple[CSRPayload, str, Any] | None:
-    """Return (payload, sign, rhs) if lhs is a realizable CSR constraint."""
-    if (
-        isinstance(lhs, Constraint)
-        and lhs._pending is not None
-        and sign is None
-        and rhs is None
-    ):
-        lhs, sign, rhs = lhs._pending
-    if not (isinstance(lhs, expressions.LinearExpression) and lhs._payload is not None):
+def csr_rhs(payload: CSRPayload, rhs: Any) -> DataArray | None:
+    """
+    Return ``rhs`` as a DataArray on the payload grid, or None if the sparse
+    path cannot take it: a non-constant rhs, one that is no DataArray-like, or
+    one with helper dims or dims outside the grid falls back to the dense path.
+    """
+    if not is_constant(rhs):
         return None
-    if not isinstance(sign, str) or rhs is None or not is_constant(rhs):
-        return None
-    rhs_da = _as_rhs_dataarray(rhs)
-    if rhs_da is None or not set(rhs_da.dims) <= set(lhs._payload.grid_dims):
-        return None
-    return lhs._payload, sign, rhs
-
-
-def _as_rhs_dataarray(rhs: Any) -> DataArray | None:
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
         return None
-    return None if set(da.dims) & set(HELPER_DIMS) else da
+    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(payload.grid_dims):
+        return None
+    return da
 
 
-def _rhs_grid_values(payload: CSRPayload, rhs: Any) -> np.ndarray:
+def _rhs_grid_values(payload: CSRPayload, rhs: DataArray) -> np.ndarray:
     """
     Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """
-    rhs_da = _as_rhs_dataarray(rhs)
-    assert rhs_da is not None
-    if bool(rhs_da.isnull().any()):
+    if bool(rhs.isnull().any()):
         check_user_nan()
-    for d in rhs_da.dims:
-        if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
+    for d in rhs.dims:
+        if not rhs.get_index(d).equals(payload.indexes[str(d)]):
             raise ValueError(
                 f"Coordinate mismatch on shared dimension {d!r} between "
                 "the rhs and the grouped result. Align the rhs with "
                 ".sel(...) / .reindex(...) before combining (§8)."
             )
-    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs_da.dims}
+    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs.dims}
     if missing:
-        rhs_da = rhs_da.expand_dims(missing)
-    return rhs_da.transpose(*payload.grid_dims).to_numpy().reshape(-1)
+        rhs = rhs.expand_dims(missing)
+    return rhs.transpose(*payload.grid_dims).to_numpy().reshape(-1)
 
 
 class Constraint(ConstraintBase):
@@ -1385,9 +1390,7 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_pending")
-
-    _pending: tuple[expressions.LinearExpression, str, Any] | None
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty")
 
     def __init__(
         self,
@@ -1418,29 +1421,9 @@ class Constraint(ConstraintBase):
         self._data = data
         self._model = model
         self._coef_dirty = False
-        self._pending = None
-
-    @classmethod
-    def _from_pending(
-        cls, lhs: expressions.LinearExpression, sign: str, rhs: Any, model: Model
-    ) -> Constraint:
-        """Anonymous constraint over a still-sparse lhs (see linopy.sparse_expression)."""
-        obj = cls.__new__(cls)
-        obj._model = model
-        obj._data = None  # type: ignore[assignment]
-        obj._assigned = False
-        obj._coef_dirty = False
-        obj._pending = (lhs, sign, rhs)
-        return obj
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._pending is not None:
-            lhs, sign, rhs = self._pending
-            dense = expressions.LinearExpression(lhs.data, lhs.model)
-            self._data = dense.to_constraint(sign, rhs).data
-            self._assigned = "labels" in self._data
-            self._pending = None
         return self._data
 
     @property
@@ -2522,18 +2505,7 @@ class Constraints:
         for k, c in self.items():
             if isinstance(c, CSRConstraint):
                 if c._dual is not None:
-                    self.data[k] = CSRConstraint(
-                        c._csr,
-                        c._con_labels,
-                        c._rhs,
-                        c._sign,
-                        c._coords,
-                        c._model,
-                        c._name,
-                        cindex=c._cindex,
-                        dual=None,
-                        scaling=c._scaling,
-                    )
+                    self.data[k] = c._replace(dual=None)
             elif isinstance(c, Constraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")

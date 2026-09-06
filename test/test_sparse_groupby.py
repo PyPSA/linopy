@@ -180,6 +180,41 @@ def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
     assert np.array_equal(con1.labels.values, con2.labels.values)
 
 
+def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    dense = c1.balance_lhs(sparse=False) == c1.load
+    con = c2.balance_lhs(sparse=True) == c2.load
+    assert isinstance(con, CSRConstraint)
+    assert not con.is_assigned
+    assert con.type == "Constraint (unassigned)"
+    assert "None" not in repr(con)
+    assert_conequal(dense, con, strict=False)
+
+    con1 = c1.m.add_constraints(dense, name="bal")
+    con2 = c2.m.add_constraints(con, name="bal", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert con2.is_assigned
+    assert np.array_equal(
+        np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
+    )
+    assert_conequal(con1, con2, strict=False)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_constraint_applies_row_scaling(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    snaps = c.load.indexes["snapshot"]
+    scaling = xr.DataArray(np.arange(1.0, len(snaps) + 1), coords=[snaps])
+    con = c.m.add_constraints(
+        c.balance_lhs(sparse) == c.load, name="bal", freeze=True, scaling=scaling
+    )
+    assert isinstance(con, CSRConstraint)
+    expected = scaling.broadcast_like(con.scaling).transpose(*con.scaling.dims)
+    xr.testing.assert_equal(con.scaling, expected)
+
+
 def test_option_gates_csr_and_freeze_model_default() -> None:
     require_v1()
     c = base_model()
