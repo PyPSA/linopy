@@ -42,7 +42,9 @@ class CSRPayload:
     ``csr`` has one row per flat grid cell (C order over ``grid_dims``) and
     one column per raw variable label — label columns stay valid when
     variables are added to the model later; realization maps them to dense
-    positions. ``const`` is the per-cell constant.
+    positions. ``const`` is the per-cell constant; a NaN marks an absent cell
+    (§2) whose ``csr`` row may still hold terms — consumers must mask or drop
+    such rows, as :meth:`materialize` and ``CSRConstraint.from_payload`` do.
     """
 
     csr: scipy.sparse.csr_array
