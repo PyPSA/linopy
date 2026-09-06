@@ -190,6 +190,12 @@ def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
     assert con.type == "Constraint (unassigned)"
     assert "None" not in repr(con)
     assert_conequal(dense, con, strict=False)
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.active_labels()
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.to_polars()
+    with pytest.raises(ValueError, match="not been assigned"):
+        c2.m.constraints.add(con)
 
     con1 = c1.m.add_constraints(dense, name="bal")
     con2 = c2.m.add_constraints(con, name="bal", freeze=True)
@@ -199,6 +205,31 @@ def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
         np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
     )
     assert_conequal(con1, con2, strict=False)
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
+    require_v1()
+
+    def build(sparse: bool) -> Constraint | CSRConstraint:
+        c = base_model()
+        gens = c.gen_p.indexes["gen"]
+        gen_p = c.gen_p.where(xr.DataArray(gens != "gen7", coords=[gens]))
+        lhs = (c.eff * gen_p).groupby(c.gbus).sum(sparse=sparse)
+        return c.m.add_constraints(lhs == c.load, name="bal", freeze=freeze)
+
+    dense, sparse = build(False), build(True)
+    assert isinstance(sparse, CSRConstraint if freeze else Constraint)
+    assert_conequal(dense, sparse, strict=False)
+    np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    with pytest.raises(ValueError, match="incorrect infinite values"):
+        c.m.add_constraints(c.balance_lhs(sparse) <= -np.inf, name="bal", freeze=True)
 
 
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])

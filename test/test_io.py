@@ -158,6 +158,9 @@ def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) ->
     assert not np.array_equal(labels, positions)
     ds["constraints-c-indices"] = xr.DataArray(positions, dims=["constraints-c-_nnz"])
     del ds.attrs["constraints-c-_csr_columns"]
+    cindex = ds.attrs["constraints-c-cindex"]
+    ds = ds.rename({"constraints-c-_active_positions": "constraints-c-_con_labels"})
+    ds["constraints-c-_con_labels"] = ds["constraints-c-_con_labels"] + cindex
     legacy_fn = tmp_path / "legacy.nc"
     ds.to_netcdf(legacy_fn)
 

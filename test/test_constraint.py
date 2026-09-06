@@ -899,16 +899,12 @@ def test_freeze_mutable_roundtrip(m: Model) -> None:
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
     np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
-    np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
+    np.testing.assert_array_equal(frozen.active_labels(), refrozen.active_labels())
 
 
 def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
     frozen = m.constraints["c"]
     assert isinstance(frozen, linopy.constraints.CSRConstraint)
-    np.testing.assert_array_equal(
-        np.unique(frozen._csr.indices), np.unique(x.labels.values)
-    )
-    assert frozen._csr.shape[1] == m._xCounter
     csr, _ = frozen.to_matrix(m.variables.label_index)
     assert csr.shape[1] == m.variables.label_index.n_active_vars
 

@@ -123,6 +123,14 @@ logger = logging.getLogger(__name__)
 DtypeKey = Literal["labels"]
 
 
+def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
+    invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
+        (sign == GREATER_EQUAL) & (rhs == np.inf)
+    )
+    if np.any(invalid):
+        raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+
+
 class Model:
     """
     Linear optimization model.
@@ -1301,6 +1309,9 @@ class Model:
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if isinstance(con, CSRConstraint) and freeze and mask is None:
+            _check_infinities(con._sign, con._rhs, name)
+            self.check_force_dim_names(con.coords.to_dataset())
+            enforce_no_multiindex(con, context=f"constraint {name!r}")
             scaling_grid = validate_scaling(
                 broadcast_to_coords(scaling, con.coords, label="constraint scaling"),
                 "constraint scaling",
@@ -1311,11 +1322,7 @@ class Model:
             return self.constraints.add(con)
         data = con.data
 
-        invalid_infinity_values = (
-            (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
-        ) | ((data.sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
-        if invalid_infinity_values.any():
-            raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+        _check_infinities(data.sign, data.rhs, name)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
