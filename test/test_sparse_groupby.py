@@ -17,7 +17,7 @@ import xarray as xr
 
 import linopy
 from linopy import LinearExpression, Model, Variable
-from linopy.constraints import Constraint, CSRConstraint
+from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
 from linopy.semantics import is_v1
 from linopy.testing import assert_conequal, assert_linequal
 
@@ -211,7 +211,7 @@ def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
 def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
     require_v1()
 
-    def build(sparse: bool) -> Constraint | CSRConstraint:
+    def build(sparse: bool) -> ConstraintBase:
         c = base_model()
         gens = c.gen_p.indexes["gen"]
         gen_p = c.gen_p.where(xr.DataArray(gens != "gen7", coords=[gens]))

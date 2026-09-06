@@ -257,7 +257,8 @@ def test_constraint_inherited_properties(
 
 
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
-    con: Constraint = 10 * x + y <= 10
+    con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
 
     # Test wrapped methods
     con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
@@ -284,12 +285,14 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
 def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.sel(first=[1, 2]), ConstraintBase)
 
 
 def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
@@ -299,6 +302,7 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.set_index({"multi": ["second", "third"]})
     assert isinstance(con, ConstraintBase)
@@ -312,6 +316,7 @@ def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.loc[[1, 2]], ConstraintBase)
 
 
@@ -926,9 +931,9 @@ def _model_with_frozen_and_mutation(freeze: bool, mutation: str) -> Model:
 def test_frozen_matrices_after_variable_mutation(mutation: str) -> None:
     frozen = _model_with_frozen_and_mutation(True, mutation)
     mutable = _model_with_frozen_and_mutation(False, mutation)
-    np.testing.assert_array_equal(
-        frozen.matrices.A.toarray(), mutable.matrices.A.toarray()
-    )
+    a_frozen, a_mutable = frozen.matrices.A, mutable.matrices.A
+    assert a_frozen is not None and a_mutable is not None
+    np.testing.assert_array_equal(a_frozen.toarray(), a_mutable.toarray())
     np.testing.assert_array_equal(frozen.matrices.b, mutable.matrices.b)
     np.testing.assert_array_equal(frozen.matrices.clabels, mutable.matrices.clabels)
     np.testing.assert_array_equal(frozen.matrices.vlabels, mutable.matrices.vlabels)
