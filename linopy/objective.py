@@ -273,7 +273,7 @@ class Objective:
     sel = objwrap(expressions.LinearExpression.sel)
 
     def __add__(
-        self, expr: int | QuadraticExpression | LinearExpression | Objective
+        self, expr: ConstantLike | QuadraticExpression | LinearExpression | Objective
     ) -> Objective:
         if isinstance(expr, Objective):
             expr = expr.expression
