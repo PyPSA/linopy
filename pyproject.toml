@@ -124,6 +124,8 @@ gpu = [
 # Install with `uv sync --group spec` or `uv pip install --group spec`.
 spec = [
     "math-spec @ git+https://github.com/energy-models/math-spec.git@1377f27b759cfbc42bb205338e79751542dabe84 ; python_version >= '3.12'",
+    "pyyaml ; python_version >= '3.12'",
+    "pyarrow ; python_version >= '3.12'",
 ]
 # datarecord feeds model data as sources into Model.from_spec (adapter showcased
 # in dev-scripts). Pre-1.0 git dep, gated on 3.12 like spec. narwhals 2.21.0 has
