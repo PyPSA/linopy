@@ -899,12 +899,23 @@ def test_freeze_mutable_roundtrip(m: Model) -> None:
     assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
     assert isinstance(mc, Constraint)
-    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
     np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
     np.testing.assert_array_equal(frozen.active_labels(), refrozen.active_labels())
+
+
+def test_frozen_coeff_dtype_preserved() -> None:
+    m = Model()
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    coeff = xr.DataArray(np.arange(1, 5, dtype=np.float32), coords=[i])
+    frozen = m.add_constraints(coeff * x >= 1, name="c", freeze=True)
+    assert frozen._csr.dtype == np.float32
+    assert frozen.coeffs.dtype == np.float32
+    assert frozen.mutable().coeffs.dtype == np.float32
 
 
 def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
@@ -959,20 +970,20 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     frozen = m.constraints["c"]
     assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
-    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert frozen.ncons == refrozen.ncons == 3
 
 
-def test_from_mutable_mixed_signs() -> None:
+def test_from_dense_mixed_signs() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
     m.add_constraints(x >= 0, name="mixed", freeze=False)
     mc = m.constraints["mixed"]
     assert isinstance(mc, Constraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    frozen = linopy.constraints.CSRConstraint.from_mutable(mc)
+    frozen = linopy.constraints.CSRConstraint.from_dense(mc)
     assert isinstance(frozen._sign, np.ndarray)
     assert list(frozen._sign) == ["<=", ">=", "<="]
     assert_equal(frozen.sign, mc.sign)

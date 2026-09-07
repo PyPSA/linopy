@@ -20,7 +20,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import product, zip_longest
 from typing import (
     TYPE_CHECKING,
@@ -106,6 +106,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
+from linopy.csr import CSRLinearExpression, _aux_coords
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -560,7 +561,7 @@ class LinearExpressionGroupby:
             over an existing dimension; with a name list and ``observed=True``
             the CSR result stays compact over the observed key combinations.
             Requires v1 semantics. Defaults to
-            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.sparse_expression`.
+            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
@@ -610,9 +611,6 @@ class LinearExpressionGroupby:
                 and grouper.index.name in self.data.dims
             )
             if supported:
-                from linopy.sparse_expression import CSRExpression
-
-                expr = LinearExpression(self.data, self.model)
                 stacked = observed or multikey_frame is None
                 group_name = (
                     "group"
@@ -622,8 +620,8 @@ class LinearExpressionGroupby:
                 coord_dims = tuple(
                     str(d) for d in self.data.coeffs.dims if d != TERM_DIM
                 )
-                csr = CSRExpression.from_grouper(
-                    expr, grouper, group_name, stacked, coord_dims
+                csr = CSRLinearExpression.from_grouper(
+                    self.data, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_csr(csr, self.model)
             if explicit_sparse:
@@ -831,7 +829,7 @@ class LinearExpressionRolling:
 
 
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model", "_csr")
+    __slots__ = ("_data", "_model")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -906,7 +904,6 @@ class BaseExpression(ABC):
         data = data.assign_attrs(name=None)
         self._model = model
         self._data = cast(Dataset, data)
-        self._csr = None
 
     def __repr__(self) -> str:
         """
@@ -1007,8 +1004,6 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        if self._csr is not None:
-            return self._from_csr(self._csr.scaled(-1.0), self._model)
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
@@ -1594,19 +1589,7 @@ class BaseExpression(ABC):
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._csr is not None:
-            self._data = self._csr.materialize().data
-            self._csr = None
         return self._data
-
-    @classmethod
-    def _from_csr(cls, csr: Any, model: Model) -> Self:
-        """Construct an expression backed by a CSRExpression."""
-        obj = cls.__new__(cls)
-        obj._model = model
-        obj._data = None  # type: ignore[assignment]
-        obj._csr = csr
-        return obj
 
     @property
     def model(self) -> Model:
@@ -1619,8 +1602,6 @@ class BaseExpression(ABC):
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._data is None and self._csr is not None:
-            return tuple(self._csr.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -1817,11 +1798,6 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
-        if self._csr is not None and isinstance(sign, str):
-            rhs_da = constraints.csr_rhs(self._csr, rhs)
-            if rhs_da is not None:
-                return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
-
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
             raise ValueError(
@@ -1985,13 +1961,6 @@ class BaseExpression(ABC):
         ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
-        csr = self._csr
-        if (
-            csr is not None
-            and isinstance(value, np.floating | np.integer | int | float)
-            and not isinstance(value, bool)
-        ):
-            return type(self)._from_csr(csr.filled(float(value)), self._model)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
@@ -2089,8 +2058,6 @@ class BaseExpression(ABC):
         """
         Get the number of terms in the linear expression.
         """
-        if self._csr is not None:
-            return self._csr.nterm
         return len(self.data._term)
 
     @property
@@ -2355,6 +2322,79 @@ class LinearExpression(BaseExpression):
     <class 'linopy.expressions.LinearExpression'>
     """
 
+    __slots__ = ("_csr",)
+
+    def __init__(self, data: Dataset | Any | None, model: Model) -> None:
+        super().__init__(data, model)
+        self._csr: CSRLinearExpression | None = None
+
+    @classmethod
+    def _from_csr(cls, csr: CSRLinearExpression, model: Model) -> Self:
+        """Construct an expression backed by a CSRLinearExpression."""
+        obj = cls.__new__(cls)
+        obj._model = model
+        obj._data = None  # type: ignore[assignment]
+        obj._csr = csr
+        return obj
+
+    @property
+    def data(self) -> Dataset:
+        if self._data is None and self._csr is not None:
+            self._data = self._csr.to_dense()._data
+            self._csr = None
+        return self._data
+
+    @property
+    def coord_dims(self) -> tuple[Hashable, ...]:
+        if self._data is None and self._csr is not None:
+            return self._csr.grid.dims
+        return super().coord_dims
+
+    @property
+    def nterm(self) -> int:
+        """
+        Get the number of terms in the linear expression.
+        """
+        if self._csr is not None:
+            return self._csr.nterm
+        return super().nterm
+
+    def __neg__(self) -> Self:
+        """
+        Get the negative of the expression.
+        """
+        if self._csr is not None:
+            return self._from_csr(self._csr.scaled(-1.0), self._model)
+        return super().__neg__()
+
+    def fillna(
+        self,
+        value: int
+        | float
+        | DataArray
+        | Dataset
+        | LinearExpression
+        | dict[str, float | int | DataArray],
+    ) -> Self:
+        csr = self._csr
+        unwrapped = _expr_unwrap(value)
+        if (
+            csr is not None
+            and isinstance(unwrapped, np.floating | np.integer | int | float)
+            and not isinstance(unwrapped, bool)
+        ):
+            return type(self)._from_csr(csr.filled(float(unwrapped)), self._model)
+        return super().fillna(value)
+
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
+    ) -> ConstraintBase:
+        if self._csr is not None and isinstance(sign, str):
+            rhs_da = constraints.csr_rhs(self._csr, rhs)
+            if rhs_da is not None:
+                return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
+        return super().to_constraint(sign, rhs, join)
+
     @overload
     def __add__(
         self,
@@ -2540,17 +2580,14 @@ class LinearExpression(BaseExpression):
         csr = self._csr
         if (
             csr is not None
-            and set(indexers) <= set(csr.grid_dims)
+            and set(indexers) <= set(csr.grid.dims)
             and method is None
             and tolerance is None
             and copy
             and fill_value is self._fill_value
         ):
-            indexes = {
-                d: pd.Index(indexers.get(d, csr.indexes[d]), name=d)
-                for d in csr.grid_dims
-            }
-            return type(self)._from_csr(csr.reindexed(indexes), self._model)
+            grid = csr.grid.with_indexes(indexers)
+            return type(self)._from_csr(csr.reindexed(grid), self._model)
         return super().reindex(
             indexers,
             method=method,
@@ -2570,7 +2607,7 @@ class LinearExpression(BaseExpression):
         """
         name_dict = either_dict_or_kwargs(name_dict, names, "rename")
         csr = self._csr
-        if csr is not None and set(name_dict) <= set(csr.grid_dims):
+        if csr is not None and set(name_dict) <= set(csr.grid.dims):
             relabel = {str(k): str(v) for k, v in name_dict.items()}
             return type(self)._from_csr(csr.renamed(relabel), self._model)
         return super().rename(name_dict)
@@ -3177,6 +3214,87 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
+def _aligned(
+    csrs: list[CSRLinearExpression], join: JoinOptions | None, fill: float
+) -> list[CSRLinearExpression] | None:
+    """
+    Conform the CSR expressions to the grid an explicit join produces, the
+    cells the join creates carrying ``fill`` as constant. None where the dense path
+    owns the semantics: ``exact`` and the auto-detected join raise there on
+    differing grids, ``override`` on differing shapes, any join on
+    non-unique labels.
+    """
+    template = csrs[0].grid
+    dims = template.dims
+    if any(not p.grid.is_unique for p in csrs):
+        return None
+    if join == "override":
+        if any(p.grid.dims != dims or p.grid.shape != template.shape for p in csrs):
+            return None
+        return [replace(p, grid=template) for p in csrs]
+    if join in ("left", "right"):
+        source = csrs[0] if join == "left" else csrs[-1]
+        grid = source.grid.reordered(dims)
+    elif join in ("outer", "inner"):
+        grid = template.combined([p.grid for p in csrs[1:]], join)
+    else:
+        return None
+    return [p.reindexed(grid, fill) for p in csrs]
+
+
+def _try_csr_merge(
+    exprs: Any,
+    dim: str,
+    join: JoinOptions | None,
+    fill_value: FillValueLike,
+    kwargs: dict[str, Any],
+) -> LinearExpression | None:
+    """
+    Sparse branch of :func:`merge`: combine plain LinearExpressions over one
+    set of grid dimensions (CSR-backed or dense-convertible) as sparse matrix
+    addition. Grids that share dims in a different order are transposed onto
+    the template order first. Grids that differ in their labels are aligned
+    row-wise onto the joined grid, the cells the join creates carrying the
+    fill of the dense path (zero, or NaN for ``fill_value=ABSENT``); auxiliary
+    coordinates across differing grids are left to the dense path. Returns
+    None to fall through to the dense path.
+    """
+    if dim != TERM_DIM or kwargs:
+        return None
+    if not all(type(e) is LinearExpression for e in exprs):
+        return None
+    if all(e._csr is None for e in exprs):
+        return None
+    dims = set(exprs[0].coord_dims)
+    if any(set(e.coord_dims) != dims for e in exprs[1:]):
+        return None
+    for e in exprs:
+        if e._csr is None and set(e.data.coords) - dims != set(
+            _aux_coords(e.data, dims)
+        ):
+            return None
+
+    csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
+    template = csrs[0]
+    order = template.grid.dims
+    csrs = [
+        p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
+        for p in csrs
+    ]
+    if not all(template.same_grid(p) for p in csrs[1:]):
+        if any(p.coords for p in csrs):
+            return None
+        aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
+        if aligned is None:
+            return None
+        csrs = aligned
+
+    combined = csrs[0]
+    for csr in csrs[1:]:
+        combined = combined.added(csr)
+    return LinearExpression._from_csr(combined, exprs[0].model)
+
+
 Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
 
 
@@ -3293,9 +3411,7 @@ def merge(
     model = exprs[0].model
 
     if issubclass(cls, LinearExpression) and not has_quad_expression:
-        from linopy.sparse_expression import try_csr_merge
-
-        csr_result = try_csr_merge(
+        csr_result = _try_csr_merge(
             exprs, dim=dim, join=join, fill_value=fill_value, kwargs=kwargs
         )
         if csr_result is not None:
