@@ -51,12 +51,14 @@ def validate(program: ms.Program, parameters: Mapping[str, xr.DataArray]) -> Non
     """
     Refuse curves the data does not supply everywhere they are built, or that bend against their method.
 
-    Raises:
-        SpecDataError: A breakpoint parameter with a hole where the block
-            builds a weight, a ``points:`` mask that is not one run per curve,
-            breakpoints that do not increase, a one-point curve under
-            ``method: lp``, or a curve of the curvature the method is not
-            exact for.
+    Raises
+    ------
+    SpecDataError
+        A breakpoint parameter with a hole where the block
+        builds a weight, a ``points:`` mask that is not one run per curve,
+        breakpoints that do not increase, a one-point curve under
+        ``method: lp``, or a curve of the curvature the method is not
+        exact for.
     """
     for block, decl in program.piecewise.items():
         run = _one(decl.checks, ms.Contiguous)

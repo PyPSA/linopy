@@ -32,9 +32,10 @@ from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
 from linopy.spec.binder import Bound, Retain, bind
-from linopy.spec.builder import build, evaluate_named, fold
+from linopy.spec.builder import build
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
+from linopy.spec.evaluate import evaluate_named, fold
 from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
@@ -49,11 +50,14 @@ def attach(
     """
     Build *spec* with *sources* into the empty *model* and return its accessor.
 
-    Raises:
-        ValueError: The model already holds variables or constraints, or runs
-            under legacy semantics.
-        TypeError: *spec* is a lowered ``Program``, which has no YAML form to
-            keep on the model.
+    Raises
+    ------
+    ValueError
+        The model already holds variables or constraints, or runs
+        under legacy semantics.
+    TypeError
+        *spec* is a lowered ``Program``, which has no YAML form to
+        keep on the model.
     """
     if not is_v1():
         raise ValueError(
@@ -98,9 +102,12 @@ class ModelSpec:
     """
     The spec a model was built from.
 
-    Attributes:
-        program: The lowered spec.
-        text: The spec as YAML, verbatim where a file or text was passed.
+    Attributes
+    ----------
+    program
+        The lowered spec.
+    text
+        The spec as YAML, verbatim where a file or text was passed.
     """
 
     def __init__(self, model: Model, program: ms.Program, text: str) -> None:
@@ -170,9 +177,11 @@ class ModelSpec:
         ``add_spec`` read it, and must describe the coordinates the model was
         built on.
 
-        Raises:
-            SpecDataError: *sources* label a dimension differently than the
-                model was built on.
+        Raises
+        ------
+        SpecDataError
+            *sources* label a dimension differently than the
+            model was built on.
         """
         bound = bind(self.program, sources, retain="none")
         coords = self.coords
@@ -239,8 +248,10 @@ class NamedExpression:
     three views agree. ``expressions[name]`` reads the retained parameters and
     the solution the model holds; ``evaluate(name, sources)`` binds fresh data.
 
-    Attributes:
-        node: The lowered expression body, math-spec's own AST handle.
+    Attributes
+    ----------
+    node
+        The lowered expression body, math-spec's own AST handle.
     """
 
     def __init__(self, spec: ModelSpec, name: str, ctx: Context) -> None:
@@ -270,9 +281,12 @@ class NamedExpression:
         """
         The expression folded over the model's solution, as data.
 
-        Raises:
-            RuntimeError: The model reads a variable but holds no solution yet.
-            SpecDataError: A parameter the body reads was not retained.
+        Raises
+        ------
+        RuntimeError
+            The model reads a variable but holds no solution yet.
+        SpecDataError
+            A parameter the body reads was not retained.
         """
         return fold(self._name, self._ctx)
 

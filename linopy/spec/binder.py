@@ -70,19 +70,25 @@ def bind(
     """
     Bind *sources* to *program*: master coordinates now, parameters on demand.
 
-    Args:
-        program: The lowered spec.
-        sources: Data keyed by declared name. Any mapping works; it is read by
-            key and never iterated beyond ``sources.keys()``. An ``xr.Dataset``
-            is accepted too: its indexes are dimension sources, its data
-            variables parameters and lookups.
-        retain: Which parameters :meth:`Bound.retained` persists.
+    Parameters
+    ----------
+    program
+        The lowered spec.
+    sources
+        Data keyed by declared name. Any mapping works; it is read by
+        key and never iterated beyond ``sources.keys()``. An ``xr.Dataset``
+        is accepted too: its indexes are dimension sources, its data
+        variables parameters and lookups.
+    retain
+        Which parameters :meth:`Bound.retained` persists.
 
-    Raises:
-        SpecDataError: A ``retain`` outside its three values, a key naming
-            nothing the spec declares, a reached dimension or a lookup with no
-            source, a duplicated dimension member, or a lookup breaking the
-            rules a map has.
+    Raises
+    ------
+    SpecDataError
+        A ``retain`` outside its three values, a key naming
+        nothing the spec declares, a reached dimension or a lookup with no
+        source, a duplicated dimension member, or a lookup breaking the
+        rules a map has.
     """
     if retain not in _RETAIN:
         raise SpecDataError(
@@ -102,15 +108,21 @@ class Bound:
     """
     A program bound to its data.
 
-    Attributes:
-        program: The lowered spec the data is bound to.
-        coords: Master coordinates by dimension, in source order, each index
-            named after its dimension. A declared dimension nothing reaches
-            and nothing supplies is absent.
-        lookups: By dimension, by lookup name, the map as an array over the
-            dimension's master coordinates, NaN where a label is unmapped.
-        retain: Which parameters :meth:`retained` persists.
-        sources: The caller's data, read by key on demand.
+    Attributes
+    ----------
+    program
+        The lowered spec the data is bound to.
+    coords
+        Master coordinates by dimension, in source order, each index
+        named after its dimension. A declared dimension nothing reaches
+        and nothing supplies is absent.
+    lookups
+        By dimension, by lookup name, the map as an array over the
+        dimension's master coordinates, NaN where a label is unmapped.
+    retain
+        Which parameters :meth:`retained` persists.
+    sources
+        The caller's data, read by key on demand.
     """
 
     program: ms.Program
@@ -129,11 +141,13 @@ class Bound:
         master coordinates, leaving NaN (``False`` for ``bool``) where no row
         was supplied.
 
-        Raises:
-            SpecDataError: No data, a shape no reader accepts, a rank other
-                than declared, a label its dimension lacks, two rows for one
-                coordinate, a null value in a row, or values of another type
-                than declared.
+        Raises
+        ------
+        SpecDataError
+            No data, a shape no reader accepts, a rank other
+            than declared, a label its dimension lacks, two rows for one
+            coordinate, a null value in a row, or values of another type
+            than declared.
         """
         declared = self._declaration(name)
         if name not in self._keys:
