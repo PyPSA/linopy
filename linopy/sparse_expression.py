@@ -65,6 +65,10 @@ class CSRExpression:
     def n_cells(self) -> int:
         return self.csr.shape[0]
 
+    @property
+    def nterm(self) -> int:
+        return max(int(np.diff(self.csr.indptr).max(initial=0)), 1)
+
     @classmethod
     def from_grouper(
         cls,

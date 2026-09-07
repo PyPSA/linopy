@@ -2089,6 +2089,8 @@ class BaseExpression(ABC):
         """
         Get the number of terms in the linear expression.
         """
+        if self._csr is not None:
+            return self._csr.nterm
         return len(self.data._term)
 
     @property
