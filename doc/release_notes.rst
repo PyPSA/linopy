@@ -23,9 +23,9 @@ Upcoming Version
 
 *Build a model from a math-spec program*
 
-* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://pypi.org/project/math-spec/>`__ YAML program bound to data, and ``model.spec`` reads it back. Requires the ``math-spec`` package and v1 semantics.
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://github.com/energy-models/math-spec>`__ YAML program bound to data, and ``model.spec`` (a ``linopy.spec.ModelSpec``) reads it back. Requires the ``spec`` dependency group (``uv sync --group spec`` / ``uv pip install --group spec``, Python >= 3.12) and v1 semantics. Data is bound onto the spec's dimensions and parameters with ``linopy.spec.bind``, raising a ``linopy.spec.SpecDataError`` on mismatched or missing data; ``linopy.spec.Bound`` carries the bound result. See :doc:`building-models-from-specs` for a worked example.
 
-* ``model.spec.expressions[name]`` returns a ``NamedExpression`` with three views of a named expression: ``.node`` (the lowered formula), ``.expression`` (the unsolved linopy expression — a ``LinearExpression``, bare ``Variable``, array or scalar) and ``.solution`` (the expression folded over the solved model). ``model.spec.evaluate(name, sources)`` returns the same object with its parameters bound afresh.
+* ``model.spec.expressions`` (a ``linopy.spec.NamedExpressions`` mapping) returns a ``linopy.spec.NamedExpression`` for each declared name, with three views: ``.node`` (the lowered formula), ``.expression`` (the unsolved linopy expression — a ``LinearExpression``, bare ``Variable``, array or scalar) and ``.solution`` (the expression folded over the solved model). ``model.spec.evaluate(name, sources)`` returns the same object with its parameters bound afresh.
 
 * ``model.spec.to_latex`` / ``.to_markdown`` / ``.to_typst`` typeset the whole model; a ``ModelSpec`` and a ``NamedExpression`` render as Markdown in a notebook.
 
