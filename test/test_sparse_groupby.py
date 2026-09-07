@@ -345,3 +345,36 @@ def test_reindex_merge_chain_peak_memory() -> None:
     finally:
         tracemalloc.stop()
     assert peak < dense_rectangle_bytes / 4
+
+
+@pytest.mark.parametrize("value", [0.0, 3.5])
+def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
+    require_v1()
+    c = base_model()
+    wide = {"bus": [f"bus{i}" for i in range(7)]}
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).reindex(wide)
+    filled = sparse.fillna(value)
+    assert filled._payload is not None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).reindex(wide)
+    assert_linequal(filled, dense.fillna(value))
+
+
+def test_fillna_with_array_falls_back_to_dense() -> None:
+    require_v1()
+    c = base_model()
+    fill = xr.zeros_like(c.load)
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    res = sparse.fillna(fill)
+    assert res._payload is None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False)
+    assert_linequal(res, dense.fillna(fill))
+
+
+def test_rename_stays_csr_and_matches_dense() -> None:
+    require_v1()
+    c = base_model()
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).rename(bus="node")
+    assert sparse._payload is not None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).rename(bus="node")
+    assert sparse.coord_dims == ("node", "snapshot")
+    assert_linequal(sparse, dense)

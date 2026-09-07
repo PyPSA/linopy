@@ -187,6 +187,20 @@ class CSRPayload:
             self, csr=scipy.sparse.csr_array(coo), const=const, indexes=indexes
         )
 
+    def filled(self, value: float) -> CSRPayload:
+        """Resolve absent cells (NaN const) to a constant; terms untouched."""
+        const = np.where(np.isnan(self.const), value, self.const)
+        return replace(self, const=const)
+
+    def renamed(self, names: dict[str, str]) -> CSRPayload:
+        """Relabel grid dims; the CSR row layout is unchanged."""
+        grid_dims = tuple(names.get(d, d) for d in self.grid_dims)
+        indexes = {
+            names.get(d, d): self.indexes[d].rename(names.get(d, d))
+            for d in self.grid_dims
+        }
+        return replace(self, grid_dims=grid_dims, indexes=indexes)
+
     def same_grid(self, other: CSRPayload) -> bool:
         return self.grid_dims == other.grid_dims and all(
             self.indexes[d].equals(other.indexes[d]) for d in self.grid_dims

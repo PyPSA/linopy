@@ -1966,6 +1966,13 @@ class BaseExpression(ABC):
         ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
+        payload = self._payload
+        if (
+            payload is not None
+            and isinstance(value, np.floating | np.integer | int | float)
+            and not isinstance(value, bool)
+        ):
+            return type(self)._from_payload(payload.filled(float(value)), self._model)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
@@ -2524,6 +2531,22 @@ class LinearExpression(BaseExpression):
             copy=copy,
             fill_value=fill_value,
         )
+
+    def rename(
+        self,
+        name_dict: Mapping[Any, Any] | None = None,
+        **names: Any,
+    ) -> LinearExpression:
+        """
+        Rename dimensions as ``Dataset.rename``; a CSR-backed expression
+        stays sparse when only grid dims are relabelled.
+        """
+        name_dict = either_dict_or_kwargs(name_dict, names, "rename")
+        payload = self._payload
+        if payload is not None and set(name_dict) <= set(payload.grid_dims):
+            relabel = {str(k): str(v) for k, v in name_dict.items()}
+            return type(self)._from_payload(payload.renamed(relabel), self._model)
+        return super().rename(name_dict)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""
