@@ -37,8 +37,14 @@ Upcoming Version
 
 * The example notebooks now opt into the v1 arithmetic convention (``linopy.options["semantics"] = "v1"``). The coordinate-alignment and expression tutorials were reworked to teach strict label-based alignment: a mismatch on a shared dimension raises rather than silently filling or pairing by position, and is resolved explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords`` or an explicit ``join=`` on the named ``.add`` / ``.mul`` / ``.le`` / … methods.
 
+**Performance**
+
+* ``@``/``dot`` against a constant matrix that holds zeros no longer densifies the result to one term per contracted member. The zero-coefficient terms are dropped, so the term dimension shrinks to the widest non-zero cell. On PyPSA's Kirchhoff Voltage Law constraint (a cycle matrix with ~3 branches per cycle) this cuts the expression from 852 to 3 terms — 284x fewer cells — which in turn shrinks the downstream ``merge``. A constant without zeros is unaffected. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
+* ``densify_terms`` (used by ``sum(drop_zeros=True)`` and the sparse ``@`` path) is now fully vectorised. It previously counted the non-zero positions with a Python loop that scaled quadratically in the number of non-zero terms — 127 s for a (2000 x 60) expression, now 3 ms — and allocated the compacted output at the full original term width. It now allocates only the compacted width and returns the expression unchanged when it holds no zeros.
+
 **Bug fixes**
 
+* ``densify_terms`` no longer raises on expressions without coordinate dimensions (``expr.sum(drop_zeros=True)`` over all dimensions) and now works on ``QuadraticExpression``, where it previously indexed the ``_factor`` axis as the term axis.
 * ``sum()`` over a dimension no longer raises when another dimension of the expression has size 0; it returns an expression without terms over the kept coordinates, as summing over the empty dimension itself already did. (https://github.com/PyPSA/linopy/issues/906)
 * A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
 * The ``linopy.options`` context manager now restores the values that were active on entry instead of resetting all options to their defaults.
