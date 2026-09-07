@@ -2158,31 +2158,35 @@ class BaseExpression(ABC):
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
         """
-        data = self.data.transpose(..., TERM_DIM)
+        coeffs = self.data.coeffs.transpose(..., TERM_DIM)
+        vars = self.data.vars.transpose(*coeffs.dims, ...)
+        cdata = coeffs.data
+        mask = cdata != 0
+        if mask.all():
+            return self
 
-        cdata = data.coeffs.data
-        axis = cdata.ndim - 1
-        nnz = np.nonzero(cdata)
-        nterm = (cdata != 0).sum(axis).max()
+        lead = cdata.shape[:-1]
+        old_nterm = cdata.shape[-1]
+        trailing = vars.shape[cdata.ndim :]
+        mask = mask.reshape(-1, old_nterm)
+        nrows = mask.shape[0]
+        counts = mask.sum(1)
+        nterm = int(counts.max()) if nrows else 0
+        rows = np.repeat(np.arange(nrows), counts)
+        pos = np.arange(rows.size) - np.repeat(np.cumsum(counts) - counts, counts)
 
-        mod_nnz = list(nnz)
-        mod_nnz.pop(axis)
+        new_coeffs = np.zeros((nrows, nterm), dtype=cdata.dtype)
+        new_coeffs[rows, pos] = cdata.reshape(nrows, old_nterm)[mask]
+        new_vars = np.full((nrows, nterm, *trailing), -1, dtype=vars.dtype)
+        new_vars[rows, pos] = vars.data.reshape(nrows, old_nterm, *trailing)[mask]
 
-        remaining_axes = np.vstack(mod_nnz).T
-        _, idx_ = np.unique(remaining_axes, axis=0, return_inverse=True)
-        idx = list(idx_)
-        new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
-        mod_nnz.insert(axis, new_index)
-
-        vdata = np.full_like(cdata, -1)
-        vdata[tuple(mod_nnz)] = data.vars.data[nnz]
-        data.vars.data = vdata
-
-        cdata = np.zeros_like(cdata)
-        cdata[tuple(mod_nnz)] = data.coeffs.data[nnz]
-        data.coeffs.data = cdata
-
-        return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
+        new: dict[Hashable, Any] = {
+            "coeffs": (coeffs.dims, new_coeffs.reshape(*lead, nterm)),
+            "vars": (vars.dims, new_vars.reshape(*lead, nterm, *trailing)),
+        }
+        data_vars = {k: new.get(k, self.data[k]) for k in self.data.data_vars}
+        data = Dataset(data_vars, coords=self.data.coords, attrs=self.data.attrs)
+        return self.__class__(data, self.model)
 
     def sanitize(self) -> Self:
         """
@@ -2469,11 +2473,15 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         other = as_constant(other)
-        if not isinstance(other, LinearExpression | variables.Variable):
+        is_constant = not isinstance(other, LinearExpression | variables.Variable)
+        if is_constant:
             other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
-        return (self * other).sum(dim=common_dims)
+        res = (self * other).sum(dim=common_dims)
+        if is_constant and common_dims and bool((other == 0).any()):
+            res = res.densify_terms()
+        return res
 
     @property
     def flat(self) -> pd.DataFrame:
