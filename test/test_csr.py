@@ -1,5 +1,5 @@
 """
-Tests for sparse groupby-sum (linopy.sparse_expression): type stability, transparent
+Tests for sparse groupby-sum (linopy.csr): type stability, transparent
 materialization, and direct CSR realization under freeze. v1-only feature.
 """
 
@@ -167,9 +167,11 @@ def test_merge_keeps_absent_cell_absent() -> None:
     flow = flow.where(mask)
 
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
-    tot = linopy.merge([sparse, flow], join="outer")
+    tot = linopy.merge([sparse, flow], join="outer", cls=LinearExpression)
     assert tot._csr is not None
-    assert_linequal(tot, linopy.merge([dense, flow], join="outer"))
+    assert_linequal(
+        tot, linopy.merge([dense, flow], join="outer", cls=LinearExpression)
+    )
 
     con = c.m.add_constraints(tot >= c.load, name="bal", freeze=True)
     assert isinstance(con, CSRConstraint)
@@ -230,7 +232,7 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
         assert set(csr.coords) == {"period", "season"}
     else:
         assert np.isnan(csr.const).sum() == 2 * 2
-    assert csr.grid_dims == dense.coord_dims
+    assert csr.grid.dims == dense.coord_dims
     assert_linequal(sparse, dense)
 
 
@@ -662,10 +664,26 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     if order == "flow-gen":
         sparse, dense = sparse[::-1], dense[::-1]
-    res = linopy.merge(sparse, join=join)
+    res = linopy.merge(sparse, join=join, cls=LinearExpression)
     assert res._csr is not None
     assert res.coord_dims == dense[0].coord_dims
-    assert_terms_equal(res, linopy.merge(dense, join=join))
+    assert_terms_equal(res, linopy.merge(dense, join=join, cls=LinearExpression))
+
+
+def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
+    """Same labels in a transposed dim order stay sparse under the default join."""
+    require_v1()
+    c = base_model()
+    a = (1.0 * c.flow).groupby(c.bus0).sum(sparse=True)
+    b = (1.0 * c.flow_t).groupby(c.bus0).sum(sparse=True)
+    assert a.coord_dims == b.coord_dims[::-1] != b.coord_dims
+    res = linopy.merge([a, b], cls=LinearExpression)
+    assert res._csr is not None
+    dense = [
+        (1.0 * c.flow).groupby(c.bus0).sum(),
+        (1.0 * c.flow_t).groupby(c.bus0).sum(),
+    ]
+    assert_terms_equal(res, linopy.merge(dense, cls=LinearExpression))
 
 
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
@@ -675,17 +693,21 @@ def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None
     third_lines = ("line3", "line4")
     sparse = cross_grid_parts(c, True) + cross_grid_parts(c, True, third_lines)[1:]
     dense = cross_grid_parts(c, False) + cross_grid_parts(c, False, third_lines)[1:]
-    res = linopy.merge(sparse, join=join)
+    res = linopy.merge(sparse, join=join, cls=LinearExpression)
     assert res._csr is not None
-    assert_terms_equal(res, linopy.merge(dense, join=join))
+    assert_terms_equal(res, linopy.merge(dense, join=join, cls=LinearExpression))
 
 
 def test_cross_grid_merge_absent_fill_matches_dense() -> None:
     require_v1()
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
-    res = linopy.merge(sparse, join="outer", fill_value=linopy.ABSENT)
-    expected = linopy.merge(dense, join="outer", fill_value=linopy.ABSENT)
+    res = linopy.merge(
+        sparse, join="outer", fill_value=linopy.ABSENT, cls=LinearExpression
+    )
+    expected = linopy.merge(
+        dense, join="outer", fill_value=linopy.ABSENT, cls=LinearExpression
+    )
     assert res._csr is not None
     filled = res.fillna(0)
     assert filled._csr is not None
@@ -700,9 +722,9 @@ def test_cross_grid_merge_keeps_absent_cell_absent() -> None:
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     mask = xr.DataArray([True, False], coords=[dense[1].indexes["bus"]])
     dense[1] = dense[1].where(mask)
-    res = linopy.merge([sparse[0], dense[1]], join="outer")
+    res = linopy.merge([sparse[0], dense[1]], join="outer", cls=LinearExpression)
     assert res._csr is not None
-    assert_terms_equal(res, linopy.merge(dense, join="outer"))
+    assert_terms_equal(res, linopy.merge(dense, join="outer", cls=LinearExpression))
 
 
 def test_cross_grid_merge_mixed_dense_operand_stays_csr() -> None:
@@ -710,8 +732,11 @@ def test_cross_grid_merge_mixed_dense_operand_stays_csr() -> None:
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     res = sparse[0].add(dense[1], join="outer")
+    assert isinstance(res, LinearExpression)
     assert res._csr is not None
-    assert_terms_equal(res, dense[0].add(dense[1], join="outer"))
+    expected = dense[0].add(dense[1], join="outer")
+    assert isinstance(expected, LinearExpression)
+    assert_terms_equal(res, expected)
 
 
 @pytest.mark.parametrize(
@@ -764,13 +789,13 @@ def test_override_merge_same_shape_stays_csr() -> None:
     c = base_model()
     gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
     flow = (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(sparse=True)
-    res = linopy.merge([gen, flow], join="override")
+    res = linopy.merge([gen, flow], join="override", cls=LinearExpression)
     assert res._csr is not None
     dense = [
         (c.eff * c.gen_p).groupby(c.gbus).sum(),
         (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(),
     ]
-    assert_terms_equal(res, linopy.merge(dense, join="override"))
+    assert_terms_equal(res, linopy.merge(dense, join="override", cls=LinearExpression))
 
 
 def test_cross_grid_balance_freezes_csr() -> None:
@@ -778,7 +803,7 @@ def test_cross_grid_balance_freezes_csr() -> None:
     c1, c2 = base_model(), base_model()
     lhs1 = linopy.merge(cross_grid_parts(c1, False), join="outer")
     con1 = c1.m.add_constraints(lhs1 == c1.load, name="bal")
-    lhs2 = linopy.merge(cross_grid_parts(c2, True), join="outer")
+    lhs2 = linopy.merge(cross_grid_parts(c2, True), join="outer", cls=LinearExpression)
     assert lhs2._csr is not None
     con2 = c2.m.add_constraints(lhs2 == c2.load, name="bal", freeze=True)
     assert isinstance(con2, CSRConstraint)

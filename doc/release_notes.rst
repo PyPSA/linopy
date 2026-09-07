@@ -33,6 +33,10 @@ Upcoming Version
 
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
 
+*Internal*
+
+* The sparse backing of a ``LinearExpression`` moved from ``linopy.sparse_expression`` to ``linopy.csr`` and the class ``CSRExpression`` was renamed to ``CSRLinearExpression``. Dense/sparse conversion is now spelled the same way on both CSR types: ``CSRLinearExpression.from_dense`` / ``.to_dense`` and ``CSRConstraint.from_dense`` (previously ``CSRConstraint.from_mutable``) / ``.to_dense``. ``Constraint.freeze()`` and ``CSRConstraint.mutable()`` are unchanged.
+
 *Documentation*
 
 * The example notebooks now opt into the v1 arithmetic convention (``linopy.options["semantics"] = "v1"``). The coordinate-alignment and expression tutorials were reworked to teach strict label-based alignment: a mismatch on a shared dimension raises rather than silently filling or pairing by position, and is resolved explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords`` or an explicit ``join=`` on the named ``.add`` / ``.mul`` / ``.le`` / … methods.
