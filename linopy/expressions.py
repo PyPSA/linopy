@@ -3272,7 +3272,9 @@ def merge(
     if issubclass(cls, LinearExpression) and not has_quad_expression:
         from linopy.sparse_expression import try_csr_merge
 
-        csr_result = try_csr_merge(exprs, dim=dim, join=join, kwargs=kwargs)
+        csr_result = try_csr_merge(
+            exprs, dim=dim, join=join, fill_value=fill_value, kwargs=kwargs
+        )
         if csr_result is not None:
             return csr_result
 
