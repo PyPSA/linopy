@@ -203,3 +203,14 @@ def test_semi_continuous_solve_cuopt() -> None:
     m.solve(solver_name="cuopt", io_api="direct", log_to_console=False)
     assert m.objective.value is not None
     assert np.isclose(m.objective.value, 0, atol=1e-6)
+
+
+@pytest.mark.skipif("scip" not in available_solvers, reason="SCIP not installed")
+def test_semi_continuous_scip() -> None:
+    """A semi-continuous variable takes zero when its lower bound is out of reach."""
+    m = Model()
+    x = m.add_variables(lower=3, upper=10, name="x", semi_continuous=True)
+    m.add_constraints(x <= 2, name="cap")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="scip")
+    assert np.isclose(float(x.solution), 0, atol=1e-6)

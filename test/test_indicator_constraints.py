@@ -15,6 +15,10 @@ requires_gurobi = pytest.mark.skipif(
     "gurobi" not in available_solvers, reason="Gurobi not installed"
 )
 
+requires_scip = pytest.mark.skipif(
+    "scip" not in available_solvers, reason="SCIP not installed"
+)
+
 
 @pytest.fixture
 def mbx() -> tuple[Model, Variable, Variable]:
@@ -423,3 +427,41 @@ class TestSolve:
         m.solve(solver_name="gurobi")
         with pytest.raises(AttributeError, match="dual"):
             _ = m.matrices.dual
+
+
+class TestSCIP:
+    """SCIP reads indicator constraints from the problem file."""
+
+    @requires_scip
+    def test_indicator_is_enforced(self, mbx: tuple[Model, Variable, Variable]) -> None:
+        m, b, x = mbx
+        m.add_constraints(b >= 1, name="fix_b")
+        m.add_indicator_constraints(b, 1, x, "<=", 3, name="ic0")
+        m.add_objective(x, sense="max")
+        m.solve(solver_name="scip")
+        assert np.isclose(m.objective.value, 3, atol=1e-6)
+
+    @requires_scip
+    def test_indicator_is_slack_when_binary_is_off(
+        self, mbx: tuple[Model, Variable, Variable]
+    ) -> None:
+        """With the binary held at zero the bound does not apply."""
+        m, b, x = mbx
+        m.add_constraints(b <= 0, name="fix_b")
+        m.add_indicator_constraints(b, 1, x, "<=", 3, name="ic0")
+        m.add_objective(x, sense="max")
+        m.solve(solver_name="scip")
+        assert np.isclose(m.objective.value, 10, atol=1e-6)
+
+    @requires_scip
+    def test_solution_excludes_reformulation_variables(
+        self, mbx: tuple[Model, Variable, Variable]
+    ) -> None:
+        """SCIP adds a slack variable per indicator that is not part of the model."""
+        m, b, x = mbx
+        m.add_constraints(b >= 1, name="fix_b")
+        m.add_indicator_constraints(b, 1, x, "<=", 3, name="ic0")
+        m.add_objective(x, sense="max")
+        m.solve(solver_name="scip")
+        assert set(m.variables) == {"b", "x"}
+        assert np.isclose(float(m.variables["x"].solution), 3, atol=1e-6)

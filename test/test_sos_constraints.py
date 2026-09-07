@@ -253,3 +253,28 @@ def test_to_highspy_raises_when_sos_present() -> None:
 
     with pytest.raises(ValueError, match="does not support SOS constraints"):
         m.to_highspy()
+
+
+@pytest.mark.skipif("scip" not in available_solvers, reason="SCIP not installed")
+def test_sos1_scip() -> None:
+    """SCIP reads SOS1 sets from the problem file and enforces them."""
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
+    m.solve(solver_name="scip")
+    assert np.isclose(build.solution.values, [0, 0, 1]).all()
+    assert np.isclose(m.objective.value, 3)
+
+
+@pytest.mark.skipif("scip" not in available_solvers, reason="SCIP not installed")
+def test_sos2_scip() -> None:
+    """An SOS2 set allows two adjacent members to be nonzero."""
+    m = Model()
+    segments = pd.Index([0, 1, 2], name="seg")
+    var = m.add_variables(coords=[segments], lower=0, upper=1, name="lambda")
+    m.add_sos_constraints(var, sos_type=2, sos_dim="seg")
+    m.add_objective(var.sum(), sense="max")
+    m.solve(solver_name="scip")
+    assert np.isclose(m.objective.value, 2)
