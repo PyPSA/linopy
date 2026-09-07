@@ -141,7 +141,20 @@ def test_frozen_con_buffers_keep_data_identity(frozen_model: Model) -> None:
         b2 = _extract_con_buffers(con, label_index)
         assert b1.data is b2.data, name
         assert b1.indptr is b2.indptr, name
-        np.testing.assert_array_equal(b1.indices, b2.indices)
+        assert b1.indices is b2.indices, name
+
+
+def test_frozen_con_positional_csr_follows_variable_changes(
+    frozen_model: Model,
+) -> None:
+    con = frozen_model.constraints["c2"]
+    label_index = frozen_model.variables.label_index
+    before = _extract_con_buffers(con, label_index).indices
+    frozen_model.add_variables(0, 1, coords=[range(2)], name="z")
+    after = _extract_con_buffers(con, label_index).indices
+    assert after is not before
+    np.testing.assert_array_equal(after, before)
+    assert _extract_con_buffers(con, label_index).indices is after
 
 
 def test_untouched_frozen_constraint_needs_no_rebuild(frozen_model: Model) -> None:

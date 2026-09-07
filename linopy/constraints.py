@@ -648,6 +648,9 @@ class CSRConstraint(ConstraintBase):
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
+        self._positional_cache: (
+            tuple[scipy.sparse.csr_array, np.ndarray, scipy.sparse.csr_array] | None
+        ) = None
 
     @property
     def model(self) -> Model:
@@ -1009,13 +1012,21 @@ class CSRConstraint(ConstraintBase):
         """
         Return the stored CSR with label columns replaced by dense positions.
 
-        Only ``indices`` is freshly allocated; ``indptr`` and ``data`` stay the
-        stored arrays, so identity comparisons against a snapshot still hold.
+        ``indptr`` and ``data`` stay the stored arrays. The result is cached
+        on the identity of the stored CSR and of ``label_index.label_to_pos``,
+        which is rebuilt whenever variables are added or removed, so repeated
+        calls on an unchanged model also return the same ``indices`` array.
         """
         csr = self._csr
-        return _csr_from_label_columns(
+        label_to_pos = label_index.label_to_pos
+        cache = self._positional_cache
+        if cache is not None and cache[0] is csr and cache[1] is label_to_pos:
+            return cache[2]
+        positional = _csr_from_label_columns(
             csr.data, csr.indices, csr.indptr, csr.shape[0], label_index, self._name
         )
+        self._positional_cache = (csr, label_to_pos, positional)
+        return positional
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset with raw CSR components for netcdf serialization."""
