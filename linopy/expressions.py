@@ -47,7 +47,7 @@ from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
-from xarray.core.utils import Frozen
+from xarray.core.utils import Frozen, either_dict_or_kwargs
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -138,7 +138,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import (
         AnonymousScalarConstraint,
-        Constraint,
+        ConstraintBase,
     )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
@@ -1286,13 +1286,13 @@ class BaseExpression(ABC):
     def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
 
-    def __le__(self, rhs: SideLike) -> Constraint:
+    def __le__(self, rhs: SideLike) -> ConstraintBase:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> Constraint:
+    def __ge__(self, rhs: SideLike) -> ConstraintBase:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
+    def __eq__(self, rhs: SideLike) -> ConstraintBase:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1448,7 +1448,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Less than or equal constraint.
 
@@ -1468,7 +1468,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Greater than or equal constraint.
 
@@ -1488,7 +1488,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Equality constraint.
 
@@ -1766,7 +1766,7 @@ class BaseExpression(ABC):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Convert a linear expression to a constraint.
 
@@ -1800,8 +1800,12 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
-        if self._payload is not None and isinstance(sign, str) and is_constant(rhs):
-            return constraints.Constraint._from_pending(self, sign, rhs, self.model)
+        if self._payload is not None and isinstance(sign, str):
+            rhs_da = constraints.csr_rhs(self._payload, rhs)
+            if rhs_da is not None:
+                return constraints.CSRConstraint.from_payload(
+                    self._payload, sign, rhs_da
+                )
 
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
@@ -1966,6 +1970,13 @@ class BaseExpression(ABC):
         ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
+        payload = self._payload
+        if (
+            payload is not None
+            and isinstance(value, np.floating | np.integer | int | float)
+            and not isinstance(value, bool)
+        ):
+            return type(self)._from_payload(payload.filled(float(value)), self._model)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
@@ -2147,31 +2158,35 @@ class BaseExpression(ABC):
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
         """
-        data = self.data.transpose(..., TERM_DIM)
+        coeffs = self.data.coeffs.transpose(..., TERM_DIM)
+        vars = self.data.vars.transpose(*coeffs.dims, ...)
+        cdata = coeffs.data
+        mask = cdata != 0
+        if mask.all():
+            return self
 
-        cdata = data.coeffs.data
-        axis = cdata.ndim - 1
-        nnz = np.nonzero(cdata)
-        nterm = (cdata != 0).sum(axis).max()
+        lead = cdata.shape[:-1]
+        old_nterm = cdata.shape[-1]
+        trailing = vars.shape[cdata.ndim :]
+        mask = mask.reshape(-1, old_nterm)
+        nrows = mask.shape[0]
+        counts = mask.sum(1)
+        nterm = int(counts.max()) if nrows else 0
+        rows = np.repeat(np.arange(nrows), counts)
+        pos = np.arange(rows.size) - np.repeat(np.cumsum(counts) - counts, counts)
 
-        mod_nnz = list(nnz)
-        mod_nnz.pop(axis)
+        new_coeffs = np.zeros((nrows, nterm), dtype=cdata.dtype)
+        new_coeffs[rows, pos] = cdata.reshape(nrows, old_nterm)[mask]
+        new_vars = np.full((nrows, nterm, *trailing), -1, dtype=vars.dtype)
+        new_vars[rows, pos] = vars.data.reshape(nrows, old_nterm, *trailing)[mask]
 
-        remaining_axes = np.vstack(mod_nnz).T
-        _, idx_ = np.unique(remaining_axes, axis=0, return_inverse=True)
-        idx = list(idx_)
-        new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
-        mod_nnz.insert(axis, new_index)
-
-        vdata = np.full_like(cdata, -1)
-        vdata[tuple(mod_nnz)] = data.vars.data[nnz]
-        data.vars.data = vdata
-
-        cdata = np.zeros_like(cdata)
-        cdata[tuple(mod_nnz)] = data.coeffs.data[nnz]
-        data.coeffs.data = cdata
-
-        return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
+        new: dict[Hashable, Any] = {
+            "coeffs": (coeffs.dims, new_coeffs.reshape(*lead, nterm)),
+            "vars": (vars.dims, new_vars.reshape(*lead, nterm, *trailing)),
+        }
+        data_vars = {k: new.get(k, self.data[k]) for k in self.data.data_vars}
+        data = Dataset(data_vars, coords=self.data.coords, attrs=self.data.attrs)
+        return self.__class__(data, self.model)
 
     def sanitize(self) -> Self:
         """
@@ -2458,11 +2473,15 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         other = as_constant(other)
-        if not isinstance(other, LinearExpression | variables.Variable):
+        other_is_const = not isinstance(other, LinearExpression | variables.Variable)
+        if other_is_const:
             other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
-        return (self * other).sum(dim=common_dims)
+        res = (self * other).sum(dim=common_dims)
+        if other_is_const and common_dims and bool((other == 0).any()):
+            res = res.densify_terms()
+        return res
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -2487,6 +2506,59 @@ class LinearExpression(BaseExpression):
         df = df.groupby("vars", as_index=False).sum()
         check_has_nulls(df, name=self.type)
         return df
+
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        *,
+        method: str | None = None,
+        tolerance: Any = None,
+        copy: bool = True,
+        fill_value: Any = FILL_VALUE,
+        **indexers_kwargs: Any,
+    ) -> LinearExpression:
+        """
+        Conform to new coordinates as ``Dataset.reindex``; a CSR-backed
+        expression stays sparse when only labels change.
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
+        payload = self._payload
+        if (
+            payload is not None
+            and set(indexers) <= set(payload.grid_dims)
+            and method is None
+            and tolerance is None
+            and copy
+            and fill_value is self._fill_value
+        ):
+            indexes = {
+                d: pd.Index(indexers.get(d, payload.indexes[d]), name=d)
+                for d in payload.grid_dims
+            }
+            return type(self)._from_payload(payload.reindexed(indexes), self._model)
+        return super().reindex(
+            indexers,
+            method=method,
+            tolerance=tolerance,
+            copy=copy,
+            fill_value=fill_value,
+        )
+
+    def rename(
+        self,
+        name_dict: Mapping[Any, Any] | None = None,
+        **names: Any,
+    ) -> LinearExpression:
+        """
+        Rename dimensions as ``Dataset.rename``; a CSR-backed expression
+        stays sparse when only grid dims are relabelled.
+        """
+        name_dict = either_dict_or_kwargs(name_dict, names, "rename")
+        payload = self._payload
+        if payload is not None and set(name_dict) <= set(payload.grid_dims):
+            relabel = {str(k): str(v) for k, v in name_dict.items()}
+            return type(self)._from_payload(payload.renamed(relabel), self._model)
+        return super().rename(name_dict)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""
@@ -3208,7 +3280,9 @@ def merge(
     if issubclass(cls, LinearExpression) and not has_quad_expression:
         from linopy.sparse_expression import try_csr_merge
 
-        csr_result = try_csr_merge(exprs, dim=dim, join=join, kwargs=kwargs)
+        csr_result = try_csr_merge(
+            exprs, dim=dim, join=join, fill_value=fill_value, kwargs=kwargs
+        )
         if csr_result is not None:
             return csr_result
 

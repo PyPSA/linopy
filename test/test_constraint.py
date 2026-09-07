@@ -257,7 +257,8 @@ def test_constraint_inherited_properties(
 
 
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
-    con: Constraint = 10 * x + y <= 10
+    con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
 
     # Test wrapped methods
     con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
@@ -284,12 +285,14 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
 def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.sel(first=[1, 2]), ConstraintBase)
 
 
 def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
@@ -299,6 +302,7 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.set_index({"multi": ["second", "third"]})
     assert isinstance(con, ConstraintBase)
@@ -312,6 +316,7 @@ def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.loc[[1, 2]], ConstraintBase)
 
 
@@ -899,7 +904,51 @@ def test_freeze_mutable_roundtrip(m: Model) -> None:
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
     np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
-    np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
+    np.testing.assert_array_equal(frozen.active_labels(), refrozen.active_labels())
+
+
+def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
+    frozen = m.constraints["c"]
+    assert isinstance(frozen, linopy.constraints.CSRConstraint)
+    csr, _ = frozen.to_matrix(m.variables.label_index)
+    assert csr.shape[1] == m.variables.label_index.n_active_vars
+
+
+def _model_with_frozen_and_mutation(freeze: bool, mutation: str) -> Model:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(2 * b >= 1, name="c1", freeze=freeze)
+    d = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="d")
+    m.add_constraints(d <= 5, name="c2", freeze=freeze)
+    if mutation == "remove":
+        m.remove_variables("a")
+    return m
+
+
+@pytest.mark.parametrize("mutation", ["add", "remove"])
+def test_frozen_matrices_after_variable_mutation(mutation: str) -> None:
+    frozen = _model_with_frozen_and_mutation(True, mutation)
+    mutable = _model_with_frozen_and_mutation(False, mutation)
+    a_frozen, a_mutable = frozen.matrices.A, mutable.matrices.A
+    assert a_frozen is not None and a_mutable is not None
+    np.testing.assert_array_equal(a_frozen.toarray(), a_mutable.toarray())
+    np.testing.assert_array_equal(frozen.matrices.b, mutable.matrices.b)
+    np.testing.assert_array_equal(frozen.matrices.clabels, mutable.matrices.clabels)
+    np.testing.assert_array_equal(frozen.matrices.vlabels, mutable.matrices.vlabels)
+
+
+@pytest.mark.parametrize("freeze", [True, False])
+def test_constraint_removed_with_referenced_variable(freeze: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    a = m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(a + b >= 1, name="c", freeze=freeze)
+    with pytest.warns(UserWarning, match="also removes constraints"):
+        m.remove_variables("a")
+    assert "c" not in m.constraints
 
 
 def test_freeze_mutable_roundtrip_with_masking() -> None:
