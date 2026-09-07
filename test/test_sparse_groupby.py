@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 import tracemalloc
+import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -179,7 +181,6 @@ def test_merge_keeps_absent_cell_absent() -> None:
     [
         (["gen", "snapshot"], {}),
         ("gen", {"use_fallback": True}),
-        (["gen"], {"observed": True}),
     ],
 )
 def test_explicit_sparse_raises_on_unsupported_grouper(
@@ -187,8 +188,170 @@ def test_explicit_sparse_raises_on_unsupported_grouper(
 ) -> None:
     require_v1()
     c = base_model()
-    with pytest.raises(ValueError, match="single-key grouper"):
+    with pytest.raises(ValueError, match="sparse=True supports only"):
         (1.0 * c.gen_p).groupby(grouper).sum(sparse=True, **kwargs)
+
+
+def keyed_model(
+    member_first: bool = True,
+) -> tuple[Model, LinearExpression, xr.DataArray]:
+    """
+    ``(1 + x)`` over ``(s, snapshot)`` with ``period``/``season`` keys on ``s``;
+    two of the six (period, season) combinations never occur.
+    """
+    n = 6
+    s = pd.RangeIndex(n, name="s")
+    snaps = pd.Index(range(2), name="snapshot")
+    m = Model()
+    coords = [s, snaps] if member_first else [snaps, s]
+    x = m.add_variables(coords=coords, name="x")
+    period = xr.DataArray(np.arange(n) // 2, dims="s", coords={"s": s})
+    season = xr.DataArray(list("wswwww"), dims="s", coords={"s": s})
+    expr = (1.0 * x + 1.0).assign_coords(period=period, season=season)
+    keys = pd.MultiIndex.from_arrays([period.values, season.values])
+    rhs = xr.DataArray(
+        np.arange(1.0, 2 * len(keys.unique()) + 1).reshape(-1, 2),
+        coords=[pd.RangeIndex(len(keys.unique()), name="group"), snaps],
+    )
+    return m, expr, rhs
+
+
+@pytest.mark.parametrize("member_first", [True, False])
+@pytest.mark.parametrize("observed", [False, True])
+def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> None:
+    require_v1()
+    _, expr, _ = keyed_model(member_first)
+    keys = ["period", "season"]
+    sparse = expr.groupby(keys).sum(sparse=True, observed=observed)
+    dense = expr.groupby(keys).sum(observed=observed)
+    payload = sparse._payload
+    assert payload is not None
+    if observed:
+        assert set(payload.coords) == {"period", "season"}
+    else:
+        assert np.isnan(payload.const).sum() == 2 * 2
+    assert payload.grid_dims == dense.coord_dims
+    assert_linequal(sparse, dense)
+
+
+@pytest.mark.parametrize("as_namelist", [False, True])
+def test_single_key_sparse_ignores_observed(as_namelist: bool) -> None:
+    require_v1()
+    c = base_model()
+    expr = (c.eff * c.gen_p).assign_coords(bus=("gen", c.gbus.to_numpy()))
+    grouper = ["bus"] if as_namelist else c.gbus
+    sparse = expr.groupby(grouper).sum(sparse=True, observed=True)
+    assert sparse._payload is not None
+    assert_linequal(sparse, expr.groupby(grouper).sum())
+
+
+def test_sparse_keeps_aux_coords_on_surviving_dims() -> None:
+    require_v1()
+    _, expr, _ = keyed_model()
+    expr = expr.assign_coords(tag=("snapshot", list("ab")))
+    for kwargs in ({}, {"observed": True}):
+        sparse = expr.groupby(["period", "season"]).sum(sparse=True, **kwargs)
+        dense = expr.groupby(["period", "season"]).sum(**kwargs)
+        assert set(sparse.coords) == set(dense.coords)
+        assert_linequal(sparse, dense)
+
+
+def test_dataframe_grouper_sparse_stays_compact() -> None:
+    require_v1()
+    _, expr, _ = keyed_model()
+    df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
+    sparse = expr.groupby(df).sum(sparse=True)
+    assert sparse._payload is not None
+    assert sparse._payload.shape == (4, 2)
+    assert_linequal(sparse, expr.groupby(df).sum())
+
+
+def test_namelist_sparse_observed_freezes_compact() -> None:
+    require_v1()
+    m1, e1, rhs = keyed_model()
+    m2, e2, _ = keyed_model()
+    dense = m1.add_constraints(
+        e1.groupby(["period", "season"]).sum(observed=True) == rhs,
+        name="c",
+        freeze=True,
+    )
+    sparse = m2.add_constraints(
+        e2.groupby(["period", "season"]).sum(sparse=True, observed=True) == rhs,
+        name="c",
+        freeze=True,
+    )
+    assert isinstance(sparse, CSRConstraint)
+    assert sparse.ncons == rhs.size
+    assert_conequal(dense, sparse, strict=False)
+
+
+def test_namelist_sparse_grid_absent_cells_inactive() -> None:
+    require_v1()
+    m1, e1, _ = keyed_model()
+    m2, e2, _ = keyed_model()
+    keys = ["period", "season"]
+    dense = m1.add_constraints(e1.groupby(keys).sum() == 0, name="c", freeze=True)
+    sparse = m2.add_constraints(
+        e2.groupby(keys).sum(sparse=True) == 0, name="c", freeze=True
+    )
+    assert isinstance(sparse, CSRConstraint)
+    assert sparse.ncons == 4 * 2
+    assert_conequal(dense, sparse, strict=False)
+    assert np.array_equal(
+        np.sort(dense.active_labels()), np.sort(sparse.active_labels())
+    )
+
+
+def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
+    require_v1()
+    _, expr, _ = keyed_model()
+    keys = ["period", "season"]
+    sparse = expr.groupby(keys).sum(sparse=True, observed=True)
+    dense = expr.groupby(keys).sum(observed=True)
+    tot = sparse + dense
+    assert tot._payload is not None
+    assert set(tot._payload.coords) == {"period", "season"}
+    assert_linequal(tot, 2.0 * dense)
+
+    other = dense.assign_coords(region=("group", list("abcd")))
+    tot = sparse + other
+    assert tot._payload is not None
+    assert set(tot._payload.coords) == {"period", "season", "region"}
+    xr.testing.assert_equal(
+        tot.data.coords.to_dataset(), (dense + other).data.coords.to_dataset()
+    )
+
+    conflicting = dense.assign_coords(season=("group", list("xyzw")))
+    with pytest.raises(ValueError, match="conflicting values"):
+        sparse + conflicting
+
+
+def test_namelist_sparse_grid_warns_and_observed_silences() -> None:
+    require_v1()
+    n = 200
+    s = pd.RangeIndex(n, name="s")
+    m = Model()
+    x = m.add_variables(coords=[s], name="x")
+    expr = (1.0 * x).assign_coords(
+        period=xr.DataArray(np.arange(n), dims="s", coords={"s": s}),
+        season=xr.DataArray(np.arange(n), dims="s", coords={"s": s}),
+    )
+    with pytest.warns(UserWarning, match="dense .* grid"):
+        expr.groupby(["period", "season"]).sum(sparse=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = expr.groupby(["period", "season"]).sum(sparse=True, observed=True)
+    assert res._payload is not None
+    assert res._payload.shape == (n,)
+
+
+def test_nan_multikey_grouper_raises_eagerly() -> None:
+    require_v1()
+    _, expr, _ = keyed_model()
+    period = expr.data["period"]
+    expr = expr.assign_coords(period=period.where(period > 0))
+    with pytest.raises(ValueError, match="NaN values"):
+        expr.groupby(["period", "season"]).sum(sparse=True)
 
 
 def test_freeze_realizes_csr_without_dense_rectangle() -> None:
@@ -446,6 +609,25 @@ def test_rename_stays_csr_and_matches_dense() -> None:
     assert sparse._payload is not None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).rename(bus="node")
     assert sparse.coord_dims == ("node", "snapshot")
+    assert_linequal(sparse, dense)
+
+
+@pytest.mark.parametrize(
+    "op",
+    [lambda e: e.reindex(group=[3, 0, 9]), lambda e: e.rename(group="g")],
+    ids=["reindex", "rename"],
+)
+def test_namelist_sparse_observed_keeps_aux_coords_through_op(
+    op: Callable[[LinearExpression], LinearExpression],
+) -> None:
+    require_v1()
+    _, expr, _ = keyed_model()
+    keys = ["period", "season"]
+    sparse = op(expr.groupby(keys).sum(sparse=True, observed=True))
+    dense = op(expr.groupby(keys).sum(sparse=False, observed=True))
+    assert sparse._payload is not None
+    for name in keys:
+        xr.testing.assert_equal(sparse.coords[name], dense.coords[name])
     assert_linequal(sparse, dense)
 
 

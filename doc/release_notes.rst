@@ -185,6 +185,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 *Compact multi-key grouping*
 
 * ``LinearExpressionGroupby.sum`` gains a pandas-style ``observed`` parameter for grouping by a list of coordinate names: ``expr.groupby(["period", "season"]).sum(observed=True)`` keeps the result stacked over only the observed key combinations (a ``MultiIndex`` ``group`` dimension) instead of unstacking into one dimension per key, which materialises the dense cartesian grid. The default ``observed=False`` mirrors xarray. When the grid would be mostly fill values, a ``UserWarning`` points to ``observed=True``.
+* The CSR-backed sparse groupby-sum (``sum(sparse=True)`` or ``linopy.options["sparse_groupby"]``, v1 semantics) now accepts multi-key groupers: a list of coordinate names or a pandas ``DataFrame``. With ``observed=True`` (always for a ``DataFrame``) the CSR result stays compact over the observed key combinations only, with neither the cartesian grid nor the group-size term padding; with ``observed=False`` it keeps one dimension per key, absent combinations being empty cells (`#757 <https://github.com/PyPSA/linopy/issues/757>`__).
 
 *Other additions*
 
