@@ -75,9 +75,10 @@ def _extract_con_buffers(
 
     Mutable ``Constraint`` objects build fresh arrays in
     ``to_matrix_with_rhs``, so the buffers are exclusively owned.
-    ``CSRConstraint`` returns a freshly gathered ``indices`` array, since its
-    label columns are mapped to dense positions on every call, and its stored
-    ``indptr``/``data`` — the latter share memory with the constraint, every
+    ``CSRConstraint`` returns its stored ``indptr``/``data`` and a weakly
+    cached positional ``indices`` array: as long as a snapshot holds it and
+    neither the constraint nor the variable label index changed, the same
+    array is returned. The buffers share memory with the constraint, every
     mutation path rebinds whole arrays (copy-on-write), and the diff uses
     object identity to skip comparisons on untouched containers.
     """
