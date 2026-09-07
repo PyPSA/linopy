@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pickle
+import weakref
+
 import numpy as np
 import pytest
 
@@ -121,6 +124,24 @@ def test_csr_capture_deterministic(baseline_model: Model) -> None:
         np.testing.assert_array_equal(b1.indptr, b2.indptr)
         np.testing.assert_array_equal(b1.indices, b2.indices)
         np.testing.assert_array_equal(b1.data, b2.data)
+
+
+def test_frozen_positional_indices_freed_without_holder(frozen_model: Model) -> None:
+    con = frozen_model.constraints["c2"]
+    label_index = frozen_model.variables.label_index
+    csr, _ = con.to_matrix(label_index)
+    ref = weakref.ref(csr.indices)
+    del csr
+    assert ref() is None
+    csr, _ = con.to_matrix(label_index)
+    np.testing.assert_array_equal(csr.indices, [0, 1, 2, 3, 4])
+
+
+def test_frozen_model_pickles_after_matrix_assembly(frozen_model: Model) -> None:
+    frozen_model.constraints.to_matrix()
+    restored = pickle.loads(pickle.dumps(frozen_model))
+    csr, _ = restored.constraints["c2"].to_matrix(restored.variables.label_index)
+    np.testing.assert_array_equal(csr.indices, [0, 1, 2, 3, 4])
 
 
 def test_frozen_capture_keeps_buffer_identity(frozen_model: Model) -> None:

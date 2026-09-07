@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import warnings
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
@@ -559,19 +560,24 @@ def _csr_from_label_columns(
     index_dtype = (
         indptr.dtype if n_cols <= np.iinfo(indptr.dtype).max else np.dtype(np.int64)
     )
+    return _positional_csr(
+        data, cols.astype(index_dtype, copy=False), indptr, n_rows, n_cols
+    )
+
+
+def _positional_csr(
+    data: np.ndarray, cols: np.ndarray, indptr: np.ndarray, n_rows: int, n_cols: int
+) -> scipy.sparse.csr_array:
+    """Wrap positional CSR components without copying ``data`` or ``cols``."""
     csr = scipy.sparse.csr_array(
-        (
-            data,
-            cols.astype(index_dtype, copy=False),
-            indptr.astype(index_dtype, copy=False),
-        ),
-        shape=(n_rows, n_cols),
+        (data, cols, indptr.astype(cols.dtype, copy=False)), shape=(n_rows, n_cols)
     )
     csr.data = data
+    csr.indices = cols
     return csr
 
 
-_PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, scipy.sparse.csr_array]
+_PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, "weakref.ref[np.ndarray]"]
 
 
 class CSRConstraint(ConstraintBase):
@@ -723,9 +729,14 @@ class CSRConstraint(ConstraintBase):
     def coord_names(self) -> list[str]:
         return [str(c.name) for c in self._coords]
 
-    def _replace(self, **changes: Any) -> CSRConstraint:
-        """Copy with the given constructor arguments replaced."""
-        kwargs: dict[str, Any] = dict(
+    def __getstate__(self) -> dict[str, Any]:
+        return self._init_kwargs()
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__init__(**state)  # type: ignore[misc]
+
+    def _init_kwargs(self) -> dict[str, Any]:
+        return dict(
             csr=self._csr,
             active_positions=self._active_positions,
             rhs=self._rhs,
@@ -739,6 +750,10 @@ class CSRConstraint(ConstraintBase):
             binval=self._binval,
             scaling=self._scaling,
         )
+
+    def _replace(self, **changes: Any) -> CSRConstraint:
+        """Copy with the given constructor arguments replaced."""
+        kwargs = self._init_kwargs()
         kwargs.update(changes)
         new = CSRConstraint(**kwargs)
         if kwargs["csr"] is self._csr:
@@ -1017,21 +1032,30 @@ class CSRConstraint(ConstraintBase):
         """
         Return the stored CSR with label columns replaced by dense positions.
 
-        ``indptr`` and ``data`` stay the stored arrays. The result is cached
-        on the identity of the stored CSR and of ``label_index.label_to_pos``,
-        which is rebuilt whenever variables are added or removed, so repeated
-        calls on an unchanged model also return the same ``indices`` array.
+        ``indptr`` and ``data`` stay the stored arrays. The positional
+        ``indices`` are cached by weak reference, keyed on the identity of the
+        stored CSR and of ``label_index.label_to_pos``, which is rebuilt
+        whenever variables are added or removed. While a caller such as a
+        ``ModelSnapshot`` holds the array, repeated calls on an unchanged model
+        return the same object; otherwise it is freed and rebuilt on demand.
         """
         csr = self._csr
         label_to_pos = label_index.label_to_pos
         if self._positional_cache is not None:
-            cached_csr, cached_label_to_pos, positional = self._positional_cache
-            if cached_csr is csr and cached_label_to_pos is label_to_pos:
-                return positional
+            cached_csr, cached_label_to_pos, ref = self._positional_cache
+            cols = ref()
+            if (
+                cached_csr is csr
+                and cached_label_to_pos is label_to_pos
+                and cols is not None
+            ):
+                return _positional_csr(
+                    csr.data, cols, csr.indptr, csr.shape[0], label_index.n_active_vars
+                )
         positional = _csr_from_label_columns(
             csr.data, csr.indices, csr.indptr, csr.shape[0], label_index, self._name
         )
-        self._positional_cache = (csr, label_to_pos, positional)
+        self._positional_cache = (csr, label_to_pos, weakref.ref(positional.indices))
         return positional
 
     def to_netcdf_ds(self) -> Dataset:
