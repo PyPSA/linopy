@@ -89,7 +89,7 @@ from linopy.types import (
 
 if TYPE_CHECKING:
     from linopy.model import Model
-    from linopy.sparse_expression import CSRPayload
+    from linopy.sparse_expression import CSRExpression
 
 
 FILL_VALUE = {
@@ -1365,35 +1365,33 @@ class CSRConstraint(ConstraintBase):
         )
 
     @classmethod
-    def from_payload(
-        cls, payload: CSRPayload, sign: str, rhs: DataArray
-    ) -> CSRConstraint:
+    def from_csr(cls, expr: CSRExpression, sign: str, rhs: DataArray) -> CSRConstraint:
         """
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
         The sparse counterpart of :meth:`from_mutable`: instead of converting a
         dense :class:`Constraint`, it realizes a
-        :class:`~linopy.sparse_expression.CSRPayload` directly. The payload's
+        :class:`~linopy.sparse_expression.CSRExpression` directly. The expression's
         label columns are kept as they are, its constant moves to the rhs, and
         rows with a NaN rhs are inactive, as on the dense path. ``rhs`` must
         come from :func:`csr_rhs`.
         """
         sign = maybe_replace_sign(sign)
-        rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
+        rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
         active = np.flatnonzero(~np.isnan(rhs_flat))
         return cls(
-            payload.csr[active],
+            expr.csr[active],
             active,
             rhs_flat[active],
             sign,
-            coords=[payload.indexes[d] for d in payload.grid_dims],
-            model=payload.model,
+            coords=[expr.indexes[d] for d in expr.grid_dims],
+            model=expr.model,
         )
 
 
-def csr_rhs(payload: CSRPayload, rhs: Any) -> DataArray | None:
+def csr_rhs(expr: CSRExpression, rhs: Any) -> DataArray | None:
     """
-    Return ``rhs`` as a DataArray on the payload grid, or None if the sparse
+    Return ``rhs`` as a DataArray on the expression grid, or None if the sparse
     path cannot take it: a non-constant rhs, one that is no DataArray-like, or
     one with helper dims or dims outside the grid falls back to the dense path.
     """
@@ -1403,30 +1401,30 @@ def csr_rhs(payload: CSRPayload, rhs: Any) -> DataArray | None:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
         return None
-    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(payload.grid_dims):
+    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid_dims):
         return None
     return da
 
 
-def _rhs_grid_values(payload: CSRPayload, rhs: DataArray) -> np.ndarray:
+def _rhs_grid_values(expr: CSRExpression, rhs: DataArray) -> np.ndarray:
     """
-    Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
+    Broadcast the rhs onto the expression grid and flatten it, with v1 parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """
     if bool(rhs.isnull().any()):
         check_user_nan()
     for d in rhs.dims:
-        if not rhs.get_index(d).equals(payload.indexes[str(d)]):
+        if not rhs.get_index(d).equals(expr.indexes[str(d)]):
             raise ValueError(
                 f"Coordinate mismatch on shared dimension {d!r} between "
                 "the rhs and the grouped result. Align the rhs with "
                 ".sel(...) / .reindex(...) before combining (§8)."
             )
-    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs.dims}
+    missing = {d: expr.indexes[d] for d in expr.grid_dims if d not in rhs.dims}
     if missing:
         rhs = rhs.expand_dims(missing)
-    return rhs.transpose(*payload.grid_dims).to_numpy().reshape(-1)
+    return rhs.transpose(*expr.grid_dims).to_numpy().reshape(-1)
 
 
 class Constraint(ConstraintBase):
