@@ -99,7 +99,7 @@ def reindexed_balance(c: Case, sparse: bool) -> LinearExpression:
     gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=sparse)
     flow = (1.0 * c.flow.loc[lines]).groupby(c.bus0.loc[lines]).sum(sparse=sparse)
     parts = [gen.reindex(bus=c.load.bus), flow.reindex(bus=c.load.bus)]
-    return linopy.merge(parts, join="outer")
+    return linopy.merge(parts, join="outer", cls=LinearExpression)
 
 
 def test_csr_requires_v1() -> None:
