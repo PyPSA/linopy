@@ -20,7 +20,7 @@ from math_spec import program as ms
 from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.nodes import children, parameters_of
+from linopy.spec.nodes import amounts_of, children, parameters_of
 from linopy.spec.where import evaluate_where
 
 Rows = xr.DataArray | None
@@ -144,10 +144,9 @@ def _coefficient_uses(
     """Each parameter *node* uses as a coefficient, with the rows it has to cover."""
     if isinstance(node, ms.Parameter):
         yield node.name, region
-    elif isinstance(node, ms.Translate) and isinstance(node.offset, str):
-        yield node.offset, None
-    elif isinstance(node, ms.Window) and isinstance(node.width, str):
-        yield node.width, None
+        return
+    for name in amounts_of(node):
+        yield name, None
 
 
 def _under_regions(

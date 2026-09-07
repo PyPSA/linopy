@@ -6,10 +6,9 @@ already. Besides them a spec-built model carries the spec text, the master
 coordinates and the lookups; the program is re-lowered from the text on read,
 so no lowered ``Program`` ever reaches the file.
 
-No netcdf type holds a dtype as written. An engine narrows an int64 to
-int32, hands a bool back as int8 and a string array back as ``<U`` or object,
-so every array here carries the dtype it had in memory and is cast back to it
-on read. That is enough for a parameter, but not for a partial lookup, which
+No netcdf type holds a dtype as written, so every array carries the dtype it
+had in memory (:func:`linopy.io.record_dtypes`) and is cast back to it on
+read. That is enough for a parameter, but not for a partial lookup, which
 holds NaN in an array of labels: a hole in a string array comes back as an
 empty string, indistinguishable from a label. So a lookup, and any array of
 objects, is written instead as integer codes into its own table of
@@ -24,23 +23,27 @@ dtype per dimension however the engine returned it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from linopy.io import SPEC_ATTR
+from linopy.io import (
+    DTYPE_ATTR,
+    SPEC_ATTR,
+    get_prefix,
+    restamp_coords,
+    with_prefix,
+)
 from linopy.model import Model
 from linopy.spec.accessor import ModelSpec, restore
 
-PREFIX = "spec-"
+PREFIX = "spec"
 COORD = "coords__"
 CODES = "codes__"
 CATEGORIES = "cats__"
 CATEGORY_DIM = "category__"
-DTYPE = "_linopy_dtype"
 
 HOLES: dict[str, Any] = {"f": np.nan, "O": np.nan, "M": np.datetime64("NaT")}
 
@@ -64,12 +67,10 @@ def encode(spec: ModelSpec) -> tuple[xr.Dataset, xr.Dataset]:
     for name in _coded(spec):
         arrays.update(_encode(name, parameters[name]))
         parameters = parameters.drop_vars(name)
-    typed = {
-        str(name): arr.assign_attrs({DTYPE: str(arr.dtype)})
-        for name, arr in parameters.items()
-    }
-    written = _prefixed(xr.Dataset(arrays)).assign_attrs({SPEC_ATTR: spec.text})
-    return parameters.assign(typed), written
+    written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
+        {SPEC_ATTR: spec.text}
+    )
+    return parameters, written
 
 
 def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
@@ -81,7 +82,7 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     decoded arrays they are the dataset :func:`linopy.spec.accessor.attach`
     left on the model when it was built.
     """
-    sub = _unprefixed(ds)
+    sub = get_prefix(ds, PREFIX)
     coords = {
         _stripped(name, COORD): _index(sub[name])
         for name in sub.data_vars
@@ -92,45 +93,9 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
         for name in sub.data_vars
         if str(name).startswith(CODES)
     }
-    typed = {str(name): _cast(arr) for name, arr in model.parameters.items()}
-    model.parameters = (
-        model.parameters.assign(typed).assign_coords(coords).assign(coded)
-    )
-    _restamp(model, coords)
+    model.parameters = model.parameters.assign_coords(coords).assign(coded)
+    restamp_coords(model, coords)
     return restore(model, text)
-
-
-def _restamp(model: Model, coords: Mapping[str, pd.Index]) -> None:
-    """Put the master coordinates on every container that carries a dimension."""
-    from linopy.constraints import Constraint, CSRConstraint
-    from linopy.csr import Grid
-
-    for _, variable in model.variables.items():
-        variable._data = _stamped(variable.data, coords)
-    for _, expression in model.expressions.items():
-        expression._data = _stamped(expression.data, coords)
-    model.objective.expression._data = _stamped(model.objective.expression.data, coords)
-    for _, constraint in model.constraints.items():
-        if isinstance(constraint, Constraint):
-            constraint._data = _stamped(constraint.data, coords)
-        elif isinstance(constraint, CSRConstraint):
-            constraint._grid = Grid(
-                {
-                    d: coords.get(d, index)
-                    for d, index in constraint._grid.indexes.items()
-                }
-            )
-
-
-def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
-    """*data* with the master coordinates in place of the ones a dtype narrowed."""
-    indexes = data.indexes
-    stale = {
-        dim: index
-        for dim, index in coords.items()
-        if dim in indexes and indexes[dim].dtype != index.dtype
-    }
-    return data.assign_coords(stale) if stale else data
 
 
 def _coded(spec: ModelSpec) -> list[str]:
@@ -159,7 +124,7 @@ def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
 
 def _decode(sub: xr.Dataset, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
     codes = sub[CODES + name]
-    dtype = np.dtype(codes.attrs[DTYPE])
+    dtype = np.dtype(codes.attrs[DTYPE_ATTR])
     categories = _categories(sub, name, dtype)
     positions = codes.to_numpy().astype(int)
     mapped = positions >= 0
@@ -187,24 +152,12 @@ def _categories(sub: xr.Dataset, name: str, dtype: np.dtype) -> np.ndarray:
     return np.empty(0, dtype=dtype)
 
 
-def _cast(arr: xr.DataArray) -> xr.DataArray:
-    """A parameter at the dtype it had in memory, whatever the engine returned."""
-    return arr.astype(np.dtype(arr.attrs.pop(DTYPE)))
-
-
 def _array(
     values: np.ndarray, dims: tuple[Any, ...], dtype: str | None = None
 ) -> xr.DataArray:
-    return xr.DataArray(values, dims=dims, attrs={DTYPE: dtype or str(values.dtype)})
-
-
-def _prefixed(ds: xr.Dataset) -> xr.Dataset:
-    return ds.rename({k: PREFIX + str(k) for k in (*ds.dims, *ds.data_vars)})
-
-
-def _unprefixed(ds: xr.Dataset) -> xr.Dataset:
-    sub = ds[[k for k in ds.data_vars if str(k).startswith(PREFIX)]]
-    return sub.rename({k: str(k)[len(PREFIX) :] for k in (*sub.dims, *sub.data_vars)})
+    return xr.DataArray(
+        values, dims=dims, attrs={DTYPE_ATTR: dtype or str(values.dtype)}
+    )
 
 
 def _stripped(name: Any, prefix: str) -> str:
@@ -213,7 +166,7 @@ def _stripped(name: Any, prefix: str) -> str:
 
 def _values(arr: xr.DataArray) -> np.ndarray:
     """The array as it was in memory, undoing what the netcdf type could not hold."""
-    return arr.to_numpy().astype(np.dtype(arr.attrs[DTYPE]))
+    return arr.to_numpy().astype(np.dtype(arr.attrs[DTYPE_ATTR]))
 
 
 def _index(arr: xr.DataArray) -> pd.Index:

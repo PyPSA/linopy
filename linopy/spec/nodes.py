@@ -21,6 +21,14 @@ def walk(*nodes: ms.ExpressionNode) -> Iterator[ms.ExpressionNode]:
         yield from walk(*children(node))
 
 
+def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
+    """The parameters *node* names as an amount: a translation's offset or a window's width."""
+    if isinstance(node, ms.Translate) and isinstance(node.offset, str):
+        yield node.offset
+    elif isinstance(node, ms.Window) and isinstance(node.width, str):
+        yield node.width
+
+
 def parameters_of(*nodes: ms.ExpressionNode) -> frozenset[str]:
     """Every parameter named anywhere under *nodes*."""
     return frozenset(n.name for n in walk(*nodes) if isinstance(n, ms.Parameter))

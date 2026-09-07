@@ -120,6 +120,25 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+@pytest.mark.parametrize("engine", ["netcdf4", "scipy"])
+def test_model_to_netcdf_keeps_parameter_dtypes(
+    model: Model, tmp_path: Path, engine: str
+) -> None:
+    if engine == "netcdf4" and not HAS_NETCDF4:
+        pytest.skip("needs the netCDF4 backend")
+    model.parameters["count"] = xr.DataArray(
+        np.array([1, 2, 3, 4], dtype=np.int64), dims=["x"]
+    )
+    model.parameters["flag"] = xr.DataArray(np.array([True, False]), dims=["y"])
+    fn = tmp_path / f"dtypes-{engine}.nc"
+    model.to_netcdf(fn, engine=engine)
+    p = read_netcdf(fn)
+
+    for name in ("count", "flag"):
+        assert p.parameters[name].dtype == model.parameters[name].dtype
+        assert p.parameters[name].equals(model.parameters[name])
+
+
 @pytest.fixture
 def unsorted_model() -> Model:
     m = Model()

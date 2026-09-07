@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import assert_never
 
 import numpy as np
@@ -13,7 +13,7 @@ from math_spec import program as ms
 from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.operators import _grouped
+from linopy.spec.groups import grouped
 
 _PREDICATE_OPS: dict[str, Callable[..., xr.DataArray]] = {
     "==": operator.eq,
@@ -37,13 +37,6 @@ def as_linopy_mask(mask: xr.DataArray) -> xr.DataArray | None:
     if mask.ndim == 0 and bool(mask):
         return None
     return mask
-
-
-def bound_lookup(
-    name: str, over: str, lookups: Mapping[str, Mapping[str, xr.DataArray]]
-) -> xr.DataArray:
-    """The lookup *name* as an array over *over*, NaN where a label is unmapped."""
-    return lookups[over][name]
 
 
 def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
@@ -75,18 +68,18 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.DimensionPositionNode):
         return _position(node, ctx)
     if isinstance(node, ms.LookupComparisonNode):
-        arr = bound_lookup(node.name, node.over, ctx.lookups)
+        arr = ctx.lookup(node.name, node.over)
         compared = _PREDICATE_OPS[node.op](arr, node.value) & arr.notnull()
         return compared.fillna(False).astype(bool)
     if isinstance(node, ms.LookupPairComparisonNode):
-        left = bound_lookup(node.name, node.over, ctx.lookups)
-        right = bound_lookup(node.other, node.over, ctx.lookups)
+        left = ctx.lookup(node.name, node.over)
+        right = ctx.lookup(node.other, node.over)
         compared = (
             _PREDICATE_OPS[node.op](left, right) & left.notnull() & right.notnull()
         )
         return compared.fillna(False).astype(bool)
     if isinstance(node, ms.LookupDefinedNode):
-        return bound_lookup(node.name, node.over, ctx.lookups).notnull()
+        return ctx.lookup(node.name, node.over).notnull()
     if isinstance(node, ms.NotNode):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.AndNode):
@@ -108,7 +101,7 @@ def _defined(arr: xr.DataArray, dtype: str) -> xr.DataArray:
 def _position(node: ms.DimensionPositionNode, ctx: Context) -> xr.DataArray:
     labels = ctx.coords[node.name]
     if node.by is not None:
-        groups = bound_lookup(node.by, node.name, ctx.lookups)
+        groups = ctx.lookup(node.by, node.name)
         arr = _group_offsets(node, groups, np.asarray(labels))
         compared = _PREDICATE_OPS[node.op](arr, 0) & arr.notnull()
         return compared.fillna(False).astype(bool)
@@ -129,7 +122,7 @@ def _group_offsets(
     node: ms.DimensionPositionNode, groups: xr.DataArray, labels: np.ndarray
 ) -> xr.DataArray:
     """Each coordinate's distance from the boundary of its own group; NaN where it is in no group."""
-    partition = _grouped(node.name, labels, groups)
+    partition = grouped(node.name, labels, groups)
     needed = node.position + 1 if node.position >= 0 else -node.position
     short = sorted(
         str(g) for g, n in zip(partition.names, partition.counts) if n < needed

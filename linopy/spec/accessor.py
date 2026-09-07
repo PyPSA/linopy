@@ -33,8 +33,9 @@ from linopy.semantics import is_v1
 from linopy.spec import terms
 from linopy.spec.binder import Bound, Retain, bind
 from linopy.spec.builder import build, evaluate_named, fold
-from linopy.spec.context import Context, Parameters, Resolve
+from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
+from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 

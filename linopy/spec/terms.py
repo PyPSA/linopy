@@ -24,11 +24,6 @@ def present(variable: Variable) -> xr.DataArray:
     return variable.labels != -1
 
 
-def unmapped(key: object) -> bool:
-    """Whether a lookup left this member in no group: ``None``, or the NaN that never equals itself."""
-    return key is None or key != key
-
-
 def variable_term(variable: Variable, absence: str) -> Term:
     """The variable as it enters a built expression, carrying its declared ``absence:``."""
     return variable.fillna(0) if absence == "zero" else variable
@@ -42,25 +37,3 @@ def solution(variable: Variable, absence: str) -> xr.DataArray:
 def coefficient(parameter: xr.DataArray) -> xr.DataArray:
     """A parameter in a coefficient position, its uncovered slots at zero."""
     return parameter.fillna(0.0)
-
-
-def filled(expression: Array, fill: float) -> Array:
-    """*expression* with every absence in it standing as *fill*."""
-    if isinstance(expression, Variable):
-        expression = expression.to_linexpr()
-    return expression.fillna(fill)
-
-
-def vacated(
-    shifted: Array, operand: Array, over: str, vacated: xr.DataArray, fill: float
-) -> Array:
-    """
-    *shifted*, with the positions the shift vacated filled, and only those.
-
-    The fill lands where the shift vacated and the operand carries the
-    coordinate; every other slot keeps the absence it arrived with, so no row
-    is invented at a coordinate the operand never had.
-    """
-    carried = (~operand.isnull()).any(over)
-    keep = carried & (~shifted.isnull() | vacated)
-    return filled(shifted, fill).where(keep)

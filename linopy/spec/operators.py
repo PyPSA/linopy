@@ -20,10 +20,33 @@ import pandas as pd
 import xarray as xr
 
 from linopy.expressions import LinearExpression
-from linopy.spec import terms
+from linopy.spec.groups import Groups, grouped
 from linopy.spec.terms import Array, Term
+from linopy.variables import Variable
 
 Amount = int | xr.DataArray
+
+
+def filled(expression: Array, fill: float) -> Array:
+    """*expression* with every absence in it standing as *fill*."""
+    if isinstance(expression, Variable):
+        expression = expression.to_linexpr()
+    return expression.fillna(fill)
+
+
+def vacated(
+    shifted: Array, operand: Array, over: str, vacated: xr.DataArray, fill: float
+) -> Array:
+    """
+    *shifted*, with the positions the shift vacated filled, and only those.
+
+    The fill lands where the shift vacated and the operand carries the
+    coordinate; every other slot keeps the absence it arrived with, so no row
+    is invented at a coordinate the operand never had.
+    """
+    carried = (~operand.isnull()).any(over)
+    keep = carried & (~shifted.isnull() | vacated)
+    return filled(shifted, fill).where(keep)
 
 
 def sum_over(array: Array, over: str) -> Array:
@@ -125,8 +148,8 @@ def shift(
     """
     edge = _Edge(wrap, fill)
     if by is not None:
-        groups = _grouped(over, np.asarray(array.indexes[over]), by)
-        return _gather_in_groups(array, over, _per_group(offset, by), groups, edge)
+        partition = grouped(over, np.asarray(array.indexes[over]), by)
+        return _gather_in_groups(array, over, _per_group(offset, by), partition, edge)
     if isinstance(offset, xr.DataArray) and offset.ndim:
         return _gather_by_offset(array, over, offset, edge)
     amount: dict[Hashable, int] = {over: int(offset)}
@@ -139,9 +162,7 @@ def shift(
     shifted = array.shift(amount)
     if fill is None:
         return shifted
-    return terms.vacated(
-        shifted, array, over, _off_the_axis(array, over, amount[over]), fill
-    )
+    return vacated(shifted, array, over, _off_the_axis(array, over, amount[over]), fill)
 
 
 def sum_back(
@@ -163,16 +184,18 @@ def sum_back(
     asked = _widest(within)
     widest = max(1, min(asked, int(array.sizes[over])))
     probe = _Edge(wrap=wrap, fill=None)
-    groups = None if by is None else _grouped(over, np.asarray(array.indexes[over]), by)
+    partition = (
+        None if by is None else grouped(over, np.asarray(array.indexes[over]), by)
+    )
     lagged_terms: list[Array] = []
     reached: list[xr.DataArray] = []
     for lag in range(widest):
         lagged = (
             _gather_by_offset(array, over, lag, probe)
-            if groups is None
-            else _gather_in_groups(array, over, lag, groups, probe)
+            if partition is None
+            else _gather_in_groups(array, over, lag, partition, probe)
         )
-        live, term = ~lagged.isnull(), terms.filled(lagged, 0.0)
+        live, term = ~lagged.isnull(), filled(lagged, 0.0)
         if isinstance(within, xr.DataArray):
             live, term = live & (within > lag), term * (within > lag).astype(float)
         lagged_terms.append(term)
@@ -230,7 +253,7 @@ def _gather_by_offset(array: Array, over: str, offset: Amount, edge: _Edge) -> A
     moved = gathered(source.clip(0, card - 1)).where(inside)
     if edge.fill is None:
         return moved
-    return terms.vacated(moved, array, over, ~inside, edge.fill)
+    return vacated(moved, array, over, ~inside, edge.fill)
 
 
 def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
@@ -241,63 +264,8 @@ def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
     return at(offset, (groups,), into=(str(target),)).drop_vars(str(target))
 
 
-@dataclass(frozen=True)
-class _Groups:
-    labels: np.ndarray
-    grouped: xr.DataArray
-    belongs: xr.DataArray
-    within: xr.DataArray
-    size: xr.DataArray
-    roster: np.ndarray
-    names: tuple[object, ...]
-    counts: tuple[int, ...]
-
-
-def _grouped(over: str, labels: np.ndarray, groups: xr.DataArray) -> _Groups:
-    """
-    How the lookup *groups* partitions the axis *over*.
-
-    A coordinate the lookup sends nowhere belongs to no group: its ``within``
-    is 0, its ``size`` 1 and its ``grouped`` False.
-    """
-    keys = np.asarray(groups.sel({over: labels}).values, dtype=object)
-    peers: dict[object, list[int]] = {}
-    within = np.zeros(len(labels), dtype=int)
-    grouped = np.zeros(len(labels), dtype=bool)
-    for k, key in enumerate(keys):
-        if terms.unmapped(key):
-            continue
-        grouped[k] = True
-        beside = peers.setdefault(key, [])
-        within[k] = len(beside)
-        beside.append(k)
-    order = {key: g for g, key in enumerate(peers)}
-    widest = max((len(beside) for beside in peers.values()), default=1)
-    roster = np.zeros((max(len(peers), 1), widest), dtype=int)
-    for key, beside in peers.items():
-        roster[order[key], : len(beside)] = beside
-    belongs = np.array([order.get(key, 0) for key in keys], dtype=int)
-    span = np.array(
-        [len(peers[key]) if held else 1 for key, held in zip(keys, grouped)], dtype=int
-    )
-
-    def on_axis(values: np.ndarray) -> xr.DataArray:
-        return xr.DataArray(values, coords={over: labels}, dims=[over])
-
-    return _Groups(
-        labels,
-        on_axis(grouped),
-        on_axis(belongs),
-        on_axis(within),
-        on_axis(span),
-        roster,
-        tuple(peers),
-        tuple(len(beside) for beside in peers.values()),
-    )
-
-
 def _gather_in_groups(
-    array: Array, over: str, offset: Amount, groups: _Groups, edge: _Edge
+    array: Array, over: str, offset: Amount, groups: Groups, edge: _Edge
 ) -> Array:
     """
     Translate *array* inside each group rather than along the axis.
@@ -322,7 +290,7 @@ def _gather_in_groups(
     )
     if edge.fill is None:
         return gathered
-    return terms.vacated(gathered, array, over, groups.grouped & ~inside, edge.fill)
+    return vacated(gathered, array, over, groups.grouped & ~inside, edge.fill)
 
 
 def _off_the_axis(array: Array, over: str, offset: int) -> xr.DataArray:

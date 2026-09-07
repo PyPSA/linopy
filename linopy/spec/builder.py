@@ -22,7 +22,7 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec import curves, operators, terms
 from linopy.spec.binder import Bound
-from linopy.spec.context import Context, Parameters
+from linopy.spec.context import Context
 from linopy.spec.coverage import (
     check_bounds_cover,
     check_coefficients_cover,
@@ -30,8 +30,9 @@ from linopy.spec.coverage import (
     check_divisors_cover,
 )
 from linopy.spec.errors import SpecDataError
+from linopy.spec.parameters import Parameters
 from linopy.spec.terms import Array, Term, Value
-from linopy.spec.where import as_linopy_mask, bound_lookup, evaluate_where
+from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _SIGN = {"==": "=", "<=": "<=", ">=": ">="}
@@ -323,11 +324,11 @@ def _partition(node: ms.Translate | ms.Window, ctx: Context) -> xr.DataArray | N
     """The lookup a windowed operator stays inside, named for the dimension its values are labels of."""
     if node.partition is None:
         return None
-    array = bound_lookup(node.partition, node.dimension, ctx.lookups)
+    array = ctx.lookup(node.partition, node.dimension)
     return array.rename(ctx.program.dimension(node.dimension).targets[node.partition])
 
 
 def _lookup_arrays(
     over: str, names: tuple[str, ...], ctx: Context
 ) -> tuple[xr.DataArray, ...]:
-    return tuple(bound_lookup(name, over, ctx.lookups) for name in names)
+    return tuple(ctx.lookup(name, over) for name in names)

@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+DTYPE_ATTR = "_linopy_dtype"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 SPEC_ATTR = "_linopy_spec"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
@@ -1020,6 +1021,124 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
+def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    """*ds* with every dim, coordinate, variable and attribute of it namespaced under *prefix*."""
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+    ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+
+    # Flatten multiindexes
+    for dim in ds.dims:
+        if isinstance(ds[dim].to_index(), pd.MultiIndex):
+            prefix_len = len(prefix) + 1  # leave original index level name
+            names = [n[prefix_len:] for n in ds[dim].to_index().names]
+            ds = ds.reset_index(dim)
+            # scipy netCDF3 backend cannot write unicode-array attrs.
+            ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
+
+    return ds
+
+
+def has_prefix(k: str, prefix: str) -> bool:
+    return k.rsplit("-", 1)[0] == prefix
+
+
+def remove_prefix(k: str, prefix: str) -> str:
+    return k[len(prefix) + 1 :]
+
+
+def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+    # str = JSON (new); iterable = legacy list from older linopy.
+    if isinstance(value, str):
+        return [str(n) for n in json.loads(value)]
+    return [str(n) for n in value]
+
+
+def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    """The part of *ds* :func:`with_prefix` wrote under *prefix*, its names given back."""
+    ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
+    multiindexes = []
+    for dim in ds.dims:
+        attr = ds.attrs.get(f"{dim}_multiindex")
+        if attr is None:
+            continue
+        for name in parse_multiindex_attr(attr):
+            multiindexes.append(prefix + "-" + name)
+    ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
+    ds.attrs = {
+        remove_prefix(k, prefix): v
+        for k, v in ds.attrs.items()
+        if has_prefix(k, prefix)
+    }
+
+    for dim in ds.dims:
+        if f"{dim}_multiindex" in ds.attrs:
+            names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
+            ds = ds.set_index({dim: names})  # type: ignore[dict-item]
+
+    return ds
+
+
+def record_dtypes(ds: xr.Dataset) -> xr.Dataset:
+    """
+    *ds* with each array's in-memory dtype written as an attribute.
+
+    No netcdf type holds a dtype as written: an engine narrows an int64 to
+    int32 and hands a bool back as int8, so the dtype travels beside the
+    values and :func:`restore_dtypes` puts it back.
+    """
+    typed = {
+        str(name): arr.assign_attrs({DTYPE_ATTR: str(arr.dtype)})
+        for name, arr in ds.items()
+    }
+    return ds.assign(typed)
+
+
+def restore_dtypes(ds: xr.Dataset) -> xr.Dataset:
+    """*ds* with each array back at the dtype :func:`record_dtypes` recorded; one written without is left as it is."""
+    cast = {
+        str(name): arr.astype(np.dtype(arr.attrs.pop(DTYPE_ATTR)))
+        for name, arr in ds.items()
+        if DTYPE_ATTR in arr.attrs
+    }
+    return ds.assign(cast)
+
+
+def restamp_coords(m: Model, coords: Mapping[str, pd.Index]) -> None:
+    """Put *coords* on every container of *m* that carries one of those dimensions."""
+    from linopy.constraints import Constraint, CSRConstraint
+    from linopy.csr import Grid
+
+    for _, variable in m.variables.items():
+        variable._data = _stamped(variable.data, coords)
+    for _, expression in m.expressions.items():
+        expression._data = _stamped(expression.data, coords)
+    m.objective.expression._data = _stamped(m.objective.expression.data, coords)
+    for _, constraint in m.constraints.items():
+        if isinstance(constraint, Constraint):
+            constraint._data = _stamped(constraint.data, coords)
+        elif isinstance(constraint, CSRConstraint):
+            constraint._grid = Grid(
+                {
+                    d: coords.get(d, index)
+                    for d, index in constraint._grid.indexes.items()
+                }
+            )
+
+
+def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
+    """*data* with *coords* in place of the ones a dtype narrowed."""
+    indexes = data.indexes
+    stale = {
+        dim: index
+        for dim, index in coords.items()
+        if dim in indexes and indexes[dim].dtype != index.dtype
+    }
+    return data.assign_coords(stale) if stale else data
+
+
 def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     """
     Write out the model to a netcdf file.
@@ -1067,22 +1186,6 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
             stacklevel=2,
         )
 
-    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
-        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-
-        # Flatten multiindexes
-        for dim in ds.dims:
-            if isinstance(ds[dim].to_index(), pd.MultiIndex):
-                prefix_len = len(prefix) + 1  # leave original index level name
-                names = [n[prefix_len:] for n in ds[dim].to_index().names]
-                ds = ds.reset_index(dim)
-                # scipy netCDF3 backend cannot write unicode-array attrs.
-                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
-
-        return ds
-
     vars = [
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
@@ -1113,7 +1216,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
 
         parameters, spec_ds = encode(m._spec)
         specs = [spec_ds]
-    params = [with_prefix(parameters, "parameters")]
+    params = [with_prefix(record_dtypes(parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(
@@ -1191,43 +1294,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
 
-    def has_prefix(k: str, prefix: str) -> bool:
-        return k.rsplit("-", 1)[0] == prefix
-
-    def remove_prefix(k: str, prefix: str) -> str:
-        return k[len(prefix) + 1 :]
-
-    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
-        # str = JSON (new); iterable = legacy list from older linopy.
-        if isinstance(value, str):
-            return [str(n) for n in json.loads(value)]
-        return [str(n) for n in value]
-
-    def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
-        ds.attrs = {
-            remove_prefix(k, prefix): v
-            for k, v in ds.attrs.items()
-            if has_prefix(k, prefix)
-        }
-
-        for dim in ds.dims:
-            if f"{dim}_multiindex" in ds.attrs:
-                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
-        return ds
-
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
         order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
@@ -1293,7 +1359,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     )
     m.objective._value = objective.attrs.pop("value", None)
 
-    m.parameters = get_prefix(ds, "parameters")
+    m.parameters = restore_dtypes(get_prefix(ds, "parameters"))
 
     if SPEC_ATTR in ds.attrs:
         from linopy.spec.netcdf import decode
