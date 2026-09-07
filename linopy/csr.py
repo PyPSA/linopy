@@ -12,15 +12,17 @@ Anything without a sparse branch expands through ``.data`` to the
 mathematically identical dense rectangle in canonical term layout — the reason
 the feature is v1-gated, where term layout is non-contractual.
 
-This module documents the CSR structure only: it works on plain datasets and
-knows nothing about the dense types. The bridges live at the dense call sites,
-in :class:`~linopy.expressions.LinearExpression` and
+This module documents the CSR structure only, working on plain datasets. The
+one bridge back to a dense type is :meth:`CSRLinearExpression.to_dense`, which
+wraps the expanded dataset in a :class:`~linopy.expressions.LinearExpression`.
+The reverse bridges live at the dense call sites, in
+:class:`~linopy.expressions.LinearExpression` and
 :meth:`linopy.constraints.CSRConstraint.from_csr`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +35,7 @@ from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.semantics import absorb_absence, enforce_aux_conflict
 
 if TYPE_CHECKING:
+    from linopy.expressions import LinearExpression
     from linopy.model import Model
 
 
@@ -85,6 +88,11 @@ class Grid:
             for i, d in enumerate(self.dims)
         }
 
+    @property
+    def is_unique(self) -> bool:
+        """Whether every dimension's labels are unique."""
+        return all(i.is_unique for i in self.indexes.values())
+
     def indexer(self, other: Grid) -> tuple[np.ndarray, np.ndarray]:
         """
         Map ``other``'s cells onto this grid: the flat target row of each
@@ -106,6 +114,35 @@ class Grid:
                 for d, i in self.indexes.items()
             }
         )
+
+    def reordered(self, dims: Iterable[str]) -> Grid:
+        """Select and order the given dimensions; labels unchanged."""
+        return Grid({d: self.indexes[d] for d in dims})
+
+    def with_indexes(self, indexers: Mapping[Hashable, Any]) -> Grid:
+        """Replace the labels of the named dimensions; the rest unchanged."""
+        return Grid(
+            {
+                d: pd.Index(indexers[d], name=d) if d in indexers else i
+                for d, i in self.indexes.items()
+            }
+        )
+
+    def combined(self, others: Iterable[Grid], how: str) -> Grid:
+        """
+        Join with ``others`` along shared dimensions: per dimension the union
+        (``how="outer"``) or intersection (``how="inner"``) of labels, kept in
+        this grid's dimension order.
+        """
+        combine = pd.Index.union if how == "outer" else pd.Index.intersection
+        others = list(others)
+        indexes = {}
+        for d in self.dims:
+            index = self.indexes[d]
+            for other in others:
+                index = combine(index, other.indexes[d])
+            indexes[d] = pd.Index(index, name=d)
+        return Grid(indexes)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Grid):
@@ -359,12 +396,15 @@ class CSRLinearExpression:
             self, csr=scipy.sparse.csr_array(coo), const=const, coords=coords
         )
 
-    def to_dense(self) -> Dataset:
+    def to_dense(self) -> LinearExpression:
         """
-        Expand to the dense rectangle in canonical form: terms label-ordered,
+        Expand to the dense equivalent in canonical form: terms label-ordered,
         duplicates summed, padded to the widest cell with the usual fill.
         Absent cells (NaN const) carry no terms, per the v1 dead-term invariant.
+        The expanded dataset is wrapped in a :class:`LinearExpression`.
         """
+        from linopy.expressions import LinearExpression
+
         csr = self.csr.copy()
         csr.sort_indices()
         nterm = self.nterm
@@ -382,7 +422,7 @@ class CSRLinearExpression:
             },
             coords=self.grid.indexes | self.coords,
         )
-        return absorb_absence(ds)
+        return LinearExpression(absorb_absence(ds), self.model)
 
 
 def csr_nterm(csr: scipy.sparse.csr_array) -> int:

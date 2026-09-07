@@ -106,7 +106,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRLinearExpression, Grid, _aux_coords
+from linopy.csr import CSRLinearExpression, _aux_coords
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -2340,7 +2340,7 @@ class LinearExpression(BaseExpression):
     @property
     def data(self) -> Dataset:
         if self._data is None and self._csr is not None:
-            self._data = LinearExpression(self._csr.to_dense(), self._model)._data
+            self._data = self._csr.to_dense()._data
             self._csr = None
         return self._data
 
@@ -2586,12 +2586,7 @@ class LinearExpression(BaseExpression):
             and copy
             and fill_value is self._fill_value
         ):
-            grid = Grid(
-                {
-                    d: pd.Index(indexers.get(d, i), name=d)
-                    for d, i in csr.grid.indexes.items()
-                }
-            )
+            grid = csr.grid.with_indexes(indexers)
             return type(self)._from_csr(csr.reindexed(grid), self._model)
         return super().reindex(
             indexers,
@@ -3229,26 +3224,19 @@ def _aligned(
     differing grids, ``override`` on differing shapes, any join on
     non-unique labels.
     """
-    template = csrs[0]
-    dims = template.grid.dims
-    if any(not p.grid.indexes[d].is_unique for p in csrs for d in dims):
+    template = csrs[0].grid
+    dims = template.dims
+    if any(not p.grid.is_unique for p in csrs):
         return None
     if join == "override":
-        if any(p.grid.dims != dims or p.shape != template.shape for p in csrs):
+        if any(p.grid.dims != dims or p.grid.shape != template.shape for p in csrs):
             return None
-        return [replace(p, grid=template.grid) for p in csrs]
+        return [replace(p, grid=template) for p in csrs]
     if join in ("left", "right"):
-        source = template if join == "left" else csrs[-1]
-        grid = Grid({d: source.grid.indexes[d] for d in dims})
+        source = csrs[0] if join == "left" else csrs[-1]
+        grid = source.grid.reordered(dims)
     elif join in ("outer", "inner"):
-        combine = pd.Index.union if join == "outer" else pd.Index.intersection
-        indexes = {}
-        for d in dims:
-            index = template.grid.indexes[d]
-            for p in csrs[1:]:
-                index = combine(index, p.grid.indexes[d])
-            indexes[d] = pd.Index(index, name=d)
-        grid = Grid(indexes)
+        grid = template.combined([p.grid for p in csrs[1:]], join)
     else:
         return None
     return [p.reindexed(grid, fill) for p in csrs]
@@ -3264,11 +3252,12 @@ def _try_csr_merge(
     """
     Sparse branch of :func:`merge`: combine plain LinearExpressions over one
     set of grid dimensions (CSR-backed or dense-convertible) as sparse matrix
-    addition. Grids that differ in their labels are aligned row-wise onto the
-    joined grid, the cells the join creates carrying the fill of the dense
-    path (zero, or NaN for ``fill_value=ABSENT``); auxiliary coordinates
-    across differing grids are left to the dense path. Returns None to fall
-    through to the dense path.
+    addition. Grids that share dims in a different order are transposed onto
+    the template order first. Grids that differ in their labels are aligned
+    row-wise onto the joined grid, the cells the join creates carrying the
+    fill of the dense path (zero, or NaN for ``fill_value=ABSENT``); auxiliary
+    coordinates across differing grids are left to the dense path. Returns
+    None to fall through to the dense path.
     """
     if dim != TERM_DIM or kwargs:
         return None
@@ -3287,6 +3276,11 @@ def _try_csr_merge(
 
     csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
     template = csrs[0]
+    order = template.grid.dims
+    csrs = [
+        p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
+        for p in csrs
+    ]
     if not all(template.same_grid(p) for p in csrs[1:]):
         if any(p.coords for p in csrs):
             return None

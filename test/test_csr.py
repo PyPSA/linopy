@@ -668,6 +668,22 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(
     assert_terms_equal(res, linopy.merge(dense, join=join))
 
 
+def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
+    """Same labels in a transposed dim order stay sparse under the default join."""
+    require_v1()
+    c = base_model()
+    a = (1.0 * c.flow).groupby(c.bus0).sum(sparse=True)
+    b = (1.0 * c.flow_t).groupby(c.bus0).sum(sparse=True)
+    assert a.coord_dims == b.coord_dims[::-1] != b.coord_dims
+    res = linopy.merge([a, b])
+    assert res._csr is not None
+    dense = [
+        (1.0 * c.flow).groupby(c.bus0).sum(),
+        (1.0 * c.flow_t).groupby(c.bus0).sum(),
+    ]
+    assert_terms_equal(res, linopy.merge(dense))
+
+
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None:
     require_v1()
