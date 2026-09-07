@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
 import linopy
 from linopy import LinearExpression, Model, Variable
@@ -471,7 +472,9 @@ def assert_terms_equal(a: LinearExpression, b: LinearExpression) -> None:
 
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 @pytest.mark.parametrize("order", ["gen-flow", "flow-gen"])
-def test_cross_grid_merge_stays_csr_and_matches_dense(join: str, order: str) -> None:
+def test_cross_grid_merge_stays_csr_and_matches_dense(
+    join: JoinOptions, order: str
+) -> None:
     require_v1()
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
@@ -484,7 +487,7 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(join: str, order: str) -> 
 
 
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
-def test_three_operand_cross_grid_merge_matches_dense(join: str) -> None:
+def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None:
     require_v1()
     c = base_model()
     third_lines = ("line3", "line4")
