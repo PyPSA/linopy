@@ -120,7 +120,7 @@ def test_csr_requires_v1() -> None:
         res = (c.eff * c.gen_p).groupby(c.gbus).sum()
     finally:
         linopy.options["sparse_groupby"] = False
-    assert res._payload is None
+    assert res._csr is None
 
 
 def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
@@ -144,7 +144,7 @@ def test_scalar_ops_stay_csr() -> None:
     require_v1()
     c = base_model()
     sparse = -2.0 * (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
-    assert sparse._payload is not None
+    assert sparse._csr is not None
     assert_linequal(sparse, -2.0 * (c.eff * c.gen_p).groupby(c.gbus).sum())
 
 
@@ -168,7 +168,7 @@ def test_merge_keeps_absent_cell_absent() -> None:
 
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
     tot = linopy.merge([sparse, flow], join="outer")
-    assert tot._payload is not None
+    assert tot._csr is not None
     assert_linequal(tot, linopy.merge([dense, flow], join="outer"))
 
     con = c.m.add_constraints(tot >= c.load, name="bal", freeze=True)
@@ -224,13 +224,13 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
     keys = ["period", "season"]
     sparse = expr.groupby(keys).sum(sparse=True, observed=observed)
     dense = expr.groupby(keys).sum(observed=observed)
-    payload = sparse._payload
-    assert payload is not None
+    csr = sparse._csr
+    assert csr is not None
     if observed:
-        assert set(payload.coords) == {"period", "season"}
+        assert set(csr.coords) == {"period", "season"}
     else:
-        assert np.isnan(payload.const).sum() == 2 * 2
-    assert payload.grid_dims == dense.coord_dims
+        assert np.isnan(csr.const).sum() == 2 * 2
+    assert csr.grid_dims == dense.coord_dims
     assert_linequal(sparse, dense)
 
 
@@ -241,7 +241,7 @@ def test_single_key_sparse_ignores_observed(as_namelist: bool) -> None:
     expr = (c.eff * c.gen_p).assign_coords(bus=("gen", c.gbus.to_numpy()))
     grouper = ["bus"] if as_namelist else c.gbus
     sparse = expr.groupby(grouper).sum(sparse=True, observed=True)
-    assert sparse._payload is not None
+    assert sparse._csr is not None
     assert_linequal(sparse, expr.groupby(grouper).sum())
 
 
@@ -261,8 +261,8 @@ def test_dataframe_grouper_sparse_stays_compact() -> None:
     _, expr, _ = keyed_model()
     df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
     sparse = expr.groupby(df).sum(sparse=True)
-    assert sparse._payload is not None
-    assert sparse._payload.shape == (4, 2)
+    assert sparse._csr is not None
+    assert sparse._csr.shape == (4, 2)
     assert_linequal(sparse, expr.groupby(df).sum())
 
 
@@ -309,14 +309,14 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
     sparse = expr.groupby(keys).sum(sparse=True, observed=True)
     dense = expr.groupby(keys).sum(observed=True)
     tot = sparse + dense
-    assert tot._payload is not None
-    assert set(tot._payload.coords) == {"period", "season"}
+    assert tot._csr is not None
+    assert set(tot._csr.coords) == {"period", "season"}
     assert_linequal(tot, 2.0 * dense)
 
     other = dense.assign_coords(region=("group", list("abcd")))
     tot = sparse + other
-    assert tot._payload is not None
-    assert set(tot._payload.coords) == {"period", "season", "region"}
+    assert tot._csr is not None
+    assert set(tot._csr.coords) == {"period", "season", "region"}
     xr.testing.assert_equal(
         tot.data.coords.to_dataset(), (dense + other).data.coords.to_dataset()
     )
@@ -341,8 +341,8 @@ def test_namelist_sparse_grid_warns_and_observed_silences() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         res = expr.groupby(["period", "season"]).sum(sparse=True, observed=True)
-    assert res._payload is not None
-    assert res._payload.shape == (n,)
+    assert res._csr is not None
+    assert res._csr.shape == (n,)
 
 
 def test_nan_multikey_grouper_raises_eagerly() -> None:
@@ -536,7 +536,7 @@ def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
     require_v1()
     c = base_model()
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).reindex(indexers)
-    assert sparse._payload is not None
+    assert sparse._csr is not None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).reindex(indexers)
     assert_linequal(sparse, dense)
 
@@ -546,7 +546,7 @@ def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
     c = base_model()
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
     res = sparse.reindex(bus=["bus3", "bus0"], copy=False)
-    assert res._payload is None
+    assert res._csr is None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False)
     assert_linequal(res, dense.reindex(bus=["bus3", "bus0"]))
 
@@ -556,7 +556,7 @@ def test_reindex_merge_chain_freezes_csr() -> None:
     c1, c2 = base_model(), base_model()
     con1 = c1.m.add_constraints(reindexed_balance(c1, False) == c1.load, name="bal")
     tot = reindexed_balance(c2, True)
-    assert tot._payload is not None
+    assert tot._csr is not None
     con2 = c2.m.add_constraints(tot == c2.load, name="bal", freeze=True)
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)
@@ -586,7 +586,7 @@ def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
     wide = {"bus": [f"bus{i}" for i in range(7)]}
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).reindex(wide)
     filled = sparse.fillna(value)
-    assert filled._payload is not None
+    assert filled._csr is not None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).reindex(wide)
     assert_linequal(filled, dense.fillna(value))
 
@@ -597,7 +597,7 @@ def test_fillna_with_array_falls_back_to_dense() -> None:
     fill = xr.zeros_like(c.load)
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
     res = sparse.fillna(fill)
-    assert res._payload is None
+    assert res._csr is None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False)
     assert_linequal(res, dense.fillna(fill))
 
@@ -606,7 +606,7 @@ def test_rename_stays_csr_and_matches_dense() -> None:
     require_v1()
     c = base_model()
     sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).rename(bus="node")
-    assert sparse._payload is not None
+    assert sparse._csr is not None
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).rename(bus="node")
     assert sparse.coord_dims == ("node", "snapshot")
     assert_linequal(sparse, dense)
@@ -625,7 +625,7 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_op(
     keys = ["period", "season"]
     sparse = op(expr.groupby(keys).sum(sparse=True, observed=True))
     dense = op(expr.groupby(keys).sum(sparse=False, observed=True))
-    assert sparse._payload is not None
+    assert sparse._csr is not None
     for name in keys:
         xr.testing.assert_equal(sparse.coords[name], dense.coords[name])
     assert_linequal(sparse, dense)
@@ -663,7 +663,7 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(
     if order == "flow-gen":
         sparse, dense = sparse[::-1], dense[::-1]
     res = linopy.merge(sparse, join=join)
-    assert res._payload is not None
+    assert res._csr is not None
     assert res.coord_dims == dense[0].coord_dims
     assert_terms_equal(res, linopy.merge(dense, join=join))
 
@@ -676,7 +676,7 @@ def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None
     sparse = cross_grid_parts(c, True) + cross_grid_parts(c, True, third_lines)[1:]
     dense = cross_grid_parts(c, False) + cross_grid_parts(c, False, third_lines)[1:]
     res = linopy.merge(sparse, join=join)
-    assert res._payload is not None
+    assert res._csr is not None
     assert_terms_equal(res, linopy.merge(dense, join=join))
 
 
@@ -686,9 +686,9 @@ def test_cross_grid_merge_absent_fill_matches_dense() -> None:
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     res = linopy.merge(sparse, join="outer", fill_value=linopy.ABSENT)
     expected = linopy.merge(dense, join="outer", fill_value=linopy.ABSENT)
-    assert res._payload is not None
+    assert res._csr is not None
     filled = res.fillna(0)
-    assert filled._payload is not None
+    assert filled._csr is not None
     assert_terms_equal(filled, expected.fillna(0))
     assert_terms_equal(res, expected)
     assert res.const.isnull().sum() == 3 * c.load.sizes["snapshot"]
@@ -701,7 +701,7 @@ def test_cross_grid_merge_keeps_absent_cell_absent() -> None:
     mask = xr.DataArray([True, False], coords=[dense[1].indexes["bus"]])
     dense[1] = dense[1].where(mask)
     res = linopy.merge([sparse[0], dense[1]], join="outer")
-    assert res._payload is not None
+    assert res._csr is not None
     assert_terms_equal(res, linopy.merge(dense, join="outer"))
 
 
@@ -710,7 +710,7 @@ def test_cross_grid_merge_mixed_dense_operand_stays_csr() -> None:
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     res = sparse[0].add(dense[1], join="outer")
-    assert res._payload is not None
+    assert res._csr is not None
     assert_terms_equal(res, dense[0].add(dense[1], join="outer"))
 
 
@@ -765,7 +765,7 @@ def test_override_merge_same_shape_stays_csr() -> None:
     gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
     flow = (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(sparse=True)
     res = linopy.merge([gen, flow], join="override")
-    assert res._payload is not None
+    assert res._csr is not None
     dense = [
         (c.eff * c.gen_p).groupby(c.gbus).sum(),
         (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(),
@@ -779,7 +779,7 @@ def test_cross_grid_balance_freezes_csr() -> None:
     lhs1 = linopy.merge(cross_grid_parts(c1, False), join="outer")
     con1 = c1.m.add_constraints(lhs1 == c1.load, name="bal")
     lhs2 = linopy.merge(cross_grid_parts(c2, True), join="outer")
-    assert lhs2._payload is not None
+    assert lhs2._csr is not None
     con2 = c2.m.add_constraints(lhs2 == c2.load, name="bal", freeze=True)
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)

@@ -610,7 +610,7 @@ class LinearExpressionGroupby:
                 and grouper.index.name in self.data.dims
             )
             if supported:
-                from linopy.sparse_expression import CSRPayload
+                from linopy.sparse_expression import CSRExpression
 
                 expr = LinearExpression(self.data, self.model)
                 stacked = observed or multikey_frame is None
@@ -622,10 +622,10 @@ class LinearExpressionGroupby:
                 coord_dims = tuple(
                     str(d) for d in self.data.coeffs.dims if d != TERM_DIM
                 )
-                payload = CSRPayload.from_grouper(
+                csr = CSRExpression.from_grouper(
                     expr, grouper, group_name, stacked, coord_dims
                 )
-                return LinearExpression._from_payload(payload, self.model)
+                return LinearExpression._from_csr(csr, self.model)
             if explicit_sparse:
                 raise ValueError(
                     "sparse=True supports only a pandas Series or DataFrame, 1-D "
@@ -831,7 +831,7 @@ class LinearExpressionRolling:
 
 
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model", "_payload")
+    __slots__ = ("_data", "_model", "_csr")
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
@@ -906,7 +906,7 @@ class BaseExpression(ABC):
         data = data.assign_attrs(name=None)
         self._model = model
         self._data = cast(Dataset, data)
-        self._payload = None
+        self._csr = None
 
     def __repr__(self) -> str:
         """
@@ -1007,8 +1007,8 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        if self._payload is not None:
-            return self._from_payload(self._payload.scaled(-1.0), self._model)
+        if self._csr is not None:
+            return self._from_csr(self._csr.scaled(-1.0), self._model)
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
@@ -1594,18 +1594,18 @@ class BaseExpression(ABC):
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._payload is not None:
-            self._data = self._payload.materialize().data
-            self._payload = None
+        if self._data is None and self._csr is not None:
+            self._data = self._csr.materialize().data
+            self._csr = None
         return self._data
 
     @classmethod
-    def _from_payload(cls, payload: Any, model: Model) -> Self:
-        """Construct an expression backed by a CSRPayload."""
+    def _from_csr(cls, csr: Any, model: Model) -> Self:
+        """Construct an expression backed by a CSRExpression."""
         obj = cls.__new__(cls)
         obj._model = model
         obj._data = None  # type: ignore[assignment]
-        obj._payload = payload
+        obj._csr = csr
         return obj
 
     @property
@@ -1619,8 +1619,8 @@ class BaseExpression(ABC):
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._data is None and self._payload is not None:
-            return tuple(self._payload.grid_dims)
+        if self._data is None and self._csr is not None:
+            return tuple(self._csr.grid_dims)
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -1817,12 +1817,10 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
-        if self._payload is not None and isinstance(sign, str):
-            rhs_da = constraints.csr_rhs(self._payload, rhs)
+        if self._csr is not None and isinstance(sign, str):
+            rhs_da = constraints.csr_rhs(self._csr, rhs)
             if rhs_da is not None:
-                return constraints.CSRConstraint.from_payload(
-                    self._payload, sign, rhs_da
-                )
+                return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
 
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
@@ -1987,13 +1985,13 @@ class BaseExpression(ABC):
         ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
-        payload = self._payload
+        csr = self._csr
         if (
-            payload is not None
+            csr is not None
             and isinstance(value, np.floating | np.integer | int | float)
             and not isinstance(value, bool)
         ):
-            return type(self)._from_payload(payload.filled(float(value)), self._model)
+            return type(self)._from_csr(csr.filled(float(value)), self._model)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
@@ -2439,10 +2437,8 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if self._payload is not None and isinstance(other, int | float | np.number):
-            return type(self)._from_payload(
-                self._payload.scaled(float(other)), self._model
-            )
+        if self._csr is not None and isinstance(other, int | float | np.number):
+            return type(self)._from_csr(self._csr.scaled(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -2539,20 +2535,20 @@ class LinearExpression(BaseExpression):
         expression stays sparse when only labels change.
         """
         indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
-        payload = self._payload
+        csr = self._csr
         if (
-            payload is not None
-            and set(indexers) <= set(payload.grid_dims)
+            csr is not None
+            and set(indexers) <= set(csr.grid_dims)
             and method is None
             and tolerance is None
             and copy
             and fill_value is self._fill_value
         ):
             indexes = {
-                d: pd.Index(indexers.get(d, payload.indexes[d]), name=d)
-                for d in payload.grid_dims
+                d: pd.Index(indexers.get(d, csr.indexes[d]), name=d)
+                for d in csr.grid_dims
             }
-            return type(self)._from_payload(payload.reindexed(indexes), self._model)
+            return type(self)._from_csr(csr.reindexed(indexes), self._model)
         return super().reindex(
             indexers,
             method=method,
@@ -2571,10 +2567,10 @@ class LinearExpression(BaseExpression):
         stays sparse when only grid dims are relabelled.
         """
         name_dict = either_dict_or_kwargs(name_dict, names, "rename")
-        payload = self._payload
-        if payload is not None and set(name_dict) <= set(payload.grid_dims):
+        csr = self._csr
+        if csr is not None and set(name_dict) <= set(csr.grid_dims):
             relabel = {str(k): str(v) for k, v in name_dict.items()}
-            return type(self)._from_payload(payload.renamed(relabel), self._model)
+            return type(self)._from_csr(csr.renamed(relabel), self._model)
         return super().rename(name_dict)
 
     def to_quadexpr(self) -> QuadraticExpression:
