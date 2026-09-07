@@ -355,27 +355,23 @@ def _restore_group_dim_position(
     return result
 
 
-def _unstack_multikey(ds: Dataset, dim: str) -> Dataset:
+def _warn_dense_grid(frame: pd.DataFrame) -> None:
     """
-    Unstack a stacked multi-key group dimension into one dimension per key.
-
-    Warn before materialising the grid when most cells would be fill values,
-    pointing to ``observed=True`` for a compact result.
+    Warn before materialising a multi-key cartesian grid when most cells
+    would be absent, pointing to ``observed=True`` for a compact result.
     """
-    mi = ds.indexes[dim].remove_unused_levels()
-    observed = len(mi)
-    grid = int(np.prod([len(level) for level in mi.levels]))
+    observed = len(frame.drop_duplicates())
+    grid = int(np.prod([frame[k].nunique() for k in frame.columns]))
     if grid > 2 * observed and grid - observed > 10_000:
         warn(
-            f"Grouping a LinearExpression by {list(mi.names)} produces a dense "
-            f"{grid:,}-cell grid, but only {observed:,} of those combinations "
-            f"occur -- the {grid - observed:,} absent ones are materialised as "
-            f"fill values. Pass `observed=True` to keep the result compact over "
-            f"only the observed combinations.",
+            f"Grouping a LinearExpression by {list(frame.columns)} produces a "
+            f"dense {grid:,}-cell grid, but only {observed:,} of those "
+            f"combinations occur -- the {grid - observed:,} absent ones are "
+            f"carried as empty cells. Pass `observed=True` to keep the result "
+            f"compact over only the observed combinations.",
             UserWarning,
             stacklevel=3,
         )
-    return ds.unstack(dim, fill_value=LinearExpression._fill_value)
 
 
 def _check_grouper_alignment(group: Any, data: Dataset) -> None:
@@ -559,14 +555,19 @@ class LinearExpressionGroupby:
             LinearExpression type — no group-size padding; a still-sparse
             lhs reaching ``Model.add_constraints`` with ``freeze=True``
             becomes a CSRConstraint directly, other operations expand to
-            the dense rectangle in canonical term layout. Single-key
-            groupers only; requires v1 semantics. Defaults to
+            the dense rectangle in canonical term layout. Supports pandas
+            Series/DataFrame, 1-D DataArray and coordinate-name-list groupers
+            over an existing dimension; with a name list and ``observed=True``
+            the CSR result stays compact over the observed key combinations.
+            Requires v1 semantics. Defaults to
             ``linopy.options["sparse_groupby"]``. See :mod:`linopy.sparse_expression`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a
-            ``MultiIndex`` ``group`` dimension) instead of unstacking into one
-            dimension per key, which materialises the dense cartesian grid.
+            ``group`` dimension: a ``MultiIndex`` under legacy semantics, a
+            flat dimension with the key values as auxiliary coordinates under
+            v1) instead of unstacking into one dimension per key, which
+            materialises the dense cartesian grid.
             Defaults to False, mirroring xarray. Not supported together with
             `use_fallback`.
 
@@ -595,27 +596,41 @@ class LinearExpressionGroupby:
                 "sparse groupby-sum requires v1 semantics; opt in with "
                 "linopy.options['semantics'] = 'v1'."
             )
+        if multikey_frame is not None and not observed:
+            _warn_dense_grid(multikey_frame)
+
         if sparse:
-            series = group.to_pandas() if isinstance(group, DataArray) else group
+            grouper = multikey_frame
+            if grouper is None:
+                is_1d = isinstance(group, DataArray) and group.ndim == 1
+                grouper = group.to_pandas() if is_1d else group
             supported = (
                 not use_fallback
-                and not observed
-                and multikey_frame is None
-                and isinstance(series, pd.Series)
-                and series.index.name in self.data.dims
+                and isinstance(grouper, (pd.Series, pd.DataFrame))
+                and grouper.index.name in self.data.dims
             )
             if supported:
                 from linopy.sparse_expression import CSRPayload
 
                 expr = LinearExpression(self.data, self.model)
-                group_name = str(series.name or "group")
-                payload = CSRPayload.from_grouper(expr, series, group_name)
+                stacked = observed or multikey_frame is None
+                group_name = (
+                    "group"
+                    if isinstance(grouper, pd.DataFrame)
+                    else str(grouper.name or "group")
+                )
+                coord_dims = tuple(
+                    str(d) for d in self.data.coeffs.dims if d != TERM_DIM
+                )
+                payload = CSRPayload.from_grouper(
+                    expr, grouper, group_name, stacked, coord_dims
+                )
                 return LinearExpression._from_payload(payload, self.model)
             if explicit_sparse:
                 raise ValueError(
-                    "sparse=True supports only a single-key grouper (pandas "
-                    "Series or 1-D DataArray) over an existing dimension, "
-                    "without use_fallback or observed."
+                    "sparse=True supports only a pandas Series or DataFrame, 1-D "
+                    "DataArray or list of coordinate names as grouper over an "
+                    "existing dimension, without use_fallback."
                 )
 
         if multikey_frame is not None:
@@ -659,7 +674,9 @@ class LinearExpressionGroupby:
 
             ds = ds.rename({GROUP_DIM: final_group_name})
             if multikey_frame is not None and not observed:
-                ds = _unstack_multikey(ds, final_group_name)
+                ds = ds.unstack(
+                    final_group_name, fill_value=LinearExpression._fill_value
+                )
         else:
 
             def func(ds: Dataset) -> Dataset:

@@ -19,7 +19,7 @@ payload to form a :class:`~linopy.constraints.CSRConstraint` lives in
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -28,6 +28,7 @@ import scipy.sparse
 from xarray import Dataset
 
 from linopy.constants import TERM_DIM
+from linopy.semantics import enforce_aux_conflict
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
@@ -42,7 +43,10 @@ class CSRPayload:
     ``csr`` has one row per flat grid cell (C order over ``grid_dims``) and
     one column per raw variable label — label columns stay valid when
     variables are added to the model later; realization maps them to dense
-    positions. ``const`` is the per-cell constant.
+    positions. ``const`` is the per-cell constant, NaN for an absent cell.
+    ``coords`` holds auxiliary coordinates as ``name -> (grid dim, values)``,
+    e.g. the key levels of a grouped result kept stacked over the observed
+    key combinations.
     """
 
     csr: scipy.sparse.csr_array
@@ -50,6 +54,7 @@ class CSRPayload:
     grid_dims: tuple[str, ...]
     indexes: dict[str, pd.Index]
     model: Model
+    coords: dict[str, tuple[str, np.ndarray]] = field(default_factory=dict)
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -61,37 +66,67 @@ class CSRPayload:
 
     @classmethod
     def from_grouper(
-        cls, expr: LinearExpression, grouper: pd.Series, group_dim: str
+        cls,
+        expr: LinearExpression,
+        grouper: pd.Series | pd.DataFrame,
+        group_dim: str,
+        stacked: bool,
+        coord_dims: tuple[str, ...],
     ) -> CSRPayload:
         """
         Build the grouped sum directly in CSR form (no padded rectangle).
 
         The grouper is conformed to the expression's member index by label
         (upstream alignment checks guarantee equal label sets) and group
-        labels are sorted, matching the dense kernel's output grid.
+        labels are sorted, matching the dense kernel's output grid. A
+        DataFrame grouper (one column per key) yields one grid dim per key
+        -- the cartesian grid, absent combinations being empty cells -- or,
+        ``stacked``, a single ``group_dim`` over the observed key combinations
+        only, the key values attached as auxiliary coordinates. The new dims
+        take the member dim's slot in ``coord_dims``, as on the dense path.
         """
         member_dim = str(grouper.index.name)
         if member_dim in expr.data.indexes:
             grouper = grouper.reindex(expr.data.indexes[member_dim])
         elif len(grouper) != expr.data.sizes[member_dim]:
             raise ValueError(f"grouper length does not match dimension {member_dim!r}")
-        codes, uniques = pd.factorize(grouper, sort=True)
-        if (codes == -1).any():
+        if grouper.isna().to_numpy().any():
             raise ValueError(
                 "Cannot group by a pandas object containing NaN values. "
                 "Drop or fill the corresponding entries before grouping."
             )
+        frame = grouper if isinstance(grouper, pd.DataFrame) else grouper.to_frame()
+        keys = [str(k) for k in frame.columns]
+        scatter_codes: dict[str, np.ndarray] = {}
+        indexes: dict[str, pd.Index] = {}
+        coords: dict[str, tuple[str, np.ndarray]] = {}
+        if len(keys) == 1:
+            codes, uniques = pd.factorize(frame.iloc[:, 0], sort=True)
+            scatter_codes[group_dim] = codes
+            indexes[group_dim] = pd.Index(uniques, name=group_dim)
+        elif stacked:
+            codes, uniques = pd.factorize(pd.MultiIndex.from_frame(frame), sort=True)
+            scatter_codes[group_dim] = codes
+            indexes[group_dim] = pd.RangeIndex(len(uniques), name=group_dim)
+            coords = {
+                k: (group_dim, uniques.get_level_values(i).to_numpy())
+                for i, k in enumerate(keys)
+            }
+        else:
+            for col, k in zip(frame.columns, keys):
+                codes, uniques = pd.factorize(frame[col], sort=True)
+                scatter_codes[k] = codes
+                indexes[k] = pd.Index(uniques, name=k)
+        new_dims = tuple(scatter_codes)
         grid_dims = tuple(
-            group_dim if d == member_dim else str(d) for d in expr.coord_dims
+            d for dim in coord_dims for d in (new_dims if dim == member_dim else (dim,))
         )
-        indexes: dict[str, pd.Index] = {
-            str(d): expr.data.get_index(d).rename(d)
-            for d in expr.coord_dims
-            if d != member_dim
-        }
-        indexes[group_dim] = pd.Index(uniques, name=group_dim)
+        for d in coord_dims:
+            if d != member_dim:
+                indexes[d] = expr.data.get_index(d).rename(d)
+        coords |= _aux_coords(expr, set(coord_dims) - {member_dim})
         return cls._from_scatter(
-            expr, grid_dims, indexes, group_dim, member_dim, codes, True
+            expr, grid_dims, indexes, member_dim, scatter_codes, True, coords
         )
 
     @classmethod
@@ -105,9 +140,10 @@ class CSRPayload:
             if not expr.data.get_index(d).equals(template.indexes[str(d)]):
                 return None
         first = template.grid_dims[0]
-        codes = np.arange(len(template.indexes[first]))
+        codes = {first: np.arange(len(template.indexes[first]))}
+        coords = _aux_coords(expr, set(template.grid_dims))
         return cls._from_scatter(
-            expr, template.grid_dims, template.indexes, first, first, codes, False
+            expr, template.grid_dims, template.indexes, first, codes, False, coords
         )
 
     @classmethod
@@ -116,30 +152,37 @@ class CSRPayload:
         expr: LinearExpression,
         grid_dims: tuple[str, ...],
         indexes: dict[str, pd.Index],
-        scatter_dim: str,
         member_dim: str,
-        codes: np.ndarray,
+        scatter_codes: dict[str, np.ndarray],
         skipna: bool,
+        coords: dict[str, tuple[str, np.ndarray]],
     ) -> CSRPayload:
         """
         Scatter an expression's terms into grid rows (conceptually ``G @ A``):
-        ``member_dim`` lands in the grid dim ``scatter_dim`` at row positions
-        ``codes``, every other grid dim maps one-to-one, and the COO→CSR
-        conversion sums duplicates — which is the group sum. With ``skipna``
-        the constant is reduced as by the dense group kernel (NaN members
-        count as 0); without it an absent cell (NaN const) stays absent, as
-        on the dense v1 merge path.
+        ``member_dim`` lands in the contiguous block of grid dims named by
+        ``scatter_codes`` (one row-position array per dim), every other grid
+        dim maps one-to-one, and the COO→CSR conversion sums duplicates --
+        which is the group sum. Cells no member lands in stay absent (NaN
+        const). With ``skipna`` the constant is reduced as by the dense group
+        kernel (NaN members count as 0); without it an absent cell (NaN const)
+        stays absent, as on the dense v1 merge path.
         """
         ds = expr.data
         shape = tuple(len(indexes[d]) for d in grid_dims)
-        strides = [
-            int(np.prod(shape[i + 1 :], dtype=np.int64)) for i in range(len(shape))
-        ]
+        strides = {
+            d: int(np.prod(shape[i + 1 :], dtype=np.int64))
+            for i, d in enumerate(grid_dims)
+        }
 
-        transposed = [member_dim if d == scatter_dim else d for d in grid_dims]
+        slot = min(grid_dims.index(d) for d in scatter_codes)
+        transposed = [d for d in grid_dims if d not in scatter_codes]
+        transposed.insert(slot, member_dim)
+        member_rows = np.zeros(ds.sizes[member_dim], dtype=np.int64)
+        for d, codes in scatter_codes.items():
+            member_rows += codes * strides[d]
         axis_positions = [
-            codes * stride if d == scatter_dim else np.arange(n) * stride
-            for d, n, stride in zip(grid_dims, shape, strides)
+            member_rows if d == member_dim else np.arange(len(indexes[d])) * strides[d]
+            for d in transposed
         ]
         cell_rows = axis_positions[0]
         for pos in axis_positions[1:]:
@@ -160,10 +203,13 @@ class CSRPayload:
         const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
         if skipna:
             const_vals = np.where(np.isnan(const_vals), 0.0, const_vals)
-        const = np.zeros(full_size)
+        const = np.full(full_size, np.nan)
+        const[cell_rows] = 0.0
         np.add.at(const, cell_rows, const_vals)
 
-        return cls(scipy.sparse.csr_array(coo), const, grid_dims, indexes, expr.model)
+        return cls(
+            scipy.sparse.csr_array(coo), const, grid_dims, indexes, expr.model, coords
+        )
 
     def scaled(self, factor: float) -> CSRPayload:
         return replace(self, csr=self.csr * factor, const=self.const * factor)
@@ -178,7 +224,8 @@ class CSRPayload:
         Sparse matrix addition == merge along the term dimension. Goes through
         COO so explicit zero coefficients survive (scipy's ``+`` drops them),
         keeping a cell with only zero-coefficient terms distinguishable from
-        an empty cell, as on the dense path.
+        an empty cell, as on the dense path. Auxiliary coordinates propagate
+        and conflicting ones raise (§11), as on the dense path.
         """
         a, b = self.csr.tocoo(), other.csr.tocoo()
         shape = (self.n_cells, max(a.shape[1], b.shape[1]))
@@ -186,8 +233,13 @@ class CSRPayload:
         cols = np.concatenate([a.coords[1], b.coords[1]])
         data = np.concatenate([a.data, b.data])
         coo = scipy.sparse.coo_array((data, (rows, cols)), shape=shape)
+        enforce_aux_conflict([Dataset(coords=p.coords) for p in (self, other)])
+        coords = other.coords | self.coords
         return replace(
-            self, csr=scipy.sparse.csr_array(coo), const=self.const + other.const
+            self,
+            csr=scipy.sparse.csr_array(coo),
+            const=self.const + other.const,
+            coords=coords,
         )
 
     def materialize(self) -> LinearExpression:
@@ -220,9 +272,20 @@ class CSRPayload:
                 "vars": (dims, vars_flat.reshape(*self.shape, nterm)),
                 "const": (self.grid_dims, self.const.reshape(self.shape)),
             },
-            coords={d: self.indexes[d] for d in self.grid_dims},
+            coords={d: self.indexes[d] for d in self.grid_dims} | self.coords,
         )
         return LinearExpression(absorb_absence(ds), self.model)
+
+
+def _aux_coords(
+    expr: LinearExpression, dims: set[str]
+) -> dict[str, tuple[str, np.ndarray]]:
+    """One-dimensional auxiliary coordinates of ``expr`` lying on ``dims``."""
+    return {
+        str(n): (str(c.dims[0]), c.to_numpy())
+        for n, c in expr.data.coords.items()
+        if n not in expr.data.dims and len(c.dims) == 1 and str(c.dims[0]) in dims
+    }
 
 
 def try_csr_merge(
