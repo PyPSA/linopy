@@ -525,6 +525,55 @@ def test_linear_expression_sum_drop_zeros(z: Variable) -> None:
     assert res.nterm == 2
 
 
+def test_densify_terms_compacts_rows_in_order(
+    x: Variable, y: Variable, z: Variable
+) -> None:
+    mask = xr.DataArray([[1.0, 0, 1], [0, 1, 0]], dims=["dim_0", "dim_1"])
+    expr = x + y * mask + z
+    res = expr.densify_terms()
+
+    assert res.nterm == 3
+    assert res.vars.dtype == x.labels.dtype
+    assert (res.vars.isel(_term=0) == x.labels).all()
+    assert (res.vars.isel(_term=1) == z.labels.where(mask == 0, y.labels)).all()
+    assert (res.vars.isel(_term=2) == z.labels.where(mask == 1, -1)).all()
+    assert (res.coeffs.isel(_term=[0, 1]) == 1).all()
+    assert (res.coeffs.isel(_term=2) == mask).all()
+    pd.testing.assert_frame_equal(res.flat, expr.flat)
+
+
+def test_densify_terms_no_zeros_is_noop(x: Variable, y: Variable) -> None:
+    expr = x + y
+    assert expr.densify_terms() is expr
+
+
+def test_densify_terms_scalar_and_all_zero(x: Variable) -> None:
+    res = (0 * x + x).sum(drop_zeros=True)
+    assert res.nterm == 2
+    assert_linequal(res, x.sum())
+
+    res = (0 * x).sum(drop_zeros=True)
+    assert res.nterm == 0
+    assert res.const.item() == 0
+
+
+def test_densify_terms_quadratic(x: Variable, y: Variable) -> None:
+    mask = xr.DataArray([1.0, 0], dims=["dim_0"])
+    expr = x * y + x * x * mask + y * y
+
+    res = expr.densify_terms()
+    assert res.nterm == 3
+    assert res.vars.dims == expr.vars.dims
+    assert res.sel(dim_0=1).nterm == 3
+    assert (res.sel(dim_0=1).coeffs.isel(_term=2) == 0).all()
+    assert (res.sel(dim_0=1).vars.isel(_term=2) == -1).all()
+    pd.testing.assert_frame_equal(res.flat, expr.flat)
+
+    res = expr.sum(drop_zeros=True)
+    assert res.nterm == 5
+    pd.testing.assert_frame_equal(res.flat, expr.sum().flat)
+
+
 class TestCollapseAuxCoords:
     # collapsing a dimension carrying an auxiliary coordinate must drop it, not
     # leak it onto the term dimension where it breaks later arithmetic with a
@@ -677,6 +726,67 @@ def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
 
     assert set(res.coord_dims) == {"location"}
     assert_linequal(res, (expr * b).sum(["dim_0", "dim_1"]))
+
+
+def test_matmul_sparse_operand_drops_zero_terms(z: Variable) -> None:
+    """
+    ``@`` against a zero-containing constant compacts the term dimension to
+    the widest non-zero cell instead of one term per contracted member (#748).
+    """
+    expr = 1 * z  # dims (dim_0, dim_1); contracting dim_1 (size 3)
+    b = xr.DataArray(
+        [[1.0, 0.0], [2.0, 3.0], [0.0, 0.0]],
+        coords={"dim_1": expr.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert res.nterm == 2 < b.sizes["dim_1"]
+    assert_linequal(res, (expr * b).sum("dim_1").densify_terms())
+
+
+def test_matmul_dense_operand_keeps_all_terms(z: Variable) -> None:
+    """A constant without zeros contracts to the full term dimension, untouched."""
+    expr = 1 * z
+    b = xr.DataArray(
+        np.arange(1, 7).reshape(3, 2),
+        coords={"dim_1": expr.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert res.nterm == b.sizes["dim_1"]
+    assert_linequal(res, (expr * b).sum("dim_1"))
+
+
+def test_matmul_all_zero_operand_yields_no_terms(z: Variable) -> None:
+    """An all-zero constant contracts to the zero expression, not a crash (#748)."""
+    expr = 1 * z
+    b = xr.DataArray(
+        np.zeros((3, 2)),
+        coords={"dim_1": expr.indexes["dim_1"], "location": ["L1", "L2"]},
+        dims=["dim_1", "location"],
+    )
+
+    res = expr @ b
+
+    assert res.nterm == 0
+    assert (res.data.vars == -1).all()
+
+
+def test_matmul_full_contraction_with_zero_operand(x: Variable) -> None:
+    """
+    ``variable @ vector`` contracting away every coord dim compacts a
+    zero-containing operand without crashing on the term-only shape (#748).
+    """
+    b = xr.DataArray([2.0, 0.0], coords={"dim_0": x.indexes["dim_0"]})
+
+    res = x @ b
+
+    assert res.nterm == 1
+    assert_linequal(res, (x * b).sum("dim_0").densify_terms())
 
 
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:

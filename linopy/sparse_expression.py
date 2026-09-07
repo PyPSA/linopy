@@ -168,26 +168,23 @@ class CSRPayload:
         stays absent, as on the dense v1 merge path.
         """
         ds = expr.data
-        shape = tuple(len(indexes[d]) for d in grid_dims)
-        strides = {
-            d: int(np.prod(shape[i + 1 :], dtype=np.int64))
-            for i, d in enumerate(grid_dims)
-        }
+        shape, strides = _grid_layout(grid_dims, indexes)
+        stride = dict(zip(grid_dims, strides))
 
         slot = min(grid_dims.index(d) for d in scatter_codes)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
         member_rows = np.zeros(ds.sizes[member_dim], dtype=np.int64)
         for d, codes in scatter_codes.items():
-            member_rows += codes * strides[d]
-        axis_positions = [
-            member_rows if d == member_dim else np.arange(len(indexes[d])) * strides[d]
-            for d in transposed
-        ]
-        cell_rows = axis_positions[0]
-        for pos in axis_positions[1:]:
-            cell_rows = cell_rows[..., None] + pos
-        cell_rows = cell_rows.reshape(-1)
+            member_rows += codes * stride[d]
+        cell_rows = _flat_cells(
+            [
+                member_rows
+                if d == member_dim
+                else np.arange(len(indexes[d])) * stride[d]
+                for d in transposed
+            ]
+        )
 
         coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
         vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
@@ -213,6 +210,56 @@ class CSRPayload:
 
     def scaled(self, factor: float) -> CSRPayload:
         return replace(self, csr=self.csr * factor, const=self.const * factor)
+
+    def reindexed(self, indexes: dict[str, pd.Index]) -> CSRPayload:
+        """
+        Remap rows onto new per-dim indexes without the dense rectangle:
+        dropped labels vanish, new labels are absent cells (NaN const).
+        """
+        shape, strides = _grid_layout(self.grid_dims, indexes)
+        positions = [indexes[d].get_indexer(self.indexes[d]) for d in self.grid_dims]
+        valid = _flat_cells([pos == -1 for pos in positions]) == 0
+        row_map = _flat_cells([pos * s for pos, s in zip(positions, strides)])
+
+        coo = self.csr.tocoo()
+        keep = valid[coo.coords[0]]
+        rows = row_map[coo.coords[0][keep]]
+        cols = coo.coords[1][keep]
+        n_cells = int(np.prod(shape, dtype=np.int64))
+        coo = scipy.sparse.coo_array(
+            (coo.data[keep], (rows, cols)), shape=(n_cells, self.csr.shape[1])
+        )
+        const = np.full(n_cells, np.nan)
+        const[row_map[valid]] = self.const[valid]
+        coords = {
+            name: (
+                d,
+                pd.Series(v, index=self.indexes[d]).reindex(indexes[d]).to_numpy(),
+            )
+            for name, (d, v) in self.coords.items()
+        }
+        return replace(
+            self,
+            csr=scipy.sparse.csr_array(coo),
+            const=const,
+            indexes=indexes,
+            coords=coords,
+        )
+
+    def filled(self, value: float) -> CSRPayload:
+        """Resolve absent cells (NaN const) to a constant; terms untouched."""
+        const = np.where(np.isnan(self.const), value, self.const)
+        return replace(self, const=const)
+
+    def renamed(self, names: dict[str, str]) -> CSRPayload:
+        """Relabel grid dims; the CSR row layout is unchanged."""
+        grid_dims = tuple(names.get(d, d) for d in self.grid_dims)
+        indexes = {
+            names.get(d, d): self.indexes[d].rename(names.get(d, d))
+            for d in self.grid_dims
+        }
+        coords = {n: (names.get(d, d), v) for n, (d, v) in self.coords.items()}
+        return replace(self, grid_dims=grid_dims, indexes=indexes, coords=coords)
 
     def same_grid(self, other: CSRPayload) -> bool:
         return self.grid_dims == other.grid_dims and all(
@@ -286,6 +333,23 @@ def _aux_coords(
         for n, c in expr.data.coords.items()
         if n not in expr.data.dims and len(c.dims) == 1 and str(c.dims[0]) in dims
     }
+
+
+def _grid_layout(
+    grid_dims: tuple[str, ...], indexes: dict[str, pd.Index]
+) -> tuple[tuple[int, ...], list[int]]:
+    """C-order shape and row strides of the grid."""
+    shape = tuple(len(indexes[d]) for d in grid_dims)
+    strides = [int(np.prod(shape[i + 1 :], dtype=np.int64)) for i in range(len(shape))]
+    return shape, strides
+
+
+def _flat_cells(axis_positions: list[np.ndarray]) -> np.ndarray:
+    """Outer sum of per-axis offsets, flattened in C order."""
+    cells = np.zeros((), dtype=np.int64)
+    for pos in axis_positions:
+        cells = cells[..., None] + pos
+    return cells.reshape(-1)
 
 
 def try_csr_merge(
