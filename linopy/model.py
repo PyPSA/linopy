@@ -497,6 +497,13 @@ class Model:
             under legacy semantics.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
+
+        Warns
+        -----
+        EvolvingAPIWarning
+            Once per session: the spec API is newly added and may change in
+            minor releases. Silence with ``warnings.filterwarnings("ignore",
+            category=linopy.EvolvingAPIWarning)``.
         """
         from linopy.spec.accessor import attach
 

@@ -23,6 +23,7 @@ import xarray as xr
 from math_spec import did_you_mean
 from math_spec import program as ms
 
+from linopy.constants import warn_evolving_api
 from linopy.spec.errors import SpecDataError
 from linopy.spec.nodes import amounts_of, parameters_of, walk
 
@@ -60,6 +61,12 @@ _PARAMETER_SHAPES = (
     "a DataFrame with columns {columns} or in wide form, a dict keyed by label, or one number"
 )
 
+EVOLVING_MESSAGE = (
+    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.bind are "
+    "newly added and their details may change in minor releases. Silence with "
+    '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
+)
+
 
 def bind(
     program: ms.Program,
@@ -90,6 +97,7 @@ def bind(
         source, a duplicated dimension member, or a lookup breaking the
         rules a map has.
     """
+    warn_evolving_api("spec", EVOLVING_MESSAGE)
     if retain not in _RETAIN:
         raise SpecDataError(
             f"retain={retain!r} is not one of {_shown(_RETAIN)}. {did_you_mean(retain, _RETAIN)}"

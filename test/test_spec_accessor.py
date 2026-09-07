@@ -5,6 +5,7 @@ and the ``add_spec``/``from_spec`` argument handling that builds them.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -236,3 +237,15 @@ def test_evaluate_refuses_sources_on_other_labels_than_the_model(
     }
     with pytest.raises(SpecDataError, match=f"dimension 'generator' {match}"):
         m.spec.evaluate("twice", sources)
+
+
+def test_spec_api_warns_once_per_session() -> None:
+    from linopy import EvolvingAPIWarning
+    from linopy.constants import _emitted_evolving_warnings
+
+    _emitted_evolving_warnings.discard("spec")
+    with pytest.warns(EvolvingAPIWarning, match="spec: Model.add_spec"):
+        Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", EvolvingAPIWarning)
+        Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)

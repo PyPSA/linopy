@@ -28,10 +28,11 @@ from math_spec import (
 )
 from math_spec import program as ms
 
+from linopy.constants import warn_evolving_api
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
-from linopy.spec.binder import Bound, Retain, bind
+from linopy.spec.binder import EVOLVING_MESSAGE, Bound, Retain, bind
 from linopy.spec.builder import build
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
@@ -59,6 +60,7 @@ def attach(
         *spec* is a lowered ``Program``, which has no YAML form to
         keep on the model.
     """
+    warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
     if not is_v1():
         raise ValueError(
             "a spec-built model uses linopy's v1 semantics, and the current setting is "

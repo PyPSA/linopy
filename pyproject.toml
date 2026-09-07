@@ -177,6 +177,7 @@ filterwarnings = [
     # collection of ``linopy/variables.py`` in the source tree on
     # Windows CI.
     "ignore:piecewise:FutureWarning",
+    "ignore:spec:FutureWarning",
 ]
 
 [tool.coverage.run]
