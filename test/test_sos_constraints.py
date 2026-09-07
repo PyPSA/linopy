@@ -265,6 +265,7 @@ def test_sos1_scip() -> None:
     m.add_objective(build * np.array([1, 2, 3]), sense="max")
     m.solve(solver_name="scip")
     assert np.isclose(build.solution.values, [0, 0, 1]).all()
+    assert m.objective.value is not None
     assert np.isclose(m.objective.value, 3)
 
 
@@ -277,4 +278,5 @@ def test_sos2_scip() -> None:
     m.add_sos_constraints(var, sos_type=2, sos_dim="seg")
     m.add_objective(var.sum(), sense="max")
     m.solve(solver_name="scip")
+    assert m.objective.value is not None
     assert np.isclose(m.objective.value, 2)

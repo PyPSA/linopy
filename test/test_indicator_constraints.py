@@ -439,6 +439,7 @@ class TestSCIP:
         m.add_indicator_constraints(b, 1, x, "<=", 3, name="ic0")
         m.add_objective(x, sense="max")
         m.solve(solver_name="scip")
+        assert m.objective.value is not None
         assert np.isclose(m.objective.value, 3, atol=1e-6)
 
     @requires_scip
@@ -451,6 +452,7 @@ class TestSCIP:
         m.add_indicator_constraints(b, 1, x, "<=", 3, name="ic0")
         m.add_objective(x, sense="max")
         m.solve(solver_name="scip")
+        assert m.objective.value is not None
         assert np.isclose(m.objective.value, 10, atol=1e-6)
 
     @requires_scip
