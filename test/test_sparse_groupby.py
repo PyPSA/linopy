@@ -17,7 +17,7 @@ import xarray as xr
 
 import linopy
 from linopy import LinearExpression, Model, Variable
-from linopy.constraints import Constraint, CSRConstraint
+from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
 from linopy.semantics import is_v1
 from linopy.testing import assert_conequal, assert_linequal
 
@@ -132,6 +132,24 @@ def test_zero_coefficient_rows_stay_active(sparse: bool) -> None:
     assert len(con.active_labels()) == c.load.size
 
 
+def test_merge_keeps_absent_cell_absent() -> None:
+    require_v1()
+    c = base_model()
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum()
+    flow = (1.0 * c.flow).groupby(c.bus0).sum()
+    mask = xr.DataArray(np.arange(len(c.load.bus)) % 2 == 0, coords=[c.load.bus])
+    flow = flow.where(mask)
+
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    tot = linopy.merge([sparse, flow], join="outer")
+    assert tot._payload is not None
+    assert_linequal(tot, linopy.merge([dense, flow], join="outer"))
+
+    con = c.m.add_constraints(tot >= c.load, name="bal", freeze=True)
+    assert isinstance(con, CSRConstraint)
+    assert con.ncons == int(mask.sum()) * c.load.sizes["snapshot"]
+
+
 @pytest.mark.parametrize(
     "grouper, kwargs",
     [
@@ -178,6 +196,72 @@ def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
     assert isinstance(con2, Constraint)
     assert_conequal(con1, con2, strict=False)
     assert np.array_equal(con1.labels.values, con2.labels.values)
+
+
+def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    dense = c1.balance_lhs(sparse=False) == c1.load
+    con = c2.balance_lhs(sparse=True) == c2.load
+    assert isinstance(con, CSRConstraint)
+    assert not con.is_assigned
+    assert con.type == "Constraint (unassigned)"
+    assert "None" not in repr(con)
+    assert_conequal(dense, con, strict=False)
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.active_labels()
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.to_polars()
+    with pytest.raises(ValueError, match="not been assigned"):
+        c2.m.constraints.add(con)
+
+    con1 = c1.m.add_constraints(dense, name="bal")
+    con2 = c2.m.add_constraints(con, name="bal", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert con2.is_assigned
+    assert np.array_equal(
+        np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
+    )
+    assert_conequal(con1, con2, strict=False)
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
+    require_v1()
+
+    def build(sparse: bool) -> ConstraintBase:
+        c = base_model()
+        gens = c.gen_p.indexes["gen"]
+        gen_p = c.gen_p.where(xr.DataArray(gens != "gen7", coords=[gens]))
+        lhs = (c.eff * gen_p).groupby(c.gbus).sum(sparse=sparse)
+        return c.m.add_constraints(lhs == c.load, name="bal", freeze=freeze)
+
+    dense, sparse = build(False), build(True)
+    assert isinstance(sparse, CSRConstraint if freeze else Constraint)
+    assert_conequal(dense, sparse, strict=False)
+    np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    with pytest.raises(ValueError, match="incorrect infinite values"):
+        c.m.add_constraints(c.balance_lhs(sparse) <= -np.inf, name="bal", freeze=True)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_constraint_applies_row_scaling(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    snaps = c.load.indexes["snapshot"]
+    scaling = xr.DataArray(np.arange(1.0, len(snaps) + 1), coords=[snaps])
+    con = c.m.add_constraints(
+        c.balance_lhs(sparse) == c.load, name="bal", freeze=True, scaling=scaling
+    )
+    assert isinstance(con, CSRConstraint)
+    expected = scaling.broadcast_like(con.scaling).transpose(*con.scaling.dims)
+    xr.testing.assert_equal(con.scaling, expected)
 
 
 def test_option_gates_csr_and_freeze_model_default() -> None:
