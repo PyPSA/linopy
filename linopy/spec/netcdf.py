@@ -103,6 +103,7 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
 def _restamp(model: Model, coords: Mapping[str, pd.Index]) -> None:
     """Put the master coordinates on every container that carries a dimension."""
     from linopy.constraints import Constraint, CSRConstraint
+    from linopy.csr import Grid
 
     for _, variable in model.variables.items():
         variable._data = _stamped(variable.data, coords)
@@ -113,9 +114,12 @@ def _restamp(model: Model, coords: Mapping[str, pd.Index]) -> None:
         if isinstance(constraint, Constraint):
             constraint._data = _stamped(constraint.data, coords)
         elif isinstance(constraint, CSRConstraint):
-            constraint._coords = [
-                coords.get(str(index.name), index) for index in constraint._coords
-            ]
+            constraint._grid = Grid(
+                {
+                    d: coords.get(d, index)
+                    for d, index in constraint._grid.indexes.items()
+                }
+            )
 
 
 def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
