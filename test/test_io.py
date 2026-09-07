@@ -20,7 +20,7 @@ import xarray as xr
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.constants import FACTOR_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.io import signed_number
+from linopy.io import CONTAINER_ORDER_ATTR, signed_number
 from linopy.testing import assert_exprequal, assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
@@ -118,6 +118,64 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     p = read_netcdf(fn)
 
     assert_model_equal(m, p)
+
+
+@pytest.fixture
+def unsorted_model() -> Model:
+    m = Model()
+    z = m.add_variables(lower=0, name="z")
+    a = m.add_variables(lower=0, name="a")
+    m.add_expressions(z - a, name="y")
+    m.add_expressions(z + a, name="b")
+    m.add_constraints(z + a >= 10, name="con2")
+    m.add_constraints(z - a <= 5, name="con1")
+    m.add_objective(z + 2 * a)
+    return m
+
+
+def test_model_to_netcdf_keeps_insertion_order(
+    unsorted_model: Model, tmp_path: Path
+) -> None:
+    fn = tmp_path / "test.nc"
+    unsorted_model.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert list(p.variables) == ["z", "a"]
+    assert list(p.expressions) == ["y", "b"]
+    assert list(p.constraints) == ["con2", "con1"]
+    assert_model_equal(unsorted_model, p)
+    np.testing.assert_array_equal(
+        unsorted_model.matrices.A.toarray(), p.matrices.A.toarray()
+    )
+
+
+def test_read_netcdf_without_order_attrs_falls_back_to_sorted(
+    unsorted_model: Model, tmp_path: Path
+) -> None:
+    fn = tmp_path / "test.nc"
+    unsorted_model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    for kind in ("variables", "expressions", "constraints"):
+        del ds.attrs[CONTAINER_ORDER_ATTR.format(kind)]
+    ds.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert list(p.variables) == ["a", "z"]
+    assert list(p.expressions) == ["b", "y"]
+    assert list(p.constraints) == ["con1", "con2"]
+
+
+def test_read_netcdf_inconsistent_order_attr_raises(
+    unsorted_model: Model, tmp_path: Path
+) -> None:
+    fn = tmp_path / "test.nc"
+    unsorted_model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    ds.attrs[CONTAINER_ORDER_ATTR.format("variables")] = json.dumps(["z"])
+    ds.to_netcdf(fn)
+
+    with pytest.raises(ValueError, match="Stored variables order"):
+        read_netcdf(fn)
 
 
 def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
