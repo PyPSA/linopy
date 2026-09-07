@@ -776,6 +776,19 @@ def test_matmul_all_zero_operand_yields_no_terms(z: Variable) -> None:
     assert (res.data.vars == -1).all()
 
 
+def test_matmul_full_contraction_with_zero_operand(x: Variable) -> None:
+    """
+    ``variable @ vector`` contracting away every coord dim compacts a
+    zero-containing operand without crashing on the term-only shape (#748).
+    """
+    b = xr.DataArray([2.0, 0.0], coords={"dim_0": x.indexes["dim_0"]})
+
+    res = x @ b
+
+    assert res.nterm == 1
+    assert_linequal(res, (x * b).sum("dim_0").densify_terms())
+
+
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     with pytest.raises(TypeError):

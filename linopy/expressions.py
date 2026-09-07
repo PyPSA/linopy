@@ -2473,13 +2473,13 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         other = as_constant(other)
-        is_constant = not isinstance(other, LinearExpression | variables.Variable)
-        if is_constant:
+        other_is_const = not isinstance(other, LinearExpression | variables.Variable)
+        if other_is_const:
             other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         res = (self * other).sum(dim=common_dims)
-        if is_constant and common_dims and bool((other == 0).any()):
+        if other_is_const and common_dims and bool((other == 0).any()):
             res = res.densify_terms()
         return res
 
