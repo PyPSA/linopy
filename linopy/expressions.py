@@ -47,7 +47,7 @@ from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
-from xarray.core.utils import Frozen
+from xarray.core.utils import Frozen, either_dict_or_kwargs
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -1970,6 +1970,13 @@ class BaseExpression(ABC):
         ``to_linexpr``), which still holds the absence labels.
         """
         value = _expr_unwrap(value)
+        payload = self._payload
+        if (
+            payload is not None
+            and isinstance(value, np.floating | np.integer | int | float)
+            and not isinstance(value, bool)
+        ):
+            return type(self)._from_payload(payload.filled(float(value)), self._model)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
@@ -2491,6 +2498,59 @@ class LinearExpression(BaseExpression):
         df = df.groupby("vars", as_index=False).sum()
         check_has_nulls(df, name=self.type)
         return df
+
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        *,
+        method: str | None = None,
+        tolerance: Any = None,
+        copy: bool = True,
+        fill_value: Any = FILL_VALUE,
+        **indexers_kwargs: Any,
+    ) -> LinearExpression:
+        """
+        Conform to new coordinates as ``Dataset.reindex``; a CSR-backed
+        expression stays sparse when only labels change.
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
+        payload = self._payload
+        if (
+            payload is not None
+            and set(indexers) <= set(payload.grid_dims)
+            and method is None
+            and tolerance is None
+            and copy
+            and fill_value is self._fill_value
+        ):
+            indexes = {
+                d: pd.Index(indexers.get(d, payload.indexes[d]), name=d)
+                for d in payload.grid_dims
+            }
+            return type(self)._from_payload(payload.reindexed(indexes), self._model)
+        return super().reindex(
+            indexers,
+            method=method,
+            tolerance=tolerance,
+            copy=copy,
+            fill_value=fill_value,
+        )
+
+    def rename(
+        self,
+        name_dict: Mapping[Any, Any] | None = None,
+        **names: Any,
+    ) -> LinearExpression:
+        """
+        Rename dimensions as ``Dataset.rename``; a CSR-backed expression
+        stays sparse when only grid dims are relabelled.
+        """
+        name_dict = either_dict_or_kwargs(name_dict, names, "rename")
+        payload = self._payload
+        if payload is not None and set(name_dict) <= set(payload.grid_dims):
+            relabel = {str(k): str(v) for k, v in name_dict.items()}
+            return type(self)._from_payload(payload.renamed(relabel), self._model)
+        return super().rename(name_dict)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""

@@ -68,6 +68,8 @@ Version 0.9.1
 
 * ``Model.remove_variables`` is 2-5x faster. The masked labels are filtered once per removal instead of once per constraint group, membership is tested against the contiguous label range rather than by a sort-based ``isin``, and CSR-backed constraints are matched on term positions instead of gathering their labels. (`#895 <https://github.com/PyPSA/linopy/pull/895>`__)
 
+* ``LinearExpression.reindex`` keeps a sparse (CSR-backed) expression sparse for plain label changes — reorder, add, or drop coordinates — instead of expanding to the dense rectangle. New coordinates become absent cells and the result matches the dense reindex, so a ``groupby(sparse=True) → reindex → merge`` chain stays sparse and the build peak stays low (v1 only; other arguments fall back to dense). (`#932 <https://github.com/PyPSA/linopy/issues/932>`__)
+
 **Bug fixes**
 
 * An SOS set is now ordered by declaration, not by the values of its coordinates. Labels are names, but they were handed to the solver as SOS weights, so element-for-element identical models could reach different optima — silently changing who is adjacent in a ``sos_type=2`` set — just because their coordinates were named differently. **Behaviour change:** ascending coordinates are unaffected (this covers every piecewise formulation), descending ones now run in reverse with the same adjacency, and only a ``sos_type=2`` set whose numeric coordinates neither ascend nor descend changes meaning — that case now warns, and sorting the index restores the old order. (`#892 <https://github.com/PyPSA/linopy/issues/892>`__, `#893 <https://github.com/PyPSA/linopy/pull/893>`__)
