@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
 import linopy
 from linopy import LinearExpression, Model, Variable
@@ -35,6 +36,7 @@ class Case:
     m: Model
     gen_p: Variable
     flow: Variable
+    flow_t: Variable
     eff: xr.DataArray
     gbus: pd.Series
     bus0: pd.Series
@@ -63,6 +65,7 @@ def base_model(
     m = linopy.Model()
     gen_p = m.add_variables(coords=[gens, snaps], name="gen_p")
     flow = m.add_variables(coords=[lines, snaps], name="flow")
+    flow_t = m.add_variables(coords=[snaps, lines], name="flow_t")
 
     gbus = pd.Series(buses[gen_bus], index=gens, name="bus")
     bus0 = pd.Series(buses[np.arange(n_bus)], index=lines, name="bus")
@@ -71,7 +74,7 @@ def base_model(
         rng.uniform(1, 10, (n_bus, n_snap)), coords=[buses, snaps], name="load"
     ).sortby("bus")
     eff = xr.DataArray(rng.uniform(0.5, 1.5, len(gens)), coords=[gens])
-    return Case(m, gen_p, flow, eff, gbus, bus0, bus1, load)
+    return Case(m, gen_p, flow, flow_t, eff, gbus, bus0, bus1, load)
 
 
 def canon(df: pl.DataFrame) -> pl.DataFrame:
@@ -444,3 +447,173 @@ def test_rename_stays_csr_and_matches_dense() -> None:
     dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).rename(bus="node")
     assert sparse.coord_dims == ("node", "snapshot")
     assert_linequal(sparse, dense)
+
+
+def cross_grid_parts(
+    c: Case, sparse: bool, lines: tuple[str, ...] = ("line1", "line2")
+) -> list[LinearExpression]:
+    """Generation on all buses, flow on a line subset only, snapshot-major on the flow side."""
+    gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=sparse)
+    flow_t = 1.0 * c.flow_t.loc[:, list(lines)]
+    flow = flow_t.groupby(c.bus0.loc[list(lines)]).sum(sparse=sparse)
+    return [gen, flow]
+
+
+def assert_terms_equal(a: LinearExpression, b: LinearExpression) -> None:
+    """``assert_linequal`` up to the width of the (non-contractual) term axis."""
+    width = max(a.nterm, b.nterm)
+    padded = []
+    for e in (a, b):
+        pad = {"_term": (0, width - e.nterm)}
+        fill = {"vars": -1, "coeffs": np.nan}
+        padded.append(LinearExpression(e.data.pad(pad, constant_values=fill), e.model))
+    assert_linequal(*padded)
+
+
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+@pytest.mark.parametrize("order", ["gen-flow", "flow-gen"])
+def test_cross_grid_merge_stays_csr_and_matches_dense(
+    join: JoinOptions, order: str
+) -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
+    if order == "flow-gen":
+        sparse, dense = sparse[::-1], dense[::-1]
+    res = linopy.merge(sparse, join=join)
+    assert res._payload is not None
+    assert res.coord_dims == dense[0].coord_dims
+    assert_terms_equal(res, linopy.merge(dense, join=join))
+
+
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None:
+    require_v1()
+    c = base_model()
+    third_lines = ("line3", "line4")
+    sparse = cross_grid_parts(c, True) + cross_grid_parts(c, True, third_lines)[1:]
+    dense = cross_grid_parts(c, False) + cross_grid_parts(c, False, third_lines)[1:]
+    res = linopy.merge(sparse, join=join)
+    assert res._payload is not None
+    assert_terms_equal(res, linopy.merge(dense, join=join))
+
+
+def test_cross_grid_merge_absent_fill_matches_dense() -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
+    res = linopy.merge(sparse, join="outer", fill_value=linopy.ABSENT)
+    expected = linopy.merge(dense, join="outer", fill_value=linopy.ABSENT)
+    assert res._payload is not None
+    filled = res.fillna(0)
+    assert filled._payload is not None
+    assert_terms_equal(filled, expected.fillna(0))
+    assert_terms_equal(res, expected)
+    assert res.const.isnull().sum() == 3 * c.load.sizes["snapshot"]
+
+
+def test_cross_grid_merge_keeps_absent_cell_absent() -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
+    mask = xr.DataArray([True, False], coords=[dense[1].indexes["bus"]])
+    dense[1] = dense[1].where(mask)
+    res = linopy.merge([sparse[0], dense[1]], join="outer")
+    assert res._payload is not None
+    assert_terms_equal(res, linopy.merge(dense, join="outer"))
+
+
+def test_cross_grid_merge_mixed_dense_operand_stays_csr() -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
+    res = sparse[0].add(dense[1], join="outer")
+    assert res._payload is not None
+    assert_terms_equal(res, dense[0].add(dense[1], join="outer"))
+
+
+@pytest.mark.parametrize(
+    "kwargs, error",
+    [
+        ({}, ValueError),
+        ({"join": "exact"}, xr.AlignmentError),
+        ({"join": "override"}, xr.AlignmentError),
+    ],
+    ids=["auto", "exact", "override"],
+)
+def test_cross_grid_merge_raises_like_dense(kwargs: dict, error: type) -> None:
+    require_v1()
+    c = base_model()
+    with pytest.raises(error):
+        linopy.merge(cross_grid_parts(c, False), **kwargs)
+    with pytest.raises(error):
+        linopy.merge(cross_grid_parts(c, True), **kwargs)
+
+
+def test_merge_with_aux_coord_operand_raises_like_dense() -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
+    tag = xr.DataArray(["x", "y"], coords=[dense[1].indexes["bus"]])
+    tagged = LinearExpression(dense[1].data.assign_coords(tag=tag), c.m)
+    with pytest.raises(xr.MergeError, match="conflicting values for variable 'tag'"):
+        linopy.merge([dense[0], tagged], join="outer")
+    with pytest.raises(xr.MergeError, match="conflicting values for variable 'tag'"):
+        linopy.merge([sparse[0], tagged], join="outer")
+
+
+def test_cross_grid_merge_with_duplicate_labels_raises_like_dense() -> None:
+    require_v1()
+    c = base_model()
+    dup = pd.Index(["bus1", "bus1", "bus2"], name="bus")
+    shed = 1.0 * c.m.add_variables(
+        coords=[dup, c.load.indexes["snapshot"]], name="shed"
+    )
+    gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum()
+    with pytest.raises(ValueError, match="cannot reindex or align"):
+        linopy.merge([dense, shed], join="left")
+    with pytest.raises(ValueError, match="cannot reindex or align"):
+        linopy.merge([gen, shed], join="left")
+
+
+def test_override_merge_same_shape_stays_csr() -> None:
+    require_v1()
+    c = base_model()
+    gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    flow = (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(sparse=True)
+    res = linopy.merge([gen, flow], join="override")
+    assert res._payload is not None
+    dense = [
+        (c.eff * c.gen_p).groupby(c.gbus).sum(),
+        (1.0 * c.flow).groupby(c.bus1.str.upper()).sum(),
+    ]
+    assert_terms_equal(res, linopy.merge(dense, join="override"))
+
+
+def test_cross_grid_balance_freezes_csr() -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    lhs1 = linopy.merge(cross_grid_parts(c1, False), join="outer")
+    con1 = c1.m.add_constraints(lhs1 == c1.load, name="bal")
+    lhs2 = linopy.merge(cross_grid_parts(c2, True), join="outer")
+    assert lhs2._payload is not None
+    con2 = c2.m.add_constraints(lhs2 == c2.load, name="bal", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert_frozen_equal(con1, con2)
+
+
+def test_cross_grid_merge_peak_memory() -> None:
+    require_v1()
+    sizes = (200,) + (1,) * 299
+    n_snap = 50
+    dense_rectangle_bytes = len(sizes) * n_snap * max(sizes) * 16
+    c = base_model(gens_per_bus=sizes, n_snap=n_snap)
+    tracemalloc.start()
+    try:
+        lhs = linopy.merge(cross_grid_parts(c, True), join="outer")
+        c.m.add_constraints(lhs == c.load, name="bal", freeze=True)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < dense_rectangle_bytes / 4
