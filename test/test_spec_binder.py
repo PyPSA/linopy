@@ -183,6 +183,22 @@ def test_lookup_shapes_bind_alike(program: Any, good: dict[str, Any], grp: Any) 
     assert got.values.tolist() == ["n", "e", "n"]
 
 
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+@pytest.mark.parametrize("shape", ["series", "dataarray"])
+def test_extension_strings_bind_as_numpy_objects(
+    program: Any, good: dict[str, Any], storage: str, shape: str
+) -> None:
+    if storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    series = pd.Series(["n", "e"], index=F[:2], dtype=pd.StringDtype(storage))
+    grp = xr.DataArray(series) if shape == "dataarray" else series
+    got = bind(program, {**good, "grp": grp}).lookups["f"]["grp"]
+    assert got.dtype == np.dtype(object)
+    assert got.values[:2].tolist() == ["n", "e"]
+    assert pd.isna(got.values[2])
+    assert got.sel(f=["b", "a"]).values.tolist() == ["n", "e"]
+
+
 def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -> None:
     sparse = {
         **good,

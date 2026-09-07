@@ -138,7 +138,7 @@ class Bound:
         declared = self._declaration(name)
         if name not in self._keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
-        arr = _as_array(name, declared, self.sources[name], self.coords)
+        arr = _numpy(_as_array(name, declared, self.sources[name], self.coords))
         onto = {d: self.coords[d] for d in declared.dims}
         return _aligned(name, arr, onto, _fill(declared))
 
@@ -300,8 +300,22 @@ def _lookups(
         series = _lookup_series(lk.name, over, sources[lk.name])
         _check_lookup(series, lk, over, coords)
         padded = series.reindex(coords[over])
-        out.setdefault(over, {})[lk.name] = xr.DataArray(padded, name=lk.name)
+        out.setdefault(over, {})[lk.name] = _numpy(xr.DataArray(padded, name=lk.name))
     return out
+
+
+def _numpy(arr: xr.DataArray) -> xr.DataArray:
+    """
+    *arr* backed by a numpy array.
+
+    xarray keeps a pandas extension array as it arrives, and pandas 3 hands
+    strings over as one. Its ``dtype`` is no ``np.dtype``, so nothing
+    downstream that records or restores a dtype can name it, and xarray's
+    positional indexing refuses the Arrow-backed variant.
+    """
+    if isinstance(arr.dtype, np.dtype):
+        return arr
+    return arr.copy(data=arr.to_numpy())
 
 
 def _lookup_series(name: str, over: str, obj: Any) -> pd.Series:
