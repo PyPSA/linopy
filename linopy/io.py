@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 NETCDF_VERSION_ATTR = "_linopy_version"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 SPEC_ATTR = "_linopy_spec"
+CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -1037,7 +1038,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     Variables, constraints, the objective, parameters and named
     expressions (``Model.expressions``, including their linear/quadratic
     type) are all persisted and fully restored by
-    :func:`linopy.io.read_netcdf`.
+    :func:`linopy.io.read_netcdf`. The insertion order of each container
+    is stored as a JSON list in the ``_linopy_<kind>_order`` attribute.
 
     A model built with :meth:`Model.add_spec` also persists its spec: the
     YAML text, the master coordinates and the lookups. ``read_netcdf``
@@ -1119,6 +1121,12 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     )
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
+    for kind, container in (
+        ("variables", m.variables),
+        ("expressions", m.expressions),
+        ("constraints", m.constraints),
+    ):
+        ds.attrs[CONTAINER_ORDER_ATTR.format(kind)] = json.dumps(list(container))
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
@@ -1158,6 +1166,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     Notes
     -----
+    Variables, expressions and constraints are restored in the insertion
+    order stored by :func:`to_netcdf`. Files written by earlier versions
+    carry no order and are loaded in sorted name order.
+
     The SOS reformulation lifecycle token is not persisted by
     :func:`to_netcdf`. If the saved model was in reformulated form,
     the deserialized Model is too, but
@@ -1216,19 +1228,29 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
         return ds
 
-    vars = [str(k) for k in ds if str(k).startswith("variables")]
-    var_names = list({str(k).rsplit("-", 1)[0] for k in vars})
+    def container_names(kind: str) -> list[str]:
+        found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
+        order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
+        if order_attr is None:
+            return sorted(found)
+        ordered = [f"{kind}-{name}" for name in json.loads(order_attr)]
+        if len(ordered) != len(found) or set(ordered) != found:
+            mismatch = sorted(set(ordered) ^ found)
+            raise ValueError(
+                f"Stored {kind} order does not match the {kind} found in the "
+                f"file; mismatching names: {mismatch}."
+            )
+        return ordered
+
     variables = {}
-    for k in sorted(var_names):
+    for k in container_names("variables"):
         name = remove_prefix(k, "variables")
         variables[name] = Variable(get_prefix(ds, k), m, name)
 
     m._variables = Variables(variables, m)
 
-    exprs = [str(k) for k in ds if str(k).startswith("expressions")]
-    expr_names = list({str(k).rsplit("-", 1)[0] for k in exprs})
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
-    for k in sorted(expr_names):
+    for k in container_names("expressions"):
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
         expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
@@ -1245,10 +1267,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._expressions = Expressions(expressions, m)
 
-    cons = [str(k) for k in ds if str(k).startswith("constraints")]
-    con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints: dict[str, ConstraintBase] = {}
-    for k in sorted(con_names):
+    for k in container_names("constraints"):
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)
         if con_ds.attrs.get("_linopy_format") == "csr":

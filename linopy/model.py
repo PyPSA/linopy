@@ -34,6 +34,7 @@ from linopy.common import (
     assigned_labels,
     best_int,
     coords_reorder_set,
+    maybe_replace_sign,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -121,6 +122,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DtypeKey = Literal["labels"]
+
+
+def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
+    invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
+        (sign == GREATER_EQUAL) & (rhs == np.inf)
+    )
+    if np.any(invalid):
+        raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
 class Model:
@@ -1184,7 +1193,7 @@ class Model:
             self._connameCounter += 1
         return name
 
-    def _constraint_data_from_lhs(
+    def _constraint_from_lhs(
         self,
         lhs: VariableLike
         | ExpressionLike
@@ -1194,8 +1203,8 @@ class Model:
         sign: SignLike | None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
-    ) -> Dataset:
-        """Build the constraint Dataset from an ``lhs`` and optional ``sign``/``rhs``."""
+    ) -> ConstraintBase:
+        """Build the anonymous constraint from an ``lhs`` and optional ``sign``/``rhs``."""
         msg_required = (
             f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
         )
@@ -1205,28 +1214,28 @@ class Model:
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return lhs.to_constraint(sign, rhs).data
+            return lhs.to_constraint(sign, rhs)
         elif isinstance(lhs, list | tuple):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return self.linexpr(*lhs).to_constraint(sign, rhs).data
+            return self.linexpr(*lhs).to_constraint(sign, rhs)
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return Constraint.from_rule(self, lhs, coords).data
+            return Constraint.from_rule(self, lhs, coords)
         elif isinstance(lhs, AnonymousScalarConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return lhs.to_constraint().data
+            return lhs.to_constraint()
         elif isinstance(lhs, ConstraintBase):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return lhs.data
+            return lhs
         elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return lhs.to_linexpr().to_constraint(sign, rhs).data
+            return lhs.to_linexpr().to_constraint(sign, rhs)
         else:
             raise TypeError(
                 f"`lhs` must be a LinearExpression, Variable, Constraint, tuple, or "
@@ -1362,18 +1371,13 @@ class Model:
         """
 
         name = self._resolve_constraint_name(name)
+        if freeze is None:
+            freeze = self.freeze_constraints
+        freeze = freeze and not self.chunk
 
-        resolved_freeze = self.freeze_constraints if freeze is None else freeze
-        if resolved_freeze and mask is None and not self.chunk:
-            from linopy.constraints import CSRConstraint, extract_csr_pending
-
-            extracted = extract_csr_pending(lhs, sign, rhs)
-            if extracted is not None:
-                payload, csr_sign, csr_rhs = extracted
-                con = CSRConstraint.from_payload(self, payload, csr_sign, csr_rhs, name)
-                return self.constraints.add(con)
-
-        if sign is not None:
+        if isinstance(sign, str):
+            sign = maybe_replace_sign(sign)
+        elif sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         # Capture original RHS for auto-masking before constraint creation
@@ -1384,13 +1388,22 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        data = self._constraint_data_from_lhs(lhs, sign, rhs, coords)
+        con = self._constraint_from_lhs(lhs, sign, rhs, coords)
+        if isinstance(con, CSRConstraint) and freeze and mask is None:
+            _check_infinities(con._sign, con._rhs, name)
+            self.check_force_dim_names(con.coords.to_dataset())
+            enforce_no_multiindex(con, context=f"constraint {name!r}")
+            scaling_grid = validate_scaling(
+                broadcast_to_coords(scaling, con.coords, label="constraint scaling"),
+                "constraint scaling",
+            )
+            cindex = self._cCounter
+            self._cCounter += con.full_size
+            con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
+            return self.constraints.add(con)
+        data = con.data
 
-        invalid_infinity_values = (
-            (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
-        ) | ((data.sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
-        if invalid_infinity_values.any():
-            raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+        _check_infinities(data.sign, data.rhs, name)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
@@ -1451,9 +1464,7 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        if freeze is None:
-            freeze = self.freeze_constraints
-        return self.constraints.add(constraint, freeze=freeze and not self.chunk)
+        return self.constraints.add(constraint, freeze=freeze)
 
     def add_indicator_constraints(
         self,
@@ -1514,7 +1525,7 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
-        data = self._constraint_data_from_lhs(lhs, sign, rhs)
+        data = self._constraint_from_lhs(lhs, sign, rhs).data
 
         data["binary_var"] = binary_var.labels
         data["binary_val"] = binary_val

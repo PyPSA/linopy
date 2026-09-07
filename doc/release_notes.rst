@@ -53,6 +53,10 @@ Upcoming Version
 * The ``linopy.options`` context manager now restores the values that were active on entry instead of resetting all options to their defaults.
 * ``Model.copy`` (and the ``copy.copy``/``copy.deepcopy`` protocols) no longer downgrades a quadratic objective to a linear one. The objective was rebuilt as a ``LinearExpression`` regardless of its type, so the copy silently solved a different problem. ``linopy.testing.assert_model_equal`` now compares the objective by expression type as well, which it could not do before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
 * ``Model.to_netcdf``/``linopy.read_netcdf`` downgraded a quadratic objective the same way; the expression type is now stored alongside the objective and restored on read. Files written by earlier versions are read as before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
+* ``linopy.read_netcdf`` now restores variables, expressions and constraints in their original insertion order instead of alphabetically, so ``matrices.A`` of a round-tripped model is no longer a row/column permutation of the original. The order is stored in the file; files written by earlier versions still load in sorted order. ``linopy.testing.assert_model_equal`` now also compares container order. (`#934 <https://github.com/PyPSA/linopy/issues/934>`__)
+* Adding or removing variables after a constraint was added with ``freeze=True`` no longer breaks ``model.matrices``. The frozen constraint stored dense variable positions as its matrix columns, so blocks frozen at different times disagreed on their width and stacking them raised ``ValueError: inconsistent shapes``. Raw variable labels are stored instead and mapped to positions when the matrix is assembled. Frozen constraints in netCDF files written by earlier versions are read as before. (`#926 <https://github.com/PyPSA/linopy/issues/926>`__)
+
+* A frozen constraint caches the label-to-position mapping of its matrix columns by weak reference and only rebuilds it when the constraint or the set of variables changes. While a persistent snapshot holds the arrays, repeated matrix assembly on an unchanged model returns the same objects, so the snapshot diff can again skip the comparison of untouched frozen constraints by object identity; one-off exports such as ``to_file`` retain no extra memory. (`#933 <https://github.com/PyPSA/linopy/issues/933>`__)
 * ``Solver.close()`` no longer leaves dangling native handles behind. The solver model is now dropped before the environment that owns it, instead of after. And the COPT and MindOpt file interfaces no longer hand back a model they already disposed: after a file-based COPT or MindOpt solve, ``model.solver_model`` is ``None`` rather than a handle into freed memory. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
 
 **Breaking Changes**
@@ -75,6 +79,8 @@ Version 0.9.1
 **Performance**
 
 * ``Model.remove_variables`` is 2-5x faster. The masked labels are filtered once per removal instead of once per constraint group, membership is tested against the contiguous label range rather than by a sort-based ``isin``, and CSR-backed constraints are matched on term positions instead of gathering their labels. (`#895 <https://github.com/PyPSA/linopy/pull/895>`__)
+
+* ``LinearExpression.reindex`` keeps a sparse (CSR-backed) expression sparse for plain label changes — reorder, add, or drop coordinates — instead of expanding to the dense rectangle. New coordinates become absent cells and the result matches the dense reindex, so a ``groupby(sparse=True) → reindex → merge`` chain stays sparse and the build peak stays low (v1 only; other arguments fall back to dense). (`#932 <https://github.com/PyPSA/linopy/issues/932>`__)
 
 **Bug fixes**
 

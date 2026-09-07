@@ -6,6 +6,7 @@ materialization, and direct CSR realization under freeze. v1-only feature.
 from __future__ import annotations
 
 import re
+import tracemalloc
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import xarray as xr
 
 import linopy
 from linopy import LinearExpression, Model, Variable
-from linopy.constraints import Constraint, CSRConstraint
+from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
 from linopy.semantics import is_v1
 from linopy.testing import assert_conequal, assert_linequal
 
@@ -81,6 +82,26 @@ def canon(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def assert_frozen_equal(con1: Constraint, con2: CSRConstraint) -> None:
+    d1, d2 = canon(con1.to_polars()), canon(con2.to_polars())
+    assert d1["labels"].equals(d2["labels"])
+    assert d1["vars"].equals(d2["vars"])
+    assert np.allclose(d1["coeffs"], d2["coeffs"])
+    assert (d1["sign"] == d2["sign"]).all()
+    assert np.allclose(d1["rhs"], d2["rhs"])
+    labels = con1.labels.values.ravel()
+    assert np.array_equal(np.sort(labels[labels != -1]), np.sort(con2.active_labels()))
+
+
+def reindexed_balance(c: Case, sparse: bool) -> LinearExpression:
+    """Generation on all buses plus flow on two lines, both reindexed onto the load grid."""
+    lines = ["line0", "line1"]
+    gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=sparse)
+    flow = (1.0 * c.flow.loc[lines]).groupby(c.bus0.loc[lines]).sum(sparse=sparse)
+    parts = [gen.reindex(bus=c.load.bus), flow.reindex(bus=c.load.bus)]
+    return linopy.merge(parts, join="outer", cls=LinearExpression)
+
+
 def test_csr_requires_v1() -> None:
     c = base_model()
     if is_v1():
@@ -132,6 +153,24 @@ def test_zero_coefficient_rows_stay_active(sparse: bool) -> None:
     assert len(con.active_labels()) == c.load.size
 
 
+def test_merge_keeps_absent_cell_absent() -> None:
+    require_v1()
+    c = base_model()
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum()
+    flow = (1.0 * c.flow).groupby(c.bus0).sum()
+    mask = xr.DataArray(np.arange(len(c.load.bus)) % 2 == 0, coords=[c.load.bus])
+    flow = flow.where(mask)
+
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    tot = linopy.merge([sparse, flow], join="outer")
+    assert tot._payload is not None
+    assert_linequal(tot, linopy.merge([dense, flow], join="outer"))
+
+    con = c.m.add_constraints(tot >= c.load, name="bal", freeze=True)
+    assert isinstance(con, CSRConstraint)
+    assert con.ncons == int(mask.sum()) * c.load.sizes["snapshot"]
+
+
 @pytest.mark.parametrize(
     "grouper, kwargs",
     [
@@ -158,15 +197,7 @@ def test_freeze_realizes_csr_without_dense_rectangle() -> None:
     )
 
     assert isinstance(con2, CSRConstraint)
-    d1, d2 = canon(con1.to_polars()), canon(con2.to_polars())
-    assert d1["labels"].equals(d2["labels"])
-    assert d1["vars"].equals(d2["vars"])
-    assert np.allclose(d1["coeffs"], d2["coeffs"])
-    assert (d1["sign"] == d2["sign"]).all()
-    assert np.allclose(d1["rhs"], d2["rhs"])
-    assert np.array_equal(
-        np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
-    )
+    assert_frozen_equal(con1, con2)
 
 
 def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
@@ -178,6 +209,72 @@ def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
     assert isinstance(con2, Constraint)
     assert_conequal(con1, con2, strict=False)
     assert np.array_equal(con1.labels.values, con2.labels.values)
+
+
+def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    dense = c1.balance_lhs(sparse=False) == c1.load
+    con = c2.balance_lhs(sparse=True) == c2.load
+    assert isinstance(con, CSRConstraint)
+    assert not con.is_assigned
+    assert con.type == "Constraint (unassigned)"
+    assert "None" not in repr(con)
+    assert_conequal(dense, con, strict=False)
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.active_labels()
+    with pytest.raises(ValueError, match="not been assigned"):
+        con.to_polars()
+    with pytest.raises(ValueError, match="not been assigned"):
+        c2.m.constraints.add(con)
+
+    con1 = c1.m.add_constraints(dense, name="bal")
+    con2 = c2.m.add_constraints(con, name="bal", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert con2.is_assigned
+    assert np.array_equal(
+        np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
+    )
+    assert_conequal(con1, con2, strict=False)
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
+    require_v1()
+
+    def build(sparse: bool) -> ConstraintBase:
+        c = base_model()
+        gens = c.gen_p.indexes["gen"]
+        gen_p = c.gen_p.where(xr.DataArray(gens != "gen7", coords=[gens]))
+        lhs = (c.eff * gen_p).groupby(c.gbus).sum(sparse=sparse)
+        return c.m.add_constraints(lhs == c.load, name="bal", freeze=freeze)
+
+    dense, sparse = build(False), build(True)
+    assert isinstance(sparse, CSRConstraint if freeze else Constraint)
+    assert_conequal(dense, sparse, strict=False)
+    np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    with pytest.raises(ValueError, match="incorrect infinite values"):
+        c.m.add_constraints(c.balance_lhs(sparse) <= -np.inf, name="bal", freeze=True)
+
+
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_constraint_applies_row_scaling(sparse: bool) -> None:
+    require_v1()
+    c = base_model()
+    snaps = c.load.indexes["snapshot"]
+    scaling = xr.DataArray(np.arange(1.0, len(snaps) + 1), coords=[snaps])
+    con = c.m.add_constraints(
+        c.balance_lhs(sparse) == c.load, name="bal", freeze=True, scaling=scaling
+    )
+    assert isinstance(con, CSRConstraint)
+    expected = scaling.broadcast_like(con.scaling).transpose(*con.scaling.dims)
+    xr.testing.assert_equal(con.scaling, expected)
 
 
 def test_option_gates_csr_and_freeze_model_default() -> None:
@@ -257,3 +354,93 @@ def test_lp_files_identical(tmp_path: Path) -> None:
     c1.m.to_file(f1)
     c2.m.to_file(f2)
     assert canon_lp(f1.read_text()) == canon_lp(f2.read_text())
+
+
+@pytest.mark.parametrize(
+    "indexers",
+    [
+        {"bus": ["bus3", "bus0", "bus1", "bus2", "bus4"]},
+        {"bus": ["bus0", "bus1", "bus2", "bus3", "bus4", "bus9"]},
+        {"bus": ["bus3", "bus0"]},
+        {"bus": ["bus4", "bus0", "bus7"], "snapshot": [2, 0, 5]},
+    ],
+    ids=["reorder", "add", "drop", "multi_dim"],
+)
+def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
+    require_v1()
+    c = base_model()
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).reindex(indexers)
+    assert sparse._payload is not None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).reindex(indexers)
+    assert_linequal(sparse, dense)
+
+
+def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
+    require_v1()
+    c = base_model()
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    res = sparse.reindex(bus=["bus3", "bus0"], copy=False)
+    assert res._payload is None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False)
+    assert_linequal(res, dense.reindex(bus=["bus3", "bus0"]))
+
+
+def test_reindex_merge_chain_freezes_csr() -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    con1 = c1.m.add_constraints(reindexed_balance(c1, False) == c1.load, name="bal")
+    tot = reindexed_balance(c2, True)
+    assert tot._payload is not None
+    con2 = c2.m.add_constraints(tot == c2.load, name="bal", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert_frozen_equal(con1, con2)
+
+
+def test_reindex_merge_chain_peak_memory() -> None:
+    require_v1()
+    sizes = (200,) + (1,) * 299
+    n_snap = 50
+    dense_rectangle_bytes = len(sizes) * n_snap * max(sizes) * 16
+    c = base_model(gens_per_bus=sizes, n_snap=n_snap)
+    tracemalloc.start()
+    try:
+        c.m.add_constraints(
+            reindexed_balance(c, True) == c.load, name="bal", freeze=True
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < dense_rectangle_bytes / 4
+
+
+@pytest.mark.parametrize("value", [0.0, 3.5])
+def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
+    require_v1()
+    c = base_model()
+    wide = {"bus": [f"bus{i}" for i in range(7)]}
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).reindex(wide)
+    filled = sparse.fillna(value)
+    assert filled._payload is not None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).reindex(wide)
+    assert_linequal(filled, dense.fillna(value))
+
+
+def test_fillna_with_array_falls_back_to_dense() -> None:
+    require_v1()
+    c = base_model()
+    fill = xr.zeros_like(c.load)
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    res = sparse.fillna(fill)
+    assert res._payload is None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False)
+    assert_linequal(res, dense.fillna(fill))
+
+
+def test_rename_stays_csr_and_matches_dense() -> None:
+    require_v1()
+    c = base_model()
+    sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True).rename(bus="node")
+    assert sparse._payload is not None
+    dense = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=False).rename(bus="node")
+    assert sparse.coord_dims == ("node", "snapshot")
+    assert_linequal(sparse, dense)

@@ -133,8 +133,8 @@ def assert_model_equal(a: Model, b: Model) -> None:
     for k in a.dataset_attrs:
         assert_datasetequal(getattr(a, k), getattr(b, k))
 
-    assert set(a.variables) == set(b.variables)
-    assert set(a.constraints) == set(b.constraints)
+    assert list(a.variables) == list(b.variables)
+    assert list(a.constraints) == list(b.constraints)
 
     for v in a.variables:
         assert_varequal(a.variables[v], b.variables[v])
@@ -142,7 +142,7 @@ def assert_model_equal(a: Model, b: Model) -> None:
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
 
-    assert set(a.expressions) == set(b.expressions)
+    assert list(a.expressions) == list(b.expressions)
 
     for e in a.expressions:
         assert_exprequal(a.expressions[e], b.expressions[e])
