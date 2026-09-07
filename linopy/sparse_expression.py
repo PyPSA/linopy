@@ -26,9 +26,10 @@ import numpy as np
 import pandas as pd
 import scipy.sparse
 from xarray import Dataset
+from xarray.core.types import JoinOptions
 
 from linopy.constants import TERM_DIM
-from linopy.semantics import enforce_aux_conflict
+from linopy.semantics import FillValueLike, enforce_aux_conflict, join_fill
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
@@ -130,21 +131,14 @@ class CSRPayload:
         )
 
     @classmethod
-    def from_expression(
-        cls, expr: LinearExpression, template: CSRPayload
-    ) -> CSRPayload | None:
-        """Convert a dense expression on the template's grid, else None."""
-        if set(expr.coord_dims) != set(template.grid_dims):
-            return None
-        for d in expr.coord_dims:
-            if not expr.data.get_index(d).equals(template.indexes[str(d)]):
-                return None
-        first = template.grid_dims[0]
-        codes = {first: np.arange(len(template.indexes[first]))}
-        coords = _aux_coords(expr, set(template.grid_dims))
-        return cls._from_scatter(
-            expr, template.grid_dims, template.indexes, first, codes, False, coords
-        )
+    def from_expression(cls, expr: LinearExpression) -> CSRPayload:
+        """Convert a dense expression to CSR form on its own coordinate grid."""
+        grid_dims = tuple(str(d) for d in expr.coord_dims)
+        indexes = {d: expr.data.get_index(d).rename(d) for d in grid_dims}
+        first = grid_dims[0]
+        codes = {first: np.arange(len(indexes[first]))}
+        coords = _aux_coords(expr, set(grid_dims))
+        return cls._from_scatter(expr, grid_dims, indexes, first, codes, False, coords)
 
     @classmethod
     def _from_scatter(
@@ -211,15 +205,25 @@ class CSRPayload:
     def scaled(self, factor: float) -> CSRPayload:
         return replace(self, csr=self.csr * factor, const=self.const * factor)
 
-    def reindexed(self, indexes: dict[str, pd.Index]) -> CSRPayload:
+    def reindexed(
+        self,
+        indexes: dict[str, pd.Index],
+        grid_dims: tuple[str, ...] | None = None,
+        fill: float = np.nan,
+    ) -> CSRPayload:
         """
-        Remap rows onto new per-dim indexes without the dense rectangle:
-        dropped labels vanish, new labels are absent cells (NaN const).
+        Remap rows onto new per-dim indexes, optionally in a new dim order,
+        without the dense rectangle: dropped labels vanish, new labels get
+        ``fill`` as their constant (NaN: absent cells).
         """
-        shape, strides = _grid_layout(self.grid_dims, indexes)
+        grid_dims = grid_dims or self.grid_dims
+        shape, strides = _grid_layout(grid_dims, indexes)
+        stride_of = dict(zip(grid_dims, strides))
         positions = [indexes[d].get_indexer(self.indexes[d]) for d in self.grid_dims]
         valid = _flat_cells([pos == -1 for pos in positions]) == 0
-        row_map = _flat_cells([pos * s for pos, s in zip(positions, strides)])
+        row_map = _flat_cells(
+            [pos * stride_of[d] for pos, d in zip(positions, self.grid_dims)]
+        )
 
         coo = self.csr.tocoo()
         keep = valid[coo.coords[0]]
@@ -229,7 +233,7 @@ class CSRPayload:
         coo = scipy.sparse.coo_array(
             (coo.data[keep], (rows, cols)), shape=(n_cells, self.csr.shape[1])
         )
-        const = np.full(n_cells, np.nan)
+        const = np.full(n_cells, fill)
         const[row_map[valid]] = self.const[valid]
         coords = {
             name: (
@@ -242,6 +246,7 @@ class CSRPayload:
             self,
             csr=scipy.sparse.csr_array(coo),
             const=const,
+            grid_dims=grid_dims,
             indexes=indexes,
             coords=coords,
         )
@@ -271,22 +276,25 @@ class CSRPayload:
         Sparse matrix addition == merge along the term dimension. Goes through
         COO so explicit zero coefficients survive (scipy's ``+`` drops them),
         keeping a cell with only zero-coefficient terms distinguishable from
-        an empty cell, as on the dense path. Auxiliary coordinates propagate
-        and conflicting ones raise (§11), as on the dense path.
+        an empty cell, as on the dense path. A cell absent in either operand
+        is absent in the sum and carries no terms (v1 dead-term invariant).
+        Auxiliary coordinates propagate and conflicting ones raise (§11), as
+        on the dense path.
         """
+        const = self.const + other.const
         a, b = self.csr.tocoo(), other.csr.tocoo()
         shape = (self.n_cells, max(a.shape[1], b.shape[1]))
         rows = np.concatenate([a.coords[0], b.coords[0]])
         cols = np.concatenate([a.coords[1], b.coords[1]])
         data = np.concatenate([a.data, b.data])
-        coo = scipy.sparse.coo_array((data, (rows, cols)), shape=shape)
+        present = ~np.isnan(const)[rows]
+        coo = scipy.sparse.coo_array(
+            (data[present], (rows[present], cols[present])), shape=shape
+        )
         enforce_aux_conflict([Dataset(coords=p.coords) for p in (self, other)])
         coords = other.coords | self.coords
         return replace(
-            self,
-            csr=scipy.sparse.csr_array(coo),
-            const=self.const + other.const,
-            coords=coords,
+            self, csr=scipy.sparse.csr_array(coo), const=const, coords=coords
         )
 
     def materialize(self) -> LinearExpression:
@@ -352,14 +360,56 @@ def _flat_cells(axis_positions: list[np.ndarray]) -> np.ndarray:
     return cells.reshape(-1)
 
 
+def _aligned(
+    payloads: list[CSRPayload], join: JoinOptions | None, fill: float
+) -> list[CSRPayload] | None:
+    """
+    Conform the payloads to the grid an explicit join produces, cells the
+    join creates carrying ``fill`` as constant. None where the dense path
+    owns the semantics: ``exact`` and the auto-detected join raise there on
+    differing grids, ``override`` on differing shapes, any join on
+    non-unique labels.
+    """
+    template = payloads[0]
+    dims = template.grid_dims
+    if any(not p.indexes[d].is_unique for p in payloads for d in dims):
+        return None
+    if join == "override":
+        if any(p.grid_dims != dims or p.shape != template.shape for p in payloads):
+            return None
+        return [replace(p, indexes=template.indexes) for p in payloads]
+    if join == "left":
+        indexes = template.indexes
+    elif join == "right":
+        indexes = payloads[-1].indexes
+    elif join in ("outer", "inner"):
+        combine = pd.Index.union if join == "outer" else pd.Index.intersection
+        indexes = {}
+        for d in dims:
+            index = template.indexes[d]
+            for p in payloads[1:]:
+                index = combine(index, p.indexes[d])
+            indexes[d] = pd.Index(index, name=d)
+    else:
+        return None
+    return [p.reindexed(indexes, dims, fill) for p in payloads]
+
+
 def try_csr_merge(
-    exprs: Any, dim: str, join: Any, kwargs: dict
+    exprs: Any,
+    dim: str,
+    join: JoinOptions | None,
+    fill_value: FillValueLike,
+    kwargs: dict[str, Any],
 ) -> LinearExpression | None:
     """
     Sparse branch of :func:`linopy.expressions.merge`: combine plain
-    LinearExpressions on one shared grid (CSR-backed or dense-convertible),
-    where any join produces the identical result. Returns None to fall
-    through to the dense path.
+    LinearExpressions over one set of grid dimensions (CSR-backed or
+    dense-convertible) as sparse matrix addition. Grids that differ in
+    their labels are aligned row-wise onto the joined grid, the cells the
+    join creates carrying the fill of the dense path (zero, or NaN for
+    ``fill_value=ABSENT``); auxiliary coordinates across differing grids
+    are left to the dense path. Returns None to fall through to the dense path.
     """
     from linopy.expressions import LinearExpression
 
@@ -367,18 +417,28 @@ def try_csr_merge(
         return None
     if not all(type(e) is LinearExpression for e in exprs):
         return None
-    payloads = [e._payload for e in exprs if e._payload is not None]
-    if not payloads:
+    if all(e._payload is None for e in exprs):
         return None
+    dims = set(exprs[0].coord_dims)
+    if any(set(e.coord_dims) != dims for e in exprs[1:]):
+        return None
+    for e in exprs:
+        if e._payload is None and set(e.data.coords) - dims != set(
+            _aux_coords(e, dims)
+        ):
+            return None
+
+    payloads = [e._payload or CSRPayload.from_expression(e) for e in exprs]
     template = payloads[0]
     if not all(template.same_grid(p) for p in payloads[1:]):
-        return None
-
-    combined: CSRPayload | None = None
-    for e in exprs:
-        payload = e._payload or CSRPayload.from_expression(e, template)
-        if payload is None:
+        if any(p.coords for p in payloads):
             return None
-        combined = payload if combined is None else combined.add(payload)
-    assert combined is not None
+        aligned = _aligned(payloads, join, join_fill(fill_value, 0.0))
+        if aligned is None:
+            return None
+        payloads = aligned
+
+    combined = payloads[0]
+    for payload in payloads[1:]:
+        combined = combined.add(payload)
     return LinearExpression._from_payload(combined, exprs[0].model)
