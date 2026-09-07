@@ -1,5 +1,5 @@
 """
-Tests for sparse groupby-sum (linopy.sparse_expression): type stability, transparent
+Tests for sparse groupby-sum (linopy.csr): type stability, transparent
 materialization, and direct CSR realization under freeze. v1-only feature.
 """
 
@@ -230,7 +230,7 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
         assert set(csr.coords) == {"period", "season"}
     else:
         assert np.isnan(csr.const).sum() == 2 * 2
-    assert csr.grid_dims == dense.coord_dims
+    assert csr.grid.dims == dense.coord_dims
     assert_linequal(sparse, dense)
 
 
