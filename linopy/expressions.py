@@ -138,7 +138,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import (
         AnonymousScalarConstraint,
-        Constraint,
+        ConstraintBase,
     )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
@@ -1286,13 +1286,13 @@ class BaseExpression(ABC):
     def __truediv__(self, other: SideLike) -> Self:
         return self.__div__(other)
 
-    def __le__(self, rhs: SideLike) -> Constraint:
+    def __le__(self, rhs: SideLike) -> ConstraintBase:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> Constraint:
+    def __ge__(self, rhs: SideLike) -> ConstraintBase:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
+    def __eq__(self, rhs: SideLike) -> ConstraintBase:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1448,7 +1448,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Less than or equal constraint.
 
@@ -1468,7 +1468,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Greater than or equal constraint.
 
@@ -1488,7 +1488,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Equality constraint.
 
@@ -1766,7 +1766,7 @@ class BaseExpression(ABC):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> Constraint:
+    ) -> ConstraintBase:
         """
         Convert a linear expression to a constraint.
 
@@ -1800,8 +1800,12 @@ class BaseExpression(ABC):
         Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
         after the subtraction filled it with 0.
         """
-        if self._payload is not None and isinstance(sign, str) and is_constant(rhs):
-            return constraints.Constraint._from_pending(self, sign, rhs, self.model)
+        if self._payload is not None and isinstance(sign, str):
+            rhs_da = constraints.csr_rhs(self._payload, rhs)
+            if rhs_da is not None:
+                return constraints.CSRConstraint.from_payload(
+                    self._payload, sign, rhs_da
+                )
 
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
