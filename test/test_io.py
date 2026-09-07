@@ -144,9 +144,9 @@ def test_model_to_netcdf_keeps_insertion_order(
     assert list(p.expressions) == ["y", "b"]
     assert list(p.constraints) == ["con2", "con1"]
     assert_model_equal(unsorted_model, p)
-    np.testing.assert_array_equal(
-        unsorted_model.matrices.A.toarray(), p.matrices.A.toarray()
-    )
+    A, A_read = unsorted_model.matrices.A, p.matrices.A
+    assert A is not None and A_read is not None
+    np.testing.assert_array_equal(A.toarray(), A_read.toarray())
 
 
 def test_read_netcdf_without_order_attrs_falls_back_to_sorted(
