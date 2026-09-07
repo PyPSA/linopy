@@ -123,6 +123,17 @@ def test_csr_capture_deterministic(baseline_model: Model) -> None:
         np.testing.assert_array_equal(b1.data, b2.data)
 
 
+def test_frozen_capture_keeps_buffer_identity(frozen_model: Model) -> None:
+    s1 = ModelSnapshot.capture(frozen_model)
+    frozen_model.reset_solution()
+    s2 = ModelSnapshot.capture(frozen_model)
+    for name in s1.con_buffers:
+        b1, b2 = s1.con_buffers[name], s2.con_buffers[name]
+        assert b1.indptr is b2.indptr, name
+        assert b1.indices is b2.indices, name
+        assert b1.data is b2.data, name
+
+
 @pytest.fixture
 def frozen_model() -> Model:
     m = Model()
@@ -144,17 +155,33 @@ def test_frozen_con_buffers_keep_data_identity(frozen_model: Model) -> None:
         assert b1.indices is b2.indices, name
 
 
-def test_frozen_con_positional_csr_follows_variable_changes(
-    frozen_model: Model,
-) -> None:
-    con = frozen_model.constraints["c2"]
-    label_index = frozen_model.variables.label_index
+def test_frozen_con_positional_csr_follows_variable_changes() -> None:
+    m = Model()
+    m.add_variables(0, 10, coords=[range(3)], name="x")
+    y = m.add_variables(0, 5, coords=[range(2)], name="y")
+    m.add_constraints(y >= 1, name="c", freeze=True)
+    con = m.constraints["c"]
+    label_index = m.variables.label_index
     before = _extract_con_buffers(con, label_index).indices
-    frozen_model.add_variables(0, 1, coords=[range(2)], name="z")
+    np.testing.assert_array_equal(before, [3, 4])
+    m.remove_variables("x")
     after = _extract_con_buffers(con, label_index).indices
-    assert after is not before
-    np.testing.assert_array_equal(after, before)
+    np.testing.assert_array_equal(after, [0, 1])
     assert _extract_con_buffers(con, label_index).indices is after
+
+
+def test_frozen_con_positional_csr_follows_csr_rebind() -> None:
+    m = Model()
+    x = m.add_variables(0, 10, coords=[range(3)], name="x")
+    z = m.add_variables(0, 1, name="z")
+    m.add_constraints(x + 1e-12 * z >= 1, name="c", freeze=True)
+    con = m.constraints["c"]
+    label_index = m.variables.label_index
+    before = _extract_con_buffers(con, label_index)
+    con.sanitize_zeros()
+    after = _extract_con_buffers(con, label_index)
+    np.testing.assert_array_equal(before.indices, [0, 3, 1, 3, 2, 3])
+    np.testing.assert_array_equal(after.indices, [0, 1, 2])
 
 
 def test_untouched_frozen_constraint_needs_no_rebuild(frozen_model: Model) -> None:

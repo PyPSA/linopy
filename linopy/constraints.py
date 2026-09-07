@@ -571,6 +571,9 @@ def _csr_from_label_columns(
     return csr
 
 
+_PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, scipy.sparse.csr_array]
+
+
 class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
@@ -615,6 +618,7 @@ class CSRConstraint(ConstraintBase):
         "_dual",
         "_binvar_labels",
         "_binval",
+        "_positional_cache",
     )
 
     def __init__(
@@ -648,9 +652,7 @@ class CSRConstraint(ConstraintBase):
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
-        self._positional_cache: (
-            tuple[scipy.sparse.csr_array, np.ndarray, scipy.sparse.csr_array] | None
-        ) = None
+        self._positional_cache: _PositionalCache | None = None
 
     @property
     def model(self) -> Model:
@@ -738,7 +740,10 @@ class CSRConstraint(ConstraintBase):
             scaling=self._scaling,
         )
         kwargs.update(changes)
-        return CSRConstraint(**kwargs)
+        new = CSRConstraint(**kwargs)
+        if kwargs["csr"] is self._csr:
+            new._positional_cache = self._positional_cache
+        return new
 
     def assign_labels(
         self, cindex: int, name: str, scaling: np.ndarray | None = None
@@ -1019,9 +1024,10 @@ class CSRConstraint(ConstraintBase):
         """
         csr = self._csr
         label_to_pos = label_index.label_to_pos
-        cache = self._positional_cache
-        if cache is not None and cache[0] is csr and cache[1] is label_to_pos:
-            return cache[2]
+        if self._positional_cache is not None:
+            cached_csr, cached_label_to_pos, positional = self._positional_cache
+            if cached_csr is csr and cached_label_to_pos is label_to_pos:
+                return positional
         positional = _csr_from_label_columns(
             csr.data, csr.indices, csr.indptr, csr.shape[0], label_index, self._name
         )
@@ -1165,6 +1171,7 @@ class CSRConstraint(ConstraintBase):
             csr.data[zeros] = 0
             csr.eliminate_zeros()
             self._csr = csr
+            self._positional_cache = None
         return self
 
     def sanitize_missings(self) -> CSRConstraint:
@@ -1188,6 +1195,7 @@ class CSRConstraint(ConstraintBase):
             return self
         keep = ~invalid
         self._csr = self._csr[keep]
+        self._positional_cache = None
         self._active_positions = self._active_positions[keep]
         self._rhs = self._rhs[keep]
         self._scaling = self._scaling[keep]
