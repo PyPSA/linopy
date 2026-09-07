@@ -88,7 +88,7 @@ Version 0.9.1
 
 * ``LinearExpression.reindex`` keeps a sparse (CSR-backed) expression sparse for plain label changes — reorder, add, or drop coordinates — instead of expanding to the dense rectangle. New coordinates become absent cells and the result matches the dense reindex, so a ``groupby(sparse=True) → reindex → merge`` chain stays sparse and the build peak stays low (v1 only; other arguments fall back to dense). (`#932 <https://github.com/PyPSA/linopy/issues/932>`__)
 
-* ``linopy.merge`` (and ``+`` / ``-`` / ``.add`` / ``.sub`` with an explicit ``join=``) keeps sparse (CSR-backed) expressions sparse when the operands live on different label subsets of the same dimensions, e.g. a nodal balance summing grouped generator, line and load terms. The payloads are aligned row-wise onto the joined grid (``outer`` / ``inner`` / ``left`` / ``right`` / ``override``) instead of falling back to the dense rectangle; the positions the join creates carry the same fill as the dense path (zero, or absent with ``fill_value=linopy.ABSENT``) and the result equals the dense one. Dense operands on a different grid are converted on the fly. (`#749 <https://github.com/PyPSA/linopy/issues/749>`__)
+* ``linopy.merge`` (and ``+`` / ``-`` / ``.add`` / ``.sub`` with an explicit ``join=``) keeps sparse (CSR-backed) expressions sparse when the operands live on different label subsets of the same dimensions, e.g. a nodal balance summing grouped generator, line and load terms. The CSR expressions are aligned row-wise onto the joined grid (``outer`` / ``inner`` / ``left`` / ``right`` / ``override``) instead of falling back to the dense rectangle; the positions the join creates carry the same fill as the dense path (zero, or absent with ``fill_value=linopy.ABSENT``) and the result equals the dense one. Dense operands on a different grid are converted on the fly. (`#749 <https://github.com/PyPSA/linopy/issues/749>`__)
 
 **Bug fixes**
 
@@ -194,6 +194,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 *Compact multi-key grouping*
 
 * ``LinearExpressionGroupby.sum`` gains a pandas-style ``observed`` parameter for grouping by a list of coordinate names: ``expr.groupby(["period", "season"]).sum(observed=True)`` keeps the result stacked over only the observed key combinations (a ``MultiIndex`` ``group`` dimension) instead of unstacking into one dimension per key, which materialises the dense cartesian grid. The default ``observed=False`` mirrors xarray. When the grid would be mostly fill values, a ``UserWarning`` points to ``observed=True``.
+* The CSR-backed sparse groupby-sum (``sum(sparse=True)`` or ``linopy.options["sparse_groupby"]``, v1 semantics) now accepts multi-key groupers: a list of coordinate names or a pandas ``DataFrame``. With ``observed=True`` (always for a ``DataFrame``) the CSR result stays compact over the observed key combinations only, with neither the cartesian grid nor the group-size term padding; with ``observed=False`` it keeps one dimension per key, absent combinations being empty cells (`#757 <https://github.com/PyPSA/linopy/issues/757>`__).
 
 *Other additions*
 
