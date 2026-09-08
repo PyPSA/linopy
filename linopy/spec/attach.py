@@ -1,7 +1,7 @@
 """
-Bind user data to a math-spec program.
+Attach user data to a math-spec program.
 
-The language fixes three binding rules and this module enforces them: a
+The language fixes three attachment rules and this module enforces them: a
 dimension's members come only from the source keyed by the dimension's
 name, their order is the source's order and is never sorted, and a
 parameter or lookup source is read for values, never for labels. Parameters
@@ -62,20 +62,20 @@ _PARAMETER_SHAPES = (
 )
 
 EVOLVING_MESSAGE = (
-    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.bind are "
+    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.attach are "
     "newly added and their details may change in minor releases. Silence with "
     '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
 
-def bind(
+def attach(
     program: ms.Program,
     sources: Mapping[str, Any] | xr.Dataset,
     *,
     retain: Retain = "report",
-) -> Bound:
+) -> Attached:
     """
-    Bind *sources* to *program*: master coordinates now, parameters on demand.
+    Attach *sources* to *program*: master coordinates now, parameters on demand.
 
     Parameters
     ----------
@@ -87,7 +87,7 @@ def bind(
         is accepted too: its indexes are dimension sources, its data
         variables parameters and lookups.
     retain
-        Which parameters :meth:`Bound.retained` persists.
+        Which parameters :meth:`Attached.retained` persists.
 
     Raises
     ------
@@ -108,18 +108,18 @@ def bind(
     _check_keys(program, keys)
     coords = _master_coords(program, sources, keys)
     lookups = _lookups(program, sources, keys, coords)
-    return Bound(program, coords, lookups, retain, sources, keys)
+    return Attached(program, coords, lookups, retain, sources, keys)
 
 
 @dataclass(frozen=True, eq=False)
-class Bound:
+class Attached:
     """
-    A program bound to its data.
+    A program attached to its data.
 
     Attributes
     ----------
     program
-        The lowered spec the data is bound to.
+        The lowered spec the data is attached to.
     coords
         Master coordinates by dimension, in source order, each index
         named after its dimension. A declared dimension nothing reaches
@@ -180,7 +180,7 @@ class Bound:
         if declared.derivation is not None:
             raise SpecDataError(
                 f"parameter '{name}' is emitted by piecewise block '{declared.derivation.block}' "
-                f"and is filled from the block's own breakpoints, not bound from sources."
+                f"and is filled from the block's own breakpoints, not attached from sources."
             )
         return declared
 

@@ -12,7 +12,7 @@ import xarray as xr
 
 math_spec = pytest.importorskip("math_spec")
 
-from linopy.spec import SpecDataError, bind  # noqa: E402
+from linopy.spec import SpecDataError, attach  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}, "g": {"dtype": "str"}},
@@ -91,8 +91,8 @@ def good() -> dict[str, Any]:
 
 
 def read_all(program: Any, sources: Mapping[str, Any]) -> list[xr.DataArray]:
-    bound = bind(program, sources)
-    return [bound.parameter(name) for name in program.parameters]
+    attached = attach(program, sources)
+    return [attached.parameter(name) for name in program.parameters]
 
 
 CAP_SHAPES = {
@@ -113,10 +113,10 @@ CAP_SHAPES = {
 
 
 @pytest.mark.parametrize("cap", CAP_SHAPES.values(), ids=CAP_SHAPES.keys())
-def test_rank_two_shapes_bind_alike(
+def test_rank_two_shapes_attach_alike(
     program: Any, good: dict[str, Any], cap: Any
 ) -> None:
-    got = bind(program, {**good, "cap": cap}).parameter("cap")
+    got = attach(program, {**good, "cap": cap}).parameter("cap")
     xr.testing.assert_equal(got, CAP)
     assert got.dims == ("f", "t")
 
@@ -132,10 +132,10 @@ COST_SHAPES = {
 
 
 @pytest.mark.parametrize("cost", COST_SHAPES.values(), ids=COST_SHAPES.keys())
-def test_rank_one_shapes_bind_alike(
+def test_rank_one_shapes_attach_alike(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = bind(program, {**good, "cost": cost}).parameter("cost")
+    got = attach(program, {**good, "cost": cost}).parameter("cost")
     xr.testing.assert_equal(got, xr.DataArray(COST, name="cost"))
 
 
@@ -153,7 +153,7 @@ DIMENSION_SHAPES = {
 def test_dimension_shapes_keep_source_order(
     program: Any, good: dict[str, Any], f: Any
 ) -> None:
-    coords = bind(program, {**good, "f": f}).coords
+    coords = attach(program, {**good, "f": f}).coords
     assert coords["f"].tolist() == ["b", "a", "c"]
     assert coords["f"].name == "f"
     assert list(coords) == ["f", "t", "g"]
@@ -162,8 +162,8 @@ def test_dimension_shapes_keep_source_order(
 def test_lookup_is_padded_onto_the_dimension(
     program: Any, good: dict[str, Any]
 ) -> None:
-    bound = bind(program, {**good, "grp": {"a": "n"}})
-    grp = bound.lookups["f"]["grp"]
+    attached = attach(program, {**good, "grp": {"a": "n"}})
+    grp = attached.lookups["f"]["grp"]
     assert grp.dims == ("f",)
     assert grp.sel(f="a").item() == "n"
     assert pd.isna(grp.sel(f=["b", "c"])).all()
@@ -178,21 +178,23 @@ LOOKUP_SHAPES = {
 
 
 @pytest.mark.parametrize("grp", LOOKUP_SHAPES.values(), ids=LOOKUP_SHAPES.keys())
-def test_lookup_shapes_bind_alike(program: Any, good: dict[str, Any], grp: Any) -> None:
-    got = bind(program, {**good, "grp": grp}).lookups["f"]["grp"]
+def test_lookup_shapes_attach_alike(
+    program: Any, good: dict[str, Any], grp: Any
+) -> None:
+    got = attach(program, {**good, "grp": grp}).lookups["f"]["grp"]
     assert got.values.tolist() == ["n", "e", "n"]
 
 
 @pytest.mark.parametrize("storage", ["python", "pyarrow"])
 @pytest.mark.parametrize("shape", ["series", "dataarray"])
-def test_extension_strings_bind_as_numpy_objects(
+def test_extension_strings_attach_as_numpy_objects(
     program: Any, good: dict[str, Any], storage: str, shape: str
 ) -> None:
     if storage == "pyarrow":
         pytest.importorskip("pyarrow")
     series = pd.Series(["n", "e"], index=F[:2], dtype=pd.StringDtype(storage))
     grp = xr.DataArray(series) if shape == "dataarray" else series
-    got = bind(program, {**good, "grp": grp}).lookups["f"]["grp"]
+    got = attach(program, {**good, "grp": grp}).lookups["f"]["grp"]
     assert got.dtype == np.dtype(object)
     assert got.values[:2].tolist() == ["n", "e"]
     assert pd.isna(got.values[2])
@@ -207,18 +209,18 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
         "flag": pd.Series({"a": True}),
         "cap": CAP.sel(t=[0, 1]),
     }
-    bound = bind(program, sparse)
-    cost = bound.parameter("cost")
+    attached = attach(program, sparse)
+    cost = attached.parameter("cost")
     assert cost.sel(f="a").item() == 1.0
     assert cost.sel(f=["b", "c"]).isnull().all()
-    lead = bound.parameter("lead")
+    lead = attached.parameter("lead")
     assert lead.dtype == np.float64
     assert lead.sel(f="a").item() == 1.0
     assert lead.sel(f=["b", "c"]).isnull().all()
-    flag = bound.parameter("flag")
+    flag = attached.parameter("flag")
     assert flag.dtype == bool
     assert flag.values.tolist() == [False, True, False]
-    cap = bound.parameter("cap")
+    cap = attached.parameter("cap")
     assert cap.dims == ("f", "t")
     assert cap.sel(t=2).isnull().all()
 
@@ -235,14 +237,14 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
 def test_scalar_is_broadcast_over_declared_dims(
     program: Any, good: dict[str, Any], name: str, value: Any, expected_dtype: Any
 ) -> None:
-    got = bind(program, {**good, name: value}).parameter(name)
+    got = attach(program, {**good, name: value}).parameter(name)
     assert got.dims == tuple(SPEC["parameters"][name]["dims"])
     assert got.dtype == expected_dtype
     assert (got == value).all()
 
 
 def test_scalar_parameter_stays_scalar(program: Any, good: dict[str, Any]) -> None:
-    got = bind(program, good).parameter("rate")
+    got = attach(program, good).parameter("rate")
     assert got.dims == ()
     assert got.item() == 0.5
 
@@ -255,10 +257,10 @@ EMPTY_SOURCES = {
 
 
 @pytest.mark.parametrize("cost", EMPTY_SOURCES.values(), ids=EMPTY_SOURCES.keys())
-def test_empty_source_binds_as_all_nan(
+def test_empty_source_attaches_as_all_nan(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = bind(program, {**good, "cost": cost}).parameter("cost")
+    got = attach(program, {**good, "cost": cost}).parameter("cost")
     assert got.dtype == np.float64
     assert got.isnull().all()
     assert got.indexes["f"].equals(F)
@@ -268,21 +270,23 @@ def test_missing_parameter_is_refused_when_read(
     program: Any, good: dict[str, Any]
 ) -> None:
     good.pop("cost")
-    bound = bind(program, good)
+    attached = attach(program, good)
     with pytest.raises(SpecDataError, match="no data provided for parameter 'cost'"):
-        bound.parameter("cost")
+        attached.parameter("cost")
 
 
 def test_undeclared_parameter_is_refused_with_a_hint(
     program: Any, good: dict[str, Any]
 ) -> None:
     with pytest.raises(SpecDataError, match="unknown parameter 'csot'.*'cost'"):
-        bind(program, good).parameter("csot")
+        attach(program, good).parameter("csot")
 
 
-def test_retain_is_validated_before_binding(program: Any, good: dict[str, Any]) -> None:
+def test_retain_is_validated_before_attaching(
+    program: Any, good: dict[str, Any]
+) -> None:
     with pytest.raises(SpecDataError, match=r"'report', 'all', 'none'") as error:
-        bind(program, good, retain="reports")  # type: ignore[arg-type]
+        attach(program, good, retain="reports")  # type: ignore[arg-type]
     assert "Did you mean 'report'?" in str(error.value)
 
 
@@ -475,8 +479,8 @@ def test_int_labels_are_shown_as_written(program: Any, good: dict[str, Any]) -> 
 def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
     dims = {"f": F, "t": T, "g": ["n", "e"]}
     values = {k: xr.DataArray(v) for k, v in good.items() if k not in dims}
-    from_dataset = bind(program, xr.Dataset(values, coords=dims))
-    from_mapping = bind(program, good)
+    from_dataset = attach(program, xr.Dataset(values, coords=dims))
+    from_mapping = attach(program, good)
     assert from_dataset.coords["f"].equals(from_mapping.coords["f"])
     for name in program.parameters:
         xr.testing.assert_equal(
@@ -510,10 +514,10 @@ def test_sources_are_pulled_by_key_on_demand(
     program: Any, good: dict[str, Any]
 ) -> None:
     sources = Counting(good)
-    bound = bind(program, sources)
+    attached = attach(program, sources)
     assert set(sources.pulled) == {"f", "t", "g", "grp"}
-    bound.parameter("cap")
-    bound.parameter("cap")
+    attached.parameter("cap")
+    attached.parameter("cap")
     assert sources.pulled.count("cap") == 2
 
 
@@ -528,7 +532,7 @@ def test_sources_are_pulled_by_key_on_demand(
 def test_retained_follows_the_named_expressions(
     program: Any, good: dict[str, Any], retain: Any, expected: set[str]
 ) -> None:
-    retained = bind(program, good, retain=retain).retained()
+    retained = attach(program, good, retain=retain).retained()
     assert set(retained.data_vars) == expected
     assert retained.coords["f"].values.tolist() == ["b", "a", "c"]
 
@@ -570,14 +574,14 @@ def test_report_closure_reads_names_and_masks() -> None:
         "on": pd.Series([True], index=f),
         "other": pd.Series([2.0], index=f),
     }
-    retained = bind(program, sources).retained()
+    retained = attach(program, sources).retained()
     assert set(retained.data_vars) == {"cost", "lag", "span", "on"}
 
 
 def test_unreached_dimension_needs_no_source() -> None:
     dimensions = {**PARITY_SPEC["dimensions"], "z": {"dtype": "int"}}
     program = math_spec.to_program({**PARITY_SPEC, "dimensions": dimensions})
-    assert list(bind(program, GOOD).coords) == ["f"]
+    assert list(attach(program, GOOD).coords) == ["f"]
 
 
 @pytest.mark.parametrize("shape", ["dataarray", "dataarray-transposed", "wide-frame"])
@@ -585,16 +589,16 @@ def test_aligned_array_is_not_copied(
     program: Any, good: dict[str, Any], shape: str
 ) -> None:
     source = CAP_SHAPES[shape]
-    bound = bind(program, {**good, "cap": source})
-    assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
-    assert np.shares_memory(np.asarray(source), bound.parameter("cap").values)
+    attached = attach(program, {**good, "cap": source})
+    assert np.shares_memory(np.asarray(source), attached.parameter("cap").values)
+    assert np.shares_memory(np.asarray(source), attached.parameter("cap").values)
 
 
 def test_master_coordinate_dtype_wins_without_a_copy(
     program: Any, good: dict[str, Any]
 ) -> None:
     source = CAP.assign_coords(t=T.astype("int32"))
-    got = bind(program, {**good, "cap": source}).parameter("cap")
+    got = attach(program, {**good, "cap": source}).parameter("cap")
     assert got.indexes["t"].dtype == np.int64
     assert np.shares_memory(np.asarray(source), got.values)
 
@@ -626,12 +630,12 @@ def test_derived_parameter_is_not_bound_from_sources() -> None:
         "bp_x": pd.Series([0.0, 5.0, 10.0], index=bp),
         "bp_y": pd.Series([0.0, 2.0, 8.0], index=bp),
     }
-    bound = bind(program, sources, retain="all")
-    assert set(bound.retained().data_vars) == {"bp_x", "bp_y"}
+    attached = attach(program, sources, retain="all")
+    assert set(attached.retained().data_vars) == {"bp_x", "bp_y"}
     with pytest.raises(SpecDataError, match="emitted by piecewise block 'curve'"):
-        bound.parameter(derived[0])
+        attached.parameter(derived[0])
     with pytest.raises(SpecDataError, match=derived[0]):
-        bind(program, {**sources, derived[0]: 1.0})
+        attach(program, {**sources, derived[0]: 1.0})
 
 
 # ---------------------------------------------------------------------------
@@ -713,11 +717,11 @@ FLAG_SPEC = {
         ),
     ],
 )
-def test_a_flag_binds_by_its_declaration(column: pd.Series, verdict: Any) -> None:
+def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> None:
     program = math_spec.to_program(FLAG_SPEC)
     sources = {"g": ["a", "b"], "active": column}
     if verdict is ACCEPTED:
-        assert bind(program, sources).parameter("active").dtype == bool
+        assert attach(program, sources).parameter("active").dtype == bool
         return
     with pytest.raises(SpecDataError, match="declared 'bool'"):
         read_all(program, sources)
@@ -787,8 +791,8 @@ TAG_GOOD = sources_from(LOOKUP_GOOD, {"gen_bus": None, "b": None})
 
 def test_a_label_space_lookup_is_padded_onto_the_dimension() -> None:
     program = math_spec.to_program(TAG_SPEC)
-    bound = bind(program, {**TAG_GOOD, "tag": {"s": 7}})
-    tag = bound.lookups["g"]["tag"]
+    attached = attach(program, {**TAG_GOOD, "tag": {"s": 7}})
+    tag = attached.lookups["g"]["tag"]
     assert tag.dims == ("g",)
     assert tag.indexes["g"].tolist() == ["w", "s"]
     assert np.isnan(tag.sel(g="w").item())
@@ -809,7 +813,7 @@ def test_a_label_space_lookup_defect_is_refused(
 ) -> None:
     program = math_spec.to_program(TAG_SPEC)
     with pytest.raises(SpecDataError, match=match):
-        bind(program, {**TAG_GOOD, "tag": tag})
+        attach(program, {**TAG_GOOD, "tag": tag})
 
 
 def test_a_stray_lookup_value_over_an_int_target_is_shown_as_written() -> None:

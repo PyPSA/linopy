@@ -32,7 +32,8 @@ from linopy.constants import warn_evolving_api
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
-from linopy.spec.binder import EVOLVING_MESSAGE, Bound, Retain, bind
+from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
+from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
@@ -72,9 +73,9 @@ def attach(
             f"{len(model.variables)} variable(s) and {len(model.constraints)} constraint(s)."
         )
     text, program = _source(spec)
-    bound: Bound = bind(program, sources, retain=retain)
-    build(model, bound)
-    model.parameters = bound.retained().assign_coords(dict(bound.coords))
+    attached: Attached = attach_data(program, sources, retain=retain)
+    build(model, attached)
+    model.parameters = attached.retained().assign_coords(dict(attached.coords))
     return ModelSpec(model, program, text)
 
 
@@ -121,7 +122,7 @@ class ModelSpec:
         names = list(self.program.named_expressions)
         return f"ModelSpec(expressions={names})"
 
-    def _rebound(self, model: Model) -> ModelSpec:
+    def _reattach(self, model: Model) -> ModelSpec:
         """The same spec, read off *model*."""
         return ModelSpec(model, self.program, self.text)
 
@@ -172,7 +173,7 @@ class ModelSpec:
         self, name: str, sources: Mapping[str, Any] | xr.Dataset
     ) -> NamedExpression:
         """
-        The named expression *name*, with its parameters bound afresh from *sources*.
+        The named expression *name*, with its parameters attached afresh from *sources*.
 
         For a model built with ``retain="none"``, or an expression reading a
         parameter ``retain="report"`` did not keep. *sources* is read the way
@@ -185,16 +186,16 @@ class ModelSpec:
             *sources* label a dimension differently than the
             model was built on.
         """
-        bound = bind(self.program, sources, retain="none")
+        attached = attach_data(self.program, sources, retain="none")
         coords = self.coords
-        for dim, index in bound.coords.items():
+        for dim, index in attached.coords.items():
             if dim in coords and not index.equals(coords[dim]):
                 raise SpecDataError(
                     f"sources describe dimension '{dim}' as {index.tolist()[:5]}, and the model "
                     f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
-                    f"model holds, so the data must be bound on the same labels in the same order."
+                    f"model holds, so the data must be attached on the same labels in the same order."
                 )
-        return NamedExpression(self, name, self._context(bound.parameter))
+        return NamedExpression(self, name, self._context(attached.parameter))
 
     def _retained(self, name: str) -> xr.DataArray:
         if name not in self.parameters:
@@ -248,7 +249,7 @@ class NamedExpression:
 
     The object pins the data sources it was made with for its lifetime, so the
     three views agree. ``expressions[name]`` reads the retained parameters and
-    the solution the model holds; ``evaluate(name, sources)`` binds fresh data.
+    the solution the model holds; ``evaluate(name, sources)`` attaches fresh data.
 
     Attributes
     ----------

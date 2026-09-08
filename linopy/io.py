@@ -1499,7 +1499,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
 
     new_model._parameters = m._parameters.copy(deep=deep)
     if m._spec is not None:
-        new_model._spec = m._spec._rebound(new_model)
+        new_model._spec = m._spec._reattach(new_model)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:

@@ -143,7 +143,7 @@ def _combine(op: Callable[[Value, Value], Value], left: Value, right: Value) -> 
                 raise SpecDataError(
                     f"operands are not aligned on '{dim}': {left.indexes[dim].tolist()[:5]} against "
                     f"{right.indexes[dim].tolist()[:5]}. Every operand is read on the master "
-                    f"coordinates, so the data was bound against other labels than the model was built on."
+                    f"coordinates, so the data was attached against other labels than the model was built on."
                 )
     elif isinstance(left, xr.DataArray) and isinstance(
         right, Variable | LinearExpression | QuadraticExpression

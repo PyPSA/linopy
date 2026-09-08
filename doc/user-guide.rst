@@ -88,11 +88,11 @@ Building a model from a spec
 
 Instead of calling ``add_variables`` / ``add_constraints`` directly,
 you can declare a model as a `math-spec
-<https://github.com/energy-models/math-spec>`__ YAML program bound to
+<https://github.com/energy-models/math-spec>`__ YAML program attached to
 data, and let linopy build it.
 
 - :doc:`building-models-from-specs` — ``Model.from_spec`` and
-  ``model.add_spec``, binding data to a spec, and reading named
+  ``model.add_spec``, attaching data to a spec, and reading named
   expressions back through ``model.spec`` after solving. Requires the
   ``spec`` dependency group and v1 semantics.
 

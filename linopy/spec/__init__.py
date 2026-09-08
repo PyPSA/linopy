@@ -22,16 +22,16 @@ from linopy.spec.accessor import (
     NamedExpressions,
     SpecLike,
 )
-from linopy.spec.binder import Bound, Retain, bind
+from linopy.spec.attach import Attached, Retain, attach
 from linopy.spec.errors import SpecDataError
 
 __all__ = [
-    "Bound",
+    "Attached",
     "ModelSpec",
     "NamedExpression",
     "NamedExpressions",
     "Retain",
     "SpecDataError",
     "SpecLike",
-    "bind",
+    "attach",
 ]

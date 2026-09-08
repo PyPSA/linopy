@@ -119,7 +119,7 @@ Building from specs
 -------------------
 
 Build a model from a `math-spec
-<https://github.com/energy-models/math-spec>`__ YAML program bound to
+<https://github.com/energy-models/math-spec>`__ YAML program attached to
 data. Requires the ``spec`` dependency group.
 
 .. autosummary::
@@ -131,8 +131,8 @@ data. Requires the ``spec`` dependency group.
    spec.ModelSpec
    spec.NamedExpressions
    spec.NamedExpression
-   spec.bind
-   spec.Bound
+   spec.attach
+   spec.Attached
    spec.SpecDataError
 
 

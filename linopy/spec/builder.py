@@ -1,5 +1,5 @@
 """
-Program plus bound data to linopy declarations.
+Program plus attached data to linopy declarations.
 
 A build hands every variable to linopy as its term, then adds special-ordered
 sets, constraints and the objective; which linopy call each construct becomes
@@ -14,7 +14,7 @@ from math_spec import program as ms
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec import curves
-from linopy.spec.binder import Bound
+from linopy.spec.attach import Attached
 from linopy.spec.context import Context
 from linopy.spec.coverage import check_bounds_cover, check_coverage
 from linopy.spec.errors import SpecDataError
@@ -29,9 +29,9 @@ _FLIPPED = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
-def build(model: Model, bound: Bound) -> None:
+def build(model: Model, attached: Attached) -> None:
     """
-    Add every declaration of the bound program to *model*.
+    Add every declaration of the attached program to *model*.
 
     Variables, special-ordered sets, constraints and the objective, in that
     order; then every named expression is checked for divisor and coefficient
@@ -40,10 +40,10 @@ def build(model: Model, bound: Bound) -> None:
     """
     ctx = Context(
         model,
-        bound.program,
-        bound.coords,
-        bound.lookups,
-        Parameters(bound.program, bound.parameter),
+        attached.program,
+        attached.coords,
+        attached.lookups,
+        Parameters(attached.program, attached.parameter),
     )
     curves.validate(ctx.program, ctx.parameters)
     _variables(ctx)
@@ -130,6 +130,6 @@ def _objective(ctx: Context) -> None:
     expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Variable | LinearExpression | QuadraticExpression):
         raise SpecDataError(
-            "the objective carries no variable term once the data is bound, so there is nothing to optimize"
+            "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
     ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])

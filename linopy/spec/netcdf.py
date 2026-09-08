@@ -13,7 +13,7 @@ holds NaN in an array of labels: a hole in a string array comes back as an
 empty string, indistinguishable from a label. So a lookup, and any array of
 objects, is written instead as integer codes into its own table of
 categories, ``-1`` where a label is missing. Decoding indexes the table and
-fills the holes back in, which reproduces what the binder built, values and
+fills the holes back in, which reproduces what attach built, values and
 dtype alike.
 
 The master coordinates are canonical: a container's coordinates for a
