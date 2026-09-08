@@ -191,6 +191,24 @@ def test_a_parameter_keeps_its_dtype(tmp_path: Path, engine: str, name: str) -> 
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    "labels", [[10, 11, 12], [0, 1]], ids=["relabelled", "shorter"]
+)
+def test_a_hand_added_variable_keeps_its_own_labels(
+    tmp_path: Path, engine: str, labels: list[int]
+) -> None:
+    """A container sharing a master dimension's name but not its labels is left alone."""
+    own = pd.Index(labels, name="snapshot")
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+    m.add_variables(coords=[own], name="side")
+    p = roundtrip(m, tmp_path, engine)
+
+    assert p.variables["side"].indexes["snapshot"].equals(own)
+    assert p.spec.coords["snapshot"].equals(m.spec.coords["snapshot"])
+    assert p.variables["p"].indexes["snapshot"].equals(m.spec.coords["snapshot"])
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("frozen", [False, True], ids=["dataset", "csr"])
 def test_every_container_shares_the_master_coordinate_dtypes(
     tmp_path: Path, engine: str, frozen: bool
