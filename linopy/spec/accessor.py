@@ -150,6 +150,26 @@ class ModelSpec:
         """Each named expression as a :class:`NamedExpression`: its math, its linopy fold and its solution."""
         return NamedExpressions(self)
 
+    def declaration(self, name: str) -> Declaration:
+        """
+        One declaration typeset on its own: a named expression, constraint or variable.
+
+        Its math as a single line, no document around it. A named expression
+        also carries its linopy fold and solution through :attr:`expressions`;
+        this handle is the typesetting one every declaration shares.
+        """
+        if name not in self._declarations:
+            raise KeyError(
+                f"unknown declaration '{name}'. "
+                + did_you_mean(name, self._declarations)
+            )
+        return Declaration(self, name)
+
+    @property
+    def _declarations(self) -> list[str]:
+        p = self.program
+        return [*p.named_expressions, *p.constraints, *p.variables]
+
     def to_latex(self, **options: Any) -> str:
         """The whole model typeset as a LaTeX document."""
         return to_latex(self._schema, **options)
@@ -244,7 +264,38 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
         return f"NamedExpressions({list(self)})"
 
 
-class NamedExpression:
+class Declaration:
+    """
+    One declaration of a spec, typeset on its own: math only, no document.
+
+    A named expression, a constraint or a variable, reached by name through
+    :meth:`ModelSpec.declaration`. :class:`NamedExpression` adds the linopy
+    fold and the solution on top of this.
+    """
+
+    def __init__(self, spec: ModelSpec, name: str) -> None:
+        self._spec = spec
+        self._name = name
+
+    def to_latex(self, **options: Any) -> str:
+        """This declaration typeset as a single LaTeX line, no document around it."""
+        return typeset_declaration(self._spec._schema, self._name, "latex", **options)
+
+    def to_markdown(self, **options: Any) -> str:
+        """This declaration typeset as a single Markdown math line, no ``$$`` around it."""
+        return typeset_declaration(
+            self._spec._schema, self._name, "markdown", **options
+        )
+
+    def to_typst(self, **options: Any) -> str:
+        """This declaration typeset as a single Typst line, no document around it."""
+        return typeset_declaration(self._spec._schema, self._name, "typst", **options)
+
+    def _repr_markdown_(self) -> str:
+        return f"$$\n{self.to_markdown()}\n$$"
+
+
+class NamedExpression(Declaration):
     """
     One named expression, in three views: its math, its linopy fold and its solution.
 
@@ -259,8 +310,7 @@ class NamedExpression:
     """
 
     def __init__(self, spec: ModelSpec, name: str, ctx: Context) -> None:
-        self._spec = spec
-        self._name = name
+        super().__init__(spec, name)
         self._ctx = ctx
 
     @property
@@ -294,25 +344,8 @@ class NamedExpression:
         """
         return fold(self._name, self._ctx)
 
-    def to_latex(self, **options: Any) -> str:
-        """This expression typeset as a single LaTeX line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "latex", **options)
-
-    def to_markdown(self, **options: Any) -> str:
-        """This expression typeset as a single Markdown math line, no ``$$`` around it."""
-        return typeset_declaration(
-            self._spec._schema, self._name, "markdown", **options
-        )
-
-    def to_typst(self, **options: Any) -> str:
-        """This expression typeset as a single Typst line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "typst", **options)
-
     def __repr__(self) -> str:
         value = self.__dict__.get("solution", self.__dict__.get("expression"))
         if isinstance(value, xr.DataArray):
             return f"NamedExpression('{self._name}', dims={tuple(value.dims)})"
         return f"NamedExpression('{self._name}')"
-
-    def _repr_markdown_(self) -> str:
-        return f"$$\n{self.to_markdown()}\n$$"

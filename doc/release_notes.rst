@@ -27,7 +27,7 @@ Upcoming Version
 
 * ``model.spec.expressions`` (a ``linopy.spec.NamedExpressions`` mapping) returns a ``linopy.spec.NamedExpression`` for each declared name, with three views: ``.node`` (the lowered formula), ``.expression`` (the unsolved linopy expression — a ``LinearExpression``, bare ``Variable``, array or scalar) and ``.solution`` (the expression folded over the solved model). ``model.spec.evaluate(name, sources)`` returns the same object with its parameters attached afresh.
 
-* ``model.spec.to_latex`` / ``.to_markdown`` / ``.to_typst`` typeset the whole model, and the same three methods on a ``NamedExpression`` typeset that one expression as a single line (math only, no document); both a ``ModelSpec`` and a ``NamedExpression`` render as Markdown in a notebook.
+* ``model.spec.to_latex`` / ``.to_markdown`` / ``.to_typst`` typeset the whole model, and ``model.spec.declaration(name)`` returns a ``linopy.spec.Declaration`` whose same three methods typeset one named expression, constraint or variable as a single line (math only, no document); a ``NamedExpression`` carries those methods too. A ``ModelSpec``, a ``Declaration`` and a ``NamedExpression`` all render as Markdown in a notebook.
 
 
 *Numerical scaling*

@@ -230,6 +230,23 @@ def test_a_named_expression_typeset_passes_options() -> None:
     ).startswith("S")
 
 
+@pytest.mark.parametrize("name", ["power_balance", "p"])
+@pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])
+def test_a_constraint_or_variable_typesets_to_one_line(name: str, fmt: str) -> None:
+    d = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.declaration(name)
+    line = getattr(d, fmt)()
+    assert line
+    assert "\n" not in line
+    assert "align" not in line and "$$" not in line
+
+
+def test_declaration_reaches_every_kind_and_an_unknown_name_is_a_key_error() -> None:
+    spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
+    assert spec.declaration("spend").to_latex() == spec.expressions["spend"].to_latex()
+    with pytest.raises(KeyError, match="unknown declaration 'spent'.*spend"):
+        spec.declaration("spent")
+
+
 def test_a_constant_expression_folds_to_a_scalar() -> None:
     spec = {**yaml_dict(), "expressions": {"answer": "6 * 7"}}
     got = Model.from_spec(spec, DISPATCH_DATA).spec.expressions["answer"].solution
