@@ -209,6 +209,27 @@ def test_the_whole_model_typesets() -> None:
     assert spec._repr_markdown_() == spec.to_markdown()
 
 
+@pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])
+def test_a_named_expression_typesets_to_one_line(fmt: str) -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    line = getattr(e, fmt)()
+    assert "spend" in line
+    assert "\n" not in line
+    assert "align" not in line and "$$" not in line
+
+
+def test_a_named_expression_repr_markdown_wraps_only_itself() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert e._repr_markdown_() == f"$$\n{e.to_markdown()}\n$$"
+
+
+def test_a_named_expression_typeset_passes_options() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert e.to_latex(
+        symbols={"notation": "latex", "names": {"spend": "S"}}
+    ).startswith("S")
+
+
 def test_a_constant_expression_folds_to_a_scalar() -> None:
     spec = {**yaml_dict(), "expressions": {"answer": "6 * 7"}}
     got = Model.from_spec(spec, DISPATCH_DATA).spec.expressions["answer"].solution

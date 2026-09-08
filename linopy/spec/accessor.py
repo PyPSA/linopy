@@ -25,6 +25,7 @@ from math_spec import (
     to_program,
     to_spec,
     to_typst,
+    typeset_declaration,
 )
 from math_spec import program as ms
 
@@ -293,6 +294,20 @@ class NamedExpression:
         """
         return fold(self._name, self._ctx)
 
+    def to_latex(self, **options: Any) -> str:
+        """This expression typeset as a single LaTeX line, no document around it."""
+        return typeset_declaration(self._spec._schema, self._name, "latex", **options)
+
+    def to_markdown(self, **options: Any) -> str:
+        """This expression typeset as a single Markdown math line, no ``$$`` around it."""
+        return typeset_declaration(
+            self._spec._schema, self._name, "markdown", **options
+        )
+
+    def to_typst(self, **options: Any) -> str:
+        """This expression typeset as a single Typst line, no document around it."""
+        return typeset_declaration(self._spec._schema, self._name, "typst", **options)
+
     def __repr__(self) -> str:
         value = self.__dict__.get("solution", self.__dict__.get("expression"))
         if isinstance(value, xr.DataArray):
@@ -300,4 +315,4 @@ class NamedExpression:
         return f"NamedExpression('{self._name}')"
 
     def _repr_markdown_(self) -> str:
-        return self._spec.to_markdown()
+        return f"$$\n{self.to_markdown()}\n$$"
