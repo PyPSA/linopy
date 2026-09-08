@@ -110,17 +110,16 @@ def test_from_spec_passes_model_kwargs_and_chains() -> None:
         ("none", set()),
     ],
 )
-def test_retain_decides_what_the_fold_can_read(retain: str, kept: set[str]) -> None:
+def test_retain_decides_what_is_kept_and_not_what_can_be_read(
+    retain: str, kept: set[str]
+) -> None:
+    """A parameter retain dropped is read from the sources the model still holds."""
     m = solved(yaml_dict(), DISPATCH_DATA, retain=retain)
     assert set(m.spec.parameters.data_vars) == kept
     assert not m.parameters.data_vars
     want = (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    xr.testing.assert_allclose(m.spec.expressions["spend"].solution, want)
     xr.testing.assert_allclose(m.spec.evaluate("spend", DISPATCH_DATA).solution, want)
-    if "cost" in kept:
-        xr.testing.assert_allclose(m.spec.expressions["spend"].solution, want)
-    else:
-        with pytest.raises(SpecDataError, match="not retained"):
-            m.spec.expressions["spend"].solution
 
 
 def test_the_spec_keeps_its_parameters_off_the_model() -> None:

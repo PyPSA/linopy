@@ -484,7 +484,9 @@ class Model:
         retain : {"report", "all", "none"}
             Which parameters to keep in ``model.spec.parameters``: those the
             named expressions read, all of them, or none. ``model.parameters``
-            stays the caller's and is never written to.
+            stays the caller's and is never written to. This decides what a
+            netcdf file holds, not what this session can read: ``model.spec``
+            falls back to ``sources`` for a parameter it did not keep.
 
         Returns
         -------

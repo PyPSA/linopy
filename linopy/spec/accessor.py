@@ -7,6 +7,12 @@ and the master coordinates sit on the accessor rather than in
 was put there, and nothing reading a spec-built model has to guess which of
 its parameters the spec owns. All of it round trips through a file, written
 under the ``spec-`` prefix.
+
+A parameter is resolved the same way however much of it was retained: from
+the retained dataset, else from the sources the model was built with, which
+the accessor keeps for as long as the model lives. So ``retain`` decides what
+a *file* holds, not what a session can read, and it is only after a round trip
+that a parameter can be out of reach.
 """
 
 from __future__ import annotations
@@ -80,12 +86,17 @@ def attach(
     attached: Attached = attach_data(program, sources, retain=retain)
     build(model, attached)
     parameters = attached.retained().assign_coords(dict(attached.coords))
-    return ModelSpec(model, program, text, parameters)
+    return ModelSpec(model, program, text, parameters, attached)
 
 
 def restore(model: Model, text: str, parameters: xr.Dataset) -> ModelSpec:
-    """The accessor for *model*, with the program lowered afresh from *text*."""
-    return ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters)
+    """
+    The accessor for *model*, with the program lowered afresh from *text*.
+
+    Read from a file, so the sources the model was built with are gone and
+    only what ``retain`` kept can be read back.
+    """
+    return ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -126,12 +137,18 @@ class ModelSpec:
     """
 
     def __init__(
-        self, model: Model, program: ms.Program, text: str, parameters: xr.Dataset
+        self,
+        model: Model,
+        program: ms.Program,
+        text: str,
+        parameters: xr.Dataset,
+        attached: Attached | None,
     ) -> None:
         self._model = model
         self.program = program
         self.text = text
         self._parameters = parameters
+        self._attached = attached
 
     def __repr__(self) -> str:
         p = self.program
@@ -151,7 +168,11 @@ class ModelSpec:
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
         """The same spec, read off *model*, holding its own copy of the parameters."""
         return ModelSpec(
-            model, self.program, self.text, self._parameters.copy(deep=deep)
+            model,
+            self.program,
+            self.text,
+            self._parameters.copy(deep=deep),
+            self._attached,
         )
 
     @property
@@ -229,8 +250,9 @@ class ModelSpec:
         """
         The named expression *name*, with its parameters attached afresh from *sources*.
 
-        For a model built with ``retain="none"``, or an expression reading a
-        parameter ``retain="report"`` did not keep. *sources* is read the way
+        For reading the spec against other data than the model was built with,
+        and for a model read from a file, whose own sources are gone.
+        ``model.spec.expressions`` needs neither. *sources* is read the way
         ``add_spec`` read it, and must describe the coordinates the model was
         built on.
 
@@ -251,14 +273,18 @@ class ModelSpec:
                 )
         return NamedExpression(self, name, self._context(attached.parameter))
 
-    def _retained(self, name: str) -> xr.DataArray:
-        if name not in self.parameters:
-            raise SpecDataError(
-                f"parameter '{name}' is not retained on the spec: retain='report' keeps only what "
-                f"the named expressions read, and retain='none' keeps nothing. Build with "
-                f"retain='all', or read the expression with evaluate(name, sources)."
-            )
-        return self.parameters[name]
+    def _resolve(self, name: str) -> xr.DataArray:
+        """The parameter *name*: retained if it was kept, else read from the sources again."""
+        if name in self.parameters:
+            return self.parameters[name]
+        if self._attached is not None:
+            return self._attached.parameter(name)
+        raise SpecDataError(
+            f"parameter '{name}' was not retained and this model no longer holds the sources "
+            f"it was built with, which is what a model read from a file looks like. Build with "
+            f"retain='all' before writing it out, or read the expression with "
+            f"evaluate(name, sources)."
+        )
 
     def _context(self, resolve: Resolve) -> Context:
         return Context(
@@ -284,7 +310,7 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
                 + did_you_mean(name, self._spec.program.named_expressions)
             )
         return NamedExpression(
-            self._spec, name, self._spec._context(self._spec._retained)
+            self._spec, name, self._spec._context(self._spec._resolve)
         )
 
     def __iter__(self) -> Iterator[str]:
@@ -333,8 +359,9 @@ class NamedExpression(Declaration):
     One named expression, in three views: its math, its linopy fold and its solution.
 
     The object pins the data sources it was made with for its lifetime, so the
-    three views agree. ``expressions[name]`` reads the retained parameters and
-    the solution the model holds; ``evaluate(name, sources)`` attaches fresh data.
+    three views agree. ``expressions[name]`` reads the model's own data --
+    what ``retain`` kept, and the sources behind it for the rest;
+    ``evaluate(name, sources)`` attaches fresh data instead.
 
     Attributes
     ----------
@@ -378,7 +405,8 @@ class NamedExpression(Declaration):
         RuntimeError
             The model reads a variable but holds no solution yet.
         SpecDataError
-            A parameter the body reads was not retained.
+            A parameter the body reads was neither retained nor
+            still reachable through the model's sources.
         """
         return fold(self._name, self._ctx)
 
