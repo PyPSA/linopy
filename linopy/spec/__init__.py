@@ -22,6 +22,7 @@ from linopy.spec.accessor import (
     NamedExpression,
     NamedExpressions,
     SpecLike,
+    Unspecified,
 )
 from linopy.spec.attach import Attached, Retain, attach
 from linopy.spec.errors import SpecDataError
@@ -35,5 +36,6 @@ __all__ = [
     "Retain",
     "SpecDataError",
     "SpecLike",
+    "Unspecified",
     "attach",
 ]

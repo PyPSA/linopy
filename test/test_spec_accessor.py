@@ -29,7 +29,12 @@ from conftest import (  # noqa: E402
     yaml_dict,
 )
 from linopy import Model  # noqa: E402
-from linopy.spec import ModelSpec, NamedExpression, SpecDataError  # noqa: E402
+from linopy.spec import (  # noqa: E402
+    ModelSpec,
+    NamedExpression,
+    SpecDataError,
+    Unspecified,
+)
 
 pytestmark = [
     pytest.mark.v1,
@@ -303,6 +308,53 @@ def test_typeset_and_its_named_aliases_agree(fmt: str) -> None:
     declaration = spec.declaration("p")
     assert spec.typeset(fmt) == getattr(spec, f"to_{fmt}")()
     assert declaration.typeset(fmt) == getattr(declaration, f"to_{fmt}")()
+
+
+def hybrid() -> Model:
+    """A spec-built model grown past its spec by hand."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    m.add_constraints(m.variables["reserve"] <= 10.0, name="reserve_cap")
+    return m
+
+
+def test_unspecified_names_what_the_spec_does_not_declare() -> None:
+    assert not Model.from_spec(yaml_dict(), DISPATCH_DATA).spec.unspecified
+    assert hybrid().spec.unspecified == Unspecified(("reserve",), ("reserve_cap",))
+
+
+@pytest.mark.parametrize(
+    ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
+)
+def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
+    fmt: str, opener: str
+) -> None:
+    """The tally is a comment of the format's own: gone once compiled, there in the source."""
+    with pytest.warns(UserWarning, match="not the whole model"):
+        rendered = hybrid().spec.typeset(fmt)
+
+    first = rendered.splitlines()[0]
+    assert first.startswith(opener)
+    assert "1 variable (reserve)" in first
+    assert "1 constraint (reserve_cap)" in first
+
+
+def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
+    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        assert not spec.to_latex().startswith("%")
+
+
+def test_a_notebook_sees_a_note_the_warning_would_not_reach() -> None:
+    """A notebook swallows warnings, so the rendered Markdown carries the tally visibly."""
+    with pytest.warns(UserWarning):
+        rendered = hybrid().spec._repr_markdown_()
+
+    assert rendered.splitlines()[-1] == (
+        "*Added outside this spec and not shown: "
+        "1 variable (reserve) and 1 constraint (reserve_cap).*"
+    )
 
 
 @pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])

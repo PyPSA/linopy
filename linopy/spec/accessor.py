@@ -18,7 +18,9 @@ that a parameter can be out of reach.
 from __future__ import annotations
 
 import functools
+import warnings
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -50,6 +52,42 @@ from linopy.spec.nodes import dims_of
 from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
+
+# A note about what is missing, spelled as a comment of the format's own. A
+# format math-spec grows later renders without one rather than with a wrong one.
+_COMMENT: dict[str, str] = {
+    "latex": "% {}",
+    "markdown": "<!-- {} -->",
+    "typst": "// {}",
+}
+
+
+@dataclass(frozen=True)
+class Unspecified:
+    """
+    What a spec-built model holds that its spec does not declare.
+
+    A model can grow past the spec it was built from -- ``add_variables`` and
+    ``add_constraints`` go on working on it -- and what is added that way
+    carries no math-spec declaration, so nothing can typeset it.
+    """
+
+    variables: tuple[str, ...]
+    constraints: tuple[str, ...]
+
+    def __bool__(self) -> bool:
+        return bool(self.variables or self.constraints)
+
+
+def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
+    """``2 constraints (a, b)``, capped with a ``+N more`` tail; empty for no names."""
+    if not names:
+        return ""
+    shown = list(names[:cap])
+    if len(names) > cap:
+        shown.append(f"+{len(names) - cap} more")
+    plural = kind if len(names) == 1 else f"{kind}s"
+    return f"{len(names)} {plural} ({', '.join(shown)})"
 
 
 def attach(
@@ -230,9 +268,30 @@ class ModelSpec:
         p = self.program
         return [*p.named_expressions, *p.constraints, *p.variables]
 
+    @property
+    def unspecified(self) -> Unspecified:
+        """
+        The model's variables and constraints this spec does not declare.
+
+        Empty for a model that is only what its spec says; anything added
+        beside the spec lands here, and is what typesetting cannot show.
+        """
+        return Unspecified(
+            tuple(n for n in self._model.variables if n not in self.program.variables),
+            tuple(
+                n for n in self._model.constraints if n not in self.program.constraints
+            ),
+        )
+
     def typeset(self, fmt: FormatName, **options: Any) -> str:
         """
         The spec this model was built from, typeset in *fmt* as a document.
+
+        The spec, and so not necessarily the whole model: what was added
+        beside the spec carries no declaration to typeset. Where the model
+        holds such a thing, :attr:`unspecified` names it, a warning says so,
+        and the rendered text opens with the same tally as a comment of
+        *fmt*'s own -- gone once compiled, there in the source.
 
         Parameters
         ----------
@@ -241,23 +300,64 @@ class ModelSpec:
         **options
             Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
             ``legend``, ``numbered``, ``inline_expressions``.
+
+        Warns
+        -----
+        UserWarning
+            The model holds variables or constraints the spec does not
+            declare, which are not in the rendered text.
         """
-        return typeset(self._schema, fmt, **options)
+        return self._render(fmt, options, 3)
 
     def to_latex(self, **options: Any) -> str:
         """The spec typeset as a LaTeX document, see :meth:`typeset`."""
-        return self.typeset("latex", **options)
+        return self._render("latex", options, 3)
 
     def to_markdown(self, **options: Any) -> str:
         """The spec typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
-        return self.typeset("markdown", **options)
+        return self._render("markdown", options, 3)
 
     def to_typst(self, **options: Any) -> str:
         """The spec typeset as Typst, see :meth:`typeset`."""
-        return self.typeset("typst", **options)
+        return self._render("typst", options, 3)
+
+    def _render(
+        self, fmt: FormatName, options: Mapping[str, Any], stacklevel: int
+    ) -> str:
+        """Typeset in *fmt*, warned and commented where the model holds more than the spec."""
+        rendered = typeset(self._schema, fmt, **options)
+        tally = self._tally()
+        if tally is None:
+            return rendered
+        warnings.warn(
+            f"this model holds {tally} added outside the spec, which carry no math-spec "
+            f"declaration and are not typeset, so this is not the whole model.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+        comment = _COMMENT.get(fmt)
+        if comment is None:
+            return rendered
+        return f"{comment.format(f'Added outside this spec and not shown: {tally}.')}\n{rendered}"
+
+    def _tally(self) -> str | None:
+        """What the model holds beside the spec, counted and named; ``None`` when it holds nothing."""
+        found = self.unspecified
+        if not found:
+            return None
+        counted = (
+            _counted(found.variables, "variable"),
+            _counted(found.constraints, "constraint"),
+        )
+        return " and ".join(c for c in counted if c)
 
     def _repr_markdown_(self) -> str:
-        return self.to_markdown()
+        """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
+        rendered = self._render("markdown", {}, 3)
+        tally = self._tally()
+        if tally is None:
+            return rendered
+        return f"{rendered}\n\n*Added outside this spec and not shown: {tally}.*"
 
     @property
     def _schema(self) -> dict[str, Any]:
@@ -357,7 +457,13 @@ class Declaration:
         self._name = name
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
-        """This declaration typeset in *fmt* as a single line, no document around it."""
+        """
+        This declaration typeset in *fmt* as a single line, no document around it.
+
+        Nothing here can be out of step with the model the way
+        :meth:`ModelSpec.typeset` can: a declaration is reached by name
+        through the spec, so there is only ever the spec's own math to show.
+        """
         return typeset_declaration(self._spec._schema, self._name, fmt, **options)
 
     def to_latex(self, **options: Any) -> str:

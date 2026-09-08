@@ -132,6 +132,7 @@ data. Requires the ``spec`` dependency group.
    spec.NamedExpressions
    spec.NamedExpression
    spec.Declaration
+   spec.Unspecified
    spec.attach
    spec.Attached
    spec.SpecDataError

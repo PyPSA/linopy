@@ -29,6 +29,8 @@ Upcoming Version
 
 * ``model.spec.typeset(fmt)`` typesets the spec in any format math-spec knows, with ``.to_latex`` / ``.to_markdown`` / ``.to_typst`` spelling the three it knows today, and ``model.spec.declaration(name)`` returns a ``linopy.spec.Declaration`` whose same three methods typeset one named expression, constraint or variable as a single line (math only, no document); a ``NamedExpression`` carries those methods too. A ``ModelSpec``, a ``Declaration`` and a ``NamedExpression`` all render as Markdown in a notebook.
 
+* Typesetting renders the *spec*, which need not be the whole model: ``add_variables`` and ``add_constraints`` go on working on a spec-built model, and what they add carries no math-spec declaration to typeset. ``model.spec.unspecified`` (a ``linopy.spec.Unspecified``) names any such variable or constraint; where there is one, typesetting warns, opens the rendered text with a comment of the format's own -- gone once compiled, there in the source -- and adds a visible note to the Markdown a notebook displays.
+
 
 *Numerical scaling*
 
