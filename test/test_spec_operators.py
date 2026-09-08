@@ -202,6 +202,29 @@ def test_an_empty_group_on_the_constant_side_is_a_zero_and_not_a_gap() -> None:
     assert float(m.solution["imports"].sel(bus="south")) == pytest.approx(0.0)
 
 
+def test_a_lookup_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> None:
+    """Filtering to the mapped members leaves nothing, and nothing is what xarray will not group."""
+    spec = with_(
+        GROUPED_SPEC,
+        variables={
+            "out": {
+                "foreach": ["generator"],
+                "bounds": {"lower": 0, "upper": "capacity"},
+            }
+        },
+        expressions={"per_bus": "sum(out, by=gen_bus)"},
+    )
+    sources = grouped_sources(pd.Series([3.0, 4.0], index=GENS))
+    sources["gen_bus"] = pd.Series([], dtype=object)
+    m = solved(spec, sources)
+
+    assert m.objective.value == pytest.approx(0.0)
+    per_bus = m.spec.expressions["per_bus"]
+    assert per_bus.expression.nterm == 0
+    assert per_bus.solution.indexes["bus"].tolist() == ["north", "south"]
+    np.testing.assert_allclose(per_bus.solution.values, [0.0, 0.0])
+
+
 def test_a_member_with_no_value_is_still_refused_through_a_group() -> None:
     with pytest.raises(SpecDataError, match="parameter 'capacity' covers 1 fewer"):
         Model.from_spec(GROUPED_SPEC, grouped_sources(pd.Series([3.0], index=GENS[:1])))

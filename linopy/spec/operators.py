@@ -81,6 +81,8 @@ def grouped_sum(
     mappings = _renamed(mappings, into)
     present = _present(mappings)
     dim = str(mappings[0].dims[0])
+    if not bool(present.any()):
+        return _empty_groups(array, dim, into=into, labels=labels)
     if not bool(present.all()):
         keep = present.to_numpy()
         mappings = tuple(m.isel({dim: keep}) for m in mappings)
@@ -90,6 +92,40 @@ def grouped_sum(
     )
     summed = attached.groupby(list(into)).sum()
     return summed.reindex({d: labels[d] for d in into}).fillna(0.0)
+
+
+def _empty_groups(
+    array: Array,
+    dim: str,
+    *,
+    into: tuple[str, ...],
+    labels: Mapping[str, pd.Index],
+) -> Array:
+    """
+    The grouped sum of an operand no member of *dim* is mapped out of.
+
+    Every declared group holds the empty sum, which is 0. Grouping cannot say
+    so itself: filtering the operand down to its mapped members leaves nothing,
+    and an empty dimension is one xarray refuses to group over.
+    """
+    kept = [d for d in _coord_dims(array) if d != dim]
+    zeros = xr.DataArray(
+        np.zeros([array.sizes[d] for d in kept] + [len(labels[d]) for d in into]),
+        coords={
+            **{d: array.indexes[d] for d in kept},
+            **{d: labels[d] for d in into},
+        },
+        dims=kept + list(into),
+    )
+    if isinstance(array, xr.DataArray):
+        return zeros
+    return LinearExpression.from_constant(array.model, zeros)
+
+
+def _coord_dims(array: Array) -> list[str]:
+    """The dimensions the operand is labelled over, without a term's own ``_term``."""
+    dims = array.dims if isinstance(array, xr.DataArray) else array.coord_dims
+    return [str(d) for d in dims]
 
 
 @overload

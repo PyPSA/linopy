@@ -40,6 +40,8 @@ Upcoming Version
 
 *Other*
 
+* A grouped sum through a lookup that maps no member at all now holds the empty sum, ``0``, on every declared group, as its documented rule says. It raised xarray's ``ValueError: <dim> must not be empty`` instead.
+
 * ``read_netcdf`` no longer rewrites the coordinates of a container that merely shares a dimension's *name* with a spec-built model's master coordinates. A hand-added variable on its own labels kept them; before, it was silently relabelled onto the master ones, or the read failed outright when the two lengths differed.
 
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
