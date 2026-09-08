@@ -239,6 +239,22 @@ def test_evaluate_refuses_sources_on_other_labels_than_the_model(
         m.spec.evaluate("twice", sources)
 
 
+def test_a_reported_dual_folds_to_the_constraint_dual() -> None:
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = solved(spec, DISPATCH_DATA)
+    xr.testing.assert_allclose(
+        m.spec.expressions["price"].solution,
+        m.constraints["power_balance"].dual.rename("price"),
+    )
+
+
+def test_a_dual_needs_a_solution() -> None:
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    with pytest.raises(RuntimeError, match="no dual yet"):
+        m.spec.expressions["price"].expression
+
+
 def test_spec_api_warns_once_per_session() -> None:
     from linopy import EvolvingAPIWarning
     from linopy.constants import _emitted_evolving_warnings

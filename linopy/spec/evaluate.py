@@ -59,6 +59,8 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
         return node.value
     if isinstance(node, ms.Variable):
         return _variable(node.name, ctx)
+    if isinstance(node, ms.Dual):
+        return _dual(node.constraint, ctx)
     if isinstance(node, ms.Parameter):
         return terms.coefficient(ctx.parameters[node.name])
     if isinstance(node, ms.Negate):
@@ -133,6 +135,14 @@ def _variable(name: str, ctx: Context) -> Value:
             f"variable '{name}' has no solution yet: solve the model before reading a named expression"
         )
     return terms.solution(variable, absence)
+
+
+def _dual(constraint: str, ctx: Context) -> xr.DataArray:
+    if not ctx.solved:
+        raise RuntimeError(
+            f"constraint '{constraint}' has no dual yet: solve the model before reading a dual"
+        )
+    return ctx.model.constraints[constraint].dual
 
 
 def _combine(op: Callable[[Value, Value], Value], left: Value, right: Value) -> Value:
