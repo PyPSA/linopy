@@ -24,6 +24,7 @@ from conftest import (  # noqa: E402
     EXAMPLE_DISPATCH,
     GENERATOR,
     solved,
+    with_,
     yaml_dict,
 )
 from linopy import Model  # noqa: E402
@@ -199,6 +200,23 @@ def test_evaluate_returns_a_named_expression() -> None:
     xr.testing.assert_allclose(
         e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
     )
+
+
+def test_repr_summarises_every_section() -> None:
+    text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA).spec)
+    assert text.startswith("ModelSpec: Least-cost dispatch")
+    assert "Dimensions:  snapshot (3), generator (2)" in text
+    assert "Variables:   p" in text
+    assert "Constraints: power_balance" in text
+    assert "Objective:   minimize" in text
+    assert "Expressions: spend, usage" in text
+
+
+def test_repr_caps_long_sections() -> None:
+    spec = with_(yaml_dict(), expressions={f"e{i}": "p / p_max" for i in range(12)})
+    text = repr(Model.from_spec(spec, DISPATCH_DATA).spec)
+    assert "(+6 more)" in text
+    assert "e11" not in text
 
 
 def test_the_whole_model_typesets() -> None:

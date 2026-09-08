@@ -102,6 +102,14 @@ def _source(spec: SpecLike) -> tuple[str, ms.Program]:
     return loaded.to_yaml(), to_program(loaded)
 
 
+def _row(label: str, items: list[str], cap: int = 8) -> str:
+    """One aligned summary line, capped with a ``(+N more)`` tail."""
+    shown = items[:cap]
+    if len(items) > cap:
+        shown = shown + [f"(+{len(items) - cap} more)"]
+    return f"  {label + ':':<13}{', '.join(shown) if shown else '—'}"
+
+
 class ModelSpec:
     """
     The spec a model was built from.
@@ -120,8 +128,20 @@ class ModelSpec:
         self.text = text
 
     def __repr__(self) -> str:
-        names = list(self.program.named_expressions)
-        return f"ModelSpec(expressions={names})"
+        p = self.program
+        coords = self.coords
+        desc = str(self._schema.get("description", "")).strip().splitlines()
+        head = f"ModelSpec: {desc[0]}" if desc else "ModelSpec"
+        rows = [
+            head,
+            _row("Dimensions", [f"{d} ({len(coords[d])})" for d in p.dimensions]),
+            _row("Variables", list(p.variables)),
+            _row("Constraints", list(p.constraints)),
+        ]
+        if p.objective is not None:
+            rows.append(_row("Objective", [p.objective.sense]))
+        rows.append(_row("Expressions", list(p.named_expressions)))
+        return "\n".join(rows)
 
     def _reattach(self, model: Model) -> ModelSpec:
         """The same spec, read off *model*."""
