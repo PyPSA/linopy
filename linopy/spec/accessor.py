@@ -84,8 +84,10 @@ def attach(
         )
     text, program = _source(spec)
     attached: Attached = attach_data(program, sources, retain=retain)
-    build(model, attached)
+    # Resolved before the build, so a parameter no declaration reads cannot fail
+    # halfway through one and leave a model too full to build into again.
     parameters = attached.retained().assign_coords(dict(attached.coords))
+    build(model, attached)
     return ModelSpec(model, program, text, parameters, attached)
 
 
