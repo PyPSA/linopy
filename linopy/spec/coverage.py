@@ -21,7 +21,7 @@ from math_spec import program as ms
 from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.nodes import amounts_of, children, parameters_of
+from linopy.spec.nodes import amounts_of, parameters_of
 from linopy.spec.where import evaluate_where
 
 Rows = xr.DataArray | None
@@ -101,7 +101,7 @@ def _collect(
             narrowed = inside if rows is None else rows & inside
             _collect(region.value, ctx, narrowed, constant, into)
         return
-    for child in children(node):
+    for child in ms.children(node):
         _collect(child, ctx, rows, constant, into)
 
 

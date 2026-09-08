@@ -1,4 +1,4 @@
-"""Walks over expression nodes that descend into every operand, a ``Power``'s included."""
+"""Walks over a program's expression nodes, and the dimensions a node spans."""
 
 from __future__ import annotations
 
@@ -7,18 +7,11 @@ from collections.abc import Iterator
 from math_spec import program as ms
 
 
-def children(node: ms.ExpressionNode) -> tuple[ms.ExpressionNode, ...]:
-    """The operands of *node*: ``math_spec.program.children`` plus a power's base and exponent."""
-    if isinstance(node, ms.Power):
-        return (node.base, node.exponent)
-    return ms.children(node)
-
-
 def walk(*nodes: ms.ExpressionNode) -> Iterator[ms.ExpressionNode]:
     """Every node under *nodes*, each of them included, parents first."""
     for node in nodes:
         yield node
-        yield from walk(*children(node))
+        yield from walk(*ms.children(node))
 
 
 def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
@@ -55,4 +48,4 @@ def _dims(node: ms.ExpressionNode, program: ms.Program) -> frozenset[str]:
         return (_dims(node.operand, program) - {node.over}) | set(node.into)
     if isinstance(node, ms.Cases):
         return frozenset().union(*(_dims(r.value, program) for r in node.regions))
-    return frozenset().union(*(_dims(c, program) for c in children(node)))
+    return frozenset().union(*(_dims(c, program) for c in ms.children(node)))
