@@ -40,6 +40,7 @@ from linopy.model import Model
 from linopy.spec.accessor import ModelSpec, restore
 
 PREFIX = "spec"
+OBJECTIVE_ATTR = "_linopy_spec_objective_replaced"
 COORD = "coords__"
 PARAM = "param__"
 CODES = "codes__"
@@ -72,7 +73,13 @@ def encode(spec: ModelSpec) -> xr.Dataset:
             arrays.update(_encode(str(name), arr))
         else:
             arrays[PARAM + str(name)] = _array(arr.to_numpy(), arr.dims, str(arr.dtype))
-    return with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs({SPEC_ATTR: spec.text})
+    written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
+        {SPEC_ATTR: spec.text}
+    )
+    if spec.unspecified.objective:
+        # Only when true, so a file written from an untouched spec is unchanged.
+        written = written.assign_attrs({OBJECTIVE_ATTR: 1})
+    return written
 
 
 def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
@@ -103,7 +110,12 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
         }
     )
     restamp_coords(model, coords)
-    return restore(model, text, xr.Dataset(arrays).assign_coords(coords))
+    return restore(
+        model,
+        text,
+        xr.Dataset(arrays).assign_coords(coords),
+        bool(ds.attrs.get(OBJECTIVE_ATTR, 0)),
+    )
 
 
 def _coded(spec: ModelSpec) -> set[str]:

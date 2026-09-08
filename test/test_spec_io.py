@@ -167,6 +167,20 @@ def test_the_caller_parameters_and_the_spec_ones_stay_apart(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+def test_a_replaced_objective_is_still_known_after_a_round_trip(
+    tmp_path: Path, engine: str
+) -> None:
+    """Nothing else in the file would say the typeset objective is not the model's."""
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+    m.add_objective(m.variables["p"].sum() * 2.0, overwrite=True)
+    p = roundtrip(m, tmp_path, engine)
+
+    assert m.spec.unspecified.objective
+    assert p.spec.unspecified.objective
+    assert_model_equal(m, p)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("mapped", [3, 2, 0], ids=["full", "partial", "empty"])
 @pytest.mark.parametrize("name", LOOKUP_OVER)
 def test_a_lookup_round_trips_exactly(

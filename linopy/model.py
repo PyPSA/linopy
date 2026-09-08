@@ -1627,6 +1627,10 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
         self.objective.scaling = scaling
+        if self._spec is not None:
+            # A spec sets its objective through here during its own build,
+            # while `_spec` is still unset, so only a later call reaches this.
+            self._spec._objective_replaced = True
 
     def remove_variables(self, name: str) -> None:
         """

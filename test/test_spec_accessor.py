@@ -28,7 +28,7 @@ from conftest import (  # noqa: E402
     with_,
     yaml_dict,
 )
-from linopy import Model  # noqa: E402
+from linopy import Model, breakpoints  # noqa: E402
 from linopy.spec import (  # noqa: E402
     ModelSpec,
     NamedExpression,
@@ -320,7 +320,47 @@ def hybrid() -> Model:
 
 def test_unspecified_names_what_the_spec_does_not_declare() -> None:
     assert not Model.from_spec(yaml_dict(), DISPATCH_DATA).spec.unspecified
-    assert hybrid().spec.unspecified == Unspecified(("reserve",), ("reserve_cap",))
+    assert hybrid().spec.unspecified == Unspecified(
+        variables=("reserve",),
+        constraints=("reserve_cap",),
+        expressions=(),
+        sos=(),
+        piecewise=(),
+        objective=False,
+    )
+
+
+def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
+    """An SOS is attributes on a variable, and a replaced objective is no name at all."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_expressions(m.variables["p"].sum("generator"), name="hand_expr")
+    m.add_sos_constraints(m.variables["p"], sos_type=2, sos_dim="generator")
+    m.add_objective(m.variables["p"].sum() * 3.0, overwrite=True)
+
+    found = m.spec.unspecified
+    assert found.expressions == ("hand_expr",)
+    assert found.sos == ("p",)
+    assert found.objective
+    assert found.variables == () and found.constraints == ()
+
+
+def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
+    """Its own variables and constraints are the formulation's business, not the tally's."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    k = pd.Index([0, 1], name="k")
+    pts = {"k": k, "_breakpoint": [0, 1, 2]}
+    x = m.add_variables(lower=0, upper=10, coords=[k], name="pw_x")
+    y = m.add_variables(lower=0, upper=10, coords=[k], name="pw_y")
+    m.add_piecewise_formulation(
+        (x, breakpoints(xr.DataArray([[0.0, 5.0, 10.0]] * 2, coords=pts))),
+        (y, breakpoints(xr.DataArray([[0.0, 1.0, 4.0]] * 2, coords=pts))),
+        name="curve",
+    )
+
+    found = m.spec.unspecified
+    assert found.piecewise == ("curve",)
+    assert found.variables == ("pw_x", "pw_y")
+    assert found.constraints == ()
 
 
 @pytest.mark.parametrize(
@@ -330,7 +370,7 @@ def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
     fmt: str, opener: str
 ) -> None:
     """The tally is a comment of the format's own: gone once compiled, there in the source."""
-    with pytest.warns(UserWarning, match="not the whole model"):
+    with pytest.warns(UserWarning, match="drifted from the spec"):
         rendered = hybrid().spec.typeset(fmt)
 
     first = rendered.splitlines()[0]
@@ -352,7 +392,7 @@ def test_a_notebook_sees_a_note_the_warning_would_not_reach() -> None:
         rendered = hybrid().spec._repr_markdown_()
 
     assert rendered.splitlines()[-1] == (
-        "*Added outside this spec and not shown: "
+        "*This model has drifted from the spec typeset here: "
         "1 variable (reserve) and 1 constraint (reserve_cap).*"
     )
 

@@ -368,6 +368,8 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
     )
     m = Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": FULL_Y})
     assert m.variables["cost_curve_lam"].attrs["sos_type"] == 2
+    # math-spec lowers the block into ordinary declarations, so none of it is drift.
+    assert not m.spec.unspecified
 
 
 # ---------------------------------------------------------------------------

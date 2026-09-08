@@ -55,6 +55,8 @@ SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 
 # A note about what is missing, spelled as a comment of the format's own. A
 # format math-spec grows later renders without one rather than with a wrong one.
+_DRIFTED = "This model has drifted from the spec typeset here: {}."
+
 _COMMENT: dict[str, str] = {
     "latex": "% {}",
     "markdown": "<!-- {} -->",
@@ -65,18 +67,56 @@ _COMMENT: dict[str, str] = {
 @dataclass(frozen=True)
 class Unspecified:
     """
-    What a spec-built model holds that its spec does not declare.
+    How a spec-built model has drifted from the spec it was built from.
 
-    A model can grow past the spec it was built from -- ``add_variables`` and
-    ``add_constraints`` go on working on it -- and what is added that way
-    carries no math-spec declaration, so nothing can typeset it.
+    A model goes on taking everything linopy can add to it, and none of that
+    carries a math-spec declaration to typeset. A spec's own ``piecewise:``
+    and ``sos:`` are not drift: math-spec lowers them into ordinary
+    declarations, so they sit in the program like any other.
+
+    Attributes
+    ----------
+    variables, constraints
+        Added beside the spec, a piecewise formulation's own aside.
+    expressions
+        Everything in ``model.expressions``: a spec's named expressions are
+        read lazily off ``model.spec`` and never live there.
+    sos
+        Variables given a special-ordered set the spec does not declare.
+        ``add_sos_constraints`` writes attributes onto a variable rather than
+        adding a name of its own, so nothing else here would show it.
+    piecewise
+        Formulations added by ``add_piecewise_formulation``, named as
+        formulations rather than as the variables and constraints they hold.
+    objective
+        Whether ``add_objective`` has replaced the spec's objective. The one
+        entry here that a render gets *wrong* rather than leaves out: the
+        typeset objective is the spec's, and the model's is another.
     """
 
     variables: tuple[str, ...]
     constraints: tuple[str, ...]
+    expressions: tuple[str, ...]
+    sos: tuple[str, ...]
+    piecewise: tuple[str, ...]
+    objective: bool
 
     def __bool__(self) -> bool:
-        return bool(self.variables or self.constraints)
+        return bool(
+            self.variables
+            or self.constraints
+            or self.expressions
+            or self.sos
+            or self.piecewise
+            or self.objective
+        )
+
+
+def _joined(parts: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    if len(parts) < 3:
+        return " and ".join(parts)
+    return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
@@ -128,14 +168,21 @@ def attach(
     return ModelSpec(model, program, text, parameters, attached)
 
 
-def restore(model: Model, text: str, parameters: xr.Dataset) -> ModelSpec:
+def restore(
+    model: Model,
+    text: str,
+    parameters: xr.Dataset,
+    objective_replaced: bool = False,
+) -> ModelSpec:
     """
     The accessor for *model*, with the program lowered afresh from *text*.
 
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    return ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
+    spec = ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
+    spec._objective_replaced = objective_replaced
+    return spec
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -193,6 +240,9 @@ class ModelSpec:
         self.text = text
         self._parameters = parameters
         self._attached = attached
+        # A build sets the objective through `add_objective` before `_spec` is
+        # assigned, so only a call after the build ever flips this.
+        self._objective_replaced = False
 
     def __repr__(self) -> str:
         p = self.program
@@ -211,13 +261,15 @@ class ModelSpec:
 
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
         """The same spec, read off *model*, holding its own copy of the parameters."""
-        return ModelSpec(
+        copied = ModelSpec(
             model,
             self.program,
             self.text,
             self._parameters.copy(deep=deep),
             self._attached,
         )
+        copied._objective_replaced = self._objective_replaced
+        return copied
 
     @property
     def parameters(self) -> xr.Dataset:
@@ -271,16 +323,36 @@ class ModelSpec:
     @property
     def unspecified(self) -> Unspecified:
         """
-        The model's variables and constraints this spec does not declare.
+        How the model has drifted from this spec, see :class:`Unspecified`.
 
-        Empty for a model that is only what its spec says; anything added
+        Falsy for a model that is only what its spec says; everything added
         beside the spec lands here, and is what typesetting cannot show.
         """
+        from linopy.constants import SOS_TYPE_ATTR
+        from linopy.piecewise import _get_piecewise_groups
+
+        model, program = self._model, self.program
+        pw_variables, pw_constraints = _get_piecewise_groups(model)
+        declared_sos = {sos.variable for sos in program.sos.values()}
         return Unspecified(
-            tuple(n for n in self._model.variables if n not in self.program.variables),
-            tuple(
-                n for n in self._model.constraints if n not in self.program.constraints
+            variables=tuple(
+                n
+                for n in model.variables
+                if n not in program.variables and n not in pw_variables
             ),
+            constraints=tuple(
+                n
+                for n in model.constraints
+                if n not in program.constraints and n not in pw_constraints
+            ),
+            expressions=tuple(model.expressions),
+            sos=tuple(
+                n
+                for n in model.variables
+                if SOS_TYPE_ATTR in model.variables[n].attrs and n not in declared_sos
+            ),
+            piecewise=tuple(model._piecewise_formulations),
+            objective=self._objective_replaced,
         )
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
@@ -330,26 +402,31 @@ class ModelSpec:
         if tally is None:
             return rendered
         warnings.warn(
-            f"this model holds {tally} added outside the spec, which carry no math-spec "
-            f"declaration and are not typeset, so this is not the whole model.",
+            f"this model has drifted from the spec it was built from: {tally}. "
+            f"What is typeset is the spec, so it is not this model.",
             UserWarning,
             stacklevel=stacklevel,
         )
         comment = _COMMENT.get(fmt)
         if comment is None:
             return rendered
-        return f"{comment.format(f'Added outside this spec and not shown: {tally}.')}\n{rendered}"
+        return f"{comment.format(_DRIFTED.format(tally))}\n{rendered}"
 
     def _tally(self) -> str | None:
-        """What the model holds beside the spec, counted and named; ``None`` when it holds nothing."""
+        """How the model has drifted, counted and named; ``None`` when it has not."""
         found = self.unspecified
         if not found:
             return None
-        counted = (
+        parts = [
             _counted(found.variables, "variable"),
             _counted(found.constraints, "constraint"),
+            _counted(found.expressions, "expression"),
+            _counted(found.sos, "SOS set"),
+            _counted(found.piecewise, "piecewise formulation"),
+        ]
+        return _joined(
+            [p for p in parts if p] + ["a replaced objective"] * found.objective
         )
-        return " and ".join(c for c in counted if c)
 
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
@@ -357,7 +434,7 @@ class ModelSpec:
         tally = self._tally()
         if tally is None:
             return rendered
-        return f"{rendered}\n\n*Added outside this spec and not shown: {tally}.*"
+        return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
 
     @property
     def _schema(self) -> dict[str, Any]:
