@@ -184,7 +184,7 @@ def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
 def test_the_named_expression_bundles_the_three_views() -> None:
     m = solved(VIEWS_SPEC, DISPATCH_DATA)
     e = m.spec.expressions["spend"]
-    assert e.node is m.spec.program.named_expressions["spend"]
+    assert e.node is m.spec.program.named_expressions["spend"].expression
     assert isinstance(e.expression, linopy.LinearExpression)
     xr.testing.assert_allclose(
         e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")

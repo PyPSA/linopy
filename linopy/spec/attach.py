@@ -196,7 +196,7 @@ class Attached:
 
 def _report_closure(program: ms.Program) -> set[str]:
     """Every parameter a named expression reads, by node or by name."""
-    bodies = tuple(program.named_expressions.values())
+    bodies = tuple(d.expression for d in program.named_expressions.values())
     names = set(parameters_of(*bodies))
     for node in walk(*bodies):
         names.update(amounts_of(node))

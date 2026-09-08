@@ -50,8 +50,8 @@ def build(model: Model, attached: Attached) -> None:
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
-    for name, body in ctx.program.named_expressions.items():
-        check_coverage(f"expression '{name}'", (body,), ctx, None)
+    for name, declared in ctx.program.named_expressions.items():
+        check_coverage(f"expression '{name}'", (declared.expression,), ctx, None)
 
 
 def _variables(ctx: Context) -> None:

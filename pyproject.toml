@@ -123,7 +123,7 @@ gpu = [
 # keeps the git pin out of the published wheel metadata, which PyPI rejects.
 # Install with `uv sync --group spec` or `uv pip install --group spec`.
 spec = [
-    "math-spec @ git+https://github.com/energy-models/math-spec.git@1377f27b759cfbc42bb205338e79751542dabe84 ; python_version >= '3.12'",
+    "math-spec @ git+https://github.com/energy-models/math-spec.git@67aeedb988ee95d196456b4cbe50821e3799edaa ; python_version >= '3.12'",
     "pyyaml ; python_version >= '3.12'",
     "pyarrow ; python_version >= '3.12'",
 ]

@@ -28,7 +28,7 @@ def evaluate_named(name: str, ctx: Context) -> Value:
             f"unknown named expression '{name}'. "
             + did_you_mean(name, ctx.program.named_expressions)
         )
-    body = ctx.program.named_expressions[name]
+    body = ctx.program.named_expressions[name].expression
     found = obligations_of((body,), ctx, None)
     check_divisors(f"expression '{name}'", found.divisors, ctx)
     value = evaluate(body, ctx)

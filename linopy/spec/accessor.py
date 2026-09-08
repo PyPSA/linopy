@@ -265,7 +265,7 @@ class NamedExpression:
     @property
     def node(self) -> ms.ExpressionNode:
         """The expression body as lowered, math-spec's own AST handle."""
-        return self._spec.program.named_expressions[self._name]
+        return self._spec.program.named_expressions[self._name].expression
 
     @functools.cached_property
     def expression(self) -> terms.Value:
