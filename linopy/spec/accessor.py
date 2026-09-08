@@ -116,6 +116,11 @@ def _source(spec: SpecLike) -> tuple[str, ms.Program]:
     return loaded.to_yaml(), to_program(loaded)
 
 
+def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
+    """A dimension and how many labels it holds; a declared one nothing reaches holds none."""
+    return f"{dim} ({len(coords[dim])})" if dim in coords else f"{dim} (unreached)"
+
+
 def _row(label: str, items: list[str], cap: int = 8) -> str:
     """One aligned summary line, capped with a ``(+N more)`` tail."""
     shown = items[:cap]
@@ -156,7 +161,7 @@ class ModelSpec:
         head = f"ModelSpec: {self.description}" if self.description else "ModelSpec"
         rows = [
             head,
-            _row("Dimensions", [f"{d} ({len(coords[d])})" for d in p.dimensions]),
+            _row("Dimensions", [_dimension(d, coords) for d in p.dimensions]),
             _row("Variables", list(p.variables)),
             _row("Constraints", list(p.constraints)),
         ]
