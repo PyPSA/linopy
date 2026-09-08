@@ -413,7 +413,7 @@ def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
         expressions={"e": "shift(c, over=t, offset=lag, edge=0) ** 1"},
     )
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
-    assert {"c", "lag"} <= set(m.parameters.data_vars)
+    assert {"c", "lag"} <= set(m.spec.parameters.data_vars)
     xr.testing.assert_allclose(
         m.spec.expressions["e"].solution,
         xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),

@@ -154,6 +154,7 @@ def assert_model_equal(a: Model, b: Model) -> None:
     assert (a._spec is None) == (b._spec is None)
     if a._spec is not None and b._spec is not None:
         assert a._spec.text == b._spec.text
+        assert_datasetequal(a._spec.parameters, b._spec.parameters)
 
     assert a.status == b.status
     assert a.termination_condition == b.termination_condition

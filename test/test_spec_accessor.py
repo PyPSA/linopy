@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -111,7 +112,8 @@ def test_from_spec_passes_model_kwargs_and_chains() -> None:
 )
 def test_retain_decides_what_the_fold_can_read(retain: str, kept: set[str]) -> None:
     m = solved(yaml_dict(), DISPATCH_DATA, retain=retain)
-    assert set(m.parameters.data_vars) == kept
+    assert set(m.spec.parameters.data_vars) == kept
+    assert not m.parameters.data_vars
     want = (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
     xr.testing.assert_allclose(m.spec.evaluate("spend", DISPATCH_DATA).solution, want)
     if "cost" in kept:
@@ -119,6 +121,17 @@ def test_retain_decides_what_the_fold_can_read(retain: str, kept: set[str]) -> N
     else:
         with pytest.raises(SpecDataError, match="not retained"):
             m.spec.expressions["spend"].solution
+
+
+def test_the_spec_keeps_its_parameters_off_the_model() -> None:
+    """``model.parameters`` is the caller's: a build neither reads nor writes it."""
+    own = xr.DataArray(np.array(["a", "b", "c"], dtype=object), dims=["own"])
+    m = Model()
+    m.parameters["cost"] = own
+    m.add_spec(yaml_dict(), DISPATCH_DATA, retain="all")
+
+    assert m.parameters["cost"].equals(own)
+    assert m.spec.parameters["cost"].dims == ("generator",)
 
 
 def test_an_unknown_expression_is_a_key_error_with_a_hint() -> None:

@@ -149,6 +149,20 @@ def test_a_retain_none_model_evaluates_after_a_round_trip(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+def test_the_caller_parameters_and_the_spec_ones_stay_apart(
+    tmp_path: Path, engine: str
+) -> None:
+    """A model parameter of the caller's is written beside the spec's, not into them."""
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+    m.parameters["cost"] = xr.DataArray([1, 2, 3], dims=["own"])
+    p = roundtrip(m, tmp_path, engine)
+
+    assert_model_equal(m, p)
+    assert_arrayequal(p.parameters["cost"], m.parameters["cost"])
+    assert_arrayequal(p.spec.parameters["cost"], m.spec.parameters["cost"])
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("mapped", [3, 2, 0], ids=["full", "partial", "empty"])
 @pytest.mark.parametrize("name", LOOKUP_OVER)
 def test_a_lookup_round_trips_exactly(
@@ -215,7 +229,7 @@ def test_a_copy_carries_the_spec(deep: bool) -> None:
     """The copy's spec reads the copy, and only a deep copy owns its buffers."""
     m = Model.from_spec(WHERE_SPEC, WHERE_DATA, retain="all")
     p = m.copy(deep=deep)
-    p.parameters["label"].values[1] = "changed"
+    p.spec.parameters["label"].values[1] = "changed"
 
     assert p.spec.text == m.spec.text
     assert p.spec.parameters["label"].values[1] == "changed"

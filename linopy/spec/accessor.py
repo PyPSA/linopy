@@ -1,10 +1,12 @@
 """
 ``model.spec``: the program a model was built from, and its named expressions as data.
 
-The model owns the data. The spec text, the retained parameters, the lookups
-and the master coordinates all sit on the model, so this accessor holds
-nothing a round trip through a file could lose: it re-lowers the text and
-reads ``model.parameters``.
+The spec owns its data. The spec text, the retained parameters, the lookups
+and the master coordinates sit on the accessor rather than in
+``model.parameters``, which stays the caller's: a spec never overwrites what
+was put there, and nothing reading a spec-built model has to guess which of
+its parameters the spec owns. All of it round trips through a file, written
+under the ``spec-`` prefix.
 """
 
 from __future__ import annotations
@@ -77,13 +79,13 @@ def attach(
     text, program = _source(spec)
     attached: Attached = attach_data(program, sources, retain=retain)
     build(model, attached)
-    model.parameters = attached.retained().assign_coords(dict(attached.coords))
-    return ModelSpec(model, program, text)
+    parameters = attached.retained().assign_coords(dict(attached.coords))
+    return ModelSpec(model, program, text, parameters)
 
 
-def restore(model: Model, text: str) -> ModelSpec:
+def restore(model: Model, text: str, parameters: xr.Dataset) -> ModelSpec:
     """The accessor for *model*, with the program lowered afresh from *text*."""
-    return ModelSpec(model, to_program(yaml.safe_load(text)), text)
+    return ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters)
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -123,10 +125,13 @@ class ModelSpec:
         The spec as YAML, verbatim where a file or text was passed.
     """
 
-    def __init__(self, model: Model, program: ms.Program, text: str) -> None:
+    def __init__(
+        self, model: Model, program: ms.Program, text: str, parameters: xr.Dataset
+    ) -> None:
         self._model = model
         self.program = program
         self.text = text
+        self._parameters = parameters
 
     def __repr__(self) -> str:
         p = self.program
@@ -143,14 +148,16 @@ class ModelSpec:
         rows.append(_row("Expressions", list(p.named_expressions)))
         return "\n".join(rows)
 
-    def _reattach(self, model: Model) -> ModelSpec:
-        """The same spec, read off *model*."""
-        return ModelSpec(model, self.program, self.text)
+    def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
+        """The same spec, read off *model*, holding its own copy of the parameters."""
+        return ModelSpec(
+            model, self.program, self.text, self._parameters.copy(deep=deep)
+        )
 
     @property
     def parameters(self) -> xr.Dataset:
-        """The parameters and lookups retained on the model, on the master coordinates."""
-        return self._model.parameters
+        """The parameters and lookups the spec retained, on the master coordinates."""
+        return self._parameters
 
     @property
     def description(self) -> str:
@@ -247,7 +254,7 @@ class ModelSpec:
     def _retained(self, name: str) -> xr.DataArray:
         if name not in self.parameters:
             raise SpecDataError(
-                f"parameter '{name}' is not retained on the model: retain='report' keeps only what "
+                f"parameter '{name}' is not retained on the spec: retain='report' keeps only what "
                 f"the named expressions read, and retain='none' keeps nothing. Build with "
                 f"retain='all', or read the expression with evaluate(name, sources)."
             )
