@@ -28,14 +28,13 @@ import yaml
 from math_spec import (
     Spec,
     did_you_mean,
-    to_latex,
-    to_markdown,
     to_program,
     to_spec,
-    to_typst,
+    typeset,
     typeset_declaration,
 )
 from math_spec import program as ms
+from math_spec.typesetting import FormatName
 
 from linopy.constants import warn_evolving_api
 from linopy.model import Model
@@ -231,17 +230,31 @@ class ModelSpec:
         p = self.program
         return [*p.named_expressions, *p.constraints, *p.variables]
 
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """
+        The spec this model was built from, typeset in *fmt* as a document.
+
+        Parameters
+        ----------
+        fmt : {"latex", "markdown", "typst"}
+            What spells the math, as ``math_spec.typeset`` takes it.
+        **options
+            Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
+            ``legend``, ``numbered``, ``inline_expressions``.
+        """
+        return typeset(self._schema, fmt, **options)
+
     def to_latex(self, **options: Any) -> str:
-        """The whole model typeset as a LaTeX document."""
-        return to_latex(self._schema, **options)
+        """The spec typeset as a LaTeX document, see :meth:`typeset`."""
+        return self.typeset("latex", **options)
 
     def to_markdown(self, **options: Any) -> str:
-        """The whole model typeset as Markdown, its equations in ``$$`` blocks."""
-        return to_markdown(self._schema, **options)
+        """The spec typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
+        return self.typeset("markdown", **options)
 
     def to_typst(self, **options: Any) -> str:
-        """The whole model typeset as Typst."""
-        return to_typst(self._schema, **options)
+        """The spec typeset as Typst, see :meth:`typeset`."""
+        return self.typeset("typst", **options)
 
     def _repr_markdown_(self) -> str:
         return self.to_markdown()
@@ -343,19 +356,21 @@ class Declaration:
         self._spec = spec
         self._name = name
 
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """This declaration typeset in *fmt* as a single line, no document around it."""
+        return typeset_declaration(self._spec._schema, self._name, fmt, **options)
+
     def to_latex(self, **options: Any) -> str:
         """This declaration typeset as a single LaTeX line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "latex", **options)
+        return self.typeset("latex", **options)
 
     def to_markdown(self, **options: Any) -> str:
         """This declaration typeset as a single Markdown math line, no ``$$`` around it."""
-        return typeset_declaration(
-            self._spec._schema, self._name, "markdown", **options
-        )
+        return self.typeset("markdown", **options)
 
     def to_typst(self, **options: Any) -> str:
         """This declaration typeset as a single Typst line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "typst", **options)
+        return self.typeset("typst", **options)
 
     def _repr_markdown_(self) -> str:
         return f"$$\n{self.to_markdown()}\n$$"
