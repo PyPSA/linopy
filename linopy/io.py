@@ -1107,7 +1107,14 @@ def restore_dtypes(ds: xr.Dataset) -> xr.Dataset:
 
 
 def restamp_coords(m: Model, coords: Mapping[str, pd.Index]) -> None:
-    """Put *coords* on every container of *m* that carries one of those dimensions."""
+    """
+    Put *coords* on every container of *m* that was built on them.
+
+    Only on those: a container may carry a dimension of that name and its own
+    labels -- a hand-added variable beside a spec-built one -- and restamping
+    it would rewrite labels it never had, or fail outright over a length the
+    master coordinate does not share.
+    """
     from linopy.constraints import Constraint, CSRConstraint
     from linopy.csr import Grid
 
@@ -1122,7 +1129,7 @@ def restamp_coords(m: Model, coords: Mapping[str, pd.Index]) -> None:
         elif isinstance(constraint, CSRConstraint):
             constraint._grid = Grid(
                 {
-                    d: coords.get(d, index)
+                    d: _restamped(index, coords.get(str(d)))
                     for d, index in constraint._grid.indexes.items()
                 }
             )
@@ -1130,13 +1137,27 @@ def restamp_coords(m: Model, coords: Mapping[str, pd.Index]) -> None:
 
 def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
     """*data* with *coords* in place of the ones a dtype narrowed."""
-    indexes = data.indexes
     stale = {
-        dim: index
-        for dim, index in coords.items()
-        if dim in indexes and indexes[dim].dtype != index.dtype
+        str(dim): restamped
+        for dim, index in data.indexes.items()
+        if (restamped := _restamped(index, coords.get(str(dim)))) is not index
     }
     return data.assign_coords(stale) if stale else data
+
+
+def _restamped(found: pd.Index, master: pd.Index | None) -> pd.Index:
+    """
+    *master* where *found* is it as a netcdf type gave it back, else *found* itself.
+
+    A narrowed int or a widened bool holds the same labels at another dtype
+    and is the one to replace -- which is what ``Index.equals`` asks, since it
+    compares labels and not dtypes. An index of another length, or of other
+    labels entirely, belongs to a container that was never built on *master*
+    and is left alone.
+    """
+    if master is None or found.dtype == master.dtype:
+        return found
+    return master if found.equals(master) else found
 
 
 def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:

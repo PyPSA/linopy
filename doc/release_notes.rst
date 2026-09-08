@@ -40,6 +40,14 @@ Upcoming Version
 
 *Other*
 
+* ``Model.add_spec`` resolves the parameters it retains before it builds. A ``retain="all"`` build that could not read a parameter no declaration uses raised after the variables and constraints were already added, leaving a model that the "builds into an empty model" guard then refused to build into again.
+
+* ``repr(model.spec)`` no longer raises ``KeyError`` for a dimension the spec declares but nothing reaches, which needs no source and so has no coordinates; it is shown as ``unreached``.
+
+* A grouped sum through a lookup that maps no member at all now holds the empty sum, ``0``, on every declared group, as its documented rule says. It raised xarray's ``ValueError: <dim> must not be empty`` instead.
+
+* ``read_netcdf`` no longer rewrites the coordinates of a container that merely shares a dimension's *name* with a spec-built model's master coordinates. A hand-added variable on its own labels kept them; before, it was silently relabelled onto the master ones, or the read failed outright when the two lengths differed.
+
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
 
 *Internal*

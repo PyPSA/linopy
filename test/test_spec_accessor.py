@@ -133,6 +133,30 @@ def test_the_spec_keeps_its_parameters_off_the_model() -> None:
     assert m.spec.parameters["cost"].dims == ("generator",)
 
 
+def test_a_build_that_cannot_retain_leaves_the_model_buildable() -> None:
+    """retain='all' reaches parameters no declaration does, and must not half-build on one."""
+    spec = with_(yaml_dict(), parameters={"spare": {"dims": ["generator"]}})
+    m = Model()
+    with pytest.raises(SpecDataError, match="no data provided for parameter 'spare'"):
+        m.add_spec(spec, DISPATCH_DATA, retain="all")
+    assert not len(m.variables) and not len(m.constraints)
+
+    spare = pd.Series([1.0, 2.0], index=GENERATOR)
+    m.add_spec(spec, {**DISPATCH_DATA, "spare": spare}, retain="all")
+    assert "spare" in m.spec.parameters
+
+
+def test_a_declared_dimension_with_no_source_still_reprs() -> None:
+    """A dimension nothing reaches needs no source, so the repr must do without its labels."""
+    spec = with_(
+        yaml_dict(), dimensions={"spare": {"dtype": "int", "description": "unreached"}}
+    )
+    m = Model.from_spec(spec, DISPATCH_DATA)
+
+    assert "spare (unreached)" in repr(m.spec)
+    assert "snapshot (3)" in repr(m.spec)
+
+
 def test_an_unknown_expression_is_a_key_error_with_a_hint() -> None:
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
     with pytest.raises(KeyError, match="unknown named expression 'spent'.*spend"):

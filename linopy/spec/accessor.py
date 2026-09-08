@@ -84,8 +84,10 @@ def attach(
         )
     text, program = _source(spec)
     attached: Attached = attach_data(program, sources, retain=retain)
-    build(model, attached)
+    # Resolved before the build, so a parameter no declaration reads cannot fail
+    # halfway through one and leave a model too full to build into again.
     parameters = attached.retained().assign_coords(dict(attached.coords))
+    build(model, attached)
     return ModelSpec(model, program, text, parameters, attached)
 
 
@@ -114,6 +116,11 @@ def _source(spec: SpecLike) -> tuple[str, ms.Program]:
         return spec, to_program(yaml.safe_load(spec))
     loaded = to_spec(dict(spec)) if isinstance(spec, Mapping) else spec
     return loaded.to_yaml(), to_program(loaded)
+
+
+def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
+    """A dimension and how many labels it holds; a declared one nothing reaches holds none."""
+    return f"{dim} ({len(coords[dim])})" if dim in coords else f"{dim} (unreached)"
 
 
 def _row(label: str, items: list[str], cap: int = 8) -> str:
@@ -156,7 +163,7 @@ class ModelSpec:
         head = f"ModelSpec: {self.description}" if self.description else "ModelSpec"
         rows = [
             head,
-            _row("Dimensions", [f"{d} ({len(coords[d])})" for d in p.dimensions]),
+            _row("Dimensions", [_dimension(d, coords) for d in p.dimensions]),
             _row("Variables", list(p.variables)),
             _row("Constraints", list(p.constraints)),
         ]
