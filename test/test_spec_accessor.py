@@ -219,6 +219,39 @@ def test_repr_caps_long_sections() -> None:
     assert "e11" not in text
 
 
+def test_model_repr_shows_the_spec_and_tags_only_expressions() -> None:
+    text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
+    assert "Linopy LP model, built from a math-spec" in text
+    assert "Least-cost dispatch of a generator fleet against an hourly load." in text
+    assert " * spend (snapshot) [spec]" in text
+    assert " * usage (snapshot, generator) [spec]" in text
+    assert " * p (snapshot, generator)\n" in text
+    assert " * power_balance (snapshot)\n" in text
+    assert "<empty>" not in text
+
+
+def test_model_repr_of_a_spec_without_a_description() -> None:
+    spec = {k: v for k, v in yaml_dict().items() if k != "description"}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert m.spec.description == ""
+    assert repr(m).startswith("Linopy LP model, built from a math-spec\n=")
+
+
+def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    v = m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    m.add_expressions(v * 2.0, name="reserve_cost")
+    m.add_constraints(v <= 10.0, name="reserve_cap")
+    text = repr(m)
+    assert " * p (snapshot, generator) [spec]" in text
+    assert " * reserve (generator)\n" in text
+    assert " * power_balance (snapshot) [spec]" in text
+    assert " * reserve_cap (generator)\n" in text
+    assert " * reserve_cost (generator)\n" in text
+    assert " * spend (snapshot) [spec]" in text
+    assert "<empty>" not in text
+
+
 def test_the_whole_model_typesets() -> None:
     spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
     assert "align" in spec.to_latex()
@@ -321,3 +354,13 @@ def test_spec_api_warns_once_per_session() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", EvolvingAPIWarning)
         Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+
+
+@pytest.mark.parametrize(
+    ("name", "dims"), [("spend", ("snapshot",)), ("usage", ("snapshot", "generator"))]
+)
+def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    expr = m.spec.expressions[name]
+    assert expr.dims == dims
+    assert set(expr.expression.coord_dims) == set(dims)

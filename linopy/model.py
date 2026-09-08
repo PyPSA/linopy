@@ -706,13 +706,33 @@ class Model:
         from linopy.piecewise import _repr_summary as pwl_repr_summary
 
         var_names, con_names = _get_piecewise_groups(self)
-        var_string = self.variables._format_items(exclude=var_names)
-        con_string = self.constraints._format_items(exclude=con_names)
-        expr_string = self.expressions._format_items()
         model_string = f"Linopy {self.type} model"
+        var_tag: set[str] | None = None
+        con_tag: set[str] | None = None
+        expr_string = self.expressions._format_items()
+        if self._spec is not None:
+            model_string += ", built from a math-spec"
+            program = self._spec.program
+            spec_vars = set(program.variables)
+            spec_cons = set(program.constraints)
+            if any(v not in spec_vars for v in self.variables):
+                var_tag = spec_vars
+            if any(c not in spec_cons for c in self.constraints):
+                con_tag = spec_cons
+            eager = expr_string if len(self.expressions) else ""
+            spec = "".join(
+                f" * {name} ({', '.join(e.dims)}) [spec]\n"
+                for name, e in self._spec.expressions.items()
+            )
+            expr_string = eager + spec or "<empty>\n"
+        var_string = self.variables._format_items(exclude=var_names, tag=var_tag)
+        con_string = self.constraints._format_items(exclude=con_names, tag=con_tag)
+        header = f"{model_string}\n{'=' * len(model_string)}\n"
+        if self._spec is not None and self._spec.description:
+            header += f"{self._spec.description}\n"
 
         return (
-            f"{model_string}\n{'=' * len(model_string)}\n\n"
+            f"{header}\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Expressions:\n------------\n{expr_string}\n"
             f"Constraints:\n------------\n{con_string}"

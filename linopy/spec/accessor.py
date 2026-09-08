@@ -39,6 +39,7 @@ from linopy.spec.builder import build
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluate import evaluate_named, fold
+from linopy.spec.nodes import dims_of
 from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
@@ -130,8 +131,7 @@ class ModelSpec:
     def __repr__(self) -> str:
         p = self.program
         coords = self.coords
-        desc = str(self._schema.get("description", "")).strip().splitlines()
-        head = f"ModelSpec: {desc[0]}" if desc else "ModelSpec"
+        head = f"ModelSpec: {self.description}" if self.description else "ModelSpec"
         rows = [
             head,
             _row("Dimensions", [f"{d} ({len(coords[d])})" for d in p.dimensions]),
@@ -151,6 +151,12 @@ class ModelSpec:
     def parameters(self) -> xr.Dataset:
         """The parameters and lookups retained on the model, on the master coordinates."""
         return self._model.parameters
+
+    @property
+    def description(self) -> str:
+        """The spec's own description, its first line, or an empty string."""
+        lines = str(self._schema.get("description", "")).strip().splitlines()
+        return lines[0] if lines else ""
 
     @property
     def coords(self) -> dict[str, pd.Index]:
@@ -337,6 +343,11 @@ class NamedExpression(Declaration):
     def node(self) -> ms.ExpressionNode:
         """The expression body as lowered, math-spec's own AST handle."""
         return self._spec.program.named_expressions[self._name].expression
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """The dimensions the expression spans, read off the spec without binding data."""
+        return dims_of(self.node, self._spec.program)
 
     @functools.cached_property
     def expression(self) -> terms.Value:
