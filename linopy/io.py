@@ -1160,8 +1160,9 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     :func:`linopy.io.read_netcdf`. The insertion order of each container
     is stored as a JSON list in the ``_linopy_<kind>_order`` attribute.
 
-    A model built with :meth:`Model.add_spec` also persists its spec: the
-    YAML text, the master coordinates and the lookups. ``read_netcdf``
+    A model built with :meth:`Model.add_spec` also persists its spec under a
+    ``spec-`` prefix of its own: the YAML text, the master coordinates and the
+    parameters the spec retained, apart from ``m.parameters``. ``read_netcdf``
     lowers the program from the text again, so reading such a file needs
     the ``math-spec`` package; a file without a spec does not.
 
@@ -1209,14 +1210,12 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    parameters = m.parameters
     specs: list[xr.Dataset] = []
     if m._spec is not None:
         from linopy.spec.netcdf import encode
 
-        parameters, spec_ds = encode(m._spec)
-        specs = [spec_ds]
-    params = [with_prefix(record_dtypes(parameters), "parameters")]
+        specs = [encode(m._spec)]
+    params = [with_prefix(record_dtypes(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(
@@ -1499,7 +1498,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
 
     new_model._parameters = m._parameters.copy(deep=deep)
     if m._spec is not None:
-        new_model._spec = m._spec._reattach(new_model)
+        new_model._spec = m._spec._reattach(new_model, deep=deep)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:

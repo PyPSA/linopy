@@ -31,6 +31,7 @@ from test_spec_builder import (  # noqa: E402
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
 from linopy.io import SPEC_ATTR  # noqa: E402
+from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_model_equal  # noqa: E402
 
@@ -137,15 +138,32 @@ def test_a_spec_built_model_round_trips(
 def test_a_retain_none_model_evaluates_after_a_round_trip(
     tmp_path: Path, engine: str
 ) -> None:
+    """A file is where retain bites: the sources the built model still read are gone."""
     m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="none")
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
     assert not p.spec.parameters.data_vars
+    with pytest.raises(SpecDataError, match="no longer holds the sources"):
+        p.spec.expressions["spend"].solution
     assert_arrayequal(
-        m.spec.evaluate("spend", DISPATCH_DATA).solution,
+        m.spec.expressions["spend"].solution,
         p.spec.evaluate("spend", DISPATCH_DATA).solution,
     )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_the_caller_parameters_and_the_spec_ones_stay_apart(
+    tmp_path: Path, engine: str
+) -> None:
+    """A model parameter of the caller's is written beside the spec's, not into them."""
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+    m.parameters["cost"] = xr.DataArray([1, 2, 3], dims=["own"])
+    p = roundtrip(m, tmp_path, engine)
+
+    assert_model_equal(m, p)
+    assert_arrayequal(p.parameters["cost"], m.parameters["cost"])
+    assert_arrayequal(p.spec.parameters["cost"], m.spec.parameters["cost"])
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -215,11 +233,21 @@ def test_a_copy_carries_the_spec(deep: bool) -> None:
     """The copy's spec reads the copy, and only a deep copy owns its buffers."""
     m = Model.from_spec(WHERE_SPEC, WHERE_DATA, retain="all")
     p = m.copy(deep=deep)
-    p.parameters["label"].values[1] = "changed"
+    p.spec.parameters["label"].values[1] = "changed"
 
     assert p.spec.text == m.spec.text
     assert p.spec.parameters["label"].values[1] == "changed"
     assert m.spec.parameters["label"].values[1] == ("u" if deep else "changed")
+
+
+def test_a_copy_can_still_read_what_retain_dropped() -> None:
+    """A copy keeps the sources, so it folds an unretained parameter like its original."""
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="none")
+
+    assert_arrayequal(
+        m.copy(include_solution=True).spec.expressions["spend"].solution,
+        m.spec.expressions["spend"].solution,
+    )
 
 
 def test_a_model_without_a_spec_carries_none(tmp_path: Path) -> None:

@@ -41,6 +41,7 @@ from linopy.spec.accessor import ModelSpec, restore
 
 PREFIX = "spec"
 COORD = "coords__"
+PARAM = "param__"
 CODES = "codes__"
 CATEGORIES = "cats__"
 CATEGORY_DIM = "category__"
@@ -48,39 +49,40 @@ CATEGORY_DIM = "category__"
 HOLES: dict[str, Any] = {"f": np.nan, "O": np.nan, "M": np.datetime64("NaT")}
 
 
-def encode(spec: ModelSpec) -> tuple[xr.Dataset, xr.Dataset]:
+def encode(spec: ModelSpec) -> xr.Dataset:
     """
-    The model's parameters without the coded arrays, and the spec's own dataset.
+    The spec's own dataset: its text, its master coordinates and its parameters.
 
-    The spec dataset carries the spec text as its one attribute, which the
-    merge lifts to the file's, and holds one array of labels per master
-    coordinate and, per coded array, its codes and its categories. It carries no coordinates of
-    its own: an index coordinate is dropped on read together with the
-    dimension it indexes once no data variable is left over that dimension,
-    and a master coordinate nothing else reaches has exactly that shape.
+    The spec text is the dataset's one attribute, which the merge lifts to the
+    file's. Beside it sits one array of labels per master coordinate and, per
+    parameter, either its values or -- where it is coded -- its codes and its
+    categories. The dataset carries no coordinates of its own: an index
+    coordinate is dropped on read together with the dimension it indexes once
+    no data variable is left over that dimension, and a master coordinate
+    nothing else reaches has exactly that shape. So a parameter is written
+    over bare dimensions and put back on the master coordinates on read.
     """
-    parameters = spec.parameters
     arrays: dict[str, xr.DataArray] = {
         COORD + dim: _array(index.to_numpy(), (dim,))
         for dim, index in spec.coords.items()
     }
-    for name in _coded(spec):
-        arrays.update(_encode(name, parameters[name]))
-        parameters = parameters.drop_vars(name)
-    written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
-        {SPEC_ATTR: spec.text}
-    )
-    return parameters, written
+    coded = _coded(spec)
+    for name, arr in spec.parameters.items():
+        if str(name) in coded:
+            arrays.update(_encode(str(name), arr))
+        else:
+            arrays[PARAM + str(name)] = _array(arr.to_numpy(), arr.dims, str(arr.dtype))
+    return with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs({SPEC_ATTR: spec.text})
 
 
 def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     """
-    Re-lower *text* onto *model* and put its coded arrays and coordinates back.
+    Re-lower *text* onto *model* and read back the dataset :func:`encode` wrote.
 
-    The parameters read from the file are the retained ones minus what
-    :func:`encode` took out; together with the master coordinates and the
-    decoded arrays they are the dataset :func:`linopy.spec.accessor.attach`
-    left on the model when it was built.
+    The master coordinates, the plainly written parameters and the coded ones
+    together are the dataset :func:`linopy.spec.accessor.attach` gave the spec
+    when the model was built. ``model.parameters`` is not touched: it holds
+    what the caller put there and nothing of the spec.
     """
     sub = get_prefix(ds, PREFIX)
     coords = {
@@ -88,24 +90,30 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
         for name in sub.data_vars
         if str(name).startswith(COORD)
     }
-    coded = {
-        _stripped(name, CODES): _decode(sub, _stripped(name, CODES), coords)
+    arrays = {
+        _stripped(name, PARAM): _plain(sub[name], _stripped(name, PARAM), coords)
         for name in sub.data_vars
-        if str(name).startswith(CODES)
+        if str(name).startswith(PARAM)
     }
-    model.parameters = model.parameters.assign_coords(coords).assign(coded)
+    arrays.update(
+        {
+            _stripped(name, CODES): _decode(sub, _stripped(name, CODES), coords)
+            for name in sub.data_vars
+            if str(name).startswith(CODES)
+        }
+    )
     restamp_coords(model, coords)
-    return restore(model, text)
+    return restore(model, text, xr.Dataset(arrays).assign_coords(coords))
 
 
-def _coded(spec: ModelSpec) -> list[str]:
+def _coded(spec: ModelSpec) -> set[str]:
     """The parameters written as codes: every lookup and every array of objects."""
     lookups = {name for by_name in spec.lookups.values() for name in by_name}
-    return [
+    return {
         str(name)
         for name, arr in spec.parameters.items()
         if name in lookups or arr.dtype == object
-    ]
+    }
 
 
 def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
@@ -120,6 +128,14 @@ def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
             np.asarray(categories), (CATEGORY_DIM + name,)
         )
     return written
+
+
+def _plain(arr: xr.DataArray, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
+    """A parameter written as its own values, back on the master coordinates at its own dtype."""
+    dims = tuple(str(d) for d in arr.dims)
+    return xr.DataArray(
+        _values(arr), coords={d: coords[d] for d in dims}, dims=dims, name=name
+    )
 
 
 def _decode(sub: xr.Dataset, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
