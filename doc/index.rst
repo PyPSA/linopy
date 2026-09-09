@@ -136,6 +136,7 @@ This package is published under MIT license.
    piecewise-linear-constraints
    numerical-scaling
    testing-framework
+   plasmo-benders
 
 .. toctree::
    :hidden:
