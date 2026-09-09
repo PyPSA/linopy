@@ -39,6 +39,9 @@ dependencies = [
     "tqdm",
     "deprecation",
     "packaging",
+    "pydantic>=2",
+    "pyparsing>=3",
+    "pyyaml",
 ]
 
 [project.urls]
