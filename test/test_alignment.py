@@ -565,41 +565,49 @@ class TestCoordsToDict:
 
 
 # ---------------------------------------------------------------------------
-# add_variables — coords / dims map to the variable's dimensions
+# add_variables — coords / dims map to the variable's dimensions and values
 # ---------------------------------------------------------------------------
 
 
-class TestAddVariablesCoords:
-    """End-to-end: each coords / dims form sets the variable's dimensions."""
+def _hourly_index(timezone: str | None) -> pd.DatetimeIndex:
+    """Five hourly stamps spanning the Europe/Berlin DST fallback."""
+    return pd.date_range(
+        "2025-10-26 00:00", periods=5, freq="h", tz=timezone, name="time"
+    )
 
-    @staticmethod
-    def _datetime_coordinates(timezone: str | None) -> xr.Coordinates:
-        time = pd.date_range(
-            "2025-10-26 00:00",
-            periods=5,
-            freq="h",
-            tz=timezone,
-            name="time",
-        )
-        return xr.Coordinates({"time": time})
+
+def _datetime_coordinates(timezone: str | None) -> xr.Coordinates:
+    return xr.Coordinates({"time": _hourly_index(timezone)})
+
+
+class TestAddVariablesCoords:
+    """End-to-end: each coords / dims form sets the variable's dims and values."""
 
     @pytest.mark.parametrize(
-        "coords, dims, expected_dims",
+        "coords, dims, expected_coords",
         [
-            ([("x", [0, 1, 2])], None, ("x",)),
-            ([pd.Index([0, 1, 2], name="x")], None, ("x",)),
-            ([pd.Index([0, 1, 2])], ["x"], ("x",)),
-            ([[0, 1, 2]], ["x"], ("x",)),
-            ([range(3)], ["x"], ("x",)),
-            ([np.array([0, 1, 2])], ["x"], ("x",)),
-            ([[0, 1, 2]], None, ("dim_0",)),
-            ([range(3)], None, ("dim_0",)),
-            ([np.array([0, 1, 2])], None, ("dim_0",)),
-            ([pd.Index([0, 1, 2])], None, ("dim_0",)),
-            ([("origin", ["a", "b"]), ("dest", ["x", "y"])], None, ("origin", "dest")),
-            (_datetime_coordinates(None), None, ("time",)),
-            (_datetime_coordinates("UTC"), None, ("time",)),
-            (_datetime_coordinates("Europe/Berlin"), None, ("time",)),
+            ([("x", [0, 1, 2])], None, {"x": [0, 1, 2]}),
+            ([pd.Index([0, 1, 2], name="x")], None, {"x": [0, 1, 2]}),
+            ([pd.Index([0, 1, 2])], ["x"], {"x": [0, 1, 2]}),
+            ([[0, 1, 2]], ["x"], {"x": [0, 1, 2]}),
+            ([range(3)], ["x"], {"x": [0, 1, 2]}),
+            ([np.array([0, 1, 2])], ["x"], {"x": [0, 1, 2]}),
+            ([[0, 1, 2]], None, {"dim_0": [0, 1, 2]}),
+            ([range(3)], None, {"dim_0": [0, 1, 2]}),
+            ([np.array([0, 1, 2])], None, {"dim_0": [0, 1, 2]}),
+            ([pd.Index([0, 1, 2])], None, {"dim_0": [0, 1, 2]}),
+            (
+                [("origin", ["a", "b"]), ("dest", ["x", "y"])],
+                None,
+                {"origin": ["a", "b"], "dest": ["x", "y"]},
+            ),
+            (_datetime_coordinates(None), None, {"time": _hourly_index(None)}),
+            (_datetime_coordinates("UTC"), None, {"time": _hourly_index("UTC")}),
+            (
+                _datetime_coordinates("Europe/Berlin"),
+                None,
+                {"time": _hourly_index("Europe/Berlin")},
+            ),
         ],
         ids=[
             "tuple",
@@ -618,12 +626,14 @@ class TestAddVariablesCoords:
             "xarray-datetime-dst",
         ],
     )
-    def test_coords_set_variable_dims(
-        self, coords: Any, dims: Any, expected_dims: tuple
+    def test_coords_set_variable_dims_and_values(
+        self, coords: Any, dims: Any, expected_coords: dict
     ) -> None:
         m = Model()
         v = m.add_variables(lower=0, coords=coords, dims=dims)
-        assert v.dims == expected_dims
+        assert v.dims == tuple(expected_coords)
+        for dim, values in expected_coords.items():
+            assert v.indexes[dim].equals(pd.Index(values))
 
 
 # ---------------------------------------------------------------------------
