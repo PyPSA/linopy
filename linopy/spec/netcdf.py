@@ -46,7 +46,7 @@ from linopy.io import (
     with_prefix,
 )
 from linopy.model import Model
-from linopy.spec.accessor import Layer, ModelSpec, restore, restore_layer
+from linopy.spec.accessor import Layer, ModelSpec, restore_layer
 
 PREFIX = "spec"
 LEGACY_NAME = "spec"
@@ -127,13 +127,14 @@ def read(model: Model, ds: xr.Dataset) -> ModelSpec:
             for name in json.loads(ds.attrs[SPEC_LAYERS_ATTR])
         ]
         whole = bool(ds.attrs[SPEC_WHOLE_ATTR])
-        return restore(model, layers, whole, json.loads(ds.attrs[SPEC_OBJECTIVE_ATTR]))
+        owner = json.loads(ds.attrs[SPEC_OBJECTIVE_ATTR])
+        return ModelSpec(model, layers, whole, owner)
     layer = decode(model, get_prefix(ds, PREFIX), LEGACY_NAME, ds.attrs[SPEC_ATTR], {})
     replaced = bool(ds.attrs.get(LEGACY_OBJECTIVE_ATTR, 0))
-    owner = (
-        LEGACY_NAME if layer.program.objective is not None and not replaced else None
+    owned = layer.program.objective is not None and not replaced
+    return ModelSpec(
+        model, [layer], whole=True, objective_owner=LEGACY_NAME if owned else None
     )
-    return restore(model, [layer], whole=True, objective_owner=owner)
 
 
 def decode(

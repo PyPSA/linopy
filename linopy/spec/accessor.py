@@ -184,22 +184,21 @@ def attach(
     layer = Layer(
         model, layer_name, program, text, parameters, attached, attached.names
     )
-    if model._spec is None:
-        spec_ = ModelSpec(model, [layer], whole)
-    else:
-        spec_ = model._spec
-        spec_.layers[layer.name] = layer
+    spec_ = model._spec if model._spec is not None else ModelSpec(model, [], whole)
+    spec_.layers[layer.name] = layer
     if program.objective is not None:
         spec_.objective_owner = layer.name
     return spec_
 
 
+def _layers(model: Model) -> list[Layer]:
+    """The layers already on *model*, in order."""
+    return [] if model._spec is None else list(model._spec.layers.values())
+
+
 def _given(model: Model) -> dict[str, pd.Index]:
     """The master coordinates of every layer already on *model*; they agree wherever they meet."""
-    if model._spec is None:
-        return {}
-    layers = model._spec.layers.values()
-    return {dim: index for layer in layers for dim, index in layer.coords.items()}
+    return {d: index for layer in _layers(model) for d, index in layer.coords.items()}
 
 
 def _layer_name(spec: SpecLike, name: str | None) -> str:
@@ -225,8 +224,7 @@ def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> 
         raise ValueError(
             f"the spec declares constraint(s) {constraints} and the model already holds them."
         )
-    names = attached.names
-    on = [names.get(s.variable, s.variable) for s in program.sos.values()]
+    on = {attached.names.get(s.variable, s.variable) for s in program.sos.values()}
     sos = [
         n
         for n in on
@@ -243,10 +241,7 @@ def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> 
             "terms through a named expression: "
             "`m.objective += m.spec.expressions[name].expression`."
         )
-    earlier: set[str] = set()
-    if model._spec is not None:
-        for layer in model._spec.layers.values():
-            earlier |= set(layer.program.named_expressions)
+    earlier = {n for layer in _layers(model) for n in layer.program.named_expressions}
     expressions = [n for n in program.named_expressions if n in earlier]
     if expressions:
         raise ValueError(
@@ -270,16 +265,6 @@ def restore_layer(
     """
     program = to_program(yaml.safe_load(text))
     return Layer(model, name, program, text, parameters, None, dict(names))
-
-
-def restore(
-    model: Model,
-    layers: Iterable[Layer],
-    whole: bool,
-    objective_owner: str | None,
-) -> ModelSpec:
-    """The accessor for *model* over *layers* read back from a file, in order."""
-    return ModelSpec(model, layers, whole, objective_owner)
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -375,6 +360,11 @@ class Layer:
     def coords(self) -> dict[str, pd.Index]:
         """Master coordinates by dimension, as the layer was built on them."""
         return {str(d): index for d, index in self.parameters.indexes.items()}
+
+    @property
+    def variables(self) -> set[str]:
+        """The model variables the layer declares, by model name: built as declared, bound as bound."""
+        return {self.names.get(n, n) for n in self.program.variables}
 
     @property
     def lookups(self) -> dict[str, dict[str, xr.DataArray]]:
@@ -639,11 +629,8 @@ class ModelSpec:
             for layer in layers
             for sos in layer.program.sos.values()
         }
-        variables: set[str] = set()
-        constraints: set[str] = set()
-        for layer in layers:
-            variables |= set(layer.program.variables) | set(layer.names.values())
-            constraints |= set(layer.program.constraints)
+        variables = {n for layer in layers for n in layer.variables}
+        constraints = {n for layer in layers for n in layer.program.constraints}
         return Unspecified(
             variables=tuple(
                 n
@@ -721,20 +708,16 @@ class ModelSpec:
         tally = self._tally()
         if tally is None:
             return rendered
-        lead = (
-            "this model has drifted from the spec it was built from"
-            if self.whole
-            else "this spec extends a model it does not describe"
-        )
+        note = self._note(tally)
         warnings.warn(
-            f"{lead}: {tally}. What is typeset is the spec, so it is not this model.",
+            f"{note} What is typeset is the spec, so it is not this model.",
             UserWarning,
             stacklevel=stacklevel,
         )
         comment = _COMMENT.get(fmt)
         if comment is None:
             return rendered
-        return f"{comment.format(self._note(tally))}\n{rendered}"
+        return f"{comment.format(note)}\n{rendered}"
 
     def _note(self, tally: str) -> str:
         return (_DRIFTED if self.whole else _EXTENDS).format(tally)

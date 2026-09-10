@@ -741,11 +741,7 @@ class Model:
                 model_string += f", extended by math-spec layer(s) {names}"
             unspecified = self._spec.unspecified
             if unspecified.variables:
-                var_tag = {
-                    n: layer.name
-                    for layer in layers
-                    for n in {*layer.program.variables, *layer.names.values()}
-                }
+                var_tag = {n: layer.name for layer in layers for n in layer.variables}
             if unspecified.constraints:
                 con_tag = {
                     n: layer.name for layer in layers for n in layer.program.constraints

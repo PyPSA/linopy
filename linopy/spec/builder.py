@@ -8,8 +8,6 @@ is one branch of :func:`linopy.spec.evaluate.evaluate`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import xarray as xr
 from math_spec import program as ms
 
@@ -49,7 +47,7 @@ def build(model: Model, attached: Attached) -> None:
         names=attached.names,
     )
     curves.validate(ctx.program, ctx.parameters)
-    _variables(ctx, attached.bound)
+    _variables(ctx)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
@@ -57,9 +55,10 @@ def build(model: Model, attached: Attached) -> None:
         check_coverage(f"expression '{name}'", (declared.expression,), ctx, None)
 
 
-def _variables(ctx: Context, bound: Mapping[str, Variable]) -> None:
+def _variables(ctx: Context) -> None:
+    """Every declared variable the layer does not bind, built as its own."""
     for name, declared in ctx.program.variables.items():
-        if name in bound:
+        if name in ctx.names:
             continue
         rows = evaluate_where(declared.where, ctx)
         check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))

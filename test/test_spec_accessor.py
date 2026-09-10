@@ -640,6 +640,23 @@ def test_unspecified_names_what_the_spec_does_not_declare() -> None:
     assert found.constraints == ("power_balance",)
 
 
+def test_a_bound_spec_name_does_not_hide_a_hand_variable_of_that_name() -> None:
+    """A layer declares the model variable it binds, not the spec name it binds under."""
+    over = ["snapshot", "generator"]
+    spec = {
+        **EXTRA_SPEC,
+        "variables": {"q": {"foreach": over}},
+        "constraints": {"q_cap": {"foreach": over, "expression": "q <= cap"}},
+        "expressions": {"total": "sum(q)"},
+    }
+    m = BASE_MODEL()
+    m.add_variables(lower=0, coords=[GENERATOR], name="q")
+    m.add_spec(spec, {**EXTRA_DATA, "q": m.variables["p"]}, name="extra")
+
+    assert m.spec["extra"].variables == {"p"}
+    assert m.spec.unspecified.variables == ("q",)
+
+
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
     """An SOS is attributes on a variable, and a replaced objective is no name at all."""
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
