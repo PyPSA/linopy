@@ -716,12 +716,11 @@ class Model:
         if self._spec is not None:
             model_string += ", built from a math-spec"
             program = self._spec.program
-            spec_vars = set(program.variables)
-            spec_cons = set(program.constraints)
-            if any(v not in spec_vars for v in self.variables):
-                var_tag = spec_vars
-            if any(c not in spec_cons for c in self.constraints):
-                con_tag = spec_cons
+            unspecified = self._spec.unspecified
+            if unspecified.variables:
+                var_tag = set(program.variables)
+            if unspecified.constraints:
+                con_tag = set(program.constraints)
             eager = expr_string if len(self.expressions) else ""
             spec = "".join(
                 f" * {name} ({', '.join(e.dims)}) [spec]\n"
@@ -1628,6 +1627,10 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
         self.objective.scaling = scaling
+        if self._spec is not None:
+            # A spec sets its objective through here during its own build,
+            # while `_spec` is still unset, so only a later call reaches this.
+            self._spec._objective_replaced = True
 
     def remove_variables(self, name: str) -> None:
         """

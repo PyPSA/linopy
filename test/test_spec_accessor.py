@@ -28,8 +28,13 @@ from conftest import (  # noqa: E402
     with_,
     yaml_dict,
 )
-from linopy import Model  # noqa: E402
-from linopy.spec import ModelSpec, NamedExpression, SpecDataError  # noqa: E402
+from linopy import Model, breakpoints  # noqa: E402
+from linopy.spec import (  # noqa: E402
+    ModelSpec,
+    NamedExpression,
+    SpecDataError,
+    Unspecified,
+)
 
 pytestmark = [
     pytest.mark.v1,
@@ -288,12 +293,108 @@ def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:
     assert "<empty>" not in text
 
 
-def test_the_whole_model_typesets() -> None:
+def test_the_spec_typesets_in_every_format() -> None:
     spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
     assert "align" in spec.to_latex()
     assert "$$" in spec.to_markdown()
     assert spec.to_typst()
     assert spec._repr_markdown_() == spec.to_markdown()
+
+
+@pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
+def test_typeset_and_its_named_aliases_agree(fmt: str) -> None:
+    """The format is a parameter; the named methods only spell a common one."""
+    spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
+    declaration = spec.declaration("p")
+    assert spec.typeset(fmt) == getattr(spec, f"to_{fmt}")()
+    assert declaration.typeset(fmt) == getattr(declaration, f"to_{fmt}")()
+
+
+def hybrid() -> Model:
+    """A spec-built model grown past its spec by hand."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    m.add_constraints(m.variables["reserve"] <= 10.0, name="reserve_cap")
+    return m
+
+
+def test_unspecified_names_what_the_spec_does_not_declare() -> None:
+    assert not Model.from_spec(yaml_dict(), DISPATCH_DATA).spec.unspecified
+    assert hybrid().spec.unspecified == Unspecified(
+        variables=("reserve",),
+        constraints=("reserve_cap",),
+        expressions=(),
+        sos=(),
+        piecewise=(),
+        objective=False,
+    )
+
+
+def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
+    """An SOS is attributes on a variable, and a replaced objective is no name at all."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_expressions(m.variables["p"].sum("generator"), name="hand_expr")
+    m.add_sos_constraints(m.variables["p"], sos_type=2, sos_dim="generator")
+    m.add_objective(m.variables["p"].sum() * 3.0, overwrite=True)
+
+    found = m.spec.unspecified
+    assert found.expressions == ("hand_expr",)
+    assert found.sos == ("p",)
+    assert found.objective
+    assert found.variables == () and found.constraints == ()
+
+
+def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
+    """Its own variables and constraints are the formulation's business, not the tally's."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    k = pd.Index([0, 1], name="k")
+    pts = {"k": k, "_breakpoint": [0, 1, 2]}
+    x = m.add_variables(lower=0, upper=10, coords=[k], name="pw_x")
+    y = m.add_variables(lower=0, upper=10, coords=[k], name="pw_y")
+    m.add_piecewise_formulation(
+        (x, breakpoints(xr.DataArray([[0.0, 5.0, 10.0]] * 2, coords=pts))),
+        (y, breakpoints(xr.DataArray([[0.0, 1.0, 4.0]] * 2, coords=pts))),
+        name="curve",
+    )
+
+    found = m.spec.unspecified
+    assert found.piecewise == ("curve",)
+    assert found.variables == ("pw_x", "pw_y")
+    assert found.constraints == ()
+
+
+@pytest.mark.parametrize(
+    ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
+)
+def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
+    fmt: str, opener: str
+) -> None:
+    """The tally is a comment of the format's own: gone once compiled, there in the source."""
+    with pytest.warns(UserWarning, match="drifted from the spec"):
+        rendered = hybrid().spec.typeset(fmt)
+
+    first = rendered.splitlines()[0]
+    assert first.startswith(opener)
+    assert "1 variable (reserve)" in first
+    assert "1 constraint (reserve_cap)" in first
+
+
+def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
+    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        assert not spec.to_latex().startswith("%")
+
+
+def test_a_notebook_sees_a_note_the_warning_would_not_reach() -> None:
+    """A notebook swallows warnings, so the rendered Markdown carries the tally visibly."""
+    with pytest.warns(UserWarning):
+        rendered = hybrid().spec._repr_markdown_()
+
+    assert rendered.splitlines()[-1] == (
+        "*This model has drifted from the spec typeset here: "
+        "1 variable (reserve) and 1 constraint (reserve_cap).*"
+    )
 
 
 @pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])

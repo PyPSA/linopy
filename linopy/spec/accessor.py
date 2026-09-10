@@ -18,7 +18,9 @@ that a parameter can be out of reach.
 from __future__ import annotations
 
 import functools
+import warnings
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -28,14 +30,13 @@ import yaml
 from math_spec import (
     Spec,
     did_you_mean,
-    to_latex,
-    to_markdown,
     to_program,
     to_spec,
-    to_typst,
+    typeset,
     typeset_declaration,
 )
 from math_spec import program as ms
+from math_spec.typesetting import FormatName
 
 from linopy.constants import warn_evolving_api
 from linopy.model import Model
@@ -51,6 +52,82 @@ from linopy.spec.nodes import dims_of
 from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
+
+# A note about what is missing, spelled as a comment of the format's own. A
+# format math-spec grows later renders without one rather than with a wrong one.
+_DRIFTED = "This model has drifted from the spec typeset here: {}."
+
+_COMMENT: dict[str, str] = {
+    "latex": "% {}",
+    "markdown": "<!-- {} -->",
+    "typst": "// {}",
+}
+
+
+@dataclass(frozen=True)
+class Unspecified:
+    """
+    How a spec-built model has drifted from the spec it was built from.
+
+    A model goes on taking everything linopy can add to it, and none of that
+    carries a math-spec declaration to typeset. A spec's own ``piecewise:``
+    and ``sos:`` are not drift: math-spec lowers them into ordinary
+    declarations, so they sit in the program like any other.
+
+    Attributes
+    ----------
+    variables, constraints
+        Added beside the spec, a piecewise formulation's own aside.
+    expressions
+        Everything in ``model.expressions``: a spec's named expressions are
+        read lazily off ``model.spec`` and never live there.
+    sos
+        Variables given a special-ordered set the spec does not declare.
+        ``add_sos_constraints`` writes attributes onto a variable rather than
+        adding a name of its own, so nothing else here would show it.
+    piecewise
+        Formulations added by ``add_piecewise_formulation``, named as
+        formulations rather than as the variables and constraints they hold.
+    objective
+        Whether ``add_objective`` has replaced the spec's objective. The one
+        entry here that a render gets *wrong* rather than leaves out: the
+        typeset objective is the spec's, and the model's is another.
+    """
+
+    variables: tuple[str, ...]
+    constraints: tuple[str, ...]
+    expressions: tuple[str, ...]
+    sos: tuple[str, ...]
+    piecewise: tuple[str, ...]
+    objective: bool
+
+    def __bool__(self) -> bool:
+        return bool(
+            self.variables
+            or self.constraints
+            or self.expressions
+            or self.sos
+            or self.piecewise
+            or self.objective
+        )
+
+
+def _joined(parts: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    if len(parts) < 3:
+        return " and ".join(parts)
+    return f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
+def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
+    """``2 constraints (a, b)``, capped with a ``+N more`` tail; empty for no names."""
+    if not names:
+        return ""
+    shown = list(names[:cap])
+    if len(names) > cap:
+        shown.append(f"+{len(names) - cap} more")
+    plural = kind if len(names) == 1 else f"{kind}s"
+    return f"{len(names)} {plural} ({', '.join(shown)})"
 
 
 def attach(
@@ -91,14 +168,21 @@ def attach(
     return ModelSpec(model, program, text, parameters, attached)
 
 
-def restore(model: Model, text: str, parameters: xr.Dataset) -> ModelSpec:
+def restore(
+    model: Model,
+    text: str,
+    parameters: xr.Dataset,
+    objective_replaced: bool = False,
+) -> ModelSpec:
     """
     The accessor for *model*, with the program lowered afresh from *text*.
 
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    return ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
+    spec = ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
+    spec._objective_replaced = objective_replaced
+    return spec
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -156,6 +240,9 @@ class ModelSpec:
         self.text = text
         self._parameters = parameters
         self._attached = attached
+        # A build sets the objective through `add_objective` before `_spec` is
+        # assigned, so only a call after the build ever flips this.
+        self._objective_replaced = False
 
     def __repr__(self) -> str:
         p = self.program
@@ -174,13 +261,15 @@ class ModelSpec:
 
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
         """The same spec, read off *model*, holding its own copy of the parameters."""
-        return ModelSpec(
+        copied = ModelSpec(
             model,
             self.program,
             self.text,
             self._parameters.copy(deep=deep),
             self._attached,
         )
+        copied._objective_replaced = self._objective_replaced
+        return copied
 
     @property
     def parameters(self) -> xr.Dataset:
@@ -231,20 +320,121 @@ class ModelSpec:
         p = self.program
         return [*p.named_expressions, *p.constraints, *p.variables]
 
+    @property
+    def unspecified(self) -> Unspecified:
+        """
+        How the model has drifted from this spec, see :class:`Unspecified`.
+
+        Falsy for a model that is only what its spec says; everything added
+        beside the spec lands here, and is what typesetting cannot show.
+        """
+        from linopy.constants import SOS_TYPE_ATTR
+        from linopy.piecewise import _get_piecewise_groups
+
+        model, program = self._model, self.program
+        pw_variables, pw_constraints = _get_piecewise_groups(model)
+        declared_sos = {sos.variable for sos in program.sos.values()}
+        return Unspecified(
+            variables=tuple(
+                n
+                for n in model.variables
+                if n not in program.variables and n not in pw_variables
+            ),
+            constraints=tuple(
+                n
+                for n in model.constraints
+                if n not in program.constraints and n not in pw_constraints
+            ),
+            expressions=tuple(model.expressions),
+            sos=tuple(
+                n
+                for n in model.variables
+                if SOS_TYPE_ATTR in model.variables[n].attrs and n not in declared_sos
+            ),
+            piecewise=tuple(model._piecewise_formulations),
+            objective=self._objective_replaced,
+        )
+
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """
+        The spec this model was built from, typeset in *fmt* as a document.
+
+        The spec, and so not necessarily the whole model: what was added
+        beside the spec carries no declaration to typeset. Where the model
+        holds such a thing, :attr:`unspecified` names it, a warning says so,
+        and the rendered text opens with the same tally as a comment of
+        *fmt*'s own -- gone once compiled, there in the source.
+
+        Parameters
+        ----------
+        fmt : {"latex", "markdown", "typst"}
+            What spells the math, as ``math_spec.typeset`` takes it.
+        **options
+            Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
+            ``legend``, ``numbered``, ``inline_expressions``.
+
+        Warns
+        -----
+        UserWarning
+            The model holds variables or constraints the spec does not
+            declare, which are not in the rendered text.
+        """
+        return self._render(fmt, options, 3)
+
     def to_latex(self, **options: Any) -> str:
-        """The whole model typeset as a LaTeX document."""
-        return to_latex(self._schema, **options)
+        """The spec typeset as a LaTeX document, see :meth:`typeset`."""
+        return self._render("latex", options, 3)
 
     def to_markdown(self, **options: Any) -> str:
-        """The whole model typeset as Markdown, its equations in ``$$`` blocks."""
-        return to_markdown(self._schema, **options)
+        """The spec typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
+        return self._render("markdown", options, 3)
 
     def to_typst(self, **options: Any) -> str:
-        """The whole model typeset as Typst."""
-        return to_typst(self._schema, **options)
+        """The spec typeset as Typst, see :meth:`typeset`."""
+        return self._render("typst", options, 3)
+
+    def _render(
+        self, fmt: FormatName, options: Mapping[str, Any], stacklevel: int
+    ) -> str:
+        """Typeset in *fmt*, warned and commented where the model holds more than the spec."""
+        rendered = typeset(self._schema, fmt, **options)
+        tally = self._tally()
+        if tally is None:
+            return rendered
+        warnings.warn(
+            f"this model has drifted from the spec it was built from: {tally}. "
+            f"What is typeset is the spec, so it is not this model.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+        comment = _COMMENT.get(fmt)
+        if comment is None:
+            return rendered
+        return f"{comment.format(_DRIFTED.format(tally))}\n{rendered}"
+
+    def _tally(self) -> str | None:
+        """How the model has drifted, counted and named; ``None`` when it has not."""
+        found = self.unspecified
+        if not found:
+            return None
+        parts = [
+            _counted(found.variables, "variable"),
+            _counted(found.constraints, "constraint"),
+            _counted(found.expressions, "expression"),
+            _counted(found.sos, "SOS set"),
+            _counted(found.piecewise, "piecewise formulation"),
+        ]
+        return _joined(
+            [p for p in parts if p] + ["a replaced objective"] * found.objective
+        )
 
     def _repr_markdown_(self) -> str:
-        return self.to_markdown()
+        """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
+        rendered = self._render("markdown", {}, 3)
+        tally = self._tally()
+        if tally is None:
+            return rendered
+        return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
 
     @property
     def _schema(self) -> dict[str, Any]:
@@ -343,19 +533,27 @@ class Declaration:
         self._spec = spec
         self._name = name
 
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """
+        This declaration typeset in *fmt* as a single line, no document around it.
+
+        Nothing here can be out of step with the model the way
+        :meth:`ModelSpec.typeset` can: a declaration is reached by name
+        through the spec, so there is only ever the spec's own math to show.
+        """
+        return typeset_declaration(self._spec._schema, self._name, fmt, **options)
+
     def to_latex(self, **options: Any) -> str:
         """This declaration typeset as a single LaTeX line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "latex", **options)
+        return self.typeset("latex", **options)
 
     def to_markdown(self, **options: Any) -> str:
         """This declaration typeset as a single Markdown math line, no ``$$`` around it."""
-        return typeset_declaration(
-            self._spec._schema, self._name, "markdown", **options
-        )
+        return self.typeset("markdown", **options)
 
     def to_typst(self, **options: Any) -> str:
         """This declaration typeset as a single Typst line, no document around it."""
-        return typeset_declaration(self._spec._schema, self._name, "typst", **options)
+        return self.typeset("typst", **options)
 
     def _repr_markdown_(self) -> str:
         return f"$$\n{self.to_markdown()}\n$$"
