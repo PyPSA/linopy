@@ -10,6 +10,8 @@ value by value and dtype by dtype, on both netcdf engines ``test_io`` uses.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,18 +22,34 @@ import xarray as xr
 math_spec = pytest.importorskip("math_spec")
 
 from test_spec_builder import (  # noqa: E402
+    BASE_MODEL,
     DISPATCH_DATA,
     EXAMPLE_DISPATCH,
     EXAMPLES_DIR,
+    GENERATOR,
+    SECOND_DATA,
+    SECOND_SPEC,
+    SOS_SPEC,
+    THREE,
     WHERE_DATA,
     WHERE_SPEC,
+    extended,
     solved,
+    subset_bound,
 )
 
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.io import SPEC_ATTR  # noqa: E402
+from linopy.io import (  # noqa: E402
+    LAYER_BOUND_ATTR,
+    LAYER_TEXT_ATTR,
+    SPEC_ATTR,
+    SPEC_LAYERS_ATTR,
+    SPEC_OBJECTIVE_ATTR,
+    SPEC_WHOLE_ATTR,
+)
 from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.netcdf import LEGACY_OBJECTIVE_ATTR  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_model_equal  # noqa: E402
 
@@ -104,8 +122,28 @@ def lookup_sources(mapped: int) -> dict[str, Any]:
     return sources
 
 
+def whole() -> Model:
+    """The dispatch example built from its spec, one layer describing the whole model."""
+    return Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+
+
+def layered(layers: int, whole_: bool) -> Model:
+    """A model under *layers* spec layers, the first the whole model or extending a hand-built one."""
+    if layers == 0:
+        return BASE_MODEL()
+    m = whole() if whole_ else extended()
+    if layers == 2:
+        data = {**SECOND_DATA, "p": m.variables["p"]}
+        m.add_spec(SECOND_SPEC, data, retain="all", name="second")
+    return m
+
+
+def netcdf_path(tmp_path: Path, engine: str) -> Path:
+    return tmp_path / f"model-{engine}.nc"
+
+
 def roundtrip(m: Model, tmp_path: Path, engine: str) -> Model:
-    path = tmp_path / f"model-{engine}.nc"
+    path = netcdf_path(tmp_path, engine)
     m.to_netcdf(path, engine=engine)
     return read_netcdf(path)
 
@@ -177,7 +215,92 @@ def test_a_replaced_objective_is_still_known_after_a_round_trip(
 
     assert m.spec.unspecified.objective
     assert p.spec.unspecified.objective
+    assert p.spec.objective_owner is None
     assert_model_equal(m, p)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    ("layers", "whole_"),
+    [(0, False), (1, True), (1, False), (2, True), (2, False)],
+    ids=["none", "1-whole", "1-extended", "2-whole", "2-extended"],
+)
+def test_layers_round_trip(
+    tmp_path: Path, engine: str, layers: int, whole_: bool
+) -> None:
+    """Every layer comes back in order with its text, its data and its bindings; a model without any writes none."""
+    m = layered(layers, whole_)
+    p = roundtrip(m, tmp_path, engine)
+    attrs = xr.load_dataset(netcdf_path(tmp_path, engine)).attrs
+
+    assert_model_equal(m, p)
+    if layers == 0:
+        assert p._spec is None
+        assert not [k for k in attrs if k.startswith(SPEC_ATTR)]
+        return
+    assert list(p.spec.layers) == list(m.spec.layers)
+    for name, layer in m.spec.layers.items():
+        other = p.spec[name]
+        assert other.text == layer.text
+        assert attrs[LAYER_TEXT_ATTR.format(name)] == layer.text
+        assert LAYER_BOUND_ATTR.format(name) in attrs
+        assert dict(other.names) == dict(layer.names)
+        assert set(other.coords) == set(layer.coords)
+        for dim, index in layer.coords.items():
+            assert other.coords[dim].equals(index)
+            assert other.coords[dim].dtype == index.dtype
+        for pname, arr in layer.parameters.items():
+            assert_arrayequal(other.parameters[pname], arr)
+    assert p.spec.whole is whole_
+    assert p.spec.objective_owner == ("spec" if whole_ else None)
+
+
+@pytest.mark.parametrize("replaced", [False, True], ids=["own", "replaced"])
+def test_a_legacy_file_reads_as_one_layer(tmp_path: Path, replaced: bool) -> None:
+    """A file written before layers existed reads as the single layer ``spec`` describing the whole model."""
+    m = whole()
+    if replaced:
+        m.add_objective(m.variables["p"].sum() * 2.0, overwrite=True)
+    path = tmp_path / "current.nc"
+    m.to_netcdf(path)
+    ds = xr.load_dataset(path)
+    old = "spec-spec-"
+    ds = ds.rename(
+        {
+            k: "spec-" + str(k)[len(old) :]
+            for k in [*ds.data_vars, *ds.dims]
+            if str(k).startswith(old)
+        }
+    )
+    for attr in (
+        SPEC_LAYERS_ATTR,
+        SPEC_WHOLE_ATTR,
+        SPEC_OBJECTIVE_ATTR,
+        LAYER_TEXT_ATTR.format("spec"),
+        LAYER_BOUND_ATTR.format("spec"),
+    ):
+        del ds.attrs[attr]
+    ds.attrs[SPEC_ATTR] = m.spec.text
+    ds.attrs[LEGACY_OBJECTIVE_ATTR] = int(replaced)
+    legacy = tmp_path / "legacy.nc"
+    ds.to_netcdf(legacy)
+    p = read_netcdf(legacy)
+
+    assert list(p.spec.layers) == ["spec"]
+    assert p.spec.whole is True
+    assert p.spec.objective_owner == (None if replaced else "spec")
+    assert_model_equal(m, p)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_bound_sos_variable_keeps_its_attrs_after_a_round_trip(
+    tmp_path: Path, engine: str
+) -> None:
+    p = roundtrip(extended(SOS_SPEC), tmp_path, engine)
+
+    assert p.variables["p"].attrs["sos_type"] == 1
+    assert p.variables["p"].attrs["sos_dim"] == "generator"
+    assert p.spec.unspecified.sos == ()
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -205,15 +328,16 @@ def test_a_parameter_keeps_its_dtype(tmp_path: Path, engine: str, name: str) -> 
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("build", [whole, extended], ids=["whole", "extended"])
 @pytest.mark.parametrize(
     "labels", [[10, 11, 12], [0, 1]], ids=["relabelled", "shorter"]
 )
 def test_a_hand_added_variable_keeps_its_own_labels(
-    tmp_path: Path, engine: str, labels: list[int]
+    tmp_path: Path, engine: str, build: Callable[[], Model], labels: list[int]
 ) -> None:
     """A container sharing a master dimension's name but not its labels is left alone."""
     own = pd.Index(labels, name="snapshot")
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all")
+    m = build()
     m.add_variables(coords=[own], name="side")
     p = roundtrip(m, tmp_path, engine)
 
@@ -223,16 +347,36 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("frozen", [False, True], ids=["dataset", "csr"])
+@pytest.mark.parametrize(
+    "build, csr",
+    [
+        (
+            functools.partial(solved, EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all"),
+            False,
+        ),
+        (
+            functools.partial(
+                solved,
+                EXAMPLE_DISPATCH,
+                DISPATCH_DATA,
+                retain="all",
+                freeze_constraints=True,
+            ),
+            True,
+        ),
+        (extended, False),
+    ],
+    ids=["dataset", "csr", "extended"],
+)
 def test_every_container_shares_the_master_coordinate_dtypes(
-    tmp_path: Path, engine: str, frozen: bool
+    tmp_path: Path, engine: str, build: Callable[[], Model], csr: bool
 ) -> None:
-    """The master coordinates are canonical: no container may disagree with them."""
-    if frozen and engine == "scipy":
+    """The master coordinates are canonical: no container may disagree with them, a bound one included."""
+    if csr and engine == "scipy":
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a CSR constraint writes one"
         )
-    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", freeze_constraints=frozen)
+    m = build()
     p = roundtrip(m, tmp_path, engine)
 
     master = {dim: index.dtype for dim, index in p.spec.coords.items()}
@@ -246,6 +390,27 @@ def test_every_container_shares_the_master_coordinate_dtypes(
         for dim, index in data.indexes.items():
             if str(dim) in master:
                 assert index.dtype == master[str(dim)], f"{dim} differs on {data}"
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_subset_bound_variable_keeps_its_own_index_and_still_folds(
+    tmp_path: Path, engine: str
+) -> None:
+    """A bound variable spanning less than the master keeps its labels at the master's dtype, and is read onto the master again after the read."""
+    m = subset_bound()
+    m.solve(solver_name="highs", output_flag=False)
+    p = roundtrip(m, tmp_path, engine)
+
+    assert_model_equal(m, p)
+    assert p.spec.coords["generator"].equals(THREE)
+    own = p.variables["p"].indexes["generator"]
+    assert (
+        own.equals(GENERATOR)
+        and own.dtype == m.variables["p"].indexes["generator"].dtype
+    )
+    assert_arrayequal(
+        p.spec.expressions["total"].solution, m.spec.expressions["total"].solution
+    )
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -270,6 +435,20 @@ def test_a_copy_carries_the_spec(deep: bool) -> None:
     assert p.spec.text == m.spec.text
     assert p.spec.parameters["label"].values[1] == "changed"
     assert m.spec.parameters["label"].values[1] == ("u" if deep else "changed")
+
+
+@pytest.mark.parametrize("deep", [True, False])
+def test_a_copy_carries_every_layer(deep: bool) -> None:
+    """Both layers, their order, their bindings and the model-level state survive a copy."""
+    m = layered(2, whole_=False)
+    p = m.copy(deep=deep)
+
+    assert_model_equal(m, p)
+    assert list(p.spec.layers) == ["extra", "second"]
+    assert dict(p.spec["second"].names) == {"p": "p"}
+    assert p.spec["second"].model is p
+    assert p.spec.whole is False
+    assert p.spec.objective_owner is None
 
 
 def test_a_copy_can_still_read_what_retain_dropped() -> None:

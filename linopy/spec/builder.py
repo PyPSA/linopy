@@ -8,6 +8,8 @@ is one branch of :func:`linopy.spec.evaluate.evaluate`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import xarray as xr
 from math_spec import program as ms
 
@@ -44,9 +46,10 @@ def build(model: Model, attached: Attached) -> None:
         attached.coords,
         attached.lookups,
         Parameters(attached.program, attached.parameter),
+        names=attached.names,
     )
     curves.validate(ctx.program, ctx.parameters)
-    _variables(ctx)
+    _variables(ctx, attached.bound)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
@@ -54,8 +57,10 @@ def build(model: Model, attached: Attached) -> None:
         check_coverage(f"expression '{name}'", (declared.expression,), ctx, None)
 
 
-def _variables(ctx: Context) -> None:
+def _variables(ctx: Context, bound: Mapping[str, Variable]) -> None:
     for name, declared in ctx.program.variables.items():
+        if name in bound:
+            continue
         rows = evaluate_where(declared.where, ctx)
         check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))
         ctx.model.add_variables(
@@ -79,9 +84,15 @@ def _bound(node: ms.ExpressionNode, ctx: Context) -> float | xr.DataArray:
 
 
 def _sos(ctx: Context) -> None:
+    """
+    Special-ordered sets on the model-owned variable object.
+
+    ``add_sos_constraints`` writes attributes onto the variable it is
+    handed, so only the object ``model.variables`` holds may go in.
+    """
     for sos in ctx.program.sos.values():
         ctx.model.add_sos_constraints(
-            ctx.model.variables[sos.variable],
+            ctx.model.variables[ctx.names.get(sos.variable, sos.variable)],
             sos_type=sos.sos_type,
             sos_dim=sos.over,
             big_m=sos.big_m,

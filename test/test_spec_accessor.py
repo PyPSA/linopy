@@ -18,12 +18,25 @@ import xarray as xr
 math_spec = pytest.importorskip("math_spec")
 yaml = pytest.importorskip("yaml")
 
+from test_spec_builder import (  # noqa: E402
+    BASE_MODEL,
+    EXTRA_DATA,
+    EXTRA_SPEC,
+    SECOND_SPEC,
+    SOS_SPEC,
+    THREE,
+    dispatch_p,
+    extended,
+    subset_bound,
+)
+
 import linopy  # noqa: E402
 from conftest import (  # noqa: E402
     DISPATCH_DATA,
     DISPATCH_P,
     EXAMPLE_DISPATCH,
     GENERATOR,
+    SNAPSHOT,
     solved,
     with_,
     yaml_dict,
@@ -35,6 +48,7 @@ from linopy.spec import (  # noqa: E402
     SpecDataError,
     Unspecified,
 )
+from linopy.testing import assert_linequal  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
@@ -75,11 +89,229 @@ def test_a_lowered_program_is_refused() -> None:
         Model().add_spec(program, DISPATCH_DATA)
 
 
-def test_add_spec_needs_an_empty_model() -> None:
+def test_a_second_spec_must_bind_or_not_collide() -> None:
     m = Model()
     m.add_variables(name="x")
-    with pytest.raises(ValueError, match="empty model"):
+    m.add_spec(yaml_dict(), DISPATCH_DATA)
+    assert list(m.variables) == ["x", "p"]
+    with pytest.raises(ValueError, match="bind it or rename it"):
         m.add_spec(yaml_dict(), DISPATCH_DATA)
+
+
+def test_a_bound_variable_is_read_not_built() -> None:
+    m = extended()
+    assert list(m.variables) == ["p"]
+    assert m.spec.names == {"p": "p"}
+    total = m.spec.expressions["total"]
+    assert_linequal(total.expression, m.variables["p"].sum())
+    m.solve(solver_name="highs", output_flag=False)
+    assert float(total.solution) == pytest.approx(float(DISPATCH_P.sum()))
+
+
+def test_a_binding_must_be_a_variable() -> None:
+    with pytest.raises(SpecDataError, match="must be a linopy Variable to bind"):
+        extended(p=3.0)
+
+
+P_OVER_GENERATOR = with_(
+    EXTRA_SPEC,
+    variables={"p": {"foreach": ["generator"]}},
+    constraints={"p_cap": {"foreach": ["generator"], "expression": "p <= cap"}},
+)
+
+
+def p_declared(**more: Any) -> dict[str, Any]:
+    return with_(EXTRA_SPEC, variables={"p": {**EXTRA_SPEC["variables"]["p"], **more}})
+
+
+@pytest.mark.parametrize(
+    ("spec", "match"),
+    [
+        pytest.param(P_OVER_GENERATOR, "Dimensions match by name", id="dims"),
+        pytest.param(
+            p_declared(bounds={"lower": 0}),
+            "owns this variable's bounds and mask",
+            id="bounds",
+        ),
+        pytest.param(
+            p_declared(where="cap > 0"),
+            "owns this variable's bounds and mask",
+            id="where",
+        ),
+        pytest.param(
+            p_declared(domain="binary"),
+            "declared binary and the bound variable 'p' is continuous",
+            id="domain",
+        ),
+    ],
+)
+def test_a_bound_variable_keeps_its_declared_shape(
+    spec: dict[str, Any], match: str
+) -> None:
+    with pytest.raises(SpecDataError, match=match):
+        extended(spec)
+
+
+def test_a_bound_subset_is_reindexed_onto_the_master() -> None:
+    """The spec spans three generators, the bound ``p`` two: its third column is absent, not a stranger."""
+    m = subset_bound()
+    assert m.spec.coords["generator"].equals(THREE)
+    assert m.variables["p"].indexes["generator"].equals(GENERATOR)
+    labels = m.constraints["p_cap"].labels
+    assert labels.shape == (3, 3)
+    assert (labels.sel(generator="solar") == -1).all()
+    assert (labels.sel(generator=GENERATOR) != -1).all()
+    total = m.spec.expressions["total"]
+    read = total.expression.vars.values
+    assert set(read[read != -1]) == set(m.variables["p"].labels.values.ravel())
+    m.solve(solver_name="highs", output_flag=False)
+    assert float(total.solution) == pytest.approx(float(DISPATCH_P.sum()))
+
+    wider = Model()
+    wider.add_variables(coords=[SNAPSHOT, THREE], name="p")
+    with pytest.raises(SpecDataError, match="variable 'p' has label.*'solar'"):
+        wider.add_spec(EXTRA_SPEC, {**EXTRA_DATA, "p": wider.variables["p"]})
+
+
+def test_a_bound_variable_can_supply_a_dimension() -> None:
+    m = BASE_MODEL()
+    data = {"cap": EXTRA_DATA["cap"], "p": m.variables["p"]}
+    m.add_spec(EXTRA_SPEC, data)
+    assert m.spec.coords["generator"].equals(GENERATOR)
+    assert m.spec.coords["snapshot"].equals(SNAPSHOT)
+    with pytest.raises(SpecDataError, match="or bind a variable that spans it"):
+        Model().add_spec(EXTRA_SPEC, {"cap": EXTRA_DATA["cap"]})
+
+
+def two_bound_variables(q_generator: pd.Index, first: str) -> None:
+    """``p`` and ``q`` bound with no generator source, *first* declared before the other."""
+    m = BASE_MODEL()
+    m.add_variables(coords=[SNAPSHOT, q_generator], name="q")
+    declared = {**EXTRA_SPEC["variables"], "q": {"foreach": ["snapshot", "generator"]}}
+    ordered = {first: declared[first], **declared}
+    spec = {**EXTRA_SPEC, "variables": ordered}
+    data = {"cap": EXTRA_DATA["cap"], "p": m.variables["p"], "q": m.variables["q"]}
+    m.add_spec(spec, data)
+
+
+def second_layer_disagrees() -> None:
+    m = extended()
+    again = {
+        k: v for k, v in EXTRA_SPEC.items() if k not in ("constraints", "expressions")
+    }
+    data = {**EXTRA_DATA, "generator": GENERATOR[::-1], "p": m.variables["p"]}
+    m.add_spec(again, data, name="again")
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: extended(generator=GENERATOR[::-1]),
+        lambda: two_bound_variables(GENERATOR[::-1], "p"),
+        lambda: two_bound_variables(THREE, "p"),
+        lambda: two_bound_variables(THREE, "q"),
+        second_layer_disagrees,
+    ],
+    ids=[
+        "sources-vs-bound",
+        "bound-vs-bound",
+        "narrower-bound-first",
+        "wider-bound-first",
+        "layer-vs-layer",
+    ],
+)
+def test_dimension_labels_must_agree(build: Callable[[], None]) -> None:
+    with pytest.raises(SpecDataError, match="same dimension name means the same axis"):
+        build()
+
+
+def test_a_later_layer_inherits_the_dimensions_it_does_not_key() -> None:
+    """No generator source and a bound ``p`` over two: the master is the first layer's three."""
+    m = subset_bound()
+    floor = pd.Series([0.0, 0.0, 0.0], index=THREE)
+    m.add_spec(SECOND_SPEC, {"floor": floor, "p": m.variables["p"]}, name="second")
+    assert m.spec["second"].coords["generator"].equals(THREE)
+    assert m.spec["second"].coords["snapshot"].equals(SNAPSHOT)
+    labels = m.constraints["p_floor"].labels
+    assert labels.indexes["generator"].equals(THREE)
+    assert labels.indexes["snapshot"].equals(SNAPSHOT)
+    assert (labels.sel(generator="solar") == -1).all()
+    assert (labels.sel(generator=GENERATOR) != -1).all()
+
+
+def with_sos(m: Model) -> None:
+    m.add_sos_constraints(m.variables["p"], sos_type=1, sos_dim="generator")
+
+
+@pytest.mark.parametrize(
+    ("spec", "sources", "prepare", "match"),
+    [
+        pytest.param(
+            EXTRA_SPEC, {"p": None}, None, "bind it or rename it", id="variable"
+        ),
+        pytest.param(
+            with_(
+                EXTRA_SPEC,
+                constraints={"power_balance": EXTRA_SPEC["constraints"]["p_cap"]},
+            ),
+            {},
+            None,
+            r"constraint\(s\) \['power_balance'\]",
+            id="constraint",
+        ),
+        pytest.param(
+            SOS_SPEC,
+            {},
+            with_sos,
+            r"special-ordered set on variable\(s\) \['p'\]",
+            id="sos",
+        ),
+    ],
+)
+def test_collisions_are_refused(
+    spec: dict[str, Any],
+    sources: dict[str, Any],
+    prepare: Callable[[Model], None] | None,
+    match: str,
+) -> None:
+    m = BASE_MODEL()
+    if prepare is not None:
+        prepare(m)
+    data = {**EXTRA_DATA, "p": m.variables["p"], **sources}
+    data = {k: v for k, v in data.items() if v is not None}
+    with pytest.raises(ValueError, match=match):
+        m.add_spec(spec, data)
+
+
+def test_an_expression_name_is_taken_once_across_specs() -> None:
+    m = extended()
+    again = {k: v for k, v in EXTRA_SPEC.items() if k != "constraints"}
+    with pytest.raises(ValueError, match=r"named expression\(s\) \['total'\]"):
+        m.add_spec(again, {**EXTRA_DATA, "p": m.variables["p"]})
+
+
+def test_an_objective_on_a_non_empty_model_is_refused() -> None:
+    spec = with_(EXTRA_SPEC, objective={"sense": "minimize", "expression": "sum(p)"})
+    with pytest.raises(ValueError, match="already has one"):
+        extended(spec)
+
+    m = Model()
+    dispatch_p(m)
+    m.add_spec(spec, {**EXTRA_DATA, "p": m.variables["p"]}, name="extra")
+    assert m.objective.sense == "min"
+    assert m.spec.name == "extra"
+    assert m.spec.objective_owner == "extra"
+    assert m.spec.unspecified.objective is False
+
+
+def test_a_binding_needs_a_mapping_source() -> None:
+    ds = xr.Dataset(
+        {"cap": EXTRA_DATA["cap"].to_xarray()}, coords={"snapshot": SNAPSHOT}
+    )
+    with pytest.raises(ValueError, match="bind it or rename it"):
+        BASE_MODEL().add_spec(EXTRA_SPEC, ds)
+    m = Model().add_spec(EXTRA_SPEC, ds)
+    assert "p" in m.variables and m.spec.names == {}
 
 
 def test_legacy_semantics_is_refused() -> None:
@@ -90,7 +322,7 @@ def test_legacy_semantics_is_refused() -> None:
 
 
 def test_a_model_without_a_spec_has_no_accessor() -> None:
-    with pytest.raises(AttributeError, match="not built from a spec"):
+    with pytest.raises(AttributeError, match="holds no spec"):
         _ = Model().spec
 
 
@@ -253,6 +485,15 @@ def test_repr_summarises_every_section() -> None:
     assert "Expressions: spend, usage" in text
 
 
+def test_repr_of_several_layers_names_each() -> None:
+    spec = two_layers().spec
+    text = repr(spec)
+    assert text.startswith("ModelSpec: layers spec, extra")
+    assert "Layer 'spec': Least-cost dispatch" in text
+    assert "Layer 'extra'\n" in text
+    assert repr(spec["extra"]).startswith("Layer 'extra'\n  Dimensions:")
+
+
 def test_repr_caps_long_sections() -> None:
     spec = with_(yaml_dict(), expressions={f"e{i}": "p / p_max" for i in range(12)})
     text = repr(Model.from_spec(spec, DISPATCH_DATA).spec)
@@ -269,6 +510,18 @@ def test_model_repr_shows_the_spec_and_tags_only_expressions() -> None:
     assert " * p (snapshot, generator)\n" in text
     assert " * power_balance (snapshot)\n" in text
     assert "<empty>" not in text
+
+
+def test_model_repr_of_an_extended_model_names_its_layers() -> None:
+    m = extended()
+    m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    text = repr(m)
+    assert "Linopy LP model, extended by math-spec layer(s) extra" in text
+    assert " * p (snapshot, generator) [extra]" in text
+    assert " * reserve (generator)\n" in text
+    assert " * p_cap (snapshot, generator) [extra]" in text
+    assert " * power_balance (snapshot)\n" in text
+    assert " * total () [extra]" in text
 
 
 def test_model_repr_of_a_spec_without_a_description() -> None:
@@ -293,12 +546,63 @@ def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:
     assert "<empty>" not in text
 
 
+def two_layers() -> Model:
+    """The dispatch example built from its spec, then extended by a second layer."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    return m.add_spec(EXTRA_SPEC, {**EXTRA_DATA, "p": m.variables["p"]}, name="extra")
+
+
 def test_the_spec_typesets_in_every_format() -> None:
     spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
     assert "align" in spec.to_latex()
     assert "$$" in spec.to_markdown()
     assert spec.to_typst()
     assert spec._repr_markdown_() == spec.to_markdown()
+
+
+@pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
+def test_two_layers_typeset_one_after_the_other(fmt: str) -> None:
+    spec = two_layers().spec
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        rendered = spec.typeset(fmt)
+    assert rendered == f"{spec['spec'].typeset(fmt)}\n\n{spec['extra'].typeset(fmt)}"
+    with pytest.raises(ValueError, match=r"model\.spec\[name\]\.typeset"):
+        spec.typeset(fmt, standalone=True)
+    assert spec["extra"].typeset(fmt, standalone=True)
+
+
+def test_model_spec_layers() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    assert list(m.spec.layers) == ["spec"]
+    assert m.spec.program is m.spec["spec"].program
+    assert m.spec.whole and m.spec.objective_owner == "spec"
+
+    m = two_layers()
+    assert list(m.spec.layers) == ["spec", "extra"]
+    assert m.spec["extra"].program.constraints.keys() == {"p_cap"}
+    assert m.spec["extra"].names == {"p": "p"}
+    with pytest.raises(ValueError, match=r"\['spec', 'extra'\]"):
+        m.spec.program
+    assert set(m.spec.expressions) == {"spend", "usage", "total"}
+    assert m.spec.declaration("p_cap").to_latex()
+    with pytest.raises(KeyError, match="unknown spec layer 'extr'.*extra"):
+        m.spec["extr"]
+    assert m.spec.whole and not extended().spec.whole
+
+
+def test_layer_names(tmp_path: Path) -> None:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    assert list(Model.from_spec(path, DISPATCH_DATA).spec.layers) == ["dispatch"]
+    assert list(Model.from_spec(yaml_dict(), DISPATCH_DATA).spec.layers) == ["spec"]
+    m = extended()
+    assert list(m.spec.layers) == ["extra"]
+    again = {
+        k: v for k, v in EXTRA_SPEC.items() if k not in ("constraints", "expressions")
+    }
+    with pytest.raises(ValueError, match="layer named 'extra' is already"):
+        m.add_spec(again, {**EXTRA_DATA, "p": m.variables["p"]}, name="extra")
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
@@ -328,6 +632,9 @@ def test_unspecified_names_what_the_spec_does_not_declare() -> None:
         piecewise=(),
         objective=False,
     )
+    found = extended().spec.unspecified
+    assert found.variables == ()
+    assert found.constraints == ("power_balance",)
 
 
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
@@ -364,19 +671,36 @@ def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
 
 
 @pytest.mark.parametrize(
+    ("build", "match", "tallied"),
+    [
+        pytest.param(
+            hybrid,
+            "drifted from the spec",
+            ["1 variable (reserve)", "1 constraint (reserve_cap)"],
+            id="whole",
+        ),
+        pytest.param(
+            extended,
+            "extends a model it does not describe",
+            ["1 constraint (power_balance)"],
+            id="extended",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
     ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
 )
 def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
-    fmt: str, opener: str
+    build: Callable[[], Model], match: str, tallied: list[str], fmt: str, opener: str
 ) -> None:
     """The tally is a comment of the format's own: gone once compiled, there in the source."""
-    with pytest.warns(UserWarning, match="drifted from the spec"):
-        rendered = hybrid().spec.typeset(fmt)
+    with pytest.warns(UserWarning, match=match):
+        rendered = build().spec.typeset(fmt)
 
     first = rendered.splitlines()[0]
     assert first.startswith(opener)
-    assert "1 variable (reserve)" in first
-    assert "1 constraint (reserve_cap)" in first
+    for part in tallied:
+        assert part in first
 
 
 def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
@@ -494,10 +818,21 @@ def test_spec_api_warns_once_per_session() -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "dims"), [("spend", ("snapshot",)), ("usage", ("snapshot", "generator"))]
+    ("build", "name", "dims"),
+    [
+        (lambda: Model.from_spec(yaml_dict(), DISPATCH_DATA), "spend", ("snapshot",)),
+        (
+            lambda: Model.from_spec(yaml_dict(), DISPATCH_DATA),
+            "usage",
+            ("snapshot", "generator"),
+        ),
+        (extended, "total", ()),
+    ],
+    ids=["spend", "usage", "bound"],
 )
-def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> None:
-    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
-    expr = m.spec.expressions[name]
+def test_named_expression_dims_are_static(
+    build: Callable[[], Model], name: str, dims: tuple[str, ...]
+) -> None:
+    expr = build().spec.expressions[name]
     assert expr.dims == dims
     assert set(expr.expression.coord_dims) == set(dims)

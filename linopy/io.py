@@ -48,6 +48,11 @@ NETCDF_VERSION_ATTR = "_linopy_version"
 DTYPE_ATTR = "_linopy_dtype"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 SPEC_ATTR = "_linopy_spec"
+SPEC_LAYERS_ATTR = "_linopy_spec_layers"
+SPEC_WHOLE_ATTR = "_linopy_spec_whole"
+SPEC_OBJECTIVE_ATTR = "_linopy_spec_objective"
+LAYER_TEXT_ATTR = SPEC_ATTR + "-{}-text"
+LAYER_BOUND_ATTR = SPEC_ATTR + "-{}-bound"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
@@ -1147,17 +1152,19 @@ def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
 
 def _restamped(found: pd.Index, master: pd.Index | None) -> pd.Index:
     """
-    *master* where *found* is it as a netcdf type gave it back, else *found* itself.
+    *master*, or its part, where *found* is it as a netcdf type gave it back, else *found* itself.
 
     A narrowed int or a widened bool holds the same labels at another dtype
     and is the one to replace -- which is what ``Index.equals`` asks, since it
-    compares labels and not dtypes. An index of another length, or of other
-    labels entirely, belongs to a container that was never built on *master*
-    and is left alone.
+    compares labels and not dtypes. A container spanning some of the master's
+    labels in its order, a variable bound to a spec over more, takes that part.
+    An index of other labels belongs to a container that was never built on
+    *master* and is left alone.
     """
     if master is None or found.dtype == master.dtype:
         return found
-    return master if found.equals(master) else found
+    part = master[master.isin(found)]
+    return part if part.equals(found) else found
 
 
 def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
@@ -1181,10 +1188,13 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     :func:`linopy.io.read_netcdf`. The insertion order of each container
     is stored as a JSON list in the ``_linopy_<kind>_order`` attribute.
 
-    A model built with :meth:`Model.add_spec` also persists its spec under a
-    ``spec-`` prefix of its own: the YAML text, the master coordinates and the
-    parameters the spec retained, apart from ``m.parameters``. ``read_netcdf``
-    lowers the program from the text again, so reading such a file needs
+    A model built or extended with :meth:`Model.add_spec` also persists each
+    spec layer under a ``spec-<name>-`` prefix of its own: the master
+    coordinates and the parameters the layer retained, apart from
+    ``m.parameters``, with its YAML text and its bound names as attributes.
+    The layer order, whether the layers describe the whole model and the
+    layer owning the objective are attributes of the file. ``read_netcdf``
+    lowers each program from its text again, so reading such a file needs
     the ``math-spec`` package; a file without a spec does not.
 
     The SOS reformulation lifecycle token lives only on the in-memory
@@ -1235,7 +1245,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     if m._spec is not None:
         from linopy.spec.netcdf import encode
 
-        specs = [encode(m._spec)]
+        specs = [encode(layer) for layer in m._spec.layers.values()]
     params = [with_prefix(record_dtypes(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
@@ -1250,6 +1260,10 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         ("constraints", m.constraints),
     ):
         ds.attrs[CONTAINER_ORDER_ATTR.format(kind)] = json.dumps(list(container))
+    if m._spec is not None:
+        ds.attrs[SPEC_LAYERS_ATTR] = json.dumps(list(m._spec.layers))
+        ds.attrs[SPEC_WHOLE_ATTR] = int(m._spec.whole)
+        ds.attrs[SPEC_OBJECTIVE_ATTR] = json.dumps(m._spec.objective_owner)
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
@@ -1381,10 +1395,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m.parameters = restore_dtypes(get_prefix(ds, "parameters"))
 
-    if SPEC_ATTR in ds.attrs:
-        from linopy.spec.netcdf import decode
+    if SPEC_LAYERS_ATTR in ds.attrs or SPEC_ATTR in ds.attrs:
+        from linopy.spec.netcdf import read
 
-        m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
+        m._spec = read(m, ds)
 
     for k in m.scalar_attrs:
         if k in ds.attrs:

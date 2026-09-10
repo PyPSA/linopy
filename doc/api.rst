@@ -129,6 +129,7 @@ data. Requires the ``spec`` dependency group.
    model.Model.from_spec
    model.Model.spec
    spec.ModelSpec
+   spec.Layer
    spec.NamedExpressions
    spec.NamedExpression
    spec.Declaration
