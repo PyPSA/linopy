@@ -18,6 +18,7 @@ import xarray as xr
 math_spec = pytest.importorskip("math_spec")
 yaml = pytest.importorskip("yaml")
 
+from math_spec.typesetting import FormatName  # noqa: E402
 from test_spec_builder import (  # noqa: E402
     BASE_MODEL,
     EXTRA_DATA,
@@ -41,7 +42,7 @@ from conftest import (  # noqa: E402
     with_,
     yaml_dict,
 )
-from linopy import Model, breakpoints  # noqa: E402
+from linopy import LinearExpression, Model, breakpoints  # noqa: E402
 from linopy.spec import (  # noqa: E402
     ModelSpec,
     NamedExpression,
@@ -103,6 +104,7 @@ def test_a_bound_variable_is_read_not_built() -> None:
     assert list(m.variables) == ["p"]
     assert m.spec.names == {"p": "p"}
     total = m.spec.expressions["total"]
+    assert isinstance(total.expression, LinearExpression)
     assert_linequal(total.expression, m.variables["p"].sum())
     m.solve(solver_name="highs", output_flag=False)
     assert float(total.solution) == pytest.approx(float(DISPATCH_P.sum()))
@@ -162,6 +164,7 @@ def test_a_bound_subset_is_reindexed_onto_the_master() -> None:
     assert (labels.sel(generator="solar") == -1).all()
     assert (labels.sel(generator=GENERATOR) != -1).all()
     total = m.spec.expressions["total"]
+    assert isinstance(total.expression, LinearExpression)
     read = total.expression.vars.values
     assert set(read[read != -1]) == set(m.variables["p"].labels.values.ravel())
     m.solve(solver_name="highs", output_flag=False)
@@ -561,7 +564,7 @@ def test_the_spec_typesets_in_every_format() -> None:
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
-def test_two_layers_typeset_one_after_the_other(fmt: str) -> None:
+def test_two_layers_typeset_one_after_the_other(fmt: FormatName) -> None:
     spec = two_layers().spec
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
@@ -606,7 +609,7 @@ def test_layer_names(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
-def test_typeset_and_its_named_aliases_agree(fmt: str) -> None:
+def test_typeset_and_its_named_aliases_agree(fmt: FormatName) -> None:
     """The format is a parameter; the named methods only spell a common one."""
     spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
     declaration = spec.declaration("p")
@@ -691,7 +694,11 @@ def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
     ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
 )
 def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
-    build: Callable[[], Model], match: str, tallied: list[str], fmt: str, opener: str
+    build: Callable[[], Model],
+    match: str,
+    tallied: list[str],
+    fmt: FormatName,
+    opener: str,
 ) -> None:
     """The tally is a comment of the format's own: gone once compiled, there in the source."""
     with pytest.warns(UserWarning, match=match):
@@ -835,4 +842,5 @@ def test_named_expression_dims_are_static(
 ) -> None:
     expr = build().spec.expressions[name]
     assert expr.dims == dims
+    assert isinstance(expr.expression, LinearExpression)
     assert set(expr.expression.coord_dims) == set(dims)

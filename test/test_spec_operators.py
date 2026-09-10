@@ -18,7 +18,7 @@ yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
 from conftest import TT, WHERE_DATA, WHERE_SPEC, solved, with_  # noqa: E402
-from linopy import Model  # noqa: E402
+from linopy import LinearExpression, Model  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 
 pytestmark = [
@@ -220,6 +220,7 @@ def test_a_lookup_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> Non
 
     assert m.objective.value == pytest.approx(0.0)
     per_bus = m.spec.expressions["per_bus"]
+    assert isinstance(per_bus.expression, LinearExpression)
     assert per_bus.expression.nterm == 0
     assert per_bus.solution.indexes["bus"].tolist() == ["north", "south"]
     np.testing.assert_allclose(per_bus.solution.values, [0.0, 0.0])
