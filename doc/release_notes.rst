@@ -21,6 +21,17 @@ Upcoming Version
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
 
+*Build a model from a math-spec program*
+
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://github.com/energy-models/math-spec>`__ YAML program attached to data, and ``model.spec`` (a ``linopy.spec.ModelSpec``) reads it back. Requires the ``spec`` dependency group (``uv sync --group spec`` / ``uv pip install --group spec``, Python >= 3.12) and v1 semantics. Data is attached onto the spec's dimensions and parameters with ``linopy.spec.attach``, raising a ``linopy.spec.SpecDataError`` on mismatched or missing data; ``linopy.spec.Attached`` carries the attached result. The parameters the spec retains live in ``model.spec.parameters``, its own dataset; ``model.parameters`` stays the caller's and a build never writes to it. ``retain`` decides what a netcdf file holds, not what a session can read: a parameter it dropped is resolved from the sources the model was built with, and only a model read back from a file can run out of data. The spec API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs` for a worked example.
+
+* ``model.spec.expressions`` (a ``linopy.spec.NamedExpressions`` mapping) returns a ``linopy.spec.NamedExpression`` for each declared name, with three views: ``.node`` (the lowered formula), ``.expression`` (the unsolved linopy expression — a ``LinearExpression``, bare ``Variable``, array or scalar) and ``.solution`` (the expression folded over the solved model). ``model.spec.evaluate(name, sources)`` returns the same object with its parameters attached afresh.
+
+* ``model.spec.typeset(fmt)`` typesets the spec in any format math-spec knows, with ``.to_latex`` / ``.to_markdown`` / ``.to_typst`` spelling the three it knows today, and ``model.spec.declaration(name)`` returns a ``linopy.spec.Declaration`` whose same three methods typeset one named expression, constraint or variable as a single line (math only, no document); a ``NamedExpression`` carries those methods too. A ``ModelSpec``, a ``Declaration`` and a ``NamedExpression`` all render as Markdown in a notebook.
+
+* Typesetting renders the *spec*, which need not be the whole model: a spec-built model goes on taking everything linopy can add to it, and none of that carries a math-spec declaration to typeset. ``model.spec.unspecified`` (a ``linopy.spec.Unspecified``) reports the drift -- variables, constraints and expressions the spec does not declare, special-ordered sets it does not declare, piecewise formulations added beside it, and whether ``add_objective`` has replaced its objective. Where there is any, typesetting warns, opens the rendered text with a comment of the format's own -- gone once compiled, there in the source -- and adds a visible note to the Markdown a notebook displays. A spec's own ``piecewise:`` and ``sos:`` are not drift: math-spec lowers them into ordinary declarations, which typeset like any other.
+
+
 *Numerical scaling*
 
 * Variables, constraints and the objective accept a ``scaling`` factor that rewrites the problem into better-behaved units for the solver, without changing the answer. Variable scaling is column-like, constraint and objective scaling are row-like, and primal values, duals and the objective are transformed back to the original units after solving. See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.
@@ -30,6 +41,14 @@ Upcoming Version
 * Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
 
 *Other*
+
+* ``Model.add_spec`` resolves the parameters it retains before it builds. A ``retain="all"`` build that could not read a parameter no declaration uses raised after the variables and constraints were already added, leaving a model that the "builds into an empty model" guard then refused to build into again.
+
+* ``repr(model.spec)`` no longer raises ``KeyError`` for a dimension the spec declares but nothing reaches, which needs no source and so has no coordinates; it is shown as ``unreached``.
+
+* A grouped sum through a lookup that maps no member at all now holds the empty sum, ``0``, on every declared group, as its documented rule says. It raised xarray's ``ValueError: <dim> must not be empty`` instead.
+
+* ``read_netcdf`` no longer rewrites the coordinates of a container that merely shares a dimension's *name* with a spec-built model's master coordinates. A hand-added variable on its own labels kept them; before, it was silently relabelled onto the master ones, or the read failed outright when the two lengths differed.
 
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
 

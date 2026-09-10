@@ -116,6 +116,7 @@ This package is published under MIT license.
    coordinate-alignment
    migrating-to-v1
    manipulating-models
+   building-models-from-specs
 
 .. toctree::
    :hidden:

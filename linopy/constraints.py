@@ -2118,7 +2118,9 @@ class Constraints:
         """
         return {format_string_as_variable_name(n): n for n in self}
 
-    def _format_items(self, exclude: set[str] | None = None) -> str:
+    def _format_items(
+        self, exclude: set[str] | None = None, tag: set[str] | None = None
+    ) -> str:
         """Format constraint items, optionally excluding names in a group."""
         r = ""
         count = 0
@@ -2131,7 +2133,8 @@ class Constraints:
                 if ds.coords
                 else ""
             )
-            r += f" * {name}{coords}\n"
+            suffix = " [spec]" if tag and name in tag else ""
+            r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"
         return r

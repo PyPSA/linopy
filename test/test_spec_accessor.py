@@ -1,0 +1,503 @@
+"""
+``model.spec``, ``ModelSpec``, ``NamedExpression``, ``evaluate``, typesetting,
+and the ``add_spec``/``from_spec`` argument handling that builds them.
+"""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+
+math_spec = pytest.importorskip("math_spec")
+yaml = pytest.importorskip("yaml")
+
+import linopy  # noqa: E402
+from conftest import (  # noqa: E402
+    DISPATCH_DATA,
+    DISPATCH_P,
+    EXAMPLE_DISPATCH,
+    GENERATOR,
+    solved,
+    with_,
+    yaml_dict,
+)
+from linopy import Model, breakpoints  # noqa: E402
+from linopy.spec import (  # noqa: E402
+    ModelSpec,
+    NamedExpression,
+    SpecDataError,
+    Unspecified,
+)
+
+pytestmark = [
+    pytest.mark.v1,
+    pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
+]
+
+# ---------------------------------------------------------------------------
+# inputs and model integration
+# ---------------------------------------------------------------------------
+
+
+SPEC_FORMS: dict[str, Callable[[Path], Any]] = {
+    "path": lambda path: path,
+    "path-string": str,
+    "yaml-text": lambda path: path.read_text(),
+    "dict": lambda path: math_spec.to_spec(path).to_dict(),
+    "spec": lambda path: math_spec.to_spec(path),
+}
+
+
+@pytest.mark.parametrize("form", SPEC_FORMS.values(), ids=SPEC_FORMS.keys())
+def test_spec_forms_build_the_same_model(
+    tmp_path: Path, form: Callable[[Path], Any]
+) -> None:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    m = Model.from_spec(form(path), DISPATCH_DATA)
+    assert list(m.variables) == ["p"]
+    assert list(m.constraints) == ["power_balance"]
+    reread = math_spec.to_program(yaml.safe_load(m.spec.text))
+    assert reread.constraints == m.spec.program.constraints
+    assert isinstance(m.spec, ModelSpec)
+
+
+def test_a_lowered_program_is_refused() -> None:
+    program = math_spec.to_program(yaml_dict())
+    with pytest.raises(TypeError, match="not a lowered Program"):
+        Model().add_spec(program, DISPATCH_DATA)
+
+
+def test_add_spec_needs_an_empty_model() -> None:
+    m = Model()
+    m.add_variables(name="x")
+    with pytest.raises(ValueError, match="empty model"):
+        m.add_spec(yaml_dict(), DISPATCH_DATA)
+
+
+def test_legacy_semantics_is_refused() -> None:
+    with linopy.options as options:
+        options["semantics"] = "legacy"
+        with pytest.raises(ValueError, match="v1"):
+            Model.from_spec(yaml_dict(), DISPATCH_DATA)
+
+
+def test_a_model_without_a_spec_has_no_accessor() -> None:
+    with pytest.raises(AttributeError, match="not built from a spec"):
+        _ = Model().spec
+
+
+def test_from_spec_passes_model_kwargs_and_chains() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, force_dim_names=True)
+    assert m.force_dim_names
+    assert Model().add_spec(
+        yaml_dict(), DISPATCH_DATA
+    ).spec.program.variables.keys() == {"p"}
+
+
+# ---------------------------------------------------------------------------
+# retain and evaluate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("retain", "kept"),
+    [
+        ("report", {"cost", "p_max"}),
+        ("all", {"cost", "load", "p_max"}),
+        ("none", set()),
+    ],
+)
+def test_retain_decides_what_is_kept_and_not_what_can_be_read(
+    retain: str, kept: set[str]
+) -> None:
+    """A parameter retain dropped is read from the sources the model still holds."""
+    m = solved(yaml_dict(), DISPATCH_DATA, retain=retain)
+    assert set(m.spec.parameters.data_vars) == kept
+    assert not m.parameters.data_vars
+    want = (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    xr.testing.assert_allclose(m.spec.expressions["spend"].solution, want)
+    xr.testing.assert_allclose(m.spec.evaluate("spend", DISPATCH_DATA).solution, want)
+
+
+def test_the_spec_keeps_its_parameters_off_the_model() -> None:
+    """``model.parameters`` is the caller's: a build neither reads nor writes it."""
+    own = xr.DataArray(np.array(["a", "b", "c"], dtype=object), dims=["own"])
+    m = Model()
+    m.parameters["cost"] = own
+    m.add_spec(yaml_dict(), DISPATCH_DATA, retain="all")
+
+    assert m.parameters["cost"].equals(own)
+    assert m.spec.parameters["cost"].dims == ("generator",)
+
+
+def test_a_build_that_cannot_retain_leaves_the_model_buildable() -> None:
+    """retain='all' reaches parameters no declaration does, and must not half-build on one."""
+    spec = with_(yaml_dict(), parameters={"spare": {"dims": ["generator"]}})
+    m = Model()
+    with pytest.raises(SpecDataError, match="no data provided for parameter 'spare'"):
+        m.add_spec(spec, DISPATCH_DATA, retain="all")
+    assert not len(m.variables) and not len(m.constraints)
+
+    spare = pd.Series([1.0, 2.0], index=GENERATOR)
+    m.add_spec(spec, {**DISPATCH_DATA, "spare": spare}, retain="all")
+    assert "spare" in m.spec.parameters
+
+
+def test_a_declared_dimension_with_no_source_still_reprs() -> None:
+    """A dimension nothing reaches needs no source, so the repr must do without its labels."""
+    spec = with_(
+        yaml_dict(), dimensions={"spare": {"dtype": "int", "description": "unreached"}}
+    )
+    m = Model.from_spec(spec, DISPATCH_DATA)
+
+    assert "spare (unreached)" in repr(m.spec)
+    assert "snapshot (3)" in repr(m.spec)
+
+
+def test_an_unknown_expression_is_a_key_error_with_a_hint() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    with pytest.raises(KeyError, match="unknown named expression 'spent'.*spend"):
+        m.spec.expressions["spent"]
+
+
+def test_a_fold_over_variables_needs_a_solution_and_one_over_data_does_not() -> None:
+    spec = {
+        **yaml_dict(),
+        "parameters": {
+            **yaml_dict()["parameters"],
+            "rate": {"dims": []},
+            "years": {"dims": []},
+        },
+        "expressions": {
+            "spend": "sum(p * cost, over=generator)",
+            "growth": "rate ** years",
+        },
+    }
+    m = Model.from_spec(spec, {**DISPATCH_DATA, "rate": 1.05, "years": 3.0})
+    assert float(m.spec.expressions["growth"].solution) == pytest.approx(1.05**3)
+    with pytest.raises(RuntimeError, match="no solution yet"):
+        m.spec.expressions["spend"].solution
+
+
+# ---------------------------------------------------------------------------
+# three views: math, the linopy expression and the solution
+# ---------------------------------------------------------------------------
+
+VIEWS_SPEC: dict[str, Any] = {
+    **math_spec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict(),
+    "expressions": {
+        "spend": "sum(p * cost, over=generator)",
+        "bare": "p",
+        "levels": "cost * 2",
+        "answer": "6 * 7",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("spend", linopy.LinearExpression),
+        ("bare", linopy.Variable),
+        ("levels", xr.DataArray),
+        ("answer", float),
+    ],
+)
+def test_expression_is_the_unsolved_linopy_term(name: str, kind: type) -> None:
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
+    assert isinstance(m.spec.expressions[name].expression, kind)
+
+
+def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert isinstance(e.expression, linopy.LinearExpression)
+    with pytest.raises(RuntimeError, match="no solution yet"):
+        e.solution
+
+
+def test_the_named_expression_bundles_the_three_views() -> None:
+    m = solved(VIEWS_SPEC, DISPATCH_DATA)
+    e = m.spec.expressions["spend"]
+    assert e.node is m.spec.program.named_expressions["spend"].expression
+    assert isinstance(e.expression, linopy.LinearExpression)
+    xr.testing.assert_allclose(
+        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    )
+
+
+def test_evaluate_returns_a_named_expression() -> None:
+    m = solved(VIEWS_SPEC, DISPATCH_DATA, retain="none")
+    e = m.spec.evaluate("spend", DISPATCH_DATA)
+    assert isinstance(e, NamedExpression)
+    assert isinstance(e.expression, linopy.LinearExpression)
+    xr.testing.assert_allclose(
+        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    )
+
+
+def test_repr_summarises_every_section() -> None:
+    text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA).spec)
+    assert text.startswith("ModelSpec: Least-cost dispatch")
+    assert "Dimensions:  snapshot (3), generator (2)" in text
+    assert "Variables:   p" in text
+    assert "Constraints: power_balance" in text
+    assert "Objective:   minimize" in text
+    assert "Expressions: spend, usage" in text
+
+
+def test_repr_caps_long_sections() -> None:
+    spec = with_(yaml_dict(), expressions={f"e{i}": "p / p_max" for i in range(12)})
+    text = repr(Model.from_spec(spec, DISPATCH_DATA).spec)
+    assert "(+6 more)" in text
+    assert "e11" not in text
+
+
+def test_model_repr_shows_the_spec_and_tags_only_expressions() -> None:
+    text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
+    assert "Linopy LP model, built from a math-spec" in text
+    assert "Least-cost dispatch of a generator fleet against an hourly load." in text
+    assert " * spend (snapshot) [spec]" in text
+    assert " * usage (snapshot, generator) [spec]" in text
+    assert " * p (snapshot, generator)\n" in text
+    assert " * power_balance (snapshot)\n" in text
+    assert "<empty>" not in text
+
+
+def test_model_repr_of_a_spec_without_a_description() -> None:
+    spec = {k: v for k, v in yaml_dict().items() if k != "description"}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert m.spec.description == ""
+    assert repr(m).startswith("Linopy LP model, built from a math-spec\n=")
+
+
+def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    v = m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    m.add_expressions(v * 2.0, name="reserve_cost")
+    m.add_constraints(v <= 10.0, name="reserve_cap")
+    text = repr(m)
+    assert " * p (snapshot, generator) [spec]" in text
+    assert " * reserve (generator)\n" in text
+    assert " * power_balance (snapshot) [spec]" in text
+    assert " * reserve_cap (generator)\n" in text
+    assert " * reserve_cost (generator)\n" in text
+    assert " * spend (snapshot) [spec]" in text
+    assert "<empty>" not in text
+
+
+def test_the_spec_typesets_in_every_format() -> None:
+    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+    assert "align" in spec.to_latex()
+    assert "$$" in spec.to_markdown()
+    assert spec.to_typst()
+    assert spec._repr_markdown_() == spec.to_markdown()
+
+
+@pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
+def test_typeset_and_its_named_aliases_agree(fmt: str) -> None:
+    """The format is a parameter; the named methods only spell a common one."""
+    spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
+    declaration = spec.declaration("p")
+    assert spec.typeset(fmt) == getattr(spec, f"to_{fmt}")()
+    assert declaration.typeset(fmt) == getattr(declaration, f"to_{fmt}")()
+
+
+def hybrid() -> Model:
+    """A spec-built model grown past its spec by hand."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
+    m.add_constraints(m.variables["reserve"] <= 10.0, name="reserve_cap")
+    return m
+
+
+def test_unspecified_names_what_the_spec_does_not_declare() -> None:
+    assert not Model.from_spec(yaml_dict(), DISPATCH_DATA).spec.unspecified
+    assert hybrid().spec.unspecified == Unspecified(
+        variables=("reserve",),
+        constraints=("reserve_cap",),
+        expressions=(),
+        sos=(),
+        piecewise=(),
+        objective=False,
+    )
+
+
+def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
+    """An SOS is attributes on a variable, and a replaced objective is no name at all."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    m.add_expressions(m.variables["p"].sum("generator"), name="hand_expr")
+    m.add_sos_constraints(m.variables["p"], sos_type=2, sos_dim="generator")
+    m.add_objective(m.variables["p"].sum() * 3.0, overwrite=True)
+
+    found = m.spec.unspecified
+    assert found.expressions == ("hand_expr",)
+    assert found.sos == ("p",)
+    assert found.objective
+    assert found.variables == () and found.constraints == ()
+
+
+def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
+    """Its own variables and constraints are the formulation's business, not the tally's."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    k = pd.Index([0, 1], name="k")
+    pts = {"k": k, "_breakpoint": [0, 1, 2]}
+    x = m.add_variables(lower=0, upper=10, coords=[k], name="pw_x")
+    y = m.add_variables(lower=0, upper=10, coords=[k], name="pw_y")
+    m.add_piecewise_formulation(
+        (x, breakpoints(xr.DataArray([[0.0, 5.0, 10.0]] * 2, coords=pts))),
+        (y, breakpoints(xr.DataArray([[0.0, 1.0, 4.0]] * 2, coords=pts))),
+        name="curve",
+    )
+
+    found = m.spec.unspecified
+    assert found.piecewise == ("curve",)
+    assert found.variables == ("pw_x", "pw_y")
+    assert found.constraints == ()
+
+
+@pytest.mark.parametrize(
+    ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
+)
+def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
+    fmt: str, opener: str
+) -> None:
+    """The tally is a comment of the format's own: gone once compiled, there in the source."""
+    with pytest.warns(UserWarning, match="drifted from the spec"):
+        rendered = hybrid().spec.typeset(fmt)
+
+    first = rendered.splitlines()[0]
+    assert first.startswith(opener)
+    assert "1 variable (reserve)" in first
+    assert "1 constraint (reserve_cap)" in first
+
+
+def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
+    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        assert not spec.to_latex().startswith("%")
+
+
+def test_a_notebook_sees_a_note_the_warning_would_not_reach() -> None:
+    """A notebook swallows warnings, so the rendered Markdown carries the tally visibly."""
+    with pytest.warns(UserWarning):
+        rendered = hybrid().spec._repr_markdown_()
+
+    assert rendered.splitlines()[-1] == (
+        "*This model has drifted from the spec typeset here: "
+        "1 variable (reserve) and 1 constraint (reserve_cap).*"
+    )
+
+
+@pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])
+def test_a_named_expression_typesets_to_one_line(fmt: str) -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    line = getattr(e, fmt)()
+    assert "spend" in line
+    assert "\n" not in line
+    assert "align" not in line and "$$" not in line
+
+
+def test_a_named_expression_repr_markdown_wraps_only_itself() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert e._repr_markdown_() == f"$$\n{e.to_markdown()}\n$$"
+
+
+def test_a_named_expression_typeset_passes_options() -> None:
+    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    assert e.to_latex(
+        symbols={"notation": "latex", "names": {"spend": "S"}}
+    ).startswith("S")
+
+
+@pytest.mark.parametrize("name", ["power_balance", "p"])
+@pytest.mark.parametrize("fmt", ["to_latex", "to_markdown", "to_typst"])
+def test_a_constraint_or_variable_typesets_to_one_line(name: str, fmt: str) -> None:
+    d = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.declaration(name)
+    line = getattr(d, fmt)()
+    assert line
+    assert "\n" not in line
+    assert "align" not in line and "$$" not in line
+
+
+def test_declaration_reaches_every_kind_and_an_unknown_name_is_a_key_error() -> None:
+    spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
+    assert spec.declaration("spend").to_latex() == spec.expressions["spend"].to_latex()
+    with pytest.raises(KeyError, match="unknown declaration 'spent'.*spend"):
+        spec.declaration("spent")
+
+
+def test_a_constant_expression_folds_to_a_scalar() -> None:
+    spec = {**yaml_dict(), "expressions": {"answer": "6 * 7"}}
+    got = Model.from_spec(spec, DISPATCH_DATA).spec.expressions["answer"].solution
+    assert got.ndim == 0 and float(got) == 42.0
+
+
+OTHER = pd.Index(["x", "y"], name="generator")
+
+
+@pytest.mark.parametrize(
+    ("generator", "match"),
+    [
+        pytest.param(GENERATOR[::-1], "as \\['gas', 'wind'\\]", id="reordered"),
+        pytest.param(OTHER, "as \\['x', 'y'\\]", id="relabelled"),
+    ],
+)
+def test_evaluate_refuses_sources_on_other_labels_than_the_model(
+    generator: pd.Index, match: str
+) -> None:
+    m = solved({**yaml_dict(), "expressions": {"twice": "cost * 2"}}, DISPATCH_DATA)
+    sources = {
+        **DISPATCH_DATA,
+        "generator": generator,
+        "p_max": pd.Series([100.0, 200.0], index=generator),
+        "cost": pd.Series([0.0, 50.0], index=generator),
+    }
+    with pytest.raises(SpecDataError, match=f"dimension 'generator' {match}"):
+        m.spec.evaluate("twice", sources)
+
+
+def test_a_reported_dual_folds_to_the_constraint_dual() -> None:
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = solved(spec, DISPATCH_DATA)
+    xr.testing.assert_allclose(
+        m.spec.expressions["price"].solution,
+        m.constraints["power_balance"].dual.rename("price"),
+    )
+
+
+def test_a_dual_needs_a_solution() -> None:
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    with pytest.raises(RuntimeError, match="no dual yet"):
+        m.spec.expressions["price"].expression
+
+
+def test_spec_api_warns_once_per_session() -> None:
+    from linopy import EvolvingAPIWarning
+    from linopy.constants import _emitted_evolving_warnings
+
+    _emitted_evolving_warnings.discard("spec")
+    with pytest.warns(EvolvingAPIWarning, match="spec: Model.add_spec"):
+        Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", EvolvingAPIWarning)
+        Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+
+
+@pytest.mark.parametrize(
+    ("name", "dims"), [("spend", ("snapshot",)), ("usage", ("snapshot", "generator"))]
+)
+def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    expr = m.spec.expressions[name]
+    assert expr.dims == dims
+    assert set(expr.expression.coord_dims) == set(dims)

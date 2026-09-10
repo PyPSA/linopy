@@ -118,6 +118,32 @@ gpu = [
     # "cupdlpx>=0.1.2", pip package currently unstable, install manually
 ]
 
+[dependency-groups]
+# math-spec is not on PyPI yet and needs Python >= 3.12. A dependency group
+# keeps the git pin out of the published wheel metadata, which PyPI rejects.
+# Install with `uv sync --group spec` or `uv pip install --group spec`.
+spec = [
+    "math-spec @ git+https://github.com/energy-models/math-spec.git@v0.0.0-alpha.76 ; python_version >= '3.12'",
+    "pyyaml ; python_version >= '3.12'",
+    "pyarrow ; python_version >= '3.12'",
+]
+# datarecord feeds model data as sources into Model.from_spec (adapter showcased
+# in dev-scripts). Pre-1.0 git dep, gated on 3.12 like spec. narwhals 2.21.0 has
+# a join regression that breaks datarecord's name-uniqueness check, so it is
+# excluded until a fix ships. Install with `uv sync --group datarecord`.
+datarecord = [
+    { include-group = "spec" },
+    "datarecord @ git+https://github.com/energy-models/datarecord.git@3b1dd503ace7c9ae12a9adf38f8222e876f09311 ; python_version >= '3.12'",
+    "narwhals!=2.21.0 ; python_version >= '3.12'",
+    "pyarrow ; python_version >= '3.12'",
+]
+# Runs dev-scripts/spec/pypsa_spec_lowering.py: a PyPSA example network lowered
+# through math-spec's examples/pypsa.yaml.
+pypsa = [
+    { include-group = "spec" },
+    "pypsa>=1.3 ; python_version >= '3.12'",
+]
+
 [tool.uv]
 # cuopt-cu12 pulls cudf-cu12, which pins pandas<3.0.4, while benchmarks pins
 # pandas==3.0.5. Resolve the two extras in separate forks instead of together.
@@ -151,6 +177,7 @@ filterwarnings = [
     # collection of ``linopy/variables.py`` in the source tree on
     # Windows CI.
     "ignore:piecewise:FutureWarning",
+    "ignore:spec:FutureWarning",
 ]
 
 [tool.coverage.run]
@@ -161,7 +188,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*']
+exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*', '^conftest\.py$']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true

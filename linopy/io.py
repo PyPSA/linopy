@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -45,7 +45,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+DTYPE_ATTR = "_linopy_dtype"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
+SPEC_ATTR = "_linopy_spec"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
@@ -1019,6 +1021,145 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
+def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    """*ds* with every dim, coordinate, variable and attribute of it namespaced under *prefix*."""
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+    ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+
+    # Flatten multiindexes
+    for dim in ds.dims:
+        if isinstance(ds[dim].to_index(), pd.MultiIndex):
+            prefix_len = len(prefix) + 1  # leave original index level name
+            names = [n[prefix_len:] for n in ds[dim].to_index().names]
+            ds = ds.reset_index(dim)
+            # scipy netCDF3 backend cannot write unicode-array attrs.
+            ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
+
+    return ds
+
+
+def has_prefix(k: str, prefix: str) -> bool:
+    return k.rsplit("-", 1)[0] == prefix
+
+
+def remove_prefix(k: str, prefix: str) -> str:
+    return k[len(prefix) + 1 :]
+
+
+def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+    # str = JSON (new); iterable = legacy list from older linopy.
+    if isinstance(value, str):
+        return [str(n) for n in json.loads(value)]
+    return [str(n) for n in value]
+
+
+def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    """The part of *ds* :func:`with_prefix` wrote under *prefix*, its names given back."""
+    ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
+    multiindexes = []
+    for dim in ds.dims:
+        attr = ds.attrs.get(f"{dim}_multiindex")
+        if attr is None:
+            continue
+        for name in parse_multiindex_attr(attr):
+            multiindexes.append(prefix + "-" + name)
+    ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
+    ds.attrs = {
+        remove_prefix(k, prefix): v
+        for k, v in ds.attrs.items()
+        if has_prefix(k, prefix)
+    }
+
+    for dim in ds.dims:
+        if f"{dim}_multiindex" in ds.attrs:
+            names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
+            ds = ds.set_index({dim: names})  # type: ignore[dict-item]
+
+    return ds
+
+
+def record_dtypes(ds: xr.Dataset) -> xr.Dataset:
+    """
+    *ds* with each array's in-memory dtype written as an attribute.
+
+    No netcdf type holds a dtype as written: an engine narrows an int64 to
+    int32 and hands a bool back as int8, so the dtype travels beside the
+    values and :func:`restore_dtypes` puts it back.
+    """
+    typed = {
+        str(name): arr.assign_attrs({DTYPE_ATTR: str(arr.dtype)})
+        for name, arr in ds.items()
+    }
+    return ds.assign(typed)
+
+
+def restore_dtypes(ds: xr.Dataset) -> xr.Dataset:
+    """*ds* with each array back at the dtype :func:`record_dtypes` recorded; one written without is left as it is."""
+    cast = {
+        str(name): arr.astype(np.dtype(arr.attrs.pop(DTYPE_ATTR)))
+        for name, arr in ds.items()
+        if DTYPE_ATTR in arr.attrs
+    }
+    return ds.assign(cast)
+
+
+def restamp_coords(m: Model, coords: Mapping[str, pd.Index]) -> None:
+    """
+    Put *coords* on every container of *m* that was built on them.
+
+    Only on those: a container may carry a dimension of that name and its own
+    labels -- a hand-added variable beside a spec-built one -- and restamping
+    it would rewrite labels it never had, or fail outright over a length the
+    master coordinate does not share.
+    """
+    from linopy.constraints import Constraint, CSRConstraint
+    from linopy.csr import Grid
+
+    for _, variable in m.variables.items():
+        variable._data = _stamped(variable.data, coords)
+    for _, expression in m.expressions.items():
+        expression._data = _stamped(expression.data, coords)
+    m.objective.expression._data = _stamped(m.objective.expression.data, coords)
+    for _, constraint in m.constraints.items():
+        if isinstance(constraint, Constraint):
+            constraint._data = _stamped(constraint.data, coords)
+        elif isinstance(constraint, CSRConstraint):
+            constraint._grid = Grid(
+                {
+                    d: _restamped(index, coords.get(str(d)))
+                    for d, index in constraint._grid.indexes.items()
+                }
+            )
+
+
+def _stamped(data: xr.Dataset, coords: Mapping[str, pd.Index]) -> xr.Dataset:
+    """*data* with *coords* in place of the ones a dtype narrowed."""
+    stale = {
+        str(dim): restamped
+        for dim, index in data.indexes.items()
+        if (restamped := _restamped(index, coords.get(str(dim)))) is not index
+    }
+    return data.assign_coords(stale) if stale else data
+
+
+def _restamped(found: pd.Index, master: pd.Index | None) -> pd.Index:
+    """
+    *master* where *found* is it as a netcdf type gave it back, else *found* itself.
+
+    A narrowed int or a widened bool holds the same labels at another dtype
+    and is the one to replace -- which is what ``Index.equals`` asks, since it
+    compares labels and not dtypes. An index of another length, or of other
+    labels entirely, belongs to a container that was never built on *master*
+    and is left alone.
+    """
+    if master is None or found.dtype == master.dtype:
+        return found
+    return master if found.equals(master) else found
+
+
 def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     """
     Write out the model to a netcdf file.
@@ -1040,6 +1181,12 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     :func:`linopy.io.read_netcdf`. The insertion order of each container
     is stored as a JSON list in the ``_linopy_<kind>_order`` attribute.
 
+    A model built with :meth:`Model.add_spec` also persists its spec under a
+    ``spec-`` prefix of its own: the YAML text, the master coordinates and the
+    parameters the spec retained, apart from ``m.parameters``. ``read_netcdf``
+    lowers the program from the text again, so reading such a file needs
+    the ``math-spec`` package; a file without a spec does not.
+
     The SOS reformulation lifecycle token lives only on the in-memory
     Model and is not persisted. If the model has an active SOS
     reformulation at serialization time, the netcdf contains the
@@ -1060,22 +1207,6 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
             UserWarning,
             stacklevel=2,
         )
-
-    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
-        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-
-        # Flatten multiindexes
-        for dim in ds.dims:
-            if isinstance(ds[dim].to_index(), pd.MultiIndex):
-                prefix_len = len(prefix) + 1  # leave original index level name
-                names = [n[prefix_len:] for n in ds[dim].to_index().names]
-                ds = ds.reset_index(dim)
-                # scipy netCDF3 backend cannot write unicode-array attrs.
-                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
-
-        return ds
 
     vars = [
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
@@ -1100,10 +1231,17 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "parameters")]
+    specs: list[xr.Dataset] = []
+    if m._spec is not None:
+        from linopy.spec.netcdf import encode
+
+        specs = [encode(m._spec)]
+    params = [with_prefix(record_dtypes(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(
+        vars + cons + exprs + obj + params + specs, combine_attrs="drop_conflicts"
+    )
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     for kind, container in (
@@ -1176,43 +1314,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
 
-    def has_prefix(k: str, prefix: str) -> bool:
-        return k.rsplit("-", 1)[0] == prefix
-
-    def remove_prefix(k: str, prefix: str) -> str:
-        return k[len(prefix) + 1 :]
-
-    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
-        # str = JSON (new); iterable = legacy list from older linopy.
-        if isinstance(value, str):
-            return [str(n) for n in json.loads(value)]
-        return [str(n) for n in value]
-
-    def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
-        ds.attrs = {
-            remove_prefix(k, prefix): v
-            for k, v in ds.attrs.items()
-            if has_prefix(k, prefix)
-        }
-
-        for dim in ds.dims:
-            if f"{dim}_multiindex" in ds.attrs:
-                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
-        return ds
-
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
         order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
@@ -1278,7 +1379,12 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     )
     m.objective._value = objective.attrs.pop("value", None)
 
-    m.parameters = get_prefix(ds, "parameters")
+    m.parameters = restore_dtypes(get_prefix(ds, "parameters"))
+
+    if SPEC_ATTR in ds.attrs:
+        from linopy.spec.netcdf import decode
+
+        m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
@@ -1412,6 +1518,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     new_model._parameters = m._parameters.copy(deep=deep)
+    if m._spec is not None:
+        new_model._spec = m._spec._reattach(new_model, deep=deep)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:

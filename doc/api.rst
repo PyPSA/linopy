@@ -115,6 +115,28 @@ IO
    model.Model.to_netcdf
    io.read_netcdf
 
+Building from specs
+-------------------
+
+Build a model from a `math-spec
+<https://github.com/energy-models/math-spec>`__ YAML program attached to
+data. Requires the ``spec`` dependency group.
+
+.. autosummary::
+   :toctree: generated/
+
+   model.Model.add_spec
+   model.Model.from_spec
+   model.Model.spec
+   spec.ModelSpec
+   spec.NamedExpressions
+   spec.NamedExpression
+   spec.Declaration
+   spec.Unspecified
+   spec.attach
+   spec.Attached
+   spec.SpecDataError
+
 
 Variable
 ========

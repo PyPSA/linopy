@@ -8,6 +8,12 @@ build:
   jobs:
     pre_system_dependencies:
     - git fetch --unshallow # Needed to get version tags
+    post_install:
+    # The spec API is documented via autodoc, which imports linopy.spec and so
+    # needs math-spec. It lives in the `spec` dependency group, not the docs
+    # extra; --group needs pip >= 25.1, hence the upgrade.
+    - python -m pip install --upgrade pip
+    - python -m pip install --group spec
 python:
   install:
     - method: pip
