@@ -106,8 +106,10 @@ def test_a_bound_variable_is_read_not_built() -> None:
     total = m.spec.expressions["total"]
     assert isinstance(total.expression, LinearExpression)
     assert_linequal(total.expression, m.variables["p"].sum())
+    assert float(m.variables["p"].upper.max()) == 200.0
     m.solve(solver_name="highs", output_flag=False)
     assert float(total.solution) == pytest.approx(float(DISPATCH_P.sum()))
+    assert float(m.solution["p"].sel(generator="wind").max()) == pytest.approx(90.0)
 
 
 def test_a_binding_must_be_a_variable() -> None:

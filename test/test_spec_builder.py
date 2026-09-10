@@ -61,7 +61,7 @@ EXTRA_SPEC: dict[str, Any] = {
 EXTRA_DATA: dict[str, Any] = {
     "snapshot": SNAPSHOT,
     "generator": GENERATOR,
-    "cap": DISPATCH_DATA["p_max"],
+    "cap": pd.Series([90.0, 200.0], index=GENERATOR),
 }
 
 
