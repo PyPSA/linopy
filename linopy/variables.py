@@ -1810,9 +1810,9 @@ class Variables:
         return base_attributes + formatted_names
 
     def _format_items(
-        self, exclude: set[str] | None = None, tag: set[str] | None = None
+        self, exclude: set[str] | None = None, tag: Mapping[str, str] | None = None
     ) -> str:
-        """Format variable items, optionally excluding names in a group."""
+        """Format variable items, optionally excluding names in a group and tagging others."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -1830,7 +1830,7 @@ class Variables:
                 coords += f" - sos{sos_type} on {sos_dim}"
             if ds.attrs.get("semi_continuous", False):
                 coords += " - semi-continuous"
-            suffix = " [spec]" if tag and name in tag else ""
+            suffix = f" [{tag[name]}]" if tag and name in tag else ""
             r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"

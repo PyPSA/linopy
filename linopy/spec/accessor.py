@@ -1,5 +1,5 @@
 """
-``model.spec``: the program a model was built from, and its named expressions as data.
+``model.spec``: the programs a model was built from or extended by, and their named expressions as data.
 
 The spec owns its data. The spec text, the retained parameters, the lookups
 and the master coordinates sit on the accessor rather than in
@@ -7,6 +7,12 @@ and the master coordinates sit on the accessor rather than in
 was put there, and nothing reading a spec-built model has to guess which of
 its parameters the spec owns. All of it round trips through a file, written
 under the ``spec-`` prefix.
+
+A model holds an ordered set of spec *layers*. The first may be the whole
+model, built into an empty one; any layer may extend a model that already
+holds variables, binding the ones it reads through ``sources``. Each
+:class:`Layer` is one program with its data; :class:`ModelSpec` is the
+model-level view over all of them.
 
 A parameter is resolved the same way however much of it was retained: from
 the retained dataset, else from the sources the model was built with, which
@@ -19,8 +25,8 @@ from __future__ import annotations
 
 import functools
 import warnings
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -38,14 +44,14 @@ from math_spec import (
 from math_spec import program as ms
 from math_spec.typesetting import FormatName
 
-from linopy.constants import warn_evolving_api
+from linopy.constants import SOS_TYPE_ATTR, warn_evolving_api
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
 from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
-from linopy.spec.context import Context
+from linopy.spec.context import Context, Views
 from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluate import evaluate_named, fold
 from linopy.spec.nodes import dims_of
@@ -56,6 +62,7 @@ SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 # A note about what is missing, spelled as a comment of the format's own. A
 # format math-spec grows later renders without one rather than with a wrong one.
 _DRIFTED = "This model has drifted from the spec typeset here: {}."
+_EXTENDS = "This spec extends a model it does not describe: {}."
 
 _COMMENT: dict[str, str] = {
     "latex": "% {}",
@@ -89,7 +96,7 @@ class Unspecified:
         Formulations added by ``add_piecewise_formulation``, named as
         formulations rather than as the variables and constraints they hold.
     objective
-        Whether ``add_objective`` has replaced the spec's objective. The one
+        Whether the model's objective is one no spec layer declared. The one
         entry here that a render gets *wrong* rather than leaves out: the
         typeset objective is the spec's, and the model's is another.
     """
@@ -135,15 +142,20 @@ def attach(
     spec: SpecLike,
     sources: Mapping[str, Any] | xr.Dataset,
     retain: Retain,
+    name: str | None = None,
 ) -> ModelSpec:
     """
-    Build *spec* with *sources* into the empty *model* and return its accessor.
+    Build *spec* with *sources* into *model* as a layer and return the accessor.
+
+    The layer is named *name*, else the file's stem, else ``"spec"``.
 
     Raises
     ------
     ValueError
-        The model already holds variables or constraints, or runs
-        under legacy semantics.
+        The model runs under legacy semantics; a layer of that name is
+        already on the model; a variable the spec introduces, a constraint
+        or a named expression collides with a name the model already holds;
+        or the spec declares an objective and the model already has one.
     TypeError
         *spec* is a lowered ``Program``, which has no YAML form to
         keep on the model.
@@ -154,35 +166,105 @@ def attach(
             "a spec-built model uses linopy's v1 semantics, and the current setting is "
             "'legacy'. Set linopy.options['semantics'] = 'v1' before building from a spec."
         )
-    if len(model.variables) or len(model.constraints):
-        raise ValueError(
-            "add_spec builds into an empty model, and this one already holds "
-            f"{len(model.variables)} variable(s) and {len(model.constraints)} constraint(s)."
-        )
     text, program = _source(spec)
-    attached: Attached = attach_data(program, sources, retain=retain)
+    attached: Attached = attach_data(
+        program, sources, retain=retain, given=_given(model)
+    )
+    _check_collisions(model, program, attached)
+    layer_name = _layer_name(spec, name)
+    if model._spec is not None and layer_name in model._spec.layers:
+        raise ValueError(
+            f"a spec layer named '{layer_name}' is already on this model; pass another name."
+        )
     # Resolved before the build, so a parameter no declaration reads cannot fail
     # halfway through one and leave a model too full to build into again.
     parameters = attached.retained().assign_coords(dict(attached.coords))
+    whole = not len(model.variables) and not len(model.constraints)
     build(model, attached)
-    return ModelSpec(model, program, text, parameters, attached)
+    layer = Layer(
+        model, layer_name, program, text, parameters, attached, attached.names
+    )
+    spec_ = model._spec if model._spec is not None else ModelSpec(model, [], whole)
+    spec_.layers[layer.name] = layer
+    if program.objective is not None:
+        spec_.objective_owner = layer.name
+    return spec_
 
 
-def restore(
+def _layers(model: Model) -> list[Layer]:
+    """The layers already on *model*, in order."""
+    return [] if model._spec is None else list(model._spec.layers.values())
+
+
+def _given(model: Model) -> dict[str, pd.Index]:
+    """The master coordinates of every layer already on *model*; they agree wherever they meet."""
+    return {d: index for layer in _layers(model) for d, index in layer.coords.items()}
+
+
+def _layer_name(spec: SpecLike, name: str | None) -> str:
+    if name is not None:
+        return name
+    if isinstance(spec, str) and "\n" not in spec:
+        spec = Path(spec)
+    return spec.stem if isinstance(spec, Path) else "spec"
+
+
+def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> None:
+    introduced = [
+        n for n in program.variables if n not in attached.bound and n in model.variables
+    ]
+    if introduced:
+        raise ValueError(
+            f"the spec introduces variable(s) {introduced} and the model already holds "
+            f"them: bind it or rename it. A binding passes the model variable under the "
+            f"declared name in sources."
+        )
+    constraints = [n for n in program.constraints if n in model.constraints]
+    if constraints:
+        raise ValueError(
+            f"the spec declares constraint(s) {constraints} and the model already holds them."
+        )
+    on = {attached.names.get(s.variable, s.variable) for s in program.sos.values()}
+    sos = [
+        n
+        for n in on
+        if n in model.variables and SOS_TYPE_ATTR in model.variables[n].attrs
+    ]
+    if sos:
+        raise ValueError(
+            f"the spec declares a special-ordered set on variable(s) {sos} and the model "
+            f"already holds one on them."
+        )
+    if program.objective is not None and not model.objective.expression.empty:
+        raise ValueError(
+            "the spec declares an objective and the model already has one. Add extra cost "
+            "terms through a named expression: "
+            "`m.objective += m.spec.expressions[name].expression`."
+        )
+    earlier = {n for layer in _layers(model) for n in layer.program.named_expressions}
+    expressions = [n for n in program.named_expressions if n in earlier]
+    if expressions:
+        raise ValueError(
+            f"the spec declares named expression(s) {expressions} and an earlier spec on "
+            f"this model already does."
+        )
+
+
+def restore_layer(
     model: Model,
+    name: str,
     text: str,
     parameters: xr.Dataset,
-    objective_replaced: bool = False,
-) -> ModelSpec:
+    names: Mapping[str, str],
+) -> Layer:
     """
-    The accessor for *model*, with the program lowered afresh from *text*.
+    One layer of *model*, with the program lowered afresh from *text*.
 
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    spec = ModelSpec(model, to_program(yaml.safe_load(text)), text, parameters, None)
-    spec._objective_replaced = objective_replaced
-    return spec
+    program = to_program(yaml.safe_load(text))
+    return Layer(model, name, program, text, parameters, None, dict(names))
 
 
 def _source(spec: SpecLike) -> tuple[str, ms.Program]:
@@ -215,39 +297,43 @@ def _row(label: str, items: list[str], cap: int = 8) -> str:
     return f"  {label + ':':<13}{', '.join(shown) if shown else '—'}"
 
 
-class ModelSpec:
+@dataclass(frozen=True, eq=False, repr=False)
+class Layer:
     """
-    The spec a model was built from.
+    One spec on a model: its program, its text and its data.
 
     Attributes
     ----------
+    name
+        What the layer was attached as, ``model.spec[name]``.
     program
         The lowered spec.
     text
         The spec as YAML, verbatim where a file or text was passed.
+    parameters
+        The parameters and lookups the layer retained, on the master coordinates.
+    names
+        Spec name to model name for every variable the layer reads instead
+        of building.
     """
 
-    def __init__(
-        self,
-        model: Model,
-        program: ms.Program,
-        text: str,
-        parameters: xr.Dataset,
-        attached: Attached | None,
-    ) -> None:
-        self._model = model
-        self.program = program
-        self.text = text
-        self._parameters = parameters
-        self._attached = attached
-        # A build sets the objective through `add_objective` before `_spec` is
-        # assigned, so only a call after the build ever flips this.
-        self._objective_replaced = False
+    model: Model
+    name: str
+    program: ms.Program
+    text: str
+    parameters: xr.Dataset
+    attached: Attached | None
+    names: Mapping[str, str]
+    _views: Views = field(default_factory=dict)
 
     def __repr__(self) -> str:
+        return "\n".join(self._rows(f"Layer '{self.name}'"))
+
+    def _rows(self, head: str) -> list[str]:
         p = self.program
         coords = self.coords
-        head = f"ModelSpec: {self.description}" if self.description else "ModelSpec"
+        if self.description:
+            head = f"{head}: {self.description}"
         rows = [
             head,
             _row("Dimensions", [_dimension(d, coords) for d in p.dimensions]),
@@ -257,24 +343,12 @@ class ModelSpec:
         if p.objective is not None:
             rows.append(_row("Objective", [p.objective.sense]))
         rows.append(_row("Expressions", list(p.named_expressions)))
-        return "\n".join(rows)
+        return rows
 
-    def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
-        """The same spec, read off *model*, holding its own copy of the parameters."""
-        copied = ModelSpec(
-            model,
-            self.program,
-            self.text,
-            self._parameters.copy(deep=deep),
-            self._attached,
-        )
-        copied._objective_replaced = self._objective_replaced
-        return copied
-
-    @property
-    def parameters(self) -> xr.Dataset:
-        """The parameters and lookups the spec retained, on the master coordinates."""
-        return self._parameters
+    def _reattach(self, model: Model, deep: bool = True) -> Layer:
+        """The same layer, read off *model*, holding its own copy of the parameters."""
+        parameters = self.parameters.copy(deep=deep)
+        return replace(self, model=model, parameters=parameters, _views={})
 
     @property
     def description(self) -> str:
@@ -284,8 +358,13 @@ class ModelSpec:
 
     @property
     def coords(self) -> dict[str, pd.Index]:
-        """Master coordinates by dimension, as the model was built on them."""
+        """Master coordinates by dimension, as the layer was built on them."""
         return {str(d): index for d, index in self.parameters.indexes.items()}
+
+    @property
+    def variables(self) -> set[str]:
+        """The model variables the layer declares, by model name: built as declared, bound as bound."""
+        return {self.names.get(n, n) for n in self.program.variables}
 
     @property
     def lookups(self) -> dict[str, dict[str, xr.DataArray]]:
@@ -298,7 +377,7 @@ class ModelSpec:
     @property
     def expressions(self) -> NamedExpressions:
         """Each named expression as a :class:`NamedExpression`: its math, its linopy fold and its solution."""
-        return NamedExpressions(self)
+        return NamedExpressions({n: self for n in self.program.named_expressions})
 
     def declaration(self, name: str) -> Declaration:
         """
@@ -320,30 +399,248 @@ class ModelSpec:
         p = self.program
         return [*p.named_expressions, *p.constraints, *p.variables]
 
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """
+        This layer's spec typeset in *fmt* as a document, the spec alone.
+
+        Parameters
+        ----------
+        fmt : {"latex", "markdown", "typst"}
+            What spells the math, as ``math_spec.typeset`` takes it.
+        **options
+            Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
+            ``legend``, ``numbered``, ``inline_expressions``.
+        """
+        return typeset(self._schema, fmt, **options)
+
+    def to_latex(self, **options: Any) -> str:
+        """The layer typeset as a LaTeX document, see :meth:`typeset`."""
+        return self.typeset("latex", **options)
+
+    def to_markdown(self, **options: Any) -> str:
+        """The layer typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
+        return self.typeset("markdown", **options)
+
+    def to_typst(self, **options: Any) -> str:
+        """The layer typeset as Typst, see :meth:`typeset`."""
+        return self.typeset("typst", **options)
+
+    @property
+    def _schema(self) -> dict[str, Any]:
+        """The spec as the mapping the typesetter reads (a bare string it reads as a path)."""
+        return yaml.safe_load(self.text)
+
+    def evaluate(
+        self, name: str, sources: Mapping[str, Any] | xr.Dataset
+    ) -> NamedExpression:
+        """
+        The named expression *name*, with its parameters attached afresh from *sources*.
+
+        For reading the spec against other data than the model was built with,
+        and for a model read from a file, whose own sources are gone.
+        ``expressions`` needs neither. *sources* is read the way ``add_spec``
+        read it, and must describe the coordinates the model was built on.
+
+        Raises
+        ------
+        SpecDataError
+            *sources* label a dimension differently than the
+            model was built on.
+        """
+        attached = attach_data(self.program, sources, retain="none")
+        coords = self.coords
+        for dim, index in attached.coords.items():
+            if dim in coords and not index.equals(coords[dim]):
+                raise SpecDataError(
+                    f"sources describe dimension '{dim}' as {index.tolist()[:5]}, and the model "
+                    f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
+                    f"model holds, so the data must be attached on the same labels in the same order."
+                )
+        return NamedExpression(self, name, self._context(attached.parameter))
+
+    def _resolve(self, name: str) -> xr.DataArray:
+        """The parameter *name*: retained if it was kept, else read from the sources again."""
+        if name in self.parameters:
+            return self.parameters[name]
+        if self.attached is not None:
+            return self.attached.parameter(name)
+        raise SpecDataError(
+            f"parameter '{name}' was not retained and this model no longer holds the sources "
+            f"it was built with, which is what a model read from a file looks like. Build with "
+            f"retain='all' before writing it out, or read the expression with "
+            f"evaluate(name, sources)."
+        )
+
+    def _context(self, resolve: Resolve) -> Context:
+        return Context(
+            self.model,
+            self.program,
+            self.coords,
+            self.lookups,
+            Parameters(self.program, resolve),
+            solved=True,
+            names=self.names,
+            views=self._views,
+        )
+
+
+class ModelSpec:
+    """
+    The spec layers of a model, and the model-level view over them.
+
+    ``model.spec[name]`` is one :class:`Layer`. With a single layer the
+    layer's ``program``, ``text``, ``parameters``, ``coords``, ``lookups``,
+    ``name`` and ``names`` read through here as well; with several they are
+    each layer's own.
+
+    Attributes
+    ----------
+    layers
+        By name, in the order they were attached.
+    whole
+        Whether the first layer was built into an empty model, so the layers
+        together describe the model rather than extend one.
+    objective_owner
+        The layer whose objective the model holds, ``None`` where the model's
+        objective is none of theirs.
+    """
+
+    def __init__(
+        self,
+        model: Model,
+        layers: Iterable[Layer],
+        whole: bool,
+        objective_owner: str | None = None,
+    ) -> None:
+        self._model = model
+        self.layers: dict[str, Layer] = {layer.name: layer for layer in layers}
+        self.whole = whole
+        self.objective_owner = objective_owner
+
+    def __getitem__(self, name: str) -> Layer:
+        if name not in self.layers:
+            raise KeyError(
+                f"unknown spec layer '{name}'. " + did_you_mean(name, self.layers)
+            )
+        return self.layers[name]
+
+    def __repr__(self) -> str:
+        if len(self.layers) == 1:
+            return "\n".join(self._only()._rows("ModelSpec"))
+        head = f"ModelSpec: layers {', '.join(self.layers)}"
+        return "\n\n".join([head, *map(repr, self.layers.values())])
+
+    def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
+        """The same layers, read off *model*, each holding its own copy of the parameters."""
+        layers = [layer._reattach(model, deep) for layer in self.layers.values()]
+        return ModelSpec(model, layers, self.whole, self.objective_owner)
+
+    def _only(self) -> Layer:
+        if len(self.layers) != 1:
+            raise ValueError(
+                f"this model holds spec layers {list(self.layers)}; read one through "
+                f"model.spec[name]."
+            )
+        return next(iter(self.layers.values()))
+
+    def _owner(self, name: str, declared: Callable[[Layer], Collection[str]]) -> Layer:
+        for layer in self.layers.values():
+            if name in declared(layer):
+                return layer
+        known = [n for layer in self.layers.values() for n in declared(layer)]
+        raise KeyError(f"unknown declaration '{name}'. " + did_you_mean(name, known))
+
+    @property
+    def name(self) -> str:
+        """The single layer's name, see :attr:`Layer.name`."""
+        return self._only().name
+
+    @property
+    def names(self) -> Mapping[str, str]:
+        """The single layer's bound names, see :attr:`Layer.names`."""
+        return self._only().names
+
+    @property
+    def program(self) -> ms.Program:
+        """The single layer's lowered spec."""
+        return self._only().program
+
+    @property
+    def text(self) -> str:
+        """The single layer's spec as YAML."""
+        return self._only().text
+
+    @property
+    def parameters(self) -> xr.Dataset:
+        """The single layer's retained parameters and lookups, on the master coordinates."""
+        return self._only().parameters
+
+    @property
+    def description(self) -> str:
+        """The single layer's description, see :attr:`Layer.description`."""
+        return self._only().description
+
+    @property
+    def coords(self) -> dict[str, pd.Index]:
+        """The single layer's master coordinates by dimension."""
+        return self._only().coords
+
+    @property
+    def lookups(self) -> dict[str, dict[str, xr.DataArray]]:
+        """The single layer's lookups, by dimension, by name."""
+        return self._only().lookups
+
+    @property
+    def expressions(self) -> NamedExpressions:
+        """Every layer's named expressions as :class:`NamedExpression` objects, by name."""
+        owners = {
+            n: layer
+            for layer in self.layers.values()
+            for n in layer.program.named_expressions
+        }
+        return NamedExpressions(owners)
+
+    def declaration(self, name: str) -> Declaration:
+        """One declaration typeset on its own, from whichever layer declares it, see :meth:`Layer.declaration`."""
+        return self._owner(name, lambda layer: layer._declarations).declaration(name)
+
+    def evaluate(
+        self, name: str, sources: Mapping[str, Any] | xr.Dataset
+    ) -> NamedExpression:
+        """The named expression *name* on fresh *sources*, from the layer that declares it, see :meth:`Layer.evaluate`."""
+        owner = self._owner(name, lambda layer: layer.program.named_expressions)
+        return owner.evaluate(name, sources)
+
     @property
     def unspecified(self) -> Unspecified:
         """
-        How the model has drifted from this spec, see :class:`Unspecified`.
+        How the model has drifted from its spec layers, see :class:`Unspecified`.
 
-        Falsy for a model that is only what its spec says; everything added
-        beside the spec lands here, and is what typesetting cannot show.
+        Falsy for a model that is only what its layers say; everything added
+        beside them lands here, and is what typesetting cannot show.
         """
-        from linopy.constants import SOS_TYPE_ATTR
         from linopy.piecewise import _get_piecewise_groups
 
-        model, program = self._model, self.program
+        model = self._model
+        layers = list(self.layers.values())
         pw_variables, pw_constraints = _get_piecewise_groups(model)
-        declared_sos = {sos.variable for sos in program.sos.values()}
+        declared_sos = {
+            layer.names.get(sos.variable, sos.variable)
+            for layer in layers
+            for sos in layer.program.sos.values()
+        }
+        variables = {n for layer in layers for n in layer.variables}
+        constraints = {n for layer in layers for n in layer.program.constraints}
         return Unspecified(
             variables=tuple(
                 n
                 for n in model.variables
-                if n not in program.variables and n not in pw_variables
+                if n not in variables and n not in pw_variables
             ),
             constraints=tuple(
                 n
                 for n in model.constraints
-                if n not in program.constraints and n not in pw_constraints
+                if n not in constraints and n not in pw_constraints
             ),
             expressions=tuple(model.expressions),
             sos=tuple(
@@ -352,12 +649,13 @@ class ModelSpec:
                 if SOS_TYPE_ATTR in model.variables[n].attrs and n not in declared_sos
             ),
             piecewise=tuple(model._piecewise_formulations),
-            objective=self._objective_replaced,
+            objective=self.objective_owner is None
+            and not model.objective.expression.empty,
         )
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
         """
-        The spec this model was built from, typeset in *fmt* as a document.
+        The spec layers typeset in *fmt* as a document, one rendering after another.
 
         The spec, and so not necessarily the whole model: what was added
         beside the spec carries no declaration to typeset. Where the model
@@ -371,7 +669,8 @@ class ModelSpec:
             What spells the math, as ``math_spec.typeset`` takes it.
         **options
             Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
-            ``legend``, ``numbered``, ``inline_expressions``.
+            ``legend``, ``numbered``, ``inline_expressions``. Several layers
+            refuse ``standalone``: one document cannot hold two preambles.
 
         Warns
         -----
@@ -397,20 +696,31 @@ class ModelSpec:
         self, fmt: FormatName, options: Mapping[str, Any], stacklevel: int
     ) -> str:
         """Typeset in *fmt*, warned and commented where the model holds more than the spec."""
-        rendered = typeset(self._schema, fmt, **options)
+        if len(self.layers) > 1 and options.get("standalone", False):
+            raise ValueError(
+                f"a standalone document holds one spec, and this model holds layers "
+                f"{list(self.layers)}. Typeset one with model.spec[name].typeset(fmt, "
+                f"standalone=True)."
+            )
+        rendered = "\n\n".join(
+            layer.typeset(fmt, **options) for layer in self.layers.values()
+        )
         tally = self._tally()
         if tally is None:
             return rendered
+        note = self._note(tally)
         warnings.warn(
-            f"this model has drifted from the spec it was built from: {tally}. "
-            f"What is typeset is the spec, so it is not this model.",
+            f"{note} What is typeset is the spec, so it is not this model.",
             UserWarning,
             stacklevel=stacklevel,
         )
         comment = _COMMENT.get(fmt)
         if comment is None:
             return rendered
-        return f"{comment.format(_DRIFTED.format(tally))}\n{rendered}"
+        return f"{comment.format(note)}\n{rendered}"
+
+    def _note(self, tally: str) -> str:
+        return (_DRIFTED if self.whole else _EXTENDS).format(tally)
 
     def _tally(self) -> str | None:
         """How the model has drifted, counted and named; ``None`` when it has not."""
@@ -424,9 +734,12 @@ class ModelSpec:
             _counted(found.sos, "SOS set"),
             _counted(found.piecewise, "piecewise formulation"),
         ]
-        return _joined(
-            [p for p in parts if p] + ["a replaced objective"] * found.objective
+        objective = (
+            "a replaced objective"
+            if self.whole
+            else "an objective this spec does not declare"
         )
+        return _joined([p for p in parts if p] + [objective] * found.objective)
 
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
@@ -434,87 +747,29 @@ class ModelSpec:
         tally = self._tally()
         if tally is None:
             return rendered
-        return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
-
-    @property
-    def _schema(self) -> dict[str, Any]:
-        """The spec as the mapping the typesetter reads (a bare string it reads as a path)."""
-        return yaml.safe_load(self.text)
-
-    def evaluate(
-        self, name: str, sources: Mapping[str, Any] | xr.Dataset
-    ) -> NamedExpression:
-        """
-        The named expression *name*, with its parameters attached afresh from *sources*.
-
-        For reading the spec against other data than the model was built with,
-        and for a model read from a file, whose own sources are gone.
-        ``model.spec.expressions`` needs neither. *sources* is read the way
-        ``add_spec`` read it, and must describe the coordinates the model was
-        built on.
-
-        Raises
-        ------
-        SpecDataError
-            *sources* label a dimension differently than the
-            model was built on.
-        """
-        attached = attach_data(self.program, sources, retain="none")
-        coords = self.coords
-        for dim, index in attached.coords.items():
-            if dim in coords and not index.equals(coords[dim]):
-                raise SpecDataError(
-                    f"sources describe dimension '{dim}' as {index.tolist()[:5]}, and the model "
-                    f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
-                    f"model holds, so the data must be attached on the same labels in the same order."
-                )
-        return NamedExpression(self, name, self._context(attached.parameter))
-
-    def _resolve(self, name: str) -> xr.DataArray:
-        """The parameter *name*: retained if it was kept, else read from the sources again."""
-        if name in self.parameters:
-            return self.parameters[name]
-        if self._attached is not None:
-            return self._attached.parameter(name)
-        raise SpecDataError(
-            f"parameter '{name}' was not retained and this model no longer holds the sources "
-            f"it was built with, which is what a model read from a file looks like. Build with "
-            f"retain='all' before writing it out, or read the expression with "
-            f"evaluate(name, sources)."
-        )
-
-    def _context(self, resolve: Resolve) -> Context:
-        return Context(
-            self._model,
-            self.program,
-            self.coords,
-            self.lookups,
-            Parameters(self.program, resolve),
-            solved=True,
-        )
+        return f"{rendered}\n\n*{self._note(tally)}*"
 
 
 class NamedExpressions(Mapping[str, "NamedExpression"]):
-    """The named expressions of a spec, each a :class:`NamedExpression` on read."""
+    """The named expressions of one or more layers, each a :class:`NamedExpression` on read."""
 
-    def __init__(self, spec: ModelSpec) -> None:
-        self._spec = spec
+    def __init__(self, owners: Mapping[str, Layer]) -> None:
+        self._owners = owners
 
     def __getitem__(self, name: str) -> NamedExpression:
-        if name not in self._spec.program.named_expressions:
+        if name not in self._owners:
             raise KeyError(
                 f"unknown named expression '{name}'. "
-                + did_you_mean(name, self._spec.program.named_expressions)
+                + did_you_mean(name, self._owners)
             )
-        return NamedExpression(
-            self._spec, name, self._spec._context(self._spec._resolve)
-        )
+        layer = self._owners[name]
+        return NamedExpression(layer, name, layer._context(layer._resolve))
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._spec.program.named_expressions)
+        return iter(self._owners)
 
     def __len__(self) -> int:
-        return len(self._spec.program.named_expressions)
+        return len(self._owners)
 
     def __repr__(self) -> str:
         return f"NamedExpressions({list(self)})"
@@ -529,8 +784,8 @@ class Declaration:
     fold and the solution on top of this.
     """
 
-    def __init__(self, spec: ModelSpec, name: str) -> None:
-        self._spec = spec
+    def __init__(self, layer: Layer, name: str) -> None:
+        self._layer = layer
         self._name = name
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
@@ -541,7 +796,7 @@ class Declaration:
         :meth:`ModelSpec.typeset` can: a declaration is reached by name
         through the spec, so there is only ever the spec's own math to show.
         """
-        return typeset_declaration(self._spec._schema, self._name, fmt, **options)
+        return typeset_declaration(self._layer._schema, self._name, fmt, **options)
 
     def to_latex(self, **options: Any) -> str:
         """This declaration typeset as a single LaTeX line, no document around it."""
@@ -574,19 +829,19 @@ class NamedExpression(Declaration):
         The lowered expression body, math-spec's own AST handle.
     """
 
-    def __init__(self, spec: ModelSpec, name: str, ctx: Context) -> None:
-        super().__init__(spec, name)
+    def __init__(self, layer: Layer, name: str, ctx: Context) -> None:
+        super().__init__(layer, name)
         self._ctx = ctx
 
     @property
     def node(self) -> ms.ExpressionNode:
         """The expression body as lowered, math-spec's own AST handle."""
-        return self._spec.program.named_expressions[self._name].expression
+        return self._layer.program.named_expressions[self._name].expression
 
     @property
     def dims(self) -> tuple[str, ...]:
         """The dimensions the expression spans, read off the spec without binding data."""
-        return dims_of(self.node, self._spec.program)
+        return dims_of(self.node, self._layer.program)
 
     @functools.cached_property
     def expression(self) -> terms.Value:

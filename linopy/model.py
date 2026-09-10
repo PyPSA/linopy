@@ -443,17 +443,20 @@ class Model:
     @property
     def spec(self) -> ModelSpec:
         """
-        The math-spec program this model was built from, see :meth:`add_spec`.
+        The math-spec layers this model was built from or extended by, see :meth:`add_spec`.
+
+        A :class:`linopy.spec.ModelSpec` over the named layers;
+        ``model.spec[name]`` is one of them.
 
         Raises
         ------
         AttributeError
-            If the model was not built from a spec.
+            If no spec was added to the model.
         """
         if self._spec is None:
             raise AttributeError(
-                "This model was not built from a spec. Use `Model.add_spec` or "
-                "`Model.from_spec` to build one."
+                "This model holds no spec. Use `Model.add_spec` or "
+                "`Model.from_spec` to add one."
             )
         return self._spec
 
@@ -462,15 +465,22 @@ class Model:
         spec: SpecLike,
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
+        name: str | None = None,
     ) -> Model:
         """
-        Build a math-spec program with its data into this empty model.
+        Build a math-spec program with its data into this model.
 
         Requires the ``math-spec`` package and linopy's v1 semantics
         (``linopy.options["semantics"] = "v1"``). Variables, constraints and
         the objective are added as the spec declares them; the spec text, the
         parameters the named expressions read and the lookups are kept on the
         model, and the named expressions are read back through ``model.spec``.
+
+        A spec can extend a model that already holds variables: passing a
+        model variable under a declared variable's name in ``sources`` binds
+        it, so the spec reads that variable instead of building one. Its
+        declaration must then match the model variable in dimensions and
+        domain and carry no bounds or ``where`` of its own.
 
         Parameters
         ----------
@@ -479,14 +489,18 @@ class Model:
             ``str`` is a path. A lowered ``math_spec.Program`` is refused,
             since it has no YAML form to keep on the model.
         sources : mapping or xarray.Dataset
-            Data keyed by declared name: dimension labels, parameters and
-            lookups. Read by key on demand and never iterated.
+            Data keyed by declared name: dimension labels, parameters,
+            lookups and the model variables to bind. Read by key on demand
+            and never iterated. A ``Dataset`` cannot carry a binding.
         retain : {"report", "all", "none"}
             Which parameters to keep in ``model.spec.parameters``: those the
             named expressions read, all of them, or none. ``model.parameters``
             stays the caller's and is never written to. This decides what a
             netcdf file holds, not what this session can read: ``model.spec``
             falls back to ``sources`` for a parameter it did not keep.
+        name : str, optional
+            The layer's name, ``model.spec[name]``. Defaults to the file's
+            stem, else ``"spec"``. A name already on the model is refused.
 
         Returns
         -------
@@ -496,10 +510,13 @@ class Model:
         Raises
         ------
         ValueError
-            If the model already holds variables or constraints, or runs
-            under legacy semantics.
+            If the model runs under legacy semantics; if a variable the spec
+            introduces, a constraint or a named expression collides with a
+            name the model already holds; or if the spec declares an
+            objective and the model already has one.
         linopy.spec.SpecDataError
-            If the data does not fit the spec.
+            If the data does not fit the spec, or a binding does not fit its
+            declaration.
 
         Warns
         -----
@@ -510,7 +527,7 @@ class Model:
         """
         from linopy.spec.accessor import attach
 
-        self._spec = attach(self, spec, sources, retain)
+        self._spec = attach(self, spec, sources, retain, name)
         return self
 
     @classmethod
@@ -519,6 +536,7 @@ class Model:
         spec: SpecLike,
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
+        name: str | None = None,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -526,7 +544,7 @@ class Model:
 
         ``model_kwargs`` are passed to :class:`Model`.
         """
-        return cls(**model_kwargs).add_spec(spec, sources, retain=retain)
+        return cls(**model_kwargs).add_spec(spec, sources, retain=retain, name=name)
 
     @property
     def dual(self) -> Dataset:
@@ -710,28 +728,36 @@ class Model:
 
         var_names, con_names = _get_piecewise_groups(self)
         model_string = f"Linopy {self.type} model"
-        var_tag: set[str] | None = None
-        con_tag: set[str] | None = None
+        var_tag: dict[str, str] | None = None
+        con_tag: dict[str, str] | None = None
         expr_string = self.expressions._format_items()
+        descriptions: list[str] = []
         if self._spec is not None:
-            model_string += ", built from a math-spec"
-            program = self._spec.program
+            layers = list(self._spec.layers.values())
+            if self._spec.whole:
+                model_string += ", built from a math-spec"
+            else:
+                names = ", ".join(layer.name for layer in layers)
+                model_string += f", extended by math-spec layer(s) {names}"
             unspecified = self._spec.unspecified
             if unspecified.variables:
-                var_tag = set(program.variables)
+                var_tag = {n: layer.name for layer in layers for n in layer.variables}
             if unspecified.constraints:
-                con_tag = set(program.constraints)
+                con_tag = {
+                    n: layer.name for layer in layers for n in layer.program.constraints
+                }
             eager = expr_string if len(self.expressions) else ""
             spec = "".join(
-                f" * {name} ({', '.join(e.dims)}) [spec]\n"
-                for name, e in self._spec.expressions.items()
+                f" * {name} ({', '.join(e.dims)}) [{layer.name}]\n"
+                for layer in layers
+                for name, e in layer.expressions.items()
             )
             expr_string = eager + spec or "<empty>\n"
+            descriptions = [layer.description for layer in layers if layer.description]
         var_string = self.variables._format_items(exclude=var_names, tag=var_tag)
         con_string = self.constraints._format_items(exclude=con_names, tag=con_tag)
         header = f"{model_string}\n{'=' * len(model_string)}\n"
-        if self._spec is not None and self._spec.description:
-            header += f"{self._spec.description}\n"
+        header += "".join(f"{d}\n" for d in descriptions)
 
         return (
             f"{header}\n"
@@ -1628,9 +1654,7 @@ class Model:
         self.objective.sense = sense
         self.objective.scaling = scaling
         if self._spec is not None:
-            # A spec sets its objective through here during its own build,
-            # while `_spec` is still unset, so only a later call reaches this.
-            self._spec._objective_replaced = True
+            self._spec.objective_owner = None
 
     def remove_variables(self, name: str) -> None:
         """
