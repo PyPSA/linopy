@@ -70,6 +70,7 @@ from linopy.alignment import (
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
@@ -1638,6 +1639,18 @@ class BaseExpression(ABC):
     @const.setter
     def const(self, value: DataArray) -> None:
         self._data = assign_multiindex_safe(self.data, const=value)
+
+    def _assign_coords(self, **coords: Any) -> Self:
+        """
+        Reassign coordinate values on the expression, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        return self
 
     @property
     def has_constant(self) -> DataArray:

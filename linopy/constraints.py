@@ -39,6 +39,7 @@ from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     assigned_labels,
     check_has_nulls,
@@ -65,6 +66,7 @@ from linopy.common import (
     save_join,
     to_dataframe,
     to_polars,
+    validate_coords_reassignment,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -201,6 +203,17 @@ class ConstraintBase(ABC):
     @abstractmethod
     def dual(self, value: DataArray) -> None:
         """Set the dual values DataArray."""
+
+    @abstractmethod
+    def _assign_coords(self, **coords: Any) -> ConstraintBase:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
 
     @property
     @abstractmethod
@@ -786,6 +799,23 @@ class CSRConstraint(ConstraintBase):
         if scaling is not None:
             changes["scaling"] = scaling[positions]
         return self._replace(**changes)
+
+    def _assign_coords(self, **coords: Any) -> CSRConstraint:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        new_indexes = validate_coords_reassignment(
+            {dim: len(index) for dim, index in self._grid.indexes.items()},
+            coords,
+            f"constraint '{self.name}'",
+        )
+        self._grid = self._grid.with_indexes(new_indexes)
+        return self
 
     def _active_to_dataarray(
         self, active_values: np.ndarray, fill: float | int | str = -1
@@ -1812,6 +1842,18 @@ class Constraint(ConstraintBase):
             new_sign = maybe_replace_signs(DataArray(sign)).broadcast_like(self.sign)
             self._update_data(sign=new_sign)
 
+        return self
+
+    def _assign_coords(self, **coords: Any) -> Constraint:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
         return self
 
     @property

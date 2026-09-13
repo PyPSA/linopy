@@ -8,7 +8,7 @@ This module contains commonly used functions.
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
@@ -25,6 +25,7 @@ from xarray import align as xr_align
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
 
+from linopy.alignment import _as_index
 from linopy.config import options
 from linopy.constants import (
     SIGNS,
@@ -335,6 +336,112 @@ def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
     """
     remainders = list(set(ds) - set(fields))
     return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
+
+
+def _as_renamed_index(values: Any, name: Hashable, context: str) -> pd.Index:
+    """
+    Convert coordinate-like values to a pandas Index named ``name``.
+
+    The dimension name is authoritative: a passed Index or DataArray with a
+    different (or missing) name is renamed to ``name``, like
+    :meth:`xarray.Dataset.assign_coords` does for keyword-assigned coords.
+    """
+    try:
+        index = _as_index(values)
+        if index.name != name:
+            index = index.rename(name)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"New coordinates for dimension '{name}' on {context} must be "
+            f"index-like, got {type(values).__name__}: {values!r}."
+        ) from e
+    return index
+
+
+def validate_coords_reassignment(
+    sizes: Mapping[str, int], coords: Mapping[str, Any], context: str
+) -> dict[str, pd.Index]:
+    """
+    Validate values-only coordinate reassignment and convert the new values.
+
+    Single-sourced per-item invariants for coordinate reassignment, used by
+    the Dataset-backed (:func:`assign_coords_multiindex_safe`) and the
+    CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
+    on its own. Model-level aggregate checks (dimension exists somewhere in
+    the model, consistent lengths across containers) live on top of this.
+
+    The keyword key is authoritative: values converted to an Index with a
+    different (or missing) name are renamed to the target dimension, like
+    :meth:`xarray.Dataset.assign_coords` does.
+
+    Parameters
+    ----------
+    sizes : Mapping
+        Existing dimension name to length, defining which coordinates may be
+        reassigned.
+    coords : Mapping
+        New coordinate values, keyed by existing dimension name.
+    context : str
+        Name of the object being reassigned, used in error messages.
+
+    Returns
+    -------
+    dict
+        New coordinate values converted to named pandas Index objects, ready
+        for assignment.
+
+    Raises
+    ------
+    ValueError
+        If a named coordinate does not exist in ``sizes``, the new values are
+        not index-like, or their length differs from the existing dimension.
+    """
+    missing = [name for name in coords if name not in sizes]
+    if missing:
+        raise ValueError(f"Cannot assign missing coordinates {missing} to {context}.")
+    new_indexes: dict[str, pd.Index] = {}
+    for name, values in coords.items():
+        index = _as_renamed_index(values, name, context)
+        if len(index) != sizes[name]:
+            raise ValueError(
+                f"Cannot assign coordinates to dimension '{name}' on {context} "
+                f"with a different length: expected {sizes[name]}, got "
+                f"{len(index)}."
+            )
+        new_indexes[name] = index
+    return new_indexes
+
+
+def assign_coords_multiindex_safe(ds: Dataset, **coords: Any) -> Dataset:
+    """
+    Reassign coordinate values on an existing Dataset, keeping the shape.
+
+    Values-only replacement of existing dimension coordinates: each new value
+    must match the length of the dimension it replaces. Neither the order of
+    the dataset's variables nor the order of its coordinates is altered —
+    plain :meth:`xarray.Dataset.assign_coords` moves every reassigned
+    coordinate to the end, which breaks downstream dimension inference.
+
+    Parameters
+    ----------
+    ds : Dataset
+        Dataset to reassign the coordinates on.
+    **coords : Any
+        New coordinate values, keyed by existing dimension name. Accepted
+        like in :meth:`xarray.Dataset.assign_coords`: index-likes such as
+        numpy arrays, pandas Index objects, DataArrays or lists.
+
+    Returns
+    -------
+    Dataset
+        Dataset with reassigned coordinate values.
+    """
+    sizes = {str(name): coord.size for name, coord in ds.coords.items()}
+    new_indexes = validate_coords_reassignment(sizes, coords, "dataset")
+    new = ds.assign_coords(new_indexes)
+    ordered = {name: new[name] for name in ds.coords}
+    data_vars = {name: new[name].variable for name in new.data_vars}
+    return Dataset(data_vars, coords=ordered, attrs=new.attrs)
 
 
 T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
