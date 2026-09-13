@@ -36,6 +36,7 @@ from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -1132,6 +1133,18 @@ class Variable:
                 "Variable.update would leave lower > upper at one or more coordinates."
             )
         return updates
+
+    def _assign_coords(self, **coords: Any) -> Variable:
+        """
+        Reassign coordinate values on the variable, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        return self
 
     @property
     @has_optimized_model
