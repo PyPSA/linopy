@@ -99,6 +99,10 @@ class Unspecified:
         Whether the model's objective is one no spec layer declared. The one
         entry here that a render gets *wrong* rather than leaves out: the
         typeset objective is the spec's, and the model's is another.
+    bound
+        Model variables a layer binds rather than builds. Not drift and not
+        falsiness: the layer accounts for them, but the model owns their bounds
+        and mask, which the layer declares without and so the render omits.
     """
 
     variables: tuple[str, ...]
@@ -107,6 +111,7 @@ class Unspecified:
     sos: tuple[str, ...]
     piecewise: tuple[str, ...]
     objective: bool
+    bound: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(
@@ -535,6 +540,18 @@ class ModelSpec:
         layers = [layer._reattach(model, deep) for layer in self.layers.values()]
         return ModelSpec(model, layers, self.whole, self.objective_owner)
 
+    def refuse_removal(self, variables: set[str], constraints: set[str]) -> None:
+        """Refuse to drop a model name a layer builds or binds, which would strand its layer."""
+        layers = self.layers.values()
+        owned_variables = {n for layer in layers for n in layer.variables}
+        owned_constraints = {n for layer in layers for n in layer.program.constraints}
+        hit = (variables & owned_variables) | (constraints & owned_constraints)
+        if hit:
+            raise ValueError(
+                f"{_joined(sorted(hit))} is declared or bound by a spec layer; a layer "
+                "cannot be left referencing a name the model no longer holds."
+            )
+
     def _only(self) -> Layer:
         if len(self.layers) != 1:
             raise ValueError(
@@ -631,6 +648,7 @@ class ModelSpec:
         }
         variables = {n for layer in layers for n in layer.variables}
         constraints = {n for layer in layers for n in layer.program.constraints}
+        bound = {n for layer in layers for n in layer.names.values()}
         return Unspecified(
             variables=tuple(
                 n
@@ -651,6 +669,7 @@ class ModelSpec:
             piecewise=tuple(model._piecewise_formulations),
             objective=self.objective_owner is None
             and not model.objective.expression.empty,
+            bound=tuple(n for n in model.variables if n in bound),
         )
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
@@ -705,22 +724,37 @@ class ModelSpec:
         rendered = "\n\n".join(
             layer.typeset(fmt, **options) for layer in self.layers.values()
         )
+        notes = []
         tally = self._tally()
-        if tally is None:
-            return rendered
-        note = self._note(tally)
-        warnings.warn(
-            f"{note} What is typeset is the spec, so it is not this model.",
-            UserWarning,
-            stacklevel=stacklevel,
-        )
+        if tally is not None:
+            note = self._note(tally)
+            warnings.warn(
+                f"{note} What is typeset is the spec, so it is not this model.",
+                UserWarning,
+                stacklevel=stacklevel,
+            )
+            notes.append(note)
+        bound = self._bound_note()
+        if bound is not None:
+            notes.append(bound)
         comment = _COMMENT.get(fmt)
-        if comment is None:
+        if not notes or comment is None:
             return rendered
-        return f"{comment.format(note)}\n{rendered}"
+        header = "\n".join(comment.format(n) for n in notes)
+        return f"{header}\n{rendered}"
 
     def _note(self, tally: str) -> str:
         return (_DRIFTED if self.whole else _EXTENDS).format(tally)
+
+    def _bound_note(self) -> str | None:
+        """A layer reads these model variables; their bounds and mask are not in the render."""
+        names = self.unspecified.bound
+        if not names:
+            return None
+        return (
+            f"This spec reads {_counted(names, 'variable')} it binds from the host "
+            "model, whose bounds and mask the render leaves out."
+        )
 
     def _tally(self) -> str | None:
         """How the model has drifted, counted and named; ``None`` when it has not."""
@@ -744,10 +778,17 @@ class ModelSpec:
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
         rendered = self._render("markdown", {}, 3)
+        notes = []
         tally = self._tally()
-        if tally is None:
+        if tally is not None:
+            notes.append(self._note(tally))
+        bound = self._bound_note()
+        if bound is not None:
+            notes.append(bound)
+        if not notes:
             return rendered
-        return f"{rendered}\n\n*{self._note(tally)}*"
+        footer = "\n\n".join(f"*{n}*" for n in notes)
+        return f"{rendered}\n\n{footer}"
 
 
 class NamedExpressions(Mapping[str, "NamedExpression"]):

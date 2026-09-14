@@ -1680,6 +1680,9 @@ class Model:
 
         to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
+        if self._spec is not None:
+            self._spec.refuse_removal({name}, set(to_remove))
+
         if to_remove:
             warnings.warn(
                 f"Removing variable '{name}' also removes constraints {to_remove} "
@@ -1714,13 +1717,12 @@ class Model:
         -------
         None.
         """
-        if isinstance(name, list):
-            for n in name:
-                logger.debug(f"Removed constraint: {n}")
-                self.constraints.remove(n)
-        else:
-            logger.debug(f"Removed constraint: {name}")
-            self.constraints.remove(name)
+        names = [name] if isinstance(name, str) else name
+        if self._spec is not None:
+            self._spec.refuse_removal(set(), set(names))
+        for n in names:
+            logger.debug(f"Removed constraint: {n}")
+            self.constraints.remove(n)
 
     def remove_expressions(self, name: str | list[str]) -> None:
         """

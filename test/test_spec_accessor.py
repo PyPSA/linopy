@@ -571,7 +571,9 @@ def test_two_layers_typeset_one_after_the_other(fmt: FormatName) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         rendered = spec.typeset(fmt)
-    assert rendered == f"{spec['spec'].typeset(fmt)}\n\n{spec['extra'].typeset(fmt)}"
+    body = f"{spec['spec'].typeset(fmt)}\n\n{spec['extra'].typeset(fmt)}"
+    assert rendered.endswith(body)
+    assert "binds from the host model" in rendered
     with pytest.raises(ValueError, match=r"model\.spec\[name\]\.typeset"):
         spec.typeset(fmt, standalone=True)
     assert spec["extra"].typeset(fmt, standalone=True)
@@ -640,6 +642,8 @@ def test_unspecified_names_what_the_spec_does_not_declare() -> None:
     found = extended().spec.unspecified
     assert found.variables == ()
     assert found.constraints == ("power_balance",)
+    assert found.bound == ("p",)
+    assert not Unspecified((), (), (), (), (), False, ("p",))
 
 
 def test_a_bound_spec_name_does_not_hide_a_hand_variable_of_that_name() -> None:
@@ -657,6 +661,18 @@ def test_a_bound_spec_name_does_not_hide_a_hand_variable_of_that_name() -> None:
 
     assert m.spec["extra"].variables == {"p"}
     assert m.spec.unspecified.variables == ("q",)
+
+
+def test_a_layer_refuses_removal_of_a_name_it_owns() -> None:
+    """A bound variable and a built constraint each strand a layer, so removal raises; a hand name still goes."""
+    m = extended()
+    with pytest.raises(ValueError, match="p is declared or bound by a spec layer"):
+        m.remove_variables("p")
+    with pytest.raises(ValueError, match="p_cap is declared or bound"):
+        m.remove_constraints("p_cap")
+    m.add_variables(lower=0, coords=[GENERATOR], name="free")
+    m.remove_variables("free")
+    assert "free" not in m.variables
 
 
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
