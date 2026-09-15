@@ -8,19 +8,21 @@ is one branch of :func:`linopy.spec.evaluate.evaluate`.
 
 from __future__ import annotations
 
+import warnings
+
 import xarray as xr
 from math_spec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec import curves
-from linopy.spec.attach import Attached
+from linopy.spec.attach import Attached, _coordinates_shown
 from linopy.spec.context import Context
 from linopy.spec.coverage import check_bounds_cover, check_coverage
 from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluate import carried, evaluate
 from linopy.spec.parameters import Parameters
-from linopy.spec.terms import Term, Value
+from linopy.spec.terms import Term, Value, live_rows
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
@@ -99,9 +101,74 @@ def _constraints(ctx: Context) -> None:
         if _term_free(lhs) and _term_free(rhs):
             continue
         term, other, sense = _sides(lhs, rhs, row.sense)
+        _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
             term, other = carried(term, other)
         ctx.model.add_constraints(term, _SIGN[sense], other, name=name, mask=mask)
+
+
+def _check_live(
+    name: str,
+    declared: ms.ConstraintDeclaration,
+    term: Term,
+    other: Value,
+    rows: xr.DataArray,
+    ctx: Context,
+) -> None:
+    """
+    Refuse a row the data emptied of every variable term.
+
+    Such a row reads as ``0 sense rhs``: linopy carries no column there, the
+    row leaves the problem and the constraint silently stops binding. Where
+    every variable of the row declares ``absence: zero`` the zero is what the
+    math says, so a zero other side is warned about rather than refused.
+    """
+    dead = rows & ~live_rows(term)
+    if not bool(dead.any()):
+        return
+    said = (
+        f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
+        f"is attached, the first at {_dead_at(dead)}. Nothing is left to constrain there, so "
+        f"the row leaves the problem without saying so."
+    )
+    zeroed = all(
+        ctx.program.variable(v).absence == "zero"
+        for v in ms.variables_of(declared.lhs, declared.rhs)
+    )
+    if zeroed and not _binds(other, dead):
+        warnings.warn(
+            f"{said} Every variable there is absence: zero and the other side is 0, "
+            f"so the row is trivially true.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return
+    supply = (
+        "  Supply the rows of the variables, if the row is meant to bind."
+        if zeroed
+        else "  Declare absence: zero on the variables, if an absent term is a zero there."
+    )
+    raise SpecDataError(
+        f"{said}\n"
+        f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
+        f"{supply}"
+    )
+
+
+def _binds(other: Value, dead: xr.DataArray) -> bool:
+    """Whether the side without the variable term is anything but 0 on a row *dead* names."""
+    if isinstance(other, xr.DataArray):
+        return bool((other.where(dead, 0.0) != 0).any())
+    return other != 0
+
+
+def _dead_at(dead: xr.DataArray) -> str:
+    """The first coordinates *dead* marks, spelled the way every other refusal spells them."""
+    dims = tuple(str(d) for d in dead.dims)
+    if not dims:
+        return "the only row"
+    stacked = dead.stack(_dead=dims)
+    return _coordinates_shown(dims, stacked.indexes["_dead"][stacked.values][:3])
 
 
 def _sides(lhs: Value, rhs: Value, sense: str) -> tuple[Term, Value, str]:
