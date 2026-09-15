@@ -117,6 +117,11 @@ def test_a_binding_must_be_a_variable() -> None:
         extended(p=3.0)
 
 
+def test_a_binding_must_be_a_variable_of_this_model() -> None:
+    with pytest.raises(SpecDataError, match="bound to a variable of another model"):
+        extended(p=BASE_MODEL().variables["p"])
+
+
 P_OVER_GENERATOR = with_(
     EXTRA_SPEC,
     variables={"p": {"dims": ["generator"]}},

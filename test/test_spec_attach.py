@@ -468,6 +468,26 @@ REFUSALS = [
         id="dimension-rank",
     ),
     pytest.param(
+        {"f": DEEP_INDEX},
+        r"index for dimension 'f' is a MultiIndex; a spec dimension is one flat axis",
+        id="dimension-multiindex",
+    ),
+    pytest.param(
+        {"f": [("a", 0), ("b", 1)]},
+        r"index for dimension 'f' is a MultiIndex",
+        id="dimension-tuples",
+    ),
+    pytest.param(
+        {"f": [1, 2, 3]},
+        r"dimension 'f' is declared 'str'.*'int'",
+        id="dimension-int-for-str",
+    ),
+    pytest.param(
+        {"t": ["a", "b", "c"]},
+        r"dimension 't' is declared 'int'.*'str'",
+        id="dimension-str-for-int",
+    ),
+    pytest.param(
         {"grp": xr.DataArray(["n"], coords={"t": [0]})},
         r"lookup 'grp' arrived as a DataArray over \['t'\]",
         id="lookup-wrong-dataarray-dim",

@@ -181,6 +181,12 @@ def attach(
     attached: Attached = attach_data(
         program, sources, retain=retain, given=_given(model)
     )
+    foreign = [n for n, v in attached.bound.items() if v.model is not model]
+    if foreign:
+        raise SpecDataError(
+            f"variable(s) {foreign} are bound to a variable of another model. A layer reads "
+            f"the variables of the model it is added to; pass the variables of this model."
+        )
     _check_collisions(model, program, attached, build_expressions)
     layer_name = _layer_name(spec, name)
     if model._spec is not None and layer_name in model._spec.layers:

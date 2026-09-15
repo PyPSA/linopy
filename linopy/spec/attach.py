@@ -356,7 +356,7 @@ def _master_coords(
     for dim in program.dimensions:
         spanning = {n: v.indexes[dim] for n, v in bound.items() if dim in v.dims}
         if dim in keys:
-            master = _index(dim, sources[dim])
+            master = _index(dim, sources[dim], program.dimensions[dim])
             if dim in given and not given[dim].equals(master):
                 _refuse_other_axis(dim, f"sources['{dim}']", master, given[dim])
         elif dim in given:
@@ -405,7 +405,7 @@ def _refuse_other_axis(
     )
 
 
-def _index(dim: str, obj: Any) -> pd.Index:
+def _index(dim: str, obj: Any, declared: ms.DimensionDeclaration) -> pd.Index:
     if isinstance(obj, (pd.Series, xr.DataArray, np.ndarray)):
         if obj.ndim != 1:
             raise SpecDataError(
@@ -418,7 +418,14 @@ def _index(dim: str, obj: Any) -> pd.Index:
         raise SpecDataError(
             f"index for dimension '{dim}': cannot read labels out of {type(obj).__name__}; pass {_DIMENSION_SHAPES}."
         )
-    index = pd.Index(values, name=dim)
+    flat = values if isinstance(values, pd.Index) else pd.Index(values)
+    if isinstance(flat, pd.MultiIndex):
+        raise SpecDataError(
+            f"index for dimension '{dim}' is a MultiIndex; a spec dimension is one flat axis, "
+            f"flatten or split it."
+        )
+    index = flat.rename(dim)
+    _check_value_dtype(dim, declared.dtype, index.dtype, what="dimension")
     if index.has_duplicates:
         twice = index[index.duplicated()].unique().tolist()
         raise SpecDataError(
@@ -747,12 +754,14 @@ def _aligned(
     return arr.reindex(onto, fill_value=fill)
 
 
-def _check_value_dtype(name: str, declared: str, dtype: Any) -> None:
+def _check_value_dtype(
+    name: str, declared: str, dtype: Any, what: str = "parameter"
+) -> None:
     if str(dtype.kind) in _ACCEPTED_KINDS[declared]:
         return
     arrived = _KIND_NAMES.get(str(dtype.kind), str(dtype))
     raise SpecDataError(
-        f"parameter '{name}' is declared '{declared}' and its values arrived as '{arrived}'. "
+        f"{what} '{name}' is declared '{declared}' and its values arrived as '{arrived}'. "
         f"A declared dtype is a claim about the values, and it is checked here: the file says what "
         f"the values are, or the values are not attached.\n"
         f"  Cast the values to {declared}, if the declaration is what you meant\n"
