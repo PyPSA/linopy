@@ -314,6 +314,23 @@ def test_a_round_trip_keeps_what_the_layers_own(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("removed", ["second", "extra"])
+def test_a_model_round_trips_after_a_layer_is_removed(
+    tmp_path: Path, engine: str, removed: str
+) -> None:
+    """Both layers bind ``p``, so the one left keeps it bound, in memory and after the round trip."""
+    m = layered(2, whole_=False)
+    m.remove_spec(removed)
+    p = roundtrip(m, tmp_path, engine)
+
+    assert_model_equal(m, p)
+    assert list(p.spec.layers) == [n for n in ["extra", "second"] if n != removed]
+    for model in (m, p):
+        with pytest.raises(ValueError, match="declared or bound by"):
+            model.variables.remove("p")
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 def test_a_bound_sos_variable_keeps_its_attrs_after_a_round_trip(
     tmp_path: Path, engine: str
 ) -> None:

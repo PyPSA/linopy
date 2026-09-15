@@ -30,6 +30,7 @@ import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, TypeAlias
 
 import pandas as pd
@@ -214,9 +215,56 @@ def attach(
     if model._spec is None:
         model._ownership = Ownership()
         model._spec = ModelSpec(model, [], whole)
-    model._spec.layers[layer.name] = layer
+    model._spec._layers[layer.name] = layer
     register(model, layer)
     return model._spec
+
+
+def remove_layer(model: Model, name: str) -> None:
+    """
+    Take the layer *name* off *model*: its constraints, its expressions, then the variables it built.
+
+    A special-ordered set the layer declared comes off the variable that
+    carries it, bound or built. The objective goes where the layer's is the
+    one the model holds. A hand-added constraint reading a variable the
+    layer built goes with the variable, as ``remove_variables`` takes it.
+    Once the last layer is off, the model holds no spec.
+
+    Raises
+    ------
+    KeyError
+        No layer of that name.
+    ValueError
+        Another layer binds a variable this one built; that layer comes off
+        first.
+    """
+    spec = model.spec
+    spec[name]
+    owned = spec._ownership
+    built = owned.held("variable", name)
+    read = [n for n in built if n in owned.bound]
+    if read:
+        binders = sorted({by for n in read for by in owned.bound[n]})
+        raise ValueError(
+            f"spec layer '{name}' built variable(s) {read} that layer(s) {binders} "
+            f"bind; remove those layers first."
+        )
+    for variable in owned.held("sos", name):
+        model.remove_sos_constraints(model.variables[variable])
+    constraints = owned.held("constraint", name)
+    expressions = [n for n in owned.held("expression", name) if n in model.expressions]
+    owns_objective = owned.objective == name
+    owned.release(name)
+    model.remove_constraints(constraints)
+    model.remove_expressions(expressions)
+    for variable in built:
+        model.remove_variables(variable)
+    if owns_objective:
+        model.remove_objective()
+    del spec._layers[name]
+    if not spec._layers:
+        model._spec = None
+        model._ownership = None
 
 
 def register(model: Model, layer: Layer) -> None:
@@ -601,7 +649,9 @@ class ModelSpec:
     Attributes
     ----------
     layers
-        By name, in the order they were attached.
+        By name, in the order they were attached. Read-only: a layer is
+        added with :meth:`Model.add_spec` and taken off with
+        :meth:`Model.remove_spec`.
     whole
         Whether the first layer was built into an empty model, so the layers
         together describe the model rather than extend one.
@@ -612,7 +662,8 @@ class ModelSpec:
 
     def __init__(self, model: Model, layers: Iterable[Layer], whole: bool) -> None:
         self._model = model
-        self.layers: dict[str, Layer] = {layer.name: layer for layer in layers}
+        self._layers: dict[str, Layer] = {layer.name: layer for layer in layers}
+        self.layers: Mapping[str, Layer] = MappingProxyType(self._layers)
         self.whole = whole
 
     @property

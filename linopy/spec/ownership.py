@@ -38,7 +38,8 @@ class Ownership:
     variables
         Built variable name to layer.
     bound
-        Model variable name to the layer that binds it.
+        Model variable name to the layers that bind it, in the order they
+        were attached; several layers may read one variable.
     constraints, expressions, sos
         Constraint, named expression and special-ordered-set variable name to
         layer. An expression is recorded whether it was built into the model
@@ -49,7 +50,7 @@ class Ownership:
     """
 
     variables: dict[str, str] = field(default_factory=dict)
-    bound: dict[str, str] = field(default_factory=dict)
+    bound: dict[str, list[str]] = field(default_factory=dict)
     constraints: dict[str, str] = field(default_factory=dict)
     expressions: dict[str, str] = field(default_factory=dict)
     sos: dict[str, str] = field(default_factory=dict)
@@ -66,8 +67,8 @@ class Ownership:
     def owner(self, kind: Kind, name: str) -> str | None:
         """The layer owning *name* as a *kind*; for a variable, the one binding it counts too."""
         layer = self._records(kind).get(name)
-        if layer is None and kind == "variable":
-            return self.bound.get(name)
+        if layer is None and kind == "variable" and name in self.bound:
+            return self.bound[name][0]
         return layer
 
     def claim(
@@ -83,12 +84,30 @@ class Ownership:
     ) -> None:
         """Record every name *layer* owns."""
         self.variables.update(dict.fromkeys(variables, layer))
-        self.bound.update(dict.fromkeys(bound, layer))
+        for name in bound:
+            self.bound.setdefault(name, []).append(layer)
         self.constraints.update(dict.fromkeys(constraints, layer))
         self.expressions.update(dict.fromkeys(expressions, layer))
         self.sos.update(dict.fromkeys(sos, layer))
         if objective:
             self.objective = layer
+
+    def held(self, kind: Kind, layer: str) -> list[str]:
+        """The names *layer* owns as a *kind*."""
+        return [n for n, by in self._records(kind).items() if by == layer]
+
+    def release(self, layer: str) -> None:
+        """Drop every record of *layer*, the objective included where it was the layer's."""
+        for records in (self.variables, self.constraints, self.expressions, self.sos):
+            for name in [n for n, by in records.items() if by == layer]:
+                del records[name]
+        for name, binders in list(self.bound.items()):
+            if layer in binders:
+                binders.remove(layer)
+            if not binders:
+                del self.bound[name]
+        if self.objective == layer:
+            self.objective = None
 
     def refuse_removal(self, kind: Kind, names: Iterable[str]) -> None:
         """Refuse to drop a name a layer builds or binds, which would strand its layer."""
@@ -96,7 +115,8 @@ class Ownership:
         if hit:
             raise ValueError(
                 f"{joined(hit)} is declared or bound by a spec layer; a layer "
-                "cannot be left referencing a name the model no longer holds."
+                "cannot be left referencing a name the model no longer holds. "
+                "Model.remove_spec(name) takes a layer off with everything it built."
             )
 
     def refuse_addition(self, kind: Kind, name: str) -> None:

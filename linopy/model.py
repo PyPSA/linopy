@@ -561,6 +561,32 @@ class Model:
         self._spec = attach(self, spec, sources, retain, name, build_expressions)
         return self
 
+    def remove_spec(self, name: str) -> None:
+        """
+        Take the spec layer *name* off the model with everything it built.
+
+        Its constraints, its named expressions and the variables it built
+        are removed, in that order, a special-ordered set it declared comes
+        off the variable carrying it, and the objective goes where the
+        layer's is the one the model holds. A variable the layer bound
+        stays: it is the model's. A hand-added constraint reading a variable
+        the layer built goes with the variable, as :meth:`remove_variables`
+        takes it. Once the last layer is off, the model holds no spec.
+
+        Raises
+        ------
+        AttributeError
+            The model holds no spec.
+        KeyError
+            No layer of that name.
+        ValueError
+            Another layer binds a variable this one built; remove that
+            layer first.
+        """
+        from linopy.spec.accessor import remove_layer
+
+        remove_layer(self, name)
+
     @classmethod
     def from_spec(
         cls,

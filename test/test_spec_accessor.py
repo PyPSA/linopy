@@ -878,6 +878,53 @@ def test_a_dropped_sos_is_the_layers_no_longer() -> None:
     assert m.spec.unspecified.sos == ("p",)
 
 
+def test_remove_spec_takes_a_layer_off_with_what_it_built() -> None:
+    """The second layer binds what the first built, so the first goes last; the objective goes with its layer."""
+    m = two_layers()
+    m.add_constraints(m.variables["p"].sum() <= 1e6, name="hand")
+    with pytest.raises(
+        ValueError,
+        match=r"built variable\(s\) \['p'\] that layer\(s\) \['extra'\] bind",
+    ):
+        m.remove_spec("spec")
+    with pytest.raises(KeyError, match="unknown spec layer 'extr'"):
+        m.remove_spec("extr")
+
+    m.remove_spec("extra")
+    assert list(m.spec.layers) == ["spec"]
+    assert "p_cap" not in m.constraints and "total" not in m.expressions
+    assert m.spec.objective_owner == "spec"
+    assert m.spec.unspecified == Unspecified((), ("hand",), (), (), (), False)
+
+    with pytest.warns(UserWarning, match=r"also removes constraints \['hand'\]"):
+        m.remove_spec("spec")
+    assert not len(m.variables) and not len(m.constraints)
+    assert not len(m.expressions) and m.objective.expression.empty
+    with pytest.raises(AttributeError, match="holds no spec"):
+        _ = m.spec
+    assert list(Model.from_spec(yaml_dict(), DISPATCH_DATA).variables) == ["p"]
+
+
+def test_remove_spec_leaves_a_bound_variable_and_takes_its_sos() -> None:
+    m = extended(SOS_SPEC)
+    m.remove_spec("extra")
+    assert list(m.variables) == ["p"] and list(m.constraints) == ["power_balance"]
+    assert "sos_type" not in m.variables["p"].attrs
+    assert not m.objective.expression.empty
+    with pytest.raises(AttributeError, match="holds no spec"):
+        _ = m.spec
+    m.add_spec(SOS_SPEC, {**EXTRA_DATA, "p": m.variables["p"]}, name="extra")
+    assert m.spec.unspecified.sos == () and "p_cap" in m.constraints
+
+
+def test_layers_are_read_only() -> None:
+    m = extended()
+    with pytest.raises(TypeError):
+        m.spec.layers["other"] = m.spec["extra"]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        del m.spec.layers["extra"]  # type: ignore[attr-defined]
+
+
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
     """An SOS is attributes on a variable, and a replaced objective is no name at all."""
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
