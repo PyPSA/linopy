@@ -47,6 +47,7 @@ from linopy.constants import (
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    SPEC_LAYER_ATTR,
     TERM_DIM,
     ModelStatus,
     Result,
@@ -117,6 +118,8 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.spec import ModelSpec, Retain, SpecLike
+    from linopy.spec.ownership import Ownership
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,8 @@ class Model:
         "_piecewise_formulations",
         "_solver",
         "_sos_reformulation_state",
+        "_spec",
+        "_ownership",
         "__weakref__",
     )
 
@@ -305,6 +310,8 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
+        self._spec: ModelSpec | None = None
+        self._ownership: Ownership | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -396,6 +403,8 @@ class Model:
             obj = Objective(obj, self)
 
         self._objective = obj
+        if self._ownership is not None:
+            self._ownership.objective = None
 
     @property
     def sense(self) -> str:
@@ -436,6 +445,168 @@ class Model:
         Solution calculated by the optimization.
         """
         return self.variables.solution
+
+    @property
+    def spec(self) -> ModelSpec:
+        """
+        The math-spec layers this model was built from or extended by, see :meth:`add_spec`.
+
+        A :class:`linopy.spec.ModelSpec` over the named layers;
+        ``model.spec[name]`` is one of them.
+
+        Raises
+        ------
+        AttributeError
+            If no spec was added to the model.
+        """
+        if self._spec is None:
+            raise AttributeError(
+                "This model holds no spec. Use `Model.add_spec` or "
+                "`Model.from_spec` to add one."
+            )
+        return self._spec
+
+    def add_spec(
+        self,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        retain: Retain = "report",
+        name: str | None = None,
+        build_expressions: bool = True,
+    ) -> Model:
+        """
+        Build a math-spec program with its data into this model.
+
+        Requires the ``math-spec`` package and linopy's v1 semantics
+        (``linopy.options["semantics"] = "v1"``). Variables, constraints and
+        the objective are added as the spec declares them; the spec text, the
+        parameters the named expressions read and the lookups are kept on the
+        model, and the named expressions are read back through ``model.spec``.
+
+        Everything the layer builds carries the layer's name in its ``attrs``
+        under ``"spec"``, read through the ``spec`` property of a
+        ``Variable``, ``Constraint`` or expression. A bound variable carries
+        none: the layer reads it and the model owns it.
+
+        A named expression whose body holds a variable term is built as well
+        and added to ``model.expressions`` under its declared name, stamped
+        like the rest, so ``model.expressions[name]`` and
+        ``model.spec.expressions[name].expression`` are one object. A
+        data-only body (parameters and constants alone) and one reading a
+        constraint's ``dual`` stay on the spec, read lazily.
+
+        A spec can extend a model that already holds variables: passing a
+        model variable under a declared variable's name in ``sources`` binds
+        it, so the spec reads that variable instead of building one. Its
+        declaration must then match the model variable in dimensions and
+        domain and carry no bounds or ``where`` of its own. Layers share
+        variables only this way: one layer's named expression is not visible
+        to another, since math-spec lowers each layer standalone.
+
+        Parameters
+        ----------
+        spec : str, pathlib.Path, dict or math_spec.Spec
+            The spec. A ``str`` is YAML text if it holds a newline, opens a
+            mapping or a sequence, or holds a ``:`` and names no file; any
+            other ``str`` is a path. A lowered ``math_spec.Program`` and an
+            open file are refused, having no YAML form to keep on the model.
+        sources : mapping or xarray.Dataset
+            Data keyed by declared name: dimension labels, parameters,
+            lookups and the model variables to bind. ``keys()`` is called
+            once, and everything after that is read by key on demand. A key
+            naming nothing the spec declares is ignored, so one mapping can
+            feed several specs; one close to a declared name is warned about
+            as a likely typo. A ``Dataset`` cannot carry a binding.
+        retain : {"report", "all", "none"}
+            Which parameters to keep in ``model.spec.parameters``: those the
+            named expressions read, all of them, or none. ``model.parameters``
+            stays the caller's and is never written to. This decides what a
+            netcdf file holds, not what this session can read: ``model.spec``
+            falls back to ``sources`` for a parameter it did not keep.
+        name : str, optional
+            The layer's name, ``model.spec[name]``. Defaults to the file's
+            stem, else ``"spec"``. A name already on the model is refused, as
+            is one holding ``/`` or ``-``, which a netcdf file cannot carry.
+        build_expressions : bool, default True
+            Whether to build the layer's variable-bearing named expressions
+            into ``model.expressions``. ``False`` stores nothing and
+            ``model.spec.expressions[name].expression`` folds on read, the
+            escape hatch for a spec whose named expressions are too large to
+            hold. Not persisted: a model read from a file folds whatever the
+            file does not hold.
+
+        Returns
+        -------
+        linopy.Model
+            This model, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the model runs under legacy semantics; if a variable the spec
+            introduces, a constraint or a named expression collides with a
+            name the model already holds; or if the spec declares an
+            objective and the model already has one.
+        linopy.spec.SpecDataError
+            If the data does not fit the spec, or a binding does not fit its
+            declaration.
+
+        Warns
+        -----
+        EvolvingAPIWarning
+            Once per session: the spec API is newly added and may change in
+            minor releases. Silence with ``warnings.filterwarnings("ignore",
+            category=linopy.EvolvingAPIWarning)``.
+        """
+        from linopy.spec.accessor import attach
+
+        self._spec = attach(self, spec, sources, retain, name, build_expressions)
+        return self
+
+    def remove_spec(self, name: str) -> None:
+        """
+        Take the spec layer *name* off the model with everything it built.
+
+        Its constraints, its named expressions and the variables it built
+        are removed, in that order, a special-ordered set it declared comes
+        off the variable carrying it, and the objective goes where the
+        layer's is the one the model holds. A variable the layer bound
+        stays: it is the model's. A hand-added constraint reading a variable
+        the layer built goes with the variable, as :meth:`remove_variables`
+        takes it. Once the last layer is off, the model holds no spec.
+
+        Raises
+        ------
+        AttributeError
+            The model holds no spec.
+        KeyError
+            No layer of that name.
+        ValueError
+            Another layer binds a variable this one built; remove that
+            layer first.
+        """
+        from linopy.spec.accessor import remove_layer
+
+        remove_layer(self, name)
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        retain: Retain = "report",
+        name: str | None = None,
+        build_expressions: bool = True,
+        **model_kwargs: Any,
+    ) -> Model:
+        """
+        A new model built from a math-spec program, see :meth:`add_spec`.
+
+        ``model_kwargs`` are passed to :class:`Model`.
+        """
+        return cls(**model_kwargs).add_spec(
+            spec, sources, retain=retain, name=name, build_expressions=build_expressions
+        )
 
     @property
     def dual(self) -> Dataset:
@@ -618,13 +789,29 @@ class Model:
         from linopy.piecewise import _repr_summary as pwl_repr_summary
 
         var_names, con_names = _get_piecewise_groups(self)
-        var_string = self.variables._format_items(exclude=var_names)
-        con_string = self.constraints._format_items(exclude=con_names)
-        expr_string = self.expressions._format_items()
         model_string = f"Linopy {self.type} model"
+        tag_variables = tag_constraints = tag_expressions = False
+        descriptions: list[str] = []
+        if self._spec is not None:
+            layers = list(self._spec.layers.values())
+            if self._spec.whole:
+                model_string += ", built from a math-spec"
+            else:
+                names = ", ".join(layer.name for layer in layers)
+                model_string += f", extended by math-spec layer(s) {names}"
+            unspecified = self._spec.unspecified
+            tag_variables = bool(unspecified.variables)
+            tag_constraints = bool(unspecified.constraints)
+            tag_expressions = bool(unspecified.expressions)
+            descriptions = [layer.description for layer in layers if layer.description]
+        var_string = self.variables._format_items(var_names, tag_variables)
+        expr_string = self.expressions._format_items(tagged=tag_expressions)
+        con_string = self.constraints._format_items(con_names, tag_constraints)
+        header = f"{model_string}\n{'=' * len(model_string)}\n"
+        header += "".join(f"{d}\n" for d in descriptions)
 
         return (
-            f"{model_string}\n{'=' * len(model_string)}\n\n"
+            f"{header}\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Expressions:\n------------\n{expr_string}\n"
             f"Constraints:\n------------\n{con_string}"
@@ -871,6 +1058,8 @@ class Model:
             name = f"var{self._varnameCounter}"
             self._varnameCounter += 1
 
+        if self._ownership is not None:
+            self._ownership.refuse_addition("variable", name)
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
 
@@ -1016,6 +1205,8 @@ class Model:
             name = f"expr{self._exprnameCounter}"
             self._exprnameCounter += 1
 
+        if self._ownership is not None:
+            self._ownership.refuse_addition("expression", name)
         if name in self.expressions:
             raise ValueError(f"Expression '{name}' already assigned to model")
 
@@ -1035,6 +1226,7 @@ class Model:
         if self.chunk:
             expr = expr.chunk(self.chunk)
 
+        expr.attrs.pop(SPEC_LAYER_ATTR, None)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr
@@ -1105,6 +1297,8 @@ class Model:
 
     def _resolve_constraint_name(self, name: str | None, prefix: str = "con") -> str:
         """Validate a constraint name or generate one from ``prefix``."""
+        if name is not None and self._ownership is not None:
+            self._ownership.refuse_addition("constraint", name)
         if name in list(self.constraints):
             raise ValueError(f"Constraint '{name}' already assigned to model")
         if name is None:
@@ -1377,6 +1571,7 @@ class Model:
         self.check_force_dim_names(data)
 
         data = self._allocate_constraint_labels(data, name, mask)
+        data.attrs.pop(SPEC_LAYER_ATTR, None)
 
         if self.chunk:
             data = data.chunk(self.chunk)
@@ -1517,6 +1712,8 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
         self.objective.scaling = scaling
+        if self._ownership is not None:
+            self._ownership.objective = None
 
     def remove_variables(self, name: str) -> None:
         """
@@ -1542,6 +1739,8 @@ class Model:
 
         to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
+        self.variables.remove(name)
+
         if to_remove:
             warnings.warn(
                 f"Removing variable '{name}' also removes constraints {to_remove} "
@@ -1552,13 +1751,12 @@ class Model:
             for k in to_remove:
                 self.constraints.remove(k)
 
-        self.variables.remove(name)
-
         referenced = self.objective.vars.isin(labels)
         if FACTOR_DIM in referenced.dims:
             referenced = referenced.any(FACTOR_DIM)
 
-        self.objective = self.objective.sel({TERM_DIM: ~referenced})
+        if referenced.any():
+            self.objective = self.objective.sel({TERM_DIM: ~referenced})
 
     def remove_constraints(self, name: str | list[str]) -> None:
         """
@@ -1576,13 +1774,12 @@ class Model:
         -------
         None.
         """
-        if isinstance(name, list):
-            for n in name:
-                logger.debug(f"Removed constraint: {n}")
-                self.constraints.remove(n)
-        else:
-            logger.debug(f"Removed constraint: {name}")
-            self.constraints.remove(name)
+        names = [name] if isinstance(name, str) else name
+        if self._ownership is not None:
+            self._ownership.refuse_removal("constraint", names)
+        for n in names:
+            logger.debug(f"Removed constraint: {n}")
+            self.constraints.remove(n)
 
     def remove_expressions(self, name: str | list[str]) -> None:
         """
@@ -1601,6 +1798,8 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
+        if self._ownership is not None:
+            self._ownership.refuse_removal("expression", names)
         for n in names:
             logger.debug(f"Removed expression: {n}")
             self.expressions.remove(n)
@@ -1628,6 +1827,8 @@ class Model:
         del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
 
         variable.attrs.pop(SOS_BIG_M_ATTR, None)
+        if self._ownership is not None:
+            self._ownership.sos.pop(variable.name, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"

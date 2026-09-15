@@ -111,28 +111,60 @@ def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -
         assert_equal(a.rhs, b.rhs)
 
 
+def _dtypes(ds: xr.Dataset) -> dict[str, str]:
+    """The dtype of every variable and coordinate, which assert_equal ignores."""
+    return {str(name): str(arr.dtype) for name, arr in {**ds.variables}.items()}
+
+
+def assert_datasetequal(a: xr.Dataset, b: xr.Dataset) -> None:
+    """
+    Assert that two datasets hold the same values at the same dtypes.
+
+    xarray's ``assert_equal`` compares values and labels but not dtypes, and a
+    netcdf engine is free to narrow an int64 or widen a bool, so the dtypes
+    are compared here on top of it.
+    """
+    assert_equal(a, b)
+    assert _dtypes(a) == _dtypes(b), f"dtypes differ: {_dtypes(a)} != {_dtypes(b)}"
+
+
 def assert_model_equal(a: Model, b: Model) -> None:
     """Assert that two models are equal."""
     for k in a.dataset_attrs:
-        assert_equal(getattr(a, k), getattr(b, k))
+        assert_datasetequal(getattr(a, k), getattr(b, k))
 
     assert list(a.variables) == list(b.variables)
     assert list(a.constraints) == list(b.constraints)
 
     for v in a.variables:
         assert_varequal(a.variables[v], b.variables[v])
+        assert a.variables[v].spec == b.variables[v].spec
 
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
+        assert a.constraints[c].spec == b.constraints[c].spec
 
     assert list(a.expressions) == list(b.expressions)
 
     for e in a.expressions:
         assert_exprequal(a.expressions[e], b.expressions[e])
+        assert a.expressions[e].spec == b.expressions[e].spec
 
     assert_exprequal(a.objective.expression, b.objective.expression, check_name=False)
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
+
+    assert (a._spec is None) == (b._spec is None)
+    if a._spec is not None and b._spec is not None:
+        assert list(a._spec.layers) == list(b._spec.layers)
+        for name, layer in a._spec.layers.items():
+            other = b._spec.layers[name]
+            assert layer.text == other.text
+            assert dict(layer.names) == dict(other.names)
+            assert_datasetequal(layer.parameters, other.parameters)
+        assert a._spec.whole == b._spec.whole
+        assert a._spec.objective_owner == b._spec.objective_owner
+        assert a._spec.unspecified == b._spec.unspecified
 
     assert a.status == b.status
     assert a.termination_condition == b.termination_condition

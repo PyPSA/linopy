@@ -1,0 +1,257 @@
+"""
+Program plus attached data to linopy declarations.
+
+A build hands every variable to linopy as its term, then adds special-ordered
+sets, constraints, the objective and the named expressions that carry a
+variable term; which linopy call each construct becomes is one branch of
+:func:`linopy.spec.evaluate.evaluate`. Everything built is stamped with the
+layer's name, a bound variable excepted: the layer reads it, the model owns it.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+import xarray as xr
+from math_spec import program as ms
+
+from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.model import Model
+from linopy.spec import curves
+from linopy.spec.attach import Attached, _coordinates_shown
+from linopy.spec.context import Context
+from linopy.spec.coverage import check_bounds_cover, check_coverage
+from linopy.spec.errors import SpecDataError
+from linopy.spec.evaluate import carried, evaluate
+from linopy.spec.nodes import walk
+from linopy.spec.parameters import Parameters
+from linopy.spec.terms import Term, Value, live_rows
+from linopy.spec.where import as_linopy_mask, evaluate_where
+from linopy.variables import Variable
+
+_SIGN = {"==": "=", "<=": "<=", ">=": ">="}
+_FLIPPED = {"==": "==", "<=": ">=", ">=": "<="}
+_SENSE = {"minimize": "min", "maximize": "max"}
+
+
+def build(
+    model: Model, attached: Attached, layer: str, build_expressions: bool = True
+) -> None:
+    """
+    Add every declaration of the attached program to *model* as the layer *layer*.
+
+    Variables, special-ordered sets, constraints, the objective and, with
+    *build_expressions*, the named expressions holding a variable term, in
+    that order. Every named expression is checked for divisor and
+    coefficient coverage either way, so a body that cannot be folded is
+    refused at build rather than at read.
+    """
+    check_supported(attached.program)
+    ctx = Context(
+        model,
+        attached.program,
+        attached.coords,
+        attached.lookups,
+        Parameters(attached.program, attached.parameter),
+        layer,
+        names=attached.names,
+    )
+    curves.validate(ctx.program, ctx.parameters)
+    _variables(ctx)
+    _sos(ctx)
+    _constraints(ctx)
+    _objective(ctx)
+    _expressions(ctx, build_expressions)
+
+
+def check_supported(program: ms.Program) -> None:
+    """
+    Refuse the constructs of *program* linopy cannot build, before any of it is built.
+
+    A product of two variable-carrying operands is a quadratic term, and
+    linopy carries one in the objective only: a constraint holding one has no
+    linopy form to be built into.
+    """
+    if "constraint" in program.footprint.quadratic:
+        raise NotImplementedError(
+            "a constraint of the spec multiplies two variable-carrying operands, and linopy "
+            "carries a quadratic term in the objective only. Move the product into the "
+            "objective, or write the constraint so that at most one side of each product "
+            "holds a variable."
+        )
+
+
+def _variables(ctx: Context) -> None:
+    """Every declared variable the layer does not bind, built as its own."""
+    for name, declared in ctx.program.variables.items():
+        if name in ctx.names:
+            continue
+        rows = evaluate_where(declared.where, ctx)
+        check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))
+        variable = ctx.model.add_variables(
+            lower=_bound(declared.lower, ctx),
+            upper=_bound(declared.upper, ctx),
+            coords={d: ctx.coords[d] for d in declared.dims},
+            name=name,
+            mask=as_linopy_mask(rows),
+            binary=declared.domain == "binary",
+            integer=declared.domain == "integer",
+        )
+        variable.spec = ctx.layer
+
+
+def _bound(node: ms.ExpressionNode, ctx: Context) -> float | xr.DataArray:
+    """A bound as linopy takes it, read raw: an uncovered slot stays NaN for :func:`check_bounds_cover`."""
+    if isinstance(node, ms.Constant):
+        return node.value
+    if isinstance(node, ms.Parameter):
+        return ctx.parameters[node.name]
+    raise TypeError(f"a bound is a number or a parameter, not {type(node).__name__}")
+
+
+def _sos(ctx: Context) -> None:
+    """
+    Special-ordered sets on the model-owned variable object.
+
+    ``add_sos_constraints`` writes attributes onto the variable it is
+    handed, so only the object ``model.variables`` holds may go in.
+    """
+    for sos in ctx.program.sos.values():
+        ctx.model.add_sos_constraints(
+            ctx.model.variables[ctx.names.get(sos.variable, sos.variable)],
+            sos_type=sos.sos_type,
+            sos_dim=sos.over,
+            big_m=sos.big_m,
+        )
+
+
+def _constraints(ctx: Context) -> None:
+    for name, row in ctx.program.constraints.items():
+        rows = evaluate_where(row.where, ctx)
+        mask = as_linopy_mask(rows)
+        check_coverage(
+            f"constraint '{name}'", (row.lhs, row.rhs), ctx, mask, comparison=True
+        )
+        lhs, rhs = evaluate(row.lhs, ctx), evaluate(row.rhs, ctx)
+        if _term_free(lhs) and _term_free(rhs):
+            continue
+        term, other, sense = _sides(lhs, rhs, row.sense)
+        _check_live(name, row, term, other, rows, ctx)
+        if isinstance(other, xr.DataArray):
+            term, other = carried(term, other)
+        built = ctx.model.add_constraints(
+            term, _SIGN[sense], other, name=name, mask=mask
+        )
+        built.spec = ctx.layer
+
+
+def _check_live(
+    name: str,
+    declared: ms.ConstraintDeclaration,
+    term: Term,
+    other: Value,
+    rows: xr.DataArray,
+    ctx: Context,
+) -> None:
+    """
+    Refuse a row the data emptied of every variable term.
+
+    Such a row reads as ``0 sense rhs``: linopy carries no column there, the
+    row leaves the problem and the constraint silently stops binding. Where
+    every variable of the row declares ``absence: zero`` the zero is what the
+    math says, so a zero other side is warned about rather than refused.
+    """
+    dead = rows & ~live_rows(term)
+    if not bool(dead.any()):
+        return
+    said = (
+        f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
+        f"is attached, the first at {_dead_at(dead)}. Nothing is left to constrain there, so "
+        f"the row leaves the problem without saying so."
+    )
+    zeroed = all(
+        ctx.program.variable(v).absence == "zero"
+        for v in ms.variables_of(declared.lhs, declared.rhs)
+    )
+    if zeroed and not _binds(other, dead):
+        warnings.warn(
+            f"{said} Every variable there is absence: zero and the other side is 0, "
+            f"so the row is trivially true.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return
+    supply = (
+        "  Supply the rows of the variables, if the row is meant to bind."
+        if zeroed
+        else "  Declare absence: zero on the variables, if an absent term is a zero there."
+    )
+    raise SpecDataError(
+        f"{said}\n"
+        f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
+        f"{supply}"
+    )
+
+
+def _binds(other: Value, dead: xr.DataArray) -> bool:
+    """Whether the side without the variable term is anything but 0 on a row *dead* names."""
+    if isinstance(other, xr.DataArray):
+        return bool((other.where(dead, 0.0) != 0).any())
+    return other != 0
+
+
+def _dead_at(dead: xr.DataArray) -> str:
+    """The first coordinates *dead* marks, spelled the way every other refusal spells them."""
+    dims = tuple(str(d) for d in dead.dims)
+    if not dims:
+        return "the only row"
+    stacked = dead.stack(_dead=dims)
+    return _coordinates_shown(dims, stacked.indexes["_dead"][stacked.values][:3])
+
+
+def _sides(lhs: Value, rhs: Value, sense: str) -> tuple[Term, Value, str]:
+    """The comparison with a term on the left, as linopy takes it; a swap flips the sense."""
+    if isinstance(lhs, Variable | LinearExpression | QuadraticExpression):
+        return lhs, rhs, sense
+    if isinstance(rhs, Variable | LinearExpression | QuadraticExpression):
+        return rhs, lhs, _FLIPPED[sense]
+    raise TypeError("a constraint needs a variable term on one side")
+
+
+def _term_free(side: Value) -> bool:
+    """Whether *side* has nowhere for a variable term to sit: data, or an expression the data emptied."""
+    if isinstance(side, Variable):
+        return False
+    if isinstance(side, LinearExpression | QuadraticExpression):
+        return side.nterm == 0
+    return True
+
+
+def _objective(ctx: Context) -> None:
+    declared = ctx.program.objective
+    if declared is None:
+        return
+    check_coverage("the objective", (declared.expression,), ctx, None)
+    expr = evaluate(declared.expression, ctx)
+    if not isinstance(expr, Variable | LinearExpression | QuadraticExpression):
+        raise SpecDataError(
+            "the objective carries no variable term once the data is attached, so there is nothing to optimize"
+        )
+    ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])
+
+
+def _expressions(ctx: Context, build: bool) -> None:
+    """
+    Every named expression coverage-checked; with *build*, the ones holding a variable term added to the model.
+
+    A data-only body has no linopy term to hold and stays on the spec; so
+    does one reading a ``dual``, which needs a solved model.
+    """
+    for name, declared in ctx.program.named_expressions.items():
+        body = declared.expression
+        check_coverage(f"expression '{name}'", (body,), ctx, None)
+        if not build or any(isinstance(n, ms.Dual) for n in walk(body)):
+            continue
+        value = evaluate(body, ctx)
+        if isinstance(value, Variable | LinearExpression | QuadraticExpression):
+            ctx.model.add_expressions(value, name=name).spec = ctx.layer

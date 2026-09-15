@@ -59,6 +59,7 @@ from linopy.constants import (
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    SPEC_LAYER_ATTR,
     STASHED_ATTRS,
     STASHED_LOWER,
     STASHED_UPPER,
@@ -919,6 +920,16 @@ class Variable:
         Return the name of the variable.
         """
         return str(self.attrs["name"])
+
+    @property
+    def spec(self) -> str | None:
+        """The spec layer that built this variable; ``None`` for one built by hand, a layer's binding included."""
+        layer = self.attrs.get(SPEC_LAYER_ATTR)
+        return None if layer is None else str(layer)
+
+    @spec.setter
+    def spec(self, layer: str) -> None:
+        self.attrs[SPEC_LAYER_ATTR] = layer
 
     @property
     def labels(self) -> DataArray:
@@ -1809,8 +1820,10 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format variable items, optionally excluding names in a group."""
+    def _format_items(
+        self, exclude: set[str] | None = None, tagged: bool = False
+    ) -> str:
+        """Format variable items, optionally excluding names in a group and, if *tagged*, naming each one's spec layer."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -1828,7 +1841,8 @@ class Variables:
                 coords += f" - sos{sos_type} on {sos_dim}"
             if ds.attrs.get("semi_continuous", False):
                 coords += " - semi-continuous"
-            r += f" * {name}{coords}\n"
+            suffix = f" [{ds.spec}]" if tagged and ds.spec is not None else ""
+            r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"
         return r
@@ -1872,7 +1886,11 @@ class Variables:
     def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
+
+        Refused where a spec layer builds or binds it.
         """
+        if self.model._ownership is not None:
+            self.model._ownership.refuse_removal("variable", [name])
         self.data.pop(name)
         self._invalidate_label_position_index()
 

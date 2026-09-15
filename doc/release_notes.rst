@@ -21,6 +21,17 @@ Upcoming Version
 * Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
 
 
+*Build a model from a math-spec program*
+
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://github.com/energy-models/math-spec>`__ program attached to data, and ``model.spec`` reads it back as named layers, each with its ``program``, ``parameters``, ``coords`` and ``lookups``. Requires the ``spec`` dependency group (``uv sync --group spec``, Python >= 3.12) and v1 semantics. The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
+
+* A spec can extend a hand-built model: a ``Variable`` passed in ``sources`` under a declared name binds it instead of building one. Everything a layer builds carries its layer name in ``.spec``; ``model.remove_spec(name)`` unwinds a layer, and removing a spec-owned name any other way is refused. ``model.spec.unspecified`` reports what the model holds beyond its specs.
+
+* ``model.spec.expressions`` evaluates the spec's named expressions against the solved model, and ``model.spec.typeset`` (``to_latex`` / ``to_markdown`` / ``to_typst``) renders the spec, warning where the model has drifted from it.
+
+* Spec models round-trip through ``to_netcdf`` / ``read_netcdf``; a file read without ``math-spec`` installed loads as a plain model with a warning.
+
+
 *Numerical scaling*
 
 * Variables, constraints and the objective accept a ``scaling`` factor that rewrites the problem into better-behaved units for the solver, without changing the answer. Variable scaling is column-like, constraint and objective scaling are row-like, and primal values, duals and the objective are transformed back to the original units after solving. See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.
