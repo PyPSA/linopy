@@ -942,15 +942,19 @@ class NamedExpression(Declaration):
             return self._stored
         return evaluate_named(self._name, self._ctx.unsolved)
 
-    @functools.cached_property
+    @property
     def solution(self) -> xr.DataArray:
         """
         The expression folded over the model's solution, as data.
 
+        Folded afresh on every read, so it follows the model: a body over
+        data alone reads without a solve at all.
+
         Raises
         ------
         RuntimeError
-            The model reads a variable but holds no solution yet.
+            The body reads a variable the model holds no solution for, or a
+            constraint it holds no dual for.
         SpecDataError
             A parameter the body reads was neither retained nor
             still reachable through the model's sources.
@@ -958,7 +962,7 @@ class NamedExpression(Declaration):
         return fold(self._name, self._ctx)
 
     def __repr__(self) -> str:
-        value = self.__dict__.get("solution", self.__dict__.get("expression"))
+        value = self.__dict__.get("expression")
         if isinstance(value, xr.DataArray):
             return f"NamedExpression('{self._name}', dims={tuple(value.dims)})"
         return f"NamedExpression('{self._name}')"

@@ -463,10 +463,15 @@ def test_a_variable_bearing_named_expression_is_the_model_expression(name: str) 
 
 
 def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
-    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
+    e = m.spec.expressions["spend"]
     assert isinstance(e.expression, linopy.LinearExpression)
     with pytest.raises(RuntimeError, match="no solution yet"):
         e.solution
+    m.solve("highs")
+    xr.testing.assert_allclose(
+        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+    )
 
 
 def test_the_named_expression_bundles_the_three_views() -> None:
@@ -857,20 +862,31 @@ def test_evaluate_refuses_sources_on_other_labels_than_the_model(
         m.spec.evaluate("twice", sources)
 
 
+DUAL_SPEC: dict[str, Any] = {
+    **yaml_dict(),
+    "expressions": {"price": "dual(power_balance)"},
+}
+
+
 def test_a_reported_dual_folds_to_the_constraint_dual() -> None:
-    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
-    m = solved(spec, DISPATCH_DATA)
+    m = solved(DUAL_SPEC, DISPATCH_DATA)
     xr.testing.assert_allclose(
         m.spec.expressions["price"].solution,
         m.constraints["power_balance"].dual.rename("price"),
     )
 
 
-def test_a_dual_needs_a_solution() -> None:
-    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
-    m = Model.from_spec(spec, DISPATCH_DATA)
-    with pytest.raises(RuntimeError, match="no dual yet"):
+@pytest.mark.parametrize("build", [Model.from_spec, solved], ids=["unsolved", "solved"])
+def test_a_dual_has_no_symbolic_form(build: Callable[..., Model]) -> None:
+    m = build(DUAL_SPEC, DISPATCH_DATA)
+    with pytest.raises(TypeError, match="no symbolic form"):
         m.spec.expressions["price"].expression
+
+
+def test_a_dual_needs_a_solution() -> None:
+    m = Model.from_spec(DUAL_SPEC, DISPATCH_DATA)
+    with pytest.raises(RuntimeError, match="no dual yet"):
+        m.spec.expressions["price"].solution
 
 
 def test_spec_api_warns_once_per_session() -> None:

@@ -139,10 +139,16 @@ def _variable(name: str, ctx: Context) -> Value:
 
 def _dual(constraint: str, ctx: Context) -> xr.DataArray:
     if not ctx.solved:
-        raise RuntimeError(
-            f"constraint '{constraint}' has no dual yet: solve the model before reading a dual"
+        raise TypeError(
+            f"the dual of constraint '{constraint}' has no symbolic form, read `.solution`"
         )
-    return ctx.model.constraints[constraint].dual
+    data = ctx.model.constraints[constraint].data
+    if "dual" not in data:
+        raise RuntimeError(
+            f"constraint '{constraint}' has no dual yet: solve the model, with a solver "
+            f"and a problem that report duals, before reading one"
+        )
+    return data["dual"]
 
 
 def _combine(op: Callable[[Value, Value], Value], left: Value, right: Value) -> Value:
