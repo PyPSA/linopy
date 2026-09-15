@@ -505,8 +505,11 @@ class Model:
             open file are refused, having no YAML form to keep on the model.
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters,
-            lookups and the model variables to bind. Read by key on demand
-            and never iterated. A ``Dataset`` cannot carry a binding.
+            lookups and the model variables to bind. ``keys()`` is called
+            once, and everything after that is read by key on demand. A key
+            naming nothing the spec declares is ignored, so one mapping can
+            feed several specs; one close to a declared name is warned about
+            as a likely typo. A ``Dataset`` cannot carry a binding.
         retain : {"report", "all", "none"}
             Which parameters to keep in ``model.spec.parameters``: those the
             named expressions read, all of them, or none. ``model.parameters``
