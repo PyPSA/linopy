@@ -2550,9 +2550,14 @@ class Model:
 
         import highspy
 
-        solver_model.setOptionValue(
-            "iis_strategy", highspy.IisStrategy.kIisStrategyIrreducible
-        )
+        solver = self.solver
+        assert solver is not None
+        if "iis_strategy" not in solver.solver_options:
+            solver_model.setOptionValue(
+                "iis_strategy",
+                int(highspy.IisStrategy.kIisStrategyFromLp)
+                | int(highspy.IisStrategy.kIisStrategyIrreducible),
+            )
         status, iis = solver_model.getIis()
         if status == highspy.HighsStatus.kError or not iis.valid_:
             raise RuntimeError(
@@ -2563,8 +2568,6 @@ class Model:
         if not len(row_index):
             return []
 
-        solver = self.solver
-        assert solver is not None
         if solver.io_api == "direct":
             clabels = self.constraints.label_index.clabels
         else:
