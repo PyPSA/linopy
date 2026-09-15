@@ -40,6 +40,7 @@ def build(model: Model, attached: Attached) -> None:
     coverage, so a body that cannot be folded is refused at build rather than
     at read.
     """
+    check_supported(attached.program)
     ctx = Context(
         model,
         attached.program,
@@ -54,6 +55,23 @@ def build(model: Model, attached: Attached) -> None:
     _objective(ctx)
     for name, declared in ctx.program.named_expressions.items():
         check_coverage(f"expression '{name}'", (declared.expression,), ctx, None)
+
+
+def check_supported(program: ms.Program) -> None:
+    """
+    Refuse the constructs of *program* linopy cannot build, before any of it is built.
+
+    A product of two variable-carrying operands is a quadratic term, and
+    linopy carries one in the objective only: a constraint holding one has no
+    linopy form to be built into.
+    """
+    if "constraint" in program.footprint.quadratic:
+        raise NotImplementedError(
+            "a constraint of the spec multiplies two variable-carrying operands, and linopy "
+            "carries a quadratic term in the objective only. Move the product into the "
+            "objective, or write the constraint so that at most one side of each product "
+            "holds a variable."
+        )
 
 
 def _variables(ctx: Context) -> None:

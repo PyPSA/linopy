@@ -20,6 +20,7 @@ import pandas as pd
 import xarray as xr
 
 from linopy.expressions import LinearExpression
+from linopy.spec.errors import SpecDataError
 from linopy.spec.groups import Groups, grouped
 from linopy.spec.terms import Array, Term
 from linopy.variables import Variable
@@ -214,11 +215,23 @@ def sum_back(
 
     A position the window cannot reach contributes a zero; a window that
     reaches nothing keeps no row. *by* stops the window at each group's edge.
+
+    With *wrap* the window continues from the other end of *over*, so a width
+    above the axis size still reads every position and is taken as the whole
+    axis. Without it such a width asks for positions that do not exist and is
+    refused.
     """
     if by is not None:
         within = _per_group(within, by)
     asked = _widest(within)
-    widest = max(1, min(asked, int(array.sizes[over])))
+    size = int(array.sizes[over])
+    if asked > size and not wrap:
+        raise SpecDataError(
+            f"a trailing sum over '{over}' asks for a window of {asked} position(s) where "
+            f"'{over}' holds {size}. Narrow 'within' to the axis, or write edge='wrap' so the "
+            f"window continues from the other end."
+        )
+    widest = max(1, min(asked, size))
     probe = _Edge(wrap=wrap, fill=None)
     partition = (
         None if by is None else grouped(over, np.asarray(array.indexes[over]), by)

@@ -460,3 +460,37 @@ def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
         m.spec.expressions["e"].solution,
         xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),
     )
+
+
+# ---------------------------------------------------------------------------
+# what linopy cannot build
+# ---------------------------------------------------------------------------
+
+QUADRATIC_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}},
+    "variables": {
+        "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+        "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+    },
+    "constraints": {"cap": {"dims": ["t"], "expression": "x * y <= 5"}},
+    "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
+}
+
+
+def test_a_quadratic_constraint_is_refused_before_anything_is_built() -> None:
+    m = Model()
+    with pytest.raises(
+        NotImplementedError, match="quadratic term in the objective only"
+    ):
+        m.add_spec(QUADRATIC_SPEC, {"t": T})
+    assert list(m.variables) == [] and list(m.constraints) == []
+
+
+def test_a_quadratic_objective_builds() -> None:
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": "sum(x * y, over=t)"},
+    )
+    m = Model.from_spec(spec, {"t": T})
+    assert isinstance(m.objective.expression, linopy.QuadraticExpression)
