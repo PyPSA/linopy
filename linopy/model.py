@@ -2388,9 +2388,7 @@ class Model:
             try:
                 import highspy
 
-                if solver_model is not None and isinstance(
-                    solver_model, highspy.Highs
-                ):
+                if solver_model is not None and isinstance(solver_model, highspy.Highs):
                     return self._compute_infeasibilities_highs(solver_model)
             except ImportError:
                 pass
