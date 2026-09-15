@@ -29,7 +29,6 @@ import xarray as xr
 from math_spec import did_you_mean
 from math_spec import program as ms
 
-from linopy.constants import warn_evolving_api
 from linopy.spec.errors import SpecDataError
 from linopy.spec.nodes import amounts_of, parameters_of, walk
 from linopy.variables import Variable
@@ -72,12 +71,6 @@ _LOOKUP_SHAPES = "a pandas Series indexed by '{over}', a dict keyed by '{over}' 
 _PARAMETER_SHAPES = (
     "a DataArray over {dims}, a pandas Series whose (Multi)Index levels are {dims}, "
     "a DataFrame with columns {columns} or in wide form, a dict keyed by label, or one number"
-)
-
-EVOLVING_MESSAGE = (
-    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.attach are "
-    "newly added and their details may change in minor releases. Silence with "
-    '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
 
@@ -126,7 +119,6 @@ def attach(
     TypeError
         *sources* offers no ``keys()``.
     """
-    warn_evolving_api("spec", EVOLVING_MESSAGE)
     if retain not in _RETAIN:
         raise SpecDataError(
             f"retain={retain!r} is not one of {_shown(_RETAIN)}. {did_you_mean(retain, _RETAIN)}"

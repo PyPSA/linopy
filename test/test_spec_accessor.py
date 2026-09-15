@@ -773,12 +773,109 @@ def test_a_layer_refuses_removal_of_a_name_it_owns() -> None:
         m.remove_constraints("p_cap")
     with pytest.raises(ValueError, match="total is declared or bound"):
         m.remove_expressions("total")
+    assert {"power_balance", "p_cap"} <= set(m.constraints)
     m.add_variables(lower=0, coords=[GENERATOR], name="free")
     m.remove_variables("free")
     assert "free" not in m.variables
     m.add_expressions(m.variables["p"].sum(), name="free_expr")
     m.remove_expressions("free_expr")
     assert "free_expr" not in m.expressions
+
+
+@pytest.mark.parametrize(
+    "remove",
+    [
+        lambda m: m.variables.remove("p"),
+        lambda m: m.constraints.remove("p_cap"),
+        lambda m: m.expressions.remove("total"),
+    ],
+    ids=["variable", "constraint", "expression"],
+)
+def test_the_containers_refuse_removal_of_what_a_layer_owns(
+    remove: Callable[[Model], None],
+) -> None:
+    m = extended()
+    with pytest.raises(ValueError, match="declared or bound by a spec layer"):
+        remove(m)
+
+
+@pytest.mark.parametrize("build_expressions", [True, False], ids=["built", "lazy"])
+@pytest.mark.parametrize(
+    ("add", "match"),
+    [
+        (lambda m: m.add_variables(name="p"), "variable 'p'"),
+        (
+            lambda m: m.add_constraints(m.variables["p"] >= 0, name="power_balance"),
+            "constraint 'power_balance'",
+        ),
+        (
+            lambda m: m.add_expressions(m.variables["p"].sum(), name="spend"),
+            "expression 'spend'",
+        ),
+    ],
+    ids=["variable", "constraint", "expression"],
+)
+def test_a_name_a_layer_declares_cannot_be_added_by_hand(
+    build_expressions: bool, add: Callable[[Model], Any], match: str
+) -> None:
+    """A lazy named expression is in no container, and is the layer's all the same."""
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, build_expressions=build_expressions)
+    with pytest.raises(ValueError, match=f"{match} is declared or bound by spec layer"):
+        add(m)
+
+
+@pytest.mark.parametrize("build_expressions", [True, False], ids=["built", "lazy"])
+def test_a_hand_expression_collides_with_a_declared_one_however_it_is_held(
+    build_expressions: bool,
+) -> None:
+    m = BASE_MODEL()
+    m.add_expressions(m.variables["p"].sum(), name="total")
+    data = {**EXTRA_DATA, "p": m.variables["p"]}
+    with pytest.raises(ValueError, match=r"named expression\(s\) \['total'\]"):
+        m.add_spec(EXTRA_SPEC, data, build_expressions=build_expressions)
+
+
+def _assign(m: Model) -> None:
+    m.objective = m.variables["p"].sum() * 2.0
+
+
+def _augment(m: Model) -> None:
+    m.objective += m.variables["p"].sum()
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        _assign,
+        _augment,
+        Model.remove_objective,
+        lambda m: m.add_objective(m.variables["p"].sum(), overwrite=True),
+    ],
+    ids=["assign", "augment", "remove", "overwrite"],
+)
+def test_an_edited_objective_is_no_layers(edit: Callable[[Model], None]) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    assert m.spec.objective_owner == "spec"
+    edit(m)
+    assert m.spec.objective_owner is None
+    assert m.spec.unspecified.objective is not m.objective.expression.empty
+
+
+def test_removing_a_hand_variable_the_objective_never_read_keeps_its_owner() -> None:
+    m = hybrid()
+    with pytest.warns(UserWarning, match="also removes constraints"):
+        m.remove_variables("reserve")
+    assert m.spec.objective_owner == "spec"
+    assert not m.spec.unspecified
+
+
+def test_a_dropped_sos_is_the_layers_no_longer() -> None:
+    m = extended(SOS_SPEC)
+    assert m.spec.unspecified.sos == ()
+    m.remove_sos_constraints(m.variables["p"])
+    assert m.spec.unspecified.sos == ()
+    m.add_sos_constraints(m.variables["p"], sos_type=2, sos_dim="generator")
+    assert m.spec.unspecified.sos == ("p",)
 
 
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:

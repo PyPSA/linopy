@@ -296,6 +296,24 @@ def test_a_legacy_file_reads_as_one_layer(tmp_path: Path, replaced: bool) -> Non
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    "touch",
+    [
+        lambda m: m.variables.remove("p"),
+        lambda m: m.remove_constraints("p_floor"),
+        lambda m: m.add_expressions(m.variables["p"].sum(), name="peak"),
+    ],
+    ids=["remove-bound", "remove-constraint", "add-declared"],
+)
+def test_a_round_trip_keeps_what_the_layers_own(
+    tmp_path: Path, engine: str, touch: Callable[[Model], Any]
+) -> None:
+    p = roundtrip(layered(2, whole_=False), tmp_path, engine)
+    with pytest.raises(ValueError, match="declared or bound by"):
+        touch(p)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 def test_a_bound_sos_variable_keeps_its_attrs_after_a_round_trip(
     tmp_path: Path, engine: str
 ) -> None:

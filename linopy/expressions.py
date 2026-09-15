@@ -3604,8 +3604,12 @@ class Expressions:
 
     def remove(self, name: str) -> None:
         """
-        Remove variable `name` from the variables.
+        Remove expression `name` from the expressions.
+
+        Refused where a spec layer builds or binds it.
         """
+        if self.model._ownership is not None:
+            self.model._ownership.refuse_removal("expression", [name])
         self.data.pop(name)
 
     @property

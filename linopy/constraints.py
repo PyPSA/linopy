@@ -2265,7 +2265,11 @@ class Constraints:
     def remove(self, name: str) -> None:
         """
         Remove constraint `name` from the constraints.
+
+        Refused where a spec layer builds or binds it.
         """
+        if self.model._ownership is not None:
+            self.model._ownership.refuse_removal("constraint", [name])
         self.data.pop(name)
         self._invalidate_label_position_index()
 

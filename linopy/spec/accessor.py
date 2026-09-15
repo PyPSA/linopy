@@ -51,13 +51,14 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
-from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
+from linopy.spec.attach import Attached, Retain
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
 from linopy.spec.context import Context, Views
 from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluate import evaluate_named, fold
 from linopy.spec.nodes import dims_of
+from linopy.spec.ownership import Ownership, joined
 from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
@@ -68,6 +69,12 @@ _DRIFTED = "This model has drifted from the spec typeset here: {}."
 _EXTENDS = "This spec extends a model it does not describe: {}."
 
 _ILLEGAL_IN_NAME = re.compile(r"[/-]")
+
+EVOLVING_MESSAGE = (
+    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.attach are "
+    "newly added and their details may change in minor releases. Silence with "
+    '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
+)
 
 _COMMENT: dict[str, str] = {
     "latex": "% {}",
@@ -86,6 +93,10 @@ class Unspecified:
     and ``sos:`` are not drift: math-spec lowers them into ordinary
     declarations, so they sit in the program like any other.
 
+    Drift is tracked by name: a name a layer owns counts as the layer's
+    whatever it holds now, so a bound or an ``rhs`` edited in place is not
+    seen here.
+
     Attributes
     ----------
     variables, constraints
@@ -95,9 +106,9 @@ class Unspecified:
         variable term live in ``model.expressions`` stamped with the layer's
         name, and are not drift.
     sos
-        Variables given a special-ordered set the spec does not declare.
-        ``add_sos_constraints`` writes attributes onto a variable rather than
-        adding a name of its own, so nothing else here would show it.
+        Variables given a special-ordered set no layer owns. A set a layer
+        declared and ``remove_sos_constraints`` dropped is the layer's no
+        longer, so one added in its place lands here.
     piecewise
         Formulations added by ``add_piecewise_formulation``, named as
         formulations rather than as the variables and constraints they hold.
@@ -128,13 +139,6 @@ class Unspecified:
             or self.piecewise
             or self.objective
         )
-
-
-def _joined(parts: list[str]) -> str:
-    """``a``, ``a and b``, ``a, b and c``."""
-    if len(parts) < 3:
-        return " and ".join(parts)
-    return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
@@ -193,7 +197,7 @@ def attach(
             f"variable(s) {foreign} are bound to a variable of another model. A layer reads "
             f"the variables of the model it is added to; pass the variables of this model."
         )
-    _check_collisions(model, program, attached, build_expressions)
+    _check_collisions(model, program, attached)
     layer_name = _check_layer_name(name if name is not None else stem or "spec")
     if model._spec is not None and layer_name in model._spec.layers:
         raise ValueError(
@@ -207,11 +211,35 @@ def attach(
     layer = Layer(
         model, layer_name, program, text, parameters, attached, attached.names
     )
-    spec_ = model._spec if model._spec is not None else ModelSpec(model, [], whole)
-    spec_.layers[layer.name] = layer
-    if program.objective is not None:
-        spec_.objective_owner = layer.name
-    return spec_
+    if model._spec is None:
+        model._ownership = Ownership()
+        model._spec = ModelSpec(model, [], whole)
+    model._spec.layers[layer.name] = layer
+    register(model, layer)
+    return model._spec
+
+
+def register(model: Model, layer: Layer) -> None:
+    """
+    Record in the model's registry every name *layer* owns.
+
+    Called once the layer is on the model: after a build, or after a read,
+    where the constraints and special-ordered sets a file gave back say what
+    the layer still holds.
+    """
+    if model._ownership is None:
+        raise RuntimeError("a model holding spec layers has no ownership registry")
+    p = layer.program
+    declared_sos = {layer.names.get(s.variable, s.variable) for s in p.sos.values()}
+    model._ownership.claim(
+        layer.name,
+        variables=[n for n in p.variables if n not in layer.names],
+        bound=layer.names.values(),
+        constraints=[n for n in p.constraints if n in model.constraints],
+        expressions=p.named_expressions,
+        sos=[n for n in declared_sos if SOS_TYPE_ATTR in model.variables[n].attrs],
+        objective=p.objective is not None,
+    )
 
 
 def _layers(model: Model) -> list[Layer]:
@@ -235,9 +263,7 @@ def _check_layer_name(name: str) -> str:
     return name
 
 
-def _check_collisions(
-    model: Model, program: ms.Program, attached: Attached, build_expressions: bool
-) -> None:
+def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> None:
     introduced = [
         n for n in program.variables if n not in attached.bound and n in model.variables
     ]
@@ -269,10 +295,10 @@ def _check_collisions(
             "terms through a named expression: "
             "`m.objective += m.spec.expressions[name].expression`."
         )
-    taken = {n for layer in _layers(model) for n in layer.program.named_expressions}
-    if build_expressions:
-        taken |= set(model.expressions)
-    expressions = [n for n in program.named_expressions if n in taken]
+    owned = model._ownership.expressions if model._ownership is not None else {}
+    expressions = [
+        n for n in program.named_expressions if n in owned or n in model.expressions
+    ]
     if expressions:
         raise ValueError(
             f"the spec declares named expression(s) {expressions} and the model or an "
@@ -584,17 +610,22 @@ class ModelSpec:
         objective is none of theirs.
     """
 
-    def __init__(
-        self,
-        model: Model,
-        layers: Iterable[Layer],
-        whole: bool,
-        objective_owner: str | None = None,
-    ) -> None:
+    def __init__(self, model: Model, layers: Iterable[Layer], whole: bool) -> None:
         self._model = model
         self.layers: dict[str, Layer] = {layer.name: layer for layer in layers}
         self.whole = whole
-        self.objective_owner = objective_owner
+
+    @property
+    def _ownership(self) -> Ownership:
+        owned = self._model._ownership
+        if owned is None:
+            raise RuntimeError("a model holding spec layers has no ownership registry")
+        return owned
+
+    @property
+    def objective_owner(self) -> str | None:
+        """The layer whose objective the model holds, ``None`` once it was replaced or edited."""
+        return self._ownership.objective
 
     def __getitem__(self, name: str) -> Layer:
         if name not in self.layers:
@@ -612,26 +643,7 @@ class ModelSpec:
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
         """The same layers, read off *model*, each holding its own copy of the parameters."""
         layers = [layer._reattach(model, deep) for layer in self.layers.values()]
-        return ModelSpec(model, layers, self.whole, self.objective_owner)
-
-    def refuse_removal(
-        self, variables: set[str], constraints: set[str], expressions: set[str]
-    ) -> None:
-        """Refuse to drop a model name a layer builds or binds, which would strand its layer."""
-        model = self._model
-        bound = {n for layer in self.layers.values() for n in layer.names.values()}
-        hit = {
-            n
-            for n, v in model.variables.items()
-            if n in variables and (n in bound or v.spec is not None)
-        }
-        hit |= {n for n, c in model.constraints.items() if n in constraints and c.spec}
-        hit |= {n for n, e in model.expressions.items() if n in expressions and e.spec}
-        if hit:
-            raise ValueError(
-                f"{_joined(sorted(hit))} is declared or bound by a spec layer; a layer "
-                "cannot be left referencing a name the model no longer holds."
-            )
+        return ModelSpec(model, layers, self.whole)
 
     def _only(self) -> Layer:
         if len(self.layers) != 1:
@@ -720,37 +732,30 @@ class ModelSpec:
         from linopy.piecewise import _get_piecewise_groups
 
         model = self._model
-        layers = list(self.layers.values())
+        owned = self._ownership
         pw_variables, pw_constraints = _get_piecewise_groups(model)
-        declared_sos = {
-            layer.names.get(sos.variable, sos.variable)
-            for layer in layers
-            for sos in layer.program.sos.values()
-        }
-        bound = {n for layer in layers for n in layer.names.values()}
         return Unspecified(
             variables=tuple(
                 n
-                for n, v in model.variables.items()
-                if v.spec is None and n not in bound and n not in pw_variables
+                for n in model.variables
+                if owned.owner("variable", n) is None and n not in pw_variables
             ),
             constraints=tuple(
                 n
-                for n, c in model.constraints.items()
-                if c.spec is None and n not in pw_constraints
+                for n in model.constraints
+                if owned.owner("constraint", n) is None and n not in pw_constraints
             ),
             expressions=tuple(
-                n for n, e in model.expressions.items() if e.spec is None
+                n for n in model.expressions if owned.owner("expression", n) is None
             ),
             sos=tuple(
                 n
-                for n in model.variables
-                if SOS_TYPE_ATTR in model.variables[n].attrs and n not in declared_sos
+                for n, v in model.variables.items()
+                if SOS_TYPE_ATTR in v.attrs and owned.owner("sos", n) is None
             ),
             piecewise=tuple(model._piecewise_formulations),
-            objective=self.objective_owner is None
-            and not model.objective.expression.empty,
-            bound=tuple(n for n in model.variables if n in bound),
+            objective=owned.objective is None and not model.objective.expression.empty,
+            bound=tuple(n for n in model.variables if n in owned.bound),
         )
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
@@ -854,7 +859,7 @@ class ModelSpec:
             if self.whole
             else "an objective this spec does not declare"
         )
-        return _joined([p for p in parts if p] + [objective] * found.objective)
+        return joined([p for p in parts if p] + [objective] * found.objective)
 
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""

@@ -119,6 +119,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
     from linopy.spec import ModelSpec, Retain, SpecLike
+    from linopy.spec.ownership import Ownership
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,7 @@ class Model:
         "_solver",
         "_sos_reformulation_state",
         "_spec",
+        "_ownership",
         "__weakref__",
     )
 
@@ -309,6 +311,7 @@ class Model:
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
         self._spec: ModelSpec | None = None
+        self._ownership: Ownership | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -400,6 +403,8 @@ class Model:
             obj = Objective(obj, self)
 
         self._objective = obj
+        if self._ownership is not None:
+            self._ownership.objective = None
 
     @property
     def sense(self) -> str:
@@ -1025,6 +1030,8 @@ class Model:
             name = f"var{self._varnameCounter}"
             self._varnameCounter += 1
 
+        if self._ownership is not None:
+            self._ownership.refuse_addition("variable", name)
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
 
@@ -1170,6 +1177,8 @@ class Model:
             name = f"expr{self._exprnameCounter}"
             self._exprnameCounter += 1
 
+        if self._ownership is not None:
+            self._ownership.refuse_addition("expression", name)
         if name in self.expressions:
             raise ValueError(f"Expression '{name}' already assigned to model")
 
@@ -1260,6 +1269,8 @@ class Model:
 
     def _resolve_constraint_name(self, name: str | None, prefix: str = "con") -> str:
         """Validate a constraint name or generate one from ``prefix``."""
+        if name is not None and self._ownership is not None:
+            self._ownership.refuse_addition("constraint", name)
         if name in list(self.constraints):
             raise ValueError(f"Constraint '{name}' already assigned to model")
         if name is None:
@@ -1673,8 +1684,8 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
         self.objective.scaling = scaling
-        if self._spec is not None:
-            self._spec.objective_owner = None
+        if self._ownership is not None:
+            self._ownership.objective = None
 
     def remove_variables(self, name: str) -> None:
         """
@@ -1700,8 +1711,7 @@ class Model:
 
         to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
-        if self._spec is not None:
-            self._spec.refuse_removal({name}, set(to_remove), set())
+        self.variables.remove(name)
 
         if to_remove:
             warnings.warn(
@@ -1713,13 +1723,12 @@ class Model:
             for k in to_remove:
                 self.constraints.remove(k)
 
-        self.variables.remove(name)
-
         referenced = self.objective.vars.isin(labels)
         if FACTOR_DIM in referenced.dims:
             referenced = referenced.any(FACTOR_DIM)
 
-        self.objective = self.objective.sel({TERM_DIM: ~referenced})
+        if referenced.any():
+            self.objective = self.objective.sel({TERM_DIM: ~referenced})
 
     def remove_constraints(self, name: str | list[str]) -> None:
         """
@@ -1738,8 +1747,6 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
-        if self._spec is not None:
-            self._spec.refuse_removal(set(), set(names), set())
         for n in names:
             logger.debug(f"Removed constraint: {n}")
             self.constraints.remove(n)
@@ -1761,8 +1768,6 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
-        if self._spec is not None:
-            self._spec.refuse_removal(set(), set(), set(names))
         for n in names:
             logger.debug(f"Removed expression: {n}")
             self.expressions.remove(n)
@@ -1790,6 +1795,8 @@ class Model:
         del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
 
         variable.attrs.pop(SOS_BIG_M_ATTR, None)
+        if self._ownership is not None:
+            self._ownership.sos.pop(variable.name, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
