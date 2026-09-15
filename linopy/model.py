@@ -2348,9 +2348,9 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` or `xpress`
-        and the termination condition was infeasible. The solver must have detected
-        the infeasibility during the solve process.
+        This function requires that the model was solved with `gurobi`, `xpress`
+        or `highs` and the termination condition was infeasible. The solver must
+        have detected the infeasibility during the solve process.
 
         Returns
         -------
@@ -2383,6 +2383,16 @@ class Model:
             except ImportError:
                 pass
 
+        # Check for HiGHS
+        if "highs" in available_solvers:
+            try:
+                import highspy
+
+                if solver_model is not None and isinstance(solver_model, highspy.Highs):
+                    return self._compute_infeasibilities_highs(solver_model)
+            except ImportError:
+                pass
+
         # If we get here, either the solver doesn't support IIS or no solver model is available
         if solver_model is None:
             # Check if this is a supported solver without a stored model
@@ -2398,12 +2408,12 @@ class Model:
                 # This is an unsupported solver
                 raise NotImplementedError(
                     f"Computing infeasibilities is not supported for '{solver_name}' solver. "
-                    "Only Gurobi and Xpress solvers support IIS computation."
+                    "Only Gurobi, Xpress and HiGHS solvers support IIS computation."
                 )
         else:
             # We have a solver model but it's not a supported type
             raise NotImplementedError(
-                "Computing infeasibilities is only supported for Gurobi and Xpress solvers. "
+                "Computing infeasibilities is only supported for Gurobi, Xpress and HiGHS solvers. "
                 f"Current solver model type: {type(solver_model).__name__}"
             )
 
@@ -2529,12 +2539,51 @@ class Model:
 
         return miisrow
 
+    def _compute_infeasibilities_highs(self, solver_model: Any) -> list[int]:
+        """Compute infeasibilities for the HiGHS solver."""
+        if not hasattr(solver_model, "getIis"):
+            raise NotImplementedError(
+                "Computing infeasibilities requires a `highspy` version that "
+                "supports `Highs.getIis` (HiGHS IIS computation). "
+                "Please upgrade the `highspy` package."
+            )
+
+        import highspy
+
+        solver = self.solver
+        assert solver is not None
+        if "iis_strategy" not in solver.solver_options:
+            solver_model.setOptionValue(
+                "iis_strategy",
+                int(highspy.IisStrategy.kIisStrategyFromLp)
+                | int(highspy.IisStrategy.kIisStrategyIrreducible),
+            )
+        status, iis = solver_model.getIis()
+        if status == highspy.HighsStatus.kError or not iis.valid_:
+            raise RuntimeError(
+                "HiGHS failed to compute an irreducible infeasible subsystem (IIS)."
+            )
+
+        row_index = np.asarray(iis.row_index_, dtype=np.intp)
+        if not len(row_index):
+            return []
+
+        if solver.io_api == "direct":
+            clabels = self.constraints.label_index.clabels
+        else:
+            from linopy.solvers import _names_to_labels
+
+            clabels = _names_to_labels(solver_model.getLp().row_names_)
+
+        labels = {int(clabels[pos]) for pos in row_index if clabels[pos] >= 0}
+        return sorted(labels)
+
     def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
         Return a string representation of infeasible constraints.
 
-        This function requires that the model was solved using `gurobi` or `xpress`
-        and the termination condition was infeasible.
+        This function requires that the model was solved using `gurobi`, `xpress`
+        or `highs` and the termination condition was infeasible.
 
         Parameters
         ----------
@@ -2573,8 +2622,8 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` or `xpress` and the
-        termination condition was infeasible.
+        This function requires that the model was solved with `gurobi`, `xpress` or `highs`
+        and the termination condition was infeasible.
 
         Returns
         -------

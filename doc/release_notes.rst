@@ -271,6 +271,7 @@ Version 0.7.0
 
 * OETC: ``Model.solve()`` forwards solver options to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
 * SCIP supports quadratic problems on Windows.
+* ``Model.compute_infeasibilities`` now also supports HiGHS, via ``Highs.getIis``.
 
 **Performance**
 

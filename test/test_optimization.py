@@ -698,7 +698,7 @@ def test_infeasible_model(
     assert status == "warning"
     assert "infeasible" in condition
 
-    if solver in ["gurobi", "xpress"]:
+    if solver in ["gurobi", "xpress", "highs"]:
         # ignore deprecated warning
         with pytest.warns(DeprecationWarning):
             model.compute_set_of_infeasible_constraints()
