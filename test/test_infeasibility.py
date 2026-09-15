@@ -75,7 +75,7 @@ class TestInfeasibility:
 
         return m
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_simple_infeasibility_detection(
         self, simple_infeasible_model: Model, solver: str
     ) -> None:
@@ -98,7 +98,7 @@ class TestInfeasibility:
         assert isinstance(formatted, str)
         assert formatted
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_complex_infeasibility_detection(
         self, complex_infeasible_model: Model, solver: str
     ) -> None:
@@ -121,7 +121,7 @@ class TestInfeasibility:
         # We expect at least 2 constraints to be involved
         assert len(labels) >= 2
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_multi_dimensional_infeasibility(
         self, multi_dimensional_infeasible_model: Model, solver: str
     ) -> None:
@@ -152,7 +152,7 @@ class TestInfeasibility:
         ):
             m.compute_infeasibilities()
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_no_solver_model_error(self, solver: str) -> None:
         """Test error when solver model is not available after solving."""
         if solver not in available_solvers:
@@ -173,7 +173,7 @@ class TestInfeasibility:
         with pytest.raises(ValueError, match="No solver model available"):
             m.compute_infeasibilities()
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_feasible_model_iis(self, solver: str) -> None:
         """Test IIS computation on a feasible model."""
         if solver not in available_solvers:
@@ -220,7 +220,7 @@ class TestInfeasibility:
             with pytest.raises(NotImplementedError):
                 m.compute_infeasibilities()
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_deprecated_method(
         self, simple_infeasible_model: Model, solver: str
     ) -> None:
@@ -246,7 +246,7 @@ class TestInfeasibility:
         # Check that it contains constraint labels
         assert len(subset) > 0
 
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_masked_constraint_infeasibility(
         self, solver: str, capsys: pytest.CaptureFixture[str]
     ) -> None:
