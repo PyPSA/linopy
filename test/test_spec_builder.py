@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -28,13 +29,14 @@ from conftest import (  # noqa: E402, F401
     FULL_X,
     FULL_Y,
     GENERATOR,
+    SNAPSHOT,
     WHERE_DATA,
     WHERE_SPEC,
     solved,
     with_,
     yaml_dict,
 )
-from linopy import Model  # noqa: E402
+from linopy import Model, Variable  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
@@ -42,6 +44,78 @@ pytestmark = [
     pytest.mark.v1,
     pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
 ]
+
+# ---------------------------------------------------------------------------
+# a hand-built base, and a spec that extends it
+# ---------------------------------------------------------------------------
+
+EXTRA_SPEC: dict[str, Any] = {
+    "dimensions": {"snapshot": {"dtype": "int"}, "generator": {"dtype": "str"}},
+    "parameters": {"cap": {"dims": ["generator"]}},
+    "variables": {"p": {"foreach": ["snapshot", "generator"]}},
+    "constraints": {
+        "p_cap": {"foreach": ["snapshot", "generator"], "expression": "p <= cap"}
+    },
+    "expressions": {"total": "sum(p)"},
+}
+EXTRA_DATA: dict[str, Any] = {
+    "snapshot": SNAPSHOT,
+    "generator": GENERATOR,
+    "cap": DISPATCH_DATA["p_max"],
+}
+
+
+SECOND_SPEC: dict[str, Any] = {
+    **EXTRA_SPEC,
+    "parameters": {"floor": {"dims": ["generator"]}},
+    "constraints": {
+        "p_floor": {"foreach": ["snapshot", "generator"], "expression": "p >= floor"}
+    },
+    "expressions": {"peak": "sum(p, over=generator)"},
+}
+SECOND_DATA: dict[str, Any] = {
+    "snapshot": SNAPSHOT,
+    "generator": GENERATOR,
+    "floor": pd.Series([0.0, 0.0], index=GENERATOR),
+}
+SOS_SPEC = with_(
+    EXTRA_SPEC,
+    sos={"one_at_a_time": {"variable": "p", "over": "generator", "type": 1}},
+)
+
+
+def dispatch_p(m: Model, name: str = "p") -> Variable:
+    """The dispatch variable ``p`` added to *m* by hand, as the spec would build it."""
+    p_max = DISPATCH_DATA["p_max"].to_xarray()
+    return m.add_variables(
+        lower=0, upper=p_max, coords=[SNAPSHOT, GENERATOR], name=name
+    )
+
+
+def BASE_MODEL() -> Model:
+    """The dispatch example built by hand: ``p``, its power balance and its cost."""
+    m = Model()
+    p = dispatch_p(m)
+    load = DISPATCH_DATA["load"].to_xarray()
+    m.add_constraints(p.sum("generator") == load, name="power_balance")
+    m.add_objective((p * DISPATCH_DATA["cost"].to_xarray()).sum())
+    return m
+
+
+def extended(spec: dict[str, Any] = EXTRA_SPEC, **sources: Any) -> Model:
+    """:func:`BASE_MODEL` extended by *spec*, its ``p`` bound to the hand-built one."""
+    m = BASE_MODEL()
+    data = {**EXTRA_DATA, "p": m.variables["p"], **sources}
+    return m.add_spec(spec, data, name="extra")
+
+
+THREE = pd.Index(["wind", "gas", "solar"], name="generator")
+
+
+def subset_bound() -> Model:
+    """:func:`extended` with the spec over three generators, the hand-built ``p`` spanning two."""
+    return extended(generator=THREE, cap=pd.Series([100.0, 200.0, 50.0], index=THREE))
+
 
 EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")
 EXAMPLES = (
@@ -66,8 +140,26 @@ def test_every_math_spec_example_builds_and_solves(path: str) -> None:
     assert m.termination_condition in ("optimal", "infeasible")
 
 
-def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
-    m = solved(yaml_dict(), DISPATCH_DATA)
+def bound_dispatch() -> Model:
+    """The dispatch spec reading a hand-built ``p`` instead of building one."""
+    m = Model()
+    dispatch_p(m)
+    spec = with_(yaml_dict(), variables={"p": {"foreach": ["snapshot", "generator"]}})
+    m.add_spec(spec, {**DISPATCH_DATA, "p": m.variables["p"]})
+    m.solve(solver_name="highs", output_flag=False)
+    return m
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda: solved(yaml_dict(), DISPATCH_DATA), bound_dispatch],
+    ids=["built", "bound"],
+)
+def test_the_dispatch_example_solves_and_its_expressions_fold(
+    build: Callable[[], Model],
+) -> None:
+    m = build()
+    assert list(m.variables) == ["p"]
     assert m.objective.value == pytest.approx(2500.0)
     xr.testing.assert_allclose(m.solution["p"], DISPATCH_P)
     spend = m.spec.expressions["spend"].solution
@@ -368,8 +460,19 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
     )
     m = Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": FULL_Y})
     assert m.variables["cost_curve_lam"].attrs["sos_type"] == 2
-    # math-spec lowers the block into ordinary declarations, so none of it is drift.
     assert not m.spec.unspecified
+
+
+@pytest.mark.parametrize("model_name", ["p", "Generator-p"])
+def test_a_sos_on_a_bound_variable_is_written_onto_the_model_owned_one(
+    model_name: str,
+) -> None:
+    m = Model()
+    p = dispatch_p(m, model_name)
+    m.add_spec(SOS_SPEC, {**EXTRA_DATA, "p": p}, name="extra")
+    assert m.variables[model_name].attrs["sos_type"] == 1
+    assert m.variables[model_name].attrs["sos_dim"] == "generator"
+    assert m.spec.unspecified.sos == ()
 
 
 # ---------------------------------------------------------------------------

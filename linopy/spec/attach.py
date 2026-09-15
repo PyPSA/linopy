@@ -2,9 +2,12 @@
 Attach user data to a math-spec program.
 
 The language fixes three attachment rules and this module enforces them: a
-dimension's members come only from the source keyed by the dimension's
-name, their order is the source's order and is never sorted, and a
-parameter or lookup source is read for values, never for labels. Parameters
+dimension's members come from the source keyed by the dimension's name --
+else from an earlier layer or a bound variable that spans it -- their order
+is that source's order and is never sorted, and a parameter or lookup source
+is read for values, never for labels. One dimension name is one axis: every
+claimant to it must agree on the labels, a bound variable at most leaving
+some out. Parameters
 are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out becomes NaN (``False`` for a ``bool`` parameter); what that means
@@ -15,7 +18,8 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, get_args
+from types import MappingProxyType
+from typing import Any, Literal, NoReturn, get_args
 
 import numpy as np
 import pandas as pd
@@ -26,9 +30,16 @@ from math_spec import program as ms
 from linopy.constants import warn_evolving_api
 from linopy.spec.errors import SpecDataError
 from linopy.spec.nodes import amounts_of, parameters_of, walk
+from linopy.variables import Variable
 
 Retain = Literal["report", "all", "none"]
 _RETAIN: tuple[str, ...] = get_args(Retain)
+
+_DEFAULT_BOUNDS: dict[str, tuple[float, float]] = {
+    "continuous": (-np.inf, np.inf),
+    "integer": (-np.inf, np.inf),
+    "binary": (0.0, 1.0),
+}
 
 _ACCEPTED_KINDS: dict[str, frozenset[str]] = {
     "float": frozenset("fiu"),
@@ -73,6 +84,7 @@ def attach(
     sources: Mapping[str, Any] | xr.Dataset,
     *,
     retain: Retain = "report",
+    given: Mapping[str, pd.Index] = MappingProxyType({}),
 ) -> Attached:
     """
     Attach *sources* to *program*: master coordinates now, parameters on demand.
@@ -83,19 +95,26 @@ def attach(
         The lowered spec.
     sources
         Data keyed by declared name. Any mapping works; it is read by
-        key and never iterated beyond ``sources.keys()``. An ``xr.Dataset``
+        key and never iterated beyond ``sources.keys()``. A linopy
+        ``Variable`` under a declared variable's name binds that variable:
+        the spec reads it instead of building one. An ``xr.Dataset``
         is accepted too: its indexes are dimension sources, its data
-        variables parameters and lookups.
+        variables parameters and lookups; it cannot carry a binding.
     retain
         Which parameters :meth:`Attached.retained` persists.
+    given
+        Master coordinates the model already holds, from the layers built
+        before this one. A dimension no source keys takes its labels from
+        here, else from a bound variable that spans it.
 
     Raises
     ------
     SpecDataError
         A ``retain`` outside its three values, a key naming
         nothing the spec declares, a reached dimension or a lookup with no
-        source, a duplicated dimension member, or a lookup breaking the
-        rules a map has.
+        source, a duplicated dimension member, a lookup breaking the
+        rules a map has, a binding whose variable does not fit its
+        declaration, or two claimants labelling one dimension differently.
     """
     warn_evolving_api("spec", EVOLVING_MESSAGE)
     if retain not in _RETAIN:
@@ -106,9 +125,10 @@ def attach(
         sources = _dataset_sources(sources)
     keys = frozenset(sources.keys())
     _check_keys(program, keys)
-    coords = _master_coords(program, sources, keys)
+    bound = _bindings(program, sources, keys)
+    coords = _master_coords(program, sources, keys, bound, given)
     lookups = _lookups(program, sources, keys, coords)
-    return Attached(program, coords, lookups, retain, sources, keys)
+    return Attached(program, coords, lookups, retain, sources, bound, keys)
 
 
 @dataclass(frozen=True, eq=False)
@@ -123,7 +143,9 @@ class Attached:
     coords
         Master coordinates by dimension, in source order, each index
         named after its dimension. A declared dimension nothing reaches
-        and nothing supplies is absent.
+        and nothing supplies is absent. A bound variable spanning fewer
+        labels than the master is read reindexed onto it, absent where it
+        has none.
     lookups
         By dimension, by lookup name, the map as an array over the
         dimension's master coordinates, NaN where a label is unmapped.
@@ -131,6 +153,9 @@ class Attached:
         Which parameters :meth:`retained` persists.
     sources
         The caller's data, read by key on demand.
+    bound
+        By declared variable name, the model variable it is bound to and
+        reads instead of building.
     """
 
     program: ms.Program
@@ -138,7 +163,13 @@ class Attached:
     lookups: Mapping[str, Mapping[str, xr.DataArray]]
     retain: Retain
     sources: Mapping[str, Any]
+    bound: Mapping[str, Variable]
     _keys: frozenset[str] = field(repr=False)
+
+    @property
+    def names(self) -> dict[str, str]:
+        """Spec name to model name for every bound variable."""
+        return {name: variable.name for name, variable in self.bound.items()}
 
     def parameter(self, name: str) -> xr.DataArray:
         """
@@ -223,6 +254,7 @@ def _attachable(program: ms.Program) -> dict[str, str]:
     }
     kinds.update({d: "dimension" for d in program.dimensions})
     kinds.update({lk.name: "lookup" for _, lk in program.lookups})
+    kinds.update({v: "variable" for v in program.variables})
     return kinds
 
 
@@ -234,9 +266,66 @@ def _check_keys(program: ms.Program, keys: frozenset[str]) -> None:
     one = len(unknown) == 1
     lead = f"source key {unknown[0]!r} names" if one else f"source keys {unknown} name"
     raise SpecDataError(
-        f"{lead} neither a parameter, a dimension nor a lookup this spec declares. "
-        f"{did_you_mean(unknown[0], known)} Pass only what the spec takes."
+        f"{lead} neither a parameter, a dimension, a lookup nor a variable this spec "
+        f"declares. {did_you_mean(unknown[0], known)} Pass only what the spec takes."
     )
+
+
+# ---------------------------------------------------------------------------
+# bindings
+# ---------------------------------------------------------------------------
+
+
+def _bindings(
+    program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
+) -> dict[str, Variable]:
+    bound: dict[str, Variable] = {}
+    for name in program.variables:
+        if name not in keys:
+            continue
+        variable = sources[name]
+        if not isinstance(variable, Variable):
+            raise SpecDataError(
+                f"the source for variable '{name}' must be a linopy Variable to bind, or "
+                f"absent to build; it arrived as {type(variable).__name__}."
+            )
+        _check_binding(name, program.variables[name], variable)
+        bound[name] = variable
+    return bound
+
+
+def _check_binding(
+    name: str, declared: ms.VariableDeclaration, variable: Variable
+) -> None:
+    dims = tuple(str(d) for d in variable.dims)
+    if declared.dims != dims:
+        raise SpecDataError(
+            f"variable '{name}' is declared over {list(declared.dims)} and the bound "
+            f"variable '{variable.name}' spans {list(dims)}. Dimensions match by name, "
+            f"so the spec must declare the axes the model variable has."
+        )
+    if not _default_bounds(declared) or declared.where is not None:
+        raise SpecDataError(
+            f"variable '{name}' is bound to '{variable.name}', and the base model owns this "
+            f"variable's bounds and mask; the spec only reads it. Declare '{name}' with "
+            f"no bounds and no where."
+        )
+    attrs = variable.attrs
+    kind = (
+        "binary" if attrs["binary"] else "integer" if attrs["integer"] else "continuous"
+    )
+    if declared.variable_type != kind:
+        raise SpecDataError(
+            f"variable '{name}' is declared {declared.variable_type} and the bound variable "
+            f"'{variable.name}' is {kind}."
+        )
+
+
+def _default_bounds(declared: ms.VariableDeclaration) -> bool:
+    lower, upper = declared.lower, declared.upper
+    if not isinstance(lower, ms.Constant) or not isinstance(upper, ms.Constant):
+        return False
+    return (lower.value, upper.value) == _DEFAULT_BOUNDS[declared.variable_type]
 
 
 # ---------------------------------------------------------------------------
@@ -257,20 +346,64 @@ def _reached(program: ms.Program) -> set[str]:
 
 
 def _master_coords(
-    program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
+    program: ms.Program,
+    sources: Mapping[str, Any],
+    keys: frozenset[str],
+    bound: Mapping[str, Variable],
+    given: Mapping[str, pd.Index],
 ) -> dict[str, pd.Index]:
     reached = _reached(program)
     coords: dict[str, pd.Index] = {}
     for dim in program.dimensions:
+        spanning = {n: v.indexes[dim] for n, v in bound.items() if dim in v.dims}
         if dim in keys:
-            coords[dim] = _index(dim, sources[dim])
+            master = _index(dim, sources[dim])
+            if dim in given and not given[dim].equals(master):
+                _refuse_other_axis(dim, f"sources['{dim}']", master, given[dim])
+        elif dim in given:
+            master = given[dim]
+        elif spanning:
+            master = _agreed(dim, spanning)
         elif dim in reached:
             raise SpecDataError(
                 f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
-                f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
-                f"one a mistyped label is indistinguishable from a new one."
+                f"{_DIMENSION_SHAPES}, or bind a variable that spans it. The index is what "
+                f"says which labels exist, and without one a mistyped label is "
+                f"indistinguishable from a new one."
             )
+        else:
+            continue
+        for name, found in spanning.items():
+            _check_axis(name, dim, found, master)
+        coords[dim] = master
     return coords
+
+
+def _agreed(dim: str, spanning: Mapping[str, pd.Index]) -> pd.Index:
+    """The one axis every bound variable spanning *dim* labels alike; with no master given, none may leave labels out."""
+    master = next(iter(spanning.values()))
+    for name, found in spanning.items():
+        if not found.equals(master):
+            _refuse_other_axis(dim, f"the bound variable '{name}'", found, master)
+    return master
+
+
+def _check_axis(name: str, dim: str, found: pd.Index, master: pd.Index) -> None:
+    """*found* is the master, or the master with labels left out, in master order."""
+    if master[master.isin(found)].equals(found):
+        return
+    _refuse_strangers(name, dim, found, master, kind="variable")
+    _refuse_other_axis(dim, f"the bound variable '{name}'", found, master)
+
+
+def _refuse_other_axis(
+    dim: str, claimant: str, found: pd.Index, master: pd.Index
+) -> NoReturn:
+    raise SpecDataError(
+        f"dimension '{dim}' is {_shown(master.tolist(), 8)}, and {claimant} labels it "
+        f"{_shown(found.tolist(), 8)}. The same dimension name means the same axis; "
+        f"a different axis needs a different name."
+    )
 
 
 def _index(dim: str, obj: Any) -> pd.Index:
@@ -594,12 +727,14 @@ def _refuse_duplicate_coordinates(
     )
 
 
-def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) -> None:
+def _refuse_strangers(
+    name: str, dim: str, labels: pd.Index, known: pd.Index, kind: str = "parameter"
+) -> None:
     strangers = labels[~labels.isin(known)].unique().tolist()
     if not strangers:
         return
     raise SpecDataError(
-        f"parameter '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
+        f"{kind} '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
         f"{_shown(strangers)}.\n  {dim} has: {_shown(known.tolist(), 10)}\n"
         f"A label that is not a coordinate is a typo: its row joins nothing, so the coordinate it "
         f"was meant for is left uncovered. Fix the label, or add it to sources['{dim}']."

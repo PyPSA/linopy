@@ -126,7 +126,7 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
 
 
 def _variable(name: str, ctx: Context) -> Value:
-    variable = ctx.model.variables[name]
+    variable = ctx.variable(name)
     absence = ctx.program.variable(name).absence
     if not ctx.solved:
         return terms.variable_term(variable, absence)

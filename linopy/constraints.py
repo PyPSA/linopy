@@ -10,7 +10,15 @@ import functools
 import warnings
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
+from collections.abc import (
+    Callable,
+    Generator,
+    Hashable,
+    ItemsView,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -2119,9 +2127,9 @@ class Constraints:
         return {format_string_as_variable_name(n): n for n in self}
 
     def _format_items(
-        self, exclude: set[str] | None = None, tag: set[str] | None = None
+        self, exclude: set[str] | None = None, tag: Mapping[str, str] | None = None
     ) -> str:
-        """Format constraint items, optionally excluding names in a group."""
+        """Format constraint items, optionally excluding names in a group and tagging others."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -2133,7 +2141,7 @@ class Constraints:
                 if ds.coords
                 else ""
             )
-            suffix = " [spec]" if tag and name in tag else ""
+            suffix = f" [{tag[name]}]" if tag and name in tag else ""
             r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"

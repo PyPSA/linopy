@@ -18,6 +18,7 @@ if find_spec("math_spec") is None:
 
 from linopy.spec.accessor import (
     Declaration,
+    Layer,
     ModelSpec,
     NamedExpression,
     NamedExpressions,
@@ -30,6 +31,7 @@ from linopy.spec.errors import SpecDataError
 __all__ = [
     "Attached",
     "Declaration",
+    "Layer",
     "ModelSpec",
     "NamedExpression",
     "NamedExpressions",

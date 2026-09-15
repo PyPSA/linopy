@@ -55,7 +55,7 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
             ctx.parameters[node.name], ctx.program.parameter(node.name).dtype
         )
     if isinstance(node, ms.VariableDefinedNode):
-        return terms.present(ctx.model.variables[node.name])
+        return terms.present(ctx.variable(node.name))
     if isinstance(node, ms.ParameterComparisonNode):
         arr = ctx.parameters[node.name]
         result = _PREDICATE_OPS[node.op](arr, _as_the_axis_spells_it(arr, node.value))

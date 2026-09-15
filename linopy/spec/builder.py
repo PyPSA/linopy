@@ -44,6 +44,7 @@ def build(model: Model, attached: Attached) -> None:
         attached.coords,
         attached.lookups,
         Parameters(attached.program, attached.parameter),
+        names=attached.names,
     )
     curves.validate(ctx.program, ctx.parameters)
     _variables(ctx)
@@ -55,7 +56,10 @@ def build(model: Model, attached: Attached) -> None:
 
 
 def _variables(ctx: Context) -> None:
+    """Every declared variable the layer does not bind, built as its own."""
     for name, declared in ctx.program.variables.items():
+        if name in ctx.names:
+            continue
         rows = evaluate_where(declared.where, ctx)
         check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))
         ctx.model.add_variables(
@@ -79,9 +83,15 @@ def _bound(node: ms.ExpressionNode, ctx: Context) -> float | xr.DataArray:
 
 
 def _sos(ctx: Context) -> None:
+    """
+    Special-ordered sets on the model-owned variable object.
+
+    ``add_sos_constraints`` writes attributes onto the variable it is
+    handed, so only the object ``model.variables`` holds may go in.
+    """
     for sos in ctx.program.sos.values():
         ctx.model.add_sos_constraints(
-            ctx.model.variables[sos.variable],
+            ctx.model.variables[ctx.names.get(sos.variable, sos.variable)],
             sos_type=sos.sos_type,
             sos_dim=sos.over,
             big_m=sos.big_m,

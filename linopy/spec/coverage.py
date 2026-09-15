@@ -112,7 +112,7 @@ def _divisor_uses(quotient: ms.Divide, ctx: Context, rows: Rows) -> list[Obligat
         return []
     needed = rows
     for variable in sorted(ms.variables_of(quotient.numerator)):
-        present = terms.present(ctx.model.variables[variable])
+        present = terms.present(ctx.variable(variable))
         needed = present if needed is None else needed & present
     return [(param, needed) for param in sorted(params)]
 

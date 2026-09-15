@@ -12,6 +12,7 @@ import xarray as xr
 
 math_spec = pytest.importorskip("math_spec")
 
+from linopy import Model  # noqa: E402
 from linopy.spec import SpecDataError, attach  # noqa: E402
 
 SPEC: dict[str, Any] = {
@@ -280,6 +281,51 @@ def test_undeclared_parameter_is_refused_with_a_hint(
 ) -> None:
     with pytest.raises(SpecDataError, match="unknown parameter 'csot'.*'cost'"):
         attach(program, good).parameter("csot")
+
+
+BARE_X = {"x": {"foreach": ["f", "t"]}}
+
+
+@pytest.mark.parametrize(
+    ("variables", "coords", "binary", "match"),
+    [
+        pytest.param(BARE_X, [F, T], False, None, id="bound"),
+        pytest.param(BARE_X, [F], False, "Dimensions match by name", id="dims"),
+        pytest.param(
+            SPEC["variables"], [F, T], False, "owns this variable's bounds", id="bounds"
+        ),
+        pytest.param(
+            {"x": {**BARE_X["x"], "where": "flag"}},
+            [F, T],
+            False,
+            "owns this variable's bounds and mask",
+            id="where",
+        ),
+        pytest.param(
+            BARE_X,
+            [F, T],
+            True,
+            "declared continuous and the bound variable",
+            id="domain",
+        ),
+    ],
+)
+def test_a_variable_key_binds_and_is_checked(
+    good: dict[str, Any],
+    variables: dict[str, Any],
+    coords: list[pd.Index],
+    binary: bool,
+    match: str | None,
+) -> None:
+    program = math_spec.to_program({**SPEC, "variables": variables})
+    x = Model().add_variables(coords=coords, name="x", binary=binary)
+    if match is not None:
+        with pytest.raises(SpecDataError, match=match):
+            attach(program, {**good, "x": x})
+        return
+    attached = attach(program, {**good, "x": x})
+    assert list(attached.bound) == ["x"] and attached.bound["x"] is x
+    assert attached.names == {"x": "x"}
 
 
 def test_retain_is_validated_before_attaching(
