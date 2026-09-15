@@ -1773,6 +1773,8 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
+        if self._ownership is not None:
+            self._ownership.refuse_removal("constraint", names)
         for n in names:
             logger.debug(f"Removed constraint: {n}")
             self.constraints.remove(n)
@@ -1794,6 +1796,8 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
+        if self._ownership is not None:
+            self._ownership.refuse_removal("expression", names)
         for n in names:
             logger.debug(f"Removed expression: {n}")
             self.expressions.remove(n)

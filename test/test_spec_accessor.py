@@ -782,6 +782,19 @@ def test_a_layer_refuses_removal_of_a_name_it_owns() -> None:
     assert "free_expr" not in m.expressions
 
 
+def test_a_refused_list_removal_drops_nothing() -> None:
+    """A list with one owned name is refused as a whole, so the hand names before it stay."""
+    m = extended()
+    m.add_constraints(m.variables["p"].sum() <= 1, name="hand")
+    m.add_expressions(m.variables["p"].sum(), name="hand_expr")
+    with pytest.raises(ValueError, match="p_cap is declared or bound"):
+        m.remove_constraints(["hand", "p_cap"])
+    with pytest.raises(ValueError, match="total is declared or bound"):
+        m.remove_expressions(["hand_expr", "total"])
+    assert "hand" in m.constraints
+    assert "hand_expr" in m.expressions
+
+
 @pytest.mark.parametrize(
     "remove",
     [
