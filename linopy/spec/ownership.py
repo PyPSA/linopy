@@ -113,8 +113,9 @@ class Ownership:
         """Refuse to drop a name a layer builds or binds, which would strand its layer."""
         hit = sorted(n for n in names if self.owner(kind, n) is not None)
         if hit:
+            verb = "is" if len(hit) == 1 else "are"
             raise ValueError(
-                f"{joined(hit)} is declared or bound by a spec layer; a layer "
+                f"{joined(hit)} {verb} declared or bound by a spec layer; a layer "
                 "cannot be left referencing a name the model no longer holds. "
                 "Model.remove_spec(name) takes a layer off with everything it built."
             )
