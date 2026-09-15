@@ -4,7 +4,9 @@ Persist the spec of a spec-built model in its netcdf file.
 Variables, constraints and the solution round trip through :mod:`linopy.io`
 already. Besides them a spec-built model carries the spec text, the master
 coordinates and the lookups; the program is re-lowered from the text on read,
-so no lowered ``Program`` ever reaches the file.
+so no lowered ``Program`` ever reaches the file. A header names the math-spec
+version that lowered the text and the number of this layout, ``FORMAT``; a
+read under another of either warns.
 
 No netcdf type holds a dtype as written, so every array carries the dtype it
 had in memory (:func:`linopy.io.record_dtypes`) and is cast back to it on
@@ -23,15 +25,19 @@ dtype per dimension however the engine returned it.
 
 from __future__ import annotations
 
+import json
+import warnings
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+from math_spec import __version__ as MATH_SPEC_VERSION
 
 from linopy.io import (
     DTYPE_ATTR,
     SPEC_ATTR,
+    SPEC_VERSION_ATTR,
     get_prefix,
     restamp_coords,
     with_prefix,
@@ -40,6 +46,7 @@ from linopy.model import Model
 from linopy.spec.accessor import ModelSpec, restore
 
 PREFIX = "spec"
+FORMAT = 1
 OBJECTIVE_ATTR = "_linopy_spec_objective_replaced"
 COORD = "coords__"
 PARAM = "param__"
@@ -73,8 +80,9 @@ def encode(spec: ModelSpec) -> xr.Dataset:
             arrays.update(_encode(str(name), arr))
         else:
             arrays[PARAM + str(name)] = _array(arr.to_numpy(), arr.dims, str(arr.dtype))
+    header = json.dumps({"math_spec": MATH_SPEC_VERSION, "format": FORMAT})
     written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
-        {SPEC_ATTR: spec.text}
+        {SPEC_ATTR: spec.text, SPEC_VERSION_ATTR: header}
     )
     if spec.unspecified.objective:
         # Only when true, so a file written from an untouched spec is unchanged.
@@ -90,7 +98,14 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     together are the dataset :func:`linopy.spec.accessor.attach` gave the spec
     when the model was built. ``model.parameters`` is not touched: it holds
     what the caller put there and nothing of the spec.
+
+    Warns
+    -----
+    UserWarning
+        The file names another math-spec version or another layout number
+        than this reader's.
     """
+    _check_header(ds)
     sub = get_prefix(ds, PREFIX)
     coords = {
         _stripped(name, COORD): _index(sub[name])
@@ -116,6 +131,27 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
         xr.Dataset(arrays).assign_coords(coords),
         bool(ds.attrs.get(OBJECTIVE_ATTR, 0)),
     )
+
+
+def _check_header(ds: xr.Dataset) -> None:
+    """Warn where the file was written under another math-spec version or layout; a file without a header is older than both."""
+    if SPEC_VERSION_ATTR not in ds.attrs:
+        return
+    header = json.loads(ds.attrs[SPEC_VERSION_ATTR])
+    if header["format"] != FORMAT:
+        warnings.warn(
+            f"the file writes its spec in layout {header['format']} and this linopy "
+            f"reads layout {FORMAT}; what the spec holds may not come back as written.",
+            UserWarning,
+            stacklevel=4,
+        )
+    if header["math_spec"] != MATH_SPEC_VERSION:
+        warnings.warn(
+            f"the file's spec was lowered by math-spec {header['math_spec']} and is "
+            f"re-lowered by {MATH_SPEC_VERSION}; the same text may lower differently.",
+            UserWarning,
+            stacklevel=4,
+        )
 
 
 def _coded(spec: ModelSpec) -> set[str]:

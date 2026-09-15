@@ -10,6 +10,8 @@ value by value and dtype by dtype, on both netcdf engines ``test_io`` uses.
 
 from __future__ import annotations
 
+import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +32,11 @@ from test_spec_builder import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.io import SPEC_ATTR  # noqa: E402
+from linopy.io import SPEC_ATTR, SPEC_VERSION_ATTR  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.netcdf import FORMAT  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
-from linopy.testing import assert_model_equal  # noqa: E402
+from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
@@ -292,6 +295,66 @@ def test_a_model_without_a_spec_carries_none(tmp_path: Path) -> None:
     assert SPEC_ATTR not in xr.load_dataset(path).attrs
     assert read_netcdf(path)._spec is None
     assert m.copy()._spec is None
+
+
+def rewritten(tmp_path: Path, m: Model, **attrs: Any) -> Path:
+    """*m* written out, its file attributes updated with *attrs*, as another writer would have left them."""
+    path = tmp_path / "current.nc"
+    m.to_netcdf(path)
+    ds = xr.load_dataset(path).assign_attrs(attrs)
+    other = tmp_path / "other.nc"
+    ds.to_netcdf(other)
+    return other
+
+
+def test_the_file_names_the_math_spec_version_and_the_layout(tmp_path: Path) -> None:
+    path = tmp_path / "model.nc"
+    Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
+    header = json.loads(xr.load_dataset(path).attrs[SPEC_VERSION_ATTR])
+    assert header == {"math_spec": math_spec.__version__, "format": FORMAT}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        read_netcdf(path)
+
+
+@pytest.mark.parametrize(
+    ("header", "match"),
+    [
+        ({"math_spec": "0.0.0", "format": FORMAT}, "lowered by math-spec 0.0.0"),
+        ({"math_spec": math_spec.__version__, "format": FORMAT + 1}, "layout 2"),
+    ],
+    ids=["math-spec", "format"],
+)
+def test_a_file_from_another_writer_warns_and_still_reads(
+    tmp_path: Path, header: dict[str, Any], match: str
+) -> None:
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    path = rewritten(tmp_path, m, **{SPEC_VERSION_ATTR: json.dumps(header)})
+    with pytest.warns(UserWarning, match=match):
+        p = read_netcdf(path)
+    assert_model_equal(m, p)
+
+
+def test_a_spec_file_reads_as_a_plain_model_without_math_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    path = tmp_path / "model.nc"
+    m.to_netcdf(path)
+    monkeypatch.setattr(linopy.io, "spec_available", lambda: False)
+    with pytest.warns(UserWarning, match="math-spec is not installed"):
+        p = read_netcdf(path)
+
+    assert p._spec is None
+    assert list(p.variables) == list(m.variables)
+    assert list(p.constraints) == list(m.constraints)
+    assert_linequal(p.objective.expression, m.objective.expression)
+    p.remove_constraints("power_balance")
+    again = tmp_path / "plain.nc"
+    p.to_netcdf(again)
+    assert SPEC_VERSION_ATTR not in xr.load_dataset(again).attrs
+    monkeypatch.undo()
+    assert read_netcdf(again)._spec is None
 
 
 @pytest.mark.skipif(

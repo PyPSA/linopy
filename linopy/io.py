@@ -13,6 +13,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping
 from importlib.metadata import version
+from importlib.util import find_spec
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -48,6 +49,7 @@ NETCDF_VERSION_ATTR = "_linopy_version"
 DTYPE_ATTR = "_linopy_dtype"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 SPEC_ATTR = "_linopy_spec"
+SPEC_VERSION_ATTR = SPEC_ATTR + "-version"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
@@ -1272,6 +1274,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ds.to_netcdf(*args, **kwargs)
 
 
+def spec_available() -> bool:
+    """Whether the ``math-spec`` package is importable, so a file's spec can be read."""
+    return find_spec("math_spec") is not None
+
+
 def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     """
     Read in a model from a netcdf file.
@@ -1382,9 +1389,17 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = restore_dtypes(get_prefix(ds, "parameters"))
 
     if SPEC_ATTR in ds.attrs:
-        from linopy.spec.netcdf import decode
+        if spec_available():
+            from linopy.spec.netcdf import decode
 
-        m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
+            m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
+        else:
+            warnings.warn(
+                f"'{path}' holds a spec and math-spec is not installed; loaded as a "
+                f"plain model, without model.spec. Install math-spec to read the spec.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
