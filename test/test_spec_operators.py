@@ -165,6 +165,35 @@ def test_a_missing_shift_amount_is_refused() -> None:
         Model.from_spec(AMOUNT_SPEC, data)
 
 
+WINDOW_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}},
+    "parameters": {"v": {"dims": ["t"]}},
+    "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}}},
+    "constraints": {"fix": {"dims": ["t"], "expression": "x == v"}},
+    "objective": {"sense": "minimize", "expression": "sum(x)"},
+}
+WINDOW_DATA: dict[str, Any] = {"t": TT, "v": pd.Series(V, index=TT)}
+
+
+def window(expression: str) -> dict[str, Any]:
+    return with_(WINDOW_SPEC, expressions={"recent": expression})
+
+
+def test_a_trailing_sum_wider_than_its_axis_is_refused() -> None:
+    with pytest.raises(
+        SpecDataError, match=r"asks for a window of 5 position\(s\) where 't' holds 4"
+    ):
+        Model.from_spec(window("sum_back(x, over=t, within=5)"), WINDOW_DATA)
+
+
+def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
+    m = solved(
+        window("sum_back(x, over=t, within=5, edge='wrap')"), WINDOW_DATA, retain="all"
+    )
+    want = xr.DataArray([V.sum()] * len(TT), coords={"t": TT}, name="recent")
+    xr.testing.assert_allclose(m.spec.expressions["recent"].solution, want)
+
+
 # ---------------------------------------------------------------------------
 # grouped sum
 # ---------------------------------------------------------------------------

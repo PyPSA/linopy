@@ -669,3 +669,37 @@ def test_a_layer_can_keep_its_named_expressions_lazy() -> None:
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA, build_expressions=False)
     assert list(m.expressions) == []
     assert isinstance(m.spec.expressions["spend"].expression, linopy.LinearExpression)
+
+
+# ---------------------------------------------------------------------------
+# what linopy cannot build
+# ---------------------------------------------------------------------------
+
+QUADRATIC_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}},
+    "variables": {
+        "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+        "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+    },
+    "constraints": {"cap": {"dims": ["t"], "expression": "x * y <= 5"}},
+    "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
+}
+
+
+def test_a_quadratic_constraint_is_refused_before_anything_is_built() -> None:
+    m = Model()
+    with pytest.raises(
+        NotImplementedError, match="quadratic term in the objective only"
+    ):
+        m.add_spec(QUADRATIC_SPEC, {"t": T}, name="quad")
+    assert list(m.variables) == [] and list(m.constraints) == []
+
+
+def test_a_quadratic_objective_builds() -> None:
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": "sum(x * y, over=t)"},
+    )
+    m = Model.from_spec(spec, {"t": T})
+    assert isinstance(m.objective.expression, linopy.QuadraticExpression)

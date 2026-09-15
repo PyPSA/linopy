@@ -108,7 +108,6 @@ CAP_SHAPES = {
     .assign(note="x"),
     "wide-frame": CAP.to_pandas(),
     "wide-frame-transposed": CAP.to_pandas().T,
-    "wide-frame-unnamed": CAP.to_pandas().rename_axis(index=None, columns=None),
     "dict": CAP.to_series().to_dict(),
 }
 
@@ -120,6 +119,25 @@ def test_rank_two_shapes_attach_alike(
     got = attach(program, {**good, "cap": cap}).parameter("cap")
     xr.testing.assert_equal(got, CAP)
     assert got.dims == ("f", "t")
+
+
+OBLONG_SPEC: dict[str, Any] = {
+    "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}},
+    "parameters": {"cap": {"dims": ["f", "t"]}},
+    "variables": {"x": {"dims": ["f", "t"]}},
+    "objective": {"sense": "maximize", "expression": "sum(x * cap)"},
+}
+
+
+def test_an_unnamed_wide_frame_of_unequal_widths_is_read_by_position() -> None:
+    f, t = pd.Index(["a", "b"], name="f"), pd.Index([0, 1, 2], name="t")
+    values = np.arange(6.0).reshape(2, 3)
+    frame = pd.DataFrame(values, index=list(f), columns=list(t))
+    sources = {"f": list(f), "t": list(t), "cap": frame}
+    got = attach(math_spec.to_program(OBLONG_SPEC), sources).parameter("cap")
+    xr.testing.assert_equal(
+        got, xr.DataArray(values, coords={"f": f, "t": t}, name="cap")
+    )
 
 
 COST_SHAPES = {
@@ -404,6 +422,12 @@ REFUSALS = [
         {"cap": CAP.to_pandas().rename_axis(index="f", columns="q")},
         r"parameter 'cap' arrived as a wide DataFrame with index 'f' and columns 'q'",
         id="wide-frame-wrong-axis-names",
+    ),
+    pytest.param(
+        {"cap": CAP.to_pandas().rename_axis(index=None, columns=None)},
+        r"parameter 'cap' arrived as a 3x3 wide DataFrame with neither axis named.*square "
+        r"frame does not say which axis is which",
+        id="wide-frame-unnamed-square",
     ),
     pytest.param(
         {"cap": xr.DataArray(np.ones((3, 3)), dims=["f", "t"])},

@@ -644,6 +644,13 @@ def _headers(df: pd.DataFrame) -> set[Any]:
 def _wide(name: str, dims: tuple[str, ...], df: pd.DataFrame) -> pd.DataFrame:
     names = (df.index.name, df.columns.name)
     if names == (None, None):
+        if len(df.index) == len(df.columns):
+            raise SpecDataError(
+                f"parameter '{name}' arrived as a {len(df.index)}x{len(df.columns)} wide DataFrame "
+                f"with neither axis named, and '{name}' is over {list(dims)}. A square frame does "
+                f"not say which axis is which. Name the index and columns after the two dims, or "
+                f"pass a table with columns {[*dims, 'value']}."
+            )
         return df.rename_axis(index=dims[0], columns=dims[1])
     if set(names) == set(dims):
         return df
