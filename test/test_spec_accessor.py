@@ -119,8 +119,8 @@ def test_a_binding_must_be_a_variable() -> None:
 
 P_OVER_GENERATOR = with_(
     EXTRA_SPEC,
-    variables={"p": {"foreach": ["generator"]}},
-    constraints={"p_cap": {"foreach": ["generator"], "expression": "p <= cap"}},
+    variables={"p": {"dims": ["generator"]}},
+    constraints={"p_cap": {"dims": ["generator"], "expression": "p <= cap"}},
 )
 
 
@@ -192,7 +192,7 @@ def two_bound_variables(q_generator: pd.Index, first: str) -> None:
     """``p`` and ``q`` bound with no generator source, *first* declared before the other."""
     m = BASE_MODEL()
     m.add_variables(coords=[SNAPSHOT, q_generator], name="q")
-    declared = {**EXTRA_SPEC["variables"], "q": {"foreach": ["snapshot", "generator"]}}
+    declared = {**EXTRA_SPEC["variables"], "q": {"dims": ["snapshot", "generator"]}}
     ordered = {first: declared[first], **declared}
     spec = {**EXTRA_SPEC, "variables": ordered}
     data = {"cap": EXTRA_DATA["cap"], "p": m.variables["p"], "q": m.variables["q"]}
@@ -577,9 +577,11 @@ def two_layers() -> Model:
 def test_the_spec_typesets_in_every_format() -> None:
     spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
     assert "align" in spec.to_latex()
-    assert "$$" in spec.to_markdown()
+    assert "```math" in spec.to_markdown()
     assert spec.to_typst()
-    assert spec._repr_markdown_() == spec.to_markdown()
+    shown = spec._repr_markdown_()
+    assert "```math" not in shown and "$`" not in shown
+    assert "$$\n" in shown and " $t$ " in shown
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
@@ -670,8 +672,8 @@ def test_a_bound_spec_name_does_not_hide_a_hand_variable_of_that_name() -> None:
     over = ["snapshot", "generator"]
     spec = {
         **EXTRA_SPEC,
-        "variables": {"q": {"foreach": over}},
-        "constraints": {"q_cap": {"foreach": over, "expression": "q <= cap"}},
+        "variables": {"q": {"dims": over}},
+        "constraints": {"q_cap": {"dims": over, "expression": "q <= cap"}},
         "expressions": {"total": "sum(q)"},
     }
     m = BASE_MODEL()

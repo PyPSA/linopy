@@ -27,15 +27,15 @@ SPEC: dict[str, Any] = {
     },
     "variables": {
         "x": {
-            "foreach": ["f", "t"],
+            "dims": ["f", "t"],
             "where": "flag",
             "bounds": {"lower": 0, "upper": "cap"},
         }
     },
     "constraints": {
-        "k": {"foreach": ["g", "t"], "expression": "sum(x, by=grp) <= 10"},
+        "k": {"dims": ["g", "t"], "expression": "sum(x, by=grp) <= 10"},
         "s": {
-            "foreach": ["f", "t"],
+            "dims": ["f", "t"],
             "expression": "shift(x, over=t, offset=lead, edge=0) >= 0",
         },
     },
@@ -283,7 +283,7 @@ def test_undeclared_parameter_is_refused_with_a_hint(
         attach(program, good).parameter("csot")
 
 
-BARE_X = {"x": {"foreach": ["f", "t"]}}
+BARE_X = {"x": {"dims": ["f", "t"]}}
 
 
 @pytest.mark.parametrize(
@@ -593,12 +593,12 @@ def test_report_closure_reads_names_and_masks() -> None:
             "on": {"dims": ["f"], "dtype": "bool"},
             "other": {"dims": ["f"]},
         },
-        "variables": {"x": {"foreach": ["f", "t"], "bounds": {"lower": 0, "upper": 1}}},
+        "variables": {"x": {"dims": ["f", "t"], "bounds": {"lower": 0, "upper": 1}}},
         "objective": {"sense": "maximize", "expression": "sum(x * other)"},
         "expressions": {
             "recent": "sum_back(x, over=t, within=span)",
             "late": {
-                "foreach": ["f", "t"],
+                "dims": ["f", "t"],
                 "cases": {
                     "active": {
                         "when": "on",
@@ -654,8 +654,8 @@ def test_derived_parameter_is_not_bound_from_sources() -> None:
         "dimensions": {"bp": {"dtype": "int"}},
         "parameters": {"bp_x": {"dims": ["bp"]}, "bp_y": {"dims": ["bp"]}},
         "variables": {
-            "x": {"foreach": [], "bounds": {"lower": 0, "upper": 10}},
-            "y": {"foreach": []},
+            "x": {"dims": [], "bounds": {"lower": 0, "upper": 10}},
+            "y": {"dims": []},
         },
         "piecewise": {
             "curve": {
@@ -691,8 +691,8 @@ def test_derived_parameter_is_not_bound_from_sources() -> None:
 PARITY_SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}},
     "parameters": {"cost": {"dims": ["f"]}, "cap": {"dims": ["f"]}},
-    "variables": {"x": {"foreach": ["f"], "bounds": {"lower": 0, "upper": "cap"}}},
-    "constraints": {"k": {"foreach": ["f"], "expression": "x <= cap"}},
+    "variables": {"x": {"dims": ["f"], "bounds": {"lower": 0, "upper": "cap"}}},
+    "constraints": {"k": {"dims": ["f"], "expression": "x <= cap"}},
     "objective": {"sense": "maximize", "expression": "sum(x * cost)"},
 }
 
@@ -747,7 +747,7 @@ FLAG_SPEC = {
     "dimensions": {"g": {"dtype": "str"}},
     "parameters": {"active": {"dims": ["g"], "dtype": "bool"}},
     "variables": {
-        "x": {"foreach": ["g"], "where": "active", "bounds": {"lower": 0, "upper": 1}}
+        "x": {"dims": ["g"], "where": "active", "bounds": {"lower": 0, "upper": 1}}
     },
     "objective": {"sense": "maximize", "expression": "sum(x)"},
 }
@@ -777,8 +777,8 @@ LOOKUP_SPEC = {
     "dimensions": {"g": {}, "b": {"dtype": "str"}},
     "lookups": {"gen_bus": {"over": "g", "into": "b"}},
     "parameters": {"p_max": {"dims": ["g"]}},
-    "variables": {"x": {"foreach": ["g"], "bounds": {"lower": 0, "upper": "p_max"}}},
-    "constraints": {"k": {"foreach": ["b"], "expression": "sum(x, by=gen_bus) <= 10"}},
+    "variables": {"x": {"dims": ["g"], "bounds": {"lower": 0, "upper": "p_max"}}},
+    "constraints": {"k": {"dims": ["b"], "expression": "sum(x, by=gen_bus) <= 10"}},
     "objective": {"sense": "maximize", "expression": "sum(x)"},
 }
 G_TWICE = pd.Index(["w", "w", "s"], name="g")
@@ -825,41 +825,6 @@ def test_a_lookup_defect_is_refused(override: dict[str, Any], match: str) -> Non
     program = math_spec.to_program(LOOKUP_SPEC)
     with pytest.raises(SpecDataError, match=match):
         read_all(program, sources_from(LOOKUP_GOOD, override))
-
-
-TAG_SPEC = {
-    **LOOKUP_SPEC,
-    "lookups": {"tag": {"over": "g", "dtype": "int"}},
-    "constraints": {"k": {"foreach": ["g"], "expression": "x <= 10"}},
-}
-TAG_GOOD = sources_from(LOOKUP_GOOD, {"gen_bus": None, "b": None})
-
-
-def test_a_label_space_lookup_is_padded_onto_the_dimension() -> None:
-    program = math_spec.to_program(TAG_SPEC)
-    attached = attach(program, {**TAG_GOOD, "tag": {"s": 7}})
-    tag = attached.lookups["g"]["tag"]
-    assert tag.dims == ("g",)
-    assert tag.indexes["g"].tolist() == ["w", "s"]
-    assert np.isnan(tag.sel(g="w").item())
-    assert tag.sel(g="s").item() == 7
-
-
-@pytest.mark.parametrize(
-    ("tag", "match"),
-    [
-        pytest.param({"w": None, "s": 7}, "null in 'tag': g='w'", id="a-null"),
-        pytest.param(
-            {"w": "x", "s": "y"}, "lookup 'tag' is declared 'int'.*'str'", id="a-str"
-        ),
-    ],
-)
-def test_a_label_space_lookup_defect_is_refused(
-    tag: dict[str, Any], match: str
-) -> None:
-    program = math_spec.to_program(TAG_SPEC)
-    with pytest.raises(SpecDataError, match=match):
-        attach(program, {**TAG_GOOD, "tag": tag})
 
 
 def test_a_stray_lookup_value_over_an_int_target_is_shown_as_written() -> None:

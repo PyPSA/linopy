@@ -74,8 +74,8 @@ def _variables(ctx: Context) -> None:
             coords={d: ctx.coords[d] for d in declared.dims},
             name=name,
             mask=as_linopy_mask(rows),
-            binary=declared.variable_type == "binary",
-            integer=declared.variable_type == "integer",
+            binary=declared.domain == "binary",
+            integer=declared.domain == "integer",
         )
         variable.spec = ctx.layer
 

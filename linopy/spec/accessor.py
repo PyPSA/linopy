@@ -24,6 +24,7 @@ that a parameter can be out of reach.
 from __future__ import annotations
 
 import functools
+import re
 import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
@@ -277,7 +278,7 @@ def restore_layer(
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    program = to_program(yaml.safe_load(text))
+    program = to_program(text)
     return Layer(model, name, program, text, parameters, None, dict(names))
 
 
@@ -293,7 +294,7 @@ def _source(spec: SpecLike) -> tuple[str, ms.Program]:
     if isinstance(spec, Path):
         return spec.read_text(), to_program(spec)
     if isinstance(spec, str):
-        return spec, to_program(yaml.safe_load(spec))
+        return spec, to_program(spec)
     loaded = to_spec(dict(spec)) if isinstance(spec, Mapping) else spec
     return loaded.to_yaml(), to_program(loaded)
 
@@ -794,7 +795,7 @@ class ModelSpec:
 
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
-        rendered = self._render("markdown", {}, 3)
+        rendered = _notebook_math(self._render("markdown", {}, 3))
         notes = []
         tally = self._tally()
         if tally is not None:
@@ -872,6 +873,18 @@ class Declaration:
 
     def _repr_markdown_(self) -> str:
         return f"$$\n{self.to_markdown()}\n$$"
+
+
+def _notebook_math(markdown: str) -> str:
+    r"""
+    GitHub's verbatim math delimiters as the ``$``-pairs a notebook's MathJax reads.
+
+    math-spec prints ``$\`...\`$`` and ```` ```math ```` fences because GitHub
+    runs Markdown's escape pass inside ``$...$``; Jupyter does not, and renders
+    only the classic pair.
+    """
+    fenced = re.sub(r"```math\n(.*?)\n```", r"$$\n\1\n$$", markdown, flags=re.S)
+    return re.sub(r"\$`(.*?)`\$", r"$\1$", fenced)
 
 
 class NamedExpression(Declaration):

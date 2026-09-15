@@ -314,9 +314,9 @@ def _check_binding(
     kind = (
         "binary" if attrs["binary"] else "integer" if attrs["integer"] else "continuous"
     )
-    if declared.variable_type != kind:
+    if declared.domain != kind:
         raise SpecDataError(
-            f"variable '{name}' is declared {declared.variable_type} and the bound variable "
+            f"variable '{name}' is declared {declared.domain} and the bound variable "
             f"'{variable.name}' is {kind}."
         )
 
@@ -325,7 +325,7 @@ def _default_bounds(declared: ms.VariableDeclaration) -> bool:
     lower, upper = declared.lower, declared.upper
     if not isinstance(lower, ms.Constant) or not isinstance(upper, ms.Constant):
         return False
-    return (lower.value, upper.value) == _DEFAULT_BOUNDS[declared.variable_type]
+    return (lower.value, upper.value) == _DEFAULT_BOUNDS[declared.domain]
 
 
 # ---------------------------------------------------------------------------
@@ -340,8 +340,7 @@ def _reached(program: ms.Program) -> set[str]:
     dims.update(pw.over for pw in program.piecewise.values())
     for over, lk in program.lookups:
         dims.add(over)
-        if lk.target is not None:
-            dims.add(lk.target)
+        dims.add(lk.target)
     return dims
 
 
@@ -522,10 +521,6 @@ def _check_lookup(
             f"none of them would place its terms nowhere, so it is a typo on one side or a label "
             f"missing from the other."
         )
-    if lk.dtype is not None:
-        _check_value_dtype(lk.name, lk.dtype, series.dtype, kind="lookup")
-    if lk.target is None:
-        return
     values = pd.Index(series.to_numpy())
     foreign = values[~values.isin(coords[lk.target])].unique().tolist()
     if foreign:
@@ -752,14 +747,12 @@ def _aligned(
     return arr.reindex(onto, fill_value=fill)
 
 
-def _check_value_dtype(
-    name: str, declared: str, dtype: Any, kind: str = "parameter"
-) -> None:
+def _check_value_dtype(name: str, declared: str, dtype: Any) -> None:
     if str(dtype.kind) in _ACCEPTED_KINDS[declared]:
         return
     arrived = _KIND_NAMES.get(str(dtype.kind), str(dtype))
     raise SpecDataError(
-        f"{kind} '{name}' is declared '{declared}' and its values arrived as '{arrived}'. "
+        f"parameter '{name}' is declared '{declared}' and its values arrived as '{arrived}'. "
         f"A declared dtype is a claim about the values, and it is checked here: the file says what "
         f"the values are, or the values are not attached.\n"
         f"  Cast the values to {declared}, if the declaration is what you meant\n"

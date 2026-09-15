@@ -53,9 +53,9 @@ pytestmark = [
 EXTRA_SPEC: dict[str, Any] = {
     "dimensions": {"snapshot": {"dtype": "int"}, "generator": {"dtype": "str"}},
     "parameters": {"cap": {"dims": ["generator"]}},
-    "variables": {"p": {"foreach": ["snapshot", "generator"]}},
+    "variables": {"p": {"dims": ["snapshot", "generator"]}},
     "constraints": {
-        "p_cap": {"foreach": ["snapshot", "generator"], "expression": "p <= cap"}
+        "p_cap": {"dims": ["snapshot", "generator"], "expression": "p <= cap"}
     },
     "expressions": {"total": "sum(p)"},
 }
@@ -70,7 +70,7 @@ SECOND_SPEC: dict[str, Any] = {
     **EXTRA_SPEC,
     "parameters": {"floor": {"dims": ["generator"]}},
     "constraints": {
-        "p_floor": {"foreach": ["snapshot", "generator"], "expression": "p >= floor"}
+        "p_floor": {"dims": ["snapshot", "generator"], "expression": "p >= floor"}
     },
     "expressions": {"peak": "sum(p, over=generator)"},
 }
@@ -145,7 +145,7 @@ def bound_dispatch() -> Model:
     """The dispatch spec reading a hand-built ``p`` instead of building one."""
     m = Model()
     dispatch_p(m)
-    spec = with_(yaml_dict(), variables={"p": {"foreach": ["snapshot", "generator"]}})
+    spec = with_(yaml_dict(), variables={"p": {"dims": ["snapshot", "generator"]}})
     m.add_spec(spec, {**DISPATCH_DATA, "p": m.variables["p"]})
     m.solve(solver_name="highs", output_flag=False)
     return m
@@ -184,8 +184,8 @@ T = pd.Index([0, 1, 2], name="t")
 SPARSE_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int"}},
     "parameters": {"c": {"dims": ["t"]}, "w": {"dims": ["t"]}},
-    "variables": {"x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": 10}}},
-    "constraints": {"cap": {"foreach": ["t"], "expression": "w * x <= c"}},
+    "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}}},
+    "constraints": {"cap": {"dims": ["t"], "expression": "w * x <= c"}},
     "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
 }
 FULL_W = pd.Series([1.0, 1.0, 1.0], index=T)
@@ -193,7 +193,7 @@ FULL_C = pd.Series([0.0, 4.0, 5.0], index=T)
 HOLE_AT_0 = pd.Series([4.0, 5.0], index=T[1:])
 W_HOLE_AT_0 = pd.Series([1.0, 1.0], index=T[1:])
 
-NO_W_CONSTRAINT = {"cap": {"foreach": ["t"], "expression": "x <= c"}}
+NO_W_CONSTRAINT = {"cap": {"dims": ["t"], "expression": "x <= c"}}
 
 
 @pytest.mark.parametrize(
@@ -230,9 +230,7 @@ NO_W_CONSTRAINT = {"cap": {"foreach": ["t"], "expression": "x <= c"}}
         pytest.param(
             with_(
                 SPARSE_SPEC,
-                variables={
-                    "x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": "c"}}
-                },
+                variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": "c"}}},
             ),
             {"w": FULL_W, "c": HOLE_AT_0},
             "variable 'x': 1 rows have NULL bounds",
@@ -241,7 +239,7 @@ NO_W_CONSTRAINT = {"cap": {"foreach": ["t"], "expression": "x <= c"}}
         pytest.param(
             with_(
                 SPARSE_SPEC,
-                constraints={"cap": {"foreach": ["t"], "expression": "x / w <= c"}},
+                constraints={"cap": {"dims": ["t"], "expression": "x / w <= c"}},
             ),
             {"w": W_HOLE_AT_0, "c": FULL_C},
             "constraint 'cap'.*divisor",
@@ -285,13 +283,13 @@ def test_a_masked_variable_bound_needs_no_row_where_it_is_masked() -> None:
         },
         variables={
             "x": {
-                "foreach": ["t"],
+                "dims": ["t"],
                 "where": "live",
                 "bounds": {"lower": 0, "upper": "c"},
             }
         },
         constraints={
-            "cap": {"foreach": ["t"], "where": "live", "expression": "w * x <= c"}
+            "cap": {"dims": ["t"], "where": "live", "expression": "w * x <= c"}
         },
     )
     live = pd.Series([True, True], index=T[1:])
@@ -341,15 +339,15 @@ ENVELOPE_SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}},
     "parameters": {"gate": {"dims": ["f"], "dtype": "bool"}, "relmax": {"dims": ["f"]}},
     "variables": {
-        "x": {"foreach": ["f"], "bounds": {"lower": 0, "upper": 100}},
+        "x": {"dims": ["f"], "bounds": {"lower": 0, "upper": 100}},
         "size": {
-            "foreach": ["f"],
+            "dims": ["f"],
             "where": "gate",
             "bounds": {"lower": 0, "upper": 50},
         },
     },
     "constraints": {
-        "envelope": {"foreach": ["f"], "expression": "x - relmax * size <= 0"}
+        "envelope": {"dims": ["f"], "expression": "x - relmax * size <= 0"}
     },
     "objective": {"sense": "maximize", "expression": "sum(x, over=f)"},
 }
@@ -362,11 +360,11 @@ DEFINED_SPEC = with_(
     ENVELOPE_SPEC,
     constraints={
         "envelope": {
-            "foreach": ["f"],
+            "dims": ["f"],
             "where": "size",
             "expression": "x - relmax * size <= 0",
         },
-        "pinned": {"foreach": ["f"], "where": "NOT size", "expression": "x <= 0"},
+        "pinned": {"dims": ["f"], "where": "NOT size", "expression": "x <= 0"},
     },
 )
 
@@ -393,8 +391,8 @@ SCALAR_SWITCH: dict[str, Any] = {
     "dimensions": {"i": {"dtype": "int"}},
     "parameters": {"on": {"dims": [], "dtype": "bool"}},
     "variables": {
-        "x": {"foreach": ["i"], "bounds": {"lower": 1, "upper": 5}, "where": "on"},
-        "y": {"foreach": ["i"], "bounds": {"lower": 2, "upper": 5}},
+        "x": {"dims": ["i"], "bounds": {"lower": 1, "upper": 5}, "where": "on"},
+        "y": {"dims": ["i"], "bounds": {"lower": 2, "upper": 5}},
     },
     "objective": {"sense": "minimize", "expression": "sum(x) + sum(y)"},
 }
@@ -409,7 +407,7 @@ def test_a_scalar_where_gates_a_whole_variable(on: bool, objective: float) -> No
 def test_a_dimension_with_no_members_builds_no_row() -> None:
     spec = with_(
         SPARSE_SPEC,
-        constraints={"budget": {"foreach": [], "expression": "sum(x, over=t) <= 10"}},
+        constraints={"budget": {"dims": [], "expression": "sum(x, over=t) <= 10"}},
     )
     empty = pd.Index([], name="t", dtype=int)
     m = Model.from_spec(
@@ -483,7 +481,7 @@ def test_a_sos_on_a_bound_variable_is_written_onto_the_model_owned_one(
 
 def test_a_constant_on_the_left_is_the_same_row() -> None:
     flipped = with_(
-        SPARSE_SPEC, constraints={"cap": {"foreach": ["t"], "expression": "c >= w * x"}}
+        SPARSE_SPEC, constraints={"cap": {"dims": ["t"], "expression": "c >= w * x"}}
     )
     m = solved(flipped, {"t": T, "w": FULL_W, "c": FULL_C})
     assert m.objective.value == pytest.approx(9.0)
@@ -506,7 +504,7 @@ def test_a_parameter_under_a_power_is_still_checked_for_coverage(
     expression: str, match: str
 ) -> None:
     spec = with_(
-        SPARSE_SPEC, constraints={"cap": {"foreach": ["t"], "expression": expression}}
+        SPARSE_SPEC, constraints={"cap": {"dims": ["t"], "expression": expression}}
     )
     with pytest.raises(SpecDataError, match=match):
         Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0})

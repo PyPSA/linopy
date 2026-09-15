@@ -1,17 +1,11 @@
-"""Walks over a program's expression nodes, and the dimensions a node spans."""
+"""The parameters a node names, and the dimensions a node spans."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 
 from math_spec import program as ms
-
-
-def walk(*nodes: ms.ExpressionNode) -> Iterator[ms.ExpressionNode]:
-    """Every node under *nodes*, each of them included, parents first."""
-    for node in nodes:
-        yield node
-        yield from walk(*ms.children(node))
+from math_spec.program import walk
 
 
 def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
