@@ -6,7 +6,9 @@ already. Besides them each spec layer carries its text, the names it binds,
 its master coordinates and its lookups; the program is re-lowered from the
 text on read, so no lowered ``Program`` ever reaches the file. The layer
 order, whether the layers describe the whole model and which layer owns the
-objective are attributes of the file itself.
+objective are attributes of the file itself, and so is a header naming the
+math-spec version that lowered the text and the number of this layout,
+``FORMAT``; a read under another of either warns.
 
 No netcdf type holds a dtype as written, so every array carries the dtype it
 had in memory (:func:`linopy.io.record_dtypes`) and is cast back to it on
@@ -26,12 +28,14 @@ dtype per dimension however the engine returned it.
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+from math_spec import __version__ as MATH_SPEC_VERSION
 
 from linopy.io import (
     DTYPE_ATTR,
@@ -40,6 +44,7 @@ from linopy.io import (
     SPEC_ATTR,
     SPEC_LAYERS_ATTR,
     SPEC_OBJECTIVE_ATTR,
+    SPEC_VERSION_ATTR,
     SPEC_WHOLE_ATTR,
     get_prefix,
     restamp_coords,
@@ -50,6 +55,7 @@ from linopy.spec.accessor import Layer, ModelSpec, register, restore_layer
 from linopy.spec.ownership import Ownership
 
 PREFIX = "spec"
+FORMAT = 1
 LEGACY_NAME = "spec"
 LEGACY_OBJECTIVE_ATTR = "_linopy_spec_objective_replaced"
 COORD = "coords__"
@@ -104,6 +110,9 @@ def encode(layer: Layer) -> xr.Dataset:
         {
             LAYER_TEXT_ATTR.format(layer.name): layer.text,
             LAYER_BOUND_ATTR.format(layer.name): json.dumps(dict(layer.names)),
+            SPEC_VERSION_ATTR: json.dumps(
+                {"math_spec": MATH_SPEC_VERSION, "format": FORMAT}
+            ),
         }
     )
 
@@ -115,7 +124,14 @@ def read(model: Model, ds: xr.Dataset) -> ModelSpec:
     A file written before layers existed holds one spec under the bare
     ``spec`` prefix and its text in one attribute; it reads as a single layer
     named ``"spec"`` that describes the whole model.
+
+    Warns
+    -----
+    UserWarning
+        The file names another math-spec version or another layout number
+        than this reader's.
     """
+    _check_header(ds)
     if SPEC_LAYERS_ATTR in ds.attrs:
         layers = [
             decode(
@@ -134,6 +150,27 @@ def read(model: Model, ds: xr.Dataset) -> ModelSpec:
     replaced = bool(ds.attrs.get(LEGACY_OBJECTIVE_ATTR, 0))
     owned = layer.program.objective is not None and not replaced
     return _restored(model, [layer], True, LEGACY_NAME if owned else None)
+
+
+def _check_header(ds: xr.Dataset) -> None:
+    """Warn where the file was written under another math-spec version or layout; a file without a header is older than both."""
+    if SPEC_VERSION_ATTR not in ds.attrs:
+        return
+    header = json.loads(ds.attrs[SPEC_VERSION_ATTR])
+    if header["format"] != FORMAT:
+        warnings.warn(
+            f"the file writes its spec layers in layout {header['format']} and this "
+            f"linopy reads layout {FORMAT}; what the layers hold may not come back as written.",
+            UserWarning,
+            stacklevel=4,
+        )
+    if header["math_spec"] != MATH_SPEC_VERSION:
+        warnings.warn(
+            f"the file's spec layers were lowered by math-spec {header['math_spec']} and "
+            f"are re-lowered by {MATH_SPEC_VERSION}; the same text may lower differently.",
+            UserWarning,
+            stacklevel=4,
+        )
 
 
 def _restored(

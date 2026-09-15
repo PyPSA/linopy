@@ -13,6 +13,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping
 from importlib.metadata import version
+from importlib.util import find_spec
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -53,6 +54,7 @@ SPEC_WHOLE_ATTR = "_linopy_spec_whole"
 SPEC_OBJECTIVE_ATTR = "_linopy_spec_objective"
 LAYER_TEXT_ATTR = SPEC_ATTR + "-{}-text"
 LAYER_BOUND_ATTR = SPEC_ATTR + "-{}-bound"
+SPEC_VERSION_ATTR = SPEC_ATTR + "-version"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
@@ -1286,6 +1288,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ds.to_netcdf(*args, **kwargs)
 
 
+def spec_available() -> bool:
+    """Whether the ``math-spec`` package is importable, so a file's spec layers can be read."""
+    return find_spec("math_spec") is not None
+
+
 def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     """
     Read in a model from a netcdf file.
@@ -1396,9 +1403,17 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = restore_dtypes(get_prefix(ds, "parameters"))
 
     if SPEC_LAYERS_ATTR in ds.attrs or SPEC_ATTR in ds.attrs:
-        from linopy.spec.netcdf import read
+        if spec_available():
+            from linopy.spec.netcdf import read
 
-        m._spec = read(m, ds)
+            m._spec = read(m, ds)
+        else:
+            warnings.warn(
+                f"'{path}' holds spec layers and math-spec is not installed; loaded as "
+                f"a plain model, without model.spec. Install math-spec to read the layers.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
