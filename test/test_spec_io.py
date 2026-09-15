@@ -61,7 +61,7 @@ LOOKUP_SPEC: dict[str, Any] = {
         "int_to_int": {"over": "i1", "into": "i2"},
     },
     "parameters": {"cost": {"dims": ["s1"]}},
-    "variables": {"x": {"foreach": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
+    "variables": {"x": {"dims": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
     "objective": {"sense": "minimize", "expression": "sum(x * cost)"},
 }
 LOOKUP_OVER = {"str_to_str": S1, "str_to_int": S1, "int_to_str": I1, "int_to_int": I1}
@@ -75,7 +75,7 @@ DTYPE_SPEC: dict[str, Any] = {
         "cost": {"dims": ["s1"]},
         "tag": {"dims": ["s1"], "dtype": "str"},
     },
-    "variables": {"x": {"foreach": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
+    "variables": {"x": {"dims": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
     "objective": {"sense": "minimize", "expression": "sum(x * cost)"},
 }
 DTYPE_DATA: dict[str, Any] = {

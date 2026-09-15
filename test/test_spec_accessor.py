@@ -296,9 +296,11 @@ def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:
 def test_the_spec_typesets_in_every_format() -> None:
     spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
     assert "align" in spec.to_latex()
-    assert "$$" in spec.to_markdown()
+    assert "```math" in spec.to_markdown()
     assert spec.to_typst()
-    assert spec._repr_markdown_() == spec.to_markdown()
+    shown = spec._repr_markdown_()
+    assert "```math" not in shown and "$`" not in shown
+    assert "$$\n" in shown and " $t$ " in shown
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])

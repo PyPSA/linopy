@@ -78,11 +78,11 @@ def operator_spec() -> dict[str, Any]:
             "lag": {"dims": ["s"], "dtype": "int"},
             "width": {"dims": ["s"], "dtype": "int"},
         },
-        "variables": {"x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": 100}}},
-        "constraints": {"fix": {"foreach": ["t"], "expression": "x == v"}},
+        "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}}},
+        "constraints": {"fix": {"dims": ["t"], "expression": "x == v"}},
         "expressions": {
             "x_state": {
-                "foreach": ["t"],
+                "dims": ["t"],
                 "cases": {"first": {"when": "position(t) == 0", "expression": 100}},
                 "otherwise": "shift(x, over=t, offset=1)",
             }
@@ -92,11 +92,11 @@ def operator_spec() -> dict[str, Any]:
     for key, (expression, dims, _) in OPERATORS.items():
         name = key.replace("-", "_")
         spec["variables"][f"y_{name}"] = {
-            "foreach": dims,
+            "dims": dims,
             "bounds": {"lower": -1000, "upper": 1000},
         }
         spec["constraints"][f"link_{name}"] = {
-            "foreach": dims,
+            "dims": dims,
             "expression": f"y_{name} == {expression}",
         }
         spec["expressions"][f"probe_{name}"] = expression
@@ -137,13 +137,13 @@ AMOUNT_SPEC: dict[str, Any] = {
     "lookups": {"grp": {"over": "t", "into": "g"}},
     "parameters": {"v": {"dims": ["t"]}, "lag": {"dims": ["g"], "dtype": "int"}},
     "variables": {
-        "x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": 100}},
-        "y": {"foreach": ["t"], "bounds": {"lower": -100, "upper": 100}},
+        "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+        "y": {"dims": ["t"], "bounds": {"lower": -100, "upper": 100}},
     },
     "constraints": {
-        "fix": {"foreach": ["t"], "expression": "x == v"},
+        "fix": {"dims": ["t"], "expression": "x == v"},
         "link": {
-            "foreach": ["t"],
+            "dims": ["t"],
             "expression": "y == shift(x, over=t, offset=lag, edge=0, by=grp)",
         },
     },
@@ -173,12 +173,10 @@ GROUPED_SPEC: dict[str, Any] = {
     "dimensions": {"generator": {}, "bus": {"dtype": "str"}},
     "lookups": {"gen_bus": {"over": "generator", "into": "bus"}},
     "parameters": {"capacity": {"dims": ["generator"]}},
-    "variables": {
-        "imports": {"foreach": ["bus"], "bounds": {"lower": 0, "upper": 100}}
-    },
+    "variables": {"imports": {"dims": ["bus"], "bounds": {"lower": 0, "upper": 100}}},
     "constraints": {
         "import_limit": {
-            "foreach": ["bus"],
+            "dims": ["bus"],
             "expression": "imports <= sum(capacity, by=gen_bus)",
         }
     },
@@ -208,7 +206,7 @@ def test_a_lookup_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> Non
         GROUPED_SPEC,
         variables={
             "out": {
-                "foreach": ["generator"],
+                "dims": ["generator"],
                 "bounds": {"lower": 0, "upper": "capacity"},
             }
         },
@@ -240,7 +238,6 @@ WHERE_CASES: dict[str, tuple[str, str, list[Any]]] = {
     "lookup-not-equal-skips-unmapped": ("x", "season_of != 'a'", [2]),
     "lookup-pair": ("x", "season_of != other_of", [1]),
     "lookup-defined": ("x", "season_of", [0, 1, 2]),
-    "label-space-lookup": ("x", "tag == 'q'", [1]),
     "not": ("x", "NOT (t > 1)", [0, 1]),
     "and": ("x", "t > 0 AND t < 3", [1, 2]),
     "or": ("x", "t == 0 OR t == 3", [0, 3]),
@@ -313,8 +310,8 @@ def test_a_member_a_lookup_sends_nowhere_reaches_nothing(key: str) -> None:
 def test_a_sum_beside_an_empty_dimension_is_the_empty_sum() -> None:
     spec: dict[str, Any] = {
         "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
-        "variables": {"x": {"foreach": ["t", "s"], "bounds": {"lower": 0, "upper": 1}}},
-        "constraints": {"cap": {"foreach": ["s"], "expression": "sum(x, over=t) <= 1"}},
+        "variables": {"x": {"dims": ["t", "s"], "bounds": {"lower": 0, "upper": 1}}},
+        "constraints": {"cap": {"dims": ["s"], "expression": "sum(x, over=t) <= 1"}},
         "objective": {"sense": "maximize", "expression": "sum(x)"},
     }
     m = Model.from_spec(spec, {"t": [0, 1], "s": pd.Index([], name="s", dtype=object)})

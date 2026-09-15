@@ -29,11 +29,7 @@ def synthetic_sources(program: ms.Program, n: int = 3) -> dict[str, Any]:
         dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
     }
     for over, lookup in program.lookups:
-        into = (
-            sources[lookup.target]
-            if lookup.target is not None
-            else _labels(lookup.name, lookup.dtype, n)
-        )
+        into = sources[lookup.target]
         sources[lookup.name] = pd.Series(
             [into[i % len(into)] for i in range(n)], index=sources[over]
         )

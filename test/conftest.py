@@ -182,13 +182,13 @@ parameters:
 variables:
   p:
     description: output of a generator in a snapshot
-    foreach: [snapshot, generator]
+    dims: [snapshot, generator]
     where: "p_max > 0"
     bounds: { lower: 0, upper: p_max }
 
 constraints:
   power_balance:
-    foreach: [snapshot]
+    dims: [snapshot]
     expression: sum(p, over=generator) == load
 
 objective:
@@ -241,7 +241,6 @@ expressions:
         "lookups": {
             "season_of": {"over": "t", "into": "s"},
             "other_of": {"over": "t", "into": "s"},
-            "tag": {"over": "t", "dtype": "str"},
         },
         "parameters": {
             "flag": {"dims": ["t"], "dtype": "bool"},
@@ -250,8 +249,8 @@ expressions:
             "day_cost": {"dims": ["d"]},
         },
         "variables": {
-            "x": {"foreach": ["t"], "bounds": {"lower": 0, "upper": 1}},
-            "y": {"foreach": ["d"], "bounds": {"lower": 0, "upper": 1}},
+            "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}},
+            "y": {"dims": ["d"], "bounds": {"lower": 0, "upper": 1}},
         },
         "objective": {"sense": "minimize", "expression": "sum(x) + sum(y)"},
     }
@@ -261,7 +260,6 @@ expressions:
         "d": DAYS,
         "season_of": pd.Series(["a", "a", "b"], index=TT[:3]),
         "other_of": pd.Series(["a", "b", "b", "a"], index=TT),
-        "tag": pd.Series(["p", "q"], index=TT[:2]),
         "flag": pd.Series([True, False], index=TT[:2]),
         "cost": pd.Series([1.0, float("inf"), 3.0], index=TT[:3]),
         "label": pd.Series(["u", "v"], index=TT[1:3]),
@@ -284,10 +282,10 @@ expressions:
         },
         "variables": {
             "p": {
-                "foreach": ["snapshot", "generator"],
+                "dims": ["snapshot", "generator"],
                 "bounds": {"lower": 0, "upper": "p_max"},
             },
-            "op_cost": {"foreach": ["snapshot", "generator"], "bounds": {"lower": 0}},
+            "op_cost": {"dims": ["snapshot", "generator"], "bounds": {"lower": 0}},
         },
         "piecewise": {
             "cost_curve": {
@@ -299,7 +297,7 @@ expressions:
         "expressions": {"spend": "sum(op_cost, over=generator)"},
         "constraints": {
             "balance": {
-                "foreach": ["snapshot"],
+                "dims": ["snapshot"],
                 "expression": "sum(p, over=generator) == load",
             }
         },
