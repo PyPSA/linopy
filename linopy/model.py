@@ -499,9 +499,10 @@ class Model:
         Parameters
         ----------
         spec : str, pathlib.Path, dict or math_spec.Spec
-            The spec. A ``str`` containing a newline is YAML text, any other
-            ``str`` is a path. A lowered ``math_spec.Program`` is refused,
-            since it has no YAML form to keep on the model.
+            The spec. A ``str`` is YAML text if it holds a newline, opens a
+            mapping or a sequence, or holds a ``:`` and names no file; any
+            other ``str`` is a path. A lowered ``math_spec.Program`` and an
+            open file are refused, having no YAML form to keep on the model.
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters,
             lookups and the model variables to bind. Read by key on demand
@@ -514,7 +515,8 @@ class Model:
             falls back to ``sources`` for a parameter it did not keep.
         name : str, optional
             The layer's name, ``model.spec[name]``. Defaults to the file's
-            stem, else ``"spec"``. A name already on the model is refused.
+            stem, else ``"spec"``. A name already on the model is refused, as
+            is one holding ``/`` or ``-``, which a netcdf file cannot carry.
         build_expressions : bool, default True
             Whether to build the layer's variable-bearing named expressions
             into ``model.expressions``. ``False`` stores nothing and

@@ -5,6 +5,7 @@ and the ``add_spec``/``from_spec`` argument handling that builds them.
 
 from __future__ import annotations
 
+import io
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -65,6 +66,9 @@ SPEC_FORMS: dict[str, Callable[[Path], Any]] = {
     "path": lambda path: path,
     "path-string": str,
     "yaml-text": lambda path: path.read_text(),
+    "flow-yaml": lambda path: yaml.safe_dump(
+        math_spec.to_spec(path).to_dict(), default_flow_style=True, width=10**6
+    ).strip(),
     "dict": lambda path: math_spec.to_spec(path).to_dict(),
     "spec": lambda path: math_spec.to_spec(path),
 }
@@ -88,6 +92,72 @@ def test_a_lowered_program_is_refused() -> None:
     program = math_spec.to_program(yaml_dict())
     with pytest.raises(TypeError, match="not a lowered Program"):
         Model().add_spec(program, DISPATCH_DATA)
+
+
+def _opened(tmp_path: Path) -> Any:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    with path.open() as handle:
+        return handle
+
+
+UNREADABLE_SPECS: list[Any] = [
+    pytest.param(_opened, TypeError, "not an open file", id="file-object"),
+    pytest.param(
+        lambda tmp_path: io.StringIO(EXAMPLE_DISPATCH),
+        TypeError,
+        "not an open file",
+        id="string-io",
+    ),
+    pytest.param(
+        lambda tmp_path: tmp_path / "absent.yaml",
+        FileNotFoundError,
+        "no spec file at",
+        id="missing-path",
+    ),
+    pytest.param(
+        lambda tmp_path: str(tmp_path / "absent.yaml"),
+        FileNotFoundError,
+        "no spec file at",
+        id="missing-path-string",
+    ),
+    pytest.param(
+        lambda tmp_path: {"description": "a spec that declares nothing"},
+        SpecDataError,
+        "the spec declares nothing",
+        id="empty-spec",
+    ),
+    pytest.param(
+        lambda tmp_path: "- p_max\n- load\n",
+        SpecDataError,
+        "a spec is a mapping of sections",
+        id="sequence",
+    ),
+]
+
+
+@pytest.mark.parametrize(("form", "error", "match"), UNREADABLE_SPECS)
+def test_an_unreadable_spec_is_refused(
+    tmp_path: Path, form: Callable[[Path], Any], error: type[Exception], match: str
+) -> None:
+    with pytest.raises(error, match=match):
+        Model().add_spec(form(tmp_path), DISPATCH_DATA)
+
+
+@pytest.mark.parametrize("name", ["dispatch-v2", "a/b", ""])
+def test_a_layer_name_a_file_cannot_carry_is_refused(name: str) -> None:
+    with pytest.raises(ValueError, match="cannot be named"):
+        Model().add_spec(yaml_dict(), DISPATCH_DATA, name=name)
+
+
+def test_a_dashed_file_stem_is_refused_before_it_reaches_a_file(tmp_path: Path) -> None:
+    path = tmp_path / "dispatch-v2.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    with pytest.raises(ValueError, match="cannot be named 'dispatch-v2'"):
+        Model.from_spec(path, DISPATCH_DATA)
+    assert Model.from_spec(path, DISPATCH_DATA, name="dispatch").spec.layers.keys() == {
+        "dispatch"
+    }
 
 
 def test_a_second_spec_must_bind_or_not_collide() -> None:

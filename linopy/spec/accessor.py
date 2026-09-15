@@ -24,6 +24,7 @@ that a parameter can be out of reach.
 from __future__ import annotations
 
 import functools
+import io
 import re
 import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
@@ -65,6 +66,8 @@ SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 # format math-spec grows later renders without one rather than with a wrong one.
 _DRIFTED = "This model has drifted from the spec typeset here: {}."
 _EXTENDS = "This spec extends a model it does not describe: {}."
+
+_ILLEGAL_IN_NAME = re.compile(r"[/-]")
 
 _COMMENT: dict[str, str] = {
     "latex": "% {}",
@@ -163,13 +166,16 @@ def attach(
     Raises
     ------
     ValueError
-        The model runs under legacy semantics; a layer of that name is
+        The model runs under legacy semantics; the layer name is empty or
+        holds a character a netcdf file cannot carry; a layer of that name is
         already on the model; a variable the spec introduces, a constraint
         or a named expression collides with a name the model already holds;
         or the spec declares an objective and the model already has one.
     TypeError
-        *spec* is a lowered ``Program``, which has no YAML form to
-        keep on the model.
+        *spec* is a lowered ``Program`` or an open file, neither of which
+        has a YAML form to keep on the model.
+    FileNotFoundError
+        *spec* reads as a path and there is no file there.
     """
     warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
     if not is_v1():
@@ -177,7 +183,7 @@ def attach(
             "a spec-built model uses linopy's v1 semantics, and the current setting is "
             "'legacy'. Set linopy.options['semantics'] = 'v1' before building from a spec."
         )
-    text, program = _source(spec)
+    text, program, stem = normalize_spec(spec)
     attached: Attached = attach_data(
         program, sources, retain=retain, given=_given(model)
     )
@@ -188,7 +194,7 @@ def attach(
             f"the variables of the model it is added to; pass the variables of this model."
         )
     _check_collisions(model, program, attached, build_expressions)
-    layer_name = _layer_name(spec, name)
+    layer_name = _check_layer_name(name if name is not None else stem or "spec")
     if model._spec is not None and layer_name in model._spec.layers:
         raise ValueError(
             f"a spec layer named '{layer_name}' is already on this model; pass another name."
@@ -218,12 +224,15 @@ def _given(model: Model) -> dict[str, pd.Index]:
     return {d: index for layer in _layers(model) for d, index in layer.coords.items()}
 
 
-def _layer_name(spec: SpecLike, name: str | None) -> str:
-    if name is not None:
-        return name
-    if isinstance(spec, str) and "\n" not in spec:
-        spec = Path(spec)
-    return spec.stem if isinstance(spec, Path) else "spec"
+def _check_layer_name(name: str) -> str:
+    """*name*, if a netcdf file can carry it: its arrays are named ``spec-<layer>-<array>``."""
+    if not name or _ILLEGAL_IN_NAME.search(name):
+        raise ValueError(
+            f"a spec layer cannot be named '{name}': a name is written into a netcdf file "
+            f"as the prefix of the layer's arrays, which rules out '/' and '-' and the "
+            f"empty name. Pass name= with another one."
+        )
+    return name
 
 
 def _check_collisions(
@@ -288,21 +297,69 @@ def restore_layer(
     return Layer(model, name, program, text, parameters, None, dict(names))
 
 
-def _source(spec: SpecLike) -> tuple[str, ms.Program]:
-    """The spec as the YAML text kept on the model, and lowered."""
+def _is_yaml_text(spec: str) -> bool:
+    """A ``str`` is YAML rather than a path if it looks like YAML and names no file."""
+    if "\n" in spec or spec.lstrip()[:1] in ("{", "-"):
+        return True
+    return ":" in spec and not Path(spec).is_file()
+
+
+def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
+    """
+    *spec* as the YAML text kept on the model, lowered, and the name a file lends the layer.
+
+    A ``str`` is YAML text if it holds a newline, opens a mapping or a
+    sequence, or holds a ``:`` and names no file; every other ``str`` is a
+    path, and so lends the layer its stem.
+
+    Raises
+    ------
+    TypeError
+        A lowered ``Program`` or an open file: neither has a YAML form to
+        keep on the model.
+    FileNotFoundError
+        *spec* reads as a path and there is no file there.
+    SpecDataError
+        The spec declares no dimension, parameter or variable.
+    """
     if isinstance(spec, ms.Program):
         raise TypeError(
             "add_spec takes the spec as a path, YAML text, a mapping or a math_spec.Spec, "
             "not a lowered Program: a Program has no YAML form to keep on the model."
         )
-    if isinstance(spec, str) and "\n" not in spec:
+    if isinstance(spec, io.IOBase):
+        raise TypeError(
+            "add_spec takes the spec as a path, YAML text, a mapping or a math_spec.Spec, "
+            "not an open file: pass the path it was opened on, or spec.read()."
+        )
+    stem: str | None = None
+    if isinstance(spec, str) and not _is_yaml_text(spec):
         spec = Path(spec)
     if isinstance(spec, Path):
-        return spec.read_text(), to_program(spec)
-    if isinstance(spec, str):
-        return spec, to_program(spec)
-    loaded = to_spec(dict(spec)) if isinstance(spec, Mapping) else spec
-    return loaded.to_yaml(), to_program(loaded)
+        if not spec.is_file():
+            raise FileNotFoundError(
+                f"no spec file at '{spec}'. A str is read as a path unless it holds a "
+                f"newline, opens a mapping or a sequence, or holds a ':' and names no "
+                f"file, so YAML text written on one line arrives here as a path."
+            )
+        text, stem = spec.read_text(), spec.stem
+    elif isinstance(spec, str):
+        text = spec
+    else:
+        text = (to_spec(dict(spec)) if isinstance(spec, Mapping) else spec).to_yaml()
+    sections = yaml.safe_load(text)
+    if not isinstance(sections, Mapping):
+        raise SpecDataError(
+            f"a spec is a mapping of sections, and this one reads as "
+            f"{type(sections).__name__}: {text[:80]!r}."
+        )
+    program = to_program(dict(sections))
+    if not (program.dimensions or program.parameters or program.variables):
+        raise SpecDataError(
+            "the spec declares nothing: no dimension, no parameter and no variable. "
+            "There is nothing to attach data to and nothing to build."
+        )
+    return text, program, stem
 
 
 def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
