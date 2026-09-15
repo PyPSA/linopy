@@ -767,7 +767,9 @@ def test_a_bound_spec_name_does_not_hide_a_hand_variable_of_that_name() -> None:
 def test_a_layer_refuses_removal_of_a_name_it_owns() -> None:
     """A bound variable and a built constraint each strand a layer, so removal raises; a hand name still goes."""
     m = extended()
-    with pytest.raises(ValueError, match="p is declared or bound by a spec layer"):
+    with pytest.raises(
+        ValueError, match="p and p_cap are declared or bound by a spec layer"
+    ):
         m.remove_variables("p")
     with pytest.raises(ValueError, match="p_cap is declared or bound"):
         m.remove_constraints("p_cap")

@@ -39,6 +39,16 @@ Upcoming Version
 
 * Typesetting renders the *spec*, which need not be the whole model: a spec-built model goes on taking everything linopy can add to it, and none of that carries a math-spec declaration to typeset. ``model.spec.unspecified`` (a ``linopy.spec.Unspecified``) reports the drift -- variables, constraints and expressions the spec does not declare, special-ordered sets it does not declare, piecewise formulations added beside it, and whether ``add_objective`` has replaced its objective. Where there is any, typesetting warns, opens the rendered text with a comment of the format's own -- gone once compiled, there in the source -- and adds a visible note to the Markdown a notebook displays. A spec's own ``piecewise:`` and ``sos:`` are not drift: math-spec lowers them into ordinary declarations, which typeset like any other.
 
+* Building now refuses what it used to build wrong or accept silently: a constraint row whose variable terms are all absent (built ``+0 = rhs`` and dropped from the LP instead of raising); a quadratic term reaching a constraint position instead of the objective; a variable bound from a *different* model; and a dimension backed by a ``pd.MultiIndex`` (flatten it, or split it into two dimensions, first).
+
+* An ownership registry tracks every name a layer builds or binds, so ``Variables.remove`` / ``Constraints.remove`` / ``Expressions.remove`` refuse a spec-owned name directly on the container, not only through the ``Model``-level wrappers. ``model.remove_spec(name)`` unwinds one layer -- its built constraints, expressions and variables, unstamping bound variables and resetting an owned objective -- and refuses if another layer still binds one of its variables.
+
+* A spec netcdf file now carries the math-spec version it was written with in its header; reading one back without ``math-spec`` installed warns and loads the model as a plain model, dropping the spec-only arrays, instead of raising.
+
+* ``linopy.spec.normalize_spec`` replaces the ad hoc source and layer-name detection: YAML text, a path, a ``Mapping``/``Spec`` and a lowered ``Program`` are told apart the same way everywhere, an empty spec is refused up front, and a layer name is checked against netcdf's naming rules before it reaches ``to_netcdf``.
+
+* The ``Sources`` adapter behind ``add_spec`` ignores a source key the spec does not declare instead of refusing it outright, and reports what it ignored on ``Attached.unused``.
+
 
 *Numerical scaling*
 

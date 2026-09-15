@@ -499,7 +499,9 @@ class Model:
         model variable under a declared variable's name in ``sources`` binds
         it, so the spec reads that variable instead of building one. Its
         declaration must then match the model variable in dimensions and
-        domain and carry no bounds or ``where`` of its own.
+        domain and carry no bounds or ``where`` of its own. Layers share
+        variables only this way: one layer's named expression is not visible
+        to another, since math-spec lowers each layer standalone.
 
         Parameters
         ----------

@@ -8,13 +8,17 @@ Python >= 3.12). It is imported here and nowhere else in linopy, so
 
 from __future__ import annotations
 
+import sys
 from importlib.util import find_spec
 
 if find_spec("math_spec") is None:
-    raise ImportError(
-        "linopy.spec needs the math-spec package. Install it with "
-        "`pip install math-spec` (Python >= 3.12) and try again."
+    message = (
+        "linopy.spec needs the math-spec package. Install it from a checkout "
+        "with `uv sync --group spec` or `pip install --group spec`."
     )
+    if sys.version_info < (3, 12):
+        message = "linopy.spec needs Python >= 3.12. " + message
+    raise ImportError(message)
 
 from linopy.spec.accessor import (
     Declaration,
