@@ -443,7 +443,7 @@ VIEWS_SPEC: dict[str, Any] = {
     ("name", "kind"),
     [
         ("spend", linopy.LinearExpression),
-        ("bare", linopy.Variable),
+        ("bare", linopy.LinearExpression),
         ("levels", xr.DataArray),
         ("answer", float),
     ],
@@ -451,6 +451,15 @@ VIEWS_SPEC: dict[str, Any] = {
 def test_expression_is_the_unsolved_linopy_term(name: str, kind: type) -> None:
     m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
     assert isinstance(m.spec.expressions[name].expression, kind)
+
+
+@pytest.mark.parametrize("name", ["spend", "bare"])
+def test_a_variable_bearing_named_expression_is_the_model_expression(name: str) -> None:
+    """The container holds one object per name; the data-only bodies stay on the spec."""
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
+    assert set(m.expressions) == {"spend", "bare"}
+    assert m.spec.expressions[name].expression is m.expressions[name]
+    assert m.expressions[name].spec == "spec"
 
 
 def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
@@ -506,27 +515,35 @@ def test_repr_caps_long_sections() -> None:
     assert "e11" not in text
 
 
-def test_model_repr_shows_the_spec_and_tags_only_expressions() -> None:
+def test_model_repr_of_a_whole_spec_model_carries_no_tags() -> None:
+    """Everything is the spec's, so naming the layer on every line would say nothing."""
     text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
     assert "Linopy LP model, built from a math-spec" in text
     assert "Least-cost dispatch of a generator fleet against an hourly load." in text
-    assert " * spend (snapshot) [spec]" in text
-    assert " * usage (snapshot, generator) [spec]" in text
+    assert " * spend (snapshot)\n" in text
+    assert " * usage (snapshot, generator)\n" in text
     assert " * p (snapshot, generator)\n" in text
     assert " * power_balance (snapshot)\n" in text
+    assert "[spec]" not in text
     assert "<empty>" not in text
 
 
 def test_model_repr_of_an_extended_model_names_its_layers() -> None:
+    """A bound variable is the model's, so it stays untagged; a container the layer fills alone needs no tag either."""
     m = extended()
     m.add_variables(lower=0, coords=[GENERATOR], name="reserve")
     text = repr(m)
     assert "Linopy LP model, extended by math-spec layer(s) extra" in text
-    assert " * p (snapshot, generator) [extra]" in text
+    assert " * p (snapshot, generator)\n" in text
     assert " * reserve (generator)\n" in text
     assert " * p_cap (snapshot, generator) [extra]" in text
     assert " * power_balance (snapshot)\n" in text
-    assert " * total () [extra]" in text
+    assert " * total\n" in text
+
+    m.add_expressions(m.variables["reserve"] * 2.0, name="reserve_cost")
+    text = repr(m)
+    assert " * total [extra]" in text
+    assert " * reserve_cost (generator)\n" in text
 
 
 def test_model_repr_of_a_spec_without_a_description() -> None:
@@ -639,9 +656,11 @@ def test_unspecified_names_what_the_spec_does_not_declare() -> None:
         piecewise=(),
         objective=False,
     )
-    found = extended().spec.unspecified
+    m = extended()
+    found = m.spec.unspecified
     assert found.variables == ()
     assert found.constraints == ("power_balance",)
+    assert found.expressions == () and "total" in m.expressions
     assert found.bound == ("p",)
     assert not Unspecified((), (), (), (), (), False, ("p",))
 
@@ -670,9 +689,14 @@ def test_a_layer_refuses_removal_of_a_name_it_owns() -> None:
         m.remove_variables("p")
     with pytest.raises(ValueError, match="p_cap is declared or bound"):
         m.remove_constraints("p_cap")
+    with pytest.raises(ValueError, match="total is declared or bound"):
+        m.remove_expressions("total")
     m.add_variables(lower=0, coords=[GENERATOR], name="free")
     m.remove_variables("free")
     assert "free" not in m.variables
+    m.add_expressions(m.variables["p"].sum(), name="free_expr")
+    m.remove_expressions("free_expr")
+    assert "free_expr" not in m.expressions
 
 
 def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:

@@ -51,7 +51,7 @@ from linopy.io import (  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.netcdf import LEGACY_OBJECTIVE_ATTR  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
-from linopy.testing import assert_model_equal  # noqa: E402
+from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
@@ -184,6 +184,9 @@ def test_a_retain_none_model_evaluates_after_a_round_trip(
     assert not p.spec.parameters.data_vars
     with pytest.raises(SpecDataError, match="no longer holds the sources"):
         p.spec.expressions["spend"].solution
+    stored = p.spec.expressions["spend"].expression
+    assert isinstance(stored, linopy.LinearExpression)
+    assert_linequal(stored, m.expressions["spend"])
     assert_arrayequal(
         m.spec.expressions["spend"].solution,
         p.spec.evaluate("spend", DISPATCH_DATA).solution,
@@ -445,6 +448,9 @@ def test_a_copy_carries_every_layer(deep: bool) -> None:
 
     assert_model_equal(m, p)
     assert list(p.spec.layers) == ["extra", "second"]
+    assert p.constraints["p_cap"].spec == "extra"
+    assert p.expressions["total"].spec == "extra"
+    assert p.variables["p"].spec is None
     assert dict(p.spec["second"].names) == {"p": "p"}
     assert p.spec["second"].model is p
     assert p.spec.whole is False
@@ -486,3 +492,22 @@ def test_the_pypsa_example_round_trips(tmp_path: Path, engine: str) -> None:
 
     assert_model_equal(m, p)
     assert set(p.spec.coords) == set(m.spec.coords)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_round_trip_keeps_the_layer_stamp(tmp_path: Path, engine: str) -> None:
+    p = roundtrip(whole(), tmp_path, engine)
+    assert p.variables["p"].spec == "spec"
+    assert p.constraints["power_balance"].spec == "spec"
+    assert p.expressions["spend"].spec == "spec"
+
+
+def test_a_frozen_constraint_keeps_the_layer_stamp_through_a_round_trip(
+    tmp_path: Path,
+) -> None:
+    """A frozen constraint carries the stamp beside its rows; the scipy engine cannot write its dimension attribute at all."""
+    m = Model.from_spec(
+        EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", freeze_constraints=True
+    )
+    p = roundtrip(m, tmp_path, "netcdf4")
+    assert p.constraints["power_balance"].spec == "spec"

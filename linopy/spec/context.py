@@ -21,11 +21,13 @@ class Context:
     """
     Everything evaluating a node needs beyond the node.
 
-    ``solved`` is the fold's switch: a build leaves it false and a variable
-    enters an expression as its linopy term; a fold sets it true and a
-    variable enters as its solved values, so a named expression reads off the
-    primal. ``names`` maps a bound spec variable to the model variable it
-    reads; a variable the spec introduced is absent and keeps its own name.
+    ``layer`` is the name of the layer the program is attached as, the stamp
+    everything a build adds to the model carries. ``solved`` is the fold's
+    switch: a build leaves it false and a variable enters an expression as
+    its linopy term; a fold sets it true and a variable enters as its solved
+    values, so a named expression reads off the primal. ``names`` maps a
+    bound spec variable to the model variable it reads; a variable the spec
+    introduced is absent and keeps its own name.
     ``views`` caches each bound variable reindexed onto the master
     coordinates, keyed by spec name and good for as long as the model
     variable's data is the one it was made from.
@@ -36,6 +38,7 @@ class Context:
     coords: Mapping[str, pd.Index]
     lookups: Mapping[str, Mapping[str, xr.DataArray]]
     parameters: Mapping[str, xr.DataArray]
+    layer: str
     solved: bool = field(default=False)
     names: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     views: Views = field(default_factory=dict)

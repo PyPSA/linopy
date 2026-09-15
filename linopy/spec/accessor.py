@@ -45,6 +45,7 @@ from math_spec import program as ms
 from math_spec.typesetting import FormatName
 
 from linopy.constants import SOS_TYPE_ATTR, warn_evolving_api
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
@@ -86,8 +87,9 @@ class Unspecified:
     variables, constraints
         Added beside the spec, a piecewise formulation's own aside.
     expressions
-        Everything in ``model.expressions``: a spec's named expressions are
-        read lazily off ``model.spec`` and never live there.
+        Added beside the spec. A layer's named expressions that hold a
+        variable term live in ``model.expressions`` stamped with the layer's
+        name, and are not drift.
     sos
         Variables given a special-ordered set the spec does not declare.
         ``add_sos_constraints`` writes attributes onto a variable rather than
@@ -148,11 +150,14 @@ def attach(
     sources: Mapping[str, Any] | xr.Dataset,
     retain: Retain,
     name: str | None = None,
+    build_expressions: bool = True,
 ) -> ModelSpec:
     """
     Build *spec* with *sources* into *model* as a layer and return the accessor.
 
-    The layer is named *name*, else the file's stem, else ``"spec"``.
+    The layer is named *name*, else the file's stem, else ``"spec"``. With
+    *build_expressions* the named expressions holding a variable term are
+    built into ``model.expressions``; without, they fold on read.
 
     Raises
     ------
@@ -175,7 +180,7 @@ def attach(
     attached: Attached = attach_data(
         program, sources, retain=retain, given=_given(model)
     )
-    _check_collisions(model, program, attached)
+    _check_collisions(model, program, attached, build_expressions)
     layer_name = _layer_name(spec, name)
     if model._spec is not None and layer_name in model._spec.layers:
         raise ValueError(
@@ -185,7 +190,7 @@ def attach(
     # halfway through one and leave a model too full to build into again.
     parameters = attached.retained().assign_coords(dict(attached.coords))
     whole = not len(model.variables) and not len(model.constraints)
-    build(model, attached)
+    build(model, attached, layer_name, build_expressions)
     layer = Layer(
         model, layer_name, program, text, parameters, attached, attached.names
     )
@@ -214,7 +219,9 @@ def _layer_name(spec: SpecLike, name: str | None) -> str:
     return spec.stem if isinstance(spec, Path) else "spec"
 
 
-def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> None:
+def _check_collisions(
+    model: Model, program: ms.Program, attached: Attached, build_expressions: bool
+) -> None:
     introduced = [
         n for n in program.variables if n not in attached.bound and n in model.variables
     ]
@@ -246,12 +253,14 @@ def _check_collisions(model: Model, program: ms.Program, attached: Attached) -> 
             "terms through a named expression: "
             "`m.objective += m.spec.expressions[name].expression`."
         )
-    earlier = {n for layer in _layers(model) for n in layer.program.named_expressions}
-    expressions = [n for n in program.named_expressions if n in earlier]
+    taken = {n for layer in _layers(model) for n in layer.program.named_expressions}
+    if build_expressions:
+        taken |= set(model.expressions)
+    expressions = [n for n in program.named_expressions if n in taken]
     if expressions:
         raise ValueError(
-            f"the spec declares named expression(s) {expressions} and an earlier spec on "
-            f"this model already does."
+            f"the spec declares named expression(s) {expressions} and the model or an "
+            f"earlier spec on it already holds them."
         )
 
 
@@ -483,6 +492,7 @@ class Layer:
             self.coords,
             self.lookups,
             Parameters(self.program, resolve),
+            self.name,
             solved=True,
             names=self.names,
             views=self._views,
@@ -540,12 +550,19 @@ class ModelSpec:
         layers = [layer._reattach(model, deep) for layer in self.layers.values()]
         return ModelSpec(model, layers, self.whole, self.objective_owner)
 
-    def refuse_removal(self, variables: set[str], constraints: set[str]) -> None:
+    def refuse_removal(
+        self, variables: set[str], constraints: set[str], expressions: set[str]
+    ) -> None:
         """Refuse to drop a model name a layer builds or binds, which would strand its layer."""
-        layers = self.layers.values()
-        owned_variables = {n for layer in layers for n in layer.variables}
-        owned_constraints = {n for layer in layers for n in layer.program.constraints}
-        hit = (variables & owned_variables) | (constraints & owned_constraints)
+        model = self._model
+        bound = {n for layer in self.layers.values() for n in layer.names.values()}
+        hit = {
+            n
+            for n, v in model.variables.items()
+            if n in variables and (n in bound or v.spec is not None)
+        }
+        hit |= {n for n, c in model.constraints.items() if n in constraints and c.spec}
+        hit |= {n for n, e in model.expressions.items() if n in expressions and e.spec}
         if hit:
             raise ValueError(
                 f"{_joined(sorted(hit))} is declared or bound by a spec layer; a layer "
@@ -646,21 +663,21 @@ class ModelSpec:
             for layer in layers
             for sos in layer.program.sos.values()
         }
-        variables = {n for layer in layers for n in layer.variables}
-        constraints = {n for layer in layers for n in layer.program.constraints}
         bound = {n for layer in layers for n in layer.names.values()}
         return Unspecified(
             variables=tuple(
                 n
-                for n in model.variables
-                if n not in variables and n not in pw_variables
+                for n, v in model.variables.items()
+                if v.spec is None and n not in bound and n not in pw_variables
             ),
             constraints=tuple(
                 n
-                for n in model.constraints
-                if n not in constraints and n not in pw_constraints
+                for n, c in model.constraints.items()
+                if c.spec is None and n not in pw_constraints
             ),
-            expressions=tuple(model.expressions),
+            expressions=tuple(
+                n for n, e in model.expressions.items() if e.spec is None
+            ),
             sos=tuple(
                 n
                 for n in model.variables
@@ -804,7 +821,9 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
                 + did_you_mean(name, self._owners)
             )
         layer = self._owners[name]
-        return NamedExpression(layer, name, layer._context(layer._resolve))
+        held = layer.model.expressions.data.get(name)
+        stored = held if held is not None and held.spec == layer.name else None
+        return NamedExpression(layer, name, layer._context(layer._resolve), stored)
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._owners)
@@ -864,15 +883,26 @@ class NamedExpression(Declaration):
     what ``retain`` kept, and the sources behind it for the rest;
     ``evaluate(name, sources)`` attaches fresh data instead.
 
+    Where the layer built the expression into ``model.expressions``,
+    ``expressions[name].expression`` is that stored object and needs no
+    parameters at all; ``solution`` folds afresh and does.
+
     Attributes
     ----------
     node
         The lowered expression body, math-spec's own AST handle.
     """
 
-    def __init__(self, layer: Layer, name: str, ctx: Context) -> None:
+    def __init__(
+        self,
+        layer: Layer,
+        name: str,
+        ctx: Context,
+        stored: LinearExpression | QuadraticExpression | None = None,
+    ) -> None:
         super().__init__(layer, name)
         self._ctx = ctx
+        self._stored = stored
 
     @property
     def node(self) -> ms.ExpressionNode:
@@ -889,11 +919,14 @@ class NamedExpression(Declaration):
         """
         The linopy symbolic expression, its variables unsolved.
 
-        A named expression is read affinely, so this is a ``LinearExpression``
-        where the body carries variables, a bare ``Variable``, a ``DataArray``
-        for a data-only body or a ``float`` for a constant. Not wrapped: a
-        degree-0 array can hold holes that ``from_constant`` would refuse.
+        The entry ``model.expressions`` holds where the layer built one,
+        else folded here: a ``LinearExpression`` where the body carries
+        variables, a bare ``Variable``, a ``DataArray`` for a data-only body
+        or a ``float`` for a constant. Not wrapped: a degree-0 array can hold
+        holes that ``from_constant`` would refuse.
         """
+        if self._stored is not None:
+            return self._stored
         return evaluate_named(self._name, self._ctx.unsolved)
 
     @functools.cached_property

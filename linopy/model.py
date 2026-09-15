@@ -47,6 +47,7 @@ from linopy.constants import (
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    SPEC_LAYER_ATTR,
     TERM_DIM,
     ModelStatus,
     Result,
@@ -466,6 +467,7 @@ class Model:
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
         name: str | None = None,
+        build_expressions: bool = True,
     ) -> Model:
         """
         Build a math-spec program with its data into this model.
@@ -475,6 +477,18 @@ class Model:
         the objective are added as the spec declares them; the spec text, the
         parameters the named expressions read and the lookups are kept on the
         model, and the named expressions are read back through ``model.spec``.
+
+        Everything the layer builds carries the layer's name in its ``attrs``
+        under ``"spec"``, read through the ``spec`` property of a
+        ``Variable``, ``Constraint`` or expression. A bound variable carries
+        none: the layer reads it and the model owns it.
+
+        A named expression whose body holds a variable term is built as well
+        and added to ``model.expressions`` under its declared name, stamped
+        like the rest, so ``model.expressions[name]`` and
+        ``model.spec.expressions[name].expression`` are one object. A
+        data-only body (parameters and constants alone) and one reading a
+        constraint's ``dual`` stay on the spec, read lazily.
 
         A spec can extend a model that already holds variables: passing a
         model variable under a declared variable's name in ``sources`` binds
@@ -501,6 +515,13 @@ class Model:
         name : str, optional
             The layer's name, ``model.spec[name]``. Defaults to the file's
             stem, else ``"spec"``. A name already on the model is refused.
+        build_expressions : bool, default True
+            Whether to build the layer's variable-bearing named expressions
+            into ``model.expressions``. ``False`` stores nothing and
+            ``model.spec.expressions[name].expression`` folds on read, the
+            escape hatch for a spec whose named expressions are too large to
+            hold. Not persisted: a model read from a file folds whatever the
+            file does not hold.
 
         Returns
         -------
@@ -527,7 +548,7 @@ class Model:
         """
         from linopy.spec.accessor import attach
 
-        self._spec = attach(self, spec, sources, retain, name)
+        self._spec = attach(self, spec, sources, retain, name, build_expressions)
         return self
 
     @classmethod
@@ -537,6 +558,7 @@ class Model:
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
         name: str | None = None,
+        build_expressions: bool = True,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -544,7 +566,9 @@ class Model:
 
         ``model_kwargs`` are passed to :class:`Model`.
         """
-        return cls(**model_kwargs).add_spec(spec, sources, retain=retain, name=name)
+        return cls(**model_kwargs).add_spec(
+            spec, sources, retain=retain, name=name, build_expressions=build_expressions
+        )
 
     @property
     def dual(self) -> Dataset:
@@ -728,9 +752,7 @@ class Model:
 
         var_names, con_names = _get_piecewise_groups(self)
         model_string = f"Linopy {self.type} model"
-        var_tag: dict[str, str] | None = None
-        con_tag: dict[str, str] | None = None
-        expr_string = self.expressions._format_items()
+        tag_variables = tag_constraints = tag_expressions = False
         descriptions: list[str] = []
         if self._spec is not None:
             layers = list(self._spec.layers.values())
@@ -740,22 +762,13 @@ class Model:
                 names = ", ".join(layer.name for layer in layers)
                 model_string += f", extended by math-spec layer(s) {names}"
             unspecified = self._spec.unspecified
-            if unspecified.variables:
-                var_tag = {n: layer.name for layer in layers for n in layer.variables}
-            if unspecified.constraints:
-                con_tag = {
-                    n: layer.name for layer in layers for n in layer.program.constraints
-                }
-            eager = expr_string if len(self.expressions) else ""
-            spec = "".join(
-                f" * {name} ({', '.join(e.dims)}) [{layer.name}]\n"
-                for layer in layers
-                for name, e in layer.expressions.items()
-            )
-            expr_string = eager + spec or "<empty>\n"
+            tag_variables = bool(unspecified.variables)
+            tag_constraints = bool(unspecified.constraints)
+            tag_expressions = bool(unspecified.expressions)
             descriptions = [layer.description for layer in layers if layer.description]
-        var_string = self.variables._format_items(exclude=var_names, tag=var_tag)
-        con_string = self.constraints._format_items(exclude=con_names, tag=con_tag)
+        var_string = self.variables._format_items(var_names, tag_variables)
+        expr_string = self.expressions._format_items(tagged=tag_expressions)
+        con_string = self.constraints._format_items(con_names, tag_constraints)
         header = f"{model_string}\n{'=' * len(model_string)}\n"
         header += "".join(f"{d}\n" for d in descriptions)
 
@@ -1171,6 +1184,7 @@ class Model:
         if self.chunk:
             expr = expr.chunk(self.chunk)
 
+        expr.attrs.pop(SPEC_LAYER_ATTR, None)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr
@@ -1513,6 +1527,7 @@ class Model:
         self.check_force_dim_names(data)
 
         data = self._allocate_constraint_labels(data, name, mask)
+        data.attrs.pop(SPEC_LAYER_ATTR, None)
 
         if self.chunk:
             data = data.chunk(self.chunk)
@@ -1681,7 +1696,7 @@ class Model:
         to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
         if self._spec is not None:
-            self._spec.refuse_removal({name}, set(to_remove))
+            self._spec.refuse_removal({name}, set(to_remove), set())
 
         if to_remove:
             warnings.warn(
@@ -1719,7 +1734,7 @@ class Model:
         """
         names = [name] if isinstance(name, str) else name
         if self._spec is not None:
-            self._spec.refuse_removal(set(), set(names))
+            self._spec.refuse_removal(set(), set(names), set())
         for n in names:
             logger.debug(f"Removed constraint: {n}")
             self.constraints.remove(n)
@@ -1741,6 +1756,8 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
+        if self._spec is not None:
+            self._spec.refuse_removal(set(), set(), set(names))
         for n in names:
             logger.debug(f"Removed expression: {n}")
             self.expressions.remove(n)

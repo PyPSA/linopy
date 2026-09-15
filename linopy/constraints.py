@@ -16,7 +16,6 @@ from collections.abc import (
     Hashable,
     ItemsView,
     Iterator,
-    Mapping,
     Sequence,
 )
 from dataclasses import dataclass
@@ -80,6 +79,7 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SPEC_LAYER_ATTR,
     TERM_DIM,
     PerformanceWarning,
     SIGNS_pretty,
@@ -159,6 +159,15 @@ class ConstraintBase(ABC):
     @abstractmethod
     def name(self) -> str:
         """Get the constraint name."""
+
+    @property
+    @abstractmethod
+    def spec(self) -> str | None:
+        """The spec layer that built this constraint; ``None`` for one built by hand."""
+
+    @spec.setter
+    @abstractmethod
+    def spec(self, layer: str) -> None: ...
 
     @property
     @abstractmethod
@@ -633,6 +642,7 @@ class CSRConstraint(ConstraintBase):
         "_dual",
         "_binvar_labels",
         "_binval",
+        "_spec",
         "_positional_cache",
     )
 
@@ -650,6 +660,7 @@ class CSRConstraint(ConstraintBase):
         binvar_labels: np.ndarray | None = None,
         binval: int | np.ndarray | None = None,
         scaling: np.ndarray | None = None,
+        spec: str | None = None,
     ) -> None:
         self._csr = csr
         self._active_positions = active_positions
@@ -667,6 +678,7 @@ class CSRConstraint(ConstraintBase):
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
+        self._spec = spec
         self._positional_cache: _PositionalCache | None = None
 
     @property
@@ -705,7 +717,17 @@ class CSRConstraint(ConstraintBase):
         d: dict[str, Any] = {"name": self._name}
         if self._cindex is not None:
             d["label_range"] = (self._cindex, self._cindex + self.full_size)
+        if self._spec is not None:
+            d[SPEC_LAYER_ATTR] = self._spec
         return d
+
+    @property
+    def spec(self) -> str | None:
+        return self._spec
+
+    @spec.setter
+    def spec(self, layer: str) -> None:
+        self._spec = layer
 
     @property
     def coords(self) -> DatasetCoordinates:
@@ -758,6 +780,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=self._binvar_labels,
             binval=self._binval,
             scaling=self._scaling,
+            spec=self._spec,
         )
 
     def _replace(self, **changes: Any) -> CSRConstraint:
@@ -790,6 +813,7 @@ class CSRConstraint(ConstraintBase):
             sign=self._sign if isinstance(self._sign, str) else self._sign[keep],
             cindex=cindex,
             name=name,
+            spec=None,
         )
         if scaling is not None:
             changes["scaling"] = scaling[positions]
@@ -1091,6 +1115,8 @@ class CSRConstraint(ConstraintBase):
         }
         if isinstance(self._sign, str):
             attrs["sign"] = self._sign
+        if self._spec is not None:
+            attrs[SPEC_LAYER_ATTR] = self._spec
         if self._binvar_labels is not None:
             attrs["is_indicator"] = True
             data_vars["_binvar_labels"] = DataArray(self._binvar_labels, dims=["_flat"])
@@ -1159,6 +1185,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            spec=attrs.get(SPEC_LAYER_ATTR),
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
@@ -1372,6 +1399,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            spec=con.data.attrs.get(SPEC_LAYER_ATTR),
         )
 
     @classmethod
@@ -1489,6 +1517,14 @@ class Constraint(ConstraintBase):
     @property
     def name(self) -> str:
         return self.attrs["name"]
+
+    @property
+    def spec(self) -> str | None:
+        return self.attrs.get(SPEC_LAYER_ATTR)
+
+    @spec.setter
+    def spec(self, layer: str) -> None:
+        self.attrs[SPEC_LAYER_ATTR] = layer
 
     @property
     def is_assigned(self) -> bool:
@@ -2127,9 +2163,9 @@ class Constraints:
         return {format_string_as_variable_name(n): n for n in self}
 
     def _format_items(
-        self, exclude: set[str] | None = None, tag: Mapping[str, str] | None = None
+        self, exclude: set[str] | None = None, tagged: bool = False
     ) -> str:
-        """Format constraint items, optionally excluding names in a group and tagging others."""
+        """Format constraint items, optionally excluding names in a group and, if *tagged*, naming each one's spec layer."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -2141,7 +2177,7 @@ class Constraints:
                 if ds.coords
                 else ""
             )
-            suffix = f" [{tag[name]}]" if tag and name in tag else ""
+            suffix = f" [{ds.spec}]" if tagged and ds.spec is not None else ""
             r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"

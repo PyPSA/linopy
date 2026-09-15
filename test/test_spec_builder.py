@@ -37,6 +37,7 @@ from conftest import (  # noqa: E402, F401
     yaml_dict,
 )
 from linopy import Model, Variable  # noqa: E402
+from linopy.constraints import CSRConstraint  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
@@ -523,3 +524,96 @@ def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
         m.spec.expressions["e"].solution,
         xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),
     )
+
+
+# ---------------------------------------------------------------------------
+# the layer stamp every built declaration carries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("build", "layer", "constraint", "expression"),
+    [
+        pytest.param(
+            lambda: Model.from_spec(yaml_dict(), DISPATCH_DATA),
+            "spec",
+            "power_balance",
+            "spend",
+            id="whole",
+        ),
+        pytest.param(extended, "extra", "p_cap", "total", id="extending"),
+    ],
+)
+def test_a_built_constraint_and_named_expression_name_their_layer(
+    build: Callable[[], Model], layer: str, constraint: str, expression: str
+) -> None:
+    m = build()
+    assert m.constraints[constraint].spec == layer
+    assert m.expressions[expression].spec == layer
+
+
+def test_a_layer_stamps_the_variable_it_builds_and_not_the_one_it_binds() -> None:
+    assert Model.from_spec(yaml_dict(), DISPATCH_DATA).variables["p"].spec == "spec"
+    assert extended().variables["p"].spec is None
+
+
+def test_a_frozen_constraint_carries_the_stamp_through_its_dense_form() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, freeze_constraints=True)
+    con = m.constraints["power_balance"]
+    assert isinstance(con, CSRConstraint)
+    assert con.spec == "spec"
+    assert con.to_dense().spec == "spec"
+
+
+@pytest.mark.parametrize(
+    "add",
+    [
+        pytest.param(
+            lambda m: m.add_expressions(m.expressions["spend"] * 2, name="twice"),
+            id="scaled",
+        ),
+        pytest.param(
+            lambda m: m.add_expressions(
+                linopy.merge([m.expressions["spend"]] * 2, dim="copy"), name="twinned"
+            ),
+            id="merged",
+        ),
+        pytest.param(
+            lambda m: m.add_constraints(
+                m.expressions["spend"] >= 0, name="spend_positive"
+            ),
+            id="constraint",
+        ),
+    ],
+)
+def test_what_the_caller_derives_from_a_stamped_expression_is_the_callers_own(
+    add: Callable[[Model], Any],
+) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    assert add(m).spec is None
+    assert m.expressions["spend"].spec == "spec"
+
+
+def test_a_named_expression_reading_a_dual_stays_on_the_spec() -> None:
+    """A dual needs a solved model, so the body cannot be folded at build time."""
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert "price" not in m.expressions
+    assert set(m.spec.expressions) == {"price"}
+
+
+def test_a_named_expression_of_a_name_the_model_holds_is_refused_before_the_build() -> (
+    None
+):
+    m = BASE_MODEL()
+    m.add_expressions(m.variables["p"].sum(), name="total")
+    with pytest.raises(ValueError, match=r"named expression\(s\) \['total'\]"):
+        m.add_spec(EXTRA_SPEC, {**EXTRA_DATA, "p": m.variables["p"]}, name="extra")
+    assert list(m.constraints) == ["power_balance"]
+    assert list(m.expressions) == ["total"]
+
+
+def test_a_layer_can_keep_its_named_expressions_lazy() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, build_expressions=False)
+    assert list(m.expressions) == []
+    assert isinstance(m.spec.expressions["spend"].expression, linopy.LinearExpression)
