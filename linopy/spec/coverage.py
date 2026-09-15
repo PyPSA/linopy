@@ -12,7 +12,7 @@ answered.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 import xarray as xr
@@ -88,6 +88,8 @@ def _collect(
     constant: bool,
     into: Obligations,
 ) -> None:
+    if isinstance(node, ms.Multiply):
+        rows = _where_present(rows, ms.variables_of(node), ctx)
     if isinstance(node, ms.Divide):
         into.divisors.extend(_divisor_uses(node, ctx, rows))
     if isinstance(node, ms.Parameter):
@@ -110,11 +112,16 @@ def _divisor_uses(quotient: ms.Divide, ctx: Context, rows: Rows) -> list[Obligat
     params = parameters_of(quotient.divisor)
     if not params:
         return []
-    needed = rows
-    for variable in sorted(ms.variables_of(quotient.numerator)):
-        present = terms.present(ctx.variable(variable))
-        needed = present if needed is None else needed & present
+    needed = _where_present(rows, ms.variables_of(quotient.numerator), ctx)
     return [(param, needed) for param in sorted(params)]
+
+
+def _where_present(rows: Rows, variables: Iterable[str], ctx: Context) -> Rows:
+    """*rows* narrowed to the coordinates every one of *variables* occupies, a term absent there carrying no parameter with it."""
+    for variable in sorted(variables):
+        present = terms.present(ctx.variable(variable))
+        rows = present if rows is None else rows & present
+    return rows
 
 
 def check_divisors(subject: str, found: Sequence[Obligation], ctx: Context) -> None:

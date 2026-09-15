@@ -70,7 +70,11 @@ SECOND_SPEC: dict[str, Any] = {
     **EXTRA_SPEC,
     "parameters": {"floor": {"dims": ["generator"]}},
     "constraints": {
-        "p_floor": {"dims": ["snapshot", "generator"], "expression": "p >= floor"}
+        "p_floor": {
+            "dims": ["snapshot", "generator"],
+            "where": "p",
+            "expression": "p >= floor",
+        }
     },
     "expressions": {"peak": "sum(p, over=generator)"},
 }
@@ -113,9 +117,17 @@ def extended(spec: dict[str, Any] = EXTRA_SPEC, **sources: Any) -> Model:
 THREE = pd.Index(["wind", "gas", "solar"], name="generator")
 
 
+SUBSET_SPEC = with_(
+    EXTRA_SPEC,
+    constraints={"p_cap": {**EXTRA_SPEC["constraints"]["p_cap"], "where": "p"}},
+)
+
+
 def subset_bound() -> Model:
     """:func:`extended` with the spec over three generators, the hand-built ``p`` spanning two."""
-    return extended(generator=THREE, cap=pd.Series([100.0, 200.0, 50.0], index=THREE))
+    return extended(
+        SUBSET_SPEC, generator=THREE, cap=pd.Series([100.0, 200.0, 50.0], index=THREE)
+    )
 
 
 EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")
@@ -369,22 +381,64 @@ DEFINED_SPEC = with_(
 )
 
 
+def sized(absence: str, expression: str) -> dict[str, Any]:
+    """:data:`ENVELOPE_SPEC` with a row over ``size`` alone, which the data empties at ``f='b'``."""
+    spec = with_(
+        ENVELOPE_SPEC,
+        variables={"size": {**ENVELOPE_SPEC["variables"]["size"], "absence": absence}},
+    )
+    spec["constraints"] = {"sized": {"dims": ["f"], "expression": expression}}
+    return spec
+
+
+def test_a_bare_variable_in_a_where_asks_whether_it_exists() -> None:
+    m = solved(DEFINED_SPEC, ENVELOPE_DATA)
+    x = m.solution["x"]
+    assert float(x.sel(f="a")) == pytest.approx(25.0)
+    assert float(x.sel(f="b")) == pytest.approx(0.0)
+
+
 @pytest.mark.parametrize(
-    ("spec", "unsized"),
+    ("spec", "match"),
     [
-        pytest.param(ENVELOPE_SPEC, 100.0, id="an-absent-term-drops-the-row"),
         pytest.param(
-            DEFINED_SPEC, 0.0, id="a-bare-variable-in-a-where-asks-whether-it-exists"
+            ENVELOPE_SPEC,
+            r"(?s)constraint 'envelope': 1 row\(s\) hold no variable term.*f='b'",
+            id="an-absent-term-empties-the-whole-row",
+        ),
+        pytest.param(
+            sized("undefined", "size <= relmax"),
+            r"(?s)constraint 'sized'.*absence: zero on the variables",
+            id="an-undefined-absence-is-refused-either-way",
+        ),
+        pytest.param(
+            sized("zero", "size <= relmax"),
+            r"(?s)constraint 'sized'.*Supply the rows of the variables",
+            id="a-zero-absence-is-refused-where-the-other-side-binds",
         ),
     ],
 )
-def test_an_absent_variable_takes_its_row_unless_a_where_says_otherwise(
-    spec: dict[str, Any], unsized: float
+def test_a_row_the_data_emptied_of_variables_is_refused(
+    spec: dict[str, Any], match: str
 ) -> None:
-    m = solved(spec, ENVELOPE_DATA)
-    x = m.solution["x"]
-    assert float(x.sel(f="a")) == pytest.approx(25.0)
-    assert float(x.sel(f="b")) == pytest.approx(unsized)
+    """Such a row would read ``0 sense rhs``, leave the problem and let the solver call it optimal."""
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, ENVELOPE_DATA)
+
+
+def test_a_dead_row_of_zero_absences_against_a_zero_side_is_only_warned_about() -> None:
+    with pytest.warns(UserWarning, match=r"constraint 'sized'.*trivially true"):
+        m = solved(sized("zero", "size >= 0"), ENVELOPE_DATA)
+    assert m.termination_condition == "optimal"
+    assert (m.constraints["sized"].vars.sel(f="b") == -1).all()
+
+
+def test_a_coefficient_needs_no_row_where_its_variable_is_absent() -> None:
+    spec = with_(DEFINED_SPEC, expressions={"sized": "relmax * size"})
+    data = {**ENVELOPE_DATA, "relmax": pd.Series([0.5], index=F[:1])}
+    m = solved(spec, data)
+    assert float(m.solution["x"].sel(f="a")) == pytest.approx(25.0)
+    assert float(m.spec.expressions["sized"].solution.sel(f="a")) == pytest.approx(25.0)
 
 
 SCALAR_SWITCH: dict[str, Any] = {
