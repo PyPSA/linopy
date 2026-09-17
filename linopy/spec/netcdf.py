@@ -37,6 +37,7 @@ from math_spec import __version__ as MATH_SPEC_VERSION
 from linopy.io import (
     DTYPE_ATTR,
     SPEC_ATTR,
+    SPEC_NAME_ATTR,
     SPEC_VERSION_ATTR,
     get_prefix,
     restamp_coords,
@@ -59,10 +60,10 @@ HOLES: dict[str, Any] = {"f": np.nan, "O": np.nan, "M": np.datetime64("NaT")}
 
 def encode(spec: ModelSpec) -> xr.Dataset:
     """
-    The spec's own dataset: its text, its master coordinates and its parameters.
+    The spec's own dataset: its text, its name, its master coordinates and its parameters.
 
-    The spec text is the dataset's one attribute, which the merge lifts to the
-    file's. Beside it sits one array of labels per master coordinate and, per
+    The spec text, the header and the name are the dataset's attributes,
+    which the merge lifts to the file's. Beside it sits one array of labels per master coordinate and, per
     parameter, either its values or -- where it is coded -- its codes and its
     categories. The dataset carries no coordinates of its own: an index
     coordinate is dropped on read together with the dimension it indexes once
@@ -82,7 +83,7 @@ def encode(spec: ModelSpec) -> xr.Dataset:
             arrays[PARAM + str(name)] = _array(arr.to_numpy(), arr.dims, str(arr.dtype))
     header = json.dumps({"math_spec": MATH_SPEC_VERSION, "format": FORMAT})
     written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
-        {SPEC_ATTR: spec.text, SPEC_VERSION_ATTR: header}
+        {SPEC_ATTR: spec.text, SPEC_VERSION_ATTR: header, SPEC_NAME_ATTR: spec.name}
     )
     if spec.unspecified.objective:
         # Only when true, so a file written from an untouched spec is unchanged.
@@ -127,6 +128,7 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     restamp_coords(model, coords)
     return restore(
         model,
+        str(ds.attrs.get(SPEC_NAME_ATTR, "spec")),
         text,
         xr.Dataset(arrays).assign_coords(coords),
         bool(ds.attrs.get(OBJECTIVE_ATTR, 0)),

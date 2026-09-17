@@ -50,6 +50,7 @@ DTYPE_ATTR = "_linopy_dtype"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 SPEC_ATTR = "_linopy_spec"
 SPEC_VERSION_ATTR = SPEC_ATTR + "-version"
+SPEC_NAME_ATTR = SPEC_ATTR + "-name"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 

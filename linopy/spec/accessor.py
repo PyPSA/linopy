@@ -41,6 +41,7 @@ from math_spec import program as ms
 from math_spec.typesetting import FormatName
 
 from linopy.constants import warn_evolving_api
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.semantics import is_v1
 from linopy.spec import terms
@@ -81,8 +82,9 @@ class Unspecified:
     variables, constraints
         Added beside the spec, a piecewise formulation's own aside.
     expressions
-        Everything in ``model.expressions``: a spec's named expressions are
-        read lazily off ``model.spec`` and never live there.
+        Added beside the spec. A named expression that holds a variable term
+        lives in ``model.expressions`` stamped with the spec's name, and is
+        not drift.
     sos
         Variables given a special-ordered set the spec does not declare.
         ``add_sos_constraints`` writes attributes onto a variable rather than
@@ -137,9 +139,14 @@ def attach(
     spec: SpecLike,
     sources: Mapping[str, Any] | xr.Dataset,
     retain: Retain,
+    build_expressions: bool = True,
 ) -> ModelSpec:
     """
     Build *spec* with *sources* into the empty *model* and return its accessor.
+
+    The spec is named after its file's stem, else ``"spec"``. With
+    *build_expressions* the named expressions holding a variable term are
+    built into ``model.expressions``; without, they fold on read.
 
     Raises
     ------
@@ -163,17 +170,19 @@ def attach(
             "add_spec builds into an empty model, and this one already holds "
             f"{len(model.variables)} variable(s) and {len(model.constraints)} constraint(s)."
         )
-    text, program = normalize_spec(spec)
+    text, program, stem = normalize_spec(spec)
     attached: Attached = attach_data(program, sources, retain=retain)
     # Resolved before the build, so a parameter no declaration reads cannot fail
     # halfway through one and leave a model too full to build into again.
     parameters = attached.retained().assign_coords(dict(attached.coords))
-    build(model, attached)
-    return ModelSpec(model, program, text, parameters, attached)
+    name = stem or "spec"
+    build(model, attached, name, build_expressions)
+    return ModelSpec(model, name, program, text, parameters, attached)
 
 
 def restore(
     model: Model,
+    name: str,
     text: str,
     parameters: xr.Dataset,
     objective_replaced: bool = False,
@@ -184,7 +193,7 @@ def restore(
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    spec = ModelSpec(model, to_program(text), text, parameters, None)
+    spec = ModelSpec(model, name, to_program(text), text, parameters, None)
     spec._objective_replaced = objective_replaced
     return spec
 
@@ -196,9 +205,9 @@ def _is_yaml_text(spec: str) -> bool:
     return ":" in spec and not Path(spec).is_file()
 
 
-def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program]:
+def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
     """
-    *spec* as the YAML text kept on the model, and lowered.
+    *spec* as the YAML text kept on the model, lowered, and the file's stem where it came from one.
 
     A ``str`` is YAML text if it holds a newline, opens a mapping or a
     sequence, or holds a ``:`` and names no file; every other ``str`` is a
@@ -227,6 +236,7 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program]:
         )
     if isinstance(spec, str) and not _is_yaml_text(spec):
         spec = Path(spec)
+    stem = spec.stem if isinstance(spec, Path) else None
     if isinstance(spec, Path):
         if not spec.is_file():
             raise FileNotFoundError(
@@ -251,7 +261,7 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program]:
             "the spec declares nothing: no dimension, no parameter and no variable. "
             "There is nothing to attach data to and nothing to build."
         )
-    return text, program
+    return text, program, stem
 
 
 def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
@@ -273,6 +283,9 @@ class ModelSpec:
 
     Attributes
     ----------
+    name
+        The spec's name, its file's stem or ``"spec"``: the stamp everything
+        it built carries in ``.spec``.
     program
         The lowered spec.
     text
@@ -282,12 +295,14 @@ class ModelSpec:
     def __init__(
         self,
         model: Model,
+        name: str,
         program: ms.Program,
         text: str,
         parameters: xr.Dataset,
         attached: Attached | None,
     ) -> None:
         self._model = model
+        self.name = name
         self.program = program
         self.text = text
         self._parameters = parameters
@@ -315,6 +330,7 @@ class ModelSpec:
         """The same spec, read off *model*, holding its own copy of the parameters."""
         copied = ModelSpec(
             model,
+            self.name,
             self.program,
             self.text,
             self._parameters.copy(deep=deep),
@@ -389,15 +405,17 @@ class ModelSpec:
         return Unspecified(
             variables=tuple(
                 n
-                for n in model.variables
-                if n not in program.variables and n not in pw_variables
+                for n, v in model.variables.items()
+                if v.spec is None and n not in pw_variables
             ),
             constraints=tuple(
                 n
-                for n in model.constraints
-                if n not in program.constraints and n not in pw_constraints
+                for n, c in model.constraints.items()
+                if c.spec is None and n not in pw_constraints
             ),
-            expressions=tuple(model.expressions),
+            expressions=tuple(
+                n for n, e in model.expressions.items() if e.spec is None
+            ),
             sos=tuple(
                 n
                 for n in model.variables
@@ -406,6 +424,21 @@ class ModelSpec:
             piecewise=tuple(model._piecewise_formulations),
             objective=self._objective_replaced,
         )
+
+    def refuse_removal(
+        self, variables: set[str], constraints: set[str], expressions: set[str]
+    ) -> None:
+        """Refuse to drop a model name this spec built, which would leave the model short of what it typesets."""
+        model = self._model
+        hit = {n for n in variables if model.variables[n].spec is not None}
+        hit |= {n for n in constraints if model.constraints[n].spec is not None}
+        hit |= {n for n in expressions if model.expressions[n].spec is not None}
+        if hit:
+            verb = "is" if len(hit) == 1 else "are"
+            raise ValueError(
+                f"{_joined(sorted(hit))} {verb} declared by the spec this model was built "
+                f"from, and a spec-built model keeps what its spec declares."
+            )
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
         """
@@ -542,6 +575,7 @@ class ModelSpec:
             self.coords,
             self.lookups,
             Parameters(self.program, resolve),
+            self.name,
             solved=True,
         )
 
@@ -558,9 +592,10 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
                 f"unknown named expression '{name}'. "
                 + did_you_mean(name, self._spec.program.named_expressions)
             )
-        return NamedExpression(
-            self._spec, name, self._spec._context(self._spec._resolve)
-        )
+        spec = self._spec
+        held = spec._model.expressions.data.get(name)
+        stored = held if held is not None and held.spec == spec.name else None
+        return NamedExpression(spec, name, spec._context(spec._resolve), stored)
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._spec.program.named_expressions)
@@ -632,15 +667,26 @@ class NamedExpression(Declaration):
     what ``retain`` kept, and the sources behind it for the rest;
     ``evaluate(name, sources)`` attaches fresh data instead.
 
+    Where the spec built the expression into ``model.expressions``,
+    ``expressions[name].expression`` is that stored object and needs no
+    parameters at all; ``solution`` folds afresh and does.
+
     Attributes
     ----------
     node
         The lowered expression body, math-spec's own AST handle.
     """
 
-    def __init__(self, spec: ModelSpec, name: str, ctx: Context) -> None:
+    def __init__(
+        self,
+        spec: ModelSpec,
+        name: str,
+        ctx: Context,
+        stored: LinearExpression | QuadraticExpression | None = None,
+    ) -> None:
         super().__init__(spec, name)
         self._ctx = ctx
+        self._stored = stored
 
     @property
     def node(self) -> ms.ExpressionNode:
@@ -657,11 +703,14 @@ class NamedExpression(Declaration):
         """
         The linopy symbolic expression, its variables unsolved.
 
-        A named expression is read affinely, so this is a ``LinearExpression``
-        where the body carries variables, a bare ``Variable``, a ``DataArray``
-        for a data-only body or a ``float`` for a constant. Not wrapped: a
-        degree-0 array can hold holes that ``from_constant`` would refuse.
+        The entry ``model.expressions`` holds where the spec built one, else
+        folded here: a ``LinearExpression`` where the body carries variables,
+        a bare ``Variable``, a ``DataArray`` for a data-only body or a
+        ``float`` for a constant. Not wrapped: a degree-0 array can hold holes
+        that ``from_constant`` would refuse.
         """
+        if self._stored is not None:
+            return self._stored
         return evaluate_named(self._name, self._ctx.unsolved)
 
     @property

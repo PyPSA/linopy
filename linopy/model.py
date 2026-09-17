@@ -47,6 +47,7 @@ from linopy.constants import (
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    SPEC_STAMP_ATTR,
     TERM_DIM,
     ModelStatus,
     Result,
@@ -462,6 +463,7 @@ class Model:
         spec: SpecLike,
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
+        build_expressions: bool = True,
     ) -> Model:
         """
         Build a math-spec program with its data into this empty model.
@@ -471,6 +473,18 @@ class Model:
         the objective are added as the spec declares them; the spec text, the
         parameters the named expressions read and the lookups are kept on the
         model, and the named expressions are read back through ``model.spec``.
+
+        Everything the spec builds carries the spec's name in its ``attrs``
+        under ``"spec"``, read through the ``spec`` property of a
+        ``Variable``, ``Constraint`` or expression. The name is the spec
+        file's stem, else ``"spec"``.
+
+        A named expression whose body holds a variable term is built as well
+        and added to ``model.expressions`` under its declared name, stamped
+        like the rest, so ``model.expressions[name]`` and
+        ``model.spec.expressions[name].expression`` are one object. A
+        data-only body (parameters and constants alone) and one reading a
+        constraint's ``dual`` stay on the spec, read lazily.
 
         Parameters
         ----------
@@ -491,6 +505,13 @@ class Model:
             stays the caller's and is never written to. This decides what a
             netcdf file holds, not what this session can read: ``model.spec``
             falls back to ``sources`` for a parameter it did not keep.
+        build_expressions : bool, default True
+            Whether to build the spec's variable-bearing named expressions
+            into ``model.expressions``. ``False`` stores nothing and
+            ``model.spec.expressions[name].expression`` folds on read, the
+            escape hatch for a spec whose named expressions are too large to
+            hold. Not persisted: a model read from a file folds whatever the
+            file does not hold.
 
         Returns
         -------
@@ -514,7 +535,7 @@ class Model:
         """
         from linopy.spec.accessor import attach
 
-        self._spec = attach(self, spec, sources, retain)
+        self._spec = attach(self, spec, sources, retain, build_expressions)
         return self
 
     @classmethod
@@ -523,6 +544,7 @@ class Model:
         spec: SpecLike,
         sources: Mapping[str, Any] | Dataset,
         retain: Retain = "report",
+        build_expressions: bool = True,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -530,7 +552,9 @@ class Model:
 
         ``model_kwargs`` are passed to :class:`Model`.
         """
-        return cls(**model_kwargs).add_spec(spec, sources, retain=retain)
+        return cls(**model_kwargs).add_spec(
+            spec, sources, retain=retain, build_expressions=build_expressions
+        )
 
     @property
     def dual(self) -> Dataset:
@@ -714,25 +738,16 @@ class Model:
 
         var_names, con_names = _get_piecewise_groups(self)
         model_string = f"Linopy {self.type} model"
-        var_tag: set[str] | None = None
-        con_tag: set[str] | None = None
-        expr_string = self.expressions._format_items()
+        tag_variables = tag_constraints = tag_expressions = False
         if self._spec is not None:
             model_string += ", built from a math-spec"
-            program = self._spec.program
             unspecified = self._spec.unspecified
-            if unspecified.variables:
-                var_tag = set(program.variables)
-            if unspecified.constraints:
-                con_tag = set(program.constraints)
-            eager = expr_string if len(self.expressions) else ""
-            spec = "".join(
-                f" * {name} ({', '.join(e.dims)}) [spec]\n"
-                for name, e in self._spec.expressions.items()
-            )
-            expr_string = eager + spec or "<empty>\n"
-        var_string = self.variables._format_items(exclude=var_names, tag=var_tag)
-        con_string = self.constraints._format_items(exclude=con_names, tag=con_tag)
+            tag_variables = bool(unspecified.variables)
+            tag_constraints = bool(unspecified.constraints)
+            tag_expressions = bool(unspecified.expressions)
+        var_string = self.variables._format_items(var_names, tag_variables)
+        expr_string = self.expressions._format_items(tagged=tag_expressions)
+        con_string = self.constraints._format_items(con_names, tag_constraints)
         header = f"{model_string}\n{'=' * len(model_string)}\n"
         if self._spec is not None and self._spec.description:
             header += f"{self._spec.description}\n"
@@ -1149,6 +1164,7 @@ class Model:
         if self.chunk:
             expr = expr.chunk(self.chunk)
 
+        expr.attrs.pop(SPEC_STAMP_ATTR, None)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr
@@ -1491,6 +1507,7 @@ class Model:
         self.check_force_dim_names(data)
 
         data = self._allocate_constraint_labels(data, name, mask)
+        data.attrs.pop(SPEC_STAMP_ATTR, None)
 
         if self.chunk:
             data = data.chunk(self.chunk)
@@ -1660,6 +1677,9 @@ class Model:
 
         to_remove = [k for k, con in self.constraints.items() if con.has_labels(labels)]
 
+        if self._spec is not None:
+            self._spec.refuse_removal({name}, set(to_remove), set())
+
         if to_remove:
             warnings.warn(
                 f"Removing variable '{name}' also removes constraints {to_remove} "
@@ -1694,13 +1714,12 @@ class Model:
         -------
         None.
         """
-        if isinstance(name, list):
-            for n in name:
-                logger.debug(f"Removed constraint: {n}")
-                self.constraints.remove(n)
-        else:
-            logger.debug(f"Removed constraint: {name}")
-            self.constraints.remove(name)
+        names = [name] if isinstance(name, str) else name
+        if self._spec is not None:
+            self._spec.refuse_removal(set(), set(names), set())
+        for n in names:
+            logger.debug(f"Removed constraint: {n}")
+            self.constraints.remove(n)
 
     def remove_expressions(self, name: str | list[str]) -> None:
         """
@@ -1719,6 +1738,8 @@ class Model:
         None.
         """
         names = [name] if isinstance(name, str) else name
+        if self._spec is not None:
+            self._spec.refuse_removal(set(), set(), set(names))
         for n in names:
             logger.debug(f"Removed expression: {n}")
             self.expressions.remove(n)

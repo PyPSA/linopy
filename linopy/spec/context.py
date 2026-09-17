@@ -17,10 +17,11 @@ class Context:
     """
     Everything evaluating a node needs beyond the node.
 
-    ``solved`` is the fold's switch: a build leaves it false and a variable
-    enters an expression as its linopy term; a fold sets it true and a
-    variable enters as its solved values, so a named expression reads off the
-    primal.
+    ``name`` is the spec's name, the stamp everything a build adds to the
+    model carries. ``solved`` is the fold's switch: a build leaves it false
+    and a variable enters an expression as its linopy term; a fold sets it
+    true and a variable enters as its solved values, so a named expression
+    reads off the primal.
     """
 
     model: Model
@@ -28,6 +29,7 @@ class Context:
     coords: Mapping[str, pd.Index]
     lookups: Mapping[str, Mapping[str, xr.DataArray]]
     parameters: Mapping[str, xr.DataArray]
+    name: str
     solved: bool = field(default=False)
 
     @property

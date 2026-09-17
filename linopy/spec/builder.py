@@ -2,8 +2,10 @@
 Program plus attached data to linopy declarations.
 
 A build hands every variable to linopy as its term, then adds special-ordered
-sets, constraints and the objective; which linopy call each construct becomes
-is one branch of :func:`linopy.spec.evaluate.evaluate`.
+sets, constraints, the objective and the named expressions that carry a
+variable term; which linopy call each construct becomes is one branch of
+:func:`linopy.spec.evaluate.evaluate`. Everything built is stamped with the
+spec's name.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from linopy.spec.context import Context
 from linopy.spec.coverage import check_bounds_cover, check_coverage
 from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluate import carried, evaluate
+from linopy.spec.nodes import walk
 from linopy.spec.parameters import Parameters
 from linopy.spec.terms import Term, Value, live_rows
 from linopy.spec.where import as_linopy_mask, evaluate_where
@@ -31,14 +34,17 @@ _FLIPPED = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
-def build(model: Model, attached: Attached) -> None:
+def build(
+    model: Model, attached: Attached, name: str, build_expressions: bool = True
+) -> None:
     """
-    Add every declaration of the attached program to *model*.
+    Add every declaration of the attached program to *model* as the spec *name*.
 
-    Variables, special-ordered sets, constraints and the objective, in that
-    order; then every named expression is checked for divisor and coefficient
-    coverage, so a body that cannot be folded is refused at build rather than
-    at read.
+    Variables, special-ordered sets, constraints, the objective and, with
+    *build_expressions*, the named expressions holding a variable term, in
+    that order. Every named expression is checked for divisor and
+    coefficient coverage either way, so a body that cannot be folded is
+    refused at build rather than at read.
     """
     check_supported(attached.program)
     ctx = Context(
@@ -47,14 +53,14 @@ def build(model: Model, attached: Attached) -> None:
         attached.coords,
         attached.lookups,
         Parameters(attached.program, attached.parameter),
+        name,
     )
     curves.validate(ctx.program, ctx.parameters)
     _variables(ctx)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
-    for name, declared in ctx.program.named_expressions.items():
-        check_coverage(f"expression '{name}'", (declared.expression,), ctx, None)
+    _expressions(ctx, build_expressions)
 
 
 def check_supported(program: ms.Program) -> None:
@@ -78,7 +84,7 @@ def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
         rows = evaluate_where(declared.where, ctx)
         check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))
-        ctx.model.add_variables(
+        variable = ctx.model.add_variables(
             lower=_bound(declared.lower, ctx),
             upper=_bound(declared.upper, ctx),
             coords={d: ctx.coords[d] for d in declared.dims},
@@ -87,6 +93,7 @@ def _variables(ctx: Context) -> None:
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
         )
+        variable.spec = ctx.name
 
 
 def _bound(node: ms.ExpressionNode, ctx: Context) -> float | xr.DataArray:
@@ -122,7 +129,10 @@ def _constraints(ctx: Context) -> None:
         _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
             term, other = carried(term, other)
-        ctx.model.add_constraints(term, _SIGN[sense], other, name=name, mask=mask)
+        built = ctx.model.add_constraints(
+            term, _SIGN[sense], other, name=name, mask=mask
+        )
+        built.spec = ctx.name
 
 
 def _check_live(
@@ -218,3 +228,20 @@ def _objective(ctx: Context) -> None:
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
     ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])
+
+
+def _expressions(ctx: Context, build: bool) -> None:
+    """
+    Every named expression coverage-checked; with *build*, the ones holding a variable term added to the model.
+
+    A data-only body has no linopy term to hold and stays on the spec; so
+    does one reading a ``dual``, which needs a solved model.
+    """
+    for name, declared in ctx.program.named_expressions.items():
+        body = declared.expression
+        check_coverage(f"expression '{name}'", (body,), ctx, None)
+        if not build or any(isinstance(n, ms.Dual) for n in walk(body)):
+            continue
+        value = evaluate(body, ctx)
+        if isinstance(value, Variable | LinearExpression | QuadraticExpression):
+            ctx.model.add_expressions(value, name=name).spec = ctx.name

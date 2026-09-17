@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from conftest import (  # noqa: E402, F401
     yaml_dict,
 )
 from linopy import Model  # noqa: E402
+from linopy.constraints import CSRConstraint  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
@@ -494,3 +496,68 @@ def test_a_quadratic_objective_builds() -> None:
     )
     m = Model.from_spec(spec, {"t": T})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
+
+
+# ---------------------------------------------------------------------------
+# the stamp every built declaration carries
+# ---------------------------------------------------------------------------
+
+
+def test_what_the_spec_builds_names_it() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    assert m.variables["p"].spec == "spec"
+    assert m.constraints["power_balance"].spec == "spec"
+    assert m.expressions["spend"].spec == "spec"
+
+
+def test_a_spec_read_from_a_file_is_named_after_it(tmp_path: Path) -> None:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    m = Model.from_spec(path, DISPATCH_DATA)
+    assert m.spec.name == "dispatch"
+    assert m.variables["p"].spec == "dispatch"
+
+
+def test_a_frozen_constraint_carries_the_stamp_through_its_dense_form() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, freeze_constraints=True)
+    con = m.constraints["power_balance"]
+    assert isinstance(con, CSRConstraint)
+    assert con.spec == "spec"
+    assert con.to_dense().spec == "spec"
+
+
+@pytest.mark.parametrize(
+    "add",
+    [
+        pytest.param(
+            lambda m: m.add_expressions(m.expressions["spend"] * 2, name="twice"),
+            id="scaled",
+        ),
+        pytest.param(
+            lambda m: m.add_expressions(
+                linopy.merge([m.expressions["spend"]] * 2, dim="copy"), name="twinned"
+            ),
+            id="merged",
+        ),
+        pytest.param(
+            lambda m: m.add_constraints(
+                m.expressions["spend"] >= 0, name="spend_positive"
+            ),
+            id="constraint",
+        ),
+    ],
+)
+def test_what_the_caller_derives_from_a_stamped_expression_is_the_callers_own(
+    add: Callable[[Model], Any],
+) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
+    assert add(m).spec is None
+    assert m.expressions["spend"].spec == "spec"
+
+
+def test_a_named_expression_reading_a_dual_stays_on_the_spec() -> None:
+    """A dual needs a solved model, so the body cannot be folded at build time."""
+    spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert list(m.expressions) == []
+    assert set(m.spec.expressions) == {"price"}

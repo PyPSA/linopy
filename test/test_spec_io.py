@@ -149,6 +149,9 @@ def test_a_retain_none_model_evaluates_after_a_round_trip(
     assert not p.spec.parameters.data_vars
     with pytest.raises(SpecDataError, match="no longer holds the sources"):
         p.spec.expressions["spend"].solution
+    stored = p.spec.expressions["spend"].expression
+    assert isinstance(stored, linopy.LinearExpression)
+    assert_linequal(stored, m.expressions["spend"])
     assert_arrayequal(
         m.spec.expressions["spend"].solution,
         p.spec.evaluate("spend", DISPATCH_DATA).solution,
@@ -370,3 +373,26 @@ def test_the_pypsa_example_round_trips(tmp_path: Path, engine: str) -> None:
 
     assert_model_equal(m, p)
     assert set(p.spec.coords) == set(m.spec.coords)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_round_trip_keeps_the_stamp_and_the_name(tmp_path: Path, engine: str) -> None:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    p = roundtrip(Model.from_spec(path, DISPATCH_DATA), tmp_path, engine)
+    assert p.spec.name == "dispatch"
+    assert p.variables["p"].spec == "dispatch"
+    assert p.constraints["power_balance"].spec == "dispatch"
+    assert p.expressions["spend"].spec == "dispatch"
+    assert p.spec.expressions["spend"].expression is p.expressions["spend"]
+
+
+def test_a_frozen_constraint_keeps_the_stamp_through_a_round_trip(
+    tmp_path: Path,
+) -> None:
+    """A frozen constraint carries the stamp beside its rows; the scipy engine cannot write its dimension attribute at all."""
+    m = Model.from_spec(
+        EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", freeze_constraints=True
+    )
+    p = roundtrip(m, tmp_path, "netcdf4")
+    assert p.constraints["power_balance"].spec == "spec"

@@ -260,7 +260,7 @@ VIEWS_SPEC: dict[str, Any] = {
     ("name", "kind"),
     [
         ("spend", linopy.LinearExpression),
-        ("bare", linopy.Variable),
+        ("bare", linopy.LinearExpression),
         ("levels", xr.DataArray),
         ("answer", float),
     ],
@@ -268,6 +268,21 @@ VIEWS_SPEC: dict[str, Any] = {
 def test_expression_is_the_unsolved_linopy_term(name: str, kind: type) -> None:
     m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
     assert isinstance(m.spec.expressions[name].expression, kind)
+
+
+@pytest.mark.parametrize("name", ["spend", "bare"])
+def test_a_variable_bearing_named_expression_is_the_model_expression(name: str) -> None:
+    """The container holds one object per name; the data-only bodies stay on the spec."""
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
+    assert set(m.expressions) == {"spend", "bare"}
+    assert m.spec.expressions[name].expression is m.expressions[name]
+    assert m.expressions[name].spec == "spec"
+
+
+def test_build_expressions_false_keeps_the_named_expressions_lazy() -> None:
+    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA, build_expressions=False)
+    assert list(m.expressions) == []
+    assert isinstance(m.spec.expressions["spend"].expression, linopy.LinearExpression)
 
 
 def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
@@ -319,14 +334,16 @@ def test_repr_caps_long_sections() -> None:
     assert "e11" not in text
 
 
-def test_model_repr_shows_the_spec_and_tags_only_expressions() -> None:
+def test_model_repr_of_a_whole_spec_model_carries_no_tags() -> None:
+    """Everything is the spec's, so naming the spec on every line would say nothing."""
     text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
     assert "Linopy LP model, built from a math-spec" in text
     assert "Least-cost dispatch of a generator fleet against an hourly load." in text
-    assert " * spend (snapshot) [spec]" in text
-    assert " * usage (snapshot, generator) [spec]" in text
+    assert " * spend (snapshot)\n" in text
+    assert " * usage (snapshot, generator)\n" in text
     assert " * p (snapshot, generator)\n" in text
     assert " * power_balance (snapshot)\n" in text
+    assert "[spec]" not in text
     assert "<empty>" not in text
 
 
@@ -403,6 +420,24 @@ def test_unspecified_sees_what_carries_no_name_of_its_own() -> None:
     assert found.sos == ("p",)
     assert found.objective
     assert found.variables == () and found.constraints == ()
+
+
+def test_removing_what_the_spec_built_is_refused() -> None:
+    m = hybrid()
+    m.add_expressions(m.variables["reserve"] * 2.0, name="reserve_cost")
+    with pytest.raises(ValueError, match="p and power_balance are declared by"):
+        m.remove_variables("p")
+    with pytest.raises(ValueError, match="power_balance is declared by the spec"):
+        m.remove_constraints("power_balance")
+    with pytest.raises(ValueError, match="spend is declared by the spec"):
+        m.remove_expressions("spend")
+    with pytest.raises(ValueError, match="spend and usage are declared by the spec"):
+        m.remove_expressions(["spend", "usage", "reserve_cost"])
+    assert "reserve_cost" in m.expressions
+    m.remove_variables("reserve")
+    m.remove_expressions("reserve_cost")
+    assert "reserve" not in m.variables and "reserve_cap" not in m.constraints
+    assert "reserve_cost" not in m.expressions
 
 
 def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
