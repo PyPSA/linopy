@@ -431,9 +431,6 @@ REFUSALS = [
         r"'cost' is declared 'float'.*'str'",
         id="str-for-float",
     ),
-    pytest.param(
-        {"csot": COST}, r"source key 'csot'.*Did you mean 'cost'", id="unknown-key"
-    ),
     pytest.param({"f": None}, r"dimension 'f' has no index", id="missing-dimension"),
     pytest.param(
         {"f": {"a": 1}},
@@ -543,6 +540,53 @@ def test_sources_are_pulled_by_key_on_demand(
     attached.parameter("cap")
     attached.parameter("cap")
     assert sources.pulled.count("cap") == 2
+
+
+class ByKeyOnly:
+    def __getitem__(self, key: str) -> Any:
+        raise AssertionError("nothing may be read out of a source without keys()")
+
+
+def test_sources_must_offer_keys(program: Any) -> None:
+    with pytest.raises(TypeError, match="sources must offer keys"):
+        attach(program, ByKeyOnly())  # type: ignore[arg-type]
+
+
+def test_an_extra_source_key_is_ignored_and_stays_unused(
+    program: Any, good: dict[str, Any]
+) -> None:
+    attached = attach(program, {**good, "notes": COST})
+    assert attached.unused == frozenset(
+        {"cost", "cap", "flag", "rate", "lead", "notes"}
+    )
+    for name in program.parameters:
+        attached.parameter(name)
+    assert attached.unused == frozenset({"notes"})
+
+
+def test_a_source_key_close_to_a_declared_name_warns(
+    program: Any, good: dict[str, Any]
+) -> None:
+    sources = sources_from(good, {"csot": COST, "cost": None})
+    with pytest.warns(UserWarning, match=r"csot -> cost"):
+        attached = attach(program, sources)
+    with pytest.raises(SpecDataError, match="no data provided for parameter 'cost'"):
+        attached.parameter("cost")
+
+
+def test_a_source_key_like_no_declared_name_is_silent(
+    program: Any, good: dict[str, Any], recwarn: Any
+) -> None:
+    attach(program, {**good, "notes": COST})
+    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+
+
+@pytest.mark.parametrize("extra", ["csot", "notes"])
+def test_strict_refuses_every_extra_source_key(
+    program: Any, good: dict[str, Any], extra: str
+) -> None:
+    with pytest.raises(SpecDataError, match=f"source key '{extra}' names"):
+        attach(program, {**good, extra: COST}, strict=True)
 
 
 @pytest.mark.parametrize(
@@ -658,8 +702,9 @@ def test_derived_parameter_is_not_bound_from_sources() -> None:
     assert set(attached.retained().data_vars) == {"bp_x", "bp_y"}
     with pytest.raises(SpecDataError, match="emitted by piecewise block 'curve'"):
         attached.parameter(derived[0])
+    assert derived[0] in attach(program, {**sources, derived[0]: 1.0}).unused
     with pytest.raises(SpecDataError, match=derived[0]):
-        attach(program, {**sources, derived[0]: 1.0})
+        attach(program, {**sources, derived[0]: 1.0}, strict=True)
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +740,7 @@ PARITY_CASES = [
     pytest.param({"cost": {"a": 1.0, "b": None}}, SpecDataError, id="a-hole-in-a-dict"),
     pytest.param({"cost": NULL_FRAME}, SpecDataError, id="a-hole-in-a-tidy-frame"),
     pytest.param({"cost": pd.Series({"a": 1, "b": 2})}, ACCEPTED, id="whole-numbers"),
-    pytest.param({"csot": COST}, SpecDataError, id="an-undeclared-source-key"),
+    pytest.param({"notes": COST}, ACCEPTED, id="an-undeclared-source-key-is-ignored"),
     pytest.param({"cost": DEEP_ROWS}, SpecDataError, id="a-series-too-deep"),
 ]
 

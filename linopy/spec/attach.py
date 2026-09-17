@@ -13,8 +13,10 @@ is the builder's question, not this module's.
 
 from __future__ import annotations
 
+import difflib
+import warnings
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 import numpy as np
@@ -73,6 +75,7 @@ def attach(
     sources: Mapping[str, Any] | xr.Dataset,
     *,
     retain: Retain = "report",
+    strict: bool = False,
 ) -> Attached:
     """
     Attach *sources* to *program*: master coordinates now, parameters on demand.
@@ -82,20 +85,27 @@ def attach(
     program
         The lowered spec.
     sources
-        Data keyed by declared name. Any mapping works; it is read by
-        key and never iterated beyond ``sources.keys()``. An ``xr.Dataset``
-        is accepted too: its indexes are dimension sources, its data
-        variables parameters and lookups.
+        Data keyed by declared name. Any mapping works; ``keys()`` is
+        called once, and everything after that is read by key. An
+        ``xr.Dataset`` is accepted too: its indexes are dimension sources,
+        its data variables parameters and lookups.
     retain
         Which parameters :meth:`Attached.retained` persists.
+    strict
+        Whether a key naming nothing the spec declares is refused. By
+        default it is ignored and reported by :attr:`Attached.unused`, so
+        one mapping can feed several specs; a key close to a declared name
+        is warned about either way.
 
     Raises
     ------
     SpecDataError
-        A ``retain`` outside its three values, a key naming
-        nothing the spec declares, a reached dimension or a lookup with no
-        source, a duplicated dimension member, or a lookup breaking the
-        rules a map has.
+        A ``retain`` outside its three values, a reached dimension or a
+        lookup with no source, a duplicated dimension member, a lookup
+        breaking the rules a map has, or, under *strict*, a key naming
+        nothing the spec declares.
+    TypeError
+        *sources* offers no ``keys()``.
     """
     warn_evolving_api("spec", EVOLVING_MESSAGE)
     if retain not in _RETAIN:
@@ -104,11 +114,10 @@ def attach(
         )
     if isinstance(sources, xr.Dataset):
         sources = _dataset_sources(sources)
-    keys = frozenset(sources.keys())
-    _check_keys(program, keys)
-    coords = _master_coords(program, sources, keys)
-    lookups = _lookups(program, sources, keys, coords)
-    return Attached(program, coords, lookups, retain, sources, keys)
+    read = Sources(sources, _attachable(program), strict)
+    coords = _master_coords(program, read)
+    lookups = _lookups(program, read, coords)
+    return Attached(program, coords, lookups, retain, read)
 
 
 @dataclass(frozen=True, eq=False)
@@ -137,8 +146,19 @@ class Attached:
     coords: Mapping[str, pd.Index]
     lookups: Mapping[str, Mapping[str, xr.DataArray]]
     retain: Retain
-    sources: Mapping[str, Any]
-    _keys: frozenset[str] = field(repr=False)
+    sources: Sources
+
+    @property
+    def unused(self) -> frozenset[str]:
+        """
+        The source keys nothing has read.
+
+        A key naming nothing the spec declares, and a declared name whose
+        data no declaration reaches, both land here. It shrinks as the
+        parameters are read, so it only tells the whole story once the
+        build is done.
+        """
+        return self.sources.unused
 
     def parameter(self, name: str) -> xr.DataArray:
         """
@@ -158,7 +178,7 @@ class Attached:
             than declared.
         """
         declared = self._declaration(name)
-        if name not in self._keys:
+        if name not in self.sources:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         arr = _numpy(_as_array(name, declared, self.sources[name], self.coords))
         onto = {d: self.coords[d] for d in declared.dims}
@@ -226,17 +246,77 @@ def _attachable(program: ms.Program) -> dict[str, str]:
     return kinds
 
 
-def _check_keys(program: ms.Program, keys: frozenset[str]) -> None:
-    known = _attachable(program)
-    unknown = sorted(keys - set(known))
+class Sources:
+    """
+    The caller's data, read by key and remembering what was read.
+
+    ``keys()`` is called once, to see which declared names have data;
+    everything after that goes through ``__getitem__``, so a source is
+    read when a declaration reaches it and never otherwise.
+
+    A key naming nothing the spec declares is ignored, so one mapping can
+    feed several specs, and :attr:`unused` reports it; under *strict* it is
+    refused instead. A key close to a declared name is a typo either way,
+    and is warned about.
+    """
+
+    def __init__(
+        self, mapping: Mapping[str, Any], declared: Mapping[str, str], strict: bool
+    ) -> None:
+        self._mapping = mapping
+        try:
+            self._keys = frozenset(mapping.keys())
+        except AttributeError:
+            raise TypeError(
+                f"sources must offer keys(): it is called once, to see which declared names "
+                f"have data, and everything after that is read by key. "
+                f"{type(mapping).__name__} offers no keys()."
+            ) from None
+        self.used: set[str] = set()
+        _check_extras(self._keys, declared, strict)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._keys
+
+    def __getitem__(self, key: str) -> Any:
+        self.used.add(key)
+        return self._mapping[key]
+
+    @property
+    def unused(self) -> frozenset[str]:
+        """The keys nothing has read yet."""
+        return self._keys - self.used
+
+
+def _check_extras(
+    keys: frozenset[str], declared: Mapping[str, str], strict: bool
+) -> None:
+    unknown = sorted(keys - set(declared))
     if not unknown:
         return
     one = len(unknown) == 1
     lead = f"source key {unknown[0]!r} names" if one else f"source keys {unknown} name"
-    raise SpecDataError(
-        f"{lead} neither a parameter, a dimension nor a lookup this spec declares. "
-        f"{did_you_mean(unknown[0], known)} Pass only what the spec takes."
-    )
+    body = f"{lead} neither a parameter, a dimension nor a lookup this spec declares."
+    if strict:
+        raise SpecDataError(
+            f"{body} {did_you_mean(unknown[0], declared)} Pass only what the spec takes."
+        )
+    typos = {k: near for k in unknown if (near := _near(k, declared)) is not None}
+    if typos:
+        warnings.warn(
+            f"{body} {_shown(sorted(typos))} read like a typo: "
+            f"{_shown([f'{k} -> {near}' for k, near in sorted(typos.items())])}. "
+            f"An unknown key is ignored, so a mistyped one leaves its declaration "
+            f"without data.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+
+def _near(key: str, declared: Mapping[str, str]) -> str | None:
+    """The one declared name *key* is close enough to be a typo of."""
+    near = difflib.get_close_matches(key, sorted(declared), n=1, cutoff=0.6)
+    return near[0] if near else None
 
 
 # ---------------------------------------------------------------------------
@@ -255,13 +335,11 @@ def _reached(program: ms.Program) -> set[str]:
     return dims
 
 
-def _master_coords(
-    program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
-) -> dict[str, pd.Index]:
+def _master_coords(program: ms.Program, sources: Sources) -> dict[str, pd.Index]:
     reached = _reached(program)
     coords: dict[str, pd.Index] = {}
     for dim in program.dimensions:
-        if dim in keys:
+        if dim in sources:
             coords[dim] = _index(dim, sources[dim])
         elif dim in reached:
             raise SpecDataError(
@@ -301,15 +379,12 @@ def _index(dim: str, obj: Any) -> pd.Index:
 
 
 def _lookups(
-    program: ms.Program,
-    sources: Mapping[str, Any],
-    keys: frozenset[str],
-    coords: Mapping[str, pd.Index],
+    program: ms.Program, sources: Sources, coords: Mapping[str, pd.Index]
 ) -> dict[str, dict[str, xr.DataArray]]:
     out: dict[str, dict[str, xr.DataArray]] = {}
     for over, lk in program.lookups:
         space = lk.target or lk.name
-        if lk.name not in keys:
+        if lk.name not in sources:
             raise SpecDataError(
                 f"no data provided for lookup '{lk.name}'. Pass it under key '{lk.name}' as "
                 f"{_LOOKUP_SHAPES.format(over=over)}, holding a '{space}' value for each "
