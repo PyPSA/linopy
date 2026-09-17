@@ -5,6 +5,7 @@ and the ``add_spec``/``from_spec`` argument handling that builds them.
 
 from __future__ import annotations
 
+import io
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -50,6 +51,9 @@ SPEC_FORMS: dict[str, Callable[[Path], Any]] = {
     "path": lambda path: path,
     "path-string": str,
     "yaml-text": lambda path: path.read_text(),
+    "flow-yaml": lambda path: yaml.safe_dump(
+        math_spec.to_spec(path).to_dict(), default_flow_style=True, width=10**6
+    ).strip(),
     "dict": lambda path: math_spec.to_spec(path).to_dict(),
     "spec": lambda path: math_spec.to_spec(path),
 }
@@ -73,6 +77,56 @@ def test_a_lowered_program_is_refused() -> None:
     program = math_spec.to_program(yaml_dict())
     with pytest.raises(TypeError, match="not a lowered Program"):
         Model().add_spec(program, DISPATCH_DATA)
+
+
+def _opened(tmp_path: Path) -> Any:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    with path.open() as handle:
+        return handle
+
+
+UNREADABLE_SPECS: list[Any] = [
+    pytest.param(_opened, TypeError, "not an open file", id="file-object"),
+    pytest.param(
+        lambda tmp_path: io.StringIO(EXAMPLE_DISPATCH),
+        TypeError,
+        "not an open file",
+        id="string-io",
+    ),
+    pytest.param(
+        lambda tmp_path: tmp_path / "absent.yaml",
+        FileNotFoundError,
+        "no spec file at",
+        id="missing-path",
+    ),
+    pytest.param(
+        lambda tmp_path: str(tmp_path / "absent.yaml"),
+        FileNotFoundError,
+        "no spec file at",
+        id="missing-path-string",
+    ),
+    pytest.param(
+        lambda tmp_path: {"description": "a spec that declares nothing"},
+        SpecDataError,
+        "the spec declares nothing",
+        id="empty-spec",
+    ),
+    pytest.param(
+        lambda tmp_path: "- p_max\n- load\n",
+        SpecDataError,
+        "a spec is a mapping of sections",
+        id="sequence",
+    ),
+]
+
+
+@pytest.mark.parametrize(("form", "error", "match"), UNREADABLE_SPECS)
+def test_an_unreadable_spec_is_refused(
+    tmp_path: Path, form: Callable[[Path], Any], error: type[Exception], match: str
+) -> None:
+    with pytest.raises(error, match=match):
+        Model().add_spec(form(tmp_path), DISPATCH_DATA)
 
 
 def test_add_spec_needs_an_empty_model() -> None:
