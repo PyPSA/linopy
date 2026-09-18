@@ -30,7 +30,7 @@ from linopy.constraints import (
     ConstraintBase,
     Constraints,
 )
-from linopy.testing import assert_linequal
+from linopy.testing import assert_linequal, assert_varequal
 
 
 @pytest.fixture
@@ -1341,3 +1341,63 @@ def test_constraint_soften_respects_mask(m: Model, x: linopy.Variable) -> None:
     assert_equal(slack.positive.mask, constraint.mask)
     assert constraint.mask is not None
     assert (constraint.mask.values == mask.values).all()
+
+
+def test_constraint_slack_none_before_soften(m: Model, x: linopy.Variable) -> None:
+    """A constraint that was never softened exposes no slack variable."""
+    constraint = m.add_constraints(x >= 0, name="constraint")
+    assert constraint.slack is None
+
+
+def test_constraint_slack_matches_returned_slack_for_le_and_ge(
+    m: Model, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """
+    `.slack` resolves to the same variables `soften` returned, for both
+    inequality directions (no negative slack).
+    """
+    m.add_objective((x + y).sum(), sense="min")
+
+    le_constraint = m.add_constraints(y <= 0, name="le_constraint")
+    le_slack = le_constraint.soften(penalty=10)
+    assert le_constraint.slack is not None
+    assert_varequal(le_constraint.slack.positive, le_slack.positive)
+    assert le_constraint.slack.negative is None
+
+    ge_constraint = m.add_constraints(x >= -10, name="ge_constraint")
+    ge_slack = ge_constraint.soften(penalty=10)
+    assert ge_constraint.slack is not None
+    assert_varequal(ge_constraint.slack.positive, ge_slack.positive)
+    assert ge_constraint.slack.negative is None
+
+
+def test_constraint_slack_matches_returned_slack_for_eq(
+    m: Model, y: linopy.Variable
+) -> None:
+    """
+    For an equality constraint, `.slack` carries both the positive and the
+    negative slack variable.
+    """
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y == 10, name="eq_constraint")
+    slack = constraint.soften(penalty=10)
+
+    resolved = constraint.slack
+    assert resolved is not None
+    assert_varequal(resolved.positive, slack.positive)
+    assert slack.negative is not None
+    assert_varequal(resolved.negative, slack.negative)
+
+
+def test_constraint_slack_reflects_latest_soften_call(
+    m: Model, y: linopy.Variable
+) -> None:
+    """Softening the same constraint again replaces the tracked slack."""
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+
+    constraint.soften(penalty=10, name="first_slack")
+    second_slack = constraint.soften(penalty=5, name="second_slack")
+
+    assert constraint.slack is not None
+    assert_varequal(constraint.slack.positive, second_slack.positive)

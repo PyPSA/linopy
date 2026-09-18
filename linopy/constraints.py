@@ -1628,6 +1628,21 @@ class Constraint(ConstraintBase):
         )
         self.update(lhs=value)
 
+    @property
+    def slack(self) -> Slack | None:
+        """
+        Slack variable(s) added via :meth:`soften`, or ``None`` if the
+        constraint has never been softened.
+        """
+        positive = self.data.attrs.get("slack_positive")
+        if positive is None:
+            return None
+        negative = self.data.attrs.get("slack_negative", "")
+        return Slack(
+            positive=self.model.variables[positive],
+            negative=self.model.variables[negative] if negative else None,
+        )
+
     def _assign_lhs(
         self, expr: expressions.LinearExpression, rhs: DataArray | None = None
     ) -> None:
@@ -2140,6 +2155,11 @@ class Constraint(ConstraintBase):
         )
         direction = 1 if model.sense == "min" else -1
         model.objective += direction * (penalty * constraint_violation).sum()
+
+        self._data = self._data.assign_attrs(
+            slack_positive=positive_slack.name,
+            slack_negative=negative_slack.name if negative_slack is not None else "",
+        )
 
         return Slack(positive=positive_slack, negative=negative_slack)
 
