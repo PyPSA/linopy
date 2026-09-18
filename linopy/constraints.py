@@ -2075,6 +2075,9 @@ class Constraint(ConstraintBase):
         raises AttributeError. Calling .mutable() first does not help either, since the resulting Constraint is a
         detached copy not registered in model.constraints, so soften raises ValueError on it instead.
 
+        Softening an already-softened constraint raises ValueError instead of stacking a second, redundant slack term
+        onto the same lhs.
+
         Examples
         --------
         >>> from linopy import Model
@@ -2111,6 +2114,12 @@ class Constraint(ConstraintBase):
                 f"Constraint {self.name!r} is not the constraint registered in the model, so "
                 "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
                 "`.sel()`, or `.isel()`). Call `soften` on `model.constraints[name]` directly."
+            )
+
+        if self.slack is not None:
+            raise ValueError(
+                f"Constraint {self.name!r} was already softened (existing slack "
+                f"variable {self.slack.positive.name!r})"
             )
 
         name = name or f"{self.name}_slack"

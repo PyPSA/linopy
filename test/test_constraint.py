@@ -1208,6 +1208,30 @@ def test_constraint_soften_raises_on_detached_mutable_constraint(
         mc.soften(penalty=10)
 
 
+def test_constraint_soften_twice_raises(m: Model, y: linopy.Variable) -> None:
+    """
+    Softening an already-softened constraint must raise instead of silently
+    stacking a second, redundant slack term onto the same lhs.
+    """
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    constraint.soften(penalty=10, name="first_slack")
+
+    with pytest.raises(ValueError, match="already softened"):
+        constraint.soften(penalty=5, name="second_slack")
+
+
+def test_constraint_soften_twice_raises_via_add_constraints_penalty(
+    m: Model, y: linopy.Variable
+) -> None:
+    """The same guard applies when the first soften came from `add_constraints(penalty=...)`."""
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint", penalty=10)
+
+    with pytest.raises(ValueError, match="already softened"):
+        constraint.soften(penalty=5, name="second")
+
+
 def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
     """
     Tests that the left hand side gains the slack term(s) with the expected sign
@@ -1389,15 +1413,3 @@ def test_constraint_slack_matches_returned_slack_for_eq(
     assert_varequal(resolved.negative, slack.negative)
 
 
-def test_constraint_slack_reflects_latest_soften_call(
-    m: Model, y: linopy.Variable
-) -> None:
-    """Softening the same constraint again replaces the tracked slack."""
-    m.add_objective(y.sum(), sense="min")
-    constraint = m.add_constraints(y >= 10, name="constraint")
-
-    constraint.soften(penalty=10, name="first_slack")
-    second_slack = constraint.soften(penalty=5, name="second_slack")
-
-    assert constraint.slack is not None
-    assert_varequal(constraint.slack.positive, second_slack.positive)
