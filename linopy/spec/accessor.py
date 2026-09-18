@@ -389,11 +389,17 @@ class ModelSpec:
         Falsy for a model that is only what its spec says; everything added
         beside the spec lands here, and is what typesetting cannot show.
         """
+        return self.drift()
+
+    def drift(self, piecewise: tuple[set[str], set[str]] | None = None) -> Unspecified:
+        """:attr:`unspecified`, given the piecewise variables and constraints where a caller has them already."""
         from linopy.constants import SOS_TYPE_ATTR
         from linopy.piecewise import _get_piecewise_groups
 
         model, program = self._model, self.program
-        pw_variables, pw_constraints = _get_piecewise_groups(model)
+        if piecewise is None:
+            piecewise = _get_piecewise_groups(model)
+        pw_variables, pw_constraints = piecewise
         declared_sos = {sos.variable for sos in program.sos.values()}
         return Unspecified(
             variables=tuple(
@@ -512,7 +518,7 @@ class ModelSpec:
             return rendered
         return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
 
-    @property
+    @functools.cached_property
     def _schema(self) -> dict[str, Any]:
         """The spec as the mapping the typesetter reads (a bare string it reads as a path)."""
         return yaml.safe_load(self.text)

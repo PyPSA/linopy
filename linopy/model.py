@@ -741,7 +741,7 @@ class Model:
         tag_variables = tag_constraints = tag_expressions = False
         if self._spec is not None:
             model_string += ", built from a math-spec"
-            unspecified = self._spec.unspecified
+            unspecified = self._spec.drift((var_names, con_names))
             tag_variables = bool(unspecified.variables)
             tag_constraints = bool(unspecified.constraints)
             tag_expressions = bool(unspecified.expressions)
