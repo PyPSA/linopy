@@ -1292,6 +1292,10 @@ class Model:
             and a penalty term to the objective. Not allowed together with
             ``freeze=True`` (or a model default of ``freeze_constraints=True``),
             since softening requires a mutable, registered ``Constraint``.
+            The resulting Slack is not returned by this shortcut; retrieve
+            the slack variable(s) from model.variables using the derived
+            name f"{name}_slack_pos" (and f"{name}_slack_neg" for
+            equality constraints).
 
         Returns
         -------

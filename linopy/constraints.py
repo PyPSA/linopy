@@ -2078,7 +2078,7 @@ class Constraint(ConstraintBase):
         >>> slack = budget_constraint.soften(penalty=budget_penalty)
         """
         # Verify valid penalty to continue:
-        if not bool(np.all(np.asarray(penalty) >= 0)):
+        if not bool(np.all(np.asarray(penalty) > 0)):
             raise ValueError("Penalty is not positive.")
 
         # Require the objective function to exist before using soften method (this is to avoid
