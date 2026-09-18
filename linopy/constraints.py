@@ -2101,6 +2101,12 @@ class Constraint(ConstraintBase):
         name = name or f"{self.name}_slack"
         upper = np.inf if max_violation is None else max_violation
 
+        sign_values = pd.unique(self.sign.values.ravel())
+        if len(sign_values) > 1:
+            raise NotImplementedError(
+                "Constraint.soften does not support constraints with mixed signs."
+            )
+
         positive_slack = model.add_variables(
             lower=0,
             upper=upper,
@@ -2111,13 +2117,7 @@ class Constraint(ConstraintBase):
         negative_slack = None
 
         # Update left hand side depending on the sign of the constraint:
-        sign_values = pd.unique(self.sign.values.ravel())
-        if len(sign_values) > 1:
-            raise NotImplementedError(
-                "Constraint.soften does not support constraints with mixed signs."
-            )
         sign = sign_values.item()
-
         if sign == "<=":
             self.update(lhs=self.lhs - positive_slack)
         elif sign == ">=":
