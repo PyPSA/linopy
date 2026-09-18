@@ -89,14 +89,14 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
     if isinstance(node, ms.GroupSum):
         return operators.grouped_sum(
             _array(evaluate(node.operand, ctx)),
-            _lookup_arrays(node.over, node.coordinate, ctx),
+            _relation_arrays(node.walks, ctx),
             into=node.into,
             labels=ctx.coords,
         )
     if isinstance(node, ms.At):
         return operators.at(
             _array(evaluate(node.operand, ctx)),
-            _lookup_arrays(node.over, node.coordinate, ctx),
+            _relation_arrays(node.walks, ctx),
             into=node.into,
         )
     if isinstance(node, ms.Translate):
@@ -201,14 +201,13 @@ def _amount(amount: int | str, ctx: Context) -> operators.Amount:
 
 
 def _partition(node: ms.Translate | ms.Window, ctx: Context) -> xr.DataArray | None:
-    """The lookup a windowed operator stays inside, named for the dimension its values are labels of."""
+    """The relation a windowed operator stays inside, named for the dimension its values are labels of."""
     if node.partition is None:
         return None
-    array = ctx.lookup(node.partition, node.dimension)
-    return array.rename(ctx.program.dimension(node.dimension).targets[node.partition])
+    return ctx.relation(node.partition.name).rename(node.partition.produced_dims[0])
 
 
-def _lookup_arrays(
-    over: str, names: tuple[str, ...], ctx: Context
+def _relation_arrays(
+    walks: tuple[ms.Walk, ...], ctx: Context
 ) -> tuple[xr.DataArray, ...]:
-    return tuple(ctx.lookup(name, over) for name in names)
+    return tuple(ctx.relation(walk.name) for walk in walks)

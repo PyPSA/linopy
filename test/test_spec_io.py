@@ -3,8 +3,8 @@ Round trips of a spec-built model through netcdf and through ``copy``.
 
 The spec itself is persisted as its YAML text and lowered again on read, so
 what has to survive besides the model is data: the master coordinates, the
-lookups and the retained parameters. Labels are the delicate part — a partial
-lookup holds NaN in an array of strings — so every lookup shape is checked
+relations and the retained parameters. Labels are the delicate part — a partial
+relation holds NaN in an array of strings — so every relation shape is checked
 value by value and dtype by dtype, on both netcdf engines ``test_io`` uses.
 """
 
@@ -50,25 +50,25 @@ S2 = pd.Index(["p", "q"], name="s2")
 I1 = pd.Index([10, 20, 30], name="i1")
 I2 = pd.Index([1, 2], name="i2")
 
-LOOKUP_SPEC: dict[str, Any] = {
+RELATION_SPEC: dict[str, Any] = {
     "dimensions": {
         "s1": {"dtype": "str"},
         "s2": {"dtype": "str"},
         "i1": {"dtype": "int"},
         "i2": {"dtype": "int"},
     },
-    "lookups": {
-        "str_to_str": {"over": "s1", "into": "s2"},
-        "str_to_int": {"over": "s1", "into": "i2"},
-        "int_to_str": {"over": "i1", "into": "s2"},
-        "int_to_int": {"over": "i1", "into": "i2"},
+    "relations": {
+        "str_to_str": {"key": "s1", "value": "s2"},
+        "str_to_int": {"key": "s1", "value": "i2"},
+        "int_to_str": {"key": "i1", "value": "s2"},
+        "int_to_int": {"key": "i1", "value": "i2"},
     },
     "parameters": {"cost": {"dims": ["s1"]}},
     "variables": {"x": {"dims": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
     "objective": {"sense": "minimize", "expression": "sum(x * cost)"},
 }
-LOOKUP_OVER = {"str_to_str": S1, "str_to_int": S1, "int_to_str": I1, "int_to_int": I1}
-LOOKUP_INTO = {"str_to_str": S2, "str_to_int": I2, "int_to_str": S2, "int_to_int": I2}
+RELATION_OVER = {"str_to_str": S1, "str_to_int": S1, "int_to_str": I1, "int_to_int": I1}
+RELATION_INTO = {"str_to_str": S2, "str_to_int": I2, "int_to_str": S2, "int_to_int": I2}
 
 DTYPE_SPEC: dict[str, Any] = {
     "dimensions": {"s1": {"dtype": "str"}},
@@ -90,8 +90,8 @@ DTYPE_DATA: dict[str, Any] = {
 }
 
 
-def lookup_sources(mapped: int) -> dict[str, Any]:
-    """Data for ``LOOKUP_SPEC``, each lookup mapping only its first *mapped* labels."""
+def relation_sources(mapped: int) -> dict[str, Any]:
+    """Data for ``RELATION_SPEC``, each relation mapping only its first *mapped* labels."""
     sources: dict[str, Any] = {
         "s1": S1,
         "s2": S2,
@@ -99,8 +99,8 @@ def lookup_sources(mapped: int) -> dict[str, Any]:
         "i2": I2,
         "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
     }
-    for name, over in LOOKUP_OVER.items():
-        into = LOOKUP_INTO[name]
+    for name, over in RELATION_OVER.items():
+        into = RELATION_INTO[name]
         sources[name] = pd.Series(
             [into[i % len(into)] for i in range(mapped)], index=over[:mapped]
         )
@@ -188,16 +188,15 @@ def test_a_replaced_objective_is_still_known_after_a_round_trip(
 
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("mapped", [3, 2, 0], ids=["full", "partial", "empty"])
-@pytest.mark.parametrize("name", LOOKUP_OVER)
-def test_a_lookup_round_trips_exactly(
+@pytest.mark.parametrize("name", RELATION_OVER)
+def test_a_relation_round_trips_exactly(
     tmp_path: Path, engine: str, mapped: int, name: str
 ) -> None:
-    m = Model.from_spec(LOOKUP_SPEC, lookup_sources(mapped), retain="all")
-    over = str(LOOKUP_OVER[name].name)
+    m = Model.from_spec(RELATION_SPEC, relation_sources(mapped), retain="all")
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert name in p.spec.lookups[over]
+    assert name in p.spec.relations
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -258,7 +257,7 @@ def test_every_container_shares_the_master_coordinate_dtypes(
 def test_labelled_parameters_and_unreached_coordinates_round_trip(
     tmp_path: Path, engine: str
 ) -> None:
-    """A str parameter with holes, and a dimension only a lookup reaches."""
+    """A str parameter with holes, and a dimension only a relation reaches."""
     m = Model.from_spec(WHERE_SPEC, WHERE_DATA, retain="all")
     p = roundtrip(m, tmp_path, engine)
 
@@ -365,7 +364,7 @@ def test_a_spec_file_reads_as_a_plain_model_without_math_spec(
 )
 @pytest.mark.parametrize("engine", ENGINES)
 def test_the_pypsa_example_round_trips(tmp_path: Path, engine: str) -> None:
-    """Nine lookups into one dimension, a datetime axis, bool and str parameters."""
+    """Nine relations into one dimension, a datetime axis, bool and str parameters."""
     path = Path(EXAMPLES_DIR or "", "pypsa.yaml")
     program = math_spec.to_program(str(path))
     m = Model.from_spec(path, synthetic_sources(program, 3), retain="all")

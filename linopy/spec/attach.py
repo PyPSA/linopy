@@ -4,7 +4,7 @@ Attach user data to a math-spec program.
 The language fixes three attachment rules and this module enforces them: a
 dimension's members come only from the source keyed by the dimension's
 name, their order is the source's order and is never sorted, and a
-parameter or lookup source is read for values, never for labels. Parameters
+parameter or relation source is read for values, never for labels. Parameters
 are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out becomes NaN (``False`` for a ``bool`` parameter); what that means
@@ -57,7 +57,7 @@ _EMPTY_DTYPES: dict[str, Any] = {
 }
 _SCALARS = (bool, int, float, str, np.number, np.bool_)
 _DIMENSION_SHAPES = "a pandas Index, a list, a tuple, a 1-D numpy array, a pandas Series or a 1-D DataArray"
-_LOOKUP_SHAPES = "a pandas Series indexed by '{over}', a dict keyed by '{over}' labels, or a 1-D DataArray over '{over}'"
+_RELATION_SHAPES = "a pandas Series indexed by '{key}', a dict keyed by '{key}' labels, or a 1-D DataArray over '{key}'"
 _PARAMETER_SHAPES = (
     "a DataArray over {dims}, a pandas Series whose (Multi)Index levels are {dims}, "
     "a DataFrame with columns {columns} or in wide form, a dict keyed by label, or one number"
@@ -88,7 +88,7 @@ def attach(
         Data keyed by declared name. Any mapping works; ``keys()`` is
         called once, and everything after that is read by key. An
         ``xr.Dataset`` is accepted too: its indexes are dimension sources,
-        its data variables parameters and lookups.
+        its data variables parameters and relations.
     retain
         Which parameters :meth:`Attached.retained` persists.
     strict
@@ -101,7 +101,7 @@ def attach(
     ------
     SpecDataError
         A ``retain`` outside its three values, a reached dimension or a
-        lookup with no source, a duplicated dimension member, a lookup
+        relation with no source, a duplicated dimension member, a relation
         breaking the rules a map has, or, under *strict*, a key naming
         nothing the spec declares.
     TypeError
@@ -116,8 +116,8 @@ def attach(
         sources = _dataset_sources(sources)
     read = Sources(sources, _attachable(program), strict)
     coords = _master_coords(program, read)
-    lookups = _lookups(program, read, coords)
-    return Attached(program, coords, lookups, retain, read)
+    relations = _relations(program, read, coords)
+    return Attached(program, coords, relations, retain, read)
 
 
 @dataclass(frozen=True, eq=False)
@@ -133,9 +133,9 @@ class Attached:
         Master coordinates by dimension, in source order, each index
         named after its dimension. A declared dimension nothing reaches
         and nothing supplies is absent.
-    lookups
-        By dimension, by lookup name, the map as an array over the
-        dimension's master coordinates, NaN where a label is unmapped.
+    relations
+        By relation name, the map as an array over its key dimension's
+        master coordinates, NaN where a label is unmapped.
     retain
         Which parameters :meth:`retained` persists.
     sources
@@ -144,7 +144,7 @@ class Attached:
 
     program: ms.Program
     coords: Mapping[str, pd.Index]
-    lookups: Mapping[str, Mapping[str, xr.DataArray]]
+    relations: Mapping[str, xr.DataArray]
     retain: Retain
     sources: Sources
 
@@ -185,10 +185,9 @@ class Attached:
         return _aligned(name, arr, onto, _fill(declared))
 
     def retained(self) -> xr.Dataset:
-        """The lookups plus the parameters ``retain`` keeps, as one dataset."""
+        """The relations plus the parameters ``retain`` keeps, as one dataset."""
         arrays = {n: self.parameter(n) for n in self._retained_names()}
-        for by_name in self.lookups.values():
-            arrays.update(by_name)
+        arrays.update(self.relations)
         return xr.Dataset(arrays)
 
     def _declaration(self, name: str) -> ms.ParameterDeclaration:
@@ -242,7 +241,7 @@ def _attachable(program: ms.Program) -> dict[str, str]:
         n: "parameter" for n, p in program.parameters.items() if p.derivation is None
     }
     kinds.update({d: "dimension" for d in program.dimensions})
-    kinds.update({lk.name: "lookup" for _, lk in program.lookups})
+    kinds.update({name: "relation" for name in program.relations})
     return kinds
 
 
@@ -296,7 +295,7 @@ def _check_extras(
         return
     one = len(unknown) == 1
     lead = f"source key {unknown[0]!r} names" if one else f"source keys {unknown} name"
-    body = f"{lead} neither a parameter, a dimension nor a lookup this spec declares."
+    body = f"{lead} neither a parameter, a dimension nor a relation this spec declares."
     if strict:
         raise SpecDataError(
             f"{body} {did_you_mean(unknown[0], declared)} Pass only what the spec takes."
@@ -329,9 +328,8 @@ def _reached(program: ms.Program) -> set[str]:
     for declared in (program.parameters, program.variables, program.constraints):
         dims.update(d for decl in declared.values() for d in decl.dims)
     dims.update(pw.over for pw in program.piecewise.values())
-    for over, lk in program.lookups:
-        dims.add(over)
-        dims.add(lk.target)
+    for rel in program.relations.values():
+        dims.update(rel.dims)
     return dims
 
 
@@ -381,26 +379,37 @@ def _index(dim: str, obj: Any, declared: ms.DimensionDeclaration) -> pd.Index:
 
 
 # ---------------------------------------------------------------------------
-# lookups
+# relations
 # ---------------------------------------------------------------------------
 
 
-def _lookups(
+def _key_value(rel: ms.RelationDeclaration) -> tuple[str, str]:
+    """The key dimension and the value dimension of a single-valued relation over two dimensions."""
+    if len(rel.key) != 1 or len(rel.values) != 1:
+        raise SpecDataError(
+            f"relation '{rel.name}' keys {list(rel.key)} into {list(rel.values)}, and this engine "
+            f"reads a relation over two dimensions: one key column mapping into one value column. "
+            f"Split it into single-valued relations."
+        )
+    return rel.dim(rel.key[0]), rel.dim(rel.values[0])
+
+
+def _relations(
     program: ms.Program, sources: Sources, coords: Mapping[str, pd.Index]
-) -> dict[str, dict[str, xr.DataArray]]:
-    out: dict[str, dict[str, xr.DataArray]] = {}
-    for over, lk in program.lookups:
-        space = lk.target or lk.name
-        if lk.name not in sources:
+) -> dict[str, xr.DataArray]:
+    out: dict[str, xr.DataArray] = {}
+    for name, rel in program.relations.items():
+        over, target = _key_value(rel)
+        if name not in sources:
             raise SpecDataError(
-                f"no data provided for lookup '{lk.name}'. Pass it under key '{lk.name}' as "
-                f"{_LOOKUP_SHAPES.format(over=over)}, holding a '{space}' value for each "
+                f"no data provided for relation '{name}'. Pass it under key '{name}' as "
+                f"{_RELATION_SHAPES.format(key=over)}, holding a '{target}' value for each "
                 f"'{over}' label it maps and nothing for a label it does not."
             )
-        series = _lookup_series(lk.name, over, sources[lk.name])
-        _check_lookup(series, lk, over, coords)
+        series = _relation_series(name, over, sources[name])
+        _check_relation(series, name, over, target, coords)
         padded = series.reindex(coords[over])
-        out.setdefault(over, {})[lk.name] = _numpy(xr.DataArray(padded, name=lk.name))
+        out[name] = _numpy(xr.DataArray(padded, name=name))
     return out
 
 
@@ -418,11 +427,11 @@ def _numpy(arr: xr.DataArray) -> xr.DataArray:
     return arr.copy(data=arr.to_numpy())
 
 
-def _lookup_series(name: str, over: str, obj: Any) -> pd.Series:
+def _relation_series(name: str, over: str, obj: Any) -> pd.Series:
     if isinstance(obj, xr.DataArray):
         if obj.dims != (over,) or over not in obj.indexes:
             raise SpecDataError(
-                f"lookup '{name}' arrived as a DataArray over {list(obj.dims)}, and it is a map "
+                f"relation '{name}' arrived as a DataArray over {list(obj.dims)}, and it is a map "
                 f"out of '{over}': pass a 1-D DataArray with '{over}' as its labelled dimension."
             )
         return obj.to_series()
@@ -431,52 +440,52 @@ def _lookup_series(name: str, over: str, obj: Any) -> pd.Series:
     if isinstance(obj, pd.Series):
         if obj.index.name not in (None, over):
             raise SpecDataError(
-                f"lookup '{name}' is a Series indexed by '{obj.index.name}', and it is a map out of "
+                f"relation '{name}' is a Series indexed by '{obj.index.name}', and it is a map out of "
                 f"'{over}': index it by '{over}' labels."
             )
         return obj.rename_axis(over)
     raise SpecDataError(
-        f"lookup '{name}': cannot adapt {type(obj).__name__} to a map; pass {_LOOKUP_SHAPES.format(over=over)}."
+        f"relation '{name}': cannot adapt {type(obj).__name__} to a map; pass {_RELATION_SHAPES.format(key=over)}."
     )
 
 
-def _check_lookup(
+def _check_relation(
     series: pd.Series,
-    lk: ms.LookupDeclaration,
+    name: str,
     over: str,
+    target: str,
     coords: Mapping[str, pd.Index],
 ) -> None:
-    space = lk.target or lk.name
     holes = series.isna()
     if holes.any():
         at = _coordinates_shown((over,), series.index[holes][:5])
         raise SpecDataError(
-            f"lookup '{lk.name}' carries {int(holes.sum())} row(s) with a null in '{space}': {at}. A map is "
+            f"relation '{name}' carries {int(holes.sum())} row(s) with a null in '{target}': {at}. A map is "
             f"partial by leaving a label out, not by mapping it to nothing: drop the row and the "
-            f"label is unmapped, which is what every operator reading the lookup already means by it."
+            f"label is unmapped, which is what every operator reading the relation already means by it."
         )
     if series.index.has_duplicates:
         twice = series.index[series.index.duplicated()].unique().tolist()
         raise SpecDataError(
-            f"lookup '{lk.name}' maps {len(twice)} '{over}' label(s) more than once: {_shown(twice)}. "
-            f"A lookup is single-valued, so each label it maps takes exactly one row."
+            f"relation '{name}' maps {len(twice)} '{over}' label(s) more than once: {_shown(twice)}. "
+            f"This relation is single-valued, so each label it maps takes exactly one row."
         )
     strays = series.index[~series.index.isin(coords[over])].tolist()
     if strays:
         raise SpecDataError(
-            f"lookup '{lk.name}' maps {_shown(strays)}, which are not labels of '{over}'. "
+            f"relation '{name}' maps {_shown(strays)}, which are not labels of '{over}'. "
             f"'{over}' takes its labels from sources['{over}'], and they are "
             f"{_shown(coords[over].tolist(), 8)}. A map maps the labels that exist: a key matching "
             f"none of them would place its terms nowhere, so it is a typo on one side or a label "
             f"missing from the other."
         )
     values = pd.Index(series.to_numpy())
-    foreign = values[~values.isin(coords[lk.target])].unique().tolist()
+    foreign = values[~values.isin(coords[target])].unique().tolist()
     if foreign:
         raise SpecDataError(
-            f"dimension '{over}' lookup '{lk.name}' has value(s) that are not '{lk.target}' labels: "
-            f"{_shown(foreign)}. Every value must be a declared '{lk.target}' label, otherwise "
-            f"sum(by={lk.name}) drops those terms in the join that places them, and the model "
+            f"relation '{name}' has value(s) that are not '{target}' labels: "
+            f"{_shown(foreign)}. Every value must be a declared '{target}' label, otherwise "
+            f"sum(by={name}) drops those terms in the join that places them, and the model "
             f"builds and solves without them."
         )
 

@@ -16,7 +16,7 @@ from linopy.spec import SpecDataError, attach  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}, "g": {"dtype": "str"}},
-    "lookups": {"grp": {"over": "f", "into": "g"}},
+    "relations": {"grp": {"key": "f", "value": "g"}},
     "parameters": {
         "cost": {"dims": ["f"]},
         "cap": {"dims": ["f", "t"]},
@@ -35,7 +35,7 @@ SPEC: dict[str, Any] = {
         "k": {"dims": ["g", "t"], "expression": "sum(x, by=grp) <= 10"},
         "s": {
             "dims": ["f", "t"],
-            "expression": "shift(x, over=t, offset=lead, edge=0) >= 0",
+            "expression": "shift(x, along=t, offset=lead, edge=0) >= 0",
         },
     },
     "objective": {"sense": "maximize", "expression": "sum(x * cost)"},
@@ -177,17 +177,17 @@ def test_dimension_shapes_keep_source_order(
     assert list(coords) == ["f", "t", "g"]
 
 
-def test_lookup_is_padded_onto_the_dimension(
+def test_relation_is_padded_onto_the_dimension(
     program: Any, good: dict[str, Any]
 ) -> None:
     attached = attach(program, {**good, "grp": {"a": "n"}})
-    grp = attached.lookups["f"]["grp"]
+    grp = attached.relations["grp"]
     assert grp.dims == ("f",)
     assert grp.sel(f="a").item() == "n"
     assert pd.isna(grp.sel(f=["b", "c"])).all()
 
 
-LOOKUP_SHAPES = {
+RELATION_SHAPES = {
     "series": pd.Series(["n", "e", "n"], index=F),
     "series-unnamed": pd.Series(["n", "e", "n"], index=F.rename(None)),
     "dict": {"b": "n", "a": "e", "c": "n"},
@@ -195,11 +195,11 @@ LOOKUP_SHAPES = {
 }
 
 
-@pytest.mark.parametrize("grp", LOOKUP_SHAPES.values(), ids=LOOKUP_SHAPES.keys())
-def test_lookup_shapes_attach_alike(
+@pytest.mark.parametrize("grp", RELATION_SHAPES.values(), ids=RELATION_SHAPES.keys())
+def test_relation_shapes_attach_alike(
     program: Any, good: dict[str, Any], grp: Any
 ) -> None:
-    got = attach(program, {**good, "grp": grp}).lookups["f"]["grp"]
+    got = attach(program, {**good, "grp": grp}).relations["grp"]
     assert got.values.tolist() == ["n", "e", "n"]
 
 
@@ -212,7 +212,7 @@ def test_extension_strings_attach_as_numpy_objects(
         pytest.importorskip("pyarrow")
     series = pd.Series(["n", "e"], index=F[:2], dtype=pd.StringDtype(storage))
     grp = xr.DataArray(series) if shape == "dataarray" else series
-    got = attach(program, {**good, "grp": grp}).lookups["f"]["grp"]
+    got = attach(program, {**good, "grp": grp}).relations["grp"]
     assert got.dtype == np.dtype(object)
     assert got.values[:2].tolist() == ["n", "e"]
     assert pd.isna(got.values[2])
@@ -464,41 +464,41 @@ REFUSALS = [
     ),
     pytest.param(
         {"grp": xr.DataArray(["n"], coords={"t": [0]})},
-        r"lookup 'grp' arrived as a DataArray over \['t'\]",
-        id="lookup-wrong-dataarray-dim",
+        r"relation 'grp' arrived as a DataArray over \['t'\]",
+        id="relation-wrong-dataarray-dim",
     ),
     pytest.param(
-        {"grp": None}, r"no data provided for lookup 'grp'", id="missing-lookup"
+        {"grp": None}, r"no data provided for relation 'grp'", id="missing-relation"
     ),
     pytest.param(
         {"grp": {"zz": "n"}},
-        r"lookup 'grp' maps 'zz', which are not labels of 'f'",
-        id="lookup-stray-key",
+        r"relation 'grp' maps 'zz', which are not labels of 'f'",
+        id="relation-stray-key",
     ),
     pytest.param(
         {"grp": {"a": "zz"}},
-        r"lookup 'grp' has value\(s\) that are not 'g' labels: 'zz'",
-        id="lookup-stray-value",
+        r"relation 'grp' has value\(s\) that are not 'g' labels: 'zz'",
+        id="relation-stray-value",
     ),
     pytest.param(
         {"grp": pd.Series(["n", "e"], index=pd.Index(["a", "a"], name="f"))},
-        r"lookup 'grp' maps 1 'f' label\(s\) more than once: 'a'",
-        id="lookup-two-values",
+        r"relation 'grp' maps 1 'f' label\(s\) more than once: 'a'",
+        id="relation-two-values",
     ),
     pytest.param(
         {"grp": {"a": None, "b": "n"}},
-        r"lookup 'grp' carries 1 row\(s\) with a null in 'g': f='a'",
-        id="lookup-null",
+        r"relation 'grp' carries 1 row\(s\) with a null in 'g': f='a'",
+        id="relation-null",
     ),
     pytest.param(
         {"grp": pd.DataFrame({"f": ["a"], "g": ["n"]})},
-        r"lookup 'grp': cannot adapt DataFrame",
-        id="lookup-shape",
+        r"relation 'grp': cannot adapt DataFrame",
+        id="relation-shape",
     ),
     pytest.param(
         {"grp": pd.Series(["n"], index=pd.Index(["a"], name="t"))},
-        r"lookup 'grp' is a Series indexed by 't'",
-        id="lookup-wrong-index",
+        r"relation 'grp' is a Series indexed by 't'",
+        id="relation-wrong-index",
     ),
 ]
 
@@ -528,7 +528,7 @@ def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
             from_dataset.parameter(name), from_mapping.parameter(name)
         )
     xr.testing.assert_equal(
-        from_dataset.lookups["f"]["grp"], from_mapping.lookups["f"]["grp"]
+        from_dataset.relations["grp"], from_mapping.relations["grp"]
     )
 
 
@@ -638,13 +638,13 @@ def test_report_closure_reads_names_and_masks() -> None:
         "variables": {"x": {"dims": ["f", "t"], "bounds": {"lower": 0, "upper": 1}}},
         "objective": {"sense": "maximize", "expression": "sum(x * other)"},
         "expressions": {
-            "recent": "sum_back(x, over=t, within=span)",
+            "recent": "sum_back(x, along=t, window=span)",
             "late": {
                 "dims": ["f", "t"],
                 "cases": {
                     "active": {
                         "when": "on",
-                        "expression": "shift(x, over=t, offset=lag, edge=0)",
+                        "expression": "shift(x, along=t, offset=lag, edge=0)",
                     }
                 },
                 "otherwise": "x * cost",
@@ -816,16 +816,16 @@ def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> 
         read_all(program, sources)
 
 
-LOOKUP_SPEC = {
+RELATION_SPEC = {
     "dimensions": {"g": {}, "b": {"dtype": "str"}},
-    "lookups": {"gen_bus": {"over": "g", "into": "b"}},
+    "relations": {"gen_bus": {"key": "g", "value": "b"}},
     "parameters": {"p_max": {"dims": ["g"]}},
     "variables": {"x": {"dims": ["g"], "bounds": {"lower": 0, "upper": "p_max"}}},
     "constraints": {"k": {"dims": ["b"], "expression": "sum(x, by=gen_bus) <= 10"}},
     "objective": {"sense": "maximize", "expression": "sum(x)"},
 }
 G_TWICE = pd.Index(["w", "w", "s"], name="g")
-LOOKUP_GOOD = {
+RELATION_GOOD = {
     "p_max": pd.Series({"w": 5.0, "s": 5.0}),
     "g": ["w", "s"],
     "b": ["n", "e"],
@@ -840,7 +840,7 @@ LOOKUP_GOOD = {
             {"g": None, "b": None}, "dimension 'g' has no index", id="a-map-no-labels"
         ),
         pytest.param(
-            {"gen_bus": None}, "no data provided for lookup", id="an-index-no-map"
+            {"gen_bus": None}, "no data provided for relation", id="an-index-no-map"
         ),
         pytest.param(
             {"gen_bus": pd.Series({"w": "n", "s": "zz"})},
@@ -864,18 +864,18 @@ LOOKUP_GOOD = {
         ),
     ],
 )
-def test_a_lookup_defect_is_refused(override: dict[str, Any], match: str) -> None:
-    program = math_spec.to_program(LOOKUP_SPEC)
+def test_a_relation_defect_is_refused(override: dict[str, Any], match: str) -> None:
+    program = math_spec.to_program(RELATION_SPEC)
     with pytest.raises(SpecDataError, match=match):
-        read_all(program, sources_from(LOOKUP_GOOD, override))
+        read_all(program, sources_from(RELATION_GOOD, override))
 
 
-def test_a_stray_lookup_value_over_an_int_target_is_shown_as_written() -> None:
+def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:
     program = math_spec.to_program(
-        {**LOOKUP_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}}
+        {**RELATION_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}}
     )
     numbered = {"b": [1, 2], "gen_bus": pd.Series({"w": 1, "s": 99})}
-    sources = sources_from(LOOKUP_GOOD, numbered)
+    sources = sources_from(RELATION_GOOD, numbered)
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:
         read_all(program, sources)
     assert "int64" not in str(error.value)

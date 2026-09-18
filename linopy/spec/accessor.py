@@ -1,7 +1,7 @@
 """
 ``model.spec``: the program a model was built from, and its named expressions as data.
 
-The spec owns its data. The spec text, the retained parameters, the lookups
+The spec owns its data. The spec text, the retained parameters, the relations
 and the master coordinates sit on the accessor rather than in
 ``model.parameters``, which stays the caller's: a spec never overwrites what
 was put there, and nothing reading a spec-built model has to guess which of
@@ -341,7 +341,7 @@ class ModelSpec:
 
     @property
     def parameters(self) -> xr.Dataset:
-        """The parameters and lookups the spec retained, on the master coordinates."""
+        """The parameters and relations the spec retained, on the master coordinates."""
         return self._parameters
 
     @property
@@ -356,12 +356,9 @@ class ModelSpec:
         return {str(d): index for d, index in self.parameters.indexes.items()}
 
     @property
-    def lookups(self) -> dict[str, dict[str, xr.DataArray]]:
-        """By dimension, by name, each lookup as an array over its dimension."""
-        out: dict[str, dict[str, xr.DataArray]] = {}
-        for over, lk in self.program.lookups:
-            out.setdefault(over, {})[lk.name] = self.parameters[lk.name]
-        return out
+    def relations(self) -> dict[str, xr.DataArray]:
+        """By name, each relation as an array over its key dimension."""
+        return {name: self.parameters[name] for name in self.program.relations}
 
     @property
     def expressions(self) -> NamedExpressions:
@@ -573,7 +570,7 @@ class ModelSpec:
             self._model,
             self.program,
             self.coords,
-            self.lookups,
+            self.relations,
             Parameters(self.program, resolve),
             self.name,
             solved=True,

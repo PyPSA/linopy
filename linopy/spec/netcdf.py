@@ -3,16 +3,16 @@ Persist the spec of a spec-built model in its netcdf file.
 
 Variables, constraints and the solution round trip through :mod:`linopy.io`
 already. Besides them a spec-built model carries the spec text, the master
-coordinates and the lookups; the program is re-lowered from the text on read,
+coordinates and the relations; the program is re-lowered from the text on read,
 so no lowered ``Program`` ever reaches the file. A header names the math-spec
 version that lowered the text and the number of this layout, ``FORMAT``; a
 read under another of either warns.
 
 No netcdf type holds a dtype as written, so every array carries the dtype it
 had in memory (:func:`linopy.io.record_dtypes`) and is cast back to it on
-read. That is enough for a parameter, but not for a partial lookup, which
+read. That is enough for a parameter, but not for a partial relation, which
 holds NaN in an array of labels: a hole in a string array comes back as an
-empty string, indistinguishable from a label. So a lookup, and any array of
+empty string, indistinguishable from a label. So a relation, and any array of
 objects, is written instead as integer codes into its own table of
 categories, ``-1`` where a label is missing. Decoding indexes the table and
 fills the holes back in, which reproduces what attach built, values and
@@ -157,12 +157,12 @@ def _check_header(ds: xr.Dataset) -> None:
 
 
 def _coded(spec: ModelSpec) -> set[str]:
-    """The parameters written as codes: every lookup and every array of objects."""
-    lookups = {name for by_name in spec.lookups.values() for name in by_name}
+    """The parameters written as codes: every relation and every array of objects."""
+    relations = set(spec.relations)
     return {
         str(name)
         for name, arr in spec.parameters.items()
-        if name in lookups or arr.dtype == object
+        if name in relations or arr.dtype == object
     }
 
 

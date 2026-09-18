@@ -23,14 +23,15 @@ def synthetic_sources(program: ms.Program, n: int = 3) -> dict[str, Any]:
     Dense data for every declaration of *program*, *n* labels per dimension.
 
     Labels are numbered after their dimension, parameters are a linear ramp,
-    and each lookup cycles through the labels it maps into.
+    and each relation cycles through the labels it maps into.
     """
     sources: dict[str, Any] = {
         dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
     }
-    for over, lookup in program.lookups:
-        into = sources[lookup.target]
-        sources[lookup.name] = pd.Series(
+    for name, relation in program.relations.items():
+        over, target = relation.dim(relation.key[0]), relation.dim(relation.values[0])
+        into = sources[target]
+        sources[name] = pd.Series(
             [into[i % len(into)] for i in range(n)], index=sources[over]
         )
     for name, parameter in program.parameters.items():

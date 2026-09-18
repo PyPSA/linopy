@@ -33,32 +33,32 @@ pytestmark = [
 S = pd.Index(["a", "b"], name="s")
 V = np.array([1.0, 2.0, 4.0, 8.0])
 OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
-    "shift-edge-0": ("shift(x, over=t, offset=1, edge=0)", ["t"], [0, 1, 2, 4]),
-    "shift-ahead-edge-0": ("shift(x, over=t, offset=-1, edge=0)", ["t"], [2, 4, 8, 0]),
-    "shift-wrap": ("shift(x, over=t, offset=1, edge='wrap')", ["t"], [8, 1, 2, 4]),
+    "shift-edge-0": ("shift(x, along=t, offset=1, edge=0)", ["t"], [0, 1, 2, 4]),
+    "shift-ahead-edge-0": ("shift(x, along=t, offset=-1, edge=0)", ["t"], [2, 4, 8, 0]),
+    "shift-wrap": ("shift(x, along=t, offset=1, edge='wrap')", ["t"], [8, 1, 2, 4]),
     "shift-wrap-in-groups": (
-        "shift(x, over=t, offset=1, edge='wrap', by=season_of)",
+        "shift(x, along=t, offset=1, edge='wrap', by=season_of)",
         ["t"],
         [2, 1, 8, 4],
     ),
     "shift-by-group-offset": (
-        "shift(x, over=t, offset=lag, edge=0, by=season_of)",
+        "shift(x, along=t, offset=lag, edge=0, by=season_of)",
         ["t"],
         [0, 1, 0, 0],
     ),
-    "sum-back": ("sum_back(x, over=t, within=2)", ["t"], [1, 3, 6, 12]),
+    "sum-back": ("sum_back(x, along=t, window=2)", ["t"], [1, 3, 6, 12]),
     "sum-back-wrap": (
-        "sum_back(x, over=t, within=2, edge='wrap')",
+        "sum_back(x, along=t, window=2, edge='wrap')",
         ["t"],
         [9, 3, 6, 12],
     ),
     "sum-back-in-groups": (
-        "sum_back(x, over=t, within=2, by=season_of)",
+        "sum_back(x, along=t, window=2, by=season_of)",
         ["t"],
         [1, 3, 4, 12],
     ),
     "sum-back-group-width": (
-        "sum_back(x, over=t, within=width, by=season_of)",
+        "sum_back(x, along=t, window=width, by=season_of)",
         ["t"],
         [1, 2, 4, 12],
     ),
@@ -71,7 +71,7 @@ OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
 def operator_spec() -> dict[str, Any]:
     spec: dict[str, Any] = {
         "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
-        "lookups": {"season_of": {"over": "t", "into": "s"}},
+        "relations": {"season_of": {"key": "t", "value": "s"}},
         "parameters": {
             "v": {"dims": ["t"]},
             "z": {"dims": ["s"]},
@@ -84,7 +84,7 @@ def operator_spec() -> dict[str, Any]:
             "x_state": {
                 "dims": ["t"],
                 "cases": {"first": {"when": "position(t) == 0", "expression": 100}},
-                "otherwise": "shift(x, over=t, offset=1)",
+                "otherwise": "shift(x, along=t, offset=1)",
             }
         },
         "objective": {"sense": "minimize", "expression": "sum(x)"},
@@ -134,7 +134,7 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
 
 AMOUNT_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "int"}},
-    "lookups": {"grp": {"over": "t", "into": "g"}},
+    "relations": {"grp": {"key": "t", "value": "g"}},
     "parameters": {"v": {"dims": ["t"]}, "lag": {"dims": ["g"], "dtype": "int"}},
     "variables": {
         "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
@@ -144,7 +144,7 @@ AMOUNT_SPEC: dict[str, Any] = {
         "fix": {"dims": ["t"], "expression": "x == v"},
         "link": {
             "dims": ["t"],
-            "expression": "y == shift(x, over=t, offset=lag, edge=0, by=grp)",
+            "expression": "y == shift(x, along=t, offset=lag, edge=0, by=grp)",
         },
     },
     "objective": {"sense": "minimize", "expression": "sum(x)"},
@@ -183,13 +183,13 @@ def test_a_trailing_sum_wider_than_its_axis_is_refused() -> None:
     with pytest.raises(
         SpecDataError, match=r"asks for a window of 5 position\(s\) where 't' holds 4"
     ):
-        m = Model.from_spec(window("sum_back(x, over=t, within=5)"), WINDOW_DATA)
+        m = Model.from_spec(window("sum_back(x, along=t, window=5)"), WINDOW_DATA)
         m.spec.expressions["recent"].expression
 
 
 def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
     m = solved(
-        window("sum_back(x, over=t, within=5, edge='wrap')"), WINDOW_DATA, retain="all"
+        window("sum_back(x, along=t, window=5, edge='wrap')"), WINDOW_DATA, retain="all"
     )
     want = xr.DataArray([V.sum()] * len(TT), coords={"t": TT}, name="recent")
     xr.testing.assert_allclose(m.spec.expressions["recent"].solution, want)
@@ -201,7 +201,7 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
 
 GROUPED_SPEC: dict[str, Any] = {
     "dimensions": {"generator": {}, "bus": {"dtype": "str"}},
-    "lookups": {"gen_bus": {"over": "generator", "into": "bus"}},
+    "relations": {"gen_bus": {"key": "generator", "value": "bus"}},
     "parameters": {"capacity": {"dims": ["generator"]}},
     "variables": {"imports": {"dims": ["bus"], "bounds": {"lower": 0, "upper": 100}}},
     "constraints": {
@@ -230,7 +230,7 @@ def test_an_empty_group_on_the_constant_side_is_a_zero_and_not_a_gap() -> None:
     assert float(m.solution["imports"].sel(bus="south")) == pytest.approx(0.0)
 
 
-def test_a_lookup_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> None:
+def test_a_relation_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> None:
     """Filtering to the mapped members leaves nothing, and nothing is what xarray will not group."""
     spec = with_(
         GROUPED_SPEC,
@@ -264,10 +264,10 @@ def test_a_member_with_no_value_is_still_refused_through_a_group() -> None:
 
 WHERE_CASES: dict[str, tuple[str, str, list[Any]]] = {
     "dimension-comparison": ("x", "t > 1", [2, 3]),
-    "lookup-comparison": ("x", "season_of == 'a'", [0, 1]),
-    "lookup-not-equal-skips-unmapped": ("x", "season_of != 'a'", [2]),
-    "lookup-pair": ("x", "season_of != other_of", [1]),
-    "lookup-defined": ("x", "season_of", [0, 1, 2]),
+    "relation-comparison": ("x", "season_of == 'a'", [0, 1]),
+    "relation-not-equal-skips-unmapped": ("x", "season_of != 'a'", [2]),
+    "relation-pair": ("x", "season_of != other_of", [1]),
+    "relation-defined": ("x", "season_of", [0, 1, 2]),
     "not": ("x", "NOT (t > 1)", [0, 1]),
     "and": ("x", "t > 0 AND t < 3", [1, 2]),
     "or": ("x", "t == 0 OR t == 3", [0, 3]),
@@ -311,7 +311,7 @@ def test_a_position_no_coordinate_holds_is_refused(predicate: str, match: str) -
 
 
 # ---------------------------------------------------------------------------
-# edges: partial lookups and an empty dimension beside a sum
+# edges: partial relations and an empty dimension beside a sum
 # ---------------------------------------------------------------------------
 
 PARTIAL_CASES: dict[str, list[float]] = {
@@ -323,7 +323,7 @@ PARTIAL_CASES: dict[str, list[float]] = {
 
 
 @pytest.mark.parametrize("key", PARTIAL_CASES)
-def test_a_member_a_lookup_sends_nowhere_reaches_nothing(key: str) -> None:
+def test_a_member_a_relation_sends_nowhere_reaches_nothing(key: str) -> None:
     data = {**OPERATOR_DATA, "season_of": pd.Series(["a", "a", "b"], index=TT[:3])}
     m = solved(operator_spec(), data, retain="all")
     _, dims, _ = OPERATORS[key]

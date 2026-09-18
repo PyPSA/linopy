@@ -23,7 +23,7 @@ Upcoming Version
 
 *Build a model from a math-spec program*
 
-* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://github.com/energy-models/math-spec>`__ program attached to data, and ``model.spec`` reads it back with its ``program``, ``text``, ``parameters``, ``coords`` and ``lookups``. Requires the ``spec`` dependency group (``uv sync --group spec``, Python >= 3.12) and v1 semantics. The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `math-spec <https://github.com/energy-models/math-spec>`__ program attached to data, and ``model.spec`` reads it back with its ``program``, ``text``, ``parameters``, ``coords`` and ``relations``. Requires the ``spec`` dependency group (``uv sync --group spec``, Python >= 3.12) and v1 semantics. The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
 
 * Everything a spec builds carries the spec's name in ``.spec``; removing a spec-built name is refused, and ``model.spec.unspecified`` reports what the model holds beyond its spec.
 

@@ -1,4 +1,4 @@
-"""How a lookup partitions an axis: the shape every group-wise operator reads."""
+"""How a relation partitions an axis: the shape every group-wise operator reads."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import xarray as xr
 
 
 def unmapped(key: object) -> bool:
-    """Whether a lookup left this member in no group: ``None``, or the NaN that never equals itself."""
+    """Whether a relation left this member in no group: ``None``, or the NaN that never equals itself."""
     return key is None or key != key
 
 
@@ -27,9 +27,9 @@ class Groups:
 
 def grouped(over: str, labels: np.ndarray, groups: xr.DataArray) -> Groups:
     """
-    How the lookup *groups* partitions the axis *over*.
+    How the relation *groups* partitions the axis *over*.
 
-    A coordinate the lookup sends nowhere belongs to no group: its ``within``
+    A coordinate the relation sends nowhere belongs to no group: its ``within``
     is 0, its ``size`` 1 and its ``grouped`` False.
     """
     keys = np.asarray(groups.sel({over: labels}).values, dtype=object)

@@ -238,9 +238,9 @@ expressions:
             "s": {"dtype": "str"},
             "d": {"dtype": "datetime"},
         },
-        "lookups": {
-            "season_of": {"over": "t", "into": "s"},
-            "other_of": {"over": "t", "into": "s"},
+        "relations": {
+            "season_of": {"key": "t", "value": "s"},
+            "other_of": {"key": "t", "value": "s"},
         },
         "parameters": {
             "flag": {"dims": ["t"], "dtype": "bool"},

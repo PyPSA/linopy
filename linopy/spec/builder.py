@@ -51,7 +51,7 @@ def build(
         model,
         attached.program,
         attached.coords,
-        attached.lookups,
+        attached.relations,
         Parameters(attached.program, attached.parameter),
         name,
     )

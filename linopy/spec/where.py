@@ -44,7 +44,7 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
     One predicate node as a boolean array.
 
     A masked-out variable coordinate and a comparison over NaN both read as
-    exclusion. A null lookup value is excluded explicitly: numpy answers
+    exclusion. A null relation value is excluded explicitly: numpy answers
     ``None != 'north'`` with True, so a ``!=`` would otherwise keep exactly
     the labels that map nowhere.
     """
@@ -67,19 +67,19 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
         return result.fillna(False).astype(bool)
     if isinstance(node, ms.DimensionPositionNode):
         return _position(node, ctx)
-    if isinstance(node, ms.LookupComparisonNode):
-        arr = ctx.lookup(node.name, node.over)
+    if isinstance(node, ms.RelationComparisonNode):
+        arr = ctx.relation(node.name)
         compared = _PREDICATE_OPS[node.op](arr, node.value) & arr.notnull()
         return compared.fillna(False).astype(bool)
-    if isinstance(node, ms.LookupPairComparisonNode):
-        left = ctx.lookup(node.name, node.over)
-        right = ctx.lookup(node.other, node.over)
+    if isinstance(node, ms.RelationPairComparisonNode):
+        left = ctx.relation(node.name)
+        right = ctx.relation(node.other)
         compared = (
             _PREDICATE_OPS[node.op](left, right) & left.notnull() & right.notnull()
         )
         return compared.fillna(False).astype(bool)
-    if isinstance(node, ms.LookupDefinedNode):
-        return ctx.lookup(node.name, node.over).notnull()
+    if isinstance(node, ms.RelationDefinedNode):
+        return ctx.relation(node.name).notnull()
     if isinstance(node, ms.NotNode):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.AndNode):
@@ -100,8 +100,8 @@ def _defined(arr: xr.DataArray, dtype: str) -> xr.DataArray:
 
 def _position(node: ms.DimensionPositionNode, ctx: Context) -> xr.DataArray:
     labels = ctx.coords[node.name]
-    if node.by is not None:
-        groups = ctx.lookup(node.by, node.name)
+    if node.partition is not None:
+        groups = ctx.relation(node.partition.name)
         arr = _group_offsets(node, groups, np.asarray(labels))
         compared = _PREDICATE_OPS[node.op](arr, 0) & arr.notnull()
         return compared.fillna(False).astype(bool)
@@ -129,7 +129,7 @@ def _group_offsets(
     )
     if short:
         raise SpecDataError(
-            f"where: position({node.name}, by={node.by}) {node.op} {node.position} names position "
+            f"where: position({node.name}, by={groups.name}) {node.op} {node.position} names position "
             f"{node.position} within each group, and {len(short)} of them are shorter than that: "
             f"{short[:5]}. A boundary that names no coordinate leaves the rows it was to seed unseeded."
         )

@@ -1,4 +1,4 @@
-"""The data an evaluation reads: the parameters, and the model, coordinates and lookups beside them."""
+"""The data an evaluation reads: the parameters, and the model, coordinates and relations beside them."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class Context:
     model: Model
     program: ms.Program
     coords: Mapping[str, pd.Index]
-    lookups: Mapping[str, Mapping[str, xr.DataArray]]
+    relations: Mapping[str, xr.DataArray]
     parameters: Mapping[str, xr.DataArray]
     name: str
     solved: bool = field(default=False)
@@ -37,6 +37,6 @@ class Context:
         """The same context with the fold's switch off, so a variable enters as its linopy term."""
         return replace(self, solved=False)
 
-    def lookup(self, name: str, over: str) -> xr.DataArray:
-        """The lookup *name* as an array over *over*, NaN where a label is unmapped."""
-        return self.lookups[over][name]
+    def relation(self, name: str) -> xr.DataArray:
+        """The relation *name* as an array over its key dimension, NaN where a label is unmapped."""
+        return self.relations[name]

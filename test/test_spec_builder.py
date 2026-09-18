@@ -454,7 +454,7 @@ def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
     spec = with_(
         SPARSE_SPEC,
         parameters={**SPARSE_SPEC["parameters"], "lag": {"dims": [], "dtype": "int"}},
-        expressions={"e": "shift(c, over=t, offset=lag, edge=0) ** 1"},
+        expressions={"e": "shift(c, along=t, offset=lag, edge=0) ** 1"},
     )
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
     assert {"c", "lag"} <= set(m.spec.parameters.data_vars)
