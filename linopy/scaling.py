@@ -71,7 +71,7 @@ def constraint_scaling_lookup(model: Model) -> np.ndarray:
     scaling = np.ones(model._cCounter, dtype=float)
     for con in model.constraints.data.values():
         if isinstance(con, CSRConstraint):
-            scaling[con._con_labels] = con._scaling
+            scaling[con.active_labels()] = con._scaling
             continue
         labels = con.labels.values.ravel()
         _scatter_active(scaling, labels, con.scaling.values.ravel())

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import warnings
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
@@ -76,6 +77,7 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
+from linopy.csr import Grid, csr_nterm, csr_to_term_arrays
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.types import (
@@ -88,14 +90,14 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from linopy.csr import CSRLinearExpression
     from linopy.model import Model
-    from linopy.sparse_expression import CSRPayload
 
 
 FILL_VALUE = {
     "labels": -1,
     "rhs": np.nan,
-    "coeffs": 0,
+    "coeffs": np.nan,
     "vars": -1,
     "sign": "=",
     "scaling": 1.0,
@@ -532,6 +534,54 @@ def _equal_nnz_slices(
         start = end
 
 
+def _csr_from_label_columns(
+    data: np.ndarray,
+    vlabel_cols: np.ndarray,
+    indptr: np.ndarray,
+    n_rows: int,
+    label_index: VariableLabelIndex,
+    name: str,
+) -> scipy.sparse.csr_array:
+    """
+    Build a CSR matrix from raw variable labels as column indices.
+
+    Labels are mapped to dense positions in the active variable array, so the
+    result is ``(n_rows, label_index.n_active_vars)`` wide regardless of when
+    the label columns were assembled. ``data`` and, where its dtype is wide
+    enough, ``indptr`` are the very arrays passed in, so callers can compare
+    buffers by identity.
+    """
+    n_cols = label_index.n_active_vars
+    cols = label_index.label_to_pos[vlabel_cols]
+    if cols.size and min(cols.min(), vlabel_cols.min()) < 0:
+        missing = vlabel_cols[(cols < 0) | (vlabel_cols < 0)]
+        raise ValueError(
+            f"Constraint '{name}' references variable labels that are no longer "
+            f"part of the model, e.g. {missing[:5].tolist()}."
+        )
+    index_dtype = (
+        indptr.dtype if n_cols <= np.iinfo(indptr.dtype).max else np.dtype(np.int64)
+    )
+    return _positional_csr(
+        data, cols.astype(index_dtype, copy=False), indptr, n_rows, n_cols
+    )
+
+
+def _positional_csr(
+    data: np.ndarray, cols: np.ndarray, indptr: np.ndarray, n_rows: int, n_cols: int
+) -> scipy.sparse.csr_array:
+    """Wrap positional CSR components without copying ``data`` or ``cols``."""
+    csr = scipy.sparse.csr_array(
+        (data, cols, indptr.astype(cols.dtype, copy=False)), shape=(n_rows, n_cols)
+    )
+    csr.data = data
+    csr.indices = cols
+    return csr
+
+
+_PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, "weakref.ref[np.ndarray]"]
+
+
 class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
@@ -539,15 +589,20 @@ class CSRConstraint(ConstraintBase):
     Parameters
     ----------
     csr : scipy.sparse.csr_array
-        Shape (n_flat, model._xCounter). Each row is a flat position in the
-        constraint grid (including masked/empty rows).
+        Shape (n_active_cons, model._xCounter). Rows are the active rows of
+        the constraint grid, column indices are raw variable labels. They are
+        mapped to dense positions in ``to_matrix``/``to_matrix_with_rhs``, so
+        adding or removing variables after freezing stays consistent.
+    active_positions : np.ndarray
+        Shape (n_active_cons,). Flat positions of the active rows in the
+        constraint grid; labels are ``cindex + active_positions``.
     rhs : np.ndarray
-        Shape (n_flat,). Right-hand-side values.
+        Shape (n_active_cons,). Right-hand-side values.
     sign : str or np.ndarray
         Constraint sign. Either a single str ('=', '<=', '>=') for uniform
         signs, or a per-row np.ndarray of sign strings for mixed signs.
-    coords : list of pd.Index
-        One index per coordinate dimension defining the constraint grid.
+    grid : Grid
+        The coordinate grid the constraint rows live on.
     model : Model
         The linopy model this constraint belongs to.
     name : str
@@ -560,26 +615,27 @@ class CSRConstraint(ConstraintBase):
 
     __slots__ = (
         "_csr",
-        "_con_labels",
+        "_active_positions",
         "_rhs",
         "_sign",
         "_scaling",
-        "_coords",
+        "_grid",
         "_model",
         "_name",
         "_cindex",
         "_dual",
         "_binvar_labels",
         "_binval",
+        "_positional_cache",
     )
 
     def __init__(
         self,
         csr: scipy.sparse.csr_array,
-        con_labels: np.ndarray,
+        active_positions: np.ndarray,
         rhs: np.ndarray,
         sign: str | np.ndarray,
-        coords: list[pd.Index],
+        grid: Grid,
         model: Model,
         name: str = "",
         cindex: int | None = None,
@@ -589,7 +645,7 @@ class CSRConstraint(ConstraintBase):
         scaling: np.ndarray | None = None,
     ) -> None:
         self._csr = csr
-        self._con_labels = con_labels
+        self._active_positions = active_positions
         self._rhs = rhs
         self._sign = sign
         self._scaling = (
@@ -597,13 +653,14 @@ class CSRConstraint(ConstraintBase):
             if scaling is not None
             else np.ones_like(rhs, dtype=float)
         )
-        self._coords = coords
+        self._grid = grid
         self._model = model
         self._name = name
         self._cindex = cindex
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
+        self._positional_cache: _PositionalCache | None = None
 
     @property
     def model(self) -> Model:
@@ -619,11 +676,11 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def shape(self) -> tuple[int, ...]:
-        return tuple(len(c) for c in self._coords)
+        return self._grid.shape
 
     @property
     def full_size(self) -> int:
-        return int(np.prod(shape)) if (shape := self.shape) else 1
+        return self._grid.size
 
     @property
     def range(self) -> tuple[int, int]:
@@ -645,20 +702,18 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def coords(self) -> DatasetCoordinates:
-        return Dataset(coords={c.name: c for c in self._coords}).coords
+        return Dataset(coords=self._grid.indexes).coords
 
     @property
     def dims(self) -> Frozen[Hashable, int]:
-        d: dict[Hashable, int] = {c.name: len(c) for c in self._coords}
+        d: dict[Hashable, int] = dict(zip(self._grid.dims, self._grid.shape))
         d[TERM_DIM] = self.nterm
         return Frozen(d)
 
     @property
     def active_positions(self) -> np.ndarray:
         """Flat positions of active (non-masked) rows in the original coord shape."""
-        if self._cindex is None:
-            return np.arange(self._csr.shape[0])
-        return self._con_labels - self._cindex
+        return self._active_positions
 
     @property
     def sizes(self) -> Frozen[Hashable, int]:
@@ -666,29 +721,86 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def indexes(self) -> Indexes:
-        return Indexes({c.name: c for c in self._coords})
+        return Dataset(coords=self._grid.indexes).indexes
 
     @property
     def nterm(self) -> int:
-        return int(np.diff(self._csr.indptr).max()) if self._csr.nnz > 0 else 1
+        return csr_nterm(self._csr)
 
     @property
     def coord_names(self) -> list[str]:
-        return [str(c.name) for c in self._coords]
+        return list(self._grid.dims)
+
+    def __getstate__(self) -> dict[str, Any]:
+        return self._init_kwargs()
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__init__(**state)  # type: ignore[misc]
+
+    def _init_kwargs(self) -> dict[str, Any]:
+        return dict(
+            csr=self._csr,
+            active_positions=self._active_positions,
+            rhs=self._rhs,
+            sign=self._sign,
+            grid=self._grid,
+            model=self._model,
+            name=self._name,
+            cindex=self._cindex,
+            dual=self._dual,
+            binvar_labels=self._binvar_labels,
+            binval=self._binval,
+            scaling=self._scaling,
+        )
+
+    def _replace(self, **changes: Any) -> CSRConstraint:
+        """Copy with the given constructor arguments replaced."""
+        kwargs = self._init_kwargs()
+        kwargs.update(changes)
+        new = CSRConstraint(**kwargs)
+        if kwargs["csr"] is self._csr:
+            new._positional_cache = self._positional_cache
+        return new
+
+    def assign_labels(
+        self, cindex: int, name: str, scaling: np.ndarray | None = None
+    ) -> CSRConstraint:
+        """
+        Return a copy labelled from ``cindex`` and named ``name``.
+
+        Rows without terms are dropped, as when freezing a dense constraint;
+        a zero coefficient counts as a term. ``scaling`` is a row scaling over
+        the full flat grid.
+        """
+        keep = np.diff(self._csr.indptr) > 0
+        positions = self._active_positions[keep]
+        csr = self._csr[keep]
+        csr.eliminate_zeros()
+        changes: dict[str, Any] = dict(
+            csr=csr,
+            active_positions=positions,
+            rhs=self._rhs[keep],
+            sign=self._sign if isinstance(self._sign, str) else self._sign[keep],
+            cindex=cindex,
+            name=name,
+        )
+        if scaling is not None:
+            changes["scaling"] = scaling[positions]
+        return self._replace(**changes)
 
     def _active_to_dataarray(
         self, active_values: np.ndarray, fill: float | int | str = -1
     ) -> DataArray:
         full = np.full(self.full_size, fill, dtype=active_values.dtype)
         full[self.active_positions] = active_values
-        return DataArray(full.reshape(self.shape), coords=self._coords)
+        return DataArray(full.reshape(self.shape), coords=self._grid.coords)
 
     @property
     def labels(self) -> DataArray:
         """Get labels DataArray, shape (*coord_dims)."""
         if self._cindex is None:
             return DataArray([])
-        return self._active_to_dataarray(self._con_labels, fill=-1)
+        return self._active_to_dataarray(self.active_labels(), fill=-1)
 
     @property
     def coeffs(self) -> DataArray:
@@ -716,7 +828,7 @@ class CSRConstraint(ConstraintBase):
     def sign(self) -> DataArray:
         """Get sign DataArray."""
         if isinstance(self._sign, str):
-            return DataArray(np.full(self.shape, self._sign), coords=self._coords)
+            return DataArray(np.full(self.shape, self._sign), coords=self._grid.coords)
         return self._active_to_dataarray(self._sign, fill="")
 
     @property
@@ -796,25 +908,20 @@ class CSRConstraint(ConstraintBase):
         -------
         Dataset with variables ``labels``, ``coeffs``, ``vars``.
         """
-        csr = self._csr
-        counts = np.diff(csr.indptr)
         shape = self.shape
         full_size = self.full_size
-
-        # Map active row i -> flat position in full shape via con_labels
         active_positions = self.active_positions
-        coeffs_2d = np.zeros((full_size, nterm), dtype=csr.dtype)
-        vars_2d = np.full((full_size, nterm), -1, dtype=self._model._dtypes["labels"])
-        if csr.nnz > 0:
-            row_indices = np.repeat(active_positions, counts)
-            term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
-            # csr.indices are column positions into vlabels; map back to variable labels
-            vlabels = self._model.variables.label_index.vlabels
-            vars_2d[row_indices, term_cols] = vlabels[csr.indices]
-            coeffs_2d[row_indices, term_cols] = csr.data
+        vars_2d, coeffs_2d = csr_to_term_arrays(
+            self._csr,
+            nterm,
+            self._model._dtypes["labels"],
+            full_size,
+            active_positions,
+            coeff_dtype=self._csr.dtype,
+        )
 
         dim_names = self.coord_names
-        xr_coords = {c.name: c for c in self._coords}
+        xr_coords = self._grid.indexes
         dims_with_term = dim_names + [TERM_DIM]
         coeffs_da = DataArray(
             coeffs_2d.reshape(shape + (nterm,)),
@@ -829,10 +936,10 @@ class CSRConstraint(ConstraintBase):
         ds = Dataset({"coeffs": coeffs_da, "vars": vars_da})
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=self._model._dtypes["labels"])
-            labels_flat[active_positions] = self._con_labels
+            labels_flat[active_positions] = self.active_labels()
             ds = assign_multiindex_safe(
                 ds,
-                labels=DataArray(labels_flat.reshape(shape), coords=self._coords),
+                labels=DataArray(labels_flat.reshape(shape), coords=self._grid.coords),
             )
         return ds
 
@@ -861,7 +968,7 @@ class CSRConstraint(ConstraintBase):
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
         max_lines = options["display_max_rows"]
-        coords = self._coords
+        coords = self._grid.coords
         shape = self.shape
         dim_names = self.coord_names
         size = self.full_size
@@ -913,10 +1020,42 @@ class CSRConstraint(ConstraintBase):
         return "\n".join(lines)
 
     def to_matrix(
-        self, label_index: VariableLabelIndex | None = None
+        self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
-        """Return the stored CSR matrix and con_labels."""
-        return self._csr, self._con_labels
+        """Return the CSR matrix with dense variable positions and con_labels."""
+        return self._to_positional_csr(label_index), self.active_labels()
+
+    def _to_positional_csr(
+        self, label_index: VariableLabelIndex
+    ) -> scipy.sparse.csr_array:
+        """
+        Return the stored CSR with label columns replaced by dense positions.
+
+        ``indptr`` and ``data`` stay the stored arrays. The positional
+        ``indices`` are cached by weak reference, keyed on the identity of the
+        stored CSR and of ``label_index.label_to_pos``, which is rebuilt
+        whenever variables are added or removed. While a caller such as a
+        ``ModelSnapshot`` holds the array, repeated calls on an unchanged model
+        return the same object; otherwise it is freed and rebuilt on demand.
+        """
+        csr = self._csr
+        label_to_pos = label_index.label_to_pos
+        if self._positional_cache is not None:
+            cached_csr, cached_label_to_pos, ref = self._positional_cache
+            cols = ref()
+            if (
+                cached_csr is csr
+                and cached_label_to_pos is label_to_pos
+                and cols is not None
+            ):
+                return _positional_csr(
+                    csr.data, cols, csr.indptr, csr.shape[0], label_index.n_active_vars
+                )
+        positional = _csr_from_label_columns(
+            csr.data, csr.indices, csr.indptr, csr.shape[0], label_index, self._name
+        )
+        self._positional_cache = (csr, label_to_pos, weakref.ref(positional.indices))
+        return positional
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset with raw CSR components for netcdf serialization."""
@@ -927,16 +1066,17 @@ class CSRConstraint(ConstraintBase):
             "data": DataArray(csr.data, dims=["_nnz"]),
             "rhs": DataArray(self._rhs, dims=["_flat"]),
             "scaling": DataArray(self._scaling, dims=["_flat"]),
-            "_con_labels": DataArray(self._con_labels, dims=["_flat"]),
+            "_active_positions": DataArray(self._active_positions, dims=["_flat"]),
         }
         if isinstance(self._sign, np.ndarray):
             data_vars["_sign"] = DataArray(self._sign, dims=["_flat"])
-        data_vars.update(coords_to_dataset_vars(self._coords))
+        data_vars.update(coords_to_dataset_vars(self._grid.coords))
         if self._dual is not None:
             data_vars["dual"] = DataArray(self._dual, dims=["_flat"])
-        dim_names = [c.name for c in self._coords]
+        dim_names = list(self._grid.dims)
         attrs: dict[str, Any] = {
             "_linopy_format": "csr",
+            "_csr_columns": "labels",
             "cindex": self._cindex if self._cindex is not None else -1,
             "shape": list(csr.shape),
             "coord_dims": dim_names,
@@ -956,11 +1096,26 @@ class CSRConstraint(ConstraintBase):
 
     @classmethod
     def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> CSRConstraint:
-        """Reconstruct a Constraint from a netcdf Dataset (CSR format)."""
+        """
+        Reconstruct a Constraint from a netcdf Dataset (CSR format).
+
+        Files without the ``_csr_columns`` attribute were written before #926
+        and hold dense variable positions instead of labels.
+        """
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
+        indices = ds["indices"].values
+        columns = attrs.get("_csr_columns", "positions")
+        if columns == "positions":
+            vlabels = model.variables.label_index.vlabels
+            indices = vlabels[indices]
+            shape = (shape[0], int(vlabels[-1]) + 1 if len(vlabels) else 1)
+        elif columns != "labels":
+            raise ValueError(
+                f"Unknown CSR column format '{columns}' for constraint '{name}'."
+            )
         csr = scipy.sparse.csr_array(
-            (ds["data"].values, ds["indices"].values, ds["indptr"].values),
+            (ds["data"].values, indices, ds["indptr"].values),
             shape=shape,
         )
         rhs = ds["rhs"].values
@@ -971,14 +1126,14 @@ class CSRConstraint(ConstraintBase):
         coord_dims = attrs["coord_dims"]
         if isinstance(coord_dims, str):
             coord_dims = [coord_dims]
-        coords = coords_from_dataset(ds, coord_dims)
+        grid = Grid.from_coords(coords_from_dataset(ds, coord_dims))
         dual = ds["dual"].values if "dual" in ds else None
-        if "_con_labels" in ds:
-            con_labels = ds["_con_labels"].values
-        elif cindex is not None:
-            con_labels = np.arange(cindex, cindex + len(rhs), dtype=np.intp)
+        if "_active_positions" in ds:
+            active_positions = ds["_active_positions"].values
+        elif "_con_labels" in ds:
+            active_positions = ds["_con_labels"].values - (cindex or 0)
         else:
-            con_labels = np.arange(len(rhs), dtype=np.intp)
+            active_positions = np.arange(len(rhs), dtype=np.intp)
         binvar_labels: np.ndarray | None = None
         binval: int | np.ndarray | None = None
         if "_binvar_labels" in ds:
@@ -986,10 +1141,10 @@ class CSRConstraint(ConstraintBase):
             binval = ds["_binval"].values if "_binval" in ds else attrs["binval"]
         return cls(
             csr,
-            con_labels,
+            active_positions,
             rhs,
             sign,
-            coords,
+            grid,
             model,
             name,
             cindex=cindex,
@@ -1000,21 +1155,27 @@ class CSRConstraint(ConstraintBase):
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
-        label_to_pos = self._model.variables.label_index.label_to_pos
-        return contains_labels(self._csr.indices, label_to_pos[labels])
+        return contains_labels(self._csr.indices, labels)
 
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
-        """Return (csr, con_labels, b, sense) — all pre-stored, no recomputation."""
+        """Return (csr, con_labels, b, sense); only the columns are recomputed."""
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
             sense = np.array([s[0] for s in self._sign])
-        return self._csr, self._con_labels, self._rhs, sense
+        return (
+            self._to_positional_csr(label_index),
+            self.active_labels(),
+            self._rhs,
+            sense,
+        )
 
     def active_labels(self) -> np.ndarray:
-        return self._con_labels
+        if self._cindex is None:
+            raise ValueError(f"Constraint {self._name!r} has not been assigned labels.")
+        return self._active_positions + self._cindex
 
     def active_row_mask(self) -> np.ndarray:
         return np.ones(self._csr.shape[0], dtype=bool)
@@ -1033,6 +1194,7 @@ class CSRConstraint(ConstraintBase):
             csr.data[zeros] = 0
             csr.eliminate_zeros()
             self._csr = csr
+            self._positional_cache = None
         return self
 
     def sanitize_missings(self) -> CSRConstraint:
@@ -1056,7 +1218,8 @@ class CSRConstraint(ConstraintBase):
             return self
         keep = ~invalid
         self._csr = self._csr[keep]
-        self._con_labels = self._con_labels[keep]
+        self._positional_cache = None
+        self._active_positions = self._active_positions[keep]
         self._rhs = self._rhs[keep]
         self._scaling = self._scaling[keep]
         if not isinstance(self._sign, str):
@@ -1067,9 +1230,13 @@ class CSRConstraint(ConstraintBase):
         """Return self (already immutable)."""
         return self
 
-    def mutable(self) -> Constraint:
+    def to_dense(self) -> Constraint:
         """Convert to a Constraint."""
         return Constraint(self.data, self._model, self._name)
+
+    def mutable(self) -> Constraint:
+        """Convert to a Constraint."""
+        return self.to_dense()
 
     def to_polars(self) -> pl.DataFrame:
         """Convert frozen constraint to polars DataFrame directly from CSR."""
@@ -1087,12 +1254,11 @@ class CSRConstraint(ConstraintBase):
             )
 
         rows = np.repeat(np.arange(csr.shape[0]), np.diff(csr.indptr))
-        vlabels = self._model.variables.label_index.vlabels
 
         data: dict[str, Any] = {
-            "labels": self._con_labels[rows],
+            "labels": self.active_labels()[rows],
             "coeffs": csr.data,
-            "vars": vlabels[csr.indices],
+            "vars": csr.indices,
             "rhs": self._rhs[rows],
         }
         sign_expr: pl.Expr | pl.Series = (
@@ -1112,9 +1278,9 @@ class CSRConstraint(ConstraintBase):
         Yield row-batched sub-Constraints without Dataset reconstruction.
 
         Batches are raw CSR slices suitable only for ``to_polars()``. They are
-        yielded with ``coords=[]`` because batches cover contiguous active rows,
-        not a contiguous slice of the coordinate grid, so the original coords
-        would be misleading. Do not call ``.data``, ``.mutable()``, or any
+        yielded with an empty ``grid`` because batches cover contiguous active
+        rows, not a contiguous slice of the coordinate grid, so the original
+        grid would be misleading. Do not call ``.data``, ``.mutable()``, or any
         coord-dependent property on batch slices.
         """
         nnz = self._csr.nnz
@@ -1126,17 +1292,18 @@ class CSRConstraint(ConstraintBase):
             sign = self._sign if isinstance(self._sign, str) else self._sign[rows]
             yield CSRConstraint(
                 csr=self._csr[rows],
-                con_labels=self._con_labels[rows],
+                active_positions=self._active_positions[rows],
                 rhs=self._rhs[rows],
                 sign=sign,
                 scaling=self._scaling[rows],
-                coords=[],
+                grid=Grid({}),
                 model=self._model,
                 name=self._name,
+                cindex=self._cindex,
             )
 
     @classmethod
-    def from_mutable(
+    def from_dense(
         cls,
         con: Constraint,
         cindex: int | None = None,
@@ -1148,17 +1315,19 @@ class CSRConstraint(ConstraintBase):
         ----------
         con : Constraint
         cindex : int or None
-            Starting label index, if assigned.
+            Starting label index; defaults to the one recorded on ``con``.
         """
-        label_index = con.model.variables.label_index
-        csr, con_labels = con.to_matrix(label_index)
+        if cindex is None and "label_range" in con.data.attrs:
+            cindex = int(con.data.attrs["label_range"][0])
+        _, active_mask, vlabel_cols, data, indptr = con._matrix_export_data()
+        active_positions = np.flatnonzero(active_mask)
+        csr = scipy.sparse.csr_array(
+            (data, vlabel_cols, indptr),
+            shape=(len(active_positions), con.model._xCounter),
+        )
+        csr.sum_duplicates()
         csr.eliminate_zeros()
-        coords = [con.indexes[d] for d in con.coord_dims]
-        # Build active_mask aligned with con_labels (rows in csr)
-        # Use same filter as to_matrix: label != -1 AND at least one var != -1
-        labels_flat = con.labels.values.ravel()
-        vars_flat = con.vars.values.reshape(len(labels_flat), con.nterm)
-        active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
+        grid = Grid.from_coords(con.indexes[d] for d in con.coord_dims)
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
@@ -1185,10 +1354,10 @@ class CSRConstraint(ConstraintBase):
                 binval = bv
         return cls(
             csr,
-            con_labels,
+            active_positions,
             rhs,
             sign,
-            coords,
+            grid,
             con.model,
             con.name,
             cindex=cindex,
@@ -1199,107 +1368,68 @@ class CSRConstraint(ConstraintBase):
         )
 
     @classmethod
-    def from_payload(
-        cls,
-        model: Model,
-        payload: CSRPayload,
-        sign: str,
-        rhs: Any,
-        name: str,
+    def from_csr(
+        cls, expr: CSRLinearExpression, sign: str, rhs: DataArray
     ) -> CSRConstraint:
         """
-        Staple sign and rhs onto a CSR-backed lhs to form a CSRConstraint.
+        Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
-        The sparse counterpart of :meth:`from_mutable`: instead of converting a
+        The sparse counterpart of :meth:`from_dense`: instead of converting a
         dense :class:`Constraint`, it realizes a
-        :class:`~linopy.sparse_expression.CSRPayload` directly. Label columns
-        are mapped to dense variable positions, the payload's constant moves to
-        the rhs, labels are allocated as in
-        ``Model._allocate_constraint_labels``, and rows without terms or with a
-        NaN rhs are inactive — all as on the frozen dense path.
+        :class:`~linopy.csr.CSRLinearExpression` directly. The expression's
+        label columns are kept as they are, its constant moves to the rhs, and
+        rows with a NaN rhs are inactive, as on the dense path. ``rhs`` must
+        come from :func:`csr_rhs`.
         """
         sign = maybe_replace_sign(sign)
-        full_size = payload.n_cells
-
-        label_index = model.variables.label_index
-        coo = payload.csr.tocoo()
-        csr = scipy.sparse.csr_array(
-            scipy.sparse.coo_array(
-                (coo.data, (coo.coords[0], label_index.label_to_pos[coo.coords[1]])),
-                shape=(full_size, label_index.n_active_vars),
-            )
-        )
-        has_terms = np.diff(csr.indptr) > 0
-        csr.eliminate_zeros()
-
-        rhs_flat = _rhs_grid_values(payload, rhs) - payload.const
-
-        cindex = model._cCounter
-        model._cCounter += full_size
-        active = has_terms & ~np.isnan(rhs_flat)
-
+        rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
+        active = np.flatnonzero(~np.isnan(rhs_flat))
         return cls(
-            csr[active],
-            np.arange(cindex, cindex + full_size)[active],
+            expr.csr[active],
+            active,
             rhs_flat[active],
             sign,
-            coords=[payload.indexes[d] for d in payload.grid_dims],
-            model=model,
-            name=name,
-            cindex=cindex,
+            grid=expr.grid,
+            model=expr.model,
         )
 
 
-def extract_csr_pending(
-    lhs: Any, sign: Any, rhs: Any
-) -> tuple[CSRPayload, str, Any] | None:
-    """Return (payload, sign, rhs) if lhs is a realizable CSR constraint."""
-    if (
-        isinstance(lhs, Constraint)
-        and lhs._pending is not None
-        and sign is None
-        and rhs is None
-    ):
-        lhs, sign, rhs = lhs._pending
-    if not (isinstance(lhs, expressions.LinearExpression) and lhs._payload is not None):
+def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | None:
+    """
+    Return ``rhs`` as a DataArray on the expression grid, or None if the sparse
+    path cannot take it: a non-constant rhs, one that is no DataArray-like, or
+    one with helper dims or dims outside the grid falls back to the dense path.
+    """
+    if not is_constant(rhs):
         return None
-    if not isinstance(sign, str) or rhs is None or not is_constant(rhs):
-        return None
-    rhs_da = _as_rhs_dataarray(rhs)
-    if rhs_da is None or not set(rhs_da.dims) <= set(lhs._payload.grid_dims):
-        return None
-    return lhs._payload, sign, rhs
-
-
-def _as_rhs_dataarray(rhs: Any) -> DataArray | None:
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
         return None
-    return None if set(da.dims) & set(HELPER_DIMS) else da
+    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
+        return None
+    return da
 
 
-def _rhs_grid_values(payload: CSRPayload, rhs: Any) -> np.ndarray:
+def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
     """
-    Broadcast the rhs onto the payload grid and flatten it, with v1 parity:
+    Broadcast the rhs onto the expression grid and flatten it, with v1 parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """
-    rhs_da = _as_rhs_dataarray(rhs)
-    assert rhs_da is not None
-    if bool(rhs_da.isnull().any()):
+    if bool(rhs.isnull().any()):
         check_user_nan()
-    for d in rhs_da.dims:
-        if not rhs_da.get_index(d).equals(payload.indexes[str(d)]):
+    for d in rhs.dims:
+        if not rhs.get_index(d).equals(expr.grid.indexes[str(d)]):
             raise ValueError(
                 f"Coordinate mismatch on shared dimension {d!r} between "
                 "the rhs and the grouped result. Align the rhs with "
                 ".sel(...) / .reindex(...) before combining (§8)."
             )
-    missing = {d: payload.indexes[d] for d in payload.grid_dims if d not in rhs_da.dims}
+    missing = {d: i for d, i in expr.grid.indexes.items() if d not in rhs.dims}
     if missing:
-        rhs_da = rhs_da.expand_dims(missing)
-    return rhs_da.transpose(*payload.grid_dims).to_numpy().reshape(-1)
+        rhs = rhs.expand_dims(missing)
+    return rhs.transpose(*expr.grid.dims).to_numpy().reshape(-1)
 
 
 class Slack(NamedTuple):
@@ -1321,9 +1451,7 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty", "_pending")
-
-    _pending: tuple[expressions.LinearExpression, str, Any] | None
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty")
 
     def __init__(
         self,
@@ -1354,29 +1482,9 @@ class Constraint(ConstraintBase):
         self._data = data
         self._model = model
         self._coef_dirty = False
-        self._pending = None
-
-    @classmethod
-    def _from_pending(
-        cls, lhs: expressions.LinearExpression, sign: str, rhs: Any, model: Model
-    ) -> Constraint:
-        """Anonymous constraint over a still-sparse lhs (see linopy.sparse_expression)."""
-        obj = cls.__new__(cls)
-        obj._model = model
-        obj._data = None  # type: ignore[assignment]
-        obj._assigned = False
-        obj._coef_dirty = False
-        obj._pending = (lhs, sign, rhs)
-        return obj
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._pending is not None:
-            lhs, sign, rhs = self._pending
-            dense = expressions.LinearExpression(lhs.data, lhs.model)
-            self._data = dense.to_constraint(sign, rhs).data
-            self._assigned = "labels" in self._data
-            self._pending = None
         return self._data
 
     @property
@@ -1737,9 +1845,9 @@ class Constraint(ConstraintBase):
         return contains_labels(self.data["vars"].values.ravel(), labels)
 
     def _matrix_export_data(
-        self, label_index: VariableLabelIndex
+        self,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        label_to_pos = label_index.label_to_pos
+        """Return (con_labels, row_mask, vlabel_cols, data, indptr) with raw labels."""
         labels_flat = self.labels.values.ravel()
         vars_vals = self.vars.values
         n_rows = len(labels_flat)
@@ -1754,14 +1862,14 @@ class Constraint(ConstraintBase):
         vars_final = vars_2d[row_mask]
         coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
         valid_final = (vars_final != -1) & (coeffs_final != 0)
-        cols = label_to_pos[vars_final[valid_final]]
+        vlabel_cols = vars_final[valid_final]
         data = coeffs_final[valid_final]
 
         counts = valid_final.sum(axis=1)
         indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
         indptr[0] = 0
         np.cumsum(counts, out=indptr[1:])
-        return con_labels, row_mask, cols, data, indptr
+        return con_labels, row_mask, vlabel_cols, data, indptr
 
     def to_matrix(
         self, label_index: VariableLabelIndex
@@ -1779,9 +1887,9 @@ class Constraint(ConstraintBase):
         con_labels : np.ndarray
             Active constraint labels in row order.
         """
-        con_labels, _, cols, data, indptr = self._matrix_export_data(label_index)
-        csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        con_labels, _, vlabel_cols, data, indptr = self._matrix_export_data()
+        csr = _csr_from_label_columns(
+            data, vlabel_cols, indptr, len(con_labels), label_index, self.name
         )
         csr.sum_duplicates()
         return csr, con_labels
@@ -1805,9 +1913,9 @@ class Constraint(ConstraintBase):
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) in one pass."""
-        con_labels, row_mask, cols, data, indptr = self._matrix_export_data(label_index)
-        csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        con_labels, row_mask, vlabel_cols, data, indptr = self._matrix_export_data()
+        csr = _csr_from_label_columns(
+            data, vlabel_cols, indptr, len(con_labels), label_index, self.name
         )
         csr.sum_duplicates()
 
@@ -1847,12 +1955,7 @@ class Constraint(ConstraintBase):
 
     def freeze(self) -> CSRConstraint:
         """Convert to an immutable Constraint."""
-        cindex = (
-            int(self.data.attrs["label_range"][0])
-            if "label_range" in self.data.attrs
-            else None
-        )
-        return CSRConstraint.from_mutable(self, cindex=cindex)
+        return CSRConstraint.from_dense(self)
 
     def mutable(self) -> Constraint:
         """Return self (already mutable)."""
@@ -2229,6 +2332,11 @@ class Constraints:
         """
         Add a constraint to the constraints container.
         """
+        if not constraint.is_assigned:
+            raise ValueError(
+                f"Constraint {constraint.name!r} has not been assigned labels; "
+                "use `Model.add_constraints`."
+            )
         if freeze and isinstance(constraint, Constraint):
             constraint = constraint.freeze()
         self.data[constraint.name] = constraint
@@ -2538,9 +2646,9 @@ class Constraints:
         """
         Construct a constraint matrix in sparse format by stacking per-constraint CSR matrices.
 
-        Each per-constraint CSR is already dense: rows are active constraints
-        only, column indices are dense variable positions (not raw labels).
-        Shape is ``(n_active_cons, n_active_vars)``.
+        Each per-constraint CSR has active constraint rows only and dense
+        variable positions as column indices. Shape is
+        ``(n_active_cons, n_active_vars)``.
 
         Returns
         -------
@@ -2573,18 +2681,7 @@ class Constraints:
         for k, c in self.items():
             if isinstance(c, CSRConstraint):
                 if c._dual is not None:
-                    self.data[k] = CSRConstraint(
-                        c._csr,
-                        c._con_labels,
-                        c._rhs,
-                        c._sign,
-                        c._coords,
-                        c._model,
-                        c._name,
-                        cindex=c._cindex,
-                        dual=None,
-                        scaling=c._scaling,
-                    )
+                    self.data[k] = c._replace(dual=None)
             elif isinstance(c, Constraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")
