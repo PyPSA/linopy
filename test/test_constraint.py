@@ -1411,5 +1411,3 @@ def test_constraint_slack_matches_returned_slack_for_eq(
     assert_varequal(resolved.positive, slack.positive)
     assert slack.negative is not None
     assert_varequal(resolved.negative, slack.negative)
-
-
