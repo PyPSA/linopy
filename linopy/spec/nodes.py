@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from math_spec import program as ms
-from math_spec.program import walk
 
 
 def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
@@ -14,11 +13,6 @@ def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
         yield node.offset
     elif isinstance(node, ms.Window) and isinstance(node.width, str):
         yield node.width
-
-
-def parameters_of(*nodes: ms.ExpressionNode) -> frozenset[str]:
-    """Every parameter named anywhere under *nodes*."""
-    return frozenset(n.name for n in walk(*nodes) if isinstance(n, ms.Parameter))
 
 
 def dims_of(node: ms.ExpressionNode, program: ms.Program) -> tuple[str, ...]:

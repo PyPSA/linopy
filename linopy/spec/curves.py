@@ -17,7 +17,7 @@ import numpy as np
 import xarray as xr
 from math_spec import program as ms
 
-from linopy.spec.errors import SpecDataError
+from linopy.spec.errors import SpecDataError, first_coordinates
 
 _C = TypeVar("_C", bound=ms.Check)
 
@@ -105,7 +105,7 @@ def _check_extent(
         )
     )
     raise SpecDataError(
-        f"piecewise '{block}': parameter '{name}' has no value at ({_first(holes)}), and every "
+        f"piecewise '{block}': parameter '{name}' has no value at ({first_coordinates(holes, 1)}), and every "
         f"breakpoint the block builds gets a weight, so a missing row is not a shorter "
         f"curve: read as a zero coefficient it is a breakpoint at the origin.\n{remedy}"
     )
@@ -128,14 +128,7 @@ def _check_one_run(
     message = ms.check_message(block, decl, run)
     if not broken.dims:
         raise SpecDataError(message)
-    raise SpecDataError(f"{message}\n  Not so at {_first(broken)}")
-
-
-def _first(flags: xr.DataArray) -> str:
-    """The first coordinate *flags* is true at, written as the reader would look for it."""
-    stacked = flags.stack(_at=flags.dims)
-    at = stacked["_at"].to_index()[stacked.to_numpy()].tolist()[0]
-    return ", ".join(f"{d}={v!r}" for d, v in zip(flags.dims, at))
+    raise SpecDataError(f"{message}\n  Not so at {first_coordinates(broken, 1)}")
 
 
 def _check_curves(

@@ -31,7 +31,6 @@ import xarray as xr
 import yaml
 from math_spec import (
     Spec,
-    did_you_mean,
     to_program,
     to_spec,
     typeset,
@@ -49,7 +48,7 @@ from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
 from linopy.spec.context import Context
-from linopy.spec.errors import SpecDataError
+from linopy.spec.errors import SpecDataError, unknown
 from linopy.spec.evaluate import evaluate_named, fold
 from linopy.spec.nodes import dims_of
 from linopy.spec.parameters import Parameters, Resolve
@@ -134,7 +133,7 @@ def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
     return f"{len(names)} {plural} ({', '.join(shown)})"
 
 
-def attach(
+def build_into(
     model: Model,
     spec: SpecLike,
     sources: Mapping[str, Any] | xr.Dataset,
@@ -193,9 +192,9 @@ def restore(
     Read from a file, so the sources the model was built with are gone and
     only what ``retain`` kept can be read back.
     """
-    spec = ModelSpec(model, name, to_program(text), text, parameters, None)
-    spec._objective_replaced = objective_replaced
-    return spec
+    return ModelSpec(
+        model, name, to_program(text), text, parameters, None, objective_replaced
+    )
 
 
 def _is_yaml_text(spec: str) -> bool:
@@ -300,6 +299,7 @@ class ModelSpec:
         text: str,
         parameters: xr.Dataset,
         attached: Attached | None,
+        objective_replaced: bool = False,
     ) -> None:
         self._model = model
         self.name = name
@@ -309,7 +309,7 @@ class ModelSpec:
         self._attached = attached
         # A build sets the objective through `add_objective` before `_spec` is
         # assigned, so only a call after the build ever flips this.
-        self._objective_replaced = False
+        self._objective_replaced = objective_replaced
 
     def __repr__(self) -> str:
         p = self.program
@@ -328,16 +328,15 @@ class ModelSpec:
 
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
         """The same spec, read off *model*, holding its own copy of the parameters."""
-        copied = ModelSpec(
+        return ModelSpec(
             model,
             self.name,
             self.program,
             self.text,
             self._parameters.copy(deep=deep),
             self._attached,
+            self._objective_replaced,
         )
-        copied._objective_replaced = self._objective_replaced
-        return copied
 
     @property
     def parameters(self) -> xr.Dataset:
@@ -374,10 +373,7 @@ class ModelSpec:
         this handle is the typesetting one every declaration shares.
         """
         if name not in self._declarations:
-            raise KeyError(
-                f"unknown declaration '{name}'. "
-                + did_you_mean(name, self._declarations)
-            )
+            raise unknown("declaration", name, self._declarations)
         return Declaration(self, name)
 
     @property
@@ -461,23 +457,21 @@ class ModelSpec:
             The model holds variables or constraints the spec does not
             declare, which are not in the rendered text.
         """
-        return self._render(fmt, options, 3)
+        return self._render(fmt, options)
 
     def to_latex(self, **options: Any) -> str:
         """The spec typeset as a LaTeX document, see :meth:`typeset`."""
-        return self._render("latex", options, 3)
+        return self._render("latex", options)
 
     def to_markdown(self, **options: Any) -> str:
         """The spec typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
-        return self._render("markdown", options, 3)
+        return self._render("markdown", options)
 
     def to_typst(self, **options: Any) -> str:
         """The spec typeset as Typst, see :meth:`typeset`."""
-        return self._render("typst", options, 3)
+        return self._render("typst", options)
 
-    def _render(
-        self, fmt: FormatName, options: Mapping[str, Any], stacklevel: int
-    ) -> str:
+    def _render(self, fmt: FormatName, options: Mapping[str, Any]) -> str:
         """Typeset in *fmt*, warned and commented where the model holds more than the spec."""
         rendered = typeset(self._schema, fmt, **options)
         tally = self._tally()
@@ -487,7 +481,7 @@ class ModelSpec:
             f"this model has drifted from the spec it was built from: {tally}. "
             f"What is typeset is the spec, so it is not this model.",
             UserWarning,
-            stacklevel=stacklevel,
+            stacklevel=3,
         )
         comment = _COMMENT.get(fmt)
         if comment is None:
@@ -512,7 +506,7 @@ class ModelSpec:
 
     def _repr_markdown_(self) -> str:
         """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
-        rendered = _notebook_math(self._render("markdown", {}, 3))
+        rendered = _notebook_math(self._render("markdown", {}))
         tally = self._tally()
         if tally is None:
             return rendered
@@ -585,9 +579,8 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
 
     def __getitem__(self, name: str) -> NamedExpression:
         if name not in self._spec.program.named_expressions:
-            raise KeyError(
-                f"unknown named expression '{name}'. "
-                + did_you_mean(name, self._spec.program.named_expressions)
+            raise unknown(
+                "named expression", name, self._spec.program.named_expressions
             )
         spec = self._spec
         held = spec._model.expressions.data.get(name)

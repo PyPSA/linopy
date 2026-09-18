@@ -533,9 +533,9 @@ class Model:
             minor releases. Silence with ``warnings.filterwarnings("ignore",
             category=linopy.EvolvingAPIWarning)``.
         """
-        from linopy.spec.accessor import attach
+        from linopy.spec.accessor import build_into
 
-        self._spec = attach(self, spec, sources, retain, build_expressions)
+        self._spec = build_into(self, spec, sources, retain, build_expressions)
         return self
 
     @classmethod

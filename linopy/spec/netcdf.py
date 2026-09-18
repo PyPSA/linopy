@@ -40,7 +40,9 @@ from linopy.io import (
     SPEC_NAME_ATTR,
     SPEC_VERSION_ATTR,
     get_prefix,
+    record_dtype,
     restamp_coords,
+    restore_dtype,
     with_prefix,
 )
 from linopy.model import Model
@@ -72,7 +74,7 @@ def encode(spec: ModelSpec) -> xr.Dataset:
     over bare dimensions and put back on the master coordinates on read.
     """
     arrays: dict[str, xr.DataArray] = {
-        COORD + dim: _array(index.to_numpy(), (dim,))
+        COORD + dim: record_dtype(xr.DataArray(index.to_numpy(), dims=(dim,)))
         for dim, index in spec.coords.items()
     }
     coded = _coded(spec)
@@ -80,7 +82,9 @@ def encode(spec: ModelSpec) -> xr.Dataset:
         if str(name) in coded:
             arrays.update(_encode(str(name), arr))
         else:
-            arrays[PARAM + str(name)] = _array(arr.to_numpy(), arr.dims, str(arr.dtype))
+            arrays[PARAM + str(name)] = record_dtype(
+                xr.DataArray(arr.to_numpy(), dims=arr.dims), str(arr.dtype)
+            )
     header = json.dumps({"math_spec": MATH_SPEC_VERSION, "format": FORMAT})
     written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
         {SPEC_ATTR: spec.text, SPEC_VERSION_ATTR: header, SPEC_NAME_ATTR: spec.name}
@@ -168,23 +172,20 @@ def _coded(spec: ModelSpec) -> set[str]:
 
 def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
     codes, categories = pd.factorize(arr.to_numpy().ravel())
-    written = {
-        CODES + name: _array(
-            codes.astype(np.int32).reshape(arr.shape), arr.dims, str(arr.dtype)
-        )
-    }
+    coded = xr.DataArray(codes.astype(np.int32).reshape(arr.shape), dims=arr.dims)
+    written = {CODES + name: record_dtype(coded, str(arr.dtype))}
     if len(categories):
-        written[CATEGORIES + name] = _array(
-            np.asarray(categories), (CATEGORY_DIM + name,)
-        )
+        table = xr.DataArray(np.asarray(categories), dims=(CATEGORY_DIM + name,))
+        written[CATEGORIES + name] = record_dtype(table)
     return written
 
 
 def _plain(arr: xr.DataArray, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
     """A parameter written as its own values, back on the master coordinates at its own dtype."""
     dims = tuple(str(d) for d in arr.dims)
+    values = restore_dtype(arr).to_numpy()
     return xr.DataArray(
-        _values(arr), coords={d: coords[d] for d in dims}, dims=dims, name=name
+        values, coords={d: coords[d] for d in dims}, dims=dims, name=name
     )
 
 
@@ -197,6 +198,11 @@ def _decode(sub: xr.Dataset, name: str, coords: dict[str, pd.Index]) -> xr.DataA
     if mapped.all():
         values = categories[positions]
     else:
+        if dtype.kind not in HOLES:
+            raise ValueError(
+                f"relation or parameter '{name}' is written as codes of dtype {dtype} with "
+                f"a hole in them, and no {dtype} value spells a hole"
+            )
         values = np.full(positions.shape, HOLES[dtype.kind], dtype=dtype)
         values[mapped] = categories[positions[mapped]]
     dims = tuple(str(d) for d in codes.dims)
@@ -214,26 +220,13 @@ def _categories(sub: xr.Dataset, name: str, dtype: np.dtype) -> np.ndarray:
     """
     written = CATEGORIES + name
     if written in sub.data_vars:
-        return _values(sub[written])
+        return restore_dtype(sub[written]).to_numpy()
     return np.empty(0, dtype=dtype)
-
-
-def _array(
-    values: np.ndarray, dims: tuple[Any, ...], dtype: str | None = None
-) -> xr.DataArray:
-    return xr.DataArray(
-        values, dims=dims, attrs={DTYPE_ATTR: dtype or str(values.dtype)}
-    )
 
 
 def _stripped(name: Any, prefix: str) -> str:
     return str(name)[len(prefix) :]
 
 
-def _values(arr: xr.DataArray) -> np.ndarray:
-    """The array as it was in memory, undoing what the netcdf type could not hold."""
-    return arr.to_numpy().astype(np.dtype(arr.attrs[DTYPE_ATTR]))
-
-
 def _index(arr: xr.DataArray) -> pd.Index:
-    return pd.Index(_values(arr), name=_stripped(arr.name, COORD))
+    return pd.Index(restore_dtype(arr).to_numpy(), name=_stripped(arr.name, COORD))

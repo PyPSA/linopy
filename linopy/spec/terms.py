@@ -11,26 +11,12 @@ from __future__ import annotations
 
 import xarray as xr
 
-from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.variables import Variable
 
 Term = Variable | LinearExpression | QuadraticExpression
 Array = xr.DataArray | Term
 Value = float | Array
-
-
-def present(variable: Variable) -> xr.DataArray:
-    """The coordinates the variable occupies; ``-1`` is linopy's marker for an absent slot."""
-    return variable.labels != -1
-
-
-def live_rows(term: Term) -> xr.DataArray:
-    """The rows *term* still holds a variable in, once the data has emptied the slots it left."""
-    if isinstance(term, Variable):
-        return present(term)
-    helpers = [d for d in (TERM_DIM, FACTOR_DIM) if d in term.vars.dims]
-    return (term.vars != -1).any(helpers)
 
 
 def variable_term(variable: Variable, absence: str) -> Term:

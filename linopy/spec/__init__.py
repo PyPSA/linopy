@@ -27,7 +27,6 @@ from linopy.spec.accessor import (
     NamedExpressions,
     SpecLike,
     Unspecified,
-    normalize_spec,
 )
 from linopy.spec.attach import Attached, Retain, attach
 from linopy.spec.errors import SpecDataError
@@ -43,5 +42,4 @@ __all__ = [
     "SpecLike",
     "Unspecified",
     "attach",
-    "normalize_spec",
 ]

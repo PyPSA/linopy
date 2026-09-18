@@ -11,21 +11,21 @@ spec's name.
 from __future__ import annotations
 
 import warnings
+from typing import TypeGuard
 
 import xarray as xr
 from math_spec import program as ms
+from math_spec.program import walk
 
-from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
-from linopy.spec import curves
-from linopy.spec.attach import Attached, _coordinates_shown
+from linopy.spec import curves, terms
+from linopy.spec.attach import Attached
 from linopy.spec.context import Context
 from linopy.spec.coverage import check_bounds_cover, check_coverage
-from linopy.spec.errors import SpecDataError
+from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluate import carried, evaluate
-from linopy.spec.nodes import walk
 from linopy.spec.parameters import Parameters
-from linopy.spec.terms import Term, Value, live_rows
+from linopy.spec.terms import Term, Value
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
@@ -82,14 +82,14 @@ def check_supported(program: ms.Program) -> None:
 
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
-        rows = evaluate_where(declared.where, ctx)
-        check_bounds_cover(name, declared, ctx, as_linopy_mask(rows))
+        mask = as_linopy_mask(evaluate_where(declared.where, ctx))
+        check_bounds_cover(name, declared, ctx, mask)
         variable = ctx.model.add_variables(
             lower=_bound(declared.lower, ctx),
             upper=_bound(declared.upper, ctx),
             coords={d: ctx.coords[d] for d in declared.dims},
             name=name,
-            mask=as_linopy_mask(rows),
+            mask=mask,
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
         )
@@ -123,15 +123,16 @@ def _constraints(ctx: Context) -> None:
             f"constraint '{name}'", (row.lhs, row.rhs), ctx, mask, comparison=True
         )
         lhs, rhs = evaluate(row.lhs, ctx), evaluate(row.rhs, ctx)
-        if _term_free(lhs) and _term_free(rhs):
+        if _has_term(lhs):
+            term, other, sign = lhs, rhs, _SIGN[row.sense]
+        elif _has_term(rhs):
+            term, other, sign = rhs, lhs, _SIGN[_FLIPPED[row.sense]]
+        else:
             continue
-        term, other, sense = _sides(lhs, rhs, row.sense)
         _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
             term, other = carried(term, other)
-        built = ctx.model.add_constraints(
-            term, _SIGN[sense], other, name=name, mask=mask
-        )
+        built = ctx.model.add_constraints(term, sign, other, name=name, mask=mask)
         built.spec = ctx.name
 
 
@@ -151,12 +152,13 @@ def _check_live(
     every variable of the row declares ``absence: zero`` the zero is what the
     math says, so a zero other side is warned about rather than refused.
     """
-    dead = rows & ~live_rows(term)
+    live = term.mask if isinstance(term, Variable) else term.has_terms
+    dead = rows & ~live
     if not bool(dead.any()):
         return
     said = (
         f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
-        f"is attached, the first at {_dead_at(dead)}. Nothing is left to constrain there, so "
+        f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
         f"the row leaves the problem without saying so."
     )
     zeroed = all(
@@ -190,31 +192,11 @@ def _binds(other: Value, dead: xr.DataArray) -> bool:
     return other != 0
 
 
-def _dead_at(dead: xr.DataArray) -> str:
-    """The first coordinates *dead* marks, spelled the way every other refusal spells them."""
-    dims = tuple(str(d) for d in dead.dims)
-    if not dims:
-        return "the only row"
-    stacked = dead.stack(_dead=dims)
-    return _coordinates_shown(dims, stacked.indexes["_dead"][stacked.values][:3])
-
-
-def _sides(lhs: Value, rhs: Value, sense: str) -> tuple[Term, Value, str]:
-    """The comparison with a term on the left, as linopy takes it; a swap flips the sense."""
-    if isinstance(lhs, Variable | LinearExpression | QuadraticExpression):
-        return lhs, rhs, sense
-    if isinstance(rhs, Variable | LinearExpression | QuadraticExpression):
-        return rhs, lhs, _FLIPPED[sense]
-    raise TypeError("a constraint needs a variable term on one side")
-
-
-def _term_free(side: Value) -> bool:
-    """Whether *side* has nowhere for a variable term to sit: data, or an expression the data emptied."""
-    if isinstance(side, Variable):
+def _has_term(side: Value) -> TypeGuard[Term]:
+    """Whether *side* holds a variable term: not data, and not an expression the data emptied."""
+    if not isinstance(side, terms.Term):
         return False
-    if isinstance(side, LinearExpression | QuadraticExpression):
-        return side.nterm == 0
-    return True
+    return isinstance(side, Variable) or side.nterm > 0
 
 
 def _objective(ctx: Context) -> None:
@@ -223,7 +205,7 @@ def _objective(ctx: Context) -> None:
         return
     check_coverage("the objective", (declared.expression,), ctx, None)
     expr = evaluate(declared.expression, ctx)
-    if not isinstance(expr, Variable | LinearExpression | QuadraticExpression):
+    if not isinstance(expr, terms.Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
@@ -243,5 +225,5 @@ def _expressions(ctx: Context, build: bool) -> None:
         if not build or any(isinstance(n, ms.Dual) for n in walk(body)):
             continue
         value = evaluate(body, ctx)
-        if isinstance(value, Variable | LinearExpression | QuadraticExpression):
+        if isinstance(value, terms.Term):
             ctx.model.add_expressions(value, name=name).spec = ctx.name

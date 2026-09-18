@@ -13,28 +13,43 @@ answered.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
 
 import xarray as xr
 from math_spec import program as ms
+from math_spec.program import parameters_of
 
-from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.nodes import amounts_of, parameters_of
+from linopy.spec.nodes import amounts_of
 from linopy.spec.where import evaluate_where
 
 Rows = xr.DataArray | None
 Obligation = tuple[str, Rows]
+Obligations = dict[str, list[Obligation]]
 
-
-@dataclass
-class Obligations:
-    """Every parameter use under a declaration, each with the rows it has to cover, gathered in one walk."""
-
-    divisors: list[Obligation] = field(default_factory=list)
-    constants: list[Obligation] = field(default_factory=list)
-    coefficients: list[Obligation] = field(default_factory=list)
+_REFUSALS: dict[str, str] = {
+    "divisor": (
+        "parameter '{param}' is used as a divisor but covers {missing} "
+        "fewer coordinates than it is divided over. A missing row means a zero "
+        "coefficient everywhere else, and zero is not a divisor: the term would drop "
+        "and the row would silently stop constraining.\n"
+        "  Supply the missing rows, or mask the coordinates out with a where."
+    ),
+    "constant": (
+        "parameter '{param}' covers {missing} fewer coordinates "
+        "than the rows built here. A missing row is read as 0, and on the constant side "
+        "that zero is a bound rather than an absence: the row still exists, and it binds.\n"
+        "  Supply the missing rows, if the value is what was meant.\n"
+        "  Mask them out with a where, if the row should not exist there."
+    ),
+    "coefficient": (
+        "parameter '{param}' is used as a coefficient but leaves "
+        "{missing} of the rows built here uncovered. A missing row reads as a zero "
+        "coefficient, dropping the term while the row stays.\n"
+        "  Supply the missing rows, if a value other than 0 was meant.\n"
+        "  Mask them out with a where, if the row should not exist there."
+    ),
+}
 
 
 def gaps_under(array: xr.DataArray, rows: Rows) -> int:
@@ -59,11 +74,23 @@ def check_coverage(
     One walk over *expressions* collects what every parameter has to cover,
     narrowed at each ``cases:`` region; divisors are judged first, then, for a
     *comparison*, the side without a variable term, then every coefficient.
+    A divisor is checked before evaluation, the last moment the gap is
+    visible: the coefficient fill would turn it into a division by zero.
     """
     found = obligations_of(expressions, ctx, rows, comparison=comparison)
-    check_divisors(subject, found.divisors, ctx)
-    check_constant_sides(subject, found.constants, ctx)
-    check_coefficients(subject, found.coefficients, ctx)
+    for kind, obligations in found.items():
+        check_kind(subject, kind, obligations, ctx)
+
+
+def check_kind(
+    subject: str, kind: str, found: Sequence[Obligation], ctx: Context
+) -> None:
+    """Refuse the first parameter used as *kind* under *subject* that leaves a row it has to cover uncovered."""
+    for param, needed in found:
+        missing = gaps_under(ctx.parameters[param], needed)
+        if missing:
+            refusal = _REFUSALS[kind].format(param=param, missing=missing)
+            raise SpecDataError(f"{subject}: {refusal}")
 
 
 def obligations_of(
@@ -73,11 +100,12 @@ def obligations_of(
     *,
     comparison: bool = False,
 ) -> Obligations:
-    """What the parameters under *expressions* have to cover, a side of a *comparison* without a variable being its constant side."""
-    found = Obligations()
+    """What the parameters under *expressions* have to cover, by kind of use; a side of a *comparison* without a variable is its constant side."""
+    found: Obligations = {"divisor": [], "constant": [], "coefficient": []}
     for expression in expressions:
         constant = comparison and not ms.carries_variable(expression)
         _collect(expression, ctx, rows, constant, found)
+    found["constant"].sort(key=lambda pair: pair[0])
     return found
 
 
@@ -91,12 +119,12 @@ def _collect(
     if isinstance(node, ms.Multiply):
         rows = _where_present(rows, ms.variables_of(node), ctx)
     if isinstance(node, ms.Divide):
-        into.divisors.extend(_divisor_uses(node, ctx, rows))
+        into["divisor"].extend(_divisor_uses(node, ctx, rows))
     if isinstance(node, ms.Parameter):
         if constant:
-            into.constants.append((node.name, rows))
-        into.coefficients.append((node.name, rows))
-    into.coefficients.extend((name, None) for name in amounts_of(node))
+            into["constant"].append((node.name, rows))
+        into["coefficient"].append((node.name, rows))
+    into["coefficient"].extend((name, None) for name in amounts_of(node))
     if isinstance(node, ms.Cases):
         for region in node.regions:
             inside = evaluate_where(region.when, ctx)
@@ -119,64 +147,9 @@ def _divisor_uses(quotient: ms.Divide, ctx: Context, rows: Rows) -> list[Obligat
 def _where_present(rows: Rows, variables: Iterable[str], ctx: Context) -> Rows:
     """*rows* narrowed to the coordinates every one of *variables* occupies, a term absent there carrying no parameter with it."""
     for variable in sorted(variables):
-        present = terms.present(ctx.model.variables[variable])
+        present = ctx.model.variables[variable].mask
         rows = present if rows is None else rows & present
     return rows
-
-
-def check_divisors(subject: str, found: Sequence[Obligation], ctx: Context) -> None:
-    """
-    A divisor must have a value wherever *subject* divides by it.
-
-    Reached before evaluation, the last moment the gap is visible: the
-    coefficient fill would turn it into a division by zero.
-    """
-    for param, needed in found:
-        missing = gaps_under(ctx.parameters[param], needed)
-        if missing:
-            raise SpecDataError(
-                f"{subject}: parameter '{param}' is used as a divisor but covers {missing} "
-                f"fewer coordinates than it is divided over. A missing row means a zero "
-                f"coefficient everywhere else, and zero is not a divisor: the term would drop "
-                f"and the row would silently stop constraining.\n"
-                f"  Supply the missing rows, or mask the coordinates out with a where."
-            )
-
-
-def check_constant_sides(
-    subject: str, found: Sequence[Obligation], ctx: Context
-) -> None:
-    """A comparison's constant side must have values wherever the row is built, or the zero is the bound."""
-    for param, needed in sorted(found, key=lambda pair: pair[0]):
-        missing = gaps_under(ctx.parameters[param], needed)
-        if missing:
-            raise SpecDataError(
-                f"{subject}: parameter '{param}' covers {missing} fewer coordinates "
-                f"than the rows built here. A missing row is read as 0, and on the constant side "
-                f"that zero is a bound rather than an absence: the row still exists, and it binds.\n"
-                f"  Supply the missing rows, if the value is what was meant.\n"
-                f"  Mask them out with a where, if the row should not exist there."
-            )
-
-
-def check_coefficients(subject: str, found: Sequence[Obligation], ctx: Context) -> None:
-    """
-    A coefficient parameter must reach every row it is built over.
-
-    A missing coefficient row would otherwise read as a zero, dropping its term
-    while the row stays. A shift offset or window width given by name is a
-    coefficient too, and stands or falls over its own coordinates.
-    """
-    for param, needed in found:
-        missing = gaps_under(ctx.parameters[param], needed)
-        if missing:
-            raise SpecDataError(
-                f"{subject}: parameter '{param}' is used as a coefficient but leaves "
-                f"{missing} of the rows built here uncovered. A missing row reads as a zero "
-                f"coefficient, dropping the term while the row stays.\n"
-                f"  Supply the missing rows, if a value other than 0 was meant.\n"
-                f"  Mask them out with a where, if the row should not exist there."
-            )
 
 
 def check_bounds_cover(

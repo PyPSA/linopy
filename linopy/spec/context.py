@@ -36,7 +36,3 @@ class Context:
     def unsolved(self) -> Context:
         """The same context with the fold's switch off, so a variable enters as its linopy term."""
         return replace(self, solved=False)
-
-    def relation(self, name: str) -> xr.DataArray:
-        """The relation *name* as an array over its key dimension, NaN where a label is unmapped."""
-        return self.relations[name]

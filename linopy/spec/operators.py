@@ -55,13 +55,8 @@ def sum_over(array: Array, over: str) -> Array:
     if not isinstance(array, xr.DataArray) and any(
         not array.sizes[dim] for dim in array.coord_dims if dim != over
     ):
-        kept = [dim for dim in array.coord_dims if dim != over]
-        zeros = xr.DataArray(
-            np.zeros([array.sizes[dim] for dim in kept]),
-            coords={dim: array.indexes[dim] for dim in kept},
-            dims=kept,
-        )
-        return LinearExpression.from_constant(array.model, zeros)
+        kept = [dim for dim in _coord_dims(array) if dim != over]
+        return _zeros(array, kept, {dim: array.indexes[dim] for dim in kept})
     return array.sum(over)
 
 
@@ -110,13 +105,16 @@ def _empty_groups(
     and an empty dimension is one xarray refuses to group over.
     """
     kept = [d for d in _coord_dims(array) if d != dim]
+    coords = {**{d: array.indexes[d] for d in kept}, **{d: labels[d] for d in into}}
+    return _zeros(array, kept + list(into), coords)
+
+
+def _zeros(array: Array, dims: list[str], coords: Mapping[str, pd.Index]) -> Array:
+    """The constant zero over *dims*, of the kind *array* is: data, or a term of its model."""
     zeros = xr.DataArray(
-        np.zeros([array.sizes[d] for d in kept] + [len(labels[d]) for d in into]),
-        coords={
-            **{d: array.indexes[d] for d in kept},
-            **{d: labels[d] for d in into},
-        },
-        dims=kept + list(into),
+        np.zeros([len(coords[d]) for d in dims]),
+        coords={d: coords[d] for d in dims},
+        dims=dims,
     )
     if isinstance(array, xr.DataArray):
         return zeros

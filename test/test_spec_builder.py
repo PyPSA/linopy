@@ -7,7 +7,6 @@ expressions.
 from __future__ import annotations
 
 import glob
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -20,17 +19,16 @@ math_spec = pytest.importorskip("math_spec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
-from conftest import (  # noqa: E402, F401
+from conftest import (  # noqa: E402
     CURVE_DATA,
     CURVE_SPEC,
     DISPATCH_DATA,
     DISPATCH_P,
     EXAMPLE_DISPATCH,
+    EXAMPLES_DIR,
     FULL_X,
     FULL_Y,
     GENERATOR,
-    WHERE_DATA,
-    WHERE_SPEC,
     solved,
     with_,
     yaml_dict,
@@ -45,7 +43,6 @@ pytestmark = [
     pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
 ]
 
-EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")
 EXAMPLES = (
     sorted(glob.glob(f"{EXAMPLES_DIR}/*.yaml") + glob.glob(f"{EXAMPLES_DIR}/*/*.yaml"))
     if EXAMPLES_DIR

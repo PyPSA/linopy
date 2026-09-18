@@ -167,6 +167,7 @@ if find_spec("math_spec") is not None:
 
     from linopy import Model
 
+    EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")
     EXAMPLE_DISPATCH = """
 description: Least-cost dispatch of a generator fleet against an hourly load.
 

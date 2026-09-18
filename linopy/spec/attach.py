@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import difflib
 import warnings
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -24,10 +24,11 @@ import pandas as pd
 import xarray as xr
 from math_spec import did_you_mean
 from math_spec import program as ms
+from math_spec.program import parameters_of, walk
 
 from linopy.constants import warn_evolving_api
-from linopy.spec.errors import SpecDataError
-from linopy.spec.nodes import amounts_of, parameters_of, walk
+from linopy.spec.errors import SpecDataError, coordinate, coordinates_shown, shown
+from linopy.spec.nodes import amounts_of
 
 Retain = Literal["report", "all", "none"]
 _RETAIN: tuple[str, ...] = get_args(Retain)
@@ -110,7 +111,7 @@ def attach(
     warn_evolving_api("spec", EVOLVING_MESSAGE)
     if retain not in _RETAIN:
         raise SpecDataError(
-            f"retain={retain!r} is not one of {_shown(_RETAIN)}. {did_you_mean(retain, _RETAIN)}"
+            f"retain={retain!r} is not one of {shown(_RETAIN)}. {did_you_mean(retain, _RETAIN)}"
         )
     if isinstance(sources, xr.Dataset):
         sources = _dataset_sources(sources)
@@ -303,8 +304,8 @@ def _check_extras(
     typos = {k: near for k in unknown if (near := _near(k, declared)) is not None}
     if typos:
         warnings.warn(
-            f"{body} {_shown(sorted(typos))} read like a typo: "
-            f"{_shown([f'{k} -> {near}' for k, near in sorted(typos.items())])}. "
+            f"{body} {shown(sorted(typos))} read like a typo: "
+            f"{shown([f'{k} -> {near}' for k, near in sorted(typos.items())])}. "
             f"An unknown key is ignored, so a mistyped one leaves its declaration "
             f"without data.",
             UserWarning,
@@ -372,7 +373,7 @@ def _index(dim: str, obj: Any, declared: ms.DimensionDeclaration) -> pd.Index:
     if index.has_duplicates:
         twice = index[index.duplicated()].unique().tolist()
         raise SpecDataError(
-            f"dimension '{dim}' lists {_shown(twice)} more than once. A dimension's members are a set: "
+            f"dimension '{dim}' lists {shown(twice)} more than once. A dimension's members are a set: "
             f"each label appears once, in the order the source gives it."
         )
     return index
@@ -458,7 +459,7 @@ def _check_relation(
 ) -> None:
     holes = series.isna()
     if holes.any():
-        at = _coordinates_shown((over,), series.index[holes][:5])
+        at = coordinates_shown((over,), series.index[holes][:5])
         raise SpecDataError(
             f"relation '{name}' carries {int(holes.sum())} row(s) with a null in '{target}': {at}. A map is "
             f"partial by leaving a label out, not by mapping it to nothing: drop the row and the "
@@ -467,15 +468,15 @@ def _check_relation(
     if series.index.has_duplicates:
         twice = series.index[series.index.duplicated()].unique().tolist()
         raise SpecDataError(
-            f"relation '{name}' maps {len(twice)} '{over}' label(s) more than once: {_shown(twice)}. "
+            f"relation '{name}' maps {len(twice)} '{over}' label(s) more than once: {shown(twice)}. "
             f"This relation is single-valued, so each label it maps takes exactly one row."
         )
     strays = series.index[~series.index.isin(coords[over])].tolist()
     if strays:
         raise SpecDataError(
-            f"relation '{name}' maps {_shown(strays)}, which are not labels of '{over}'. "
+            f"relation '{name}' maps {shown(strays)}, which are not labels of '{over}'. "
             f"'{over}' takes its labels from sources['{over}'], and they are "
-            f"{_shown(coords[over].tolist(), 8)}. A map maps the labels that exist: a key matching "
+            f"{shown(coords[over].tolist(), 8)}. A map maps the labels that exist: a key matching "
             f"none of them would place its terms nowhere, so it is a typo on one side or a label "
             f"missing from the other."
         )
@@ -484,7 +485,7 @@ def _check_relation(
     if foreign:
         raise SpecDataError(
             f"relation '{name}' has value(s) that are not '{target}' labels: "
-            f"{_shown(foreign)}. Every value must be a declared '{target}' label, otherwise "
+            f"{shown(foreign)}. Every value must be a declared '{target}' label, otherwise "
             f"sum(by={name}) drops those terms in the join that places them, and the model "
             f"builds and solves without them."
         )
@@ -634,7 +635,7 @@ def _from_rows(
     if holes.any():
         raise SpecDataError(
             f"parameter '{name}' carries {int(holes.sum())} row(s) with no value, null or NaN: "
-            f"{_coordinates_shown(dims, series.index[holes][:3])}. In a table the absence of a "
+            f"{coordinates_shown(dims, series.index[holes][:3])}. In a table the absence of a "
             f"value is the absence of the row, and such a row says the coordinate exists and denies "
             f"it in the same breath. Drop those rows, or supply the values."
         )
@@ -678,7 +679,7 @@ def _refuse_duplicate_coordinates(
         return
     counts = index[duplicated].value_counts()
     shown = "; ".join(
-        f"{_coordinate(dims, key)} ({n + 1} rows)" for key, n in counts.iloc[:3].items()
+        f"{coordinate(dims, key)} ({n + 1} rows)" for key, n in counts.iloc[:3].items()
     )
     raise SpecDataError(
         f"parameter '{name}' has more than one row for a coordinate: {shown}. A parameter is a "
@@ -693,7 +694,7 @@ def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) ->
         return
     raise SpecDataError(
         f"parameter '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
-        f"{_shown(strangers)}.\n  {dim} has: {_shown(known.tolist(), 10)}\n"
+        f"{shown(strangers)}.\n  {dim} has: {shown(known.tolist(), 10)}\n"
         f"A label that is not a coordinate is a typo: its row joins nothing, so the coordinate it "
         f"was meant for is left uncovered. Fix the label, or add it to sources['{dim}']."
     )
@@ -723,22 +724,3 @@ def _check_value_dtype(
         f"  Cast the values to {declared}, if the declaration is what you meant\n"
         f"  Or declare what the data has: {{dtype: {arrived}}}"
     )
-
-
-# ---------------------------------------------------------------------------
-# wording
-# ---------------------------------------------------------------------------
-
-
-def _shown(labels: Sequence[Any], limit: int = 5) -> str:
-    head = ", ".join(repr(x) for x in labels[:limit])
-    return head + (f" (and {len(labels) - limit} more)" if len(labels) > limit else "")
-
-
-def _coordinate(dims: Sequence[str], key: Hashable) -> str:
-    row = key if isinstance(key, tuple) else (key,)
-    return ", ".join(f"{d}={v!r}" for d, v in zip(dims, row))
-
-
-def _coordinates_shown(dims: Sequence[str], rows: Iterable[Hashable]) -> str:
-    return "; ".join(_coordinate(dims, row) for row in rows)

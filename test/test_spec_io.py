@@ -21,7 +21,8 @@ import xarray as xr
 
 math_spec = pytest.importorskip("math_spec")
 
-from test_spec_builder import (  # noqa: E402
+import linopy  # noqa: E402
+from conftest import (  # noqa: E402
     DISPATCH_DATA,
     EXAMPLE_DISPATCH,
     EXAMPLES_DIR,
@@ -29,8 +30,6 @@ from test_spec_builder import (  # noqa: E402
     WHERE_SPEC,
     solved,
 )
-
-import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
 from linopy.io import SPEC_ATTR, SPEC_VERSION_ATTR  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402

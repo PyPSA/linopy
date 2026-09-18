@@ -1084,6 +1084,16 @@ def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
     return ds
 
 
+def record_dtype(arr: xr.DataArray, dtype: str | None = None) -> xr.DataArray:
+    """*arr* with its in-memory dtype, or the *dtype* it stands for, written as an attribute."""
+    return arr.assign_attrs({DTYPE_ATTR: dtype or str(arr.dtype)})
+
+
+def restore_dtype(arr: xr.DataArray) -> xr.DataArray:
+    """*arr* back at the dtype :func:`record_dtype` recorded, the attribute consumed."""
+    return arr.astype(np.dtype(arr.attrs.pop(DTYPE_ATTR)))
+
+
 def record_dtypes(ds: xr.Dataset) -> xr.Dataset:
     """
     *ds* with each array's in-memory dtype written as an attribute.
@@ -1092,17 +1102,13 @@ def record_dtypes(ds: xr.Dataset) -> xr.Dataset:
     int32 and hands a bool back as int8, so the dtype travels beside the
     values and :func:`restore_dtypes` puts it back.
     """
-    typed = {
-        str(name): arr.assign_attrs({DTYPE_ATTR: str(arr.dtype)})
-        for name, arr in ds.items()
-    }
-    return ds.assign(typed)
+    return ds.assign({str(name): record_dtype(arr) for name, arr in ds.items()})
 
 
 def restore_dtypes(ds: xr.Dataset) -> xr.Dataset:
     """*ds* with each array back at the dtype :func:`record_dtypes` recorded; one written without is left as it is."""
     cast = {
-        str(name): arr.astype(np.dtype(arr.attrs.pop(DTYPE_ATTR)))
+        str(name): restore_dtype(arr)
         for name, arr in ds.items()
         if DTYPE_ATTR in arr.attrs
     }

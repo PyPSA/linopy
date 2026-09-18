@@ -17,7 +17,7 @@ math_spec = pytest.importorskip("math_spec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
-from conftest import TT, WHERE_DATA, WHERE_SPEC, solved, with_  # noqa: E402
+from conftest import TT, WHERE_DATA, WHERE_SPEC, S, solved, with_  # noqa: E402
 from linopy import Model  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 
@@ -30,7 +30,6 @@ pytestmark = [
 # operators, built as a constraint and folded as a named expression
 # ---------------------------------------------------------------------------
 
-S = pd.Index(["a", "b"], name="s")
 V = np.array([1.0, 2.0, 4.0, 8.0])
 OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
     "shift-edge-0": ("shift(x, along=t, offset=1, edge=0)", ["t"], [0, 1, 2, 4]),

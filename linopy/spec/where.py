@@ -10,7 +10,6 @@ import numpy as np
 import xarray as xr
 from math_spec import program as ms
 
-from linopy.spec import terms
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
 from linopy.spec.groups import grouped
@@ -55,31 +54,25 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
             ctx.parameters[node.name], ctx.program.parameter(node.name).dtype
         )
     if isinstance(node, ms.VariableDefinedNode):
-        return terms.present(ctx.model.variables[node.name])
+        return ctx.model.variables[node.name].mask
     if isinstance(node, ms.ParameterComparisonNode):
-        arr = ctx.parameters[node.name]
-        result = _PREDICATE_OPS[node.op](arr, _as_the_axis_spells_it(arr, node.value))
-        return result.fillna(False).astype(bool)
+        return _compared(ctx.parameters[node.name], node.op, node.value)
     if isinstance(node, ms.DimensionComparisonNode):
         labels = ctx.coords[node.name]
         arr = xr.DataArray(labels, coords={node.name: labels}, dims=[node.name])
-        result = _PREDICATE_OPS[node.op](arr, _as_the_axis_spells_it(arr, node.value))
-        return result.fillna(False).astype(bool)
+        return _compared(arr, node.op, node.value)
     if isinstance(node, ms.DimensionPositionNode):
         return _position(node, ctx)
     if isinstance(node, ms.RelationComparisonNode):
-        arr = ctx.relation(node.name)
-        compared = _PREDICATE_OPS[node.op](arr, node.value) & arr.notnull()
-        return compared.fillna(False).astype(bool)
+        arr = ctx.relations[node.name]
+        return _bool(_PREDICATE_OPS[node.op](arr, node.value) & arr.notnull())
     if isinstance(node, ms.RelationPairComparisonNode):
-        left = ctx.relation(node.name)
-        right = ctx.relation(node.other)
-        compared = (
-            _PREDICATE_OPS[node.op](left, right) & left.notnull() & right.notnull()
-        )
-        return compared.fillna(False).astype(bool)
+        left = ctx.relations[node.name]
+        right = ctx.relations[node.other]
+        compared = _PREDICATE_OPS[node.op](left, right) & left.notnull()
+        return _bool(compared & right.notnull())
     if isinstance(node, ms.RelationDefinedNode):
-        return ctx.relation(node.name).notnull()
+        return ctx.relations[node.name].notnull()
     if isinstance(node, ms.NotNode):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.AndNode):
@@ -89,10 +82,20 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
     assert_never(node)
 
 
+def _bool(arr: xr.DataArray) -> xr.DataArray:
+    """*arr* as a boolean mask, a hole reading as exclusion."""
+    return arr.fillna(False).astype(bool)
+
+
+def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:
+    """*arr* against a literal spelled the way its axis spells it."""
+    return _bool(_PREDICATE_OPS[op](arr, _as_the_axis_spells_it(arr, value)))
+
+
 def _defined(arr: xr.DataArray, dtype: str) -> xr.DataArray:
     """What a bare parameter name asks: a bool is its own answer, a str is defined where it has a row, a number must be finite too."""
     if dtype == "bool":
-        return arr.fillna(False).astype(bool)
+        return _bool(arr)
     if dtype == "str":
         return arr.notnull()
     return arr.notnull() & np.isfinite(arr)
@@ -101,10 +104,9 @@ def _defined(arr: xr.DataArray, dtype: str) -> xr.DataArray:
 def _position(node: ms.DimensionPositionNode, ctx: Context) -> xr.DataArray:
     labels = ctx.coords[node.name]
     if node.partition is not None:
-        groups = ctx.relation(node.partition.name)
+        groups = ctx.relations[node.partition.name]
         arr = _group_offsets(node, groups, np.asarray(labels))
-        compared = _PREDICATE_OPS[node.op](arr, 0) & arr.notnull()
-        return compared.fillna(False).astype(bool)
+        return _bool(_PREDICATE_OPS[node.op](arr, 0) & arr.notnull())
     at = node.position + len(labels) if node.position < 0 else node.position
     if not 0 <= at < len(labels):
         raise SpecDataError(

@@ -5,17 +5,15 @@ from __future__ import annotations
 import functools
 import operator
 from collections.abc import Callable
-from typing import assert_never
+from typing import assert_never, cast
 
 import xarray as xr
-from math_spec import did_you_mean
 from math_spec import program as ms
 
-from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators, terms
 from linopy.spec.context import Context
-from linopy.spec.coverage import check_divisors, obligations_of
-from linopy.spec.errors import SpecDataError
+from linopy.spec.coverage import check_kind, obligations_of
+from linopy.spec.errors import SpecDataError, unknown
 from linopy.spec.terms import Array, Term, Value
 from linopy.spec.where import evaluate_where
 from linopy.variables import Variable
@@ -24,13 +22,10 @@ from linopy.variables import Variable
 def evaluate_named(name: str, ctx: Context) -> Value:
     """The named expression *name* as its linopy term, array or number over *ctx*, its divisors checked first."""
     if name not in ctx.program.named_expressions:
-        raise KeyError(
-            f"unknown named expression '{name}'. "
-            + did_you_mean(name, ctx.program.named_expressions)
-        )
+        raise unknown("named expression", name, ctx.program.named_expressions)
     body = ctx.program.named_expressions[name].expression
     found = obligations_of((body,), ctx, None)
-    check_divisors(f"expression '{name}'", found.divisors, ctx)
+    check_kind(f"expression '{name}'", "divisor", found["divisor"], ctx)
     value = evaluate(body, ctx)
     return _named(value, name) if isinstance(value, xr.DataArray) else value
 
@@ -38,13 +33,9 @@ def evaluate_named(name: str, ctx: Context) -> Value:
 def fold(name: str, ctx: Context) -> xr.DataArray:
     """The named expression *name* as data, folded over the solution and the parameters *ctx* holds."""
     value = evaluate_named(name, ctx)
-    if isinstance(value, xr.DataArray):
-        return value
     if isinstance(value, float | int):
         return xr.DataArray(float(value), name=name)
-    raise TypeError(
-        f"expression '{name}' folded to a {type(value).__name__}, not to data"
-    )
+    return cast(xr.DataArray, value)
 
 
 def _named(value: xr.DataArray, name: str) -> xr.DataArray:
@@ -161,13 +152,9 @@ def _combine(op: Callable[[Value, Value], Value], left: Value, right: Value) -> 
                     f"{right.indexes[dim].tolist()[:5]}. Every operand is read on the master "
                     f"coordinates, so the data was attached against other labels than the model was built on."
                 )
-    elif isinstance(left, xr.DataArray) and isinstance(
-        right, Variable | LinearExpression | QuadraticExpression
-    ):
+    elif isinstance(left, xr.DataArray) and isinstance(right, terms.Term):
         right, left = carried(right, left)
-    elif isinstance(right, xr.DataArray) and isinstance(
-        left, Variable | LinearExpression | QuadraticExpression
-    ):
+    elif isinstance(right, xr.DataArray) and isinstance(left, terms.Term):
         left, right = carried(left, right)
     return op(left, right)
 
@@ -204,10 +191,10 @@ def _partition(node: ms.Translate | ms.Window, ctx: Context) -> xr.DataArray | N
     """The relation a windowed operator stays inside, named for the dimension its values are labels of."""
     if node.partition is None:
         return None
-    return ctx.relation(node.partition.name).rename(node.partition.produced_dims[0])
+    return ctx.relations[node.partition.name].rename(node.partition.produced_dims[0])
 
 
 def _relation_arrays(
     walks: tuple[ms.Walk, ...], ctx: Context
 ) -> tuple[xr.DataArray, ...]:
-    return tuple(ctx.relation(walk.name) for walk in walks)
+    return tuple(ctx.relations[walk.name] for walk in walks)
