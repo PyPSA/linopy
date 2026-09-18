@@ -10,11 +10,10 @@ from typing import assert_never, cast
 import xarray as xr
 from math_spec import program as ms
 
-from linopy.spec import operators, terms
-from linopy.spec.context import Context
+from linopy.spec import context, operators
+from linopy.spec.context import Array, Context, Term, Value
 from linopy.spec.coverage import check_kind, obligations_of
 from linopy.spec.errors import SpecDataError, unknown
-from linopy.spec.terms import Array, Term, Value
 from linopy.spec.where import evaluate_where
 from linopy.variables import Variable
 
@@ -53,7 +52,7 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
     if isinstance(node, ms.Dual):
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.Parameter):
-        return terms.coefficient(ctx.parameters[node.name])
+        return context.coefficient(ctx.parameters[node.name])
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
     if isinstance(node, ms.Add):
@@ -120,12 +119,12 @@ def _variable(name: str, ctx: Context) -> Value:
     variable = ctx.model.variables[name]
     absence = ctx.program.variable(name).absence
     if not ctx.solved:
-        return terms.variable_term(variable, absence)
+        return context.variable_term(variable, absence)
     if "solution" not in variable.data:
         raise RuntimeError(
             f"variable '{name}' has no solution yet: solve the model before reading a named expression"
         )
-    return terms.solution(variable, absence)
+    return context.solution(variable, absence)
 
 
 def _dual(constraint: str, ctx: Context) -> xr.DataArray:
@@ -152,9 +151,9 @@ def _combine(op: Callable[[Value, Value], Value], left: Value, right: Value) -> 
                     f"{right.indexes[dim].tolist()[:5]}. Every operand is read on the master "
                     f"coordinates, so the data was attached against other labels than the model was built on."
                 )
-    elif isinstance(left, xr.DataArray) and isinstance(right, terms.Term):
+    elif isinstance(left, xr.DataArray) and isinstance(right, Term):
         right, left = carried(right, left)
-    elif isinstance(right, xr.DataArray) and isinstance(left, terms.Term):
+    elif isinstance(right, xr.DataArray) and isinstance(left, Term):
         left, right = carried(left, right)
     return op(left, right)
 
@@ -183,7 +182,7 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:
     if isinstance(amount, str):
-        return terms.coefficient(ctx.parameters[amount])
+        return context.coefficient(ctx.parameters[amount])
     return amount
 
 

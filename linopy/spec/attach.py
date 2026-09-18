@@ -27,8 +27,8 @@ from math_spec import program as ms
 from math_spec.program import parameters_of, walk
 
 from linopy.constants import warn_evolving_api
+from linopy.spec.coverage import amounts_of
 from linopy.spec.errors import SpecDataError, coordinate, coordinates_shown, shown
-from linopy.spec.nodes import amounts_of
 
 Retain = Literal["report", "all", "none"]
 _RETAIN: tuple[str, ...] = get_args(Retain)

@@ -18,14 +18,12 @@ from math_spec import program as ms
 from math_spec.program import walk
 
 from linopy.model import Model
-from linopy.spec import curves, terms
+from linopy.spec import curves
 from linopy.spec.attach import Attached
-from linopy.spec.context import Context
+from linopy.spec.context import Context, Parameters, Term, Value
 from linopy.spec.coverage import check_bounds_cover, check_coverage
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluate import carried, evaluate
-from linopy.spec.parameters import Parameters
-from linopy.spec.terms import Term, Value
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
@@ -194,7 +192,7 @@ def _binds(other: Value, dead: xr.DataArray) -> bool:
 
 def _has_term(side: Value) -> TypeGuard[Term]:
     """Whether *side* holds a variable term: not data, and not an expression the data emptied."""
-    if not isinstance(side, terms.Term):
+    if not isinstance(side, Term):
         return False
     return isinstance(side, Variable) or side.nterm > 0
 
@@ -205,7 +203,7 @@ def _objective(ctx: Context) -> None:
         return
     check_coverage("the objective", (declared.expression,), ctx, None)
     expr = evaluate(declared.expression, ctx)
-    if not isinstance(expr, terms.Term):
+    if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
@@ -225,5 +223,5 @@ def _expressions(ctx: Context, build: bool) -> None:
         if not build or any(isinstance(n, ms.Dual) for n in walk(body)):
             continue
         value = evaluate(body, ctx)
-        if isinstance(value, terms.Term):
+        if isinstance(value, Term):
             ctx.model.add_expressions(value, name=name).spec = ctx.name

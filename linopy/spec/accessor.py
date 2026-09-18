@@ -43,15 +43,13 @@ from linopy.constants import warn_evolving_api
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.semantics import is_v1
-from linopy.spec import terms
 from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
-from linopy.spec.context import Context
+from linopy.spec.context import Context, Parameters, Resolve, Value
+from linopy.spec.coverage import dims_of
 from linopy.spec.errors import SpecDataError, unknown
 from linopy.spec.evaluate import evaluate_named, fold
-from linopy.spec.nodes import dims_of
-from linopy.spec.parameters import Parameters, Resolve
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 
@@ -695,7 +693,7 @@ class NamedExpression(Declaration):
         return dims_of(self.node, self._spec.program)
 
     @functools.cached_property
-    def expression(self) -> terms.Value:
+    def expression(self) -> Value:
         """
         The linopy symbolic expression, its variables unsolved.
 

@@ -20,9 +20,9 @@ import pandas as pd
 import xarray as xr
 
 from linopy.expressions import LinearExpression
+from linopy.spec.context import Array, Term
 from linopy.spec.errors import SpecDataError
 from linopy.spec.groups import Groups, grouped
-from linopy.spec.terms import Array, Term
 from linopy.variables import Variable
 
 Amount = int | xr.DataArray

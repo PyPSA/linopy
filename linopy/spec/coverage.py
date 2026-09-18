@@ -12,7 +12,7 @@ answered.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 import xarray as xr
 from math_spec import program as ms
@@ -20,7 +20,6 @@ from math_spec.program import parameters_of
 
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.nodes import amounts_of
 from linopy.spec.where import evaluate_where
 
 Rows = xr.DataArray | None
@@ -50,6 +49,38 @@ _REFUSALS: dict[str, str] = {
         "  Mask them out with a where, if the row should not exist there."
     ),
 }
+
+
+def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
+    """The parameters *node* names as an amount: a translation's offset or a window's width."""
+    if isinstance(node, ms.Translate) and isinstance(node.offset, str):
+        yield node.offset
+    elif isinstance(node, ms.Window) and isinstance(node.width, str):
+        yield node.width
+
+
+def dims_of(node: ms.ExpressionNode, program: ms.Program) -> tuple[str, ...]:
+    """The dimensions *node* spans, in the program's dimension order, before any data is bound."""
+    spanned = _dims(node, program)
+    return tuple(d for d in program.dimensions if d in spanned)
+
+
+def _dims(node: ms.ExpressionNode, program: ms.Program) -> frozenset[str]:
+    if isinstance(node, ms.Constant):
+        return frozenset()
+    if isinstance(node, ms.Variable):
+        return frozenset(program.variables[node.name].dims)
+    if isinstance(node, ms.Parameter):
+        return frozenset(program.parameters[node.name].dims)
+    if isinstance(node, ms.Dual):
+        return frozenset(program.constraints[node.constraint].dims)
+    if isinstance(node, ms.Sum):
+        return _dims(node.operand, program) - set(node.over)
+    if isinstance(node, ms.GroupSum | ms.At):
+        return (_dims(node.operand, program) - {node.over}) | set(node.into)
+    if isinstance(node, ms.Cases):
+        return frozenset().union(*(_dims(r.value, program) for r in node.regions))
+    return frozenset().union(*(_dims(c, program) for c in ms.children(node)))
 
 
 def gaps_under(array: xr.DataArray, rows: Rows) -> int:
