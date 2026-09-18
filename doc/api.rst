@@ -115,6 +115,35 @@ IO
    model.Model.to_netcdf
    io.read_netcdf
 
+Building from specs
+-------------------
+
+Build a model from a `math-spec
+<https://github.com/energy-models/math-spec>`__ YAML program attached to
+data. Requires the ``spec`` dependency group.
+
+A spec's grouped sums and windows build dense by default, which is wasteful on
+a skewed topology (a lookup with a few large groups and many small ones, or a
+wide ``sum_back`` window). Set ``linopy.options["sparse_groupby"] = True`` (v1
+semantics) to back grouped sums with :mod:`linopy.csr`, and build the model
+with ``Model(freeze_constraints=True)`` to keep the constraints CSR-backed
+instead of densifying them.
+
+.. autosummary::
+   :toctree: generated/
+
+   model.Model.add_spec
+   model.Model.from_spec
+   model.Model.spec
+   spec.ModelSpec
+   spec.NamedExpressions
+   spec.NamedExpression
+   spec.Declaration
+   spec.Unspecified
+   spec.attach
+   spec.Attached
+   spec.SpecDataError
+
 
 Variable
 ========
