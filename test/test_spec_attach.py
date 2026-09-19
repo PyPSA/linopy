@@ -16,7 +16,7 @@ from linopy.spec import SpecDataError, attach  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}, "g": {"dtype": "str"}},
-    "relations": {"grp": {"key": "f", "value": "g"}},
+    "relations": {"grp": {"key": "f", "values": "g"}},
     "parameters": {
         "cost": {"dims": ["f"]},
         "cap": {"dims": ["f", "t"]},
@@ -32,7 +32,7 @@ SPEC: dict[str, Any] = {
         }
     },
     "constraints": {
-        "k": {"dims": ["g", "t"], "expression": "sum(x, by=grp) <= 10"},
+        "k": {"dims": ["g", "t"], "expression": "sum(x, by=grp, over=f, into=g) <= 10"},
         "s": {
             "dims": ["f", "t"],
             "expression": "shift(x, along=t, offset=lead, edge=0) >= 0",
@@ -818,10 +818,12 @@ def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> 
 
 RELATION_SPEC = {
     "dimensions": {"g": {}, "b": {"dtype": "str"}},
-    "relations": {"gen_bus": {"key": "g", "value": "b"}},
+    "relations": {"gen_bus": {"key": "g", "values": "b"}},
     "parameters": {"p_max": {"dims": ["g"]}},
     "variables": {"x": {"dims": ["g"], "bounds": {"lower": 0, "upper": "p_max"}}},
-    "constraints": {"k": {"dims": ["b"], "expression": "sum(x, by=gen_bus) <= 10"}},
+    "constraints": {
+        "k": {"dims": ["b"], "expression": "sum(x, by=gen_bus, over=g, into=b) <= 10"}
+    },
     "objective": {"sense": "maximize", "expression": "sum(x)"},
 }
 G_TWICE = pd.Index(["w", "w", "s"], name="g")

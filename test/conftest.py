@@ -240,8 +240,8 @@ expressions:
             "d": {"dtype": "datetime"},
         },
         "relations": {
-            "season_of": {"key": "t", "value": "s"},
-            "other_of": {"key": "t", "value": "s"},
+            "season_of": {"key": "t", "values": "s"},
+            "other_of": {"key": "t", "values": "s"},
         },
         "parameters": {
             "flag": {"dims": ["t"], "dtype": "bool"},

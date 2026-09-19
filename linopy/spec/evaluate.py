@@ -79,14 +79,14 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
     if isinstance(node, ms.GroupSum):
         return operators.grouped_sum(
             _array(evaluate(node.operand, ctx)),
-            _relation_arrays(node.walks, ctx),
+            _relation_arrays((node.walk,), ctx),
             into=node.into,
             labels=ctx.coords,
         )
     if isinstance(node, ms.At):
         return operators.at(
             _array(evaluate(node.operand, ctx)),
-            _relation_arrays(node.walks, ctx),
+            _relation_arrays((node.walk,), ctx),
             into=node.into,
         )
     if isinstance(node, ms.Translate):

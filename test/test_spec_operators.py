@@ -36,12 +36,12 @@ OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
     "shift-ahead-edge-0": ("shift(x, along=t, offset=-1, edge=0)", ["t"], [2, 4, 8, 0]),
     "shift-wrap": ("shift(x, along=t, offset=1, edge='wrap')", ["t"], [8, 1, 2, 4]),
     "shift-wrap-in-groups": (
-        "shift(x, along=t, offset=1, edge='wrap', by=season_of)",
+        "shift(x, along=t, offset=1, edge='wrap', by=season_of, within=s)",
         ["t"],
         [2, 1, 8, 4],
     ),
     "shift-by-group-offset": (
-        "shift(x, along=t, offset=lag, edge=0, by=season_of)",
+        "shift(x, along=t, offset=lag, edge=0, by=season_of, within=s)",
         ["t"],
         [0, 1, 0, 0],
     ),
@@ -52,17 +52,17 @@ OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
         [9, 3, 6, 12],
     ),
     "sum-back-in-groups": (
-        "sum_back(x, along=t, window=2, by=season_of)",
+        "sum_back(x, along=t, window=2, by=season_of, within=s)",
         ["t"],
         [1, 3, 4, 12],
     ),
     "sum-back-group-width": (
-        "sum_back(x, along=t, window=width, by=season_of)",
+        "sum_back(x, along=t, window=width, by=season_of, within=s)",
         ["t"],
         [1, 2, 4, 12],
     ),
-    "sum-by": ("sum(x, by=season_of)", ["s"], [3, 12]),
-    "at": ("x * at(z, by=season_of)", ["t"], [10, 20, 80, 160]),
+    "sum-by": ("sum(x, by=season_of, over=t, into=s)", ["s"], [3, 12]),
+    "at": ("x * at(z, by=season_of, over=s, into=t)", ["t"], [10, 20, 80, 160]),
     "cases": ("x_state", ["t"], [100, 1, 2, 4]),
 }
 
@@ -70,7 +70,7 @@ OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
 def operator_spec() -> dict[str, Any]:
     spec: dict[str, Any] = {
         "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
-        "relations": {"season_of": {"key": "t", "value": "s"}},
+        "relations": {"season_of": {"key": "t", "values": "s"}},
         "parameters": {
             "v": {"dims": ["t"]},
             "z": {"dims": ["s"]},
@@ -133,7 +133,7 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
 
 AMOUNT_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "int"}},
-    "relations": {"grp": {"key": "t", "value": "g"}},
+    "relations": {"grp": {"key": "t", "values": "g"}},
     "parameters": {"v": {"dims": ["t"]}, "lag": {"dims": ["g"], "dtype": "int"}},
     "variables": {
         "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
@@ -143,7 +143,7 @@ AMOUNT_SPEC: dict[str, Any] = {
         "fix": {"dims": ["t"], "expression": "x == v"},
         "link": {
             "dims": ["t"],
-            "expression": "y == shift(x, along=t, offset=lag, edge=0, by=grp)",
+            "expression": "y == shift(x, along=t, offset=lag, edge=0, by=grp, within=g)",
         },
     },
     "objective": {"sense": "minimize", "expression": "sum(x)"},
@@ -200,13 +200,13 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
 
 GROUPED_SPEC: dict[str, Any] = {
     "dimensions": {"generator": {}, "bus": {"dtype": "str"}},
-    "relations": {"gen_bus": {"key": "generator", "value": "bus"}},
+    "relations": {"gen_bus": {"key": "generator", "values": "bus"}},
     "parameters": {"capacity": {"dims": ["generator"]}},
     "variables": {"imports": {"dims": ["bus"], "bounds": {"lower": 0, "upper": 100}}},
     "constraints": {
         "import_limit": {
             "dims": ["bus"],
-            "expression": "imports <= sum(capacity, by=gen_bus)",
+            "expression": "imports <= sum(capacity, by=gen_bus, over=generator, into=bus)",
         }
     },
     "objective": {"sense": "maximize", "expression": "sum(imports, over=bus)"},
@@ -239,7 +239,7 @@ def test_a_relation_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> N
                 "bounds": {"lower": 0, "upper": "capacity"},
             }
         },
-        expressions={"per_bus": "sum(out, by=gen_bus)"},
+        expressions={"per_bus": "sum(out, by=gen_bus, over=generator, into=bus)"},
     )
     sources = grouped_sources(pd.Series([3.0, 4.0], index=GENS))
     sources["gen_bus"] = pd.Series([], dtype=object)
@@ -271,7 +271,7 @@ WHERE_CASES: dict[str, tuple[str, str, list[Any]]] = {
     "and": ("x", "t > 0 AND t < 3", [1, 2]),
     "or": ("x", "t == 0 OR t == 3", [0, 3]),
     "position": ("x", "position(t) == -1", [3]),
-    "position-in-groups": ("x", "position(t, by=season_of) == 0", [0, 2]),
+    "position-in-groups": ("x", "position(t, by=season_of, within=s) == 0", [0, 2]),
     "bool-parameter": ("x", "flag", [0]),
     "float-parameter-must-be-finite": ("x", "cost", [0, 2]),
     "str-parameter": ("x", "label", [1, 2]),
@@ -297,7 +297,7 @@ def test_a_where_picks_the_rows_it_names(case: str) -> None:
     ("predicate", "match"),
     [
         ("position(t) == 7", "names position 7 of 't', which has 4"),
-        ("position(t, by=season_of) == 1", "shorter than that: \\['b'\\]"),
+        ("position(t, by=season_of, within=s) == 1", "shorter than that: \\['b'\\]"),
     ],
 )
 def test_a_position_no_coordinate_holds_is_refused(predicate: str, match: str) -> None:
