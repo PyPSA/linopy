@@ -122,6 +122,11 @@ Build a model from a `math-spec
 <https://github.com/energy-models/math-spec>`__ YAML program attached to
 data. Requires the ``spec`` dependency group.
 
+Spec fragments that read variables or constraints they do not build (declared
+under ``given:``) compose into one whole model with ``linopy.spec.merge`` (fold
+fragments together) or ``linopy.spec.override`` (lay a patch over a base). linopy
+builds whole models only: a spec that still reads a ``given:`` name is refused.
+
 A spec's grouped sums and windows build dense by default, which is wasteful on
 a skewed topology (a lookup with a few large groups and many small ones, or a
 wide ``sum_back`` window). Set ``linopy.options["sparse_groupby"] = True`` (v1
@@ -143,6 +148,8 @@ instead of densifying them.
    spec.attach
    spec.Attached
    spec.SpecDataError
+   spec.merge
+   spec.override
 
 
 Variable

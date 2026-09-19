@@ -148,8 +148,9 @@ def build_into(
     Raises
     ------
     ValueError
-        The model already holds variables or constraints, or runs
-        under legacy semantics.
+        The model already holds variables or constraints, runs under
+        legacy semantics, or the spec is a fragment that still reads a
+        name under ``given:``.
     TypeError
         *spec* is a lowered ``Program`` or an open file, neither of which
         has a YAML form to keep on the model.
@@ -168,6 +169,14 @@ def build_into(
             f"{len(model.variables)} variable(s) and {len(model.constraints)} constraint(s)."
         )
     text, program, stem = normalize_spec(spec)
+    given = (*program.given.variables, *program.given.constraints)
+    if given:
+        raise ValueError(
+            f"the spec reads {len(given)} name(s) under `given:` that it does not build "
+            f"({', '.join(given)}), so it is a fragment rather than a whole model. linopy "
+            f"builds whole models: compose the fragments with linopy.spec.merge, or lay a "
+            f"patch over a base with linopy.spec.override, and build the result."
+        )
     attached: Attached = attach_data(program, sources, retain=retain)
     # Resolved before the build, so a parameter no declaration reads cannot fail
     # halfway through one and leave a model too full to build into again.

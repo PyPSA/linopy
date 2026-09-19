@@ -29,6 +29,8 @@ Upcoming Version
 
 * ``model.spec.expressions`` evaluates the spec's named expressions against the solved model, and ``model.spec.typeset`` (``to_latex`` / ``to_markdown`` / ``to_typst``) renders the spec, warning where the model has drifted from it.
 
+* Spec fragments compose into a whole model. A fragment declares under ``given:`` the variables and constraints it reads but does not build; ``linopy.spec.merge`` folds those reads into the fragment that introduces them and ``linopy.spec.override`` lays a patch over a base, both producing one whole model. linopy builds whole models only, so a spec that still reads a ``given:`` name is refused.
+
 * Spec models round-trip through ``to_netcdf`` / ``read_netcdf``; a file read without ``math-spec`` installed loads as a plain model with a warning.
 
 
