@@ -20,6 +20,8 @@ if find_spec("math_spec") is None:
         message = "linopy.spec needs Python >= 3.12. " + message
     raise ImportError(message)
 
+from math_spec import merge, override
+
 from linopy.spec.accessor import (
     Declaration,
     ModelSpec,
@@ -42,4 +44,6 @@ __all__ = [
     "SpecLike",
     "Unspecified",
     "attach",
+    "merge",
+    "override",
 ]

@@ -123,7 +123,10 @@ gpu = [
 # keeps the git pin out of the published wheel metadata, which PyPI rejects.
 # Install with `uv sync --group spec` or `uv pip install --group spec`.
 spec = [
-    "math-spec @ git+https://github.com/energy-models/math-spec.git@v0.0.0-alpha.106 ; python_version >= '3.12'",
+    # TODO: repin to the released alpha before merge. The feat/given branch head
+    # (a106 + given: merge/override/Program.given) is used for local iteration
+    # only, until an alpha tag cut from it is available.
+    "math-spec @ git+https://github.com/energy-models/math-spec.git@4afb08cd69bee2358600611ec18a70a261a8f063 ; python_version >= '3.12'",
     "pyyaml ; python_version >= '3.12'",
     "pyarrow ; python_version >= '3.12'",
 ]
