@@ -32,6 +32,7 @@ Upcoming Version
 *Other*
 
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
+* ``Model.compute_infeasibilities`` now also supports HiGHS, via ``Highs.getIis``. (https://github.com/PyPSA/linopy/issues/956)
 
 *Internal*
 
@@ -271,7 +272,6 @@ Version 0.7.0
 
 * OETC: ``Model.solve()`` forwards solver options to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
 * SCIP supports quadratic problems on Windows.
-* ``Model.compute_infeasibilities`` now also supports HiGHS, via ``Highs.getIis``.
 
 **Performance**
 
