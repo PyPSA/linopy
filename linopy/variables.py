@@ -36,6 +36,7 @@ from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -86,7 +87,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import AnonymousScalarConstraint, ConstraintBase
     from linopy.expressions import (
         GenericExpression,
         LinearExpression,
@@ -618,13 +619,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __le__(self, other: SideLike) -> Constraint:
+    def __le__(self, other: SideLike) -> ConstraintBase:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other: SideLike) -> Constraint:
+    def __ge__(self, other: SideLike) -> ConstraintBase:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
+    def __eq__(self, other: SideLike) -> ConstraintBase:  # type: ignore[override]
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -744,7 +745,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
-    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
         """
         Less than or equal constraint.
 
@@ -761,7 +762,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
         """
         Greater than or equal constraint.
 
@@ -778,7 +779,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
         """
         Equality constraint.
 
@@ -1132,6 +1133,18 @@ class Variable:
                 "Variable.update would leave lower > upper at one or more coordinates."
             )
         return updates
+
+    def _assign_coords(self, **coords: Any) -> Variable:
+        """
+        Reassign coordinate values on the variable, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        return self
 
     @property
     @has_optimized_model

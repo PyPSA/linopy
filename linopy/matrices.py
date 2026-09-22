@@ -242,7 +242,7 @@ class MatrixAccessor:
                     dual_list.append(c._dual)
                     has_dual = True
                 else:
-                    dual_list.append(np.full(len(c._con_labels), np.nan))
+                    dual_list.append(np.full(c.ncons, np.nan))
             else:
                 active_rows = np.flatnonzero(c.active_row_mask())
                 if "dual" in c.data:

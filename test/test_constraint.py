@@ -30,6 +30,7 @@ from linopy.constraints import (
     ConstraintBase,
     Constraints,
 )
+from linopy.testing import assert_linequal, assert_varequal
 
 
 @pytest.fixture
@@ -93,6 +94,41 @@ def test_add_constraints_uses_model_freeze_default() -> None:
     assert isinstance(
         m.constraints["frozen_by_default"], linopy.constraints.CSRConstraint
     )
+
+
+def test_add_constraints_penalty_softens_constraint(
+    m: Model, y: linopy.Variable
+) -> None:
+    """`penalty=` on add_constraints is a shortcut for calling `.soften()`."""
+    m.add_objective(y.sum(), sense="min")
+    penalty_coeff = 10
+    constraint = m.add_constraints(y >= 10, name="constraint", penalty=penalty_coeff)
+
+    assert isinstance(constraint, linopy.constraints.Constraint)
+    # The slack term was added to the lhs, same effect as calling .soften() directly:
+    assert constraint.lhs.nterm == 2
+    expected_objective = (
+        y.sum() + penalty_coeff * m.variables["constraint_slack_pos"].sum()
+    )
+    assert_linequal(m.objective.expression, expected_objective)
+
+
+def test_add_constraints_penalty_with_freeze_true_raises(
+    m: Model, x: linopy.Variable
+) -> None:
+    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
+        m.add_constraints(x >= 0, name="frozen_penalized", freeze=True, penalty=10)
+
+
+def test_add_constraints_penalty_with_model_freeze_default_raises() -> None:
+    """
+    `freeze=None` resolves to the model's `freeze_constraints` default, which must
+    also be checked against `penalty`, not just an explicit `freeze=True`.
+    """
+    m = Model(freeze_constraints=True)
+    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
+        m.add_constraints(x >= 0, name="frozen_by_default_penalized", penalty=10)
 
 
 def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
@@ -257,7 +293,8 @@ def test_constraint_inherited_properties(
 
 
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
-    con: Constraint = 10 * x + y <= 10
+    con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
 
     # Test wrapped methods
     con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
@@ -284,12 +321,14 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
 def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.sel(first=[1, 2]), ConstraintBase)
 
 
 def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
@@ -299,6 +338,7 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.set_index({"multi": ["second", "third"]})
     assert isinstance(con, ConstraintBase)
@@ -312,6 +352,7 @@ def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
+    assert isinstance(con, Constraint)
     assert isinstance(con.loc[[1, 2]], ConstraintBase)
 
 
@@ -894,12 +935,67 @@ def test_freeze_mutable_roundtrip(m: Model) -> None:
     assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
     assert isinstance(mc, Constraint)
-    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
     np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
-    np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
+    np.testing.assert_array_equal(frozen.active_labels(), refrozen.active_labels())
+
+
+def test_frozen_coeff_dtype_preserved() -> None:
+    m = Model()
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    coeff = xr.DataArray(np.arange(1, 5, dtype=np.float32), coords=[i])
+    frozen = m.add_constraints(coeff * x >= 1, name="c", freeze=True)
+    assert frozen._csr.dtype == np.float32
+    assert frozen.coeffs.dtype == np.float32
+    assert frozen.mutable().coeffs.dtype == np.float32
+
+
+def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
+    frozen = m.constraints["c"]
+    assert isinstance(frozen, linopy.constraints.CSRConstraint)
+    csr, _ = frozen.to_matrix(m.variables.label_index)
+    assert csr.shape[1] == m.variables.label_index.n_active_vars
+
+
+def _model_with_frozen_and_mutation(freeze: bool, mutation: str) -> Model:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(2 * b >= 1, name="c1", freeze=freeze)
+    d = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="d")
+    m.add_constraints(d <= 5, name="c2", freeze=freeze)
+    if mutation == "remove":
+        m.remove_variables("a")
+    return m
+
+
+@pytest.mark.parametrize("mutation", ["add", "remove"])
+def test_frozen_matrices_after_variable_mutation(mutation: str) -> None:
+    frozen = _model_with_frozen_and_mutation(True, mutation)
+    mutable = _model_with_frozen_and_mutation(False, mutation)
+    a_frozen, a_mutable = frozen.matrices.A, mutable.matrices.A
+    assert a_frozen is not None and a_mutable is not None
+    np.testing.assert_array_equal(a_frozen.toarray(), a_mutable.toarray())
+    np.testing.assert_array_equal(frozen.matrices.b, mutable.matrices.b)
+    np.testing.assert_array_equal(frozen.matrices.clabels, mutable.matrices.clabels)
+    np.testing.assert_array_equal(frozen.matrices.vlabels, mutable.matrices.vlabels)
+
+
+@pytest.mark.parametrize("freeze", [True, False])
+def test_constraint_removed_with_referenced_variable(freeze: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    a = m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    m.add_constraints(a + b >= 1, name="c", freeze=freeze)
+    with pytest.warns(UserWarning, match="also removes constraints"):
+        m.remove_variables("a")
+    assert "c" not in m.constraints
 
 
 def test_freeze_mutable_roundtrip_with_masking() -> None:
@@ -910,20 +1006,20 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     frozen = m.constraints["c"]
     assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
-    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert frozen.ncons == refrozen.ncons == 3
 
 
-def test_from_mutable_mixed_signs() -> None:
+def test_from_dense_mixed_signs() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
     m.add_constraints(x >= 0, name="mixed", freeze=False)
     mc = m.constraints["mixed"]
     assert isinstance(mc, Constraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    frozen = linopy.constraints.CSRConstraint.from_mutable(mc)
+    frozen = linopy.constraints.CSRConstraint.from_dense(mc)
     assert isinstance(frozen._sign, np.ndarray)
     assert list(frozen._sign) == ["<=", ">=", "<="]
     assert_equal(frozen.sign, mc.sign)
@@ -1059,3 +1155,260 @@ def test_mixed_sign_repr() -> None:
     r = repr(con)
     assert "≥" in r
     assert "=" in r
+
+
+# Constraint.soften method's tests
+
+
+def test_constraint_soften_returns_slack_for_le_and_ge(
+    m: Model, y: linopy.Variable
+) -> None:
+    """
+    Checks that a constraint of type 'less or equal' or 'great and equal' returns
+    one slack each.
+    """
+    z = m.variables["z"]
+    m.add_objective((z + y).sum(), sense="min")
+
+    # create new constraint, and add slack for 'greater or equal'
+    z_constraint = m.add_constraints(z >= -10, name="constraint_over_z")
+    z_slack = z_constraint.soften(penalty=10)
+    assert isinstance(z_slack.positive, linopy.Variable)
+    assert z_slack.negative is None
+
+    # create new constraint, and add slack for 'less or equal':
+    y_constraint = m.add_constraints(y <= 0, name="constraint_over_y")
+    y_slack = y_constraint.soften(penalty=10)
+    assert isinstance(y_slack.positive, linopy.Variable)
+    assert y_slack.negative is None
+
+
+def test_constraint_soften_returns_slack_for_eq(m: Model, y: linopy.Variable) -> None:
+    """Checks that a constraint of type 'equal'' returns two slack variables"""
+    m.add_objective(y.sum(), sense="min")
+    y_contraint = m.add_constraints(y == 10, name="equality_contraint")
+    y_slack = y_contraint.soften(penalty=10)
+
+    assert isinstance(y_slack.positive, linopy.Variable)
+    assert isinstance(y_slack.negative, linopy.Variable)
+
+
+def test_constraint_soften_raises_on_detached_mutable_constraint(
+    m: Model, x: linopy.Variable, mc: linopy.Constraint
+) -> None:
+    """
+    `.mutable()` on a frozen constraint returns a detached copy that is not
+    registered in `model.constraints`; softening it would silently fail to
+    affect the actual model, so `soften` must raise instead.
+    """
+    m.add_objective(x.sum(), sense="min")
+
+    with pytest.raises(ValueError, match="not the constraint registered"):
+        # mc := m.constraints["c"].mutable(), detached from the model
+        mc.soften(penalty=10)
+
+
+def test_constraint_soften_twice_raises(m: Model, y: linopy.Variable) -> None:
+    """
+    Softening an already-softened constraint must raise instead of silently
+    stacking a second, redundant slack term onto the same lhs.
+    """
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    constraint.soften(penalty=10, name="first_slack")
+
+    with pytest.raises(ValueError, match="already softened"):
+        constraint.soften(penalty=5, name="second_slack")
+
+
+def test_constraint_soften_twice_raises_via_add_constraints_penalty(
+    m: Model, y: linopy.Variable
+) -> None:
+    """The same guard applies when the first soften came from `add_constraints(penalty=...)`."""
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint", penalty=10)
+
+    with pytest.raises(ValueError, match="already softened"):
+        constraint.soften(penalty=5, name="second")
+
+
+def test_constraint_soften_updates_lhs(m: Model, y: linopy.Variable) -> None:
+    """
+    Tests that the left hand side gains the slack term(s) with the expected sign
+    per constraint direction.
+    """
+    m.add_objective(y.sum(), sense="min")
+
+    # '<=' : lhs -> lhs - positive_slack
+    le_constraint = m.add_constraints(y <= 10, name="le_constraint")
+    le_slack = le_constraint.soften(penalty=10)
+
+    # Assert that the new lhs has 1 extra term:
+    assert le_constraint.lhs.nterm == 2
+
+    # Assert tht the label for the constraint's new variable is the same as the slack:
+    assert_equal(
+        le_constraint.vars.isel({le_constraint.term_dim: -1}),
+        le_slack.positive.labels,
+    )
+
+    # Since the it's less or equal, we expect the coeff of the variable to be -1
+    assert (le_constraint.coeffs.isel({le_constraint.term_dim: -1}) == -1).all()
+
+    # '>=' : lhs -> lhs + positive_slack
+    ge_constraint = m.add_constraints(y >= -10, name="ge_constraint")
+    ge_slack = ge_constraint.soften(penalty=10)
+
+    assert ge_constraint.lhs.nterm == 2
+
+    assert_equal(
+        ge_constraint.vars.isel({ge_constraint.term_dim: -1}),
+        ge_slack.positive.labels,
+    )
+    assert (ge_constraint.coeffs.isel({ge_constraint.term_dim: -1}) == 1).all()
+
+    # '==' : lhs -> lhs - positive_slack + negative_slack
+    eq_constraint = m.add_constraints(y == 0, name="eq_constraint")
+    eq_slack = eq_constraint.soften(penalty=10)
+    assert eq_slack.negative is not None
+
+    # Assert there's two extra terms:
+    assert eq_constraint.lhs.nterm == 3
+
+    # The positive slack is added first to the lhs, therefore, it should be on position
+    # -2 of the lhs:
+    assert_equal(
+        eq_constraint.vars.isel({eq_constraint.term_dim: -2}),
+        eq_slack.positive.labels,
+    )
+
+    # The negative slack is added next to the lhs, therefore, it should be on position
+    # -1 of the lhs:
+    assert_equal(
+        eq_constraint.vars.isel({eq_constraint.term_dim: -1}),
+        eq_slack.negative.labels,
+    )
+
+    assert (eq_constraint.coeffs.isel({eq_constraint.term_dim: -2}) == -1).all()
+    assert (eq_constraint.coeffs.isel({eq_constraint.term_dim: -1}) == 1).all()
+
+
+def test_constraint_soften_updates_objective_min_sense(
+    m: Model, y: linopy.Variable
+) -> None:
+    penalty_coeff = 10
+    original_objective = y.sum()
+    m.add_objective(original_objective, sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    slack = constraint.soften(penalty=penalty_coeff)
+
+    # For sense='min', the penalty must added with positive sign:
+    expected_objective = original_objective + penalty_coeff * slack.positive.sum()
+    assert_linequal(m.objective.expression, expected_objective)
+
+
+def test_constraint_soften_updates_objective_max_sense(
+    m: Model, y: linopy.Variable
+) -> None:
+    penalty_coeff = 10
+    original_objective = y.sum()
+    m.add_objective(original_objective, sense="max")
+    constraint = m.add_constraints(y <= 10, name="constraint")
+    slack = constraint.soften(penalty=penalty_coeff)
+
+    # For sense='max', the penalty must added with negative sign:
+    expected_objective = original_objective - penalty_coeff * slack.positive.sum()
+    assert_linequal(m.objective.expression, expected_objective)
+
+
+def test_constraint_soften_max_violation_bounds_slack(
+    m: Model, x: linopy.Variable
+) -> None:
+    """max_violation sets the slack variable's upper bound; default is unbounded (inf)."""
+    m.add_objective(x.sum(), sense="min")
+
+    bounded_constraint = m.add_constraints(x >= 0, name="bounded_constraint")
+    bounded_slack = bounded_constraint.soften(penalty=10, max_violation=5)
+    assert (bounded_slack.positive.upper == 5).all()
+
+    unbounded_constraint = m.add_constraints(x >= 0, name="unbounded_constraint")
+    unbounded_slack = unbounded_constraint.soften(penalty=10)
+    assert np.isinf(unbounded_slack.positive.upper).all()
+
+
+def test_constraint_soften_negative_penalty_raises(
+    m: Model, y: linopy.Variable
+) -> None:
+    """Setting penalty < 0 raises ValueError."""
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y >= 10, name="constraint")
+    with pytest.raises(ValueError, match="Penalty is not positive"):
+        constraint.soften(penalty=-10)
+
+
+def test_constraint_soften_without_objective_raises(
+    m: Model, y: linopy.Variable
+) -> None:
+    """Calling soften before model.add_objective raises ValueError."""
+    constraint = m.add_constraints(y <= 10, name="constraint")
+    with pytest.raises(ValueError, match="Objective must be defined"):
+        constraint.soften(penalty=10)
+
+
+def test_constraint_soften_respects_mask(m: Model, x: linopy.Variable) -> None:
+    """Masked constraint entries produce masked slack variables (mask propagated)."""
+    m.add_objective(x.sum(), sense="min")
+    mask = pd.Series([False] * 5 + [True] * 5)
+    constraint = m.add_constraints(x >= 0, name="masked_constraint", mask=mask)
+    slack = constraint.soften(penalty=10)
+
+    assert_equal(slack.positive.mask, constraint.mask)
+    assert constraint.mask is not None
+    assert (constraint.mask.values == mask.values).all()
+
+
+def test_constraint_slack_none_before_soften(m: Model, x: linopy.Variable) -> None:
+    """A constraint that was never softened exposes no slack variable."""
+    constraint = m.add_constraints(x >= 0, name="constraint")
+    assert constraint.slack is None
+
+
+def test_constraint_slack_matches_returned_slack_for_le_and_ge(
+    m: Model, x: linopy.Variable, y: linopy.Variable
+) -> None:
+    """
+    `.slack` resolves to the same variables `soften` returned, for both
+    inequality directions (no negative slack).
+    """
+    m.add_objective((x + y).sum(), sense="min")
+
+    le_constraint = m.add_constraints(y <= 0, name="le_constraint")
+    le_slack = le_constraint.soften(penalty=10)
+    assert le_constraint.slack is not None
+    assert_varequal(le_constraint.slack.positive, le_slack.positive)
+    assert le_constraint.slack.negative is None
+
+    ge_constraint = m.add_constraints(x >= -10, name="ge_constraint")
+    ge_slack = ge_constraint.soften(penalty=10)
+    assert ge_constraint.slack is not None
+    assert_varequal(ge_constraint.slack.positive, ge_slack.positive)
+    assert ge_constraint.slack.negative is None
+
+
+def test_constraint_slack_matches_returned_slack_for_eq(
+    m: Model, y: linopy.Variable
+) -> None:
+    """
+    For an equality constraint, `.slack` carries both the positive and the
+    negative slack variable.
+    """
+    m.add_objective(y.sum(), sense="min")
+    constraint = m.add_constraints(y == 10, name="eq_constraint")
+    slack = constraint.soften(penalty=10)
+
+    resolved = constraint.slack
+    assert resolved is not None
+    assert_varequal(resolved.positive, slack.positive)
+    assert slack.negative is not None
+    assert resolved.negative is not None
+    assert_varequal(resolved.negative, slack.negative)

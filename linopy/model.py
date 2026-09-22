@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -30,10 +30,13 @@ from xarray.core.types import T_Chunks
 from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
+    _as_renamed_index,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     assigned_labels,
     best_int,
     coords_reorder_set,
+    maybe_replace_sign,
     maybe_replace_signs,
     replace_by_map,
     to_path,
@@ -86,7 +89,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex
+from linopy.semantics import enforce_no_multiindex, is_v1
 
 try:
     from linopy.remote import OetcHandler
@@ -120,6 +123,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DtypeKey = Literal["labels"]
+
+
+def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
+    invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
+        (sign == GREATER_EQUAL) & (rhs == np.inf)
+    )
+    if np.any(invalid):
+        raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
 class Model:
@@ -1103,7 +1114,7 @@ class Model:
             self._connameCounter += 1
         return name
 
-    def _constraint_data_from_lhs(
+    def _constraint_from_lhs(
         self,
         lhs: VariableLike
         | ExpressionLike
@@ -1113,8 +1124,8 @@ class Model:
         sign: SignLike | None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
-    ) -> Dataset:
-        """Build the constraint Dataset from an ``lhs`` and optional ``sign``/``rhs``."""
+    ) -> ConstraintBase:
+        """Build the anonymous constraint from an ``lhs`` and optional ``sign``/``rhs``."""
         msg_required = (
             f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
         )
@@ -1124,28 +1135,28 @@ class Model:
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return lhs.to_constraint(sign, rhs).data
+            return lhs.to_constraint(sign, rhs)
         elif isinstance(lhs, list | tuple):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return self.linexpr(*lhs).to_constraint(sign, rhs).data
+            return self.linexpr(*lhs).to_constraint(sign, rhs)
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return Constraint.from_rule(self, lhs, coords).data
+            return Constraint.from_rule(self, lhs, coords)
         elif isinstance(lhs, AnonymousScalarConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return lhs.to_constraint().data
+            return lhs.to_constraint()
         elif isinstance(lhs, ConstraintBase):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
-            return lhs.data
+            return lhs
         elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_required)
-            return lhs.to_linexpr().to_constraint(sign, rhs).data
+            return lhs.to_linexpr().to_constraint(sign, rhs)
         else:
             raise TypeError(
                 f"`lhs` must be a LinearExpression, Variable, Constraint, tuple, or "
@@ -1181,6 +1192,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> Constraint: ...
 
     @overload
@@ -1198,6 +1210,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
         scaling: ConstantLike = ...,
+        penalty: None = ...,
     ) -> CSRConstraint: ...
 
     @overload
@@ -1215,6 +1228,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: bool | None = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> ConstraintBase: ...
 
     def add_constraints(
@@ -1231,6 +1245,7 @@ class Model:
         mask: MaskLike | None = None,
         freeze: bool | None = None,
         scaling: ConstantLike = 1,
+        penalty: ConstantLike | None = None,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1273,6 +1288,16 @@ class Model:
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
             by this factor. The default is 1.
+        penalty : constant-like, optional
+            If given, soften the constraint right away by calling
+            :meth:`Constraint.soften` with this penalty, adding a slack variable
+            and a penalty term to the objective. Not allowed together with
+            ``freeze=True`` (or a model default of ``freeze_constraints=True``),
+            since softening requires a mutable, registered ``Constraint``.
+            The resulting Slack is not returned by this shortcut; retrieve
+            the slack variable(s) from model.variables using the derived
+            name f"{name}_slack_pos" (and f"{name}_slack_neg" for
+            equality constraints).
 
         Returns
         -------
@@ -1281,18 +1306,19 @@ class Model:
         """
 
         name = self._resolve_constraint_name(name)
+        if freeze is None:
+            freeze = self.freeze_constraints
+        freeze = freeze and not self.chunk
 
-        resolved_freeze = self.freeze_constraints if freeze is None else freeze
-        if resolved_freeze and mask is None and not self.chunk:
-            from linopy.constraints import CSRConstraint, extract_csr_pending
+        if penalty is not None and freeze:
+            raise ValueError(
+                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
+                "since `soften` is not supported on frozen constraints."
+            )
 
-            extracted = extract_csr_pending(lhs, sign, rhs)
-            if extracted is not None:
-                payload, csr_sign, csr_rhs = extracted
-                con = CSRConstraint.from_payload(self, payload, csr_sign, csr_rhs, name)
-                return self.constraints.add(con)
-
-        if sign is not None:
+        if isinstance(sign, str):
+            sign = maybe_replace_sign(sign)
+        elif sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         # Capture original RHS for auto-masking before constraint creation
@@ -1303,13 +1329,22 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        data = self._constraint_data_from_lhs(lhs, sign, rhs, coords)
+        con = self._constraint_from_lhs(lhs, sign, rhs, coords)
+        if isinstance(con, CSRConstraint) and freeze and mask is None:
+            _check_infinities(con._sign, con._rhs, name)
+            self.check_force_dim_names(con.coords.to_dataset())
+            enforce_no_multiindex(con, context=f"constraint {name!r}")
+            scaling_grid = validate_scaling(
+                broadcast_to_coords(scaling, con.coords, label="constraint scaling"),
+                "constraint scaling",
+            )
+            cindex = self._cCounter
+            self._cCounter += con.full_size
+            con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
+            return self.constraints.add(con)
+        data = con.data
 
-        invalid_infinity_values = (
-            (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
-        ) | ((data.sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
-        if invalid_infinity_values.any():
-            raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+        _check_infinities(data.sign, data.rhs, name)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
@@ -1370,9 +1405,10 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        if freeze is None:
-            freeze = self.freeze_constraints
-        return self.constraints.add(constraint, freeze=freeze and not self.chunk)
+        added = self.constraints.add(constraint, freeze=freeze)
+        if penalty is not None:
+            constraint.soften(penalty=penalty)
+        return added
 
     def add_indicator_constraints(
         self,
@@ -1433,7 +1469,7 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
-        data = self._constraint_data_from_lhs(lhs, sign, rhs)
+        data = self._constraint_from_lhs(lhs, sign, rhs).data
 
         data["binary_var"] = binary_var.labels
         data["binary_val"] = binary_val
@@ -2103,6 +2139,8 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
+        self._check_coord_consistency()
+
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -2237,6 +2275,182 @@ class Model:
 
             return self.assign_result(result)
 
+    def assign_coords(self, **coords_kwargs: Any) -> Model:
+        """
+        Reassign coordinate values across the whole model, keeping the shape.
+
+        Mirrors :meth:`xarray.Dataset.assign_coords` semantics for an existing
+        model: for every named dimension, the coordinate values of every
+        variable, constraint (dense and CSR-backed), expression and the
+        parameters carrying that dimension are replaced in place.
+        Values-only — no relabeling, no reindexing, no shape change. The order
+        of each dataset's variables and coordinates is preserved.
+
+        Containers may hold *subsets* of a dimension (e.g. a piecewise
+        commitment variable on a subset of generators): the new values must
+        match the length of the full-index carrier (the master), and every
+        container's labels are mapped through the master's ``old -> new``
+        correspondence, preserving subset relations.
+
+        Typical use is rolling-horizon optimization with the persistent solver
+        interface, where the model structure stays identical between
+        iterations while the window's coordinate labels advance.
+
+        Parameters
+        ----------
+        **coords_kwargs : Any
+            New coordinate values, keyed by an existing dimension name, e.g.
+            ``m.assign_coords(snapshot=new_snapshots)``. Accepted are
+            index-likes: numpy arrays, pandas Index objects, DataArrays or
+            lists.
+
+        Returns
+        -------
+        Model
+            ``self`` for chaining.
+
+        Raises
+        ------
+        ValueError
+            If a named dimension does not exist anywhere in the model, the
+            new values do not match any container's dimension length, or a
+            container carries labels outside the master's index.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>>
+        >>> sns = pd.date_range("2026-01-01", periods=3, freq="h", name="snapshot")
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[sns], name="x")
+        >>> _ = m.add_constraints(x >= 0, name="c")
+        >>>
+        >>> _ = m.assign_coords(snapshot=sns + pd.Timedelta("1h"))
+        """
+        # validate everything up front, then mutate
+        mapped: dict[Any, dict[str, pd.Index]] = {}
+        for dim, values in coords_kwargs.items():
+            carriers = [
+                (item.name, item.indexes[dim])
+                for item in self._coordinate_carriers()
+                if dim in item.sizes and dim in item.indexes
+            ]
+            if dim in self.parameters.sizes and dim in self.parameters.indexes:
+                carriers.append(("parameters", self.parameters.indexes[dim]))
+            if not carriers:
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "not found in the model."
+                )
+            new = _as_renamed_index(values, dim, "model")
+
+            masters = [index for _, index in carriers if len(index) == len(new)]
+            if not masters:
+                lengths = sorted({len(index) for _, index in carriers})
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}' with "
+                    f"length {len(new)}: no container carries it with a "
+                    f"matching length ({lengths})."
+                )
+            master = masters[0]
+            if any(not master.equals(other) for other in masters[1:]):
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "containers of matching length carry different values."
+                )
+            if not master.is_unique:
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "the carrier's index has duplicate labels, so a "
+                    "values-only reassignment is ambiguous."
+                )
+
+            for name, index in carriers:
+                if not index.isin(master).all():
+                    raise ValueError(
+                        f"Cannot assign coordinates to dimension '{dim}': "
+                        f"container '{name}' carries labels outside the "
+                        "dimension's index. Relabel model-wide first, or "
+                        "align the container with `.sel`."
+                    )
+                mapped.setdefault(dim, {})[name] = index.map(
+                    dict(zip(master, new))
+                ).rename(dim)
+
+        for container in (self.variables, self.constraints, self.expressions):
+            for name, item in container.items():
+                applicable = {
+                    dim: mapped[dim][name]
+                    for dim in mapped
+                    if name in container.data and dim in item.indexes
+                }
+                if applicable:
+                    item._assign_coords(**applicable)
+
+        # note: the objective is stored as a reduced (coords-less) expression
+        # by design, so it never carries dimensions to reassign
+
+        parameters_applicable = {
+            dim: indexes["parameters"]
+            for dim, indexes in mapped.items()
+            if "parameters" in indexes
+        }
+        if parameters_applicable:
+            self._parameters = assign_coords_multiindex_safe(
+                self.parameters, **parameters_applicable
+            )
+
+        return self
+
+    def _coordinate_carriers(self) -> list[Any]:
+        """All items carrying coordinates: variables, constraints, expressions."""
+        return [
+            *self.variables.data.values(),
+            *self.constraints.data.values(),
+            *self.expressions.data.values(),
+        ]
+
+    def _check_coord_consistency(self) -> None:
+        """
+        Raise if containers carry incompatible labels on a shared dimension.
+
+        v1-only guard: under v1 semantics (convention §8) shared dimensions
+        must carry identical labels, and models can only diverge through
+        internal-state corruption. Under legacy, non-aligned containers are
+        documented positional behavior and the check is a no-op.
+
+        Allowed are label sets that nest by inclusion (a container may hold a
+        subset of the dimension, like a piecewise commitment gate); what
+        cannot be aligned by subset — same-length relabelings, disjoint or
+        partially overlapping labels — raises. Internal dims
+        (underscore-prefixed, like ``_term`` or ``_breakpoint_piece``) are
+        exempt: they are per-container bookkeeping which the piecewise
+        machinery labels differently on purpose.
+        """
+        if not is_v1():
+            return
+        indexes_by_dim: dict[Hashable, list[tuple[str, pd.Index]]] = {}
+        for item in self._coordinate_carriers():
+            for dim, index in item.indexes.items():
+                if str(dim).startswith("_"):
+                    continue
+                indexes_by_dim.setdefault(dim, []).append((str(item.name), index))
+
+        for dim, entries in indexes_by_dim.items():
+            master_name, master_index = max(entries, key=lambda e: len(e[1]))
+            for other_name, other_index in entries:
+                if other_index.isin(master_index).all():
+                    continue
+                raise ValueError(
+                    f"Coordinates for dimension '{dim}' are incompatible "
+                    f"across the model: '{other_name}' carries labels not "
+                    f"contained in the largest carrier '{master_name}', so "
+                    "they are neither equal nor subsets of a shared index. "
+                    "Use Model.assign_coords to relabel the model, or align "
+                    "the containers with `.sel`."
+                )
+
     def assign_result(
         self,
         result: Result,
@@ -2337,9 +2551,9 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` or `xpress`
-        and the termination condition was infeasible. The solver must have detected
-        the infeasibility during the solve process.
+        This function requires that the model was solved with `gurobi`, `xpress`
+        or `highs` and the termination condition was infeasible. The solver must
+        have detected the infeasibility during the solve process.
 
         Returns
         -------
@@ -2350,27 +2564,24 @@ class Model:
 
         # Check for Gurobi
         if "gurobi" in available_solvers:
-            try:
-                import gurobipy
+            import gurobipy
 
-                if solver_model is not None and isinstance(
-                    solver_model, gurobipy.Model
-                ):
-                    return self._compute_infeasibilities_gurobi(solver_model)
-            except ImportError:
-                pass
+            if solver_model is not None and isinstance(solver_model, gurobipy.Model):
+                return self._compute_infeasibilities_gurobi(solver_model)
 
         # Check for Xpress
         if "xpress" in available_solvers:
-            try:
-                import xpress
+            import xpress
 
-                if solver_model is not None and isinstance(
-                    solver_model, xpress.problem
-                ):
-                    return self._compute_infeasibilities_xpress(solver_model)
-            except ImportError:
-                pass
+            if solver_model is not None and isinstance(solver_model, xpress.problem):
+                return self._compute_infeasibilities_xpress(solver_model)
+
+        # Check for HiGHS
+        if "highs" in available_solvers:
+            import highspy
+
+            if solver_model is not None and isinstance(solver_model, highspy.Highs):
+                return self._compute_infeasibilities_highs(solver_model)
 
         # If we get here, either the solver doesn't support IIS or no solver model is available
         if solver_model is None:
@@ -2387,12 +2598,12 @@ class Model:
                 # This is an unsupported solver
                 raise NotImplementedError(
                     f"Computing infeasibilities is not supported for '{solver_name}' solver. "
-                    "Only Gurobi and Xpress solvers support IIS computation."
+                    "Only Gurobi, Xpress and HiGHS solvers support IIS computation."
                 )
         else:
             # We have a solver model but it's not a supported type
             raise NotImplementedError(
-                "Computing infeasibilities is only supported for Gurobi and Xpress solvers. "
+                "Computing infeasibilities is only supported for Gurobi, Xpress and HiGHS solvers. "
                 f"Current solver model type: {type(solver_model).__name__}"
             )
 
@@ -2518,12 +2729,40 @@ class Model:
 
         return miisrow
 
+    def _compute_infeasibilities_highs(self, solver_model: Any) -> list[int]:
+        """Compute infeasibilities for the HiGHS solver."""
+        import highspy
+
+        solver = self.solver
+        assert solver is not None
+        if "iis_strategy" not in solver.solver_options:
+            from_lp = int(highspy.IisStrategy.kIisStrategyFromLp)
+            irreducible = int(highspy.IisStrategy.kIisStrategyIrreducible)
+            solver_model.setOptionValue("iis_strategy", from_lp | irreducible)
+
+        status, iis = solver_model.getIis()
+        if status == highspy.HighsStatus.kError or not iis.valid_:
+            raise RuntimeError(
+                "HiGHS failed to compute an irreducible infeasible subsystem (IIS)."
+            )
+
+        row_index = np.asarray(iis.row_index_, dtype=np.intp)
+        if not len(row_index):
+            return []
+
+        if solver.io_api == "direct":
+            clabels = self.constraints.label_index.clabels
+        else:
+            clabels = solvers._names_to_labels(solver_model.getLp().row_names_)
+
+        return sorted({int(clabels[pos]) for pos in row_index if clabels[pos] >= 0})
+
     def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
         Return a string representation of infeasible constraints.
 
-        This function requires that the model was solved using `gurobi` or `xpress`
-        and the termination condition was infeasible.
+        This function requires that the model was solved using `gurobi`, `xpress`
+        or `highs` and the termination condition was infeasible.
 
         Parameters
         ----------
@@ -2562,8 +2801,8 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` or `xpress` and the
-        termination condition was infeasible.
+        This function requires that the model was solved with `gurobi`, `xpress` or `highs`
+        and the termination condition was infeasible.
 
         Returns
         -------

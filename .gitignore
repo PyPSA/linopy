@@ -58,3 +58,6 @@ benchmarks/.ipynb_checkpoints/
 # direnv
 .envrc
 coverage.xml
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

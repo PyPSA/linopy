@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 from linopy import expressions
 from linopy.constraints import Constraint
@@ -75,10 +76,12 @@ def _extract_con_buffers(
 
     Mutable ``Constraint`` objects build fresh arrays in
     ``to_matrix_with_rhs``, so the buffers are exclusively owned.
-    ``CSRConstraint`` returns its stored arrays — the buffers share memory
-    with the constraint, every mutation path rebinds whole arrays
-    (copy-on-write), and the diff uses object identity to skip comparisons
-    on untouched containers.
+    ``CSRConstraint`` returns its stored ``indptr``/``data`` and a weakly
+    cached positional ``indices`` array: as long as a snapshot holds it and
+    neither the constraint nor the variable label index changed, the same
+    array is returned. The buffers share memory with the constraint, every
+    mutation path rebinds whole arrays (copy-on-write), and the diff uses
+    object identity to skip comparisons on untouched containers.
     """
     csr, con_labels, b, sense = con.to_matrix_with_rhs(var_label_index)
     return ContainerConBuffers(
@@ -128,8 +131,28 @@ class ContainerConBuffers:
     active_labels: np.ndarray
 
 
-def _coord_snapshot(obj: Variable | ConstraintBase) -> dict[str, np.ndarray]:
-    return {str(name): np.asarray(idx) for name, idx in obj.indexes.items()}
+def _coord_snapshot(
+    obj: Variable | ConstraintBase,
+) -> dict[str, tuple[str | None, np.ndarray]]:
+    """
+    Snapshot a container's coordinate indexes.
+
+    Each coordinate is stored as a ``(tz_key, values)`` pair: the raw values as
+    a numpy array plus the tz identity for equality purposes. For tz-aware
+    ``DatetimeIndex`` coordinates the values are stored as UTC-ns
+    ``datetime64`` — ``np.asarray`` would instead materialize an object array
+    of Timestamps (O(n) Python objects per container and per diff) — and the
+    tz string is carried so tz identity stays part of the equality: a naive
+    index never equals a tz-aware one, matching pandas' own naive/aware
+    comparison semantics.
+    """
+    out: dict[str, tuple[str | None, np.ndarray]] = {}
+    for name, idx in obj.indexes.items():
+        if isinstance(idx, pd.DatetimeIndex) and idx.tz is not None:
+            out[str(name)] = (str(idx.tz), idx.tz_convert(None).to_numpy())
+        else:
+            out[str(name)] = (None, np.asarray(idx))
+    return out
 
 
 def clear_coef_dirty(model: Model) -> None:
@@ -150,8 +173,12 @@ class ModelSnapshot:
     structural_key: StructuralKey
     var_buffers: dict[str, ContainerVarBuffers] = field(default_factory=dict)
     con_buffers: dict[str, ContainerConBuffers] = field(default_factory=dict)
-    var_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-    con_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    var_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = field(
+        default_factory=dict
+    )
+    con_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = field(
+        default_factory=dict
+    )
     obj_c: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
     obj_quad_present: bool = False
     obj_sense: str = "min"
