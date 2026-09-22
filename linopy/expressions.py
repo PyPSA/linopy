@@ -62,6 +62,7 @@ from types import EllipsisType, NotImplementedType
 from linopy import constraints, variables
 from linopy.alignment import (
     _matmul_operand_to_dataarray,
+    _matmul_operand_to_matrix,
     as_constant,
     as_dataarray,
     broadcast_to_coords,
@@ -1526,6 +1527,10 @@ class BaseExpression(ABC):
     def dot(self, other: ndarray) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
+
+        Identical to ``@``. For a :class:`LinearExpression` that includes the
+        sparse contraction under v1; :class:`QuadraticExpression` always takes
+        the dense path. There is no per-call ``sparse=`` flag.
         """
         return self.__matmul__(other)
 
@@ -2539,9 +2544,20 @@ class LinearExpression(BaseExpression):
     ) -> LinearExpression | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
+
+        Under v1, a constant ``other`` is contracted as one sparse matrix
+        product (:meth:`_sparse_matmul`) instead of the dense broadcast
+        ``(self * other).sum(dim)``. The result is then the compact canonical
+        form -- duplicate variables summed, terms label-ordered, explicit
+        zeros pruned -- so its term count may differ from the dense path's
+        while the values agree. A CSR-backed expression stays CSR-backed.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
+        if other_is_const and is_v1() and type(self) is LinearExpression:
+            sparse = self._sparse_matmul(other)
+            if sparse is not None:
+                return sparse
         if other_is_const:
             other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
 
@@ -2550,6 +2566,47 @@ class LinearExpression(BaseExpression):
         if other_is_const and common_dims and bool((other == 0).any()):
             res = res.densify_terms()
         return res
+
+    def _sparse_matmul(self, other: ConstantLike) -> LinearExpression | None:
+        """
+        Contract against a constant as one sparse matrix product, skipping the
+        dense broadcast intermediate of ``(self * other).sum(dim)``.
+
+        Returns None where the dense path owns the semantics: a MultiIndex on
+        the expression or on the operand, non-unique or MultiIndex grid
+        labels, a zero-size grid, an operand sharing no dimension with the
+        grid, and an unlabelled output dimension. The result is the compact
+        canonical form of :meth:`CSRLinearExpression.contracted`, so its term
+        count may differ from the dense path's while the values agree; it
+        stays CSR-backed when the input was.
+        """
+        if is_nan_scalar(other):
+            check_user_nan(op_kind="mul")
+        if self._csr is None and _has_multiindex(self.data.indexes.values()):
+            return None
+        if not self.coord_dims:
+            return None
+        csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
+        if not csr.grid.is_unique or _has_multiindex(csr.grid.indexes.values()):
+            return None
+        if csr.grid.size == 0:
+            return None
+        coords = Dataset(coords=dict(csr.grid.indexes) | dict(csr.coords)).coords
+        da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
+        if _has_multiindex(da.indexes.values()):
+            return None
+        contracted = [d for d in csr.grid.dims if d in da.dims]
+        new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
+        if not contracted or any(d not in da.indexes for d in new_dims):
+            return None
+        matrix = _matmul_operand_to_matrix(
+            da, contracted, new_dims, csr.grid.indexes, csr.coords
+        )
+        new_indexes = [da.indexes[d].rename(d) for d in new_dims]
+        res = csr.contracted(matrix, contracted, new_indexes)
+        if self._csr is not None or options["sparse_groupby"]:
+            return type(self)._from_csr(res, self.model)
+        return res.to_dense()
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -3225,6 +3282,10 @@ def as_expression(
         except ValueError as e:
             raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
+
+
+def _has_multiindex(indexes: Iterable[pd.Index]) -> bool:
+    return any(isinstance(i, pd.MultiIndex) for i in indexes)
 
 
 def _aligned(

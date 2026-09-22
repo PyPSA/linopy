@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 from numpy import arange
 from xarray import Coordinates, DataArray, Dataset, broadcast
 from xarray import align as xr_align
@@ -43,6 +44,12 @@ except ImportError:
     CoordinateValidationError = ValueError  # type: ignore[assignment, misc]
 
 from linopy.constants import HELPER_DIMS
+from linopy.semantics import (
+    _shared_dim_mismatch_message,
+    check_user_nan,
+    enforce_aux_conflict,
+    first_mismatched_dim,
+)
 from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
 
 
@@ -682,6 +689,33 @@ def _matmul_operand_to_dataarray(
     expected = {d: coords[d] for d in coord_dims}
     dims = _dims_for_positional_input(other, expected, None)
     return as_dataarray(other, coords=coords, dims=dims)
+
+
+def _matmul_operand_to_matrix(
+    other: DataArray,
+    contracted: Sequence[str],
+    new_dims: Sequence[str],
+    indexes: Mapping[str, pd.Index],
+    aux_coords: Mapping[str, tuple[str, np.ndarray]],
+) -> scipy.sparse.csr_array:
+    """
+    Flatten a ``@`` constant to the ``(contracted, new)`` matrix of the sparse
+    contraction, enforcing the same rules ``*`` enforces on a constant: §5 on
+    NaN, §8 on the labels of the shared (contracted) dims and §11 on auxiliary
+    coordinates. The expression side is represented by its grid labels alone
+    and never broadcasts.
+    """
+    if other.isnull().any():
+        check_user_nan(op_kind="mul")
+    reference = Dataset(coords={d: indexes[d] for d in contracted} | dict(aux_coords))
+    mismatch = first_mismatched_dim(reference, other)
+    if mismatch is not None:
+        raise ValueError(_shared_dim_mismatch_message(*mismatch))
+    enforce_aux_conflict([reference, other])
+    values = other.transpose(*contracted, *new_dims).values
+    n_contracted = int(np.prod([len(indexes[d]) for d in contracted], dtype=np.int64))
+    n_new = int(np.prod([other.sizes[d] for d in new_dims], dtype=np.int64))
+    return scipy.sparse.csr_array(values.reshape(n_contracted, n_new))
 
 
 def _dims_for_positional_input(
