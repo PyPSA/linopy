@@ -2361,27 +2361,17 @@ class Model:
 
         # Check for Gurobi
         if "gurobi" in available_solvers:
-            try:
-                import gurobipy
+            import gurobipy
 
-                if solver_model is not None and isinstance(
-                    solver_model, gurobipy.Model
-                ):
-                    return self._compute_infeasibilities_gurobi(solver_model)
-            except ImportError:
-                pass
+            if solver_model is not None and isinstance(solver_model, gurobipy.Model):
+                return self._compute_infeasibilities_gurobi(solver_model)
 
         # Check for Xpress
         if "xpress" in available_solvers:
-            try:
-                import xpress
+            import xpress
 
-                if solver_model is not None and isinstance(
-                    solver_model, xpress.problem
-                ):
-                    return self._compute_infeasibilities_xpress(solver_model)
-            except ImportError:
-                pass
+            if solver_model is not None and isinstance(solver_model, xpress.problem):
+                return self._compute_infeasibilities_xpress(solver_model)
 
         # Check for HiGHS
         if "highs" in available_solvers:
