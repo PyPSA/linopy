@@ -22,7 +22,7 @@ The reverse bridges live at the dense call sites, in
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -119,7 +119,7 @@ class Grid:
         """Select and order the given dimensions; labels unchanged."""
         return Grid({d: self.indexes[d] for d in dims})
 
-    def with_indexes(self, indexers: Mapping[Hashable, Any]) -> Grid:
+    def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
         """Replace the labels of the named dimensions; the rest unchanged."""
         return Grid(
             {

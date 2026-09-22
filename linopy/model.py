@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -30,6 +30,8 @@ from xarray.core.types import T_Chunks
 from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
+    _as_renamed_index,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     assigned_labels,
     best_int,
@@ -87,7 +89,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex
+from linopy.semantics import enforce_no_multiindex, is_v1
 
 try:
     from linopy.remote import OetcHandler
@@ -2114,6 +2116,8 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
+        self._check_coord_consistency()
+
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -2247,6 +2251,182 @@ class Model:
                         os.remove(fn)
 
             return self.assign_result(result)
+
+    def assign_coords(self, **coords_kwargs: Any) -> Model:
+        """
+        Reassign coordinate values across the whole model, keeping the shape.
+
+        Mirrors :meth:`xarray.Dataset.assign_coords` semantics for an existing
+        model: for every named dimension, the coordinate values of every
+        variable, constraint (dense and CSR-backed), expression and the
+        parameters carrying that dimension are replaced in place.
+        Values-only — no relabeling, no reindexing, no shape change. The order
+        of each dataset's variables and coordinates is preserved.
+
+        Containers may hold *subsets* of a dimension (e.g. a piecewise
+        commitment variable on a subset of generators): the new values must
+        match the length of the full-index carrier (the master), and every
+        container's labels are mapped through the master's ``old -> new``
+        correspondence, preserving subset relations.
+
+        Typical use is rolling-horizon optimization with the persistent solver
+        interface, where the model structure stays identical between
+        iterations while the window's coordinate labels advance.
+
+        Parameters
+        ----------
+        **coords_kwargs : Any
+            New coordinate values, keyed by an existing dimension name, e.g.
+            ``m.assign_coords(snapshot=new_snapshots)``. Accepted are
+            index-likes: numpy arrays, pandas Index objects, DataArrays or
+            lists.
+
+        Returns
+        -------
+        Model
+            ``self`` for chaining.
+
+        Raises
+        ------
+        ValueError
+            If a named dimension does not exist anywhere in the model, the
+            new values do not match any container's dimension length, or a
+            container carries labels outside the master's index.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>>
+        >>> sns = pd.date_range("2026-01-01", periods=3, freq="h", name="snapshot")
+        >>> m = linopy.Model()
+        >>> x = m.add_variables(coords=[sns], name="x")
+        >>> _ = m.add_constraints(x >= 0, name="c")
+        >>>
+        >>> _ = m.assign_coords(snapshot=sns + pd.Timedelta("1h"))
+        """
+        # validate everything up front, then mutate
+        mapped: dict[Any, dict[str, pd.Index]] = {}
+        for dim, values in coords_kwargs.items():
+            carriers = [
+                (item.name, item.indexes[dim])
+                for item in self._coordinate_carriers()
+                if dim in item.sizes and dim in item.indexes
+            ]
+            if dim in self.parameters.sizes and dim in self.parameters.indexes:
+                carriers.append(("parameters", self.parameters.indexes[dim]))
+            if not carriers:
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "not found in the model."
+                )
+            new = _as_renamed_index(values, dim, "model")
+
+            masters = [index for _, index in carriers if len(index) == len(new)]
+            if not masters:
+                lengths = sorted({len(index) for _, index in carriers})
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}' with "
+                    f"length {len(new)}: no container carries it with a "
+                    f"matching length ({lengths})."
+                )
+            master = masters[0]
+            if any(not master.equals(other) for other in masters[1:]):
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "containers of matching length carry different values."
+                )
+            if not master.is_unique:
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "the carrier's index has duplicate labels, so a "
+                    "values-only reassignment is ambiguous."
+                )
+
+            for name, index in carriers:
+                if not index.isin(master).all():
+                    raise ValueError(
+                        f"Cannot assign coordinates to dimension '{dim}': "
+                        f"container '{name}' carries labels outside the "
+                        "dimension's index. Relabel model-wide first, or "
+                        "align the container with `.sel`."
+                    )
+                mapped.setdefault(dim, {})[name] = index.map(
+                    dict(zip(master, new))
+                ).rename(dim)
+
+        for container in (self.variables, self.constraints, self.expressions):
+            for name, item in container.items():
+                applicable = {
+                    dim: mapped[dim][name]
+                    for dim in mapped
+                    if name in container.data and dim in item.indexes
+                }
+                if applicable:
+                    item._assign_coords(**applicable)
+
+        # note: the objective is stored as a reduced (coords-less) expression
+        # by design, so it never carries dimensions to reassign
+
+        parameters_applicable = {
+            dim: indexes["parameters"]
+            for dim, indexes in mapped.items()
+            if "parameters" in indexes
+        }
+        if parameters_applicable:
+            self._parameters = assign_coords_multiindex_safe(
+                self.parameters, **parameters_applicable
+            )
+
+        return self
+
+    def _coordinate_carriers(self) -> list[Any]:
+        """All items carrying coordinates: variables, constraints, expressions."""
+        return [
+            *self.variables.data.values(),
+            *self.constraints.data.values(),
+            *self.expressions.data.values(),
+        ]
+
+    def _check_coord_consistency(self) -> None:
+        """
+        Raise if containers carry incompatible labels on a shared dimension.
+
+        v1-only guard: under v1 semantics (convention §8) shared dimensions
+        must carry identical labels, and models can only diverge through
+        internal-state corruption. Under legacy, non-aligned containers are
+        documented positional behavior and the check is a no-op.
+
+        Allowed are label sets that nest by inclusion (a container may hold a
+        subset of the dimension, like a piecewise commitment gate); what
+        cannot be aligned by subset — same-length relabelings, disjoint or
+        partially overlapping labels — raises. Internal dims
+        (underscore-prefixed, like ``_term`` or ``_breakpoint_piece``) are
+        exempt: they are per-container bookkeeping which the piecewise
+        machinery labels differently on purpose.
+        """
+        if not is_v1():
+            return
+        indexes_by_dim: dict[Hashable, list[tuple[str, pd.Index]]] = {}
+        for item in self._coordinate_carriers():
+            for dim, index in item.indexes.items():
+                if str(dim).startswith("_"):
+                    continue
+                indexes_by_dim.setdefault(dim, []).append((str(item.name), index))
+
+        for dim, entries in indexes_by_dim.items():
+            master_name, master_index = max(entries, key=lambda e: len(e[1]))
+            for other_name, other_index in entries:
+                if other_index.isin(master_index).all():
+                    continue
+                raise ValueError(
+                    f"Coordinates for dimension '{dim}' are incompatible "
+                    f"across the model: '{other_name}' carries labels not "
+                    f"contained in the largest carrier '{master_name}', so "
+                    "they are neither equal nor subsets of a shared index. "
+                    "Use Model.assign_coords to relabel the model, or align "
+                    "the containers with `.sel`."
+                )
 
     def assign_result(
         self,

@@ -72,6 +72,7 @@ Modifying a model
    model.Model.remove_expressions
    model.Model.remove_objective
    model.Model.remove_sos_constraints
+   model.Model.assign_coords
    model.Model.copy
    model.Model.apply_sos_reformulation
    model.Model.undo_sos_reformulation

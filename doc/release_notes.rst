@@ -31,6 +31,8 @@ Upcoming Version
 
 *Other*
 
+* New method :meth:`linopy.Model.assign_coords` reassigns coordinate values across an existing model — variables, constraints (dense and CSR-backed), expressions and parameters — without changing the model's shape: ``m.assign_coords(snapshot=new_snapshots)``. Values-only: the new values must match the length of the dimension's full-index container, and containers holding subsets of the dimension are mapped by label, preserving the subset relation. Dataset variable order is preserved. Under v1 semantics, ``Model.solve()`` raises when containers carry labels on a shared dimension that are neither equal nor subsets of one another. Typical use is advancing the window in rolling-horizon optimization with the persistent solver interface. (https://github.com/PyPSA/linopy/issues/767)
+
 * ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
 
 *Internal*
