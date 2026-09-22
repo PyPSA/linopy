@@ -2541,23 +2541,15 @@ class Model:
 
     def _compute_infeasibilities_highs(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for the HiGHS solver."""
-        if not hasattr(solver_model, "getIis"):
-            raise NotImplementedError(
-                "Computing infeasibilities requires a `highspy` version that "
-                "supports `Highs.getIis` (HiGHS IIS computation). "
-                "Please upgrade the `highspy` package."
-            )
-
         import highspy
 
         solver = self.solver
         assert solver is not None
         if "iis_strategy" not in solver.solver_options:
-            solver_model.setOptionValue(
-                "iis_strategy",
-                int(highspy.IisStrategy.kIisStrategyFromLp)
-                | int(highspy.IisStrategy.kIisStrategyIrreducible),
-            )
+            from_lp = int(highspy.IisStrategy.kIisStrategyFromLp)
+            irreducible = int(highspy.IisStrategy.kIisStrategyIrreducible)
+            solver_model.setOptionValue("iis_strategy", from_lp | irreducible)
+
         status, iis = solver_model.getIis()
         if status == highspy.HighsStatus.kError or not iis.valid_:
             raise RuntimeError(
@@ -2571,12 +2563,9 @@ class Model:
         if solver.io_api == "direct":
             clabels = self.constraints.label_index.clabels
         else:
-            from linopy.solvers import _names_to_labels
+            clabels = solvers._names_to_labels(solver_model.getLp().row_names_)
 
-            clabels = _names_to_labels(solver_model.getLp().row_names_)
-
-        labels = {int(clabels[pos]) for pos in row_index if clabels[pos] >= 0}
-        return sorted(labels)
+        return sorted({int(clabels[pos]) for pos in row_index if clabels[pos] >= 0})
 
     def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
