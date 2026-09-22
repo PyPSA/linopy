@@ -18,7 +18,7 @@ from math_spec import program as ms
 from math_spec.program import walk
 
 from linopy.model import Model
-from linopy.spec import curves
+from linopy.spec.assumptions import check_assumptions
 from linopy.spec.attach import Attached
 from linopy.spec.context import Context, Parameters, Term, Value
 from linopy.spec.coverage import check_bounds_cover, check_coverage
@@ -40,9 +40,10 @@ def build(
 
     Variables, special-ordered sets, constraints, the objective and, with
     *build_expressions*, the named expressions holding a variable term, in
-    that order. Every named expression is checked for divisor and
-    coefficient coverage either way, so a body that cannot be folded is
-    refused at build rather than at read.
+    that order. The program's assumptions are checked once the variables
+    exist, so a predicate may read where one is defined. Every named
+    expression is checked for divisor and coefficient coverage either way, so
+    a body that cannot be folded is refused at build rather than at read.
     """
     check_supported(attached.program)
     ctx = Context(
@@ -53,8 +54,8 @@ def build(
         Parameters(attached.program, attached.parameter),
         name,
     )
-    curves.validate(ctx.program, ctx.parameters)
     _variables(ctx)
+    check_assumptions(ctx)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
@@ -109,7 +110,6 @@ def _sos(ctx: Context) -> None:
             ctx.model.variables[sos.variable],
             sos_type=sos.sos_type,
             sos_dim=sos.over,
-            big_m=sos.big_m,
         )
 
 

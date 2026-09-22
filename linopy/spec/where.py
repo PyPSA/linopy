@@ -10,7 +10,7 @@ import numpy as np
 import xarray as xr
 from math_spec import program as ms
 
-from linopy.spec.context import Context
+from linopy.spec.context import Context, Term, Value
 from linopy.spec.errors import SpecDataError
 from linopy.spec.groups import grouped
 
@@ -45,7 +45,10 @@ def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
     A masked-out variable coordinate and a comparison over NaN both read as
     exclusion. A null relation value is excluded explicitly: numpy answers
     ``None != 'north'`` with True, so a ``!=`` would otherwise keep exactly
-    the labels that map nowhere.
+    the labels that map nowhere; a side of an expression comparison that is
+    absent is excluded the same way. A count is one number per coordinate
+    the counted predicate keeps, and a translated predicate is false where
+    the translation vacates.
     """
     if isinstance(node, ms.BooleanLiteral):
         return xr.DataArray(node.value)
@@ -57,6 +60,20 @@ def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
         return ctx.model.variables[node.name].mask
     if isinstance(node, ms.ParameterComparison):
         return _compared(ctx.parameters[node.name], node.op, node.value)
+    if isinstance(node, ms.ExpressionComparison):
+        left, right = _side(node.left, ctx), _side(node.right, ctx)
+        compared = _PREDICATE_OPS[node.op](left, right) & left.notnull()
+        return _bool(compared & right.notnull())
+    if isinstance(node, ms.ArithmeticComparison):
+        raise TypeError(
+            "an ArithmeticComparison is rewritten by lowering and never reaches a program"
+        )
+    if isinstance(node, ms.CountComparison):
+        count = _node(node.predicate.root, ctx).sum(node.over)
+        return _PREDICATE_OPS[node.op](count, node.value).astype(bool)
+    if isinstance(node, ms.TranslatedPredicate):
+        shifted = _node(node.operand.root, ctx).shift({node.along: node.offset})
+        return _bool(shifted)
     if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
         arr = xr.DataArray(labels, coords={node.name: labels}, dims=[node.name])
@@ -85,6 +102,16 @@ def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
 def _bool(arr: xr.DataArray) -> xr.DataArray:
     """*arr* as a boolean mask, a hole reading as exclusion."""
     return arr.fillna(False).astype(bool)
+
+
+def _side(node: ms.Expression, ctx: Context) -> xr.DataArray:
+    """One side of an expression comparison as data, its holes kept so they read as exclusion."""
+    from linopy.spec.evaluate import evaluate
+
+    value: Value = evaluate(node, ctx.unfilled)
+    if isinstance(value, Term):
+        raise TypeError("a side of a where comparison is variable-free")
+    return value if isinstance(value, xr.DataArray) else xr.DataArray(value)
 
 
 def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:

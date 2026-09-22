@@ -691,42 +691,6 @@ def test_master_coordinate_dtype_wins_without_a_copy(
     assert np.shares_memory(np.asarray(source), got.values)
 
 
-def test_derived_parameter_is_not_bound_from_sources() -> None:
-    spec = {
-        "dimensions": {"bp": {"dtype": "int"}},
-        "parameters": {"bp_x": {"dims": ["bp"]}, "bp_y": {"dims": ["bp"]}},
-        "variables": {
-            "x": {"dims": [], "bounds": {"lower": 0, "upper": 10}},
-            "y": {"dims": []},
-        },
-        "piecewise": {
-            "curve": {
-                "over": "bp",
-                "method": "lp",
-                "points": "bp_x",
-                "links": [["x", "bp_x"], ["y", "bp_y", ">="]],
-            }
-        },
-        "objective": {"sense": "minimize", "expression": "y"},
-    }
-    program = math_spec.to_program(spec)
-    derived = [n for n, p in program.parameters.items() if p.derivation is not None]
-    assert derived
-    bp = pd.Index([0, 1, 2], name="bp")
-    sources = {
-        "bp": bp,
-        "bp_x": pd.Series([0.0, 5.0, 10.0], index=bp),
-        "bp_y": pd.Series([0.0, 2.0, 8.0], index=bp),
-    }
-    attached = attach(program, sources, retain="all")
-    assert set(attached.retained().data_vars) == {"bp_x", "bp_y"}
-    with pytest.raises(SpecDataError, match="emitted by piecewise block 'curve'"):
-        attached.parameter(derived[0])
-    assert derived[0] in attach(program, {**sources, derived[0]: 1.0}).unused
-    with pytest.raises(SpecDataError, match=derived[0]):
-        attach(program, {**sources, derived[0]: 1.0}, strict=True)
-
-
 # ---------------------------------------------------------------------------
 # lpspec data-parity cases, eager representation
 # ---------------------------------------------------------------------------

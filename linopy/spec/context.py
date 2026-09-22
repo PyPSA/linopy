@@ -23,7 +23,6 @@ from math_spec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
-from linopy.spec import curves
 from linopy.variables import Variable
 
 Term = Variable | LinearExpression | QuadraticExpression
@@ -33,13 +32,7 @@ Resolve = Callable[[str], xr.DataArray]
 
 
 class Parameters(Mapping[str, xr.DataArray]):
-    """
-    Every parameter of a program by name, each resolved on first read and then held.
-
-    A declared parameter comes from *resolve*; one a ``piecewise:`` expansion
-    emitted is derived from the block's own breakpoints the way its
-    derivation says, so a caller never supplies it.
-    """
+    """Every parameter of a program by name, each resolved from *resolve* on first read and then held."""
 
     def __init__(self, program: ms.Program, resolve: Resolve) -> None:
         self._program = program
@@ -48,12 +41,7 @@ class Parameters(Mapping[str, xr.DataArray]):
 
     def __getitem__(self, name: str) -> xr.DataArray:
         if name not in self._arrays:
-            derivation = self._program.parameters[name].derivation
-            self._arrays[name] = (
-                self._resolve(name)
-                if derivation is None
-                else curves.derive(derivation, self, self._program)
-            )
+            self._arrays[name] = self._resolve(name)
         return self._arrays[name]
 
     def __iter__(self) -> Iterator[str]:
@@ -72,7 +60,9 @@ class Context:
     model carries. ``solved`` is the fold's switch: a build leaves it false
     and a variable enters an expression as its linopy term; a fold sets it
     true and a variable enters as its solved values, so a named expression
-    reads off the primal.
+    reads off the primal. ``filled`` is the coefficient's switch: on, a
+    parameter enters an expression with its holes at zero; a predicate turns
+    it off so a hole reaches the comparison and reads as false there.
     """
 
     model: Model
@@ -82,11 +72,17 @@ class Context:
     parameters: Mapping[str, xr.DataArray]
     name: str
     solved: bool = field(default=False)
+    filled: bool = field(default=True)
 
     @property
     def unsolved(self) -> Context:
         """The same context with the fold's switch off, so a variable enters as its linopy term."""
         return replace(self, solved=False)
+
+    @property
+    def unfilled(self) -> Context:
+        """The same context with the coefficient's switch off, so a parameter enters holes and all."""
+        return replace(self, filled=False)
 
 
 def variable_term(variable: Variable, absence: str) -> Term:

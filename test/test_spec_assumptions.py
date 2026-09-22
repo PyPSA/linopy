@@ -1,7 +1,7 @@
 """
-Piecewise curve derivation and validation: whole and ragged breakpoint
-tables, the checks that refuse a curve a method cannot build, and the
-convex-hull method's single-bend requirement.
+Assumptions checked against the bound data: the ones a ``piecewise:`` method
+implies of its breakpoints, whole and ragged, and the ones a spec states in
+its own ``assumptions:`` block.
 """
 
 from __future__ import annotations
@@ -73,19 +73,19 @@ def without(series: pd.Series, *keys: tuple[str, int]) -> pd.Series:
         pytest.param(
             CURVE_SPEC,
             {"bp_x": without(FULL_X, ("gas", 3)), "bp_y": FULL_Y},
-            "parameter 'bp_x' has no value at \\(generator='gas', bp=3\\)",
+            "assumption 'cost_curve_complete' does not hold.*\n  Not so at generator='gas', bp=3",
             id="a-hole-in-a-whole-curve",
         ),
         pytest.param(
             MASKED_CURVE_SPEC,
             {"bp_x": RAGGED_X, "bp_y": without(RAGGED_Y, ("gas", 3))},
-            "Shorten it    'bp_x' claims this breakpoint",
+            "assumption 'cost_curve_complete' does not hold.*narrow points: 'bp_x'",
             id="a-hole-inside-the-mask",
         ),
         pytest.param(
             MASKED_CURVE_SPEC,
             {"bp_x": without(FULL_X, ("gas", 1)), "bp_y": FULL_Y},
-            "Not so at generator='gas'",
+            "assumption 'cost_curve_contiguous' does not hold.*\n  Not so at generator='gas'",
             id="a-mask-with-a-gap",
         ),
         pytest.param(
@@ -121,7 +121,7 @@ def without(series: pd.Series, *keys: tuple[str, int]) -> pd.Series:
         pytest.param(
             MASKED_CURVE_SPEC,
             {"bp_x": without(RAGGED_X, ("hydro", 1)), "bp_y": RAGGED_Y},
-            "This curve carries 1",
+            "at least two breakpoints per curve.*\n  Not so at generator='hydro'",
             id="a-one-point-curve-under-lp",
         ),
     ],
@@ -158,3 +158,46 @@ def test_a_convex_hull_curve_may_bend_either_way_but_not_both() -> None:
     )
     with pytest.raises(SpecDataError, match="exact only for a single bend"):
         Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": mixed})
+
+
+# ---------------------------------------------------------------------------
+# a spec's own assumptions
+# ---------------------------------------------------------------------------
+
+CURVES = {"bp_x": FULL_X, "bp_y": FULL_Y}
+
+
+@pytest.mark.parametrize(
+    ("assumption", "match"),
+    [
+        pytest.param("p_max > 0", None, id="holds"),
+        pytest.param(
+            {"holds": "p_max >= 50", "where": "p_max > 40"},
+            None,
+            id="holds-where-checked",
+        ),
+        pytest.param(
+            {
+                "holds": "p_max >= 50",
+                "description": "a small unit is not worth a curve",
+            },
+            "assumption 'sized' does not hold for the data bound to 'p_max' — a small "
+            "unit is not worth a curve\n  Not so at generator='hydro'",
+            id="fails-with-the-description",
+        ),
+        pytest.param(
+            "load <= sum(p_max, over=generator)",
+            None,
+            id="holds-across-an-expression",
+        ),
+    ],
+)
+def test_a_declared_assumption_is_checked_against_the_data(
+    assumption: Any, match: str | None
+) -> None:
+    spec = with_(CURVE_SPEC, assumptions={"sized": assumption})
+    if match is None:
+        assert "p" in Model.from_spec(spec, {**CURVE_DATA, **CURVES}).variables
+        return
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, {**CURVE_DATA, **CURVES})

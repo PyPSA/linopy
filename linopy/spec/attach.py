@@ -196,22 +196,16 @@ class Attached:
             raise SpecDataError(
                 f"unknown parameter '{name}'. {did_you_mean(name, self.program.parameters)}"
             )
-        declared = self.program.parameters[name]
-        if declared.derivation is not None:
-            raise SpecDataError(
-                f"parameter '{name}' is emitted by piecewise block '{declared.derivation.block}' "
-                f"and is filled from the block's own breakpoints, not attached from sources."
-            )
-        return declared
+        return self.program.parameters[name]
 
     def _retained_names(self) -> list[str]:
         if self.retain == "none":
             return []
         parameters = self.program.parameters
-        keep = (
-            set(parameters) if self.retain == "all" else _report_closure(self.program)
-        )
-        return [n for n, p in parameters.items() if p.derivation is None and n in keep]
+        if self.retain == "all":
+            return list(parameters)
+        keep = _report_closure(self.program)
+        return [n for n in parameters if n in keep]
 
 
 def _report_closure(program: ms.Program) -> set[str]:
@@ -238,9 +232,7 @@ def _dataset_sources(ds: xr.Dataset) -> dict[str, Any]:
 
 
 def _attachable(program: ms.Program) -> dict[str, str]:
-    kinds = {
-        n: "parameter" for n, p in program.parameters.items() if p.derivation is None
-    }
+    kinds = {n: "parameter" for n in program.parameters}
     kinds.update({d: "dimension" for d in program.dimensions})
     kinds.update({name: "relation" for name in program.relations})
     return kinds

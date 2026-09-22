@@ -52,7 +52,8 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Dual):
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.Parameter):
-        return context.coefficient(ctx.parameters[node.name])
+        parameter = ctx.parameters[node.name]
+        return context.coefficient(parameter) if ctx.filled else parameter
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
     if isinstance(node, ms.Add):

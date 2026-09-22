@@ -35,8 +35,7 @@ def synthetic_sources(program: ms.Program, n: int = 3) -> dict[str, Any]:
             [into[i % len(into)] for i in range(n)], index=sources[over]
         )
     for name, parameter in program.parameters.items():
-        if parameter.derivation is None:
-            sources[name] = _parameter(name, parameter, sources, n)
+        sources[name] = _parameter(name, parameter, sources, n)
     return sources
 
 
