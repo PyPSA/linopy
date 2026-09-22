@@ -39,7 +39,7 @@ import polars as pl
 import scipy
 import xarray as xr
 import xarray.core.groupby
-from numpy import array, nan, ndarray
+from numpy import array, nan
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -1524,7 +1524,7 @@ class BaseExpression(ABC):
         """
         return self.__pow__(other)
 
-    def dot(self, other: ndarray) -> Self | QuadraticExpression:
+    def dot(self, other: SideLike) -> Self | QuadraticExpression:
         """
         Matrix multiplication with other, similar to xarray dot.
 

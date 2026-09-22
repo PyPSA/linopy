@@ -1129,6 +1129,7 @@ def test_matmul_keeps_aux_coords_on_kept_dims_only() -> None:
     require_v1()
     c = base_model()
     grouped = tagged_group(c)
+    assert grouped._csr is not None
     indexes = grouped._csr.grid.indexes
 
     kept = grouped @ loc_operand(indexes["snapshot"])
