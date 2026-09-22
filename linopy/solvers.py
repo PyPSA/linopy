@@ -1575,6 +1575,7 @@ class Highs(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             SolverFeature.MIP_DUAL_BOUND_REPORT,
+            SolverFeature.IIS_COMPUTATION,
         }
     )
     supports_persistent_update: ClassVar[bool] = True
