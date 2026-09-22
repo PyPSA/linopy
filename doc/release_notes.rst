@@ -45,6 +45,7 @@ Upcoming Version
 
 * ``@``/``dot`` against a constant matrix that holds zeros no longer densifies the result to one term per contracted member. The zero-coefficient terms are dropped, so the term dimension shrinks to the widest non-zero cell. On PyPSA's Kirchhoff Voltage Law constraint (a cycle matrix with ~3 branches per cycle) this cuts the expression from 852 to 3 terms — 284x fewer cells — which in turn shrinks the downstream ``merge``. A constant without zeros is unaffected. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
 * ``densify_terms`` (used by ``sum(drop_zeros=True)`` and the sparse ``@`` path) is now fully vectorised. It previously counted the non-zero positions with a Python loop that scaled quadratically in the number of non-zero terms — 127 s for a (2000 x 60) expression, now 3 ms — and allocated the compacted output at the full original term width. It now allocates only the compacted width and returns the expression unchanged when it holds no zeros.
+* Persistent snapshots of tz-aware ``DatetimeIndex`` coordinates no longer materialise an object array of ``Timestamp`` per container per capture and diff. Coordinates are stored as UTC-ns arrays with the timezone identity carried alongside, making snapshot capture ~24x and warm-start diffs ~33x faster on tz-aware models, while naive and tz-aware coordinates — and differing timezones — stay correctly unequal. (`#960 <https://github.com/PyPSA/linopy/pull/960>`__)
 
 **Bug fixes**
 
