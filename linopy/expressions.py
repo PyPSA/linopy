@@ -104,6 +104,7 @@ from linopy.constants import (
     GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
+    SPEC_STAMP_ATTR,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
@@ -1587,6 +1588,15 @@ class BaseExpression(ABC):
         Return the name of the variable.
         """
         return str(self.attrs["name"])
+
+    @property
+    def spec(self) -> str | None:
+        """The name of the spec whose named expression this is; ``None`` for one built by hand."""
+        return self.attrs.get(SPEC_STAMP_ATTR)
+
+    @spec.setter
+    def spec(self, name: str) -> None:
+        self.attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def data(self) -> Dataset:
@@ -3549,8 +3559,10 @@ class Expressions:
         ]
         return base_attributes + formatted_names
 
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format expression items, optionally excluding names in a group."""
+    def _format_items(
+        self, exclude: set[str] | None = None, tagged: bool = False
+    ) -> str:
+        """Format expression items, optionally excluding names in a group and, if *tagged*, naming each one's spec."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -3562,7 +3574,8 @@ class Expressions:
                 if ds.coords
                 else ""
             )
-            r += f" * {name}{coords}\n"
+            suffix = f" [{ds.spec}]" if tagged and ds.spec is not None else ""
+            r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"
         return r
