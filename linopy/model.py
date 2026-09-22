@@ -2336,6 +2336,12 @@ class Model:
                     f"Cannot assign coordinates to dimension '{dim}': "
                     "containers of matching length carry different values."
                 )
+            if not master.is_unique:
+                raise ValueError(
+                    f"Cannot assign coordinates to dimension '{dim}': "
+                    "the carrier's index has duplicate labels, so a "
+                    "values-only reassignment is ambiguous."
+                )
 
             for name, index in carriers:
                 if not index.isin(master).all():
@@ -2354,7 +2360,7 @@ class Model:
                 applicable = {
                     dim: mapped[dim][name]
                     for dim in mapped
-                    if name in container.data and dim in item.sizes
+                    if name in container.data and dim in item.indexes
                 }
                 if applicable:
                     item._assign_coords(**applicable)
@@ -2409,20 +2415,17 @@ class Model:
                 indexes_by_dim.setdefault(dim, []).append((str(item.name), index))
 
         for dim, entries in indexes_by_dim.items():
-            (first_name, first_index), *rest = entries
-            for other_name, other_index in rest:
-                nested = (
-                    first_index.isin(other_index).all()
-                    or other_index.isin(first_index).all()
-                )
-                if nested:
+            master_name, master_index = max(entries, key=lambda e: len(e[1]))
+            for other_name, other_index in entries:
+                if other_index.isin(master_index).all():
                     continue
                 raise ValueError(
                     f"Coordinates for dimension '{dim}' are incompatible "
-                    f"across the model: '{first_name}' and '{other_name}' "
-                    "carry labels that are neither equal nor subsets of one "
-                    "another. Use Model.assign_coords to relabel the model, "
-                    "or align the containers with `.sel`."
+                    f"across the model: '{other_name}' carries labels not "
+                    f"contained in the largest carrier '{master_name}', so "
+                    "they are neither equal nor subsets of a shared index. "
+                    "Use Model.assign_coords to relabel the model, or align "
+                    "the containers with `.sel`."
                 )
 
     def assign_result(

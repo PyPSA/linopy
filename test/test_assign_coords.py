@@ -394,3 +394,42 @@ def test_check_coord_consistency_rejects_partial_overlap(m: Model) -> None:
 
     with pytest.raises(ValueError, match="incompatible"):
         m._check_coord_consistency()
+
+
+@pytest.mark.v1
+def test_check_coord_consistency_subset_order_independent() -> None:
+    """
+    Two valid subsets of a master pass regardless of definition order.
+
+    The guard compares every carrier against the largest (the master), not
+    against whichever container is defined first: a subset defined before the
+    master must not trip the check.
+    """
+    model = Model()
+    model.add_variables(
+        binary=True, coords=[pd.Index(["a", "b"], name="gen")], name="u"
+    )
+    model.add_variables(coords=[pd.Index(["a", "b", "c"], name="gen")], name="x")
+    model.add_variables(
+        binary=True, coords=[pd.Index(["b", "c"], name="gen")], name="v"
+    )
+
+    model._check_coord_consistency()
+
+
+@pytest.mark.v1
+def test_solve_rejects_diverged_coords_end_to_end(m: Model) -> None:
+    """Model.solve() itself raises on diverged coords, before any solver runs."""
+    m.variables["x"]._assign_coords(snapshot=sns0 + pd.Timedelta("5h"))
+
+    with pytest.raises(ValueError, match="incompatible"):
+        m.solve()
+
+
+def test_assign_coords_rejects_duplicate_master_labels() -> None:
+    """A carrier with duplicate labels makes values-only reassignment ambiguous."""
+    model = Model()
+    model.add_variables(coords=[pd.Index(["a", "a", "b"], name="gen")], name="x")
+
+    with pytest.raises(ValueError, match="duplicate"):
+        model.assign_coords(gen=["p", "q", "r"])
