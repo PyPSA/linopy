@@ -1192,6 +1192,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> Constraint: ...
 
     @overload
@@ -1209,6 +1210,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
         scaling: ConstantLike = ...,
+        penalty: None = ...,
     ) -> CSRConstraint: ...
 
     @overload
@@ -1226,6 +1228,7 @@ class Model:
         mask: MaskLike | None = ...,
         freeze: bool | None = ...,
         scaling: ConstantLike = ...,
+        penalty: ConstantLike | None = ...,
     ) -> ConstraintBase: ...
 
     def add_constraints(
@@ -1242,6 +1245,7 @@ class Model:
         mask: MaskLike | None = None,
         freeze: bool | None = None,
         scaling: ConstantLike = 1,
+        penalty: ConstantLike | None = None,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1284,6 +1288,16 @@ class Model:
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
             by this factor. The default is 1.
+        penalty : constant-like, optional
+            If given, soften the constraint right away by calling
+            :meth:`Constraint.soften` with this penalty, adding a slack variable
+            and a penalty term to the objective. Not allowed together with
+            ``freeze=True`` (or a model default of ``freeze_constraints=True``),
+            since softening requires a mutable, registered ``Constraint``.
+            The resulting Slack is not returned by this shortcut; retrieve
+            the slack variable(s) from model.variables using the derived
+            name f"{name}_slack_pos" (and f"{name}_slack_neg" for
+            equality constraints).
 
         Returns
         -------
@@ -1295,6 +1309,12 @@ class Model:
         if freeze is None:
             freeze = self.freeze_constraints
         freeze = freeze and not self.chunk
+
+        if penalty is not None and freeze:
+            raise ValueError(
+                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
+                "since `soften` is not supported on frozen constraints."
+            )
 
         if isinstance(sign, str):
             sign = maybe_replace_sign(sign)
@@ -1385,7 +1405,10 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        return self.constraints.add(constraint, freeze=freeze)
+        added = self.constraints.add(constraint, freeze=freeze)
+        if penalty is not None:
+            constraint.soften(penalty=penalty)
+        return added
 
     def add_indicator_constraints(
         self,

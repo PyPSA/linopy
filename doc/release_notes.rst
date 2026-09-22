@@ -29,6 +29,11 @@ Upcoming Version
 
 * Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
 
+*New feature: constraint softening*
+
+* A constraint can now be softened with ``Constraint.soften(penalty, max_violation=None, name=None)``, which adds a slack variable (a positive/negative pair for equality constraints) to the constraint's ``lhs`` and a penalty term to the objective, returning a ``Slack`` named tuple. It is not supported on frozen constraints or on detached copies from ``.mutable()``, ``.sel()``, or ``.isel()``. ``model.add_constraints(..., penalty=...)`` is a shortcut that softens the constraint right after creation and cannot be combined with ``freeze=True``.
+* The slack variable(s) created by ``soften()`` can be retrieved afterwards via the new ``Constraint.slack`` property.
+
 *Other*
 
 * New method :meth:`linopy.Model.assign_coords` reassigns coordinate values across an existing model — variables, constraints (dense and CSR-backed), expressions and parameters — without changing the model's shape: ``m.assign_coords(snapshot=new_snapshots)``. Values-only: the new values must match the length of the dimension's full-index container, and containers holding subsets of the dimension are mapped by label, preserving the subset relation. Dataset variable order is preserved. Under v1 semantics, ``Model.solve()`` raises when containers carry labels on a shared dimension that are neither equal nor subsets of one another. Typical use is advancing the window in rolling-horizon optimization with the persistent solver interface. (https://github.com/PyPSA/linopy/issues/767)
