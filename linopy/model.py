@@ -2385,13 +2385,10 @@ class Model:
 
         # Check for HiGHS
         if "highs" in available_solvers:
-            try:
-                import highspy
+            import highspy
 
-                if solver_model is not None and isinstance(solver_model, highspy.Highs):
-                    return self._compute_infeasibilities_highs(solver_model)
-            except ImportError:
-                pass
+            if solver_model is not None and isinstance(solver_model, highspy.Highs):
+                return self._compute_infeasibilities_highs(solver_model)
 
         # If we get here, either the solver doesn't support IIS or no solver model is available
         if solver_model is None:
