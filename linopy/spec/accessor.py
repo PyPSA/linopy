@@ -321,7 +321,7 @@ class ModelSpec:
         ]
         if p.objective is not None:
             rows.append(_row("Objective", [p.objective.sense]))
-        rows.append(_row("Expressions", list(p.named_expressions)))
+        rows.append(_row("Expressions", list(p.expressions)))
         return "\n".join(rows)
 
     def _reattach(self, model: Model, deep: bool = True) -> ModelSpec:
@@ -377,7 +377,7 @@ class ModelSpec:
     @property
     def _declarations(self) -> list[str]:
         p = self.program
-        return [*p.named_expressions, *p.constraints, *p.variables]
+        return [*p.expressions, *p.constraints, *p.variables]
 
     @property
     def unspecified(self) -> Unspecified:
@@ -582,20 +582,18 @@ class NamedExpressions(Mapping[str, "NamedExpression"]):
         self._spec = spec
 
     def __getitem__(self, name: str) -> NamedExpression:
-        if name not in self._spec.program.named_expressions:
-            raise unknown(
-                "named expression", name, self._spec.program.named_expressions
-            )
+        if name not in self._spec.program.expressions:
+            raise unknown("named expression", name, self._spec.program.expressions)
         spec = self._spec
         held = spec._model.expressions.data.get(name)
         stored = held if held is not None and held.spec == spec.name else None
         return NamedExpression(spec, name, spec._context(spec._resolve), stored)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._spec.program.named_expressions)
+        return iter(self._spec.program.expressions)
 
     def __len__(self) -> int:
-        return len(self._spec.program.named_expressions)
+        return len(self._spec.program.expressions)
 
     def __repr__(self) -> str:
         return f"NamedExpressions({list(self)})"
@@ -683,9 +681,9 @@ class NamedExpression(Declaration):
         self._stored = stored
 
     @property
-    def node(self) -> ms.ExpressionNode:
+    def node(self) -> ms.Expression:
         """The expression body as lowered, math-spec's own AST handle."""
-        return self._spec.program.named_expressions[self._name].expression
+        return self._spec.program.expressions[self._name].expression
 
     @property
     def dims(self) -> tuple[str, ...]:

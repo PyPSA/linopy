@@ -94,7 +94,7 @@ def _variables(ctx: Context) -> None:
         variable.spec = ctx.name
 
 
-def _bound(node: ms.ExpressionNode, ctx: Context) -> float | xr.DataArray:
+def _bound(node: ms.Expression, ctx: Context) -> float | xr.DataArray:
     """A bound as linopy takes it, read raw: an uncovered slot stays NaN for :func:`check_bounds_cover`."""
     if isinstance(node, ms.Constant):
         return node.value
@@ -160,7 +160,7 @@ def _check_live(
         f"the row leaves the problem without saying so."
     )
     zeroed = all(
-        ctx.program.variable(v).absence == "zero"
+        ctx.program.variables[v].absence == "zero"
         for v in ms.variables_of(declared.lhs, declared.rhs)
     )
     if zeroed and not _binds(other, dead):
@@ -217,7 +217,7 @@ def _expressions(ctx: Context, build: bool) -> None:
     A data-only body has no linopy term to hold and stays on the spec; so
     does one reading a ``dual``, which needs a solved model.
     """
-    for name, declared in ctx.program.named_expressions.items():
+    for name, declared in ctx.program.expressions.items():
         body = declared.expression
         check_coverage(f"expression '{name}'", (body,), ctx, None)
         if not build or any(isinstance(n, ms.Dual) for n in walk(body)):

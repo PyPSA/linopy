@@ -216,7 +216,7 @@ class Attached:
 
 def _report_closure(program: ms.Program) -> set[str]:
     """Every parameter a named expression reads, by node or by name."""
-    bodies = tuple(d.expression for d in program.named_expressions.values())
+    bodies = tuple(d.expression for d in program.expressions.values())
     names = set(parameters_of(*bodies))
     for node in walk(*bodies):
         names.update(amounts_of(node))
@@ -384,11 +384,11 @@ def _index(dim: str, obj: Any, declared: ms.DimensionDeclaration) -> pd.Index:
 # ---------------------------------------------------------------------------
 
 
-def _key_value(rel: ms.RelationDeclaration) -> tuple[str, str]:
+def _key_value(name: str, rel: ms.RelationDeclaration) -> tuple[str, str]:
     """The key dimension and the value dimension of a single-valued relation over two dimensions."""
     if len(rel.key) != 1 or len(rel.values) != 1:
         raise SpecDataError(
-            f"relation '{rel.name}' keys {list(rel.key)} into {list(rel.values)}, and this engine "
+            f"relation '{name}' keys {list(rel.key)} into {list(rel.values)}, and this engine "
             f"reads a relation over two dimensions: one key column mapping into one value column. "
             f"Split it into single-valued relations."
         )
@@ -400,7 +400,7 @@ def _relations(
 ) -> dict[str, xr.DataArray]:
     out: dict[str, xr.DataArray] = {}
     for name, rel in program.relations.items():
-        over, target = _key_value(rel)
+        over, target = _key_value(name, rel)
         if name not in sources:
             raise SpecDataError(
                 f"no data provided for relation '{name}'. Pass it under key '{name}' as "

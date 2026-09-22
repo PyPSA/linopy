@@ -20,9 +20,9 @@ from linopy.variables import Variable
 
 def evaluate_named(name: str, ctx: Context) -> Value:
     """The named expression *name* as its linopy term, array or number over *ctx*, its divisors checked first."""
-    if name not in ctx.program.named_expressions:
-        raise unknown("named expression", name, ctx.program.named_expressions)
-    body = ctx.program.named_expressions[name].expression
+    if name not in ctx.program.expressions:
+        raise unknown("named expression", name, ctx.program.expressions)
+    body = ctx.program.expressions[name].expression
     found = obligations_of((body,), ctx, None)
     check_kind(f"expression '{name}'", "divisor", found["divisor"], ctx)
     value = evaluate(body, ctx)
@@ -43,7 +43,7 @@ def _named(value: xr.DataArray, name: str) -> xr.DataArray:
     return value.drop_vars(stray).rename(name)
 
 
-def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
+def evaluate(node: ms.Expression, ctx: Context) -> Value:
     """One node as a linopy term, an array or a number."""
     if isinstance(node, ms.Constant):
         return node.value
@@ -79,29 +79,29 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
     if isinstance(node, ms.GroupSum):
         return operators.grouped_sum(
             _array(evaluate(node.operand, ctx)),
-            _relation_arrays((node.walk,), ctx),
-            into=node.into,
+            (ctx.relations[node.direction.name],),
+            into=node.direction.produced_dims,
             labels=ctx.coords,
         )
-    if isinstance(node, ms.At):
+    if isinstance(node, ms.Pullback):
         return operators.at(
             _array(evaluate(node.operand, ctx)),
-            _relation_arrays((node.walk,), ctx),
-            into=node.into,
+            (ctx.relations[node.direction.name],),
+            into=node.direction.consumed_dims,
         )
     if isinstance(node, ms.Translate):
         return operators.shift(
             _array(evaluate(node.operand, ctx)),
-            over=node.dimension,
+            over=node.along,
             offset=_amount(node.offset, ctx),
             wrap=node.wrap,
             fill=node.fill,
             by=_partition(node, ctx),
         )
-    if isinstance(node, ms.Window):
+    if isinstance(node, ms.WindowSum):
         return operators.sum_back(
             _array(evaluate(node.operand, ctx)),
-            over=node.dimension,
+            over=node.along,
             within=_amount(node.width, ctx),
             wrap=node.wrap,
             by=_partition(node, ctx),
@@ -117,7 +117,7 @@ def evaluate(node: ms.ExpressionNode, ctx: Context) -> Value:
 
 def _variable(name: str, ctx: Context) -> Value:
     variable = ctx.model.variables[name]
-    absence = ctx.program.variable(name).absence
+    absence = ctx.program.variables[name].absence
     if not ctx.solved:
         return context.variable_term(variable, absence)
     if "solution" not in variable.data:
@@ -186,14 +186,9 @@ def _amount(amount: int | str, ctx: Context) -> operators.Amount:
     return amount
 
 
-def _partition(node: ms.Translate | ms.Window, ctx: Context) -> xr.DataArray | None:
-    """The relation a windowed operator stays inside, named for the dimension its values are labels of."""
+def _partition(node: ms.Translate | ms.WindowSum, ctx: Context) -> xr.DataArray | None:
+    """The relation a windowed operator stays inside, named for the dimension its group column is over."""
     if node.partition is None:
         return None
-    return ctx.relations[node.partition.name].rename(node.partition.produced_dims[0])
-
-
-def _relation_arrays(
-    walks: tuple[ms.Walk, ...], ctx: Context
-) -> tuple[xr.DataArray, ...]:
-    return tuple(ctx.relations[walk.name] for walk in walks)
+    partition = node.partition
+    return ctx.relations[partition.name].rename(partition.dim(partition.group[0]))

@@ -38,7 +38,7 @@ def as_linopy_mask(mask: xr.DataArray) -> xr.DataArray | None:
     return mask
 
 
-def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
+def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
     """
     One predicate node as a boolean array.
 
@@ -47,37 +47,37 @@ def _node(node: ms.WhereNode, ctx: Context) -> xr.DataArray:
     ``None != 'north'`` with True, so a ``!=`` would otherwise keep exactly
     the labels that map nowhere.
     """
-    if isinstance(node, ms.BooleanLiteralNode):
+    if isinstance(node, ms.BooleanLiteral):
         return xr.DataArray(node.value)
-    if isinstance(node, ms.ParameterDefinedNode):
+    if isinstance(node, ms.ParameterDefined):
         return _defined(
-            ctx.parameters[node.name], ctx.program.parameter(node.name).dtype
+            ctx.parameters[node.name], ctx.program.parameters[node.name].dtype
         )
-    if isinstance(node, ms.VariableDefinedNode):
+    if isinstance(node, ms.VariableDefined):
         return ctx.model.variables[node.name].mask
-    if isinstance(node, ms.ParameterComparisonNode):
+    if isinstance(node, ms.ParameterComparison):
         return _compared(ctx.parameters[node.name], node.op, node.value)
-    if isinstance(node, ms.DimensionComparisonNode):
+    if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
         arr = xr.DataArray(labels, coords={node.name: labels}, dims=[node.name])
         return _compared(arr, node.op, node.value)
-    if isinstance(node, ms.DimensionPositionNode):
+    if isinstance(node, ms.DimensionPosition):
         return _position(node, ctx)
-    if isinstance(node, ms.RelationComparisonNode):
+    if isinstance(node, ms.RelationComparison):
         arr = ctx.relations[node.name]
         return _bool(_PREDICATE_OPS[node.op](arr, node.value) & arr.notnull())
-    if isinstance(node, ms.RelationPairComparisonNode):
+    if isinstance(node, ms.RelationPairComparison):
         left = ctx.relations[node.name]
         right = ctx.relations[node.other]
         compared = _PREDICATE_OPS[node.op](left, right) & left.notnull()
         return _bool(compared & right.notnull())
-    if isinstance(node, ms.RelationDefinedNode):
+    if isinstance(node, ms.RelationDefined):
         return ctx.relations[node.name].notnull()
-    if isinstance(node, ms.NotNode):
+    if isinstance(node, ms.Not):
         return ~_node(node.operand, ctx)
-    if isinstance(node, ms.AndNode):
+    if isinstance(node, ms.And):
         return _node(node.left, ctx) & _node(node.right, ctx)
-    if isinstance(node, ms.OrNode):
+    if isinstance(node, ms.Or):
         return _node(node.left, ctx) | _node(node.right, ctx)
     assert_never(node)
 
@@ -101,7 +101,7 @@ def _defined(arr: xr.DataArray, dtype: str) -> xr.DataArray:
     return arr.notnull() & np.isfinite(arr)
 
 
-def _position(node: ms.DimensionPositionNode, ctx: Context) -> xr.DataArray:
+def _position(node: ms.DimensionPosition, ctx: Context) -> xr.DataArray:
     labels = ctx.coords[node.name]
     if node.partition is not None:
         groups = ctx.relations[node.partition.name]
@@ -121,7 +121,7 @@ def _position(node: ms.DimensionPositionNode, ctx: Context) -> xr.DataArray:
 
 
 def _group_offsets(
-    node: ms.DimensionPositionNode, groups: xr.DataArray, labels: np.ndarray
+    node: ms.DimensionPosition, groups: xr.DataArray, labels: np.ndarray
 ) -> xr.DataArray:
     """Each coordinate's distance from the boundary of its own group; NaN where it is in no group."""
     partition = grouped(node.name, labels, groups)

@@ -51,21 +51,21 @@ _REFUSALS: dict[str, str] = {
 }
 
 
-def amounts_of(node: ms.ExpressionNode) -> Iterator[str]:
+def amounts_of(node: ms.Expression) -> Iterator[str]:
     """The parameters *node* names as an amount: a translation's offset or a window's width."""
     if isinstance(node, ms.Translate) and isinstance(node.offset, str):
         yield node.offset
-    elif isinstance(node, ms.Window) and isinstance(node.width, str):
+    elif isinstance(node, ms.WindowSum) and isinstance(node.width, str):
         yield node.width
 
 
-def dims_of(node: ms.ExpressionNode, program: ms.Program) -> tuple[str, ...]:
+def dims_of(node: ms.Expression, program: ms.Program) -> tuple[str, ...]:
     """The dimensions *node* spans, in the program's dimension order, before any data is bound."""
     spanned = _dims(node, program)
     return tuple(d for d in program.dimensions if d in spanned)
 
 
-def _dims(node: ms.ExpressionNode, program: ms.Program) -> frozenset[str]:
+def _dims(node: ms.Expression, program: ms.Program) -> frozenset[str]:
     if isinstance(node, ms.Constant):
         return frozenset()
     if isinstance(node, ms.Variable):
@@ -76,8 +76,10 @@ def _dims(node: ms.ExpressionNode, program: ms.Program) -> frozenset[str]:
         return frozenset(program.constraints[node.constraint].dims)
     if isinstance(node, ms.Sum):
         return _dims(node.operand, program) - set(node.over)
-    if isinstance(node, ms.GroupSum | ms.At):
-        return (_dims(node.operand, program) - {node.over}) | set(node.into)
+    if isinstance(node, ms.GroupSum | ms.Pullback):
+        direction = node.direction
+        operand = _dims(node.operand, program) - set(direction.consumed_dims)
+        return operand | set(direction.produced_dims)
     if isinstance(node, ms.Cases):
         return frozenset().union(*(_dims(r.value, program) for r in node.regions))
     return frozenset().union(*(_dims(c, program) for c in ms.children(node)))
@@ -93,7 +95,7 @@ def gaps_under(array: xr.DataArray, rows: Rows) -> int:
 
 def check_coverage(
     subject: str,
-    expressions: Sequence[ms.ExpressionNode],
+    expressions: Sequence[ms.Expression],
     ctx: Context,
     rows: Rows,
     *,
@@ -125,7 +127,7 @@ def check_kind(
 
 
 def obligations_of(
-    expressions: Sequence[ms.ExpressionNode],
+    expressions: Sequence[ms.Expression],
     ctx: Context,
     rows: Rows,
     *,
@@ -141,7 +143,7 @@ def obligations_of(
 
 
 def _collect(
-    node: ms.ExpressionNode,
+    node: ms.Expression,
     ctx: Context,
     rows: Rows,
     constant: bool,

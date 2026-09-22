@@ -48,7 +48,7 @@ class Parameters(Mapping[str, xr.DataArray]):
 
     def __getitem__(self, name: str) -> xr.DataArray:
         if name not in self._arrays:
-            derivation = self._program.parameter(name).derivation
+            derivation = self._program.parameters[name].derivation
             self._arrays[name] = (
                 self._resolve(name)
                 if derivation is None
