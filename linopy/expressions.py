@@ -2894,13 +2894,15 @@ class LinearExpression(BaseExpression):
         -------
         df : pandas.DataFrame
         """
-        ds = self.data
+        if self._csr is not None:
+            df = self._csr_terms(self._csr).to_pandas()
+        else:
 
-        def mask_func(data: dict) -> pd.Series:
-            mask = (data["vars"] != -1) & (data["coeffs"] != 0)
-            return mask
+            def mask_func(data: dict) -> pd.Series:
+                mask = (data["vars"] != -1) & (data["coeffs"] != 0)
+                return mask
 
-        df = to_dataframe(ds, mask_func=mask_func)
+            df = to_dataframe(self.data, mask_func=mask_func)
         df = df.groupby("vars", as_index=False).sum()
         check_has_nulls(df, name=self.type)
         return df
@@ -2975,17 +2977,34 @@ class LinearExpression(BaseExpression):
         -------
         df : polars.DataFrame
         """
-        if self.is_constant:
+        if self._csr is not None:
+            df = self._csr_terms(self._csr)
+        elif self.is_constant:
             df = pl.DataFrame(
                 {"const": self.data["const"].values.reshape(-1)}
             ).with_columns(pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars"))
             return df.select(["vars", "coeffs", "const"])
-
-        df = to_polars(self.data)
-        df = filter_nulls_polars(df)
+        else:
+            df = filter_nulls_polars(to_polars(self.data))
         df = maybe_group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
         return df
+
+    def _csr_terms(self, csr: CSRLinearExpression) -> pl.DataFrame:
+        """
+        Stored terms of a CSR backing as ``coeffs``, ``vars`` and ``const``
+        columns, dropping absent cells and zero coefficients like the dense
+        long format.
+        """
+        rows = np.repeat(np.arange(csr.n_cells), np.diff(csr.csr.indptr))
+        df = pl.DataFrame(
+            {
+                "const": csr.const[rows],
+                "coeffs": csr.csr.data.astype(float),
+                "vars": csr.csr.indices.astype(self.model._dtypes["labels"]),
+            }
+        )
+        return filter_nulls_polars(df.filter(pl.col("const").is_not_nan()))
 
     def simplify(self) -> LinearExpression:
         """

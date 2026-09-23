@@ -1397,6 +1397,21 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
     assert notices[0].filename == __file__
 
 
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_flat_and_to_polars_served_without_densifying(build: str, scale: float) -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense(build)
+    sparse = scale * sparse
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    with no_densify():
+        got_pl, got_flat = sparse.to_polars(), sparse.flat
+    assert sparse.is_sparse
+    assert got_pl.sort("vars").equals(dense.to_polars().sort("vars"))
+    pd.testing.assert_frame_equal(got_flat, dense.flat)
+
+
 def grid_operand(e: LinearExpression) -> xr.DataArray:
     """Positive values over the expression's full grid."""
     values = np.random.default_rng(1).uniform(1, 2, e.shape[:-1])
