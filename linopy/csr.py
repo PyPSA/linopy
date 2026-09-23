@@ -38,6 +38,7 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset
 
+from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import (
@@ -55,6 +56,9 @@ CONTRACTION_CHUNK = 64
 
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
+
+_AUX_PREFIX = "_aux_"
+_COORDDIM_PREFIX = "_coorddim_"
 
 
 @dataclass(frozen=True, eq=False)
@@ -84,6 +88,28 @@ class Grid:
         dims = tuple(dims)
         indexes = {d: ds.get_index(d).rename(d) for d in dims}
         return cls(indexes, _aux_coords(ds, set(dims)))
+
+    @classmethod
+    def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
+        """Read back a grid written by :meth:`to_netcdf_vars`."""
+        aux: AuxCoords = {}
+        for k in ds:
+            name = str(k)
+            if name.startswith(_AUX_PREFIX):
+                da = ds[k]
+                d = str(da.dims[0]).removeprefix(_COORDDIM_PREFIX) if da.ndim else ()
+                aux[name.removeprefix(_AUX_PREFIX)] = (d, da.to_numpy())
+        return cls(cls.from_coords(coords_from_dataset(ds, list(dims))).indexes, aux)
+
+    def to_netcdf_vars(self) -> dict[str, DataArray]:
+        """The indexes and auxiliary coordinates as plain data variables for netcdf."""
+        aux = {
+            f"{_AUX_PREFIX}{n}": DataArray(
+                v, dims=[f"{_COORDDIM_PREFIX}{d}"] if isinstance(d, str) else []
+            )
+            for n, (d, v) in self.aux.items()
+        }
+        return coords_to_dataset_vars(self.coords) | aux
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -687,7 +713,7 @@ def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
     """Scalar and one-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
     aux: AuxCoords = {}
     for n, c in ds.coords.items():
-        if n in ds.dims:
+        if n in ds.xindexes:
             continue
         if c.ndim == 0:
             aux[str(n)] = ((), c.to_numpy())

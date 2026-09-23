@@ -1351,7 +1351,11 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
     "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
     "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
-    "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
+    "rhs": (
+        lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
+        "rhs over dimensions outside the grid",
+    ),
+    "rhs-expr": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "over different dim"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
@@ -1818,14 +1822,120 @@ MASKS: dict[str, Callable[[LinearExpression], Any]] = {
 }
 
 
+@pytest.mark.parametrize("prebuilt", [False, True], ids=["lhs", "constraint"])
 @pytest.mark.parametrize("mask", list(MASKS))
-def test_add_constraints_mask_freezes_sparse_and_matches_dense(mask: str) -> None:
+def test_add_constraints_mask_freezes_sparse_and_matches_dense(
+    mask: str, prebuilt: bool
+) -> None:
     require_v1()
     c1, c2 = base_model(), base_model()
     lhs = c2.balance_lhs(sparse=True)
     m = MASKS[mask](lhs)
     con1 = c1.m.add_constraints(c1.balance_lhs(False), ">=", c1.load, "bal", mask=m)
     with no_densify():
-        con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m, freeze=True)
+        if prebuilt:
+            con2 = c2.m.add_constraints(lhs >= c2.load, name="bal", mask=m, freeze=True)
+        else:
+            con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m, freeze=True)
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)
+
+
+def observed_keys_group() -> LinearExpression:
+    """The #941 reproducer: a multi-key observed grouping with aux coords on ``group``."""
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="s")], name="x")
+    expr = x.to_linexpr().assign_coords(
+        period=("s", [1, 1, 2, 2]), region=("s", ["n", "s", "n", "s"])
+    )
+    return expr.groupby(["period", "region"]).sum(observed=True, sparse=True)
+
+
+AUX_BUILDS: dict[str, Callable[[], LinearExpression]] = {
+    "observed-keys": observed_keys_group,
+    "aux": lambda: SPARSE_BUILDS["aux"](base_model()),
+    "scalar": lambda: SPARSE_BUILDS["grouped"](base_model()).sel(snapshot=1),
+}
+
+
+@pytest.mark.parametrize("build", list(AUX_BUILDS))
+def test_frozen_constraint_keeps_aux_coords_like_dense(
+    build: str, tmp_path: Path
+) -> None:
+    require_v1()
+    sparse = AUX_BUILDS[build]()
+    m = sparse.model
+    assert sparse._csr is not None
+    ref = m.add_constraints(sparse._csr.to_dense() >= 1, name="dense")
+    with no_densify():
+        con = m.add_constraints(sparse >= 1, name="sparse", freeze=True)
+    assert isinstance(con, CSRConstraint)
+    want = xr.Dataset(coords=ref.coords)
+    assert set(want.coords) > set(con.coord_names)
+    for got in (con, con.mutable(), ref.freeze()):
+        xr.testing.assert_identical(xr.Dataset(coords=got.coords), want)
+    m.to_netcdf(tmp_path / "m.nc")
+    read = linopy.read_netcdf(tmp_path / "m.nc").constraints["sparse"]
+    assert isinstance(read, CSRConstraint)
+    xr.testing.assert_identical(xr.Dataset(coords=read.coords), want)
+
+
+FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
+    "loc": lambda con: con.loc[{"bus": "bus0"}],
+    "update": lambda con: con.update(rhs=2.0),
+    "from_rule": lambda con: type(con).from_rule(con.model, lambda m, i: None, [[0]]),
+    "soften": lambda con: con.soften(penalty=1.0),
+    **{
+        attr: lambda con, attr=attr: setattr(con, attr, 1.0)
+        for attr in ["coeffs", "vars", "sign", "rhs", "lhs", "scaling"]
+    },
+}
+
+
+@pytest.mark.parametrize("op", list(FROZEN_MUTATIONS))
+def test_frozen_constraint_mutation_names_mutable(op: str) -> None:
+    require_v1()
+    c = base_model()
+    con = c.m.add_constraints(c.balance_lhs(sparse=True) >= c.load, freeze=True)
+    assert isinstance(con, CSRConstraint)
+    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*\.mutable\(\)"):
+        FROZEN_MUTATIONS[op](con)
+
+
+EXPR_RHS: dict[str, Callable[[Case, bool], LinearExpression]] = {
+    "expr": lambda c, sparse: (1.0 * c.flow).groupby(c.bus1).sum(sparse=sparse),
+    "expr-const": lambda c, sparse: (
+        (1.0 * c.flow).groupby(c.bus1).sum(sparse=sparse) + c.load
+    ),
+    "dense-expr-const": lambda c, sparse: (1.0 * c.flow).groupby(c.bus1).sum() - 2.0,
+}
+
+
+@pytest.mark.parametrize("form", ["operator", "add_constraints"])
+@pytest.mark.parametrize("rhs", list(EXPR_RHS))
+def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    lhs1 = (c1.eff * c1.gen_p).groupby(c1.gbus).sum()
+    con1 = c1.m.add_constraints(lhs1 <= EXPR_RHS[rhs](c1, False), name="c", freeze=True)
+    lhs2 = (c2.eff * c2.gen_p).groupby(c2.gbus).sum(sparse=True)
+    rhs2 = EXPR_RHS[rhs](c2, True)
+    with no_densify():
+        if form == "operator":
+            con2 = c2.m.add_constraints(lhs2 <= rhs2, name="c", freeze=True)
+        else:
+            con2 = c2.m.add_constraints(lhs2, "<=", rhs2, name="c", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert_frozen_equal(con1, con2)
+
+
+@pytest.mark.parametrize("default", [False, True], ids=["argument", "model-default"])
+def test_penalty_with_freeze_raises(default: bool) -> None:
+    require_v1()
+    c = base_model()
+    c.m.freeze_constraints = default
+    lhs = c.balance_lhs(sparse=True)
+    with pytest.raises(ValueError, match="`penalty` cannot be combined with `freeze"):
+        c.m.add_constraints(
+            lhs >= c.load, penalty=1.0, freeze=None if default else True
+        )

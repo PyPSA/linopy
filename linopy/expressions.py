@@ -2669,6 +2669,9 @@ class LinearExpression(BaseExpression):
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> ConstraintBase:
         if self._csr is not None and isinstance(sign, str):
+            rhs = as_constant(rhs)
+            if not isinstance(rhs, CONSTANT_TYPES):
+                return self.sub(rhs, join=join).to_constraint(sign, 0)
             rhs_da = constraints.csr_rhs(self._csr, rhs)
             if isinstance(rhs_da, DataArray):
                 return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
