@@ -1419,7 +1419,7 @@ class CSRConstraint(ConstraintBase):
             active,
             rhs_flat[active],
             sign,
-            grid=expr.grid,
+            grid=Grid(expr.grid.indexes),
             model=expr.model,
         )
 

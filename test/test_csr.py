@@ -9,7 +9,7 @@ import re
 import tracemalloc
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ import linopy
 from linopy import LinearExpression, Model, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
-from linopy.csr import CSRLinearExpression
+from linopy.csr import CSRLinearExpression, Grid
 from linopy.semantics import is_v1
 from linopy.testing import assert_conequal, assert_linequal, assert_quadequal
 
@@ -233,7 +233,7 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
     csr = sparse._csr
     assert csr is not None
     if observed:
-        assert set(csr.coords) == {"period", "season"}
+        assert set(csr.grid.aux) == {"period", "season"}
     else:
         assert np.isnan(csr.const).sum() == 2 * 2
     assert csr.grid.dims == dense.coord_dims
@@ -316,13 +316,13 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
     dense = expr.groupby(keys).sum(observed=True)
     tot = sparse + dense
     assert tot._csr is not None
-    assert set(tot._csr.coords) == {"period", "season"}
+    assert set(tot._csr.grid.aux) == {"period", "season"}
     assert_linequal(tot, 2.0 * dense)
 
     other = dense.assign_coords(region=("group", list("abcd")))
     tot = sparse + other
     assert tot._csr is not None
-    assert set(tot._csr.coords) == {"period", "season", "region"}
+    assert set(tot._csr.grid.aux) == {"period", "season", "region"}
     xr.testing.assert_equal(
         tot.data.coords.to_dataset(), (dense + other).data.coords.to_dataset()
     )
@@ -991,7 +991,7 @@ def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
     c = base_model()
     csr = tagged_group(c)._csr
     assert csr is not None
-    assert set(csr.coords) == {"bus", "tag"}
+    assert set(csr.grid.aux) == {"bus", "tag"}
     kept = csr.contracted(
         flat_operand(
             loc_operand(csr.grid.indexes["snapshot"]), ("snapshot",), ("loc",)
@@ -999,13 +999,53 @@ def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
         ["snapshot"],
         [LOC],
     )
-    assert set(kept.coords) == {"bus", "tag"}
+    assert set(kept.grid.aux) == {"bus", "tag"}
     dropped = csr.contracted(
         flat_operand(loc_operand(csr.grid.indexes["group"]), ("group",), ("loc",)),
         ["group"],
         [LOC],
     )
-    assert dropped.coords == {}
+    assert dropped.grid.aux == {}
+
+
+@pytest.mark.parametrize(
+    ("op", "aux_dims"),
+    [
+        (lambda g: g.renamed({"group": "g"}), {"bus": "g", "tag": "g"}),
+        (
+            lambda g: g.reordered(["snapshot", "group"]),
+            {"bus": "group", "tag": "group"},
+        ),
+        (lambda g: g.reordered(["snapshot"]), {}),
+        (
+            lambda g: g.with_indexes({"snapshot": [5, 6, 7]}),
+            {"bus": "group", "tag": "group"},
+        ),
+        (lambda g: g.combined([g], "outer"), {}),
+    ],
+    ids=["renamed", "transposed", "dropped", "relabelled", "combined"],
+)
+def test_grid_ops_carry_aux_coords(
+    op: Callable[[Grid], Grid], aux_dims: dict[str, str]
+) -> None:
+    require_v1()
+    csr = tagged_group(base_model())._csr
+    assert csr is not None
+    assert {n: d for n, (d, _) in op(csr.grid).aux.items()} == aux_dims
+
+
+def test_grid_conformed_reindexes_aux_coords_and_equality_sees_them() -> None:
+    require_v1()
+    csr = tagged_group(base_model())._csr
+    assert csr is not None
+    grid = csr.grid
+    labels = grid.indexes["group"][::-1]
+    conformed = grid.conformed(grid.with_indexes({"group": labels}))
+    tags = pd.Series(grid.aux["tag"][1], index=grid.indexes["group"])
+    assert np.array_equal(conformed.aux["tag"][1], tags.loc[labels].to_numpy())
+    assert grid == replace(grid)
+    assert grid != replace(grid, aux={})
+    assert grid.same_layout(replace(grid, aux={}))
 
 
 def test_matmul_absent_cells_have_const_zero_and_no_terms() -> None:

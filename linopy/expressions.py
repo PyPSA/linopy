@@ -2591,7 +2591,7 @@ class LinearExpression(BaseExpression):
             return None
         if csr.grid.size == 0:
             return None
-        coords = Dataset(coords=dict(csr.grid.indexes) | dict(csr.coords)).coords
+        coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
         if _has_multiindex(da.indexes.values()):
             return None
@@ -2600,7 +2600,7 @@ class LinearExpression(BaseExpression):
         if not contracted or any(d not in da.indexes for d in new_dims):
             return None
         matrix = _matmul_operand_to_matrix(
-            da, contracted, new_dims, csr.grid.indexes, csr.coords
+            da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
         res = csr.contracted(matrix, contracted, new_indexes)
@@ -3356,7 +3356,7 @@ def _try_csr_merge(
         for p in csrs
     ]
     if not all(template.same_grid(p) for p in csrs[1:]):
-        if any(p.coords for p in csrs):
+        if any(p.grid.aux for p in csrs):
             return None
         aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
         if aligned is None:
