@@ -2895,7 +2895,7 @@ class LinearExpression(BaseExpression):
         df : pandas.DataFrame
         """
         if self._csr is not None:
-            df = self._csr_terms(self._csr).to_pandas()
+            df = pd.DataFrame(self._csr_terms(self._csr))
         else:
 
             def mask_func(data: dict) -> pd.Series:
@@ -2978,7 +2978,7 @@ class LinearExpression(BaseExpression):
         df : polars.DataFrame
         """
         if self._csr is not None:
-            df = self._csr_terms(self._csr)
+            df = pl.DataFrame(self._csr_terms(self._csr))
         elif self.is_constant:
             df = pl.DataFrame(
                 {"const": self.data["const"].values.reshape(-1)}
@@ -2990,21 +2990,21 @@ class LinearExpression(BaseExpression):
         check_has_nulls_polars(df, name=self.type)
         return df
 
-    def _csr_terms(self, csr: CSRLinearExpression) -> pl.DataFrame:
+    def _csr_terms(self, csr: CSRLinearExpression) -> dict[str, np.ndarray]:
         """
-        Stored terms of a CSR backing as ``coeffs``, ``vars`` and ``const``
+        Stored terms of a CSR backing as ``const``, ``coeffs`` and ``vars``
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
         rows = np.repeat(np.arange(csr.n_cells), np.diff(csr.csr.indptr))
-        df = pl.DataFrame(
-            {
-                "const": csr.const[rows],
-                "coeffs": csr.csr.data.astype(float),
-                "vars": csr.csr.indices.astype(self.model._dtypes["labels"]),
-            }
-        )
-        return filter_nulls_polars(df.filter(pl.col("const").is_not_nan()))
+        const = csr.const[rows]
+        coeffs = csr.csr.data.astype(float)
+        keep = ~np.isnan(const) & (coeffs != 0)
+        return {
+            "const": const[keep],
+            "coeffs": coeffs[keep],
+            "vars": csr.csr.indices[keep].astype(self.model._dtypes["labels"]),
+        }
 
     def simplify(self) -> LinearExpression:
         """
