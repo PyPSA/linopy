@@ -462,7 +462,9 @@ def enforce_no_multiindex(
     warn_legacy(_legacy_multiindex_message(str(dim), context), stacklevel=stacklevel)
 
 
-def first_mismatched_dim(a: DataArray, b: DataArray) -> tuple[str, Any, Any] | None:
+def first_mismatched_dim(
+    a: DataArray | Dataset, b: DataArray | Dataset
+) -> tuple[str, Any, Any] | None:
     """
     Return ``(dim, a_labels, b_labels)`` for the first shared dim that
     disagrees on coordinate labels OR size, or ``None`` if all agree.

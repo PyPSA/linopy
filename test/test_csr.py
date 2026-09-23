@@ -11,19 +11,23 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
+import scipy.sparse
 import xarray as xr
 from xarray.core.types import JoinOptions
 
 import linopy
 from linopy import LinearExpression, Model, Variable
+from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
+from linopy.csr import CSRLinearExpression
 from linopy.semantics import is_v1
-from linopy.testing import assert_conequal, assert_linequal
+from linopy.testing import assert_conequal, assert_linequal, assert_quadequal
 
 
 def require_v1() -> None:
@@ -823,4 +827,395 @@ def test_cross_grid_merge_peak_memory() -> None:
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
+    assert peak < dense_rectangle_bytes / 4
+
+
+def cell_matrix(
+    expr: LinearExpression, dims: tuple[str, ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-cell coefficient row over raw variable labels, plus the flat constant."""
+    ds = expr.data
+    nterm = ds.sizes[TERM_DIM]
+    vars_ = ds.vars.transpose(*dims, TERM_DIM).to_numpy().reshape(-1, nterm)
+    coeffs = ds.coeffs.transpose(*dims, TERM_DIM).to_numpy().reshape(-1, nterm)
+    active = (vars_ != -1) & ~np.isnan(coeffs)
+    rows = np.broadcast_to(np.arange(len(vars_))[:, None], vars_.shape)
+    matrix = np.zeros((len(vars_), expr.model._xCounter))
+    np.add.at(matrix, (rows[active], vars_[active]), coeffs[active])
+    const = np.nan_to_num(ds.const.transpose(*dims).to_numpy().reshape(-1))
+    return matrix, const
+
+
+def assert_cells_equal(
+    res: LinearExpression, reference: LinearExpression, dims: tuple[str, ...]
+) -> None:
+    """Compare two expressions cell by cell, independently of the term layout."""
+    got, got_const = cell_matrix(res, dims)
+    want, want_const = cell_matrix(reference, dims)
+    assert np.allclose(got, want)
+    assert np.allclose(got_const, want_const)
+
+
+def assert_contracted_equal(
+    res: CSRLinearExpression, reference: LinearExpression, dims: tuple[str, ...]
+) -> None:
+    """Compare a contraction with a dense reference independently of term layout."""
+    assert res.grid.dims == dims
+    assert_cells_equal(res.to_dense(), reference, dims)
+
+
+def flat_operand(
+    da: xr.DataArray, contracted_dims: tuple[str, ...], new_dims: tuple[str, ...]
+) -> scipy.sparse.csr_array:
+    """The C-order flattening ``contracted`` expects, as a sparse matrix."""
+    values = da.transpose(*contracted_dims, *new_dims).to_numpy()
+    n_contracted = int(np.prod([da.sizes[d] for d in contracted_dims], dtype=int))
+    return scipy.sparse.csr_array(values.reshape(n_contracted, -1))
+
+
+def gen_csr(c: Case) -> CSRLinearExpression:
+    return CSRLinearExpression.from_dense((c.eff * c.gen_p).data, c.m)
+
+
+@pytest.mark.parametrize("n_snap", [3, 70], ids=["one-chunk", "chunk-boundary"])
+@pytest.mark.parametrize("zeros", [False, True], ids=["dense-C", "sparse-C"])
+def test_contracted_partial_matches_dense(n_snap: int, zeros: bool) -> None:
+    require_v1()
+    c = base_model(n_snap=n_snap)
+    expr = c.eff * c.gen_p
+    values = np.arange(1.0, expr.data.sizes["gen"] * 2 + 1).reshape(-1, 2)
+    if zeros:
+        values[::2] = 0.0
+    operand = xr.DataArray(
+        values, coords={"gen": expr.indexes["gen"], "loc": ["L1", "L2"]}
+    )
+    res = gen_csr(c).contracted(
+        flat_operand(operand, ("gen",), ("loc",)),
+        ["gen"],
+        [pd.Index(["L1", "L2"], name="loc")],
+    )
+    assert_contracted_equal(res, (expr * operand).sum("gen"), ("snapshot", "loc"))
+
+
+def test_contracted_full_yields_zero_dim_grid() -> None:
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    operand = xr.DataArray(
+        np.arange(
+            expr.data.sizes["gen"] * expr.data.sizes["snapshot"], dtype=float
+        ).reshape(expr.data.sizes["gen"], -1),
+        coords={"gen": expr.indexes["gen"], "snapshot": expr.indexes["snapshot"]},
+    )
+    res = gen_csr(c).contracted(
+        flat_operand(operand, ("gen", "snapshot"), ()), ["gen", "snapshot"], []
+    )
+    assert res.grid.size == 1
+    assert_contracted_equal(res, (expr * operand).sum(["gen", "snapshot"]), ())
+
+
+def test_contracted_with_two_new_dims() -> None:
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    operand = xr.DataArray(
+        np.arange(expr.data.sizes["gen"] * 6, dtype=float).reshape(-1, 3, 2),
+        coords={
+            "gen": expr.indexes["gen"],
+            "loc": ["L1", "L2", "L3"],
+            "scen": [0, 1],
+        },
+    )
+    res = gen_csr(c).contracted(
+        flat_operand(operand, ("gen",), ("loc", "scen")),
+        ["gen"],
+        [pd.Index(["L1", "L2", "L3"], name="loc"), pd.Index([0, 1], name="scen")],
+    )
+    assert_contracted_equal(
+        res, (expr * operand).sum("gen"), ("snapshot", "loc", "scen")
+    )
+
+
+def test_contracted_zero_operand_leaves_empty_rows() -> None:
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    operand = xr.DataArray(
+        np.zeros((expr.data.sizes["gen"], 2)),
+        coords={"gen": expr.indexes["gen"], "loc": ["L1", "L2"]},
+    )
+    res = gen_csr(c).contracted(
+        flat_operand(operand, ("gen",), ("loc",)),
+        ["gen"],
+        [pd.Index(["L1", "L2"], name="loc")],
+    )
+    assert res.csr.nnz == 0
+    assert (res.const == 0).all()
+    assert (res.to_dense().data.vars == -1).all()
+
+
+def test_contracted_reorders_non_trailing_contracted_dim() -> None:
+    """``flow_t`` is stored as (snapshot, line); contracting ``line`` needs a reorder."""
+    require_v1()
+    c = base_model()
+    expr = 1.0 * c.flow_t
+    csr = CSRLinearExpression.from_dense(expr.data, c.m)
+    assert csr.grid.dims == ("snapshot", "line")
+    operand = xr.DataArray(
+        np.arange(expr.data.sizes["line"] * 2, dtype=float).reshape(-1, 2),
+        coords={"line": expr.indexes["line"], "loc": ["L1", "L2"]},
+    )
+    res = csr.contracted(
+        flat_operand(operand, ("line",), ("loc",)),
+        ["line"],
+        [pd.Index(["L1", "L2"], name="loc")],
+    )
+    assert_contracted_equal(res, (expr * operand).sum("line"), ("snapshot", "loc"))
+
+
+LOC = pd.Index(["L1", "L2"], name="loc")
+
+
+def loc_operand(index: pd.Index) -> xr.DataArray:
+    return xr.DataArray(np.ones((len(index), len(LOC))), coords=[index, LOC])
+
+
+def tagged_group(c: Case) -> LinearExpression:
+    """Generation grouped into ``group`` with ``bus``/``tag`` as auxiliary coords."""
+    grouper = pd.DataFrame({"bus": c.gbus, "tag": c.gbus})
+    return (1.0 * c.gen_p).groupby(grouper).sum(sparse=True, observed=True)
+
+
+def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
+    require_v1()
+    c = base_model()
+    csr = tagged_group(c)._csr
+    assert csr is not None
+    assert set(csr.coords) == {"bus", "tag"}
+    kept = csr.contracted(
+        flat_operand(
+            loc_operand(csr.grid.indexes["snapshot"]), ("snapshot",), ("loc",)
+        ),
+        ["snapshot"],
+        [LOC],
+    )
+    assert set(kept.coords) == {"bus", "tag"}
+    dropped = csr.contracted(
+        flat_operand(loc_operand(csr.grid.indexes["group"]), ("group",), ("loc",)),
+        ["group"],
+        [LOC],
+    )
+    assert dropped.coords == {}
+
+
+def test_matmul_absent_cells_have_const_zero_and_no_terms() -> None:
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    snaps = expr.indexes["snapshot"]
+    expr = expr.where(xr.DataArray(snaps != 1, coords=[snaps]))
+    operand = loc_operand(expr.indexes["gen"])
+
+    res = expr @ operand
+
+    absent = res.sel(snapshot=1)
+    assert (absent.data.vars == -1).all()
+    assert (absent.const == 0).all()
+    assert_cells_equal(res, (expr * operand).sum("gen"), ("snapshot", "loc"))
+
+
+def test_matmul_prunes_explicit_zero_coefficients() -> None:
+    """Unlike ``added``, ``@`` drops zero terms; the cell stays active via ``const``."""
+    require_v1()
+    c = base_model()
+    expr = 0.0 * c.gen_p + 1.0
+    operand = loc_operand(expr.indexes["gen"])
+
+    res = expr @ operand
+
+    assert (res.data.vars == -1).all()
+    assert (res.const == len(expr.indexes["gen"])).all()
+    assert_cells_equal(res, (expr * operand).sum("gen"), ("snapshot", "loc"))
+
+
+@pytest.mark.parametrize("kind", ["nan", "mismatch", "reorder", "aux"])
+def test_matmul_operand_errors_match_multiplication(kind: str) -> None:
+    """§5, §8 and §11 on the constant are raised as ``*`` raises them."""
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    gens = expr.indexes["gen"]
+    values = np.ones((len(gens), len(LOC)))
+    index = gens
+    if kind == "nan":
+        values[0, 0] = np.nan
+    elif kind == "mismatch":
+        index = pd.Index([f"g{i}" for i in range(len(gens))], name="gen")
+    elif kind == "reorder":
+        index = gens[::-1]
+    operand = xr.DataArray(values, coords=[index, LOC])
+    if kind == "aux":
+        operand = operand.assign_coords(tag=("gen", ["X"] * len(gens)))
+        expr = expr.assign_coords(tag=("gen", ["Y"] * len(gens)))
+
+    with pytest.raises(ValueError) as dense:
+        expr * operand
+    with pytest.raises(ValueError) as sparse:
+        expr._sparse_matmul(operand)
+    assert str(sparse.value) == str(dense.value)
+
+
+@pytest.mark.parametrize("kind", ["non-unique", "multiindex"])
+def test_matmul_falls_back_to_dense_on_unsupported_labels(kind: str) -> None:
+    require_v1()
+    m = Model()
+    labels = ["a", "a", "b"] if kind == "non-unique" else ["a", "b", "c"]
+    x = m.add_variables(coords=[pd.Index(labels, name="d")], name="x")
+    expr = 1.0 * x
+    coords: Any = {"d": expr.indexes["d"]}
+    if kind == "multiindex":
+        keys = pd.MultiIndex.from_tuples(
+            [(0, "a"), (0, "b"), (1, "a")], names=["p", "q"]
+        )
+        coords = xr.Coordinates.from_pandas_multiindex(keys, "d")
+        expr = LinearExpression(expr.data.drop_vars("d").assign_coords(coords), m)
+    operand = (
+        xr.DataArray(np.ones((3, len(LOC))), dims=["d", "loc"])
+        .assign_coords(coords)
+        .assign_coords(loc=LOC)
+    )
+
+    res = expr @ operand
+
+    assert res._csr is None
+    assert_linequal(res, (expr * operand).sum("d"))
+
+
+@pytest.mark.parametrize("empty", ["kept", "contracted"], ids=["kept", "contracted"])
+def test_matmul_with_zero_length_dim_matches_dense(empty: str) -> None:
+    """A zero-length grid dim contracts to the same empty result as the dense path."""
+    require_v1()
+    m = Model()
+    gens = pd.Index(["g0", "g1"], name="gen")
+    empties = pd.Index([], name="empty", dtype=object)
+    x = m.add_variables(coords=[gens, empties], name="x")
+    expr = 1.0 * x
+    contracted = "gen" if empty == "kept" else "empty"
+    operand = loc_operand(expr.indexes[contracted])
+
+    res = expr @ operand
+
+    reference = (expr * operand).sum(contracted)
+    assert res.coord_dims == ("empty" if empty == "kept" else "gen", "loc")
+    assert res.coord_sizes == reference.coord_sizes
+    assert res.data.vars.size == reference.data.vars.size == 0
+    assert np.allclose(res.const, reference.const)
+
+
+def test_matmul_dimensionless_expression_matches_dense() -> None:
+    """A grid-less expression has nothing to contract and stays on the dense path."""
+    require_v1()
+    c = base_model()
+    expr = (1.0 * c.gen_p).sum()
+    operand = xr.DataArray(np.arange(2.0), coords=[LOC])
+
+    res = expr @ operand
+
+    assert res._csr is None
+    assert_linequal(res, (expr * operand).sum([]))
+
+
+def test_matmul_keeps_aux_coords_on_kept_dims_only() -> None:
+    require_v1()
+    c = base_model()
+    grouped = tagged_group(c)
+    assert grouped._csr is not None
+    indexes = grouped._csr.grid.indexes
+
+    kept = grouped @ loc_operand(indexes["snapshot"])
+    dropped = grouped @ loc_operand(indexes["group"])
+
+    assert {"bus", "tag"} <= set(kept.coords)
+    assert not {"bus", "tag"} & set(dropped.coords)
+
+
+def test_matmul_output_dim_order_matches_dense() -> None:
+    require_v1()
+    c = base_model()
+    expr = c.eff * c.gen_p
+    operand = loc_operand(expr.indexes["gen"])
+
+    res = expr @ operand
+
+    assert res.data.vars.dims == ("snapshot", "loc", TERM_DIM)
+    assert res.data.vars.dims == (expr * operand).sum("gen").data.vars.dims
+
+
+def test_matmul_keeps_csr_backing_through_chain() -> None:
+    require_v1()
+    c = base_model()
+    snaps = c.gen_p.indexes["snapshot"]
+    operand = loc_operand(snaps)
+    gen = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    flow = (1.0 * c.flow).groupby(c.bus0).sum(sparse=True)
+
+    res = gen @ operand
+    assert res._csr is not None
+    assert_linequal(res, gen.dot(operand))
+    assert_cells_equal(
+        res,
+        (c.eff * c.gen_p).groupby(c.gbus).sum() @ operand,
+        ("bus", "loc"),
+    )
+
+    total = res + (flow @ operand)
+    assert total._csr is not None
+    con = c.m.add_constraints(total <= 0, name="matmul", freeze=True)
+    assert isinstance(con, CSRConstraint)
+
+
+@pytest.mark.legacy
+def test_matmul_legacy_stays_dense() -> None:
+    c = base_model()
+    expr = c.eff * c.gen_p
+    operand = loc_operand(expr.indexes["gen"])
+
+    res = expr @ operand
+
+    assert res._csr is None
+    assert_linequal(res, (expr * operand).sum("gen"))
+
+
+def test_quadratic_matmul_stays_on_dense_path() -> None:
+    require_v1()
+    c = base_model()
+    quad = (1.0 * c.gen_p) * (1.0 * c.gen_p)
+    operand = loc_operand(quad.indexes["gen"])
+
+    res = quad @ operand
+
+    assert_quadequal(res, (quad * operand).sum("gen"))
+
+
+def test_matmul_peak_memory() -> None:
+    require_v1()
+    n_branch, n_cycle, n_snap = 1000, 300, 100
+    dense_rectangle_bytes = n_snap * n_branch * n_cycle * 16
+    branches = pd.Index([f"br{i}" for i in range(n_branch)], name="branch")
+    cycles = pd.Index(range(n_cycle), name="cycle")
+    snaps = pd.Index(range(n_snap), name="snapshot")
+    rng = np.random.default_rng(0)
+    incidence = xr.DataArray(
+        rng.uniform(size=(n_branch, n_cycle)) < 0.01, coords=[branches, cycles]
+    ).astype(float)
+    m = Model()
+    expr = 1.0 * m.add_variables(coords=[branches, snaps], name="flow")
+
+    tracemalloc.start()
+    try:
+        res = expr @ incidence
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert res.coord_dims == ("snapshot", "cycle")
     assert peak < dense_rectangle_bytes / 4

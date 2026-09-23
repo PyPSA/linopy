@@ -7,7 +7,10 @@ backed by a :class:`CSRLinearExpression` instead of the dense dataset — same
 public type, different backing, akin to dask-backed xarray objects. The CSR
 form is canonical (duplicate variables summed, terms label-ordered) and ragged
 along ``_term``, so the group-size padding of issue #745 has no analog;
-grouping, ``merge``/``+``/``-`` and scaling become sparse linear algebra.
+grouping, ``merge``/``+``/``-``, scaling and ``@``/``dot`` (:meth:`contracted`)
+become sparse linear algebra. Unlike :meth:`added`, which preserves explicit
+zeros through COO, ``@``/``dot`` prunes them: cell activeness is carried by
+``const`` alone (issue #925).
 Anything without a sparse branch expands through ``.data`` to the
 mathematically identical dense rectangle in canonical term layout — the reason
 the feature is v1-gated, where term layout is non-contractual.
@@ -37,6 +40,9 @@ from linopy.semantics import absorb_absence, enforce_aux_conflict
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
     from linopy.model import Model
+
+CONTRACTION_CHUNK = 64
+"""Kept-axis block size of the chunked Kronecker product in ``contracted``."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -394,6 +400,73 @@ class CSRLinearExpression:
         coords = other.coords | self.coords
         return replace(
             self, csr=scipy.sparse.csr_array(coo), const=const, coords=coords
+        )
+
+    def contracted(
+        self,
+        matrix: scipy.sparse.csr_array,
+        contracted_dims: Iterable[str],
+        new_indexes: Iterable[pd.Index],
+    ) -> CSRLinearExpression:
+        """
+        Contract grid dimensions against a sparse constant (``expr @ C``).
+
+        ``matrix`` is the constant flattened to
+        ``(prod(contracted shape), prod(new shape))`` in C order over
+        ``contracted_dims``, which are given in grid order. Each entry of
+        ``new_indexes`` must be named after the dim it creates, which is read
+        off its ``name``. The result lives on the kept grid dims followed by
+        ``new_indexes`` and is
+        ``kron(I_kept, matrix.T) @ csr``, evaluated in chunks of the kept axis
+        so the operator never grows with the kept size.
+
+        The result is compact canonical form: duplicate variables summed, terms
+        label-ordered and explicit zeros pruned -- unlike :meth:`added`, the
+        sparse product drops them, so cell activeness is carried by ``const``
+        alone (see issue #925). Auxiliary coordinates on kept dims propagate,
+        those on contracted dims drop.
+        """
+        contracted_dims = tuple(contracted_dims)
+        kept = tuple(d for d in self.grid.dims if d not in contracted_dims)
+        target = kept + contracted_dims
+        source = (
+            self
+            if self.grid.dims == target
+            else self.reindexed(self.grid.reordered(target))
+        )
+
+        n_contracted = matrix.shape[0]
+        kept_grid = source.grid.reordered(kept)
+        n_kept = kept_grid.size
+        const = np.nan_to_num(source.const)
+        chunk = min(CONTRACTION_CHUNK, n_kept)
+        operator = scipy.sparse.kron(
+            scipy.sparse.eye_array(chunk), matrix.T, format="csr"
+        )
+
+        blocks = []
+        const_blocks = []
+        for start in range(0, n_kept, chunk):
+            size = min(chunk, n_kept - start)
+            block = (
+                operator
+                if size == chunk
+                else scipy.sparse.kron(
+                    scipy.sparse.eye_array(size), matrix.T, format="csr"
+                )
+            )
+            rows = slice(start * n_contracted, (start + size) * n_contracted)
+            blocks.append(block @ source.csr[rows])
+            const_blocks.append(block @ const[rows])
+
+        indexes = kept_grid.indexes
+        indexes |= {str(i.name): i for i in new_indexes}
+        return replace(
+            source,
+            csr=scipy.sparse.csr_array(scipy.sparse.vstack(blocks, format="csr")),
+            const=np.concatenate(const_blocks),
+            grid=Grid(indexes),
+            coords={n: (d, v) for n, (d, v) in source.coords.items() if d in kept},
         )
 
     def to_dense(self) -> LinearExpression:

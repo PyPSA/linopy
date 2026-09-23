@@ -32,6 +32,7 @@ from linopy import (
 )
 from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
+from linopy.semantics import is_v1
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
 
@@ -687,7 +688,41 @@ def test_matmul_expr_and_const(x: Variable, y: Variable) -> None:
     assert_linequal(expr.dot(const), target)
 
 
-def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
+def backed(expr: LinearExpression, backing: str) -> LinearExpression:
+    """The same expression, dense or CSR-backed through an identity groupby."""
+    if backing == "dense":
+        return expr
+    if not is_v1():
+        pytest.skip("CSR backing requires v1 semantics")
+    dim = str(expr.coord_dims[-1])
+    idx = expr.indexes[dim]
+    return expr.groupby(pd.Series(idx, index=idx, name=dim)).sum(sparse=True)
+
+
+def assert_matmul_equal(res: LinearExpression, reference: LinearExpression) -> None:
+    """``assert_linequal`` up to the term layout, which ``@`` does not promise."""
+    width = max(res.nterm, reference.nterm)
+    normed = []
+    for expr in (res, reference):
+        pad = {TERM_DIM: (0, width - expr.nterm)}
+        ds = expr.data.pad(pad, constant_values={"vars": -1, "coeffs": np.nan})
+        ds = ds.assign(coeffs=ds.coeffs.where(ds.vars != -1))
+        normed.append(LinearExpression(ds, expr.model))
+    assert_linequal(*normed)
+
+
+def matmul_backed(expr: LinearExpression, backing: str, other: Any) -> LinearExpression:
+    """``@`` on the given backing, asserting the backing survives the product."""
+    res = backed(expr, backing) @ other
+    assert (res._csr is not None) == (backing == "csr")
+    return res
+
+
+backings = pytest.mark.parametrize("backing", ["dense", "csr"])
+
+
+@backings
+def test_matmul_contracts_only_shared_dims(z: Variable, backing: str) -> None:
     """
     A @ b contracts the genuinely shared dims and keeps the rest.
 
@@ -703,13 +738,16 @@ def test_matmul_contracts_only_shared_dims(z: Variable) -> None:
         dims=["dim_1", "location"],
     )
 
-    res = expr @ b
+    res = matmul_backed(expr, backing, b)
 
     assert set(res.coord_dims) == {"dim_0", "location"}
-    assert_linequal(res, (expr * b).sum("dim_1"))
+    assert_matmul_equal(res, (expr * b).sum("dim_1"))
 
 
-def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
+@backings
+def test_matmul_contracts_all_dims_when_const_covers_them(
+    z: Variable, backing: str
+) -> None:
     """B covering all of a's dims (and more) contracts a's dims, keeping b's extras."""
     expr = 1 * z  # dims (dim_0, dim_1)
     b = xr.DataArray(
@@ -722,13 +760,14 @@ def test_matmul_contracts_all_dims_when_const_covers_them(z: Variable) -> None:
         dims=["dim_0", "dim_1", "location"],
     )
 
-    res = expr @ b
+    res = matmul_backed(expr, backing, b)
 
     assert set(res.coord_dims) == {"location"}
-    assert_linequal(res, (expr * b).sum(["dim_0", "dim_1"]))
+    assert_matmul_equal(res, (expr * b).sum(["dim_0", "dim_1"]))
 
 
-def test_matmul_sparse_operand_drops_zero_terms(z: Variable) -> None:
+@backings
+def test_matmul_sparse_operand_drops_zero_terms(z: Variable, backing: str) -> None:
     """
     ``@`` against a zero-containing constant compacts the term dimension to
     the widest non-zero cell instead of one term per contracted member (#748).
@@ -740,13 +779,14 @@ def test_matmul_sparse_operand_drops_zero_terms(z: Variable) -> None:
         dims=["dim_1", "location"],
     )
 
-    res = expr @ b
+    res = matmul_backed(expr, backing, b)
 
     assert res.nterm == 2 < b.sizes["dim_1"]
-    assert_linequal(res, (expr * b).sum("dim_1").densify_terms())
+    assert_matmul_equal(res, (expr * b).sum("dim_1").densify_terms())
 
 
-def test_matmul_dense_operand_keeps_all_terms(z: Variable) -> None:
+@backings
+def test_matmul_dense_operand_keeps_all_terms(z: Variable, backing: str) -> None:
     """A constant without zeros contracts to the full term dimension, untouched."""
     expr = 1 * z
     b = xr.DataArray(
@@ -755,13 +795,14 @@ def test_matmul_dense_operand_keeps_all_terms(z: Variable) -> None:
         dims=["dim_1", "location"],
     )
 
-    res = expr @ b
+    res = matmul_backed(expr, backing, b)
 
     assert res.nterm == b.sizes["dim_1"]
-    assert_linequal(res, (expr * b).sum("dim_1"))
+    assert_matmul_equal(res, (expr * b).sum("dim_1"))
 
 
-def test_matmul_all_zero_operand_yields_no_terms(z: Variable) -> None:
+@backings
+def test_matmul_all_zero_operand_yields_no_terms(z: Variable, backing: str) -> None:
     """An all-zero constant contracts to the zero expression, not a crash (#748)."""
     expr = 1 * z
     b = xr.DataArray(
@@ -770,23 +811,43 @@ def test_matmul_all_zero_operand_yields_no_terms(z: Variable) -> None:
         dims=["dim_1", "location"],
     )
 
-    res = expr @ b
+    res = matmul_backed(expr, backing, b)
 
-    assert res.nterm == 0
     assert (res.data.vars == -1).all()
+    assert (res.const == 0).all()
 
 
-def test_matmul_full_contraction_with_zero_operand(x: Variable) -> None:
+@backings
+def test_matmul_full_contraction_with_zero_operand(x: Variable, backing: str) -> None:
     """
     ``variable @ vector`` contracting away every coord dim compacts a
     zero-containing operand without crashing on the term-only shape (#748).
     """
     b = xr.DataArray([2.0, 0.0], coords={"dim_0": x.indexes["dim_0"]})
 
-    res = x @ b
+    res = matmul_backed(1 * x, backing, b)
 
     assert res.nterm == 1
-    assert_linequal(res, (x * b).sum("dim_0").densify_terms())
+    assert_matmul_equal(res, (x * b).sum("dim_0").densify_terms())
+
+
+@pytest.mark.v1
+@backings
+def test_matmul_sums_duplicate_variables(x: Variable, backing: str) -> None:
+    """A variable repeated across contracted cells collapses to one summed term."""
+    s = x.model.add_variables(name="dup_scalar")
+    expr = 1.0 * x + 2.0 * s
+    b = xr.DataArray(
+        [[1.0, 2.0], [1.0, 3.0]],
+        coords={"dim_0": expr.indexes["dim_0"], "loc": ["L1", "L2"]},
+    )
+
+    res = matmul_backed(expr, backing, b)
+
+    assert res.nterm == len(expr.indexes["dim_0"]) + 1
+    assert (res.data.vars.values == [*x.labels.values, s.labels.item()]).all()
+    assert np.allclose(res.data.coeffs.values, [[1.0, 1.0, 4.0], [2.0, 3.0, 10.0]])
+    assert (res.const == 0).all()
 
 
 def test_matmul_wrong_input(x: Variable, y: Variable, z: Variable) -> None:
