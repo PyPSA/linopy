@@ -2695,10 +2695,6 @@ class LinearExpression(BaseExpression):
         res = csr.contracted(matrix, contracted, new_indexes)
         if self._csr is not None or options["sparse_groupby"]:
             return type(self)._from_csr(res, self.model)
-        _densify_notice(
-            "`@` on a dense expression returns dense unless "
-            'options["sparse_groupby"] is set'
-        )
         return res.to_dense()
 
     @property

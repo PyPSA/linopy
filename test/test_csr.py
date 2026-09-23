@@ -1321,10 +1321,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
     "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
     "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
-    "dense-matmul": (
-        lambda e, c: (1.0 * c.gen_p) @ loc_operand(c.gbus.index),
-        "sparse_groupby",
-    ),
     "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
 }
