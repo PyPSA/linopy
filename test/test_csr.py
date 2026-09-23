@@ -782,9 +782,7 @@ def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) ->
 
 def test_cross_grid_merge_aux_coord_conflict_raises_like_dense() -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["aux"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("aux")
     parts = [sparse, sparse.isel(group=[2, 1])]
     with pytest.raises(ValueError) as want:
         linopy.merge([dense, dense.isel(group=[2, 1])], join="outer")
@@ -855,9 +853,9 @@ def cell_matrix(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-cell coefficient row over raw variable labels, plus the flat constant."""
     ds = expr.data
-    nterm = ds.sizes[TERM_DIM]
-    vars_ = ds.vars.transpose(*dims, TERM_DIM).to_numpy().reshape(-1, nterm)
-    coeffs = ds.coeffs.transpose(*dims, TERM_DIM).to_numpy().reshape(-1, nterm)
+    shape = (int(np.prod([ds.sizes[d] for d in dims], dtype=int)), ds.sizes[TERM_DIM])
+    vars_ = ds.vars.transpose(*dims, TERM_DIM).to_numpy().reshape(shape)
+    coeffs = ds.coeffs.transpose(*dims, TERM_DIM).to_numpy().reshape(shape)
     active = (vars_ != -1) & ~np.isnan(coeffs)
     rows = np.broadcast_to(np.arange(len(vars_))[:, None], vars_.shape)
     matrix = np.zeros((len(vars_), expr.model._xCounter))
@@ -1294,6 +1292,17 @@ SPARSE_BUILDS: dict[str, Callable[[Case], LinearExpression]] = {
     "zero-dim": full_contraction,
 }
 
+
+def sparse_and_dense(
+    build: str, c: Case | None = None
+) -> tuple[LinearExpression, LinearExpression]:
+    """A sparse build and its dense conversion, the sparse one left sparse."""
+    sparse = SPARSE_BUILDS[build](base_model() if c is None else c)
+    csr = sparse._csr
+    assert sparse.is_sparse and csr is not None
+    return sparse, csr.to_dense()
+
+
 METADATA: dict[str, Callable[[LinearExpression], Any]] = {
     "shape": lambda e: e.shape,
     "size": lambda e: e.size,
@@ -1314,9 +1323,7 @@ METADATA: dict[str, Callable[[LinearExpression], Any]] = {
 @pytest.mark.parametrize("build", list(SPARSE_BUILDS))
 def test_metadata_is_served_without_densifying(build: str, attr: str) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS[build](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense(build)
     got, want = METADATA[attr](sparse), METADATA[attr](dense)
     assert sparse.is_sparse
     if isinstance(got, xr.Dataset | xr.DataArray):
@@ -1385,8 +1392,9 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
     if not enabled:
         assert notices == []
         return
-    assert any(re.search(reason, str(w.message)) for w in notices)
-    assert all(w.filename == __file__ for w in notices)
+    assert len(notices) == 1
+    assert re.search(reason, str(notices[0].message))
+    assert notices[0].filename == __file__
 
 
 def grid_operand(e: LinearExpression) -> xr.DataArray:
@@ -1436,9 +1444,7 @@ def test_elementwise_constant_ops_stay_csr_and_match_dense(
     build: str, operand: str, op: str
 ) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS[build](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense(build)
     x = OPERANDS[operand](dense)
     func = ELEMENTWISE_OPS[op]
     res = func(sparse, x)
@@ -1453,9 +1459,7 @@ def test_elementwise_join_on_mismatched_labels_stays_csr_and_matches_dense(
     method: str, fill_value: Any, join: JoinOptions
 ) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["grouped"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped")
     x = first_dim_operand(dense).isel(bus=[1, 3]).reindex(bus=["bus3", "bus1", "x"])
     x = x.fillna(2.0)
     res = getattr(sparse, method)(x, join=join, fill_value=fill_value)
@@ -1470,9 +1474,7 @@ def test_elementwise_join_on_mismatched_labels_stays_csr_and_matches_dense(
 def test_elementwise_operand_errors_match_dense(kind: str, op: str) -> None:
     """§5, §8 and §11 on the constant are raised as on the dense path."""
     require_v1()
-    sparse = SPARSE_BUILDS["aux"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("aux")
     x: Any = grid_operand(dense)
     if kind == "nan":
         x[0, 0] = np.nan
@@ -1496,9 +1498,7 @@ def test_elementwise_operand_errors_match_dense(kind: str, op: str) -> None:
 @pytest.mark.parametrize("op", ["mul", "add"])
 def test_elementwise_operand_over_new_dim_falls_back_to_dense(op: str) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["grouped"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped")
     x = xr.DataArray([1.0, 2.0], coords=[LOC])
     func = ELEMENTWISE_OPS[op]
     res = func(sparse, x)
@@ -1506,14 +1506,20 @@ def test_elementwise_operand_over_new_dim_falls_back_to_dense(op: str) -> None:
     assert_linequal(res, func(dense, x))
 
 
-def test_elementwise_ops_keep_absent_cells_termless() -> None:
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+def test_join_with_constant_keeps_aux_coords_like_dense(
+    op: str, join: JoinOptions
+) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["absent"](base_model())
-    csr = (sparse * grid_operand(sparse) + 1.0)._csr
-    assert csr is not None
-    absent = np.isnan(csr.const)
-    assert absent.any()
-    assert (np.diff(csr.csr.indptr)[absent] == 0).all()
+    sparse, dense = sparse_and_dense("aux")
+    n = sparse.sizes["group"]
+    x = xr.DataArray(
+        np.arange(1.0, n + 2), coords=[pd.RangeIndex(1, n + 2, name="group")]
+    )
+    with no_densify():
+        res = getattr(sparse, op)(x, join=join)
+    assert_sparse_matches(res, getattr(dense, op)(x, join=join))
 
 
 def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None:
@@ -1552,9 +1558,7 @@ SUM_DIMS: dict[str, Callable[[tuple[str, ...]], Any]] = {
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
 def test_sum_stays_csr_and_matches_dense(build: str, dims: str) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS[build](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense(build)
     dim = SUM_DIMS[dims](tuple(map(str, sparse.coord_dims)))
     with no_densify():
         res = sparse.sum(dim)
@@ -1576,9 +1580,7 @@ def test_sum_keeps_explicit_zeros_unless_dropped(drop_zeros: bool) -> None:
 
 def test_sum_unknown_dim_raises_like_dense() -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["grouped"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped")
     with pytest.raises(KeyError) as want:
         dense.sum("nodim")
     with pytest.raises(KeyError) as got:
@@ -1590,6 +1592,10 @@ CHAINS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
     "group-group": lambda e: e.groupby(halves(e)).sum(),
     "group-sum": lambda e: e.groupby(halves(e)).sum().sum("snapshot"),
     "sum-group": lambda e: e.sum("snapshot").groupby(halves(e)).sum(),
+    "empty-sum": lambda e: e.isel({dim0(e): []}).sum(dim0(e)),
+    "empty-group": lambda e: (
+        (empty := e.isel({dim0(e): []})).groupby(halves(empty)).sum()
+    ),
 }
 
 
@@ -1597,9 +1603,7 @@ CHAINS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
 def test_chained_groupby_stays_csr_and_matches_dense(build: str, chain: str) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS[build](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense(build)
     func = CHAINS[chain]
     with no_densify():
         res = func(sparse)
@@ -1609,18 +1613,14 @@ def test_chained_groupby_stays_csr_and_matches_dense(build: str, chain: str) -> 
 @pytest.mark.parametrize("observed", [False, True])
 def test_chained_namelist_groupby_on_aux_coords_matches_dense(observed: bool) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["aux"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("aux")
     res = sparse.groupby(["bus", "tag"]).sum(observed=observed)
     assert_sparse_matches(res, dense.groupby(["bus", "tag"]).sum(observed=observed))
 
 
 def test_chained_groupby_sparse_false_densifies() -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["grouped"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped")
     res = sparse.groupby(halves(sparse)).sum(sparse=False)
     assert not res.is_sparse
     assert_linequal(res, dense.groupby(halves(dense)).sum())
@@ -1668,19 +1668,24 @@ SELECTIONS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
 def test_selection_stays_csr_and_matches_dense(build: str, select: str) -> None:
     require_v1()
-    sparse = SPARSE_BUILDS[build](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense(build)
     func = SELECTIONS[select]
     with no_densify():
         res = func(sparse)
     assert_sparse_matches(res, func(dense))
 
 
-def test_selection_keeps_absent_cells_termless() -> None:
+ABSENT_KEEPING_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "elementwise": lambda e: e * grid_operand(e) + 1.0,
+    "selection": lambda e: e.where(alternating(e), 3.0).isel(season=[1, 0, 1]),
+}
+
+
+@pytest.mark.parametrize("op", list(ABSENT_KEEPING_OPS))
+def test_absent_cells_stay_termless(op: str) -> None:
     require_v1()
     sparse = SPARSE_BUILDS["absent"](base_model())
-    csr = sparse.where(alternating(sparse), 3.0).isel(season=[1, 0, 1])._csr
+    csr = ABSENT_KEEPING_OPS[op](sparse)._csr
     assert csr is not None
     absent = np.isnan(csr.const)
     assert absent.any()
@@ -1690,9 +1695,7 @@ def test_selection_keeps_absent_cells_termless() -> None:
 def test_scalar_selection_coords_merge_like_dense() -> None:
     require_v1()
     c = base_model()
-    sparse = SPARSE_BUILDS["grouped"](c)
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped", c)
     flow = (1.0 * c.flow).groupby(c.bus0).sum()
     with no_densify():
         res = sparse.sel(snapshot=1) + flow.sel(snapshot=1)
@@ -1706,9 +1709,7 @@ def test_scalar_selection_coords_merge_like_dense() -> None:
 
 def test_where_on_mismatched_labels_raises_like_dense() -> None:
     require_v1()
-    sparse = SPARSE_BUILDS["grouped"](base_model())
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped")
     cond = alternating(dense).isel(bus=slice(1, None))
     with pytest.raises(ValueError) as want:
         dense.where(cond)
@@ -1725,9 +1726,7 @@ SELECTION_FALLBACKS = ["isel-pointwise", "where-new-dim", "where-callable"]
 def test_selection_fallbacks_match_dense(op: str) -> None:
     require_v1()
     c = base_model()
-    sparse = SPARSE_BUILDS["grouped"](c)
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    sparse, dense = sparse_and_dense("grouped", c)
     func = DENSIFY_OPS[op][0]
     res = func(sparse, c)
     assert not res.is_sparse

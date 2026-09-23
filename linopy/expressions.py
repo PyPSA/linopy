@@ -1116,7 +1116,7 @@ class BaseExpression(ABC):
         API-stable across xarray releases.
         """
         enforce_aux_conflict([self.const, other], stacklevel=4)
-        other_fill = join_fill(fill_value, 0)
+        other_fill = {other.name: join_fill(fill_value, 0)}
         if join is None:
             if is_v1():
                 join = "exact"
@@ -2408,11 +2408,12 @@ class LinearExpression(BaseExpression):
 
     @property
     def data(self) -> Dataset:
-        if self._data is None and self._csr is not None:
-            _densify_notice("`.data` read, e.g. by an operation without a sparse path")
-            self._data = self._csr.to_dense()._data
-            self._csr = None
+        self._densify("`.data` read, e.g. by an operation without a sparse path")
         return self._data
+
+    def _densify(self, reason: str) -> None:
+        """Convert the CSR backing to dense for good, with a notice naming ``reason``."""
+        _densify_all([self], reason)
 
     @property
     def is_sparse(self) -> bool:
@@ -2497,7 +2498,7 @@ class LinearExpression(BaseExpression):
         dims = csr.grid.dims
         const = op(self_const, operand)
         if set(const.dims) != set(dims) or _has_multiindex(const.indexes.values()):
-            self._sparse_fallback(
+            self._densify(
                 "elementwise operation with a constant over new dimensions or "
                 "MultiIndex labels"
             )
@@ -2524,10 +2525,6 @@ class LinearExpression(BaseExpression):
             return self._csr.cell(indices)
         return super()._printout_cell(indices)
 
-    def _sparse_fallback(self, reason: str) -> None:
-        if self._csr is not None:
-            _densify_notice(reason)
-
     def _selected(
         self, select: Callable[[DataArray], DataArray], name: str
     ) -> CSRLinearExpression | None:
@@ -2543,17 +2540,17 @@ class LinearExpression(BaseExpression):
             return None
         reason = f"`{name}` over MultiIndex labels, or introducing dimensions"
         if _has_multiindex(csr.grid.indexes.values()):
-            _densify_notice(reason)
+            self._densify(reason)
             return None
         rows = select(csr.grid.dataarray(np.arange(csr.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
         leaves_grid = not set(dims) <= set(csr.grid.dims) & set(rows.indexes)
         if leaves_grid or _has_multiindex(rows.indexes.values()):
-            _densify_notice(reason)
+            self._densify(reason)
             return None
         grid = Grid.from_dataset(rows, dims)
         if set(rows.coords) != set(dims) | set(grid.aux):
-            _densify_notice(reason)
+            self._densify(reason)
             return None
         flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
         return csr.taken(flat, grid)
@@ -2597,7 +2594,7 @@ class LinearExpression(BaseExpression):
             and (absent or (isinstance(other, int | float) and not drop))
         )
         if not supported:
-            self._sparse_fallback(
+            self._densify(
                 "`where` with a condition that is no DataArray, an `other` that "
                 "is no scalar, or extra arguments"
             )
@@ -2675,8 +2672,9 @@ class LinearExpression(BaseExpression):
     ) -> ConstraintBase:
         if self._csr is not None and isinstance(sign, str):
             rhs_da = constraints.csr_rhs(self._csr, rhs)
-            if rhs_da is not None:
+            if isinstance(rhs_da, DataArray):
                 return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
+            self._densify(rhs_da)
         return super().to_constraint(sign, rhs, join)
 
     @overload
@@ -2855,24 +2853,24 @@ class LinearExpression(BaseExpression):
         if self._csr is None and _has_multiindex(self.data.indexes.values()):
             return None
         if not self.coord_dims:
-            self._sparse_fallback("`@` on a zero-dimensional expression")
+            self._densify("`@` on a zero-dimensional expression")
             return None
         csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
         if not csr.grid.is_unique or _has_multiindex(csr.grid.indexes.values()):
-            self._sparse_fallback("`@` over non-unique or MultiIndex labels")
+            self._densify("`@` over non-unique or MultiIndex labels")
             return None
         if csr.grid.size == 0:
-            self._sparse_fallback("`@` over a zero-size grid")
+            self._densify("`@` over a zero-size grid")
             return None
         coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
         if _has_multiindex(da.indexes.values()):
-            self._sparse_fallback("`@` with a MultiIndex operand")
+            self._densify("`@` with a MultiIndex operand")
             return None
         contracted = [d for d in csr.grid.dims if d in da.dims]
         new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
         if not contracted or any(d not in da.indexes for d in new_dims):
-            self._sparse_fallback(
+            self._densify(
                 "`@` with an operand sharing no dimension or with an unlabelled one"
             )
             return None
@@ -3565,25 +3563,37 @@ def _has_multiindex(indexes: Iterable[pd.Index]) -> bool:
     return any(isinstance(i, pd.MultiIndex) for i in indexes)
 
 
+def _densify_all(exprs: Iterable[Any], reason: str) -> None:
+    """Convert the CSR-backed LinearExpressions among ``exprs`` to dense, with one notice."""
+    sparse = [
+        (e, csr)
+        for e in exprs
+        if isinstance(e, LinearExpression) and (csr := e._csr) is not None
+    ]
+    if sparse:
+        _densify_notice(reason)
+    for e, csr in sparse:
+        e._data = csr.to_dense()._data
+        e._csr = None
+
+
 def _aligned(
     csrs: list[CSRLinearExpression], join: JoinOptions | None, fill: float
-) -> list[CSRLinearExpression] | None:
+) -> list[CSRLinearExpression] | str:
     """
     Conform the CSR expressions to the grid an explicit join produces, the
     cells the join creates carrying ``fill`` as constant. None where the dense path
     owns the semantics: ``exact`` and the auto-detected join raise there on
     differing grids, ``override`` on differing shapes, any join on
-    non-unique labels.
+    non-unique labels; the reason is returned instead.
     """
     template = csrs[0].grid
     dims = template.dims
     if any(not p.grid.is_unique for p in csrs):
-        _densify_notice("merge over non-unique labels")
-        return None
+        return "merge over non-unique labels"
     if join == "override":
         if any(p.grid.dims != dims or p.grid.shape != template.shape for p in csrs):
-            _densify_notice('`join="override"` merge of differently shaped grids')
-            return None
+            return '`join="override"` merge of differently shaped grids'
         return [replace(p, grid=template) for p in csrs]
     if join in ("left", "right"):
         source = csrs[0] if join == "left" else csrs[-1]
@@ -3591,8 +3601,7 @@ def _aligned(
     elif join in ("outer", "inner"):
         grid = template.combined([p.grid for p in csrs[1:]], join)
     else:
-        _densify_notice(f"merge of differing grids with join={join!r}")
-        return None
+        return f"merge of differing grids with join={join!r}"
     return [p.reindexed(grid, fill) for p in csrs]
 
 
@@ -3617,20 +3626,24 @@ def _try_csr_merge(
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
         return None
     if dim != TERM_DIM or kwargs:
-        _densify_notice("merge along a coordinate dimension or with extra arguments")
+        _densify_all(
+            exprs, "merge along a coordinate dimension or with extra arguments"
+        )
         return None
     if not all(type(e) is LinearExpression for e in exprs):
-        _densify_notice("merge with an operand that is not a LinearExpression")
+        _densify_all(exprs, "merge with an operand that is not a LinearExpression")
         return None
     dims = set(exprs[0].coord_dims)
     if any(set(e.coord_dims) != dims for e in exprs[1:]):
-        _densify_notice("merge of operands over different dimensions")
+        _densify_all(exprs, "merge of operands over different dimensions")
         return None
     for e in exprs:
         if e._csr is None and set(e.data.coords) - dims != set(
             _aux_coords(e.data, dims)
         ):
-            _densify_notice("merge with a dense operand carrying non-grid coordinates")
+            _densify_all(
+                exprs, "merge with a dense operand carrying non-grid coordinates"
+            )
             return None
 
     csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
@@ -3643,7 +3656,8 @@ def _try_csr_merge(
     if not all(template.same_grid(p) for p in csrs[1:]):
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
         aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
-        if aligned is None:
+        if isinstance(aligned, str):
+            _densify_all(exprs, aligned)
             return None
         csrs = aligned
 

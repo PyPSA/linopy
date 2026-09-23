@@ -29,11 +29,9 @@ The reverse bridges live at the dense call sites, in
 from __future__ import annotations
 
 import operator
-import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, TypeAlias
-from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -42,7 +40,11 @@ from xarray import DataArray, Dataset
 
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
-from linopy.semantics import _LINOPY_ROOT, absorb_absence, enforce_aux_conflict
+from linopy.semantics import (
+    absorb_absence,
+    enforce_aux_conflict,
+    warn_outside_linopy,
+)
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
@@ -422,9 +424,8 @@ class CSRLinearExpression:
             (coo.data, (rows[coo.coords[0]], coo.coords[1])),
             shape=(grid.size, self.csr.shape[1]),
         )
-        const = np.bincount(
-            rows, weights=np.nan_to_num(self.const), minlength=grid.size
-        )
+        weights = np.nan_to_num(self.const)
+        const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
         const[np.bincount(rows, minlength=grid.size) == 0] = np.nan
         return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
 
@@ -693,13 +694,10 @@ def _densify_notice(reason: str) -> None:
     Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
     (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set.
     """
-    if not options["warn_on_densify"]:
-        return
-    message = f"Sparse (CSR) backing densified: {reason}."
-    if sys.version_info >= (3, 12):
-        warn(message, PerformanceWarning, skip_file_prefixes=(_LINOPY_ROOT,))
-    else:
-        warn(message, PerformanceWarning, stacklevel=4)
+    if options["warn_on_densify"]:
+        warn_outside_linopy(
+            f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
+        )
 
 
 def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:

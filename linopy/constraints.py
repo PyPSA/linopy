@@ -1425,23 +1425,21 @@ class CSRConstraint(ConstraintBase):
         )
 
 
-def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | None:
+def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
     """
-    Return ``rhs`` as a DataArray on the expression grid, or None if the sparse
-    path cannot take it: a non-constant rhs, one that is no DataArray-like, or
-    one with helper dims or dims outside the grid falls back to the dense path.
+    Return ``rhs`` as a DataArray on the expression grid, or the reason the
+    sparse path cannot take it: a non-constant rhs, one that is no
+    DataArray-like, or one with helper dims or dims outside the grid falls
+    back to the dense path.
     """
     if not is_constant(rhs):
-        _densify_notice("constraint with a non-constant rhs")
-        return None
+        return "constraint with a non-constant rhs"
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
-        _densify_notice("constraint with an rhs that is not array-like")
-        return None
+        return "constraint with an rhs that is not array-like"
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
-        _densify_notice("constraint with an rhs over dimensions outside the grid")
-        return None
+        return "constraint with an rhs over dimensions outside the grid"
     return da
 
 
