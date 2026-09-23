@@ -1323,6 +1323,7 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
     "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
+    "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
 }
 
 
@@ -1343,3 +1344,130 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
         return
     assert any(re.search(reason, str(w.message)) for w in notices)
     assert all(w.filename == __file__ for w in notices)
+
+
+def grid_operand(e: LinearExpression) -> xr.DataArray:
+    """Positive values over the expression's full grid."""
+    values = np.random.default_rng(1).uniform(1, 2, e.shape[:-1])
+    return xr.DataArray(values, coords=[e.indexes[d] for d in e.coord_dims])
+
+
+def first_dim_operand(e: LinearExpression) -> xr.DataArray:
+    return grid_operand(e).isel({e.coord_dims[-1]: 0}, drop=True)
+
+
+OPERANDS: dict[str, Callable[[LinearExpression], Any]] = {
+    "dataarray": grid_operand,
+    "subset-dims": first_dim_operand,
+    "series": lambda e: first_dim_operand(e).to_series(),
+    "ndarray": lambda e: grid_operand(e).to_numpy(),
+    "zeros": lambda e: xr.zeros_like(grid_operand(e)),
+    "operand-aux": lambda e: first_dim_operand(e).assign_coords(
+        extra=(e.coord_dims[0], np.arange(e.shape[0]))
+    ),
+}
+
+ELEMENTWISE_OPS: dict[str, Callable[[LinearExpression, Any], LinearExpression]] = {
+    "mul": lambda e, x: e * x,
+    "rmul": lambda e, x: x * e,
+    "truediv": lambda e, x: e / x,
+    "div": lambda e, x: e.div(x, join="left"),
+    "add": lambda e, x: e + x,
+    "radd": lambda e, x: x + e,
+    "sub": lambda e, x: e - x,
+    "rsub": lambda e, x: x - e,
+}
+
+
+@pytest.mark.parametrize(
+    ("build", "operand", "op"),
+    [
+        (b, o, op)
+        for b in ["grouped", "aux", "absent"]
+        for o in OPERANDS
+        for op in ELEMENTWISE_OPS
+        if (b, o) != ("absent", "ndarray") and not (o == "zeros" and "div" in op)
+    ],
+)
+def test_elementwise_constant_ops_stay_csr_and_match_dense(
+    build: str, operand: str, op: str
+) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS[build](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    x = OPERANDS[operand](dense)
+    func = ELEMENTWISE_OPS[op]
+    res = func(sparse, x)
+    assert res.is_sparse
+    assert_linequal(res, func(dense, x))
+
+
+@pytest.mark.parametrize("join", ["inner", "outer", "left", "right"])
+@pytest.mark.parametrize("fill_value", [None, linopy.ABSENT], ids=["fill", "absent"])
+@pytest.mark.parametrize("method", ["add", "sub", "mul", "div"])
+def test_elementwise_join_on_mismatched_labels_stays_csr_and_matches_dense(
+    method: str, fill_value: Any, join: JoinOptions
+) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["grouped"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    x = first_dim_operand(dense).isel(bus=[1, 3]).reindex(bus=["bus3", "bus1", "x"])
+    x = x.fillna(2.0)
+    res = getattr(sparse, method)(x, join=join, fill_value=fill_value)
+    want = getattr(dense, method)(x, join=join, fill_value=fill_value)
+    assert res.is_sparse
+    xr.testing.assert_identical(res.isnull(), want.isnull())
+    assert_cells_equal(res, want, ("bus", "snapshot"))
+
+
+@pytest.mark.parametrize("op", ["mul", "add"])
+@pytest.mark.parametrize("kind", ["nan", "nan-scalar", "mismatch", "reorder", "aux"])
+def test_elementwise_operand_errors_match_dense(kind: str, op: str) -> None:
+    """§5, §8 and §11 on the constant are raised as on the dense path."""
+    require_v1()
+    sparse = SPARSE_BUILDS["aux"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    x: Any = grid_operand(dense)
+    if kind == "nan":
+        x[0, 0] = np.nan
+    elif kind == "nan-scalar":
+        x = np.float32("nan")
+    elif kind == "mismatch":
+        x = x.isel(group=slice(1, None))
+    elif kind == "reorder":
+        x = x.isel(group=slice(None, None, -1))
+    else:
+        x = x.assign_coords(tag=("group", ["X"] * x.sizes["group"]))
+    func = ELEMENTWISE_OPS[op]
+    with pytest.raises(ValueError) as want:
+        func(dense, x)
+    with pytest.raises(ValueError) as got:
+        func(sparse, x)
+    assert str(got.value) == str(want.value)
+    assert sparse.is_sparse
+
+
+@pytest.mark.parametrize("op", ["mul", "add"])
+def test_elementwise_operand_over_new_dim_falls_back_to_dense(op: str) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["grouped"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    x = xr.DataArray([1.0, 2.0], coords=[LOC])
+    func = ELEMENTWISE_OPS[op]
+    res = func(sparse, x)
+    assert not res.is_sparse
+    assert_linequal(res, func(dense, x))
+
+
+def test_elementwise_ops_keep_absent_cells_termless() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["absent"](base_model())
+    csr = (sparse * grid_operand(sparse) + 1.0)._csr
+    assert csr is not None
+    absent = np.isnan(csr.const)
+    assert absent.any()
+    assert (np.diff(csr.csr.indptr)[absent] == 0).all()

@@ -25,8 +25,9 @@ The reverse bridges live at the dense call sites, in
 
 from __future__ import annotations
 
+import operator
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 from warnings import warn
@@ -34,7 +35,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import scipy.sparse
-from xarray import Dataset
+from xarray import DataArray, Dataset
 
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
@@ -69,7 +70,7 @@ class Grid:
         return cls({str(c.name): c for c in coords})
 
     @classmethod
-    def from_dataset(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
+    def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
         """Build from the indexes and auxiliary coordinates ``ds`` carries on ``dims``."""
         dims = tuple(dims)
         indexes = {d: ds.get_index(d).rename(d) for d in dims}
@@ -369,8 +370,40 @@ class CSRLinearExpression:
 
         return cls(scipy.sparse.csr_array(coo), const, grid, model)
 
-    def scaled(self, factor: float) -> CSRLinearExpression:
-        return replace(self, csr=self.csr * factor, const=self.const * factor)
+    def scaled(
+        self,
+        factor: float | np.ndarray,
+        op: Callable[[Any, Any], Any] = operator.mul,
+    ) -> CSRLinearExpression:
+        """
+        Apply ``op`` with ``factor`` -- a scalar or one value per cell -- to
+        every coefficient and to the constant. Explicit zeros are kept, as by
+        :meth:`added`.
+        """
+        factor = np.broadcast_to(factor, (self.n_cells,))
+        per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        csr = scipy.sparse.csr_array(
+            (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
+            shape=self.csr.shape,
+        )
+        return replace(self, csr=csr).with_const(op(self.const, factor))
+
+    def with_const(self, const: np.ndarray) -> CSRLinearExpression:
+        """
+        Replace the per-cell constant, leaving the terms alone. A cell it makes
+        absent (NaN) drops its terms (v1 dead-term invariant).
+        """
+        absent = np.isnan(const)
+        counts = np.diff(self.csr.indptr)
+        if not counts[absent].any():
+            return replace(self, const=const)
+        keep = np.repeat(~absent, counts)
+        indptr = np.concatenate([[0], np.cumsum(np.where(absent, 0, counts))])
+        csr = scipy.sparse.csr_array(
+            (self.csr.data[keep], self.csr.indices[keep], indptr),
+            shape=self.csr.shape,
+        )
+        return replace(self, csr=csr, const=const)
 
     def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
@@ -577,7 +610,9 @@ def _densify_notice(reason: str) -> None:
         warn(message, PerformanceWarning, stacklevel=4)
 
 
-def _aux_coords(ds: Dataset, dims: set[str]) -> dict[str, tuple[str, np.ndarray]]:
+def _aux_coords(
+    ds: Dataset | DataArray, dims: set[str]
+) -> dict[str, tuple[str, np.ndarray]]:
     """One-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
     return {
         str(n): (str(c.dims[0]), c.to_numpy())

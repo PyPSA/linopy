@@ -108,7 +108,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRLinearExpression, _aux_coords, _densify_notice
+from linopy.csr import CSRLinearExpression, Grid, _aux_coords, _densify_notice
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -1160,6 +1160,24 @@ class BaseExpression(ABC):
         data = self.data.reindex_like(const, fill_value=self._fill_value)
         return self.__class__(data, self.model)
 
+    def _combined_with_constant(
+        self,
+        self_const: DataArray,
+        operand: Any,
+        needs_data_reindex: bool,
+        op: Callable[[Any, Any], Any],
+        scale: bool,
+    ) -> Self:
+        """
+        Combine the aligned constant ``operand`` into ``const`` with ``op``,
+        and into the coefficients too if ``scale``.
+        """
+        expr = self._reindexed_to(self_const, needs_data_reindex)
+        const = op(self_const, operand)
+        if not scale:
+            return expr.assign(const=const)
+        return expr.assign(coeffs=op(expr.coeffs, operand), const=const)
+
     def _add_constant(
         self,
         other: ConstantLike,
@@ -1180,12 +1198,16 @@ class BaseExpression(ABC):
         if np.isscalar(other) and join is None:
             if is_nan_scalar(other):
                 check_user_nan()
-            return self.assign(const=self.const + other)
+            return self._combined_with_constant(
+                self.const, other, False, operator.add, scale=False
+            )
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
         )
-        expr = self._reindexed_to(self_const, needs_reindex)
-        return expr.assign(const=self_const + da)._absorb_join_absence(fill_value)
+        expr = self._combined_with_constant(
+            self_const, da, needs_reindex, operator.add, scale=False
+        )
+        return expr._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _add_constant_legacy(
@@ -1236,11 +1258,10 @@ class BaseExpression(ABC):
         self_const, factor, needs_reindex = self._broadcast_and_align(
             other, fill_value, join, op_kind
         )
-        expr = self._reindexed_to(self_const, needs_reindex)
-        result = expr.assign(
-            coeffs=op(expr.coeffs, factor), const=op(self_const, factor)
+        expr = self._combined_with_constant(
+            self_const, factor, needs_reindex, op, scale=True
         )
-        return result._absorb_join_absence(fill_value)
+        return expr._absorb_join_absence(fill_value)
 
     # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
     def _apply_constant_op_legacy(
@@ -2430,14 +2451,54 @@ class LinearExpression(BaseExpression):
             return self._csr.grid.to_dataset().indexes
         return super().indexes
 
-    def isnull(self) -> DataArray:
+    @property
+    def const(self) -> DataArray:
         csr = self._csr
         if csr is None:
-            return super().isnull()
+            return super().const
         grid = csr.grid
-        absent = np.isnan(csr.const).reshape(grid.shape)
+        const = csr.const.reshape(grid.shape)
         coords = grid.to_dataset().coords
-        return DataArray(absent, coords=coords, dims=grid.dims, name="const")
+        return DataArray(const, coords=coords, dims=grid.dims, name="const")
+
+    @const.setter
+    def const(self, value: DataArray) -> None:
+        self._data = assign_multiindex_safe(self.data, const=value)
+
+    def _combined_with_constant(
+        self,
+        self_const: DataArray,
+        operand: Any,
+        needs_data_reindex: bool,
+        op: Callable[[Any, Any], Any],
+        scale: bool,
+    ) -> Self:
+        csr = self._csr
+        args = (self_const, operand, needs_data_reindex, op, scale)
+        if csr is None:
+            return super()._combined_with_constant(*args)
+        dims = csr.grid.dims
+        const = op(self_const, operand)
+        if set(const.dims) != set(dims) or _has_multiindex(const.indexes.values()):
+            self._sparse_fallback(
+                "elementwise operation with a constant over new dimensions or "
+                "MultiIndex labels"
+            )
+            return super()._combined_with_constant(*args)
+        const = const.transpose(*dims)
+        grid = Grid.from_dataset(const, dims)
+        if needs_data_reindex:
+            csr = csr.reindexed(grid)
+        if scale:
+            factor = operand.broadcast_like(const).transpose(*dims)
+            csr = csr.scaled(factor.to_numpy().reshape(-1), op)
+        csr = replace(csr.with_const(const.to_numpy().reshape(-1)), grid=grid)
+        return type(self)._from_csr(csr, self._model)
+
+    def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
+        if self._csr is not None:
+            return self
+        return super()._absorb_join_absence(fill_value)
 
     def _printout_cell(
         self, indices: tuple[Any, ...]
@@ -2579,7 +2640,11 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if self._csr is not None and isinstance(other, int | float | np.number):
+        if (
+            self._csr is not None
+            and isinstance(other, int | float | np.number)
+            and not is_nan_scalar(other)
+        ):
             return type(self)._from_csr(self._csr.scaled(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
