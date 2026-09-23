@@ -764,10 +764,7 @@ def test_cross_grid_merge_raises_like_dense(kwargs: dict, error: type) -> None:
 
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) -> None:
-    """
-    The aux coord follows its rows onto the joined grid. Dense agrees where it
-    succeeds; on ``outer``/``left`` it raises an incidental ``MergeError``.
-    """
+    """The aux coord follows its rows onto the joined grid, like dense."""
     require_v1()
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
@@ -779,9 +776,8 @@ def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) ->
     labels = res.indexes["bus"]
     want = tag.to_series().reindex(labels).to_numpy()
     assert pd.Series(res.coords["tag"].values).equals(pd.Series(want))
-    if join in ("inner", "right"):
-        want_expr = linopy.merge([dense[0], tagged], join=join, cls=LinearExpression)
-        assert_sparse_matches(res, want_expr)
+    want_expr = linopy.merge([dense[0], tagged], join=join, cls=LinearExpression)
+    assert_sparse_matches(res, want_expr)
 
 
 def test_cross_grid_merge_aux_coord_conflict_raises_like_dense() -> None:

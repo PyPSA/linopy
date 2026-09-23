@@ -2467,6 +2467,18 @@ class TestAuxCoordPropagation:
         result = v + w
         assert "B" in result.coords
 
+    @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+    @pytest.mark.parametrize("tagged_first", [False, True])
+    def test_aux_coord_only_on_one_side_follows_join(
+        self, m: Model, v: Variable, join: Any, tagged_first: bool
+    ) -> None:
+        """The one-sided aux coord follows its rows, NaN where no operand has it."""
+        w = m.add_variables(lower=0, coords=[pd.Index([0, 1, 2], name="A")], name="w")
+        parts = [1 * v, 1 * w][:: -1 if tagged_first else 1]
+        result = merge(parts, join=join)
+        want = v.coords["B"].to_series().reindex(result.indexes["A"])
+        assert result.coords["B"].to_series().equals(want)
+
     def test_aux_coord_object_dtype_with_nan_compares_equal(
         self, m: Model, A: pd.Index
     ) -> None:

@@ -3812,10 +3812,9 @@ def merge(
     skipna = not is_v1()
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        subkwargs = {**kwargs, "fill_value": join_fill(fill_value, 0)}
-        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
-            TERM_DIM, skipna=skipna
-        )
+        subkwargs = {**kwargs, "fill_value": {"const": join_fill(fill_value, 0)}}
+        const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
+        const = const.sum(TERM_DIM, skipna=skipna)
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
