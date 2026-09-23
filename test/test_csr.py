@@ -1736,3 +1736,23 @@ def test_selection_fallbacks_match_dense(op: str) -> None:
     res = func(sparse, c)
     assert not res.is_sparse
     assert_linequal(res, func(dense, c))
+
+
+MASKS: dict[str, Callable[[LinearExpression], Any]] = {
+    "dim": alternating,
+    "grid": lambda e: grid_operand(e) > 1.5,
+    "ndarray": lambda e: (grid_operand(e) > 1.5).to_numpy(),
+}
+
+
+@pytest.mark.parametrize("mask", list(MASKS))
+def test_add_constraints_mask_freezes_sparse_and_matches_dense(mask: str) -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    lhs = c2.balance_lhs(sparse=True)
+    m = MASKS[mask](lhs)
+    con1 = c1.m.add_constraints(c1.balance_lhs(False), ">=", c1.load, "bal", mask=m)
+    with no_densify():
+        con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m, freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert_frozen_equal(con1, con2)
