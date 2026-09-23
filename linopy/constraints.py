@@ -79,7 +79,7 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
-from linopy.csr import Grid, csr_nterm, csr_to_term_arrays
+from linopy.csr import Grid, _densify_notice, csr_nterm, csr_to_term_arrays
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.types import (
@@ -1262,6 +1262,7 @@ class CSRConstraint(ConstraintBase):
 
     def to_dense(self) -> Constraint:
         """Convert to a Constraint."""
+        _densify_notice("frozen constraint converted by `to_dense()`/`mutable()`")
         return Constraint(self.data, self._model, self._name)
 
     def mutable(self) -> Constraint:
@@ -1431,12 +1432,15 @@ def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | None:
     one with helper dims or dims outside the grid falls back to the dense path.
     """
     if not is_constant(rhs):
+        _densify_notice("constraint with a non-constant rhs")
         return None
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
+        _densify_notice("constraint with an rhs that is not array-like")
         return None
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
+        _densify_notice("constraint with an rhs over dimensions outside the grid")
         return None
     return da
 

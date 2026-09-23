@@ -108,7 +108,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRLinearExpression, _aux_coords
+from linopy.csr import CSRLinearExpression, _aux_coords, _densify_notice
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -920,10 +920,10 @@ class BaseExpression(ABC):
         masked_entries = 0  # (~self.mask).sum().values.item() if self.mask
         lines = []
 
-        header_string = self.type
+        header_string = f"{self.type} (sparse)" if self.is_sparse else self.type
 
         if size > 1 or ndim > 0:
-            row_labels = get_printout_labels(self.data, dims)
+            row_labels = get_printout_labels(self.coords.to_dataset(), dims)
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
@@ -931,10 +931,7 @@ class BaseExpression(ABC):
                     coord = [row_labels[i][ind] for i, ind in enumerate(indices)]
                     if self.mask is None or self.mask.values[indices]:
                         expr = format_single_expression(
-                            self.coeffs.values[indices],
-                            self.vars.values[indices],
-                            self.const.values[indices],
-                            self.model,
+                            *self._printout_cell(indices), self.model
                         )
 
                         line = format_coord(coord) + f": {expr}"
@@ -947,14 +944,27 @@ class BaseExpression(ABC):
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = format_single_expression(
-                self.coeffs.values, self.vars.values, self.const.item(), self.model
-            )
+            expr = format_single_expression(*self._printout_cell(()), self.model)
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
         else:
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
+
+    def _printout_cell(
+        self, indices: tuple[Any, ...]
+    ) -> tuple[np.ndarray, np.ndarray, Any]:
+        """Coefficients, variable labels and constant of one cell of the repr."""
+        return (
+            self.coeffs.values[indices],
+            self.vars.values[indices],
+            self.const.values[indices],
+        )
+
+    @property
+    def is_sparse(self) -> bool:
+        """Whether the expression is backed by a sparse CSR matrix (:mod:`linopy.csr`)."""
+        return False
 
     @property
     def is_constant(self) -> bool:
@@ -1616,7 +1626,7 @@ class BaseExpression(ABC):
 
     @property
     def coord_names(self) -> list[str]:
-        return get_dims_with_index_levels(self.data, self.coord_dims)
+        return get_dims_with_index_levels(self.coords.to_dataset(), self.coord_dims)
 
     @property
     def vars(self) -> DataArray:
@@ -2358,15 +2368,87 @@ class LinearExpression(BaseExpression):
     @property
     def data(self) -> Dataset:
         if self._data is None and self._csr is not None:
+            _densify_notice("`.data` read, e.g. by an operation without a sparse path")
             self._data = self._csr.to_dense()._data
             self._csr = None
         return self._data
 
     @property
+    def is_sparse(self) -> bool:
+        """
+        Whether the expression is backed by a sparse CSR matrix
+        (:mod:`linopy.csr`) instead of a dense Dataset. Reading ``.data``, or
+        an operation without a sparse path, converts it to dense for good.
+        """
+        return self._csr is not None
+
+    @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._data is None and self._csr is not None:
+        if self._csr is not None:
             return self._csr.grid.dims
         return super().coord_dims
+
+    @property
+    def dims(self) -> tuple[Hashable, ...]:
+        if self._csr is not None:
+            return (*self._csr.grid.dims, TERM_DIM)
+        return super().dims
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        if self._csr is not None:
+            return (*self._csr.grid.shape, self._csr.nterm)
+        return super().shape
+
+    @property
+    def size(self) -> int:
+        if self._csr is not None:
+            return int(np.prod(self.shape, dtype=np.int64))
+        return super().size
+
+    @property
+    def ndim(self) -> int:
+        if self._csr is not None:
+            return len(self._csr.grid.dims)
+        return super().ndim
+
+    @property
+    def sizes(self) -> Frozen:
+        if self._csr is not None:
+            return Frozen(dict(zip(self.dims, self.shape)))
+        return super().sizes
+
+    @property
+    def coords(self) -> DatasetCoordinates:
+        if self._csr is not None:
+            return self._csr.grid.to_dataset().coords
+        return super().coords
+
+    @property
+    def indexes(self) -> Indexes:
+        if self._csr is not None:
+            return self._csr.grid.to_dataset().indexes
+        return super().indexes
+
+    def isnull(self) -> DataArray:
+        csr = self._csr
+        if csr is None:
+            return super().isnull()
+        grid = csr.grid
+        absent = np.isnan(csr.const).reshape(grid.shape)
+        coords = grid.to_dataset().coords
+        return DataArray(absent, coords=coords, dims=grid.dims, name="const")
+
+    def _printout_cell(
+        self, indices: tuple[Any, ...]
+    ) -> tuple[np.ndarray, np.ndarray, Any]:
+        if self._csr is not None:
+            return self._csr.cell(indices)
+        return super()._printout_cell(indices)
+
+    def _sparse_fallback(self, reason: str) -> None:
+        if self._csr is not None:
+            _densify_notice(reason)
 
     @property
     def nterm(self) -> int:
@@ -2585,19 +2667,26 @@ class LinearExpression(BaseExpression):
         if self._csr is None and _has_multiindex(self.data.indexes.values()):
             return None
         if not self.coord_dims:
+            self._sparse_fallback("`@` on a zero-dimensional expression")
             return None
         csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
         if not csr.grid.is_unique or _has_multiindex(csr.grid.indexes.values()):
+            self._sparse_fallback("`@` over non-unique or MultiIndex labels")
             return None
         if csr.grid.size == 0:
+            self._sparse_fallback("`@` over a zero-size grid")
             return None
         coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
         if _has_multiindex(da.indexes.values()):
+            self._sparse_fallback("`@` with a MultiIndex operand")
             return None
         contracted = [d for d in csr.grid.dims if d in da.dims]
         new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
         if not contracted or any(d not in da.indexes for d in new_dims):
+            self._sparse_fallback(
+                "`@` with an operand sharing no dimension or with an unlabelled one"
+            )
             return None
         matrix = _matmul_operand_to_matrix(
             da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
@@ -2606,6 +2695,10 @@ class LinearExpression(BaseExpression):
         res = csr.contracted(matrix, contracted, new_indexes)
         if self._csr is not None or options["sparse_groupby"]:
             return type(self)._from_csr(res, self.model)
+        _densify_notice(
+            "`@` on a dense expression returns dense unless "
+            'options["sparse_groupby"] is set'
+        )
         return res.to_dense()
 
     @property
@@ -3301,9 +3394,11 @@ def _aligned(
     template = csrs[0].grid
     dims = template.dims
     if any(not p.grid.is_unique for p in csrs):
+        _densify_notice("merge over non-unique labels")
         return None
     if join == "override":
         if any(p.grid.dims != dims or p.grid.shape != template.shape for p in csrs):
+            _densify_notice('`join="override"` merge of differently shaped grids')
             return None
         return [replace(p, grid=template) for p in csrs]
     if join in ("left", "right"):
@@ -3312,6 +3407,7 @@ def _aligned(
     elif join in ("outer", "inner"):
         grid = template.combined([p.grid for p in csrs[1:]], join)
     else:
+        _densify_notice(f"merge of differing grids with join={join!r}")
         return None
     return [p.reindexed(grid, fill) for p in csrs]
 
@@ -3333,19 +3429,23 @@ def _try_csr_merge(
     coordinates across differing grids are left to the dense path. Returns
     None to fall through to the dense path.
     """
+    if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
+        return None
     if dim != TERM_DIM or kwargs:
+        _densify_notice("merge along a coordinate dimension or with extra arguments")
         return None
     if not all(type(e) is LinearExpression for e in exprs):
-        return None
-    if all(e._csr is None for e in exprs):
+        _densify_notice("merge with an operand that is not a LinearExpression")
         return None
     dims = set(exprs[0].coord_dims)
     if any(set(e.coord_dims) != dims for e in exprs[1:]):
+        _densify_notice("merge of operands over different dimensions")
         return None
     for e in exprs:
         if e._csr is None and set(e.data.coords) - dims != set(
             _aux_coords(e.data, dims)
         ):
+            _densify_notice("merge with a dense operand carrying non-grid coordinates")
             return None
 
     csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
@@ -3357,6 +3457,7 @@ def _try_csr_merge(
     ]
     if not all(template.same_grid(p) for p in csrs[1:]):
         if any(p.grid.aux for p in csrs):
+            _densify_notice("merge of differing grids with auxiliary coordinates")
             return None
         aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
         if aligned is None:

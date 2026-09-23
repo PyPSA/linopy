@@ -1259,3 +1259,91 @@ def test_matmul_peak_memory() -> None:
         tracemalloc.stop()
     assert res.coord_dims == ("snapshot", "cycle")
     assert peak < dense_rectangle_bytes / 4
+
+
+def full_contraction(c: Case) -> LinearExpression:
+    grouped = (1.0 * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    ones = xr.DataArray(np.ones(grouped.shape[:2]), coords=grouped.coords)
+    return grouped @ ones
+
+
+SPARSE_BUILDS: dict[str, Callable[[Case], LinearExpression]] = {
+    "grouped": lambda c: (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True),
+    "aux": tagged_group,
+    "absent": lambda c: keyed_model()[1].groupby(["period", "season"]).sum(sparse=True),
+    "zero-dim": full_contraction,
+}
+
+METADATA: dict[str, Callable[[LinearExpression], Any]] = {
+    "shape": lambda e: e.shape,
+    "size": lambda e: e.size,
+    "ndim": lambda e: e.ndim,
+    "sizes": lambda e: dict(e.sizes),
+    "dims": lambda e: e.dims,
+    "coord_dims": lambda e: e.coord_dims,
+    "coord_sizes": lambda e: e.coord_sizes,
+    "coord_names": lambda e: e.coord_names,
+    "coords": lambda e: xr.Dataset(coords=e.coords),
+    "indexes": lambda e: {k: list(v) for k, v in e.indexes.items()},
+    "isnull": lambda e: e.isnull(),
+    "repr": lambda e: repr(e).splitlines()[2:],
+}
+
+
+@pytest.mark.parametrize("attr", list(METADATA))
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_metadata_is_served_without_densifying(build: str, attr: str) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS[build](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    got, want = METADATA[attr](sparse), METADATA[attr](dense)
+    assert sparse.is_sparse
+    if isinstance(got, xr.Dataset | xr.DataArray):
+        xr.testing.assert_identical(got, want)
+    else:
+        assert got == want
+
+
+def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
+    require_v1()
+    c = base_model()
+    sparse = SPARSE_BUILDS["grouped"](c)
+    assert sparse.is_sparse
+    assert repr(sparse).startswith("LinearExpression (sparse) [")
+    sparse.data
+    assert not sparse.is_sparse
+    assert repr(sparse).startswith("LinearExpression [")
+    assert not (1.0 * c.gen_p).is_sparse
+
+
+DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
+    "data": (lambda e, c: e.data, "`.data` read"),
+    "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
+    "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
+    "dense-matmul": (
+        lambda e, c: (1.0 * c.gen_p) @ loc_operand(c.gbus.index),
+        "sparse_groupby",
+    ),
+    "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
+    "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
+}
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "default"])
+@pytest.mark.parametrize("op", list(DENSIFY_OPS))
+def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
+    require_v1()
+    c = base_model()
+    sparse = SPARSE_BUILDS["grouped"](c)
+    func, reason = DENSIFY_OPS[op]
+    with linopy.options as opts, warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", linopy.PerformanceWarning)
+        opts.set_value(warn_on_densify=enabled)
+        func(sparse, c)
+    notices = [w for w in caught if issubclass(w.category, linopy.PerformanceWarning)]
+    if not enabled:
+        assert notices == []
+        return
+    assert any(re.search(reason, str(w.message)) for w in notices)
+    assert all(w.filename == __file__ for w in notices)

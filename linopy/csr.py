@@ -25,17 +25,20 @@ The reverse bridges live at the dense call sites, in
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
+from warnings import warn
 
 import numpy as np
 import pandas as pd
 import scipy.sparse
 from xarray import Dataset
 
-from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.semantics import absorb_absence, enforce_aux_conflict
+from linopy.config import options
+from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
+from linopy.semantics import _LINOPY_ROOT, absorb_absence, enforce_aux_conflict
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
@@ -219,6 +222,20 @@ class CSRLinearExpression:
     @property
     def nterm(self) -> int:
         return csr_nterm(self.csr)
+
+    def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
+        """
+        Coefficients, label-ordered variable labels and constant of the grid
+        cell at ``indices``, as in the dense form: an absent cell has no terms.
+        """
+        row = int(np.ravel_multi_index(indices, self.grid.shape)) if indices else 0
+        const = float(self.const[row])
+        start, end = self.csr.indptr[row], self.csr.indptr[row + 1]
+        if np.isnan(const):
+            end = start
+        vars_, coeffs = self.csr.indices[start:end], self.csr.data[start:end]
+        order = np.argsort(vars_, kind="stable")
+        return coeffs[order], vars_[order], const
 
     @classmethod
     def from_grouper(
@@ -544,6 +561,20 @@ def csr_to_term_arrays(
         vars_[rows, cols] = csr.indices
         coeffs[rows, cols] = csr.data
     return vars_, coeffs
+
+
+def _densify_notice(reason: str) -> None:
+    """
+    Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
+    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set.
+    """
+    if not options["warn_on_densify"]:
+        return
+    message = f"Sparse (CSR) backing densified: {reason}."
+    if sys.version_info >= (3, 12):
+        warn(message, PerformanceWarning, skip_file_prefixes=(_LINOPY_ROOT,))
+    else:
+        warn(message, PerformanceWarning, stacklevel=4)
 
 
 def _aux_coords(ds: Dataset, dims: set[str]) -> dict[str, tuple[str, np.ndarray]]:
