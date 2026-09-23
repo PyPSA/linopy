@@ -8,7 +8,8 @@ from __future__ import annotations
 import re
 import tracemalloc
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -1324,7 +1325,18 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
+    "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
+    "groupby-fallback": (
+        lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
+        "`.data` read",
+    ),
 }
+
+
+def halves(e: LinearExpression) -> pd.Series:
+    """Alternating ``a``/``b`` grouper over the expression's first dimension."""
+    index = e.indexes[e.coord_dims[0]]
+    return pd.Series(np.arange(len(index)) % 2, index=index).map({0: "a", 1: "b"})
 
 
 @pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "default"])
@@ -1471,3 +1483,113 @@ def test_elementwise_ops_keep_absent_cells_termless() -> None:
     absent = np.isnan(csr.const)
     assert absent.any()
     assert (np.diff(csr.csr.indptr)[absent] == 0).all()
+
+
+def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None:
+    """CSR backing kept, and equal to the dense reference up to term layout."""
+    assert res.is_sparse
+    assert res.coord_dims == want.coord_dims
+    xr.testing.assert_identical(
+        xr.Dataset(coords=res.coords), xr.Dataset(coords=want.coords)
+    )
+    xr.testing.assert_identical(res.isnull(), want.isnull())
+    assert_cells_equal(res, want, tuple(map(str, want.coord_dims)))
+
+
+@contextmanager
+def no_densify() -> Iterator[None]:
+    """Fail on any densify notice inside the block."""
+    with linopy.options as opts, warnings.catch_warnings():
+        warnings.simplefilter("error", linopy.PerformanceWarning)
+        opts.set_value(warn_on_densify=True)
+        yield
+
+
+SUM_DIMS: dict[str, Callable[[tuple[str, ...]], Any]] = {
+    "first": lambda d: d[0],
+    "last-list": lambda d: [d[-1]],
+    "leading": lambda d: list(d[:-1]),
+    "all": lambda d: None,
+    "all-reversed": lambda d: list(d)[::-1],
+    "ellipsis": lambda d: ...,
+    "empty": lambda d: [],
+    "term": lambda d: [TERM_DIM],
+}
+
+
+@pytest.mark.parametrize("dims", list(SUM_DIMS))
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_sum_stays_csr_and_matches_dense(build: str, dims: str) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS[build](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    dim = SUM_DIMS[dims](tuple(map(str, sparse.coord_dims)))
+    with no_densify():
+        res = sparse.sum(dim)
+    assert_sparse_matches(res, dense.sum(dim))
+
+
+@pytest.mark.parametrize("drop_zeros", [False, True])
+def test_sum_keeps_explicit_zeros_unless_dropped(drop_zeros: bool) -> None:
+    require_v1()
+    c = base_model()
+    sparse = (0.0 * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    res = sparse.sum("snapshot", drop_zeros=drop_zeros)
+    assert res._csr is not None
+    assert (res._csr.csr.nnz == 0) == drop_zeros
+    assert_sparse_matches(res, dense.sum("snapshot", drop_zeros=drop_zeros))
+
+
+def test_sum_unknown_dim_raises_like_dense() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["grouped"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    with pytest.raises(KeyError) as want:
+        dense.sum("nodim")
+    with pytest.raises(KeyError) as got:
+        sparse.sum("nodim")
+    assert str(got.value) == str(want.value)
+
+
+CHAINS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "group-group": lambda e: e.groupby(halves(e)).sum(),
+    "group-sum": lambda e: e.groupby(halves(e)).sum().sum("snapshot"),
+    "sum-group": lambda e: e.sum("snapshot").groupby(halves(e)).sum(),
+}
+
+
+@pytest.mark.parametrize("chain", list(CHAINS))
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_chained_groupby_stays_csr_and_matches_dense(build: str, chain: str) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS[build](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    func = CHAINS[chain]
+    with no_densify():
+        res = func(sparse)
+    assert_sparse_matches(res, func(dense))
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_chained_namelist_groupby_on_aux_coords_matches_dense(observed: bool) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["aux"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    res = sparse.groupby(["bus", "tag"]).sum(observed=observed)
+    assert_sparse_matches(res, dense.groupby(["bus", "tag"]).sum(observed=observed))
+
+
+def test_chained_groupby_sparse_false_densifies() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["grouped"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    res = sparse.groupby(halves(sparse)).sum(sparse=False)
+    assert not res.is_sparse
+    assert_linequal(res, dense.groupby(halves(dense)).sum())

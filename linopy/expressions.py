@@ -464,12 +464,29 @@ def _restore_multikey_index(
 class LinearExpressionGroupby:
     """
     GroupBy object specialized to grouping LinearExpression objects.
+
+    ``obj`` is the grouped expression, or its dense dataset. A CSR-backed
+    expression is only densified by operations without a sparse path.
     """
 
-    data: xr.Dataset
+    obj: xr.Dataset | BaseExpression
     group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def data(self) -> Dataset:
+        return self.obj if isinstance(self.obj, Dataset) else self.obj.data
+
+    @property
+    def _csr(self) -> CSRLinearExpression | None:
+        return self.obj._csr if isinstance(self.obj, LinearExpression) else None
+
+    @property
+    def _labels(self) -> Dataset:
+        """The coordinates to resolve groupers against, without densifying."""
+        csr = self._csr
+        return self.data if csr is None else csr.grid.to_dataset()
 
     @property
     def groupby(self) -> xarray.core.groupby.DatasetGroupBy:
@@ -584,16 +601,16 @@ class LinearExpressionGroupby:
                 "`observed=True` is not supported with `use_fallback=True`."
             )
 
-        group = _resolve_group(self.group, self.data)
-        _check_grouper_alignment(group, self.data)
+        labels = self._labels
+        group = _resolve_group(self.group, labels)
+        _check_grouper_alignment(group, labels)
 
-        multikey_frame = (
-            None if use_fallback else _multikey_value_frame(group, self.data)
-        )
+        multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
+        csr = self._csr
         explicit_sparse = sparse is True
         if sparse is None:
-            sparse = is_v1() and options["sparse_groupby"]
+            sparse = is_v1() and (options["sparse_groupby"] or csr is not None)
         elif sparse and not is_v1():
             raise ValueError(
                 "sparse groupby-sum requires v1 semantics; opt in with "
@@ -607,10 +624,17 @@ class LinearExpressionGroupby:
             if grouper is None:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
                 grouper = group.to_pandas() if is_1d else group
+            if csr is None:
+                source: Dataset | CSRLinearExpression = self.data
+                coord_dims = tuple(
+                    str(d) for d in self.data.coeffs.dims if d != TERM_DIM
+                )
+            else:
+                source, coord_dims = csr, csr.grid.dims
             supported = (
                 not use_fallback
                 and isinstance(grouper, (pd.Series, pd.DataFrame))
-                and grouper.index.name in self.data.dims
+                and grouper.index.name in coord_dims
             )
             if supported:
                 stacked = observed or multikey_frame is None
@@ -619,13 +643,10 @@ class LinearExpressionGroupby:
                     if isinstance(grouper, pd.DataFrame)
                     else str(grouper.name or "group")
                 )
-                coord_dims = tuple(
-                    str(d) for d in self.data.coeffs.dims if d != TERM_DIM
+                res = CSRLinearExpression.from_grouper(
+                    source, self.model, grouper, group_name, stacked, coord_dims
                 )
-                csr = CSRLinearExpression.from_grouper(
-                    self.data, self.model, grouper, group_name, stacked, coord_dims
-                )
-                return LinearExpression._from_csr(csr, self.model)
+                return LinearExpression._from_csr(res, self.model)
             if explicit_sparse:
                 raise ValueError(
                     "sparse=True supports only a pandas Series or DataFrame, 1-D "
@@ -2061,9 +2082,8 @@ class BaseExpression(ABC):
             A `LinearExpressionGroupBy` containing the xarray groups and ensuring
             the correct return type.
         """
-        ds = self.data
         kwargs = dict(restore_coord_dims=restore_coord_dims, **kwargs)
-        return LinearExpressionGroupby(ds, group, model=self.model, kwargs=kwargs)
+        return LinearExpressionGroupby(self, group, model=self.model, kwargs=kwargs)
 
     def rolling(
         self,
@@ -2510,6 +2530,25 @@ class LinearExpression(BaseExpression):
     def _sparse_fallback(self, reason: str) -> None:
         if self._csr is not None:
             _densify_notice(reason)
+
+    def sum(
+        self,
+        dim: DimsLike | None = None,
+        drop_zeros: bool = False,
+        **kwargs: Any,
+    ) -> Self:
+        csr = self._csr
+        if csr is None or kwargs:
+            return super().sum(dim, drop_zeros, **kwargs)
+        if dim is None or isinstance(dim, EllipsisType):
+            dims: list[Hashable] = list(csr.grid.dims)
+        else:
+            dims = [dim] if isinstance(dim, str) else list(dim)
+        summed = [str(d) for d in dims if d != TERM_DIM]
+        if not set(summed) <= set(csr.grid.dims):
+            return super().sum(dim, drop_zeros)
+        res = csr.summed(summed) if summed else csr
+        return type(self)._from_csr(res.pruned() if drop_zeros else res, self._model)
 
     @property
     def nterm(self) -> int:
