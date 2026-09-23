@@ -174,22 +174,9 @@ class MatrixAccessor:
 
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
-        expr = m.objective.expression
-        if isinstance(expr, expressions.QuadraticExpression):
-            # vars has shape (_factor=2, _term); linear terms have one factor == -1
-            vars_2d = expr.data.vars.values  # shape (2, n_term)
-            coeffs_all = expr.data.coeffs.values.ravel()
-            vars1, vars2 = vars_2d[0], vars_2d[1]
-            linear = (vars1 == -1) | (vars2 == -1)
-            var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
-            coeffs = coeffs_all[linear]
-        else:
-            var_labels = expr.data.vars.values.ravel()
-            coeffs = expr.data.coeffs.values.ravel()
-
-        mask = var_labels != -1
-        positions = label_to_pos[var_labels[mask]]
-        scaled_coeffs = coeffs[mask] / self.var_scaling[positions]
+        var_labels, coeffs = m.objective.linear_terms()
+        positions = label_to_pos[var_labels]
+        scaled_coeffs = coeffs / self.var_scaling[positions]
         scaled_coeffs = scaled_coeffs * m.objective.scaling
         np.add.at(result, positions, scaled_coeffs)
         return result

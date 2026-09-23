@@ -499,6 +499,22 @@ def test_nan_grouper_raises_eagerly() -> None:
         (1.0 * c.gen_p).groupby(gbus).sum(sparse=True)
 
 
+TERM_LINE = re.compile(r"^[+-][0-9.e+-]+ x[0-9]+$")
+
+
+def canon_lp(text: str) -> list[str]:
+    """LP file lines with each block of term lines sorted."""
+    out: list[str] = []
+    buf: list[str] = []
+    for line in text.splitlines():
+        if TERM_LINE.match(line):
+            buf.append(line)
+        else:
+            out += sorted(buf) + [line]
+            buf = []
+    return out + sorted(buf)
+
+
 def test_lp_files_identical(tmp_path: Path) -> None:
     require_v1()
     sizes = (7, 1, 3, 1, 2, 1, 1, 4, 1, 2, 1, 1)
@@ -509,19 +525,6 @@ def test_lp_files_identical(tmp_path: Path) -> None:
         c2.balance_lhs(sparse=True) == c2.load, name="bal", freeze=True
     )
     c2.m.add_objective((1.0 * c2.gen_p).sum())
-
-    term_line = re.compile(r"^[+-][0-9.e+-]+ x[0-9]+$")
-
-    def canon_lp(text: str) -> list[str]:
-        out: list[str] = []
-        buf: list[str] = []
-        for line in text.splitlines():
-            if term_line.match(line):
-                buf.append(line)
-            else:
-                out += sorted(buf) + [line]
-                buf = []
-        return out + sorted(buf)
 
     f1, f2 = tmp_path / "eager.lp", tmp_path / "sparse.lp"
     c1.m.to_file(f1)
@@ -1410,6 +1413,64 @@ def test_flat_and_to_polars_served_without_densifying(build: str, scale: float) 
     assert sparse.is_sparse
     assert got_pl.sort("vars").equals(dense.to_polars().sort("vars"))
     pd.testing.assert_frame_equal(got_flat, dense.flat)
+
+
+def objective_twins(build: str, scale: float) -> tuple[Model, Model]:
+    """Twin models, the first with the sparse build as objective, the second dense."""
+    sparse, _ = sparse_and_dense(build)
+    _, dense = sparse_and_dense(build)
+    with no_densify():
+        sparse.model.add_objective(scale * (sparse - sparse.const.fillna(0)))
+    dense.model.add_objective(scale * (dense - dense.const.fillna(0)))
+    return sparse.model, dense.model
+
+
+def test_sparse_objective_rejects_constant_without_densifying() -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense("absent")
+    with no_densify(), pytest.raises(ValueError, match="Constant values"):
+        sparse.model.add_objective(sparse)
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_objective_stays_csr_and_exports_like_dense(
+    build: str, scale: float, tmp_path: Path
+) -> None:
+    require_v1()
+    ms, md = objective_twins(build, scale)
+    with no_densify():
+        c = ms.matrices.c
+        ms.to_file(tmp_path / "sparse.lp")
+        ms.to_netcdf(tmp_path / "sparse.nc")
+        copied = ms.copy()
+        assert ms.objective.attrs == {"name": "objective"}
+        repr(ms.objective)
+    assert ms.objective.expression.is_sparse and copied.objective.expression.is_sparse
+    md.to_file(tmp_path / "dense.lp")
+    md.to_netcdf(tmp_path / "dense.nc")
+    assert np.array_equal(c, md.matrices.c)
+    lp_sparse, lp_dense = (tmp_path / f"{k}.lp" for k in ("sparse", "dense"))
+    assert canon_lp(lp_sparse.read_text()) == canon_lp(lp_dense.read_text())
+    rs, rd = (linopy.read_netcdf(tmp_path / f"{k}.nc") for k in ("sparse", "dense"))
+    assert_cells_equal(rs.objective.expression, rd.objective.expression, ())
+    assert rs.objective.expression.attrs["name"] == "objective"
+
+
+@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.parametrize("io_api", ["lp", "direct"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_sparse_objective_solves_like_dense(build: str, io_api: str) -> None:
+    require_v1()
+    values = []
+    for m in objective_twins(build, 1.0):
+        for var in m.variables.data.values():
+            var.update(lower=0, upper=1)
+        m.objective.sense = "max"
+        with no_densify():
+            m.solve("highs", io_api=io_api)
+        values.append(m.objective.value)
+    assert values[0] == pytest.approx(values[1])
 
 
 def grid_operand(e: LinearExpression) -> xr.DataArray:

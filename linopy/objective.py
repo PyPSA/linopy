@@ -53,6 +53,19 @@ def objwrap(
     return _objwrap
 
 
+def linear_part(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Linear terms of a quadratic ``to_polars`` frame, their variable in ``vars``.
+    """
+    linear = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
+    return linear.with_columns(
+        pl.when(pl.col("vars1").eq(-1))
+        .then(pl.col("vars2"))
+        .otherwise(pl.col("vars1"))
+        .alias("vars")
+    )
+
+
 class Objective:
     """
     An objective expression containing all relevant information.
@@ -93,11 +106,18 @@ class Objective:
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
 
     @property
+    def name(self) -> str:
+        """
+        Returns the name of the objective, owned by the objective itself.
+        """
+        return "objective"
+
+    @property
     def attrs(self) -> dict[str, Any]:
         """
         Returns the attributes of the objective.
         """
-        return self.expression.attrs
+        return {"name": self.name}
 
     @property
     def coords(self) -> DatasetCoordinates:
@@ -132,6 +152,29 @@ class Objective:
         Returns the objective as a polars DataFrame.
         """
         return self.expression.to_polars(**kwargs)
+
+    def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Returns the variable labels and coefficients of the linear objective
+        terms, zero coefficients dropped, read from ``to_polars``.
+        """
+        df = self.to_polars()
+        if self.is_quadratic:
+            df = linear_part(df)
+        df = df.drop_nulls("vars").cast({"vars": pl.Int64, "coeffs": pl.Float64})
+        return df["vars"].to_numpy(), df["coeffs"].to_numpy()
+
+    def to_netcdf_ds(self) -> Dataset:
+        """
+        Returns the objective in the dense layout for netcdf serialization.
+
+        A sparse objective is expanded without dropping its sparse backing;
+        after the setter's full sum it holds a single cell.
+        """
+        expr = self.expression
+        csr = expr._csr if isinstance(expr, expressions.LinearExpression) else None
+        ds = expr.data if csr is None else csr.to_dense().data
+        return ds.assign_attrs(name=self.name)
 
     @property
     def coeffs(self) -> DataArray:
@@ -197,7 +240,8 @@ class Objective:
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
-        expr.attrs["name"] = "objective"
+        if not expr.is_sparse:
+            expr.attrs["name"] = self.name
         self._expression = expr
 
     @property

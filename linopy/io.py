@@ -12,6 +12,7 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -30,7 +31,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.objective import Objective
+from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 
 if TYPE_CHECKING:
@@ -301,14 +302,7 @@ def objective_to_file(
 
     elif m.is_quadratic:
         df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
-        linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
-        linear_terms = linear_terms.with_columns(
-            pl.when(pl.col("vars1").eq(-1))
-            .then(pl.col("vars2"))
-            .otherwise(pl.col("vars1"))
-            .alias("vars")
-        )
-        objective_write_linear_terms(f, linear_terms, print_variable)
+        objective_write_linear_terms(f, linear_part(df), print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
         objective_write_quadratic_terms(f, quads, print_variable)
@@ -1091,8 +1085,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         )
         for name, expr in m.expressions.items()
     ]
-    objective = m.objective.data
-    objective = objective.assign_attrs(
+    objective = m.objective.to_netcdf_ds().assign_attrs(
         sense=m.objective.sense,
         scaling=m.objective.scaling,
         **{EXPR_TYPE_ATTR: m.objective.expression.type},
@@ -1399,8 +1392,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = type(m.objective.expression)(
-        m.objective.expression.data.copy(deep=deep), new_model
+    expr = m.objective.expression
+    csr = expr._csr if isinstance(expr, LinearExpression) else None
+    obj_expr = (
+        type(expr)(expr.data.copy(deep=deep), new_model)
+        if csr is None
+        else LinearExpression._from_csr(replace(csr, model=new_model), new_model)
     )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
