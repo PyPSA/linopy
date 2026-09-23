@@ -2476,10 +2476,7 @@ class LinearExpression(BaseExpression):
         csr = self._csr
         if csr is None:
             return super().const
-        grid = csr.grid
-        const = csr.const.reshape(grid.shape)
-        coords = grid.to_dataset().coords
-        return DataArray(const, coords=coords, dims=grid.dims, name="const")
+        return csr.grid.dataarray(csr.const, name="const")
 
     @const.setter
     def const(self, value: DataArray) -> None:
@@ -2530,6 +2527,93 @@ class LinearExpression(BaseExpression):
     def _sparse_fallback(self, reason: str) -> None:
         if self._csr is not None:
             _densify_notice(reason)
+
+    def _selected(
+        self, select: Callable[[DataArray], DataArray], name: str
+    ) -> CSRLinearExpression | None:
+        """
+        Apply the dense selection ``select`` to the grid's row numbers and
+        gather the selected rows, a row number of ``-1`` or NaN leaving the
+        cell absent. None, after a densify notice, where the selection leaves
+        the grid: new or unlabelled dimensions, MultiIndex labels, or
+        coordinates that are no auxiliary coordinates of the grid.
+        """
+        csr = self._csr
+        if csr is None:
+            return None
+        reason = f"`{name}` over MultiIndex labels, or introducing dimensions"
+        if _has_multiindex(csr.grid.indexes.values()):
+            _densify_notice(reason)
+            return None
+        rows = select(csr.grid.dataarray(np.arange(csr.n_cells)))
+        dims = tuple(str(d) for d in rows.dims)
+        leaves_grid = not set(dims) <= set(csr.grid.dims) & set(rows.indexes)
+        if leaves_grid or _has_multiindex(rows.indexes.values()):
+            _densify_notice(reason)
+            return None
+        grid = Grid.from_dataset(rows, dims)
+        if set(rows.coords) != set(dims) | set(grid.aux):
+            _densify_notice(reason)
+            return None
+        flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
+        return csr.taken(flat, grid)
+
+    def sel(self, *args: Any, **kwargs: Any) -> LinearExpression:
+        """Select by label as ``Dataset.sel``; a CSR-backed expression stays sparse."""
+        csr = self._selected(lambda rows: rows.sel(*args, **kwargs), "sel")
+        if csr is None:
+            return super().sel(*args, **kwargs)
+        return type(self)._from_csr(csr, self._model)
+
+    def isel(self, *args: Any, **kwargs: Any) -> LinearExpression:
+        """Select by position as ``Dataset.isel``; a CSR-backed expression stays sparse."""
+        csr = self._selected(lambda rows: rows.isel(*args, **kwargs), "isel")
+        if csr is None:
+            return super().isel(*args, **kwargs)
+        return type(self)._from_csr(csr, self._model)
+
+    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
+        csr = self._selected(lambda rows: rows[selector], "__getitem__")
+        if csr is None:
+            return super().__getitem__(selector)
+        return type(self)._from_csr(csr, self._model)
+
+    def where(
+        self,
+        cond: DataArray,
+        other: LinearExpression
+        | int
+        | DataArray
+        | dict[str, float | int | DataArray]
+        | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        cond_da = _expr_unwrap(cond)
+        drop = kwargs.get("drop", False)
+        absent = other is None or other is np.nan
+        supported = (
+            isinstance(cond_da, DataArray)
+            and set(kwargs) <= {"drop"}
+            and (absent or (isinstance(other, int | float) and not drop))
+        )
+        if not supported:
+            self._sparse_fallback(
+                "`where` with a condition that is no DataArray, an `other` that "
+                "is no scalar, or extra arguments"
+            )
+            return super().where(cond, other, **kwargs)
+        csr = self._selected(
+            lambda rows: (
+                rows.where(cond_da, drop=True) if drop else rows.where(cond_da, -1)
+            ),
+            "where",
+        )
+        if csr is None:
+            return super().where(cond, other, **kwargs)
+        if not absent:
+            const = self.const.where(cond_da, other).transpose(*csr.grid.dims)
+            csr = csr.with_const(const.to_numpy().reshape(-1))
+        return type(self)._from_csr(csr, self._model)
 
     def sum(
         self,
@@ -3525,8 +3609,9 @@ def _try_csr_merge(
     addition. Grids that share dims in a different order are transposed onto
     the template order first. Grids that differ in their labels are aligned
     row-wise onto the joined grid, the cells the join creates carrying the
-    fill of the dense path (zero, or NaN for ``fill_value=ABSENT``); auxiliary
-    coordinates across differing grids are left to the dense path. Returns
+    fill of the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary
+    coordinates are checked for conflicts on the operands as given (§11, as
+    on the dense path) and follow their rows onto the joined grid. Returns
     None to fall through to the dense path.
     """
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
@@ -3556,9 +3641,7 @@ def _try_csr_merge(
         for p in csrs
     ]
     if not all(template.same_grid(p) for p in csrs[1:]):
-        if any(p.grid.aux for p in csrs):
-            _densify_notice("merge of differing grids with auxiliary coordinates")
-            return None
+        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
         aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
         if aligned is None:
             return None

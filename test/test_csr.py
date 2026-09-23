@@ -762,16 +762,39 @@ def test_cross_grid_merge_raises_like_dense(kwargs: dict, error: type) -> None:
         linopy.merge(cross_grid_parts(c, True), **kwargs)
 
 
-def test_merge_with_aux_coord_operand_raises_like_dense() -> None:
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) -> None:
+    """
+    The aux coord follows its rows onto the joined grid. Dense agrees where it
+    succeeds; on ``outer``/``left`` it raises an incidental ``MergeError``.
+    """
     require_v1()
     c = base_model()
     sparse, dense = cross_grid_parts(c, True), cross_grid_parts(c, False)
     tag = xr.DataArray(["x", "y"], coords=[dense[1].indexes["bus"]])
     tagged = LinearExpression(dense[1].data.assign_coords(tag=tag), c.m)
-    with pytest.raises(xr.MergeError, match="conflicting values for variable 'tag'"):
-        linopy.merge([dense[0], tagged], join="outer")
-    with pytest.raises(xr.MergeError, match="conflicting values for variable 'tag'"):
-        linopy.merge([sparse[0], tagged], join="outer")
+    with no_densify():
+        res = linopy.merge([sparse[0], tagged], join=join, cls=LinearExpression)
+    assert res.is_sparse
+    labels = res.indexes["bus"]
+    want = tag.to_series().reindex(labels).to_numpy()
+    assert pd.Series(res.coords["tag"].values).equals(pd.Series(want))
+    if join in ("inner", "right"):
+        want_expr = linopy.merge([dense[0], tagged], join=join, cls=LinearExpression)
+        assert_sparse_matches(res, want_expr)
+
+
+def test_cross_grid_merge_aux_coord_conflict_raises_like_dense() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["aux"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    parts = [sparse, sparse.isel(group=[2, 1])]
+    with pytest.raises(ValueError) as want:
+        linopy.merge([dense, dense.isel(group=[2, 1])], join="outer")
+    with pytest.raises(ValueError) as got:
+        linopy.merge(parts, join="outer")
+    assert str(got.value) == str(want.value)
 
 
 def test_cross_grid_merge_with_duplicate_labels_raises_like_dense() -> None:
@@ -1330,6 +1353,18 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
         "`.data` read",
     ),
+    "isel-pointwise": (
+        lambda e, c: e.isel(bus=xr.DataArray([0, 1], dims="pt")),
+        "`isel` over MultiIndex labels, or introducing dimensions",
+    ),
+    "where-new-dim": (
+        lambda e, c: e.where(xr.DataArray([True, False], coords=[LOC])),
+        "`where` over MultiIndex labels, or introducing dimensions",
+    ),
+    "where-callable": (
+        lambda e, c: e.where(lambda ds: ds.const > 0),
+        "`where` with a condition that is no DataArray",
+    ),
 }
 
 
@@ -1593,3 +1628,111 @@ def test_chained_groupby_sparse_false_densifies() -> None:
     res = sparse.groupby(halves(sparse)).sum(sparse=False)
     assert not res.is_sparse
     assert_linequal(res, dense.groupby(halves(dense)).sum())
+
+
+def dim0(e: LinearExpression) -> str:
+    return str(e.coord_dims[0])
+
+
+def labels0(e: LinearExpression) -> pd.Index:
+    return e.indexes[dim0(e)]
+
+
+def alternating(e: LinearExpression) -> xr.DataArray:
+    """True on every other label of the expression's first dimension."""
+    labels = labels0(e)
+    return xr.DataArray(np.arange(len(labels)) % 2 == 0, coords=[labels])
+
+
+SELECTIONS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "sel-scalar": lambda e: e.sel({dim0(e): labels0(e)[1]}),
+    "sel-scalar-drop": lambda e: e.sel({dim0(e): labels0(e)[1]}, drop=True),
+    "sel-list": lambda e: e.sel({dim0(e): list(labels0(e)[[2, 0]])}),
+    "sel-slice": lambda e: e.sel({dim0(e): slice(labels0(e)[1], None)}),
+    "isel-int": lambda e: e.isel({str(e.coord_dims[-1]): 0}),
+    "isel-list": lambda e: e.isel({dim0(e): [2, 1, 1]}),
+    "isel-slice": lambda e: e.isel({dim0(e): slice(None, None, -2)}),
+    "isel-empty": lambda e: e.isel({dim0(e): []}),
+    "loc-dict": lambda e: e.loc[{dim0(e): list(labels0(e)[:2])}],
+    "loc-scalar": lambda e: e.loc[labels0(e)[1]],
+    "getitem-int": lambda e: e[0],
+    "getitem-tuple": lambda e: e[1:, [1, 0]],
+    "where-dim": lambda e: e.where(alternating(e)),
+    "where-grid": lambda e: e.where(grid_operand(e) > 1.5),
+    "where-other": lambda e: e.where(alternating(e), 3.0),
+    "where-drop": lambda e: e.where(alternating(e), drop=True),
+    "where-drop-mismatch": lambda e: e.where(
+        alternating(e).isel({dim0(e): slice(1, None)}), drop=True
+    ),
+    "sel-scalar-sum": lambda e: e.sel({dim0(e): labels0(e)[1]}).sum(),
+}
+
+
+@pytest.mark.parametrize("select", list(SELECTIONS))
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_selection_stays_csr_and_matches_dense(build: str, select: str) -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS[build](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    func = SELECTIONS[select]
+    with no_densify():
+        res = func(sparse)
+    assert_sparse_matches(res, func(dense))
+
+
+def test_selection_keeps_absent_cells_termless() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["absent"](base_model())
+    csr = sparse.where(alternating(sparse), 3.0).isel(season=[1, 0, 1])._csr
+    assert csr is not None
+    absent = np.isnan(csr.const)
+    assert absent.any()
+    assert (np.diff(csr.csr.indptr)[absent] == 0).all()
+
+
+def test_scalar_selection_coords_merge_like_dense() -> None:
+    require_v1()
+    c = base_model()
+    sparse = SPARSE_BUILDS["grouped"](c)
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    flow = (1.0 * c.flow).groupby(c.bus0).sum()
+    with no_densify():
+        res = sparse.sel(snapshot=1) + flow.sel(snapshot=1)
+    assert_sparse_matches(res, dense.sel(snapshot=1) + flow.sel(snapshot=1))
+    with pytest.raises(ValueError) as want:
+        dense.sel(snapshot=1) + flow.sel(snapshot=2)
+    with pytest.raises(ValueError) as got:
+        sparse.sel(snapshot=1) + flow.sel(snapshot=2)
+    assert str(got.value) == str(want.value)
+
+
+def test_where_on_mismatched_labels_raises_like_dense() -> None:
+    require_v1()
+    sparse = SPARSE_BUILDS["grouped"](base_model())
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    cond = alternating(dense).isel(bus=slice(1, None))
+    with pytest.raises(ValueError) as want:
+        dense.where(cond)
+    with pytest.raises(ValueError) as got:
+        sparse.where(cond)
+    assert str(got.value) == str(want.value)
+    assert sparse.is_sparse
+
+
+SELECTION_FALLBACKS = ["isel-pointwise", "where-new-dim", "where-callable"]
+
+
+@pytest.mark.parametrize("op", SELECTION_FALLBACKS)
+def test_selection_fallbacks_match_dense(op: str) -> None:
+    require_v1()
+    c = base_model()
+    sparse = SPARSE_BUILDS["grouped"](c)
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    func = DENSIFY_OPS[op][0]
+    res = func(sparse, c)
+    assert not res.is_sparse
+    assert_linequal(res, func(dense, c))

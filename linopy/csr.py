@@ -32,7 +32,7 @@ import operator
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 from warnings import warn
 
 import numpy as np
@@ -51,6 +51,9 @@ if TYPE_CHECKING:
 CONTRACTION_CHUNK = 64
 """Kept-axis block size of the chunked Kronecker product in ``contracted``."""
 
+AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
+"""Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
+
 
 @dataclass(frozen=True, eq=False)
 class Grid:
@@ -61,11 +64,12 @@ class Grid:
     dimensions are, so row ``i`` of a CSR matrix is cell ``i`` of the
     C-order flattening of that grid. ``aux`` holds the auxiliary
     coordinates as ``name -> (grid dim, values)``, e.g. the key levels of a
-    grouped result kept stacked over the observed key combinations.
+    grouped result kept stacked over the observed key combinations; a
+    scalar coordinate, e.g. left by a scalar selection, has dim ``()``.
     """
 
     indexes: dict[str, pd.Index]
-    aux: dict[str, tuple[str, np.ndarray]] = field(default_factory=dict)
+    aux: AuxCoords = field(default_factory=dict)
 
     @classmethod
     def from_coords(cls, coords: Iterable[pd.Index]) -> Grid:
@@ -133,16 +137,23 @@ class Grid:
         indexes = {
             names.get(d, d): i.rename(names.get(d, d)) for d, i in self.indexes.items()
         }
-        aux = {n: (names.get(d, d), v) for n, (d, v) in self.aux.items()}
+        aux = {
+            n: (names.get(d, d) if isinstance(d, str) else d, v)
+            for n, (d, v) in self.aux.items()
+        }
         return Grid(indexes, aux)
 
     def reordered(self, dims: Iterable[str]) -> Grid:
         """
         Select and order the given dimensions; labels unchanged, auxiliary
-        coordinates on dropped dimensions dropped.
+        coordinates on dropped dimensions dropped, scalar ones kept.
         """
         dims = tuple(dims)
-        aux = {n: (d, v) for n, (d, v) in self.aux.items() if d in dims}
+        aux = {
+            n: (d, v)
+            for n, (d, v) in self.aux.items()
+            if not isinstance(d, str) or d in dims
+        }
         return Grid({d: self.indexes[d] for d in dims}, aux)
 
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
@@ -158,10 +169,11 @@ class Grid:
 
     def conformed(self, target: Grid) -> Grid:
         """``target`` carrying this grid's auxiliary coordinates, reindexed onto its labels."""
-        aux = {}
+        aux = dict(self.aux)
         for name, (d, values) in self.aux.items():
-            series = pd.Series(values, index=self.indexes[d])
-            aux[name] = (d, series.reindex(target.indexes[d]).to_numpy())
+            if isinstance(d, str):
+                series = pd.Series(values, index=self.indexes[d])
+                aux[name] = (d, series.reindex(target.indexes[d]).to_numpy())
         return Grid(target.indexes, aux)
 
     def combined(self, others: Iterable[Grid], how: str) -> Grid:
@@ -193,9 +205,20 @@ class Grid:
             return False
         for name, (d, values) in self.aux.items():
             other_d, other_values = other.aux[name]
-            if d != other_d or not pd.Index(values).equals(pd.Index(other_values)):
+            if d != other_d:
+                return False
+            if not pd.Index(np.atleast_1d(values)).equals(
+                pd.Index(np.atleast_1d(other_values))
+            ):
                 return False
         return True
+
+    def dataarray(self, values: np.ndarray, name: str | None = None) -> DataArray:
+        """Wrap one value per flat cell as a DataArray on the grid's coordinates."""
+        coords = self.to_dataset().coords
+        return DataArray(
+            values.reshape(self.shape), coords=coords, dims=self.dims, name=name
+        )
 
 
 @dataclass(frozen=True)
@@ -280,7 +303,7 @@ class CSRLinearExpression:
         keys = [str(k) for k in frame.columns]
         scatter_codes: dict[str, np.ndarray] = {}
         indexes: dict[str, pd.Index] = {}
-        aux: dict[str, tuple[str, np.ndarray]] = {}
+        aux: AuxCoords = {}
         if len(keys) == 1:
             codes, uniques = pd.factorize(frame.iloc[:, 0], sort=True)
             scatter_codes[group_dim] = codes
@@ -462,6 +485,17 @@ class CSRLinearExpression:
             shape=self.csr.shape,
         )
         return replace(self, csr=csr, const=const)
+
+    def taken(self, rows: np.ndarray, grid: Grid) -> CSRLinearExpression:
+        """
+        Gather rows into the cells of ``grid``, cell ``i`` taking row
+        ``rows[i]`` with its terms, explicit zeros included, and its constant;
+        ``-1`` leaves the cell absent. Auxiliary coordinates are ``grid``'s.
+        """
+        present = rows >= 0
+        const = np.where(present, self.const[rows], np.nan)
+        csr = self.csr[np.where(present, rows, 0)]
+        return replace(self, csr=csr, grid=grid).with_const(const)
 
     def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
@@ -668,15 +702,17 @@ def _densify_notice(reason: str) -> None:
         warn(message, PerformanceWarning, stacklevel=4)
 
 
-def _aux_coords(
-    ds: Dataset | DataArray, dims: set[str]
-) -> dict[str, tuple[str, np.ndarray]]:
-    """One-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
-    return {
-        str(n): (str(c.dims[0]), c.to_numpy())
-        for n, c in ds.coords.items()
-        if n not in ds.dims and len(c.dims) == 1 and str(c.dims[0]) in dims
-    }
+def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
+    """Scalar and one-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
+    aux: AuxCoords = {}
+    for n, c in ds.coords.items():
+        if n in ds.dims:
+            continue
+        if c.ndim == 0:
+            aux[str(n)] = ((), c.to_numpy())
+        elif c.ndim == 1 and str(c.dims[0]) in dims:
+            aux[str(n)] = (str(c.dims[0]), c.to_numpy())
+    return aux
 
 
 def _member_rows(
