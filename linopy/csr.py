@@ -57,8 +57,8 @@ CONTRACTION_CHUNK = 64
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
 
-_AUX_PREFIX = "_aux_"
-_COORDDIM_PREFIX = "_coorddim_"
+_AUX_PREFIX = "_aux"
+_SCALAR_DIM = "_scalar"
 
 
 @dataclass(frozen=True, eq=False)
@@ -92,22 +92,25 @@ class Grid:
     @classmethod
     def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
         """Read back a grid written by :meth:`to_netcdf_vars`."""
-        aux: AuxCoords = {}
-        for k in ds:
-            name = str(k)
-            if name.startswith(_AUX_PREFIX):
-                da = ds[k]
-                d = str(da.dims[0]).removeprefix(_COORDDIM_PREFIX) if da.ndim else ()
-                aux[name.removeprefix(_AUX_PREFIX)] = (d, da.to_numpy())
+        aux: AuxCoords = {
+            da.attrs["name"]: (da.attrs.get("dim", ()), da.to_numpy())
+            for k, da in ds.data_vars.items()
+            if str(k).startswith(_AUX_PREFIX)
+        }
         return cls(cls.from_coords(coords_from_dataset(ds, list(dims))).indexes, aux)
 
     def to_netcdf_vars(self) -> dict[str, DataArray]:
-        """The indexes and auxiliary coordinates as plain data variables for netcdf."""
+        """
+        The indexes and auxiliary coordinates as plain data variables for
+        netcdf, named by position with the coordinate names as attributes.
+        """
         aux = {
-            f"{_AUX_PREFIX}{n}": DataArray(
-                v, dims=[f"{_COORDDIM_PREFIX}{d}"] if isinstance(d, str) else []
+            f"{_AUX_PREFIX}{j}": DataArray(
+                v,
+                dims=[f"{_AUX_PREFIX}dim{j}"] if isinstance(d, str) else [],
+                attrs={"name": n} | ({"dim": d} if isinstance(d, str) else {}),
             )
-            for n, (d, v) in self.aux.items()
+            for j, (n, (d, v)) in enumerate(self.aux.items())
         }
         return coords_to_dataset_vars(self.coords) | aux
 
@@ -369,6 +372,9 @@ class CSRLinearExpression:
         """Convert a dense expression to CSR form on its own coordinate grid."""
         grid_dims = tuple(str(d) for d in ds.coeffs.dims if d not in HELPER_DIMS)
         grid = Grid.from_dataset(ds, grid_dims)
+        if not grid_dims:
+            scalar = ds.expand_dims(_SCALAR_DIM)
+            return cls._from_scatter(scalar, model, grid, _SCALAR_DIM, {}, False)
         first = grid_dims[0]
         codes = {first: np.arange(len(grid.indexes[first]))}
         return cls._from_scatter(ds, model, grid, first, codes, False)
@@ -394,7 +400,7 @@ class CSRLinearExpression:
         stays absent, as on the dense v1 merge path.
         """
         grid_dims = grid.dims
-        slot = min(grid_dims.index(d) for d in scatter_codes)
+        slot = min((grid_dims.index(d) for d in scatter_codes), default=0)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
         member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])

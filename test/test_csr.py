@@ -1347,6 +1347,16 @@ def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
     assert not (1.0 * c.gen_p).is_sparse
 
 
+def add_chunked(e: LinearExpression, c: Case) -> Any:
+    c.m.chunk = {"bus": 2}
+    return c.m.add_constraints(e >= 1, freeze=True)
+
+
+def add_with_penalty(e: LinearExpression, c: Case) -> Any:
+    c.m.add_objective(1.0 * c.gen_p.sum())
+    return c.m.add_constraints(e >= 1, penalty=1.0)
+
+
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
     "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
@@ -1357,6 +1367,12 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     ),
     "rhs-expr": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "over different dim"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
+    "add-unfrozen": (
+        lambda e, c: c.m.add_constraints(e >= 1),
+        "constraint added unfrozen, `freeze=False`",
+    ),
+    "add-chunked": (add_chunked, "chunked model"),
+    "add-penalty": (add_with_penalty, "`penalty` given"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
     "groupby-fallback": (
@@ -1534,6 +1550,28 @@ def test_elementwise_constant_ops_stay_csr_and_match_dense(
     assert_linequal(res, func(dense, x))
 
 
+DENSE_ADDENDS: dict[str, Callable[[Case, LinearExpression], LinearExpression]] = {
+    "same-grid": lambda c, dense: 2 * dense,
+    "scalar-var": lambda c, dense: 2 * c.gen_p.isel(gen=0, snapshot=0),
+}
+
+
+@pytest.mark.parametrize(
+    ("build", "addend"),
+    [(b, "same-grid") for b in SPARSE_BUILDS] + [("zero-dim", "scalar-var")],
+)
+def test_merge_with_dense_expression_stays_csr_and_matches_dense(
+    build: str, addend: str
+) -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = sparse_and_dense(build, c)
+    other = DENSE_ADDENDS[addend](c, dense)
+    with no_densify():
+        res = sparse + other
+    assert_sparse_matches(res, dense + other)
+
+
 @pytest.mark.parametrize("join", ["inner", "outer", "left", "right"])
 @pytest.mark.parametrize("fill_value", [None, linopy.ABSENT], ids=["fill", "absent"])
 @pytest.mark.parametrize("method", ["add", "sub", "mul", "div"])
@@ -1602,6 +1640,24 @@ def test_join_with_constant_keeps_aux_coords_like_dense(
     with no_densify():
         res = getattr(sparse, op)(x, join=join)
     assert_sparse_matches(res, getattr(dense, op)(x, join=join))
+
+
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+def test_to_constraint_join_with_constant_matches_dense(join: JoinOptions) -> None:
+    require_v1()
+    cons = []
+    for sparse in (False, True):
+        c = base_model()
+        lhs = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=sparse)
+        with no_densify():
+            con = lhs.to_constraint("<=", c.load.isel(bus=[0, 2]), join=join)
+            cons.append(c.m.add_constraints(con, name="c", freeze=sparse))
+    dense, frozen = cons
+    assert isinstance(frozen, CSRConstraint)
+    xr.testing.assert_identical(
+        xr.Dataset(coords=frozen.coords), xr.Dataset(coords=dense.coords)
+    )
+    assert_frozen_equal(dense, frozen)
 
 
 def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None:
@@ -1851,8 +1907,21 @@ def observed_keys_group() -> LinearExpression:
     return expr.groupby(["period", "region"]).sum(observed=True, sparse=True)
 
 
+def dashed_group() -> LinearExpression:
+    """An observed grouping whose dims and aux coords carry dashes, the netcdf name separator."""
+    m = Model()
+    s = pd.RangeIndex(4, name="my-s")
+    x = m.add_variables(coords=[s], name="x")
+    grouper = pd.DataFrame(
+        {"my-bus": ["a", "a", "b", "b"], "tag": [1, 1, 2, 2]}, index=s
+    )
+    grouped = x.to_linexpr().groupby(grouper).sum(sparse=True, observed=True)
+    return grouped.rename({"group": "my-group"})
+
+
 AUX_BUILDS: dict[str, Callable[[], LinearExpression]] = {
     "observed-keys": observed_keys_group,
+    "dashed": dashed_group,
     "aux": lambda: SPARSE_BUILDS["aux"](base_model()),
     "scalar": lambda: SPARSE_BUILDS["grouped"](base_model()).sel(snapshot=1),
 }
@@ -1883,7 +1952,6 @@ def test_frozen_constraint_keeps_aux_coords_like_dense(
 FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
     "loc": lambda con: con.loc[{"bus": "bus0"}],
     "update": lambda con: con.update(rhs=2.0),
-    "from_rule": lambda con: type(con).from_rule(con.model, lambda m, i: None, [[0]]),
     "soften": lambda con: con.soften(penalty=1.0),
     **{
         attr: lambda con, attr=attr: setattr(con, attr, 1.0)
@@ -1900,6 +1968,11 @@ def test_frozen_constraint_mutation_names_mutable(op: str) -> None:
     assert isinstance(con, CSRConstraint)
     with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*\.mutable\(\)"):
         FROZEN_MUTATIONS[op](con)
+
+
+def test_frozen_from_rule_names_the_mutable_route() -> None:
+    with pytest.raises(AttributeError, match=r"Constraint\.from_rule .*\.freeze\(\)"):
+        CSRConstraint.from_rule(Model(), lambda m, i: None, [[0]])
 
 
 EXPR_RHS: dict[str, Callable[[Case, bool], LinearExpression]] = {

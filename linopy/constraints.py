@@ -593,8 +593,12 @@ def _positional_csr(
 _UNSUPPORTED = "is not supported on a frozen constraint"
 
 
-def _frozen_error(attr: str, what: str = "is read-only") -> AttributeError:
-    return AttributeError(f"CSRConstraint.{attr} {what}; call .mutable() to modify.")
+def _frozen_error(
+    attr: str,
+    what: str = "is read-only",
+    remedy: str = "call .mutable() to modify",
+) -> AttributeError:
+    return AttributeError(f"CSRConstraint.{attr} {what}; {remedy}.")
 
 
 _PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, "weakref.ref[np.ndarray]"]
@@ -935,7 +939,11 @@ class CSRConstraint(ConstraintBase):
 
     @classmethod
     def from_rule(cls, *args: Any, **kwargs: Any) -> NoReturn:
-        raise _frozen_error("from_rule", _UNSUPPORTED)
+        raise _frozen_error(
+            "from_rule",
+            "is not supported",
+            "build with Constraint.from_rule and call .freeze() on the result",
+        )
 
     @property
     @has_optimized_model

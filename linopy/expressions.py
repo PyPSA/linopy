@@ -2670,7 +2670,7 @@ class LinearExpression(BaseExpression):
     ) -> ConstraintBase:
         if self._csr is not None and isinstance(sign, str):
             rhs = as_constant(rhs)
-            if not isinstance(rhs, CONSTANT_TYPES):
+            if join is not None or not isinstance(rhs, CONSTANT_TYPES):
                 return self.sub(rhs, join=join).to_constraint(sign, 0)
             rhs_da = constraints.csr_rhs(self._csr, rhs)
             if isinstance(rhs_da, DataArray):

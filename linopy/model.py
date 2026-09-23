@@ -61,6 +61,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.csr import _densify_notice
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -1308,6 +1309,7 @@ class Model:
         name = self._resolve_constraint_name(name)
         if freeze is None:
             freeze = self.freeze_constraints
+        chunked = bool(freeze and self.chunk)
         freeze = freeze and not self.chunk
 
         if penalty is not None and freeze:
@@ -1345,6 +1347,14 @@ class Model:
             self._cCounter += con.full_size
             con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
             return self.constraints.add(con)
+        if isinstance(con, CSRConstraint):
+            if penalty is not None:
+                reason = "`penalty` given, softening needs a mutable constraint"
+            elif chunked:
+                reason = "chunked model, `Model.chunk` adds constraints unfrozen"
+            else:
+                reason = "constraint added unfrozen, `freeze=False`"
+            _densify_notice(reason)
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)
