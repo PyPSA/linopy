@@ -1185,8 +1185,9 @@ class BaseExpression(ABC):
         self,
         self_const: DataArray,
         operand: Any,
-        needs_data_reindex: bool,
         op: Callable[[Any, Any], Any],
+        *,
+        needs_data_reindex: bool,
         scale: bool,
     ) -> Self:
         """
@@ -1220,13 +1221,13 @@ class BaseExpression(ABC):
             if is_nan_scalar(other):
                 check_user_nan()
             return self._combined_with_constant(
-                self.const, other, False, operator.add, scale=False
+                self.const, other, operator.add, needs_data_reindex=False, scale=False
             )
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
         )
         expr = self._combined_with_constant(
-            self_const, da, needs_reindex, operator.add, scale=False
+            self_const, da, operator.add, needs_data_reindex=needs_reindex, scale=False
         )
         return expr._absorb_join_absence(fill_value)
 
@@ -1280,7 +1281,7 @@ class BaseExpression(ABC):
             other, fill_value, join, op_kind
         )
         expr = self._combined_with_constant(
-            self_const, factor, needs_reindex, op, scale=True
+            self_const, factor, op, needs_data_reindex=needs_reindex, scale=True
         )
         return expr._absorb_join_absence(fill_value)
 
@@ -2449,12 +2450,6 @@ class LinearExpression(BaseExpression):
         return super().size
 
     @property
-    def ndim(self) -> int:
-        if self._csr is not None:
-            return len(self._csr.grid.dims)
-        return super().ndim
-
-    @property
     def sizes(self) -> Frozen:
         if self._csr is not None:
             return Frozen(dict(zip(self.dims, self.shape)))
@@ -2487,14 +2482,15 @@ class LinearExpression(BaseExpression):
         self,
         self_const: DataArray,
         operand: Any,
-        needs_data_reindex: bool,
         op: Callable[[Any, Any], Any],
+        *,
+        needs_data_reindex: bool,
         scale: bool,
     ) -> Self:
         csr = self._csr
-        args = (self_const, operand, needs_data_reindex, op, scale)
+        flags = {"needs_data_reindex": needs_data_reindex, "scale": scale}
         if csr is None:
-            return super()._combined_with_constant(*args)
+            return super()._combined_with_constant(self_const, operand, op, **flags)
         dims = csr.grid.dims
         const = op(self_const, operand)
         if set(const.dims) != set(dims) or _has_multiindex(const.indexes.values()):
@@ -2502,7 +2498,7 @@ class LinearExpression(BaseExpression):
                 "elementwise operation with a constant over new dimensions or "
                 "MultiIndex labels"
             )
-            return super()._combined_with_constant(*args)
+            return super()._combined_with_constant(self_const, operand, op, **flags)
         const = const.transpose(*dims)
         grid = Grid.from_dataset(const, dims)
         if needs_data_reindex:

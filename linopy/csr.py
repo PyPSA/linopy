@@ -335,15 +335,7 @@ class CSRLinearExpression:
         if isinstance(source, Dataset):
             return cls._from_scatter(ds, model, grid, member_dim, scatter_codes, True)
         member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
-        stride = grid.strides
-        rows = _outer_sum(
-            [
-                member_rows
-                if d == member_dim
-                else np.arange(len(grid.indexes[d])) * stride[d]
-                for d in source.grid.dims
-            ]
-        )
+        rows = _cell_rows(grid, member_rows, member_dim, source.grid.dims)
         return source.aggregated(grid, rows)
 
     @classmethod
@@ -376,20 +368,11 @@ class CSRLinearExpression:
         stays absent, as on the dense v1 merge path.
         """
         grid_dims = grid.dims
-        stride = grid.strides
-
         slot = min(grid_dims.index(d) for d in scatter_codes)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
         member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
-        cell_rows = _outer_sum(
-            [
-                member_rows
-                if d == member_dim
-                else np.arange(len(grid.indexes[d])) * stride[d]
-                for d in transposed
-            ]
-        )
+        cell_rows = _cell_rows(grid, member_rows, member_dim, transposed)
 
         coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
         vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
@@ -722,6 +705,24 @@ def _member_rows(
     for d, codes in scatter_codes.items():
         member_rows += codes * stride[d]
     return member_rows
+
+
+def _cell_rows(
+    grid: Grid, member_rows: np.ndarray, member_dim: str, dims: Iterable[str]
+) -> np.ndarray:
+    """
+    Grid row of every cell over ``dims`` in C order, ``member_dim`` landing on
+    ``member_rows`` and every other dim mapping one-to-one onto ``grid``.
+    """
+    stride = grid.strides
+    return _outer_sum(
+        [
+            member_rows
+            if d == member_dim
+            else np.arange(len(grid.indexes[d])) * stride[d]
+            for d in dims
+        ]
+    )
 
 
 def _outer_sum(axis_positions: list[np.ndarray]) -> np.ndarray:

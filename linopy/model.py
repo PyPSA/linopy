@@ -1329,16 +1329,16 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if (
-            isinstance(con, CSRConstraint)
-            and isinstance(lhs, LinearExpression)
+            isinstance(lhs, LinearExpression)
+            and lhs.is_sparse
             and freeze
             and mask is not None
         ):
-            mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
-            con = self._constraint_from_lhs(lhs.where(mask), sign, rhs, coords)
+            mask = broadcast_to_coords(mask, lhs.coords, label="mask").astype(bool)
+            lhs = lhs.where(mask)
             mask = None
+        con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if isinstance(con, CSRConstraint) and freeze and mask is None:
             _check_infinities(con._sign, con._rhs, name)
             self.check_force_dim_names(con.coords.to_dataset())
