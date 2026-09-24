@@ -92,7 +92,7 @@ def canon(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def assert_frozen_equal(con1: Constraint, con2: CSRConstraint) -> None:
+def assert_frozen_equal(con1: ConstraintBase, con2: ConstraintBase) -> None:
     d1, d2 = canon(con1.to_polars()), canon(con2.to_polars())
     assert d1["labels"].equals(d2["labels"])
     assert d1["vars"].equals(d2["vars"])
@@ -1473,7 +1473,9 @@ def test_objective_stays_csr_and_exports_like_dense(
     lp_sparse, lp_dense = (tmp_path / f"{k}.lp" for k in ("sparse", "dense"))
     assert canon_lp(lp_sparse.read_text()) == canon_lp(lp_dense.read_text())
     rs, rd = (linopy.read_netcdf(tmp_path / f"{k}.nc") for k in ("sparse", "dense"))
-    assert_cells_equal(rs.objective.expression, rd.objective.expression, ())
+    es, ed = rs.objective.expression, rd.objective.expression
+    assert isinstance(es, LinearExpression) and isinstance(ed, LinearExpression)
+    assert_cells_equal(es, ed, ())
     assert rs.objective.expression.attrs["name"] == "objective"
 
 
@@ -1949,11 +1951,15 @@ def test_frozen_constraint_keeps_aux_coords_like_dense(
     xr.testing.assert_identical(xr.Dataset(coords=read.coords), want)
 
 
+def setter(attr: str) -> Callable[[CSRConstraint], None]:
+    return lambda con: setattr(con, attr, 1.0)
+
+
 FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
     "loc": lambda con: con.loc[{"bus": "bus0"}],
     "update": lambda con: con.update(rhs=2.0),
     **{
-        attr: lambda con, attr=attr: setattr(con, attr, 1.0)
+        attr: setter(attr)
         for attr in ["coeffs", "vars", "sign", "rhs", "lhs", "scaling"]
     },
 }
