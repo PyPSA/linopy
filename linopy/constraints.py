@@ -77,7 +77,13 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
-from linopy.csr import Grid, _densify_notice, csr_nterm, csr_to_term_arrays
+from linopy.csr import (
+    Grid,
+    _densify_notice,
+    csr_nterm,
+    csr_to_term_arrays,
+    index_dtype,
+)
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.types import (
@@ -1978,7 +1984,8 @@ class Constraint(ConstraintBase):
         data = coeffs_final[valid_final]
 
         counts = valid_final.sum(axis=1)
-        indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
+        dtype = index_dtype(len(data), (len(con_labels),), self.model)
+        indptr = np.empty(len(con_labels) + 1, dtype=dtype)
         indptr[0] = 0
         np.cumsum(counts, out=indptr[1:])
         return con_labels, row_mask, vlabel_cols, data, indptr

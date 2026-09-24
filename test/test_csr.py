@@ -1435,6 +1435,28 @@ def test_flat_and_to_polars_served_without_densifying(build: str, scale: float) 
     pd.testing.assert_frame_equal(got_flat, dense.flat)
 
 
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense(build)
+    m = sparse.model
+    con = m.add_constraints(sparse >= 1, name="con", freeze=True)
+    assert isinstance(con, CSRConstraint) and sparse._csr is not None
+    dtypes = {sparse._csr.csr.indices.dtype, con._csr.indices.dtype}
+    assert dtypes == {np.dtype(m.dtypes["labels"]), m.matrices.A.indices.dtype}
+
+
+@pytest.mark.parametrize("label_dtype", [np.int32, np.int64])
+def test_sparse_group_sum_indices_widen_with_model(label_dtype: type) -> None:
+    require_v1()
+    m = Model(dtypes={"labels": label_dtype})
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    group = xr.DataArray([0, 0, 1, 1], coords=[x.indexes["i"]], name="g")
+    expr = x.groupby(group).sum(sparse=True)
+    assert expr._csr is not None
+    assert expr._csr.csr.indices.dtype == expr._csr.csr.indptr.dtype == label_dtype
+
+
 def objective_twins(build: str, scale: float) -> tuple[Model, Model]:
     """Twin models, the first with the sparse build as objective, the second dense."""
     sparse, _ = sparse_and_dense(build)

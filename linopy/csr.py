@@ -269,6 +269,14 @@ class CSRLinearExpression:
     grid: Grid
     model: Model
 
+    def __post_init__(self) -> None:
+        csr = self.csr
+        dtype = index_dtype(csr.nnz, csr.shape, self.model)
+        if csr.indices.dtype != dtype or csr.indptr.dtype != dtype:
+            indices, indptr = csr.indices.astype(dtype), csr.indptr.astype(dtype)
+            csr = scipy.sparse.csr_array((csr.data, indices, indptr), shape=csr.shape)
+            object.__setattr__(self, "csr", csr)
+
     @property
     def shape(self) -> tuple[int, ...]:
         return self.grid.shape
@@ -412,9 +420,8 @@ class CSRLinearExpression:
         keep = (vars_ != -1) & ~np.isnan(coeffs)
 
         full_size = grid.size
-        coo = scipy.sparse.coo_array(
-            (coeffs[keep], (rows[keep], vars_[keep])),
-            shape=(full_size, model._xCounter),
+        csr = coo_to_csr(
+            coeffs[keep], rows[keep], vars_[keep], (full_size, model._xCounter), model
         )
 
         const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
@@ -424,7 +431,7 @@ class CSRLinearExpression:
         const[cell_rows] = 0.0
         np.add.at(const, cell_rows, const_vals)
 
-        return cls(scipy.sparse.csr_array(coo), const, grid, model)
+        return cls(csr, const, grid, model)
 
     def aggregated(self, grid: Grid, rows: np.ndarray) -> CSRLinearExpression:
         """
@@ -435,14 +442,13 @@ class CSRLinearExpression:
         cells no row lands in are absent. Auxiliary coordinates are ``grid``'s.
         """
         coo = self.csr.tocoo()
-        coo = scipy.sparse.coo_array(
-            (coo.data, (rows[coo.coords[0]], coo.coords[1])),
-            shape=(grid.size, self.csr.shape[1]),
-        )
+        shape = (grid.size, self.csr.shape[1])
+        rows_ = rows[coo.coords[0]]
+        csr = coo_to_csr(coo.data, rows_, coo.coords[1], shape, self.model)
         weights = np.nan_to_num(self.const)
         const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
         const[np.bincount(rows, minlength=grid.size) == 0] = np.nan
-        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
+        return replace(self, csr=csr, const=const, grid=grid)
 
     def summed(self, dims: Iterable[str]) -> CSRLinearExpression:
         """
@@ -527,14 +533,13 @@ class CSRLinearExpression:
         rows = row_map[coo.coords[0][keep]]
         cols = coo.coords[1][keep]
         n_cells = grid.size
-        coo = scipy.sparse.coo_array(
-            (coo.data[keep], (rows, cols)), shape=(n_cells, self.csr.shape[1])
-        )
+        shape = (n_cells, self.csr.shape[1])
+        csr = coo_to_csr(coo.data[keep], rows, cols, shape, self.model)
         const = np.full(n_cells, fill)
         const[row_map[valid]] = self.const[valid]
         return replace(
             self,
-            csr=scipy.sparse.csr_array(coo),
+            csr=csr,
             const=const,
             grid=self.grid.conformed(grid),
         )
@@ -569,12 +574,10 @@ class CSRLinearExpression:
         cols = np.concatenate([a.coords[1], b.coords[1]])
         data = np.concatenate([a.data, b.data])
         present = ~np.isnan(const)[rows]
-        coo = scipy.sparse.coo_array(
-            (data[present], (rows[present], cols[present])), shape=shape
-        )
+        csr = coo_to_csr(data[present], rows[present], cols[present], shape, self.model)
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in (self, other)])
         grid = replace(self.grid, aux=other.grid.aux | self.grid.aux)
-        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
+        return replace(self, csr=csr, const=const, grid=grid)
 
     def contracted(
         self,
@@ -668,6 +671,28 @@ class CSRLinearExpression:
             coords=self.grid.indexes | self.grid.aux,
         )
         return LinearExpression(absorb_absence(ds), self.model)
+
+
+def index_dtype(nnz: int, shape: tuple[int, ...], model: Model) -> np.dtype:
+    """
+    Index dtype of a CSR store: the model's label dtype, widened to int64
+    only when the nonzeros or the shape outgrow it.
+    """
+    dtype = np.dtype(model._dtypes["labels"])
+    return dtype if max(nnz, *shape) <= np.iinfo(dtype).max else np.dtype(np.int64)
+
+
+def coo_to_csr(
+    data: np.ndarray,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    shape: tuple[int, int],
+    model: Model,
+) -> scipy.sparse.csr_array:
+    """Build a CSR store from COO triplets in the model's index dtype."""
+    dtype = index_dtype(len(data), shape, model)
+    coords = (rows.astype(dtype, copy=False), cols.astype(dtype, copy=False))
+    return scipy.sparse.csr_array(scipy.sparse.coo_array((data, coords), shape=shape))
 
 
 def csr_nterm(csr: scipy.sparse.csr_array) -> int:
