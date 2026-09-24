@@ -2501,6 +2501,9 @@ class SCIP(Solver[None]):
             SolverFeature.LP_FILE_NAMES,
             SolverFeature.READ_MODEL_FROM_FILE,
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.INDICATOR_CONSTRAINTS,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
         }
     )
 
@@ -2583,10 +2586,8 @@ class SCIP(Solver[None]):
 
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
-            vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
-
             s = m.getSols()[0]
-            kept_vars = [v for v in m.getVars() if v.name not in vars_to_ignore]
+            kept_vars = [v for v in m.getVars() if re.fullmatch(r"x\d+", v.name)]
             sol = _solution_from_names(
                 np.array([s[v] for v in kept_vars], dtype=float),
                 [v.name for v in kept_vars],
@@ -2595,7 +2596,7 @@ class SCIP(Solver[None]):
 
             cons = m.getConss(False)
             if len(cons) != 0:
-                kept_cons = [c for c in cons if c.name not in vars_to_ignore]
+                kept_cons = [c for c in cons if re.fullmatch(r"c\d+", c.name)]
                 dual = _solution_from_names(
                     np.array([m.getDualSolVal(c) for c in kept_cons], dtype=float),
                     [c.name for c in kept_cons],

@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+* The SCIP solver now accepts indicator constraints, SOS constraints and
+  semi-continuous variables. SCIP already read all three from the problem
+  file; it rewrites them into rows and variables of its own, which the
+  solution reader now leaves out of the returned solution and duals.
+
 
 *Strict "v1" arithmetic semantics (opt-in)*
 
