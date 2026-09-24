@@ -301,6 +301,7 @@ def test_quadratic_expression_linear_terms(
     x: Variable, y: Variable, factor_last: bool
 ) -> None:
     expr = x * y + 3 * x + 0 * y
+    assert isinstance(expr, QuadraticExpression)
     if factor_last:
         expr = QuadraticExpression(expr.data.transpose(..., FACTOR_DIM), expr.model)
     labels, coeffs = expr.linear_terms()
