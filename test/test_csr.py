@@ -2048,9 +2048,16 @@ def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) ->
     assert_frozen_equal(con1, con2)
 
 
+MASK_KINDS: dict[str, Callable[[Case], xr.DataArray | None]] = {
+    "full": lambda c: None,
+    "masked": lambda c: c.load > 4,
+    "all-masked": lambda c: c.load > np.inf,
+}
+
+
 def softened(
     sign: str,
-    masked: bool,
+    mask_kind: str,
     route: str,
     max_violation: float | None,
     freeze: bool,
@@ -2058,7 +2065,7 @@ def softened(
     c = base_model()
     c.m.add_objective(1.0 * c.gen_p.sum())
     c.m.freeze_constraints = freeze and route == "penalty-default"
-    mask = c.load > 4 if masked else None
+    mask = MASK_KINDS[mask_kind](c)
     args = (c.balance_lhs(sparse=freeze), sign, c.load)
     kwargs: dict[str, Any] = dict(name="c", mask=mask)
     if route == "soften":
@@ -2079,28 +2086,28 @@ SOFTEN_ROUTES = [
 
 
 @pytest.mark.parametrize(("route", "max_violation"), SOFTEN_ROUTES)
-@pytest.mark.parametrize("masked", [False, True], ids=["full", "masked"])
+@pytest.mark.parametrize("mask_kind", list(MASK_KINDS))
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
 def test_frozen_soften_matches_dense(
-    sign: str, masked: bool, route: str, max_violation: float | None, tmp_path: Path
+    sign: str, mask_kind: str, route: str, max_violation: float | None, tmp_path: Path
 ) -> None:
     require_v1()
-    dense_case, dense = softened(sign, masked, route, max_violation, freeze=False)
+    dense_case, dense = softened(sign, mask_kind, route, max_violation, freeze=False)
     with no_densify():
-        case, con = softened(sign, masked, route, max_violation, freeze=True)
+        case, con = softened(sign, mask_kind, route, max_violation, freeze=True)
         case.m.to_netcdf(tmp_path / "m.nc")
     assert isinstance(con, CSRConstraint)
     assert case.m.constraints["c"] is con
     assert_frozen_equal(dense, con)
-    got, want = case.m.objective.expression, dense_case.m.objective.expression
-    assert isinstance(got, LinearExpression) and isinstance(want, LinearExpression)
-    assert_cells_equal(got, want, ())
+    obj, want_obj = case.m.objective.expression, dense_case.m.objective.expression
+    assert isinstance(obj, LinearExpression) and isinstance(want_obj, LinearExpression)
+    assert_cells_equal(obj, want_obj, ())
     assert dense.slack is not None
     read = linopy.read_netcdf(tmp_path / "m.nc").constraints["c"]
     assert isinstance(read, CSRConstraint)
     assert_frozen_equal(dense, read)
-    for got in (con, read, con.mutable(), dense.freeze()):
-        slack = got.slack
+    for frozen_con in (con, read, con.mutable(), dense.freeze()):
+        slack = frozen_con.slack
         assert slack is not None
         assert_varequal(slack.positive, dense.slack.positive)
         assert (slack.negative is None) == (dense.slack.negative is None)
@@ -2118,13 +2125,30 @@ def test_frozen_soften_keeps_sparse_objective() -> None:
     assert c.m.objective.expression.is_sparse
 
 
+def test_frozen_soften_max_sense_with_array_penalty() -> None:
+    require_v1()
+    c = base_model()
+    c.m.add_objective(1.0 * c.gen_p.sum(), sense="max")
+    with no_densify():
+        con = c.m.add_constraints(
+            c.balance_lhs(sparse=True), ">=", c.load, name="c", freeze=True
+        )
+    assert isinstance(con, CSRConstraint)
+    penalty = xr.full_like(c.load, 2.0)
+    slack = con.soften(penalty=penalty)
+    expected_objective = 1.0 * c.gen_p.sum() - (penalty * slack.positive).sum()
+    obj = c.m.objective.expression
+    assert isinstance(obj, LinearExpression)
+    assert_cells_equal(obj, expected_objective, ())
+
+
 @pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
 def test_frozen_soften_solves_like_dense(sign: str) -> None:
     require_v1()
     values = []
     for freeze in (False, True):
-        c, _ = softened(sign, True, "soften", 20.0, freeze)
+        c, _ = softened(sign, "masked", "soften", 20.0, freeze)
         for var in (c.gen_p, c.flow):
             var.update(lower=0, upper=1)
         c.m.solve("highs")
@@ -2152,9 +2176,18 @@ SOFTEN_ERRORS: dict[str, tuple[Callable[[ConstraintBase], Any], type, str]] = {
     ),
 }
 
+# "twice", "zero-penalty" and "no-objective" are already covered for dense
+# constraints in test/test_constraint.py; only the frozen path needs them here.
+FROZEN_ONLY_ERRORS = {"twice", "zero-penalty", "no-objective"}
 
-@pytest.mark.parametrize("freeze", [False, True], ids=["dense", "frozen"])
-@pytest.mark.parametrize("error", list(SOFTEN_ERRORS))
+SOFTEN_REJECT_CASES = [
+    pytest.param(error, freeze, id=f"{error}-{'frozen' if freeze else 'dense'}")
+    for error in SOFTEN_ERRORS
+    for freeze in ((True,) if error in FROZEN_ONLY_ERRORS else (False, True))
+]
+
+
+@pytest.mark.parametrize(("error", "freeze"), SOFTEN_REJECT_CASES)
 def test_soften_rejects(error: str, freeze: bool) -> None:
     require_v1()
     c = base_model()

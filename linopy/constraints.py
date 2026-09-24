@@ -342,7 +342,7 @@ class ConstraintBase(ABC):
         max_violation: constant-like
             The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
         name: string
-            The name for the slack variable. If None, it well reuse the constraint name and add a '_slack'.
+            The name for the slack variable. If None, it will reuse the constraint name and add a '_slack'.
 
         Returns
         -------
@@ -353,8 +353,8 @@ class ConstraintBase(ABC):
         Notes
         -----
         On a frozen CSRConstraint the slack terms are appended to the sparse rows in place, without densifying.
-        A detached copy (from `.mutable()`, `.sel()` or `.isel()`) is not registered in model.constraints, so
-        soften raises ValueError on it.
+        A detached copy (from `.mutable()`, `.sel()`, `.isel()` or `.freeze()`) is not registered in
+        model.constraints, so soften raises ValueError on it.
 
         Softening an already-softened constraint raises ValueError instead of stacking a second, redundant slack term
         onto the same lhs.
@@ -389,13 +389,15 @@ class ConstraintBase(ABC):
             raise ValueError(
                 f"Constraint {self.name!r} is not the constraint registered in the model, so "
                 "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
-                "`.sel()`, or `.isel()`). Call `soften` on `model.constraints[name]` directly."
+                "`.sel()`, `.isel()`, or `.freeze()`). Call `soften` on `model.constraints[name]` "
+                "directly."
             )
 
-        if self.slack is not None:
+        existing_slack = self.slack
+        if existing_slack is not None:
             raise ValueError(
                 f"Constraint {self.name!r} was already softened (existing slack "
-                f"variable {self.slack.positive.name!r})"
+                f"variable {existing_slack.positive.name!r})"
             )
 
         sign_values = pd.unique(self.sign.values.ravel())
@@ -750,6 +752,10 @@ class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
 
+    The structure is frozen: rows, coeffs, sign and rhs cannot be mutated
+    (see the raising setters below). The one exception is ``soften``, which
+    appends slack terms to the CSR matrix in place.
+
     Parameters
     ----------
     csr : scipy.sparse.csr_array
@@ -1084,7 +1090,8 @@ class CSRConstraint(ConstraintBase):
 
     def _attach_slack(self, slack: Slack, sign: str) -> None:
         slacks = [v for v in slack if v is not None]
-        coeffs = np.array([1.0 if sign == GREATER_EQUAL else -1.0, 1.0])[: len(slacks)]
+        sign_coeff = 1.0 if sign == GREATER_EQUAL else -1.0
+        coeffs = np.array([sign_coeff, 1.0][: len(slacks)])
         labels = [v.labels.transpose(*self._grid.dims).values.ravel() for v in slacks]
         cols = np.stack(labels, axis=1)[self._active_positions].ravel()
         n = self.ncons
@@ -1092,9 +1099,10 @@ class CSRConstraint(ConstraintBase):
         shape = (n, self._model._xCounter)
         indptr = np.arange(n + 1) * len(slacks)
         extra = scipy.sparse.csr_array((data, cols, indptr), shape=shape)
-        csr = self._csr.copy()
-        csr.resize(shape)
-        self._csr = csr + extra
+        widened = scipy.sparse.csr_array(
+            (self._csr.data, self._csr.indices, self._csr.indptr), shape=shape
+        )
+        self._csr = widened + extra
         self._positional_cache = None
         self._slack = (
             slack.positive.name,
@@ -1475,7 +1483,7 @@ class CSRConstraint(ConstraintBase):
         return self
 
     def freeze(self) -> CSRConstraint:
-        """Return self (already immutable)."""
+        """Return self (structure is already frozen)."""
         return self
 
     def to_dense(self) -> Constraint:
@@ -1583,7 +1591,10 @@ class CSRConstraint(ConstraintBase):
         active_signs = sign_vals[active_mask]
         unique_signs = np.unique(active_signs)
         if len(unique_signs) == 0:
-            sign: str | np.ndarray = "="
+            full_unique_signs = np.unique(sign_vals)
+            sign: str | np.ndarray = (
+                str(full_unique_signs.item()) if len(full_unique_signs) == 1 else "="
+            )
         elif len(unique_signs) == 1:
             sign = str(unique_signs[0])
         else:
