@@ -61,6 +61,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.csr import _densify_notice
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -1308,11 +1309,12 @@ class Model:
         name = self._resolve_constraint_name(name)
         if freeze is None:
             freeze = self.freeze_constraints
+        chunked = bool(freeze and self.chunk)
         freeze = freeze and not self.chunk
 
         if penalty is not None and freeze:
             raise ValueError(
-                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
+                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`), "
                 "since `soften` is not supported on frozen constraints."
             )
 
@@ -1329,17 +1331,11 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        if (
-            isinstance(lhs, LinearExpression)
-            and lhs.is_sparse
-            and freeze
-            and mask is not None
-        ):
-            mask = broadcast_to_coords(mask, lhs.coords, label="mask").astype(bool)
-            lhs = lhs.where(mask)
-            mask = None
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        if isinstance(con, CSRConstraint) and freeze and mask is None:
+        if isinstance(con, CSRConstraint) and freeze:
+            if mask is not None:
+                mask = broadcast_to_coords(mask, con.coords, label="mask")
+                con = con.masked(mask.astype(bool))
             _check_infinities(con._sign, con._rhs, name)
             self.check_force_dim_names(con.coords.to_dataset())
             enforce_no_multiindex(con, context=f"constraint {name!r}")
@@ -1351,6 +1347,14 @@ class Model:
             self._cCounter += con.full_size
             con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
             return self.constraints.add(con)
+        if isinstance(con, CSRConstraint):
+            if penalty is not None:
+                reason = "`penalty` given, softening needs a mutable constraint"
+            elif chunked:
+                reason = "chunked model, `Model.chunk` adds constraints unfrozen"
+            else:
+                reason = "constraint added unfrozen, `freeze=False`"
+            _densify_notice(reason)
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)

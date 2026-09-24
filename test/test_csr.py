@@ -92,7 +92,7 @@ def canon(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def assert_frozen_equal(con1: Constraint, con2: CSRConstraint) -> None:
+def assert_frozen_equal(con1: ConstraintBase, con2: ConstraintBase) -> None:
     d1, d2 = canon(con1.to_polars()), canon(con2.to_polars())
     assert d1["labels"].equals(d2["labels"])
     assert d1["vars"].equals(d2["vars"])
@@ -499,6 +499,22 @@ def test_nan_grouper_raises_eagerly() -> None:
         (1.0 * c.gen_p).groupby(gbus).sum(sparse=True)
 
 
+TERM_LINE = re.compile(r"^[+-][0-9.e+-]+ x[0-9]+$")
+
+
+def canon_lp(text: str) -> list[str]:
+    """LP file lines with each block of term lines sorted."""
+    out: list[str] = []
+    buf: list[str] = []
+    for line in text.splitlines():
+        if TERM_LINE.match(line):
+            buf.append(line)
+        else:
+            out += sorted(buf) + [line]
+            buf = []
+    return out + sorted(buf)
+
+
 def test_lp_files_identical(tmp_path: Path) -> None:
     require_v1()
     sizes = (7, 1, 3, 1, 2, 1, 1, 4, 1, 2, 1, 1)
@@ -509,19 +525,6 @@ def test_lp_files_identical(tmp_path: Path) -> None:
         c2.balance_lhs(sparse=True) == c2.load, name="bal", freeze=True
     )
     c2.m.add_objective((1.0 * c2.gen_p).sum())
-
-    term_line = re.compile(r"^[+-][0-9.e+-]+ x[0-9]+$")
-
-    def canon_lp(text: str) -> list[str]:
-        out: list[str] = []
-        buf: list[str] = []
-        for line in text.splitlines():
-            if term_line.match(line):
-                buf.append(line)
-            else:
-                out += sorted(buf) + [line]
-                buf = []
-        return out + sorted(buf)
 
     f1, f2 = tmp_path / "eager.lp", tmp_path / "sparse.lp"
     c1.m.to_file(f1)
@@ -1344,12 +1347,32 @@ def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
     assert not (1.0 * c.gen_p).is_sparse
 
 
+def add_chunked(e: LinearExpression, c: Case) -> Any:
+    c.m.chunk = {"bus": 2}
+    return c.m.add_constraints(e >= 1, freeze=True)
+
+
+def add_with_penalty(e: LinearExpression, c: Case) -> Any:
+    c.m.add_objective(1.0 * c.gen_p.sum())
+    return c.m.add_constraints(e >= 1, penalty=1.0)
+
+
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
     "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
     "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
-    "rhs": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "non-constant rhs"),
+    "rhs": (
+        lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
+        "rhs over dimensions outside the grid",
+    ),
+    "rhs-expr": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "over different dim"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
+    "add-unfrozen": (
+        lambda e, c: c.m.add_constraints(e >= 1),
+        "constraint added unfrozen, `freeze=False`",
+    ),
+    "add-chunked": (add_chunked, "chunked model"),
+    "add-penalty": (add_with_penalty, "`penalty` given"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
     "groupby-fallback": (
@@ -1395,6 +1418,109 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
     assert len(notices) == 1
     assert re.search(reason, str(notices[0].message))
     assert notices[0].filename == __file__
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_flat_and_to_polars_served_without_densifying(build: str, scale: float) -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense(build)
+    sparse = scale * sparse
+    assert sparse._csr is not None
+    dense = sparse._csr.to_dense()
+    with no_densify():
+        got_pl, got_flat = sparse.to_polars(), sparse.flat
+    assert sparse.is_sparse
+    assert got_pl.sort("vars").equals(dense.to_polars().sort("vars"))
+    pd.testing.assert_frame_equal(got_flat, dense.flat)
+
+
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense(build)
+    m = sparse.model
+    con = m.add_constraints(sparse >= 1, name="con", freeze=True)
+    A = m.matrices.A
+    assert isinstance(con, CSRConstraint) and sparse._csr is not None
+    assert A is not None
+    dtypes = {sparse._csr.csr.indices.dtype, con._csr.indices.dtype}
+    assert dtypes == {np.dtype(m.dtypes["labels"]), A.indices.dtype}
+
+
+@pytest.mark.parametrize("label_dtype", [np.int32, np.int64])
+def test_sparse_group_sum_indices_widen_with_model(label_dtype: type) -> None:
+    require_v1()
+    m = Model(dtypes={"labels": label_dtype})
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    group = xr.DataArray([0, 0, 1, 1], coords=[x.indexes["i"]], name="g")
+    expr = x.groupby(group).sum(sparse=True)
+    assert expr._csr is not None
+    assert expr._csr.csr.indices.dtype == expr._csr.csr.indptr.dtype == label_dtype
+
+
+def objective_twins(build: str, scale: float) -> tuple[Model, Model]:
+    """Twin models, the first with the sparse build as objective, the second dense."""
+    sparse, _ = sparse_and_dense(build)
+    _, dense = sparse_and_dense(build)
+    with no_densify():
+        sparse.model.add_objective(scale * (sparse - sparse.const.fillna(0)))
+    dense.model.add_objective(scale * (dense - dense.const.fillna(0)))
+    return sparse.model, dense.model
+
+
+def test_sparse_objective_rejects_constant_without_densifying() -> None:
+    require_v1()
+    sparse, _ = sparse_and_dense("absent")
+    with no_densify(), pytest.raises(ValueError, match="Constant values"):
+        sparse.model.add_objective(sparse)
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_objective_stays_csr_and_exports_like_dense(
+    build: str, scale: float, tmp_path: Path
+) -> None:
+    require_v1()
+    ms, md = objective_twins(build, scale)
+    with no_densify():
+        c = ms.matrices.c
+        terms = ms.objective.linear_terms()
+        ms.to_file(tmp_path / "sparse.lp")
+        ms.to_netcdf(tmp_path / "sparse.nc")
+        copied = ms.copy()
+        assert ms.objective.attrs == {"name": "objective"}
+        repr(ms.objective)
+    assert ms.objective.expression.is_sparse and copied.objective.expression.is_sparse
+    md.to_file(tmp_path / "dense.lp")
+    md.to_netcdf(tmp_path / "dense.nc")
+    assert np.array_equal(c, md.matrices.c)
+    dense_terms = md.objective.linear_terms()
+    assert sorted(zip(*map(list, terms))) == sorted(zip(*map(list, dense_terms)))
+    assert (dense_terms[1] != 0).all()
+    lp_sparse, lp_dense = (tmp_path / f"{k}.lp" for k in ("sparse", "dense"))
+    assert canon_lp(lp_sparse.read_text()) == canon_lp(lp_dense.read_text())
+    rs, rd = (linopy.read_netcdf(tmp_path / f"{k}.nc") for k in ("sparse", "dense"))
+    es, ed = rs.objective.expression, rd.objective.expression
+    assert isinstance(es, LinearExpression) and isinstance(ed, LinearExpression)
+    assert_cells_equal(es, ed, ())
+    assert rs.objective.expression.attrs["name"] == "objective"
+
+
+@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.parametrize("io_api", ["lp", "direct"])
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_sparse_objective_solves_like_dense(build: str, io_api: str) -> None:
+    require_v1()
+    values = []
+    for m in objective_twins(build, 1.0):
+        for var in m.variables.data.values():
+            var.update(lower=0, upper=1)
+        m.objective.sense = "max"
+        with no_densify():
+            m.solve("highs", io_api=io_api)
+        values.append(m.objective.value)
+    assert values[0] == pytest.approx(values[1])
 
 
 def grid_operand(e: LinearExpression) -> xr.DataArray:
@@ -1452,6 +1578,28 @@ def test_elementwise_constant_ops_stay_csr_and_match_dense(
     res = func(sparse, x)
     assert res.is_sparse
     assert_linequal(res, func(dense, x))
+
+
+DENSE_ADDENDS: dict[str, Callable[[Case, LinearExpression], LinearExpression]] = {
+    "same-grid": lambda c, dense: 2 * dense,
+    "scalar-var": lambda c, dense: 2 * c.gen_p.isel(gen=0, snapshot=0),
+}
+
+
+@pytest.mark.parametrize(
+    ("build", "addend"),
+    [(b, "same-grid") for b in SPARSE_BUILDS] + [("zero-dim", "scalar-var")],
+)
+def test_merge_with_dense_expression_stays_csr_and_matches_dense(
+    build: str, addend: str
+) -> None:
+    require_v1()
+    c = base_model()
+    sparse, dense = sparse_and_dense(build, c)
+    other = DENSE_ADDENDS[addend](c, dense)
+    with no_densify():
+        res = sparse + other
+    assert_sparse_matches(res, dense + other)
 
 
 @pytest.mark.parametrize("join", ["inner", "outer", "left", "right"])
@@ -1522,6 +1670,24 @@ def test_join_with_constant_keeps_aux_coords_like_dense(
     with no_densify():
         res = getattr(sparse, op)(x, join=join)
     assert_sparse_matches(res, getattr(dense, op)(x, join=join))
+
+
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+def test_to_constraint_join_with_constant_matches_dense(join: JoinOptions) -> None:
+    require_v1()
+    cons = []
+    for sparse in (False, True):
+        c = base_model()
+        lhs = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=sparse)
+        with no_densify():
+            con = lhs.to_constraint("<=", c.load.isel(bus=[0, 2]), join=join)
+            cons.append(c.m.add_constraints(con, name="c", freeze=sparse))
+    dense, frozen = cons
+    assert isinstance(frozen, CSRConstraint)
+    xr.testing.assert_identical(
+        xr.Dataset(coords=frozen.coords), xr.Dataset(coords=dense.coords)
+    )
+    assert_frozen_equal(dense, frozen)
 
 
 def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None:
@@ -1742,14 +1908,155 @@ MASKS: dict[str, Callable[[LinearExpression], Any]] = {
 }
 
 
+@pytest.mark.parametrize("prebuilt", [False, True], ids=["lhs", "constraint"])
 @pytest.mark.parametrize("mask", list(MASKS))
-def test_add_constraints_mask_freezes_sparse_and_matches_dense(mask: str) -> None:
+def test_add_constraints_mask_freezes_sparse_and_matches_dense(
+    mask: str, prebuilt: bool
+) -> None:
     require_v1()
     c1, c2 = base_model(), base_model()
     lhs = c2.balance_lhs(sparse=True)
     m = MASKS[mask](lhs)
     con1 = c1.m.add_constraints(c1.balance_lhs(False), ">=", c1.load, "bal", mask=m)
     with no_densify():
-        con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m, freeze=True)
+        if prebuilt:
+            con2 = c2.m.add_constraints(lhs >= c2.load, name="bal", mask=m, freeze=True)
+        else:
+            con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m, freeze=True)
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)
+
+
+def observed_keys_group() -> LinearExpression:
+    """The #941 reproducer: a multi-key observed grouping with aux coords on ``group``."""
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="s")], name="x")
+    expr = x.to_linexpr().assign_coords(
+        period=("s", [1, 1, 2, 2]), region=("s", ["n", "s", "n", "s"])
+    )
+    return expr.groupby(["period", "region"]).sum(observed=True, sparse=True)
+
+
+def dashed_group() -> LinearExpression:
+    """An observed grouping whose dims and aux coords carry dashes, the netcdf name separator."""
+    m = Model()
+    s = pd.RangeIndex(4, name="my-s")
+    x = m.add_variables(coords=[s], name="x")
+    grouper = pd.DataFrame(
+        {"my-bus": ["a", "a", "b", "b"], "tag": [1, 1, 2, 2]}, index=s
+    )
+    grouped = x.to_linexpr().groupby(grouper).sum(sparse=True, observed=True)
+    return grouped.rename({"group": "my-group"})
+
+
+AUX_BUILDS: dict[str, Callable[[], LinearExpression]] = {
+    "observed-keys": observed_keys_group,
+    "dashed": dashed_group,
+    "aux": lambda: SPARSE_BUILDS["aux"](base_model()),
+    "scalar": lambda: SPARSE_BUILDS["grouped"](base_model()).sel(snapshot=1),
+}
+
+
+@pytest.mark.parametrize("build", list(AUX_BUILDS))
+def test_frozen_constraint_keeps_aux_coords_like_dense(
+    build: str, tmp_path: Path
+) -> None:
+    require_v1()
+    sparse = AUX_BUILDS[build]()
+    m = sparse.model
+    assert sparse._csr is not None
+    ref = m.add_constraints(sparse._csr.to_dense() >= 1, name="dense")
+    with no_densify():
+        con = m.add_constraints(sparse >= 1, name="sparse", freeze=True)
+    assert isinstance(con, CSRConstraint)
+    want = xr.Dataset(coords=ref.coords)
+    assert set(want.coords) > set(con.coord_names)
+    for got in (con, con.mutable(), ref.freeze()):
+        xr.testing.assert_identical(xr.Dataset(coords=got.coords), want)
+    m.to_netcdf(tmp_path / "m.nc")
+    read = linopy.read_netcdf(tmp_path / "m.nc").constraints["sparse"]
+    assert isinstance(read, CSRConstraint)
+    xr.testing.assert_identical(xr.Dataset(coords=read.coords), want)
+
+
+def setter(attr: str) -> Callable[[CSRConstraint], None]:
+    return lambda con: setattr(con, attr, 1.0)
+
+
+FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
+    "loc": lambda con: con.loc[{"bus": "bus0"}],
+    "update": lambda con: con.update(rhs=2.0),
+    **{
+        attr: setter(attr)
+        for attr in ["coeffs", "vars", "sign", "rhs", "lhs", "scaling"]
+    },
+}
+
+
+@pytest.mark.parametrize("op", list(FROZEN_MUTATIONS))
+def test_frozen_constraint_mutation_names_mutable(op: str) -> None:
+    require_v1()
+    c = base_model()
+    con = c.m.add_constraints(c.balance_lhs(sparse=True) >= c.load, freeze=True)
+    assert isinstance(con, CSRConstraint)
+    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*\.mutable\(\)"):
+        FROZEN_MUTATIONS[op](con)
+
+
+FROZEN_UNSUPPORTED: dict[str, tuple[Callable[[CSRConstraint], Any], str]] = {
+    "soften": (lambda con: con.soften(penalty=1.0), r"freeze=False"),
+    "from_rule": (
+        lambda con: CSRConstraint.from_rule(con.model, lambda m, i: None, [[0]]),
+        r"Constraint\.from_rule .*\.freeze\(\)",
+    ),
+}
+
+
+@pytest.mark.parametrize("op", list(FROZEN_UNSUPPORTED))
+def test_frozen_unsupported_names_the_working_route(op: str) -> None:
+    require_v1()
+    c = base_model()
+    con = c.m.add_constraints(c.balance_lhs(sparse=True) >= c.load, freeze=True)
+    assert isinstance(con, CSRConstraint)
+    call, remedy = FROZEN_UNSUPPORTED[op]
+    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*{remedy}"):
+        call(con)
+
+
+EXPR_RHS: dict[str, Callable[[Case, bool], LinearExpression]] = {
+    "expr": lambda c, sparse: (1.0 * c.flow).groupby(c.bus1).sum(sparse=sparse),
+    "expr-const": lambda c, sparse: (
+        (1.0 * c.flow).groupby(c.bus1).sum(sparse=sparse) + c.load
+    ),
+    "dense-expr-const": lambda c, sparse: (1.0 * c.flow).groupby(c.bus1).sum() - 2.0,
+}
+
+
+@pytest.mark.parametrize("form", ["operator", "add_constraints"])
+@pytest.mark.parametrize("rhs", list(EXPR_RHS))
+def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) -> None:
+    require_v1()
+    c1, c2 = base_model(), base_model()
+    lhs1 = (c1.eff * c1.gen_p).groupby(c1.gbus).sum()
+    con1 = c1.m.add_constraints(lhs1 <= EXPR_RHS[rhs](c1, False), name="c", freeze=True)
+    lhs2 = (c2.eff * c2.gen_p).groupby(c2.gbus).sum(sparse=True)
+    rhs2 = EXPR_RHS[rhs](c2, True)
+    with no_densify():
+        if form == "operator":
+            con2 = c2.m.add_constraints(lhs2 <= rhs2, name="c", freeze=True)
+        else:
+            con2 = c2.m.add_constraints(lhs2, "<=", rhs2, name="c", freeze=True)
+    assert isinstance(con2, CSRConstraint)
+    assert_frozen_equal(con1, con2)
+
+
+@pytest.mark.parametrize("default", [False, True], ids=["argument", "model-default"])
+def test_penalty_with_freeze_raises(default: bool) -> None:
+    require_v1()
+    c = base_model()
+    c.m.freeze_constraints = default
+    lhs = c.balance_lhs(sparse=True)
+    with pytest.raises(ValueError, match="`penalty` cannot be combined with `freeze"):
+        c.m.add_constraints(
+            lhs >= c.load, penalty=1.0, freeze=None if default else True
+        )

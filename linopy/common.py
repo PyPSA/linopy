@@ -7,6 +7,7 @@ This module contains commonly used functions.
 
 from __future__ import annotations
 
+import json
 import operator
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
@@ -1318,24 +1319,25 @@ def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
 
     Suitable for embedding coordinate metadata as plain data variables in a
     Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
+    The variables are named by position, never by the (possibly dashed)
+    dimension or level names, since the netcdf reader splits variable names
+    on ``-``; the level names of a MultiIndex are stored as a JSON attribute.
     Reconstruct with :func:`coords_from_dataset`.
     """
     data_vars: dict[str, DataArray] = {}
-    for c in coords:
+    for i, c in enumerate(coords):
         if isinstance(c, pd.MultiIndex):
-            for level_name, level_values in zip(c.names, c.levels):
-                data_vars[f"_coord_{c.name}_level_{level_name}"] = DataArray(
-                    np.array(level_values),
-                    dims=[f"_coorddim_{c.name}_level_{level_name}"],
+            for j, level_values in enumerate(c.levels):
+                data_vars[f"_index{i}_level{j}"] = DataArray(
+                    np.array(level_values), dims=[f"_indexdim{i}_level{j}"]
                 )
-            data_vars[f"_coord_{c.name}_codes"] = DataArray(
+            data_vars[f"_index{i}_codes"] = DataArray(
                 np.array(c.codes).T,
-                dims=[f"_coorddim_{c.name}", f"_coorddim_{c.name}_nlevels"],
+                dims=[f"_indexdim{i}", f"_indexdim{i}_nlevels"],
+                attrs={"level_names": json.dumps([str(n) for n in c.names])},
             )
         else:
-            data_vars[f"_coord_{c.name}"] = DataArray(
-                np.array(c), dims=[f"_coorddim_{c.name}"]
-            )
+            data_vars[f"_index{i}"] = DataArray(np.array(c), dims=[f"_indexdim{i}"])
     return data_vars
 
 
@@ -1343,27 +1345,42 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
     """
     Deserialize a list of pd.Index (including MultiIndex) from a Dataset.
 
-    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`.
+    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
+    or by its earlier name-keyed format (``_coord_<dim>``).
     """
     coords = []
-    for d in coord_dims:
-        if f"_coord_{d}_codes" in ds:
-            codes_2d = ds[f"_coord_{d}_codes"].values.T
+    for i, d in enumerate(coord_dims):
+        if f"_index{i}_codes" in ds:
+            codes = ds[f"_index{i}_codes"]
+            level_names = json.loads(codes.attrs["level_names"])
+            level_keys = [f"_index{i}_level{j}" for j in range(len(level_names))]
+            coords.append(_multiindex(ds, codes.values.T, level_keys, level_names, d))
+        elif f"_index{i}" in ds:
+            coords.append(pd.Index(ds[f"_index{i}"].values, name=d))
+        elif f"_coord_{d}_codes" in ds:
+            prefix = f"_coord_{d}_level_"
             level_names = [
-                str(k)[len(f"_coord_{d}_level_") :]
-                for k in ds
-                if str(k).startswith(f"_coord_{d}_level_")
+                str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)
             ]
-            arrays = [
-                ds[f"_coord_{d}_level_{ln}"].values[codes_2d[i]]
-                for i, ln in enumerate(level_names)
-            ]
-            mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
-            mi.name = d
-            coords.append(mi)
+            level_keys = [prefix + ln for ln in level_names]
+            codes_2d = ds[f"_coord_{d}_codes"].values.T
+            coords.append(_multiindex(ds, codes_2d, level_keys, level_names, d))
         else:
             coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
     return coords
+
+
+def _multiindex(
+    ds: Dataset,
+    codes_2d: np.ndarray,
+    level_keys: list[str],
+    level_names: list[str],
+    name: str,
+) -> pd.MultiIndex:
+    arrays = [ds[k].values[codes_2d[j]] for j, k in enumerate(level_keys)]
+    mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
+    mi.name = name
+    return mi
 
 
 def is_constant(x: SideLike) -> bool:

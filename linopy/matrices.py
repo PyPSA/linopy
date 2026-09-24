@@ -116,6 +116,7 @@ class MatrixAccessor:
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
         con_scaling_by_label = constraint_scaling_lookup(m)
+        unit_cols = bool((self.var_scaling == 1).all())
 
         def scale_rows_and_cols(
             csr: scipy.sparse.csr_array, con_labels: np.ndarray, b: np.ndarray
@@ -123,18 +124,20 @@ class MatrixAccessor:
             if csr.shape[0] == 0:
                 return csr, b
             row_scaling = con_scaling_by_label[con_labels]
+            unit_rows = bool((row_scaling == 1).all())
+            if unit_rows and unit_cols:
+                return csr, b
             # With solver variables y = Scol * x, constraints A x = b become
             # Srow * A * Scol^-1 * y = Srow * b.
-            csr = cast(
-                scipy.sparse.csr_array,
-                csr.multiply(row_scaling[:, np.newaxis]).tocsr(),
+            data = csr.data
+            if not unit_rows:
+                data = data * np.repeat(row_scaling, np.diff(csr.indptr))
+            if not unit_cols:
+                data = data / self.var_scaling[csr.indices]
+            scaled = scipy.sparse.csr_array(
+                (data, csr.indices, csr.indptr), shape=csr.shape
             )
-            if csr.shape[1] and len(self.var_scaling):
-                csr = cast(
-                    scipy.sparse.csr_array,
-                    csr.multiply(1 / self.var_scaling[np.newaxis, :]).tocsr(),
-                )
-            return csr, b * row_scaling
+            return scaled, b * row_scaling
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
@@ -174,22 +177,9 @@ class MatrixAccessor:
 
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
-        expr = m.objective.expression
-        if isinstance(expr, expressions.QuadraticExpression):
-            # vars has shape (_factor=2, _term); linear terms have one factor == -1
-            vars_2d = expr.data.vars.values  # shape (2, n_term)
-            coeffs_all = expr.data.coeffs.values.ravel()
-            vars1, vars2 = vars_2d[0], vars_2d[1]
-            linear = (vars1 == -1) | (vars2 == -1)
-            var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
-            coeffs = coeffs_all[linear]
-        else:
-            var_labels = expr.data.vars.values.ravel()
-            coeffs = expr.data.coeffs.values.ravel()
-
-        mask = var_labels != -1
-        positions = label_to_pos[var_labels[mask]]
-        scaled_coeffs = coeffs[mask] / self.var_scaling[positions]
+        var_labels, coeffs = m.objective.linear_terms()
+        positions = label_to_pos[var_labels]
+        scaled_coeffs = coeffs / self.var_scaling[positions]
         scaled_coeffs = scaled_coeffs * m.objective.scaling
         np.add.at(result, positions, scaled_coeffs)
         return result
