@@ -1944,9 +1944,10 @@ class BaseExpression(ABC):
 
     def where(
         self,
-        cond: DataArray,
+        cond: DataArray | Callable[[Any], DataArray],
         other: LinearExpression
         | int
+        | float
         | DataArray
         | dict[str, float | int | DataArray]
         | None = None,
@@ -2573,9 +2574,10 @@ class LinearExpression(BaseExpression):
 
     def where(
         self,
-        cond: DataArray,
+        cond: DataArray | Callable[[Any], DataArray],
         other: LinearExpression
         | int
+        | float
         | DataArray
         | dict[str, float | int | DataArray]
         | None = None,

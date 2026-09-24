@@ -23,7 +23,7 @@ import xarray as xr
 from xarray.core.types import JoinOptions
 
 import linopy
-from linopy import LinearExpression, Model, Variable
+from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
 from linopy.csr import CSRLinearExpression, Grid
@@ -1418,7 +1418,9 @@ OPERANDS: dict[str, Callable[[LinearExpression], Any]] = {
     ),
 }
 
-ELEMENTWISE_OPS: dict[str, Callable[[LinearExpression, Any], LinearExpression]] = {
+ELEMENTWISE_OPS: dict[
+    str, Callable[[LinearExpression, Any], LinearExpression | QuadraticExpression]
+] = {
     "mul": lambda e, x: e * x,
     "rmul": lambda e, x: x * e,
     "truediv": lambda e, x: e / x,
