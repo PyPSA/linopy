@@ -1441,10 +1441,11 @@ def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
     sparse, _ = sparse_and_dense(build)
     m = sparse.model
     con = m.add_constraints(sparse >= 1, name="con", freeze=True)
-    assert isinstance(con, CSRConstraint)
-    assert sparse._csr is not None and con._csr is not None
+    A = m.matrices.A
+    assert isinstance(con, CSRConstraint) and sparse._csr is not None
+    assert A is not None
     dtypes = {sparse._csr.csr.indices.dtype, con._csr.indices.dtype}
-    assert dtypes == {np.dtype(m.dtypes["labels"]), m.matrices.A.indices.dtype}
+    assert dtypes == {np.dtype(m.dtypes["labels"]), A.indices.dtype}
 
 
 @pytest.mark.parametrize("label_dtype", [np.int32, np.int64])
