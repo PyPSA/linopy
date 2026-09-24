@@ -1189,8 +1189,8 @@ class CSRConstraint(ConstraintBase):
         """
         Reconstruct a Constraint from a netcdf Dataset (CSR format).
 
-        Files without the ``_csr_columns`` attribute were written before #926
-        and hold dense variable positions instead of labels.
+        Files without the ``_csr_columns`` attribute hold dense variable
+        positions instead of labels.
         """
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
@@ -1465,12 +1465,10 @@ class CSRConstraint(ConstraintBase):
         """
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
-        The sparse counterpart of :meth:`from_dense`: instead of converting a
-        dense :class:`Constraint`, it realizes a
-        :class:`~linopy.csr.CSRLinearExpression` directly. The expression's
-        label columns are kept as they are, its constant moves to the rhs, and
-        rows with a NaN rhs are inactive, as on the dense path. ``rhs`` must
-        come from :func:`csr_rhs`.
+        Builds directly from a :class:`~linopy.csr.CSRLinearExpression`. The
+        expression's label columns are kept as they are, its constant moves to
+        the rhs, and rows with a NaN rhs are inactive. ``rhs`` must come from
+        :func:`csr_rhs`.
         """
         sign = maybe_replace_sign(sign)
         rhs_flat = _rhs_grid_values(expr, rhs) - expr.const

@@ -567,9 +567,9 @@ class LinearExpressionGroupby:
         Parameters
         ----------
         use_fallback : bool
-            Fall back to the previous, slower groupby-sum implementation, kept
-            as an escape hatch. Leave at False unless the default misbehaves.
-            Defaults to False.
+            Use the slower fallback groupby-sum implementation instead of the
+            default one. Kept as an escape hatch. Leave at False unless the
+            default misbehaves. Defaults to False.
         sparse : bool, optional
             Build the grouped sum in CSR form behind the ordinary
             LinearExpression type — no group-size padding; a still-sparse
@@ -2556,14 +2556,20 @@ class LinearExpression(BaseExpression):
         return csr.taken(flat, grid)
 
     def sel(self, *args: Any, **kwargs: Any) -> LinearExpression:
-        """Select by label as ``Dataset.sel``; a CSR-backed expression stays sparse."""
+        """
+        Select by label as ``Dataset.sel``. For a CSR-backed expression,
+        returns a CSR-backed result when the selection stays on the grid.
+        """
         csr = self._selected(lambda rows: rows.sel(*args, **kwargs), "sel")
         if csr is None:
             return super().sel(*args, **kwargs)
         return type(self)._from_csr(csr, self._model)
 
     def isel(self, *args: Any, **kwargs: Any) -> LinearExpression:
-        """Select by position as ``Dataset.isel``; a CSR-backed expression stays sparse."""
+        """
+        Select by position as ``Dataset.isel``. For a CSR-backed expression,
+        returns a CSR-backed result when the selection stays on the grid.
+        """
         csr = self._selected(lambda rows: rows.isel(*args, **kwargs), "isel")
         if csr is None:
             return super().isel(*args, **kwargs)
@@ -2822,7 +2828,8 @@ class LinearExpression(BaseExpression):
         ``(self * other).sum(dim)``. The result is then the compact canonical
         form -- duplicate variables summed, terms label-ordered, explicit
         zeros pruned -- so its term count may differ from the dense path's
-        while the values agree. A CSR-backed expression stays CSR-backed.
+        while the values agree. Returns a CSR-backed result when ``self`` is
+        CSR-backed.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
@@ -2849,8 +2856,8 @@ class LinearExpression(BaseExpression):
         labels, a zero-size grid, an operand sharing no dimension with the
         grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRLinearExpression.contracted`, so its term
-        count may differ from the dense path's while the values agree; it
-        stays CSR-backed when the input was.
+        count may differ from the dense path's while the values agree; the
+        result is CSR-backed when the input was.
         """
         if is_nan_scalar(other):
             check_user_nan(op_kind="mul")
@@ -2924,8 +2931,9 @@ class LinearExpression(BaseExpression):
         **indexers_kwargs: Any,
     ) -> LinearExpression:
         """
-        Conform to new coordinates as ``Dataset.reindex``; a CSR-backed
-        expression stays sparse when only labels change.
+        Conform to new coordinates as ``Dataset.reindex``. For a CSR-backed
+        expression, returns a CSR-backed result when only grid labels change
+        and no other keyword argument is given.
         """
         indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
         csr = self._csr
@@ -2953,8 +2961,8 @@ class LinearExpression(BaseExpression):
         **names: Any,
     ) -> LinearExpression:
         """
-        Rename dimensions as ``Dataset.rename``; a CSR-backed expression
-        stays sparse when only grid dims are relabelled.
+        Rename dimensions as ``Dataset.rename``. For a CSR-backed expression,
+        returns a CSR-backed result when only grid dims are relabelled.
         """
         name_dict = either_dict_or_kwargs(name_dict, names, "rename")
         csr = self._csr
@@ -3012,9 +3020,10 @@ class LinearExpression(BaseExpression):
 
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
         """
-        Variable labels and coefficients of the stored terms, without a dense
-        round trip for a CSR backing; absent terms and zero coefficients are
-        dropped, duplicate labels are not summed.
+        Variable labels and coefficients of the stored terms. For a CSR-backed
+        expression, reads the CSR arrays directly; otherwise reads the dense
+        term arrays. Absent terms and zero coefficients are dropped, duplicate
+        labels are not summed.
         """
         if self._csr is not None:
             csr = self._csr.csr
@@ -3633,10 +3642,10 @@ def _aligned(
 ) -> list[CSRLinearExpression] | str:
     """
     Conform the CSR expressions to the grid an explicit join produces, the
-    cells the join creates carrying ``fill`` as constant. None where the dense path
-    owns the semantics: ``exact`` and the auto-detected join raise there on
-    differing grids, ``override`` on differing shapes, any join on
-    non-unique labels; the reason is returned instead.
+    cells the join creates carrying ``fill`` as constant. Returns the reason
+    as a string where the dense path owns the semantics instead: ``exact``
+    and the auto-detected join raise there on differing grids, ``override``
+    on differing shapes, any join on non-unique labels.
     """
     template = csrs[0].grid
     dims = template.dims
@@ -3670,9 +3679,9 @@ def _try_csr_merge(
     the template order first. Grids that differ in their labels are aligned
     row-wise onto the joined grid, the cells the join creates carrying the
     fill of the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary
-    coordinates are checked for conflicts on the operands as given (§11, as
-    on the dense path) and follow their rows onto the joined grid. Returns
-    None to fall through to the dense path.
+    coordinates are checked for conflicts on the operands as given and follow
+    their rows onto the joined grid. Returns None to fall through to the
+    dense path.
     """
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
         return None

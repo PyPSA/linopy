@@ -164,8 +164,9 @@ class Objective:
         """
         Returns the objective in the dense layout for netcdf serialization.
 
-        A sparse objective is expanded without dropping its sparse backing;
-        after the setter's full sum it holds a single cell.
+        The expression setter reduces the objective to a single cell, so a
+        CSR-backed expression is densified into that one cell here, without
+        mutating the stored CSR data.
         """
         expr = self.expression
         csr = expr._csr if isinstance(expr, expressions.LinearExpression) else None
