@@ -1952,7 +1952,6 @@ def test_frozen_constraint_keeps_aux_coords_like_dense(
 FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
     "loc": lambda con: con.loc[{"bus": "bus0"}],
     "update": lambda con: con.update(rhs=2.0),
-    "soften": lambda con: con.soften(penalty=1.0),
     **{
         attr: lambda con, attr=attr: setattr(con, attr, 1.0)
         for attr in ["coeffs", "vars", "sign", "rhs", "lhs", "scaling"]
@@ -1970,9 +1969,24 @@ def test_frozen_constraint_mutation_names_mutable(op: str) -> None:
         FROZEN_MUTATIONS[op](con)
 
 
-def test_frozen_from_rule_names_the_mutable_route() -> None:
-    with pytest.raises(AttributeError, match=r"Constraint\.from_rule .*\.freeze\(\)"):
-        CSRConstraint.from_rule(Model(), lambda m, i: None, [[0]])
+FROZEN_UNSUPPORTED: dict[str, tuple[Callable[[CSRConstraint], Any], str]] = {
+    "soften": (lambda con: con.soften(penalty=1.0), r"freeze=False"),
+    "from_rule": (
+        lambda con: CSRConstraint.from_rule(con.model, lambda m, i: None, [[0]]),
+        r"Constraint\.from_rule .*\.freeze\(\)",
+    ),
+}
+
+
+@pytest.mark.parametrize("op", list(FROZEN_UNSUPPORTED))
+def test_frozen_unsupported_names_the_working_route(op: str) -> None:
+    require_v1()
+    c = base_model()
+    con = c.m.add_constraints(c.balance_lhs(sparse=True) >= c.load, freeze=True)
+    assert isinstance(con, CSRConstraint)
+    call, remedy = FROZEN_UNSUPPORTED[op]
+    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*{remedy}"):
+        call(con)
 
 
 EXPR_RHS: dict[str, Callable[[Case, bool], LinearExpression]] = {

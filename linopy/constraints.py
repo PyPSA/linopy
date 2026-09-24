@@ -935,7 +935,11 @@ class CSRConstraint(ConstraintBase):
         raise _frozen_error("update", _UNSUPPORTED)
 
     def soften(self, *args: Any, **kwargs: Any) -> NoReturn:
-        raise _frozen_error("soften", _UNSUPPORTED)
+        raise _frozen_error(
+            "soften",
+            _UNSUPPORTED,
+            "add the constraint with freeze=False to soften it",
+        )
 
     @classmethod
     def from_rule(cls, *args: Any, **kwargs: Any) -> NoReturn:
