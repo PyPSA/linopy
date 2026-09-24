@@ -303,29 +303,36 @@ def _legacy_multiindex_message(dim: str, context: str) -> str:
 _LINOPY_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
+def warn_outside_linopy(message: str, category: type[Warning]) -> None:
+    """
+    Emit a warning whose source-frame points at the first call-stack frame
+    *outside* the linopy package, as the call-chain depth varies per site.
+    Python 3.12+ uses the stdlib ``skip_file_prefixes``; older versions walk
+    the stack to compute the ``stacklevel``.
+    """
+    if sys.version_info >= (3, 12):
+        warn(message, category, skip_file_prefixes=(_LINOPY_ROOT,))
+        return
+    frame = sys._getframe()
+    stacklevel = 1
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(
+        _LINOPY_ROOT
+    ):
+        frame = frame.f_back
+        stacklevel += 1
+    warn(message, category, stacklevel=stacklevel)
+
+
 def warn_legacy(message: str, *, stacklevel: int | None = None) -> None:
     """
-    Emit a `LinopySemanticsWarning` whose source-frame points at the
-    first call-stack frame *outside* the linopy package.
-
-    Static ``stacklevel`` doesn't fit here — the call-chain depth from
-    ``warn_legacy`` to the user's code varies per site (e.g. masked-var
-    via ``__add__`` is 5 frames deep, via ``Variable.fillna`` is 4). On
-    Python 3.12+ we use the stdlib ``skip_file_prefixes`` argument
-    (implemented and tested in CPython); on 3.11 we fall back to a
-    static ``stacklevel=5``, good enough for the common merge chain.
-    Pass an explicit ``stacklevel`` to override (e.g. for tests).
+    Emit a `LinopySemanticsWarning` pointing at the first call-stack frame
+    outside the linopy package (see :func:`warn_outside_linopy`). Pass an
+    explicit ``stacklevel`` to override (e.g. for tests).
     """
-    if stacklevel is not None:
-        warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
-    elif sys.version_info >= (3, 12):
-        warn(
-            message,
-            LinopySemanticsWarning,
-            skip_file_prefixes=(_LINOPY_ROOT,),
-        )
+    if stacklevel is None:
+        warn_outside_linopy(message, LinopySemanticsWarning)
     else:
-        warn(message, LinopySemanticsWarning, stacklevel=5)
+        warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
 
 
 def _short_repr(values: Any, limit: int = 6) -> str:
@@ -491,6 +498,7 @@ def reindex_like_if_needed(
 ) -> DataArray:
     """
     ``arr.reindex_like(ref, fill_value=...)`` without the copy when already aligned.
+    Only the values take ``fill_value``; auxiliary coordinates are filled with NaN.
 
     ``broadcast_to_coords`` leaves an operand spanning ``ref``'s dims but with
     fresh index objects (equal, not identical), so a plain ``reindex_like`` would
@@ -501,7 +509,7 @@ def reindex_like_if_needed(
     """
     if set(ref.dims) <= set(arr.dims) and first_mismatched_dim(ref, arr) is None:
         return arr
-    return arr.reindex_like(ref, fill_value=fill_value)
+    return arr.reindex_like(ref, fill_value={arr.name: fill_value})
 
 
 def shared_dim_mismatches(

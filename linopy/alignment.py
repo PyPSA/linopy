@@ -77,6 +77,7 @@ def as_constant(other: Any) -> Any:
 
 
 if TYPE_CHECKING:
+    from linopy.csr import AuxCoords
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
@@ -696,7 +697,7 @@ def _matmul_operand_to_matrix(
     contracted: Sequence[str],
     new_dims: Sequence[str],
     indexes: Mapping[str, pd.Index],
-    aux_coords: Mapping[str, tuple[str, np.ndarray]],
+    aux_coords: AuxCoords,
 ) -> scipy.sparse.csr_array:
     """
     Flatten a ``@`` constant to the ``(contracted, new)`` matrix of the sparse

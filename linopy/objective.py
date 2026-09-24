@@ -270,7 +270,7 @@ class Objective:
 
     assign = objwrap(expressions.LinearExpression.assign)
 
-    sel = objwrap(expressions.LinearExpression.sel)
+    sel = objwrap(expressions.BaseExpression.sel)
 
     def __add__(
         self, expr: ConstantLike | QuadraticExpression | LinearExpression | Objective

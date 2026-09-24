@@ -7,10 +7,13 @@ backed by a :class:`CSRLinearExpression` instead of the dense dataset — same
 public type, different backing, akin to dask-backed xarray objects. The CSR
 form is canonical (duplicate variables summed, terms label-ordered) and ragged
 along ``_term``, so the group-size padding of issue #745 has no analog;
-grouping, ``merge``/``+``/``-``, scaling and ``@``/``dot`` (:meth:`contracted`)
-become sparse linear algebra. Unlike :meth:`added`, which preserves explicit
-zeros through COO, ``@``/``dot`` prunes them: cell activeness is carried by
-``const`` alone (issue #925).
+grouping, ``sum``, ``merge``/``+``/``-``, scaling and ``@``/``dot``
+(:meth:`contracted`) become sparse linear algebra. Zero policy: the structural
+operations (grouping and ``sum`` via :meth:`aggregated`, merge via
+:meth:`added`, scaling, reindexing) go through COO and keep explicit zero
+coefficients, like the dense path; only the product with a constant matrix,
+``@``/``dot``, prunes them. Either way cell activeness is carried by ``const``
+alone (issue #925), so the two differ in term layout only.
 Anything without a sparse branch expands through ``.data`` to the
 mathematically identical dense rectangle in canonical term layout — the reason
 the feature is v1-gated, where term layout is non-contractual.
@@ -25,17 +28,23 @@ The reverse bridges live at the dense call sites, in
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import operator
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
 import pandas as pd
 import scipy.sparse
-from xarray import Dataset
+from xarray import DataArray, Dataset
 
-from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.semantics import absorb_absence, enforce_aux_conflict
+from linopy.config import options
+from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
+from linopy.semantics import (
+    absorb_absence,
+    enforce_aux_conflict,
+    warn_outside_linopy,
+)
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
@@ -43,6 +52,9 @@ if TYPE_CHECKING:
 
 CONTRACTION_CHUNK = 64
 """Kept-axis block size of the chunked Kronecker product in ``contracted``."""
+
+AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
+"""Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -52,10 +64,14 @@ class Grid:
 
     ``indexes`` maps each grid dimension to its labels, ordered as the
     dimensions are, so row ``i`` of a CSR matrix is cell ``i`` of the
-    C-order flattening of that grid.
+    C-order flattening of that grid. ``aux`` holds the auxiliary
+    coordinates as ``name -> (grid dim, values)``, e.g. the key levels of a
+    grouped result kept stacked over the observed key combinations; a
+    scalar coordinate, e.g. left by a scalar selection, has dim ``()``.
     """
 
     indexes: dict[str, pd.Index]
+    aux: AuxCoords = field(default_factory=dict)
 
     @classmethod
     def from_coords(cls, coords: Iterable[pd.Index]) -> Grid:
@@ -63,9 +79,11 @@ class Grid:
         return cls({str(c.name): c for c in coords})
 
     @classmethod
-    def from_dataset(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
-        """Build from the indexes ``ds`` carries on ``dims``."""
-        return cls({d: ds.get_index(d).rename(d) for d in dims})
+    def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
+        """Build from the indexes and auxiliary coordinates ``ds`` carries on ``dims``."""
+        dims = tuple(dims)
+        indexes = {d: ds.get_index(d).rename(d) for d in dims}
+        return cls(indexes, _aux_coords(ds, set(dims)))
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -78,6 +96,10 @@ class Grid:
     @property
     def shape(self) -> tuple[int, ...]:
         return tuple(len(i) for i in self.indexes.values())
+
+    def to_dataset(self) -> Dataset:
+        """The grid's indexes and auxiliary coordinates as a coordinate-only Dataset."""
+        return Dataset(coords=self.indexes | self.aux)
 
     @property
     def size(self) -> int:
@@ -114,31 +136,53 @@ class Grid:
 
     def renamed(self, names: Mapping[str, str]) -> Grid:
         """Relabel dimensions; the cell layout is unchanged."""
-        return Grid(
-            {
-                names.get(d, d): i.rename(names.get(d, d))
-                for d, i in self.indexes.items()
-            }
-        )
+        indexes = {
+            names.get(d, d): i.rename(names.get(d, d)) for d, i in self.indexes.items()
+        }
+        aux = {
+            n: (names.get(d, d) if isinstance(d, str) else d, v)
+            for n, (d, v) in self.aux.items()
+        }
+        return Grid(indexes, aux)
 
     def reordered(self, dims: Iterable[str]) -> Grid:
-        """Select and order the given dimensions; labels unchanged."""
-        return Grid({d: self.indexes[d] for d in dims})
+        """
+        Select and order the given dimensions; labels unchanged, auxiliary
+        coordinates on dropped dimensions dropped, scalar ones kept.
+        """
+        dims = tuple(dims)
+        aux = {
+            n: (d, v)
+            for n, (d, v) in self.aux.items()
+            if not isinstance(d, str) or d in dims
+        }
+        return Grid({d: self.indexes[d] for d in dims}, aux)
 
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
-        """Replace the labels of the named dimensions; the rest unchanged."""
-        return Grid(
-            {
-                d: pd.Index(indexers[d], name=d) if d in indexers else i
-                for d, i in self.indexes.items()
-            }
-        )
+        """
+        Replace the labels of the named dimensions; the rest, and the
+        auxiliary coordinates, unchanged.
+        """
+        indexes = {
+            d: pd.Index(indexers[d], name=d) if d in indexers else i
+            for d, i in self.indexes.items()
+        }
+        return replace(self, indexes=indexes)
+
+    def conformed(self, target: Grid) -> Grid:
+        """``target`` carrying this grid's auxiliary coordinates, reindexed onto its labels."""
+        aux = dict(self.aux)
+        for name, (d, values) in self.aux.items():
+            if isinstance(d, str):
+                series = pd.Series(values, index=self.indexes[d])
+                aux[name] = (d, series.reindex(target.indexes[d]).to_numpy())
+        return Grid(target.indexes, aux)
 
     def combined(self, others: Iterable[Grid], how: str) -> Grid:
         """
         Join with ``others`` along shared dimensions: per dimension the union
         (``how="outer"``) or intersection (``how="inner"``) of labels, kept in
-        this grid's dimension order.
+        this grid's dimension order. Auxiliary coordinates are not carried.
         """
         combine = pd.Index.union if how == "outer" else pd.Index.intersection
         others = list(others)
@@ -150,11 +194,32 @@ class Grid:
             indexes[d] = pd.Index(index, name=d)
         return Grid(indexes)
 
+    def same_layout(self, other: Grid) -> bool:
+        """Whether both grids have the same dims and labels, auxiliary coordinates aside."""
+        return self.dims == other.dims and all(
+            i.equals(other.indexes[d]) for d, i in self.indexes.items()
+        )
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Grid):
             return NotImplemented
-        return self.dims == other.dims and all(
-            i.equals(other.indexes[d]) for d, i in self.indexes.items()
+        if not self.same_layout(other) or self.aux.keys() != other.aux.keys():
+            return False
+        for name, (d, values) in self.aux.items():
+            other_d, other_values = other.aux[name]
+            if d != other_d:
+                return False
+            if not pd.Index(np.atleast_1d(values)).equals(
+                pd.Index(np.atleast_1d(other_values))
+            ):
+                return False
+        return True
+
+    def dataarray(self, values: np.ndarray, name: str | None = None) -> DataArray:
+        """Wrap one value per flat cell as a DataArray on the grid's coordinates."""
+        coords = self.to_dataset().coords
+        return DataArray(
+            values.reshape(self.shape), coords=coords, dims=self.dims, name=name
         )
 
 
@@ -166,16 +231,14 @@ class CSRLinearExpression:
     ``csr`` has one row per flat cell of ``grid`` and one column per raw
     variable label — label columns stay valid when variables are added to
     the model later; realization maps them to dense positions. ``const`` is
-    the per-cell constant, NaN for an absent cell. ``coords`` holds auxiliary
-    coordinates as ``name -> (grid dim, values)``, e.g. the key levels of a
-    grouped result kept stacked over the observed key combinations.
+    the per-cell constant, NaN for an absent cell. Auxiliary coordinates
+    live on the ``grid``.
     """
 
     csr: scipy.sparse.csr_array
     const: np.ndarray
     grid: Grid
     model: Model
-    coords: dict[str, tuple[str, np.ndarray]] = field(default_factory=dict)
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -189,10 +252,24 @@ class CSRLinearExpression:
     def nterm(self) -> int:
         return csr_nterm(self.csr)
 
+    def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
+        """
+        Coefficients, label-ordered variable labels and constant of the grid
+        cell at ``indices``, as in the dense form: an absent cell has no terms.
+        """
+        row = int(np.ravel_multi_index(indices, self.grid.shape)) if indices else 0
+        const = float(self.const[row])
+        start, end = self.csr.indptr[row], self.csr.indptr[row + 1]
+        if np.isnan(const):
+            end = start
+        vars_, coeffs = self.csr.indices[start:end], self.csr.data[start:end]
+        order = np.argsort(vars_, kind="stable")
+        return coeffs[order], vars_[order], const
+
     @classmethod
     def from_grouper(
         cls,
-        ds: Dataset,
+        source: Dataset | CSRLinearExpression,
         model: Model,
         grouper: pd.Series | pd.DataFrame,
         group_dim: str,
@@ -210,7 +287,10 @@ class CSRLinearExpression:
         ``stacked``, a single ``group_dim`` over the observed key combinations
         only, the key values attached as auxiliary coordinates. The new dims
         take the member dim's slot in ``coord_dims``, as on the dense path.
+        ``source`` is a dense expression dataset or an already CSR-backed
+        expression, which is regrouped through :meth:`aggregated`.
         """
+        ds = source if isinstance(source, Dataset) else source.grid.to_dataset()
         member_dim = str(grouper.index.name)
         if member_dim in ds.indexes:
             grouper = grouper.reindex(ds.indexes[member_dim])
@@ -225,7 +305,7 @@ class CSRLinearExpression:
         keys = [str(k) for k in frame.columns]
         scatter_codes: dict[str, np.ndarray] = {}
         indexes: dict[str, pd.Index] = {}
-        coords: dict[str, tuple[str, np.ndarray]] = {}
+        aux: AuxCoords = {}
         if len(keys) == 1:
             codes, uniques = pd.factorize(frame.iloc[:, 0], sort=True)
             scatter_codes[group_dim] = codes
@@ -234,7 +314,7 @@ class CSRLinearExpression:
             codes, uniques = pd.factorize(pd.MultiIndex.from_frame(frame), sort=True)
             scatter_codes[group_dim] = codes
             indexes[group_dim] = pd.RangeIndex(len(uniques), name=group_dim)
-            coords = {
+            aux = {
                 k: (group_dim, uniques.get_level_values(i).to_numpy())
                 for i, k in enumerate(keys)
             }
@@ -250,11 +330,13 @@ class CSRLinearExpression:
         for d in coord_dims:
             if d != member_dim:
                 indexes[d] = ds.get_index(d).rename(d)
-        coords |= _aux_coords(ds, set(coord_dims) - {member_dim})
-        grid = Grid({d: indexes[d] for d in grid_dims})
-        return cls._from_scatter(
-            ds, model, grid, member_dim, scatter_codes, True, coords
-        )
+        aux |= _aux_coords(ds, set(coord_dims) - {member_dim})
+        grid = Grid({d: indexes[d] for d in grid_dims}, aux)
+        if isinstance(source, Dataset):
+            return cls._from_scatter(ds, model, grid, member_dim, scatter_codes, True)
+        member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
+        rows = _cell_rows(grid, member_rows, member_dim, source.grid.dims)
+        return source.aggregated(grid, rows)
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> CSRLinearExpression:
@@ -263,8 +345,7 @@ class CSRLinearExpression:
         grid = Grid.from_dataset(ds, grid_dims)
         first = grid_dims[0]
         codes = {first: np.arange(len(grid.indexes[first]))}
-        coords = _aux_coords(ds, set(grid_dims))
-        return cls._from_scatter(ds, model, grid, first, codes, False, coords)
+        return cls._from_scatter(ds, model, grid, first, codes, False)
 
     @classmethod
     def _from_scatter(
@@ -275,7 +356,6 @@ class CSRLinearExpression:
         member_dim: str,
         scatter_codes: dict[str, np.ndarray],
         skipna: bool,
-        coords: dict[str, tuple[str, np.ndarray]],
     ) -> CSRLinearExpression:
         """
         Scatter an expression's terms into grid rows (conceptually ``G @ A``):
@@ -288,22 +368,11 @@ class CSRLinearExpression:
         stays absent, as on the dense v1 merge path.
         """
         grid_dims = grid.dims
-        stride = grid.strides
-
         slot = min(grid_dims.index(d) for d in scatter_codes)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
-        member_rows = np.zeros(ds.sizes[member_dim], dtype=np.int64)
-        for d, codes in scatter_codes.items():
-            member_rows += codes * stride[d]
-        cell_rows = _outer_sum(
-            [
-                member_rows
-                if d == member_dim
-                else np.arange(len(grid.indexes[d])) * stride[d]
-                for d in transposed
-            ]
-        )
+        member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
+        cell_rows = _cell_rows(grid, member_rows, member_dim, transposed)
 
         coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
         vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
@@ -323,16 +392,101 @@ class CSRLinearExpression:
         const[cell_rows] = 0.0
         np.add.at(const, cell_rows, const_vals)
 
-        return cls(scipy.sparse.csr_array(coo), const, grid, model, coords)
+        return cls(scipy.sparse.csr_array(coo), const, grid, model)
 
-    def scaled(self, factor: float) -> CSRLinearExpression:
-        return replace(self, csr=self.csr * factor, const=self.const * factor)
+    def aggregated(self, grid: Grid, rows: np.ndarray) -> CSRLinearExpression:
+        """
+        Sum source rows into the cells of ``grid``, row ``i`` landing in cell
+        ``rows[i]`` (conceptually ``G @ A``). Goes through COO, so duplicate
+        variables are summed and explicit zeros kept, as by :meth:`added`. The
+        constant is reduced as by the dense group kernel (NaN counts as 0);
+        cells no row lands in are absent. Auxiliary coordinates are ``grid``'s.
+        """
+        coo = self.csr.tocoo()
+        coo = scipy.sparse.coo_array(
+            (coo.data, (rows[coo.coords[0]], coo.coords[1])),
+            shape=(grid.size, self.csr.shape[1]),
+        )
+        weights = np.nan_to_num(self.const)
+        const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
+        const[np.bincount(rows, minlength=grid.size) == 0] = np.nan
+        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
+
+    def summed(self, dims: Iterable[str]) -> CSRLinearExpression:
+        """
+        Sum over grid dimensions, as the dense ``sum``: the kept dims stay in
+        grid order with their auxiliary coordinates, and every kept cell is
+        present, its constant the NaN-skipping sum of its members.
+        """
+        dims = set(dims)
+        grid = self.grid.reordered(d for d in self.grid.dims if d not in dims)
+        stride = grid.strides
+        rows = _outer_sum(
+            [
+                np.zeros(n, dtype=np.int64) if d in dims else np.arange(n) * stride[d]
+                for d, n in zip(self.grid.dims, self.grid.shape)
+            ]
+        )
+        return self.aggregated(grid, rows).filled(0.0)
+
+    def pruned(self) -> CSRLinearExpression:
+        """Drop explicit zero coefficients; cell activeness stays with ``const``."""
+        csr = self.csr.copy()
+        csr.eliminate_zeros()
+        return replace(self, csr=csr)
+
+    def scaled(
+        self,
+        factor: float | np.ndarray,
+        op: Callable[[Any, Any], Any] = operator.mul,
+    ) -> CSRLinearExpression:
+        """
+        Apply ``op`` with ``factor`` -- a scalar or one value per cell -- to
+        every coefficient and to the constant. Explicit zeros are kept, as by
+        :meth:`added`.
+        """
+        factor = np.broadcast_to(factor, (self.n_cells,))
+        per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        csr = scipy.sparse.csr_array(
+            (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
+            shape=self.csr.shape,
+        )
+        return replace(self, csr=csr).with_const(op(self.const, factor))
+
+    def with_const(self, const: np.ndarray) -> CSRLinearExpression:
+        """
+        Replace the per-cell constant, leaving the terms alone. A cell it makes
+        absent (NaN) drops its terms (v1 dead-term invariant).
+        """
+        absent = np.isnan(const)
+        counts = np.diff(self.csr.indptr)
+        if not counts[absent].any():
+            return replace(self, const=const)
+        keep = np.repeat(~absent, counts)
+        indptr = np.concatenate([[0], np.cumsum(np.where(absent, 0, counts))])
+        csr = scipy.sparse.csr_array(
+            (self.csr.data[keep], self.csr.indices[keep], indptr),
+            shape=self.csr.shape,
+        )
+        return replace(self, csr=csr, const=const)
+
+    def taken(self, rows: np.ndarray, grid: Grid) -> CSRLinearExpression:
+        """
+        Gather rows into the cells of ``grid``, cell ``i`` taking row
+        ``rows[i]`` with its terms, explicit zeros included, and its constant;
+        ``-1`` leaves the cell absent. Auxiliary coordinates are ``grid``'s.
+        """
+        present = rows >= 0
+        const = np.where(present, self.const[rows], np.nan)
+        csr = self.csr[np.where(present, rows, 0)]
+        return replace(self, csr=csr, grid=grid).with_const(const)
 
     def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
         Remap rows onto a new grid, possibly in a new dim order, without the
         dense rectangle: dropped labels vanish, new labels get ``fill`` as
-        their constant (NaN: absent cells).
+        their constant (NaN: absent cells). Auxiliary coordinates follow the
+        rows; those of ``grid`` are ignored.
         """
         row_map, valid = grid.indexer(self.grid)
 
@@ -346,21 +500,11 @@ class CSRLinearExpression:
         )
         const = np.full(n_cells, fill)
         const[row_map[valid]] = self.const[valid]
-        coords = {
-            name: (
-                d,
-                pd.Series(v, index=self.grid.indexes[d])
-                .reindex(grid.indexes[d])
-                .to_numpy(),
-            )
-            for name, (d, v) in self.coords.items()
-        }
         return replace(
             self,
             csr=scipy.sparse.csr_array(coo),
             const=const,
-            grid=grid,
-            coords=coords,
+            grid=self.grid.conformed(grid),
         )
 
     def filled(self, value: float) -> CSRLinearExpression:
@@ -370,11 +514,11 @@ class CSRLinearExpression:
 
     def renamed(self, names: dict[str, str]) -> CSRLinearExpression:
         """Relabel grid dims; the CSR row layout is unchanged."""
-        coords = {n: (names.get(d, d), v) for n, (d, v) in self.coords.items()}
-        return replace(self, grid=self.grid.renamed(names), coords=coords)
+        return replace(self, grid=self.grid.renamed(names))
 
     def same_grid(self, other: CSRLinearExpression) -> bool:
-        return self.grid == other.grid
+        """Whether both live on the same cells, auxiliary coordinates aside."""
+        return self.grid.same_layout(other.grid)
 
     def added(self, other: CSRLinearExpression) -> CSRLinearExpression:
         """
@@ -396,11 +540,9 @@ class CSRLinearExpression:
         coo = scipy.sparse.coo_array(
             (data[present], (rows[present], cols[present])), shape=shape
         )
-        enforce_aux_conflict([Dataset(coords=p.coords) for p in (self, other)])
-        coords = other.coords | self.coords
-        return replace(
-            self, csr=scipy.sparse.csr_array(coo), const=const, coords=coords
-        )
+        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in (self, other)])
+        grid = replace(self.grid, aux=other.grid.aux | self.grid.aux)
+        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
 
     def contracted(
         self,
@@ -459,14 +601,12 @@ class CSRLinearExpression:
             blocks.append(block @ source.csr[rows])
             const_blocks.append(block @ const[rows])
 
-        indexes = kept_grid.indexes
-        indexes |= {str(i.name): i for i in new_indexes}
+        indexes = kept_grid.indexes | {str(i.name): i for i in new_indexes}
         return replace(
             source,
             csr=scipy.sparse.csr_array(scipy.sparse.vstack(blocks, format="csr")),
             const=np.concatenate(const_blocks),
-            grid=Grid(indexes),
-            coords={n: (d, v) for n, (d, v) in source.coords.items() if d in kept},
+            grid=Grid(indexes, kept_grid.aux),
         )
 
     def to_dense(self) -> LinearExpression:
@@ -493,7 +633,7 @@ class CSRLinearExpression:
                 "vars": (dims, vars_flat.reshape(*shape, nterm)),
                 "const": (self.grid.dims, self.const.reshape(shape)),
             },
-            coords=self.grid.indexes | self.coords,
+            coords=self.grid.indexes | self.grid.aux,
         )
         return LinearExpression(absorb_absence(ds), self.model)
 
@@ -532,13 +672,57 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _aux_coords(ds: Dataset, dims: set[str]) -> dict[str, tuple[str, np.ndarray]]:
-    """One-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
-    return {
-        str(n): (str(c.dims[0]), c.to_numpy())
-        for n, c in ds.coords.items()
-        if n not in ds.dims and len(c.dims) == 1 and str(c.dims[0]) in dims
-    }
+def _densify_notice(reason: str) -> None:
+    """
+    Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
+    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set.
+    """
+    if options["warn_on_densify"]:
+        warn_outside_linopy(
+            f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
+        )
+
+
+def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
+    """Scalar and one-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
+    aux: AuxCoords = {}
+    for n, c in ds.coords.items():
+        if n in ds.dims:
+            continue
+        if c.ndim == 0:
+            aux[str(n)] = ((), c.to_numpy())
+        elif c.ndim == 1 and str(c.dims[0]) in dims:
+            aux[str(n)] = (str(c.dims[0]), c.to_numpy())
+    return aux
+
+
+def _member_rows(
+    grid: Grid, scatter_codes: dict[str, np.ndarray], n_members: int
+) -> np.ndarray:
+    """Row offset in ``grid`` of each member, from its per-dim group codes."""
+    stride = grid.strides
+    member_rows = np.zeros(n_members, dtype=np.int64)
+    for d, codes in scatter_codes.items():
+        member_rows += codes * stride[d]
+    return member_rows
+
+
+def _cell_rows(
+    grid: Grid, member_rows: np.ndarray, member_dim: str, dims: Iterable[str]
+) -> np.ndarray:
+    """
+    Grid row of every cell over ``dims`` in C order, ``member_dim`` landing on
+    ``member_rows`` and every other dim mapping one-to-one onto ``grid``.
+    """
+    stride = grid.strides
+    return _outer_sum(
+        [
+            member_rows
+            if d == member_dim
+            else np.arange(len(grid.indexes[d])) * stride[d]
+            for d in dims
+        ]
+    )
 
 
 def _outer_sum(axis_positions: list[np.ndarray]) -> np.ndarray:

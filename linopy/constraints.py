@@ -79,7 +79,7 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
-from linopy.csr import Grid, csr_nterm, csr_to_term_arrays
+from linopy.csr import Grid, _densify_notice, csr_nterm, csr_to_term_arrays
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.types import (
@@ -1262,6 +1262,7 @@ class CSRConstraint(ConstraintBase):
 
     def to_dense(self) -> Constraint:
         """Convert to a Constraint."""
+        _densify_notice("frozen constraint converted by `to_dense()`/`mutable()`")
         return Constraint(self.data, self._model, self._name)
 
     def mutable(self) -> Constraint:
@@ -1419,25 +1420,26 @@ class CSRConstraint(ConstraintBase):
             active,
             rhs_flat[active],
             sign,
-            grid=expr.grid,
+            grid=Grid(expr.grid.indexes),
             model=expr.model,
         )
 
 
-def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | None:
+def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
     """
-    Return ``rhs`` as a DataArray on the expression grid, or None if the sparse
-    path cannot take it: a non-constant rhs, one that is no DataArray-like, or
-    one with helper dims or dims outside the grid falls back to the dense path.
+    Return ``rhs`` as a DataArray on the expression grid, or the reason the
+    sparse path cannot take it: a non-constant rhs, one that is no
+    DataArray-like, or one with helper dims or dims outside the grid falls
+    back to the dense path.
     """
     if not is_constant(rhs):
-        return None
+        return "constraint with a non-constant rhs"
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
-        return None
+        return "constraint with an rhs that is not array-like"
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
-        return None
+        return "constraint with an rhs over dimensions outside the grid"
     return da
 
 
