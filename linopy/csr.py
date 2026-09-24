@@ -467,6 +467,14 @@ class CSRLinearExpression:
         )
         return self.aggregated(grid, rows).filled(0.0)
 
+    def live_terms(self) -> np.ndarray:
+        """
+        Mask over the stored terms: the cell is present and the coefficient
+        is nonzero.
+        """
+        present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
+        return present & (self.csr.data != 0)
+
     def pruned(self) -> CSRLinearExpression:
         """Drop explicit zero coefficients; cell activeness stays with ``const``."""
         csr = self.csr.copy()

@@ -867,6 +867,9 @@ class BaseExpression(ABC):
     @abstractmethod
     def to_polars(self) -> pl.DataFrame: ...
 
+    @abstractmethod
+    def linear_terms(self) -> tuple[np.ndarray, np.ndarray]: ...
+
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
@@ -2999,15 +3002,30 @@ class LinearExpression(BaseExpression):
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
-        rows = np.repeat(np.arange(csr.n_cells), np.diff(csr.csr.indptr))
-        const = csr.const[rows]
-        coeffs = csr.csr.data.astype(float)
-        keep = ~np.isnan(const) & (coeffs != 0)
+        keep = csr.live_terms()
+        const = np.repeat(csr.const, np.diff(csr.csr.indptr))
         return {
             "const": const[keep],
-            "coeffs": coeffs[keep],
+            "coeffs": csr.csr.data[keep].astype(float),
             "vars": csr.csr.indices[keep].astype(self.model._dtypes["labels"]),
         }
+
+    def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Variable labels and coefficients of the stored terms, without a dense
+        round trip for a CSR backing; absent terms and zero coefficients are
+        dropped, duplicate labels are not summed.
+        """
+        if self._csr is not None:
+            csr = self._csr.csr
+            keep = self._csr.live_terms()
+            if keep.all():
+                return csr.indices, csr.data
+            return csr.indices[keep], csr.data[keep]
+        labels = self.data.vars.values.ravel()
+        coeffs = self.data.coeffs.values.ravel()
+        keep = (labels != -1) & (coeffs != 0)
+        return labels[keep], coeffs[keep]
 
     def simplify(self) -> LinearExpression:
         """
@@ -3482,6 +3500,19 @@ class QuadraticExpression(BaseExpression):
         df = df.groupby(["vars1", "vars2"], as_index=False).sum()
         check_has_nulls(df, name=self.type)
         return df
+
+    def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Variable labels and coefficients of the terms with a single variable;
+        zero coefficients are dropped, duplicate labels are not summed.
+        """
+        coeffs = self.data.coeffs
+        factors = self.data.vars.transpose(FACTOR_DIM, *coeffs.dims).values
+        vars1, vars2 = factors[0].ravel(), factors[1].ravel()
+        labels = np.where(vars1 != -1, vars1, vars2)
+        values = coeffs.values.ravel()
+        keep = ((vars1 == -1) | (vars2 == -1)) & (labels != -1) & (values != 0)
+        return labels[keep], values[keep]
 
     def to_polars(self, **kwargs: Any) -> pl.DataFrame:
         """

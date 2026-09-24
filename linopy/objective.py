@@ -23,7 +23,6 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions
-from linopy.constants import FACTOR_DIM
 from linopy.types import ConstantLike
 
 if TYPE_CHECKING:
@@ -157,29 +156,9 @@ class Objective:
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Returns the variable labels and coefficients of the linear objective
-        terms, read from the stored arrays; absent terms and zero coefficients
-        are dropped, duplicate labels are not summed.
+        terms, see ``LinearExpression.linear_terms``.
         """
-        expr = self.expression
-        if isinstance(expr, expressions.LinearExpression) and expr._csr is not None:
-            csr = expr._csr.csr
-            present = ~np.isnan(expr._csr.const)
-            keep = np.repeat(present, np.diff(csr.indptr)) & (csr.data != 0)
-            if keep.all():
-                return csr.indices, csr.data
-            return csr.indices[keep], csr.data[keep]
-        coeffs = expr.data.coeffs.values.ravel()
-        vars = expr.data.vars
-        if isinstance(expr, expressions.QuadraticExpression):
-            factors = np.moveaxis(vars.values, vars.get_axis_num(FACTOR_DIM), 0)
-            vars1, vars2 = factors[0].ravel(), factors[1].ravel()
-            linear = (vars1 == -1) | (vars2 == -1)
-            labels = np.where(vars1 != -1, vars1, vars2)[linear]
-            coeffs = coeffs[linear]
-        else:
-            labels = vars.values.ravel()
-        mask = (labels != -1) & (coeffs != 0)
-        return labels[mask], coeffs[mask]
+        return self.expression.linear_terms()
 
     def to_netcdf_ds(self) -> Dataset:
         """
