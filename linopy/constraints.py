@@ -10,7 +10,15 @@ import functools
 import warnings
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
+from collections.abc import (
+    Callable,
+    Generator,
+    Hashable,
+    ItemsView,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -301,6 +309,126 @@ class ConstraintBase(ABC):
     @abstractmethod
     def active_row_mask(self) -> np.ndarray:
         """Boolean mask over raveled rows selecting active constraint rows."""
+
+    @property
+    def slack(self) -> Slack | None:
+        """
+        Slack variable(s) added via :meth:`soften`, or ``None`` if the
+        constraint has never been softened.
+        """
+        names = _slack_names(self.attrs)
+        if names is None:
+            return None
+        positive, negative = names
+        return Slack(
+            positive=self.model.variables[positive],
+            negative=self.model.variables[negative] if negative else None,
+        )
+
+    def soften(
+        self,
+        penalty: ConstantLike,
+        *,
+        max_violation: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> Slack:
+        """
+        Soften a constraint, adding a slack variable and a penalty to the objective function.
+
+        Parameters
+        ----------
+        penalty : constant-like
+            The penalty that will match the slack variable inside the objective function. Must be bigger than 0.
+        max_violation: constant-like
+            The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
+        name: string
+            The name for the slack variable. If None, it well reuse the constraint name and add a '_slack'.
+
+        Returns
+        -------
+        Slack
+            Named tuple with the `positive` slack variable, and the `negative` one for equality constraints (`None`
+            for inequality constraints).
+
+        Notes
+        -----
+        On a frozen CSRConstraint the slack terms are appended to the sparse rows in place, without densifying.
+        A detached copy (from `.mutable()`, `.sel()` or `.isel()`) is not registered in model.constraints, so
+        soften raises ValueError on it.
+
+        Softening an already-softened constraint raises ValueError instead of stacking a second, redundant slack term
+        onto the same lhs.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+
+        >>> m = Model()
+        >>> investments = pd.Index(["A", "B", "C"], name="investments")
+        >>> expected_return = pd.Series(
+        ...     [0.08, 0.03, 0.1], index=investments, name="expected_return"
+        ... )
+        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
+        >>> m.add_objective((expected_return * w).sum(), sense="max")
+        >>> budget_penalty = 2
+
+        >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
+        >>> slack = budget_constraint.soften(penalty=budget_penalty)
+        """
+        if not bool(np.all(np.asarray(penalty) > 0)):
+            raise ValueError("Penalty is not positive.")
+
+        model = self.model
+        if model.objective.expression.empty:
+            raise ValueError(
+                "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
+            )
+
+        if model.constraints.data.get(self.name) is not self:
+            raise ValueError(
+                f"Constraint {self.name!r} is not the constraint registered in the model, so "
+                "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
+                "`.sel()`, or `.isel()`). Call `soften` on `model.constraints[name]` directly."
+            )
+
+        if self.slack is not None:
+            raise ValueError(
+                f"Constraint {self.name!r} was already softened (existing slack "
+                f"variable {self.slack.positive.name!r})"
+            )
+
+        sign_values = pd.unique(self.sign.values.ravel())
+        if len(sign_values) > 1:
+            raise NotImplementedError(
+                "Constraint.soften does not support constraints with mixed signs."
+            )
+        sign = sign_values.item()
+
+        name = name or f"{self.name}_slack"
+        upper = np.inf if max_violation is None else max_violation
+
+        def add_slack(suffix: str) -> variables.Variable:
+            return model.add_variables(
+                lower=0,
+                upper=upper,
+                coords=self.coords,
+                mask=self.mask,
+                name=f"{name}_{suffix}",
+            )
+
+        positive = add_slack("pos")
+        slack = Slack(positive, add_slack("neg") if sign == EQUAL else None)
+        self._attach_slack(slack, sign)
+
+        violation = positive if slack.negative is None else positive + slack.negative
+        direction = 1 if model.sense == "min" else -1
+        model.objective += direction * (penalty * violation).sum()
+        return slack
+
+    @abstractmethod
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        """Add the slack terms to the lhs and record the slack variable names."""
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
@@ -599,6 +727,14 @@ def _positional_csr(
 _UNSUPPORTED = "is not supported on a frozen constraint"
 
 
+def _slack_names(attrs: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Names of the positive and negative slack variables recorded by ``soften``."""
+    positive = attrs.get("slack_positive")
+    if positive is None:
+        return None
+    return str(positive), str(attrs.get("slack_negative", ""))
+
+
 def _frozen_error(
     attr: str,
     what: str = "is read-only",
@@ -654,6 +790,7 @@ class CSRConstraint(ConstraintBase):
         "_dual",
         "_binvar_labels",
         "_binval",
+        "_slack",
         "_positional_cache",
     )
 
@@ -671,6 +808,7 @@ class CSRConstraint(ConstraintBase):
         binvar_labels: np.ndarray | None = None,
         binval: int | np.ndarray | None = None,
         scaling: np.ndarray | None = None,
+        slack: tuple[str, str] | None = None,
     ) -> None:
         self._csr = csr
         self._active_positions = active_positions
@@ -688,6 +826,7 @@ class CSRConstraint(ConstraintBase):
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
+        self._slack = slack
         self._positional_cache: _PositionalCache | None = None
 
     @property
@@ -726,6 +865,8 @@ class CSRConstraint(ConstraintBase):
         d: dict[str, Any] = {"name": self._name}
         if self._cindex is not None:
             d["label_range"] = (self._cindex, self._cindex + self.full_size)
+        if self._slack is not None:
+            d["slack_positive"], d["slack_negative"] = self._slack
         return d
 
     @property
@@ -779,6 +920,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=self._binvar_labels,
             binval=self._binval,
             scaling=self._scaling,
+            slack=self._slack,
         )
 
     def _replace(self, **changes: Any) -> CSRConstraint:
@@ -940,11 +1082,23 @@ class CSRConstraint(ConstraintBase):
     def update(self, *args: Any, **kwargs: Any) -> NoReturn:
         raise _frozen_error("update", _UNSUPPORTED)
 
-    def soften(self, *args: Any, **kwargs: Any) -> NoReturn:
-        raise _frozen_error(
-            "soften",
-            _UNSUPPORTED,
-            "add the constraint with freeze=False to soften it",
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        slacks = [v for v in slack if v is not None]
+        coeffs = np.array([1.0 if sign == GREATER_EQUAL else -1.0, 1.0])[: len(slacks)]
+        labels = [v.labels.transpose(*self._grid.dims).values.ravel() for v in slacks]
+        cols = np.stack(labels, axis=1)[self._active_positions].ravel()
+        n = self.ncons
+        data = np.tile(coeffs.astype(self._csr.dtype), n)
+        shape = (n, self._model._xCounter)
+        indptr = np.arange(n + 1) * len(slacks)
+        extra = scipy.sparse.csr_array((data, cols, indptr), shape=shape)
+        csr = self._csr.copy()
+        csr.resize(shape)
+        self._csr = csr + extra
+        self._positional_cache = None
+        self._slack = (
+            slack.positive.name,
+            slack.negative.name if slack.negative is not None else "",
         )
 
     @classmethod
@@ -1174,6 +1328,8 @@ class CSRConstraint(ConstraintBase):
         }
         if isinstance(self._sign, str):
             attrs["sign"] = self._sign
+        if self._slack is not None:
+            attrs["slack_positive"], attrs["slack_negative"] = self._slack
         if self._binvar_labels is not None:
             attrs["is_indicator"] = True
             data_vars["_binvar_labels"] = DataArray(self._binvar_labels, dims=["_flat"])
@@ -1229,6 +1385,7 @@ class CSRConstraint(ConstraintBase):
         if "_binvar_labels" in ds:
             binvar_labels = ds["_binvar_labels"].values
             binval = ds["_binval"].values if "_binval" in ds else attrs["binval"]
+        slack = _slack_names(attrs)
         return cls(
             csr,
             active_positions,
@@ -1242,6 +1399,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            slack=slack,
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
@@ -1456,6 +1614,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            slack=_slack_names(con.attrs),
         )
 
     @classmethod
@@ -1716,21 +1875,6 @@ class Constraint(ConstraintBase):
             stacklevel=2,
         )
         self.update(lhs=value)
-
-    @property
-    def slack(self) -> Slack | None:
-        """
-        Slack variable(s) added via :meth:`soften`, or ``None`` if the
-        constraint has never been softened.
-        """
-        positive = self.data.attrs.get("slack_positive")
-        if positive is None:
-            return None
-        negative = self.data.attrs.get("slack_negative", "")
-        return Slack(
-            positive=self.model.variables[positive],
-            negative=self.model.variables[negative] if negative else None,
-        )
 
     def _assign_lhs(
         self, expr: expressions.LinearExpression, rhs: DataArray | None = None
@@ -2145,134 +2289,16 @@ class Constraint(ConstraintBase):
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
 
-    def soften(
-        self,
-        penalty: ConstantLike,
-        *,
-        max_violation: ConstantLike | None = None,
-        name: str | None = None,
-    ) -> Slack:
-        """
-        Soften a constraint, adding a slack variable and a penalty to the objective function.
-
-        Parameters
-        ----------
-        penalty : constant-like
-            The penalty that will match the slack variable inside the objective function. Must be bigger than 0.
-        max_violation: constant-like
-            The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
-        name: string
-            The name for the slack variable. If None, it well reuse the constraint name and add a '_slack'.
-
-        Returns
-        -------
-        Slack
-            Named tuple with the `positive` slack variable, and the `negative` one for equality constraints (`None`
-            for inequality constraints).
-
-        Notes
-        -----
-        Not supported on frozen constraints (e.g. a CSRConstraint from add_constraints(..., freeze=True) or
-        Model(freeze_constraints=True)). This method is only defined on Constraint and calling it on a CSRConstraint
-        raises AttributeError. Calling .mutable() first does not help either, since the resulting Constraint is a
-        detached copy not registered in model.constraints, so soften raises ValueError on it instead.
-
-        Softening an already-softened constraint raises ValueError instead of stacking a second, redundant slack term
-        onto the same lhs.
-
-        Examples
-        --------
-        >>> from linopy import Model
-        >>> import pandas as pd
-
-        >>> m = Model()
-        >>> investments = pd.Index(["A", "B", "C"], name="investments")
-        >>> expected_return = pd.Series(
-        ...     [0.08, 0.03, 0.1], index=investments, name="expected_return"
-        ... )
-        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
-        >>> m.add_objective((expected_return * w).sum(), sense="max")
-        >>> budget_penalty = 2
-
-        >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
-        >>> slack = budget_constraint.soften(penalty=budget_penalty)
-        """
-        # Verify valid penalty to continue:
-        if not bool(np.all(np.asarray(penalty) > 0)):
-            raise ValueError("Penalty is not positive.")
-
-        # Require the objective function to exist before using soften method (this is to avoid
-        # `add_objective` overwriting the penalty term added below, since it replaces rather than merges):
-        model = self.model
-        if model.objective.expression.empty:
-            raise ValueError(
-                "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
-            )
-
-        # A detached copy of the constraint (e.g. from `.mutable()`, `.sel()`, `.isel()`) isn't in
-        # `model.constraints`, so .soften would silently do nothing on the real model. This check is to avoid that:
-        if model.constraints.data.get(self.name) is not self:
-            raise ValueError(
-                f"Constraint {self.name!r} is not the constraint registered in the model, so "
-                "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
-                "`.sel()`, or `.isel()`). Call `soften` on `model.constraints[name]` directly."
-            )
-
-        if self.slack is not None:
-            raise ValueError(
-                f"Constraint {self.name!r} was already softened (existing slack "
-                f"variable {self.slack.positive.name!r})"
-            )
-
-        name = name or f"{self.name}_slack"
-        upper = np.inf if max_violation is None else max_violation
-
-        sign_values = pd.unique(self.sign.values.ravel())
-        if len(sign_values) > 1:
-            raise NotImplementedError(
-                "Constraint.soften does not support constraints with mixed signs."
-            )
-
-        positive_slack = model.add_variables(
-            lower=0,
-            upper=upper,
-            coords=self.lhs.coords,
-            mask=self.mask,
-            name=f"{name}_pos",
-        )
-        negative_slack = None
-
-        # Update left hand side depending on the sign of the constraint:
-        sign = sign_values.item()
-        if sign == "<=":
-            self.update(lhs=self.lhs - positive_slack)
-        elif sign == ">=":
-            self.update(lhs=self.lhs + positive_slack)
-        else:
-            negative_slack = model.add_variables(
-                lower=0,
-                upper=upper,
-                coords=self.lhs.coords,
-                mask=self.mask,
-                name=f"{name}_neg",
-            )
-            self.update(lhs=self.lhs - positive_slack + negative_slack)
-
-        # Update objective function:
-        constraint_violation = (
-            positive_slack + negative_slack
-            if negative_slack is not None
-            else positive_slack
-        )
-        direction = 1 if model.sense == "min" else -1
-        model.objective += direction * (penalty * constraint_violation).sum()
-
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        positive = slack.positive
+        lhs = self.lhs + positive if sign == GREATER_EQUAL else self.lhs - positive
+        if slack.negative is not None:
+            lhs = lhs + slack.negative
+        self.update(lhs=lhs)
         self._data = self._data.assign_attrs(
-            slack_positive=positive_slack.name,
-            slack_negative=negative_slack.name if negative_slack is not None else "",
+            slack_positive=slack.positive.name,
+            slack_negative=slack.negative.name if slack.negative is not None else "",
         )
-
-        return Slack(positive=positive_slack, negative=negative_slack)
 
     def to_polars(self) -> pl.DataFrame:
         """
