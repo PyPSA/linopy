@@ -1461,6 +1461,7 @@ def test_objective_stays_csr_and_exports_like_dense(
     ms, md = objective_twins(build, scale)
     with no_densify():
         c = ms.matrices.c
+        terms = ms.objective.linear_terms()
         ms.to_file(tmp_path / "sparse.lp")
         ms.to_netcdf(tmp_path / "sparse.nc")
         copied = ms.copy()
@@ -1470,6 +1471,9 @@ def test_objective_stays_csr_and_exports_like_dense(
     md.to_file(tmp_path / "dense.lp")
     md.to_netcdf(tmp_path / "dense.nc")
     assert np.array_equal(c, md.matrices.c)
+    dense_terms = md.objective.linear_terms()
+    assert sorted(zip(*map(list, terms))) == sorted(zip(*map(list, dense_terms)))
+    assert (dense_terms[1] != 0).all()
     lp_sparse, lp_dense = (tmp_path / f"{k}.lp" for k in ("sparse", "dense"))
     assert canon_lp(lp_sparse.read_text()) == canon_lp(lp_dense.read_text())
     rs, rd = (linopy.read_netcdf(tmp_path / f"{k}.nc") for k in ("sparse", "dense"))

@@ -116,6 +116,7 @@ class MatrixAccessor:
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
         con_scaling_by_label = constraint_scaling_lookup(m)
+        unit_cols = bool((self.var_scaling == 1).all())
 
         def scale_rows_and_cols(
             csr: scipy.sparse.csr_array, con_labels: np.ndarray, b: np.ndarray
@@ -123,18 +124,20 @@ class MatrixAccessor:
             if csr.shape[0] == 0:
                 return csr, b
             row_scaling = con_scaling_by_label[con_labels]
+            unit_rows = bool((row_scaling == 1).all())
+            if unit_rows and unit_cols:
+                return csr, b
             # With solver variables y = Scol * x, constraints A x = b become
             # Srow * A * Scol^-1 * y = Srow * b.
-            csr = cast(
-                scipy.sparse.csr_array,
-                csr.multiply(row_scaling[:, np.newaxis]).tocsr(),
+            data = csr.data
+            if not unit_rows:
+                data = data * np.repeat(row_scaling, np.diff(csr.indptr))
+            if not unit_cols:
+                data = data / self.var_scaling[csr.indices]
+            scaled = scipy.sparse.csr_array(
+                (data, csr.indices, csr.indptr), shape=csr.shape
             )
-            if csr.shape[1] and len(self.var_scaling):
-                csr = cast(
-                    scipy.sparse.csr_array,
-                    csr.multiply(1 / self.var_scaling[np.newaxis, :]).tocsr(),
-                )
-            return csr, b * row_scaling
+            return scaled, b * row_scaling
 
         reg_csrs, reg_b, reg_sense = [], [], []
         ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
