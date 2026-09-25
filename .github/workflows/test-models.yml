@@ -1,13 +1,8 @@
 name: Test models
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches: ["*"]
   schedule:
-    - cron: "0 5 * * *"
+    - cron: "0 5 * * 1"
 
 # Cancel any in-progress runs when a new run is triggered
 concurrency:
@@ -47,8 +42,6 @@ jobs:
         with:
           pixi-version: v0.68.1
           cache: true
-          # Do not cache in branches
-          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'master' }}
 
       - name: Setup cache keys
         run: |
@@ -83,7 +76,7 @@ jobs:
         run: |
           pixi remove pypsa
           pixi remove linopy
-          pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.sha }}
           pixi add --pypi pypsa
 
       - name: Run snakemake test workflows
