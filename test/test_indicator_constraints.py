@@ -236,10 +236,12 @@ class TestPersistence:
         assert ic.binary_var is not None
         assert np.all(ic.binary_val == 1)
 
-    @pytest.mark.parametrize("freeze_constraints", [False, True])
-    def test_netcdf_roundtrip(self, tmp_path: Path, freeze_constraints: bool) -> None:
+    @pytest.mark.parametrize(
+        "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
+    )
+    def test_netcdf_roundtrip(self, tmp_path: Path, sparse: bool) -> None:
         """is_indicator and binary fields survive a netCDF round-trip."""
-        m = Model(freeze_constraints=freeze_constraints)
+        m = Model(sparse=sparse)
         b = m.add_variables(name="b", binary=True)
         x = m.add_variables(lower=0, upper=10, name="x")
         m.add_constraints(x >= 0, name="regular")
@@ -253,9 +255,10 @@ class TestPersistence:
         assert ic.binary_var is not None
         assert np.all(ic.binary_val == 1)
 
+    @pytest.mark.v1
     def test_array_binval_roundtrip(self, tmp_path: Path) -> None:
         """A coords-based indicator has per-element binary_val that round-trips."""
-        m = Model(freeze_constraints=True)
+        m = Model(sparse=True)
         idx = pd.RangeIndex(3, name="i")
         b = m.add_variables(coords=[idx], name="b", binary=True)
         x = m.add_variables(coords=[idx], lower=0, upper=10, name="x")

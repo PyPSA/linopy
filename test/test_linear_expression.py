@@ -31,6 +31,7 @@ from linopy import (
     options,
 )
 from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
+from linopy.csr import CSRLinearExpression
 from linopy.expressions import ScalarLinearExpression
 from linopy.semantics import is_v1
 from linopy.testing import assert_linequal, assert_quadequal
@@ -689,14 +690,13 @@ def test_matmul_expr_and_const(x: Variable, y: Variable) -> None:
 
 
 def backed(expr: LinearExpression, backing: str) -> LinearExpression:
-    """The same expression, dense or CSR-backed through an identity groupby."""
+    """The same expression, dense or CSR-backed."""
     if backing == "dense":
         return expr
     if not is_v1():
         pytest.skip("CSR backing requires v1 semantics")
-    dim = str(expr.coord_dims[-1])
-    idx = expr.indexes[dim]
-    return expr.groupby(pd.Series(idx, index=idx, name=dim)).sum(sparse=True)
+    csr = CSRLinearExpression.from_dense(expr.data, expr.model)
+    return LinearExpression._from_csr(csr, expr.model)
 
 
 def assert_matmul_equal(res: LinearExpression, reference: LinearExpression) -> None:

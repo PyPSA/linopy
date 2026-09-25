@@ -151,8 +151,6 @@ filterwarnings = [
     # collection of ``linopy/variables.py`` in the source tree on
     # Windows CI.
     "ignore:piecewise:FutureWarning",
-    # The deprecated sparse switches (#976) stay covered until their removal.
-    "ignore:.*deprecated and will be removed with the legacy semantics:FutureWarning",
 ]
 
 [tool.coverage.run]

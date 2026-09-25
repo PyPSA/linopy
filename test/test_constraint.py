@@ -86,8 +86,9 @@ def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     assert c.ncons == 10
 
 
+@pytest.mark.v1
 def test_add_constraints_uses_model_freeze_default() -> None:
-    m = Model(freeze_constraints=True)
+    m = Model(sparse=True)
     x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
     c = m.add_constraints(x >= 1, name="frozen_by_default")
     assert isinstance(c, linopy.constraints.CSRConstraint)
@@ -122,11 +123,11 @@ def test_empty_constraints_repr() -> None:
     Model().constraints.__repr__()
 
 
-@pytest.mark.parametrize("freeze_constraints", [True, False])
-def test_constraint_handles_empty_rows(freeze_constraints: bool) -> None:
+@pytest.mark.parametrize("freeze", [True, False])
+def test_constraint_handles_empty_rows(freeze: bool) -> None:
     """An empty constraint group must be accepted and solve cleanly."""
 
-    m = Model(freeze_constraints=freeze_constraints)
+    m = Model()
     x = m.add_variables(
         lower=0.0,
         coords=[range(3), range(2)],
@@ -134,7 +135,7 @@ def test_constraint_handles_empty_rows(freeze_constraints: bool) -> None:
         name="x",
     )
     empty = x.isel(time=range(1, 1))
-    c = m.add_constraints(empty == 0, name="empty")
+    c = m.add_constraints(empty == 0, name="empty", freeze=freeze)
     assert isinstance(c, linopy.constraints.ConstraintBase)
     assert c.size == 0
     # Solving a model with only an empty constraint group is also fine.
