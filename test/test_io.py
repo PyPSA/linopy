@@ -628,13 +628,32 @@ def test_to_xpress(model: Model) -> None:
     assert p.attributes.rows > 0
 
 
-SOLVER_IO: dict[str, tuple[Callable[..., Any], Callable[[Any], list[str]]]] = {
-    "highs": (Model.to_highspy, lambda h: list(h.getLp().col_names_)),
-    "gurobi": (Model.to_gurobipy, lambda gm: [v.VarName for v in gm.getVars()]),
-    "xpress": (Model.to_xpress, lambda p: [v.name for v in p.getVariable()]),
+def _gurobi_names(gm: Any) -> tuple[list[str], list[str]]:
+    gm.update()
+    return [v.VarName for v in gm.getVars()], [c.ConstrName for c in gm.getConstrs()]
+
+
+SOLVER_IO: dict[
+    str, tuple[Callable[..., Any], Callable[[Any], tuple[list[str], list[str]]]]
+] = {
+    "highs": (
+        Model.to_highspy,
+        lambda h: (list(h.getLp().col_names_), list(h.getLp().row_names_)),
+    ),
+    "gurobi": (Model.to_gurobipy, _gurobi_names),
+    "xpress": (
+        Model.to_xpress,
+        lambda p: (
+            [v.name for v in p.getVariable()],
+            [c.name for c in p.getConstraint()],
+        ),
+    ),
     "mosek": (
         Model.to_mosek,
-        lambda task: [task.getvarname(i) for i in range(task.getnumvar())],
+        lambda task: (
+            [task.getvarname(i) for i in range(task.getnumvar())],
+            [task.getconname(i) for i in range(task.getnumcon())],
+        ),
     ),
 }
 
@@ -658,11 +677,11 @@ def test_to_solver_set_names(
 ) -> None:
     if solver not in available_solvers:
         pytest.skip(f"{solver} not installed")
-    to_solver, var_names = SOLVER_IO[solver]
+    to_solver, names = SOLVER_IO[solver]
     named = to_solver(model, set_names=True)
     model.set_names_in_solver_io = model_default
     built = to_solver(model, set_names=set_names)
-    assert (var_names(built) == var_names(named)) == expected
+    assert (names(built) == names(named)) == expected
 
 
 @pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
