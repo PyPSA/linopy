@@ -614,19 +614,19 @@ class LinearExpressionGroupby:
         self.model._check_sparse_semantics()
         csr = self._csr
         explicit_sparse = sparse is True
-        if sparse is not None:
-            warn_outside_linopy(
-                f"groupby(...).sum(sparse=...) {SPARSE_DEPRECATION}.", FutureWarning
-            )
         if sparse is None:
             sparse = is_v1() and (
                 self.model.sparse or options["sparse_groupby"] or csr is not None
             )
-        elif sparse and not is_v1():
-            raise ValueError(
-                "sparse groupby-sum requires v1 semantics; opt in with "
-                "linopy.options['semantics'] = 'v1'."
+        else:
+            warn_outside_linopy(
+                f"groupby(...).sum(sparse=...) {SPARSE_DEPRECATION}.", FutureWarning
             )
+            if sparse and not is_v1():
+                raise ValueError(
+                    "sparse groupby-sum requires v1 semantics; opt in with "
+                    "linopy.options['semantics'] = 'v1'."
+                )
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 

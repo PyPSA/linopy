@@ -290,14 +290,8 @@ class Model:
         -------
         linopy.Model
         """
-        if sparse:
-            if not is_v1():
-                raise ValueError(
-                    "Model(sparse=True) requires v1 semantics; opt in with "
-                    "linopy.options['semantics'] = 'v1'."
-                )
-            if chunk:
-                raise ValueError("Model(sparse=True) does not support `chunk`.")
+        self._sparse: bool = bool(sparse)
+        self._check_sparse_semantics()
         self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
             dtypes
         )
@@ -317,10 +311,9 @@ class Model:
         self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
-        self._chunk: T_Chunks = chunk
+        self.chunk = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
-        self._sparse: bool = bool(sparse)
         self._freeze_constraints: bool = self._sparse
         if freeze_constraints is not None:
             self.freeze_constraints = freeze_constraints
@@ -584,8 +577,8 @@ class Model:
         """Raise if the model is sparse but the semantics are legacy."""
         if self._sparse and not is_v1():
             raise ValueError(
-                "The model was created with sparse=True, which requires v1 "
-                "semantics, but linopy.options['semantics'] is 'legacy'."
+                "Model(sparse=True) requires v1 semantics; opt in with "
+                "linopy.options['semantics'] = 'v1'."
             )
 
     @property
