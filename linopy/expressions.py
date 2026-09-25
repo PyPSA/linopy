@@ -1738,12 +1738,14 @@ class BaseExpression(ABC):
         return None
 
     @has_optimized_model
-    def _map_solution(self) -> DataArray:
+    def _label_solution(self, labels: np.ndarray) -> np.ndarray:
         """
-        Replace variable labels by solution values.
+        Solution values indexed by variable label, with a trailing NaN that
+        label ``-1`` reads.
+
+        Raises if ``labels`` reference variables missing from the model.
         """
         m = self.model
-        labels = self.vars.values
         known = np.append(m.variables.label_index.label_to_pos != -1, True)
         if not known[labels].all():
             raise KeyError("Expression references variables missing from the model.")
@@ -1751,8 +1753,15 @@ class BaseExpression(ABC):
         for var in m.variables.data.values():
             sol[var.labels.values] = var.solution.values
         sol[-1] = np.nan
-        values = sol[labels]
-        return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
+        return sol
+
+    def _map_solution(self) -> DataArray:
+        """
+        Replace variable labels by solution values.
+        """
+        labels = self.vars
+        values = self._label_solution(labels.values)[labels.values]
+        return xr.DataArray(values, dims=labels.dims, coords=labels.coords)
 
     @property
     def solution(self) -> DataArray:
@@ -2511,6 +2520,21 @@ class LinearExpression(BaseExpression):
         return csr.grid.dataarray(
             present & (np.diff(csr.csr.indptr) > 0), name="has_terms"
         )
+
+    @property
+    def solution(self) -> DataArray:
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        csr = self._csr
+        if csr is None:
+            return super().solution
+        sol = self._label_solution(csr.csr.indices)[: csr.csr.shape[1]]
+        sol = np.nan_to_num(sol)
+        return csr.grid.dataarray(csr.csr @ sol + csr.const, name="solution")
 
     def _combined_with_constant(
         self,
@@ -3769,9 +3793,7 @@ def _try_csr_merge(
             return None
         csrs = aligned
 
-    combined = csrs[0]
-    for csr in csrs[1:]:
-        combined = combined.added(csr)
+    combined = csrs[0].added(*csrs[1:])
     return LinearExpression._from_csr(combined, exprs[0].model)
 
 
