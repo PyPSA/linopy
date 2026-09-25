@@ -517,6 +517,27 @@ def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
     assert model.solver_name is None
 
 
+def test_solve_disjoint_labels_on_shared_dim() -> None:
+    """
+    Containers sharing a dim name with disjoint labels solve as long as they
+    are never combined element-wise (PyPSA's shared ``name`` dim, #986).
+    """
+    m = Model()
+    gen = m.add_variables(
+        lower=0, coords=[pd.Index(["gen1", "gen2"], name="name")], name="gen"
+    )
+    store = m.add_variables(
+        lower=0, coords=[pd.Index(["store1"], name="name")], name="store"
+    )
+    m.add_constraints(gen.sum() + store.sum() >= 1, name="balance")
+    m.add_objective(gen.sum() + 2 * store.sum())
+
+    status, _ = m.solve(solver_name="highs")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_default_settings_chunked(
     model_chunked: Model, solver: str, io_api: str, explicit_coordinate_names: bool
