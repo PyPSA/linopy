@@ -180,13 +180,14 @@ def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path: Path) -> No
     assert f"<= {40.0 * 4}" in text
 
 
-def test_assign_result_unscales_solution_objective_and_dual() -> None:
+@pytest.mark.parametrize("freeze", [False, True])
+def test_assign_result_unscales_solution_objective_and_dual(freeze: bool) -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
     b = m.add_variables(binary=True, name="b", scaling=50.0)
 
-    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0])
+    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0], freeze=freeze)
     m.add_objective(x.sum() + b, scaling=10.0)
 
     primal = np.full(m._xCounter, np.nan)

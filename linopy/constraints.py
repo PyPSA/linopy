@@ -939,31 +939,39 @@ class CSRConstraint(ConstraintBase):
         return new
 
     def assign_labels(
-        self, cindex: int, name: str, scaling: float | DataArray = 1.0
+        self,
+        cindex: int,
+        name: str,
+        scaling: float | DataArray = 1.0,
+        mask: np.ndarray | None = None,
     ) -> CSRConstraint:
         """
         Return a copy labelled from ``cindex`` and named ``name``.
 
         Rows without terms are dropped, as when freezing a dense constraint;
-        a zero coefficient counts as a term. ``scaling`` is a scalar or a row
-        scaling broadcast on the grid; its distinct values are validated
-        without expanding a broadcast view.
+        a zero coefficient counts as a term. Active rows where the boolean
+        ``mask`` is False are dropped in the same gather. ``scaling`` is a
+        scalar or a row scaling broadcast on the grid; its distinct values are
+        validated without expanding a broadcast view.
         """
         values = np.asarray(scaling)
         distinct = values[tuple(slice(None) if s else 0 for s in values.strides)]
         validate_scaling(distinct, "constraint scaling")
-        kept = self._kept(np.diff(self._csr.indptr) > 0)
+        keep = np.diff(self._csr.indptr) > 0
+        if mask is not None:
+            keep &= mask
+        kept = self._kept(keep)
         csr = kept._csr
         if not csr.data.all():
             csr = csr.copy() if csr is self._csr else csr
             csr.eliminate_zeros()
         if isinstance(scaling, DataArray):
-            row_scaling = kept._active_values(scaling)
+            row_scaling = kept.active_values(scaling)
         else:
             row_scaling = np.full(csr.shape[0], float(scaling))
         return kept._replace(csr=csr, cindex=cindex, name=name, scaling=row_scaling)
 
-    def _active_values(self, values: DataArray) -> np.ndarray:
+    def active_values(self, values: DataArray) -> np.ndarray:
         """
         Values of ``values``, broadcast on the grid, at the active rows.
 
@@ -1001,13 +1009,6 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=rows(self._binvar_labels),
             binval=rows(self._binval),
         )
-
-    def masked(self, mask: DataArray) -> CSRConstraint:
-        """
-        Copy with the cells where the boolean ``mask`` is False made inactive,
-        without the dense rectangle. ``mask`` must lie on the constraint grid.
-        """
-        return self._kept(self._active_values(mask).astype(bool))
 
     def _assign_coords(self, **coords: Any) -> CSRConstraint:
         """
@@ -1448,7 +1449,7 @@ class CSRConstraint(ConstraintBase):
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
-            sense = np.array([s[0] for s in self._sign])
+            sense = self._sign.astype("U1")
         return (
             self._to_positional_csr(label_index),
             self.active_labels(),
@@ -1472,7 +1473,9 @@ class CSRConstraint(ConstraintBase):
         external holders of the previous arrays (e.g. a ModelSnapshot
         sharing them) keep a valid baseline.
         """
-        zeros = np.abs(self._csr.data) <= 1e-10
+        data = self._csr.data
+        zeros = data <= 1e-10
+        zeros &= data >= -1e-10
         if zeros.any():
             csr = self._csr.copy()
             csr.data[zeros] = 0
@@ -1617,14 +1620,12 @@ class CSRConstraint(ConstraintBase):
         scaling = con.scaling.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
         active_signs = sign_vals[active_mask]
-        unique_signs = np.unique(active_signs)
-        if len(unique_signs) == 0:
+        sign: str | np.ndarray
+        if not len(active_signs):
             full_unique_signs = np.unique(sign_vals)
-            sign: str | np.ndarray = (
-                str(full_unique_signs.item()) if len(full_unique_signs) == 1 else "="
-            )
-        elif len(unique_signs) == 1:
-            sign = str(unique_signs[0])
+            sign = str(full_unique_signs.item()) if len(full_unique_signs) == 1 else "="
+        elif (active_signs == active_signs[0]).all():
+            sign = str(active_signs[0])
         else:
             sign = active_signs
         dual = (
@@ -2221,12 +2222,7 @@ class Constraint(ConstraintBase):
         csr.sum_duplicates()
 
         b = self.rhs.values.ravel()[row_mask]
-        sign_flat = self.sign.values.ravel()[row_mask]
-        unique_signs = np.unique(sign_flat)
-        if len(unique_signs) == 1:
-            sense = np.full(len(con_labels), str(unique_signs[0])[0], dtype="U1")
-        else:
-            sense = sign_flat.astype("U1")
+        sense = self.sign.values.ravel()[row_mask].astype("U1")
         return csr, con_labels, b, sense
 
     def sanitize_zeros(self) -> Constraint:

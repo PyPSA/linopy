@@ -11,6 +11,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -456,12 +457,21 @@ def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
     np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
 
 
+@pytest.mark.parametrize("masked", [False, True], ids=["unmasked", "masked"])
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
+def test_frozen_invalid_infinite_rhs_raises(sparse: bool, masked: bool) -> None:
     require_v1()
     c = base_model(sparse=sparse)
+    valid = c.load.bus != "bus0"
+    rhs = c.load.where(valid, -np.inf)
+    mask = valid if masked else None
+    add = partial(c.m.add_constraints, name="bal", freeze=True, mask=mask)
+    if masked and sparse:
+        con = add(c.balance_lhs() <= rhs)
+        assert con.ncons == int(valid.sum()) * c.load.sizes["snapshot"]
+        return
     with pytest.raises(ValueError, match="incorrect infinite values"):
-        c.m.add_constraints(c.balance_lhs() <= -np.inf, name="bal", freeze=True)
+        add(c.balance_lhs() <= rhs)
 
 
 ROW_SCALINGS: dict[str, Callable[[xr.DataArray], Any]] = {
