@@ -296,6 +296,18 @@ def test_quadratic_expression_to_polars(x: Variable, y: Variable) -> None:
     assert len(df) == expr.nterm * 2
 
 
+@pytest.mark.parametrize("factor_last", [False, True])
+def test_quadratic_expression_linear_terms(
+    x: Variable, y: Variable, factor_last: bool
+) -> None:
+    expr = x * y + 3 * x + 0 * y
+    assert isinstance(expr, QuadraticExpression)
+    if factor_last:
+        expr = QuadraticExpression(expr.data.transpose(..., FACTOR_DIM), expr.model)
+    labels, coeffs = expr.linear_terms()
+    assert sorted(zip(labels.tolist(), coeffs.tolist())) == [(0, 3.0), (1, 3.0)]
+
+
 def test_quadratic_expression_constant_to_polars() -> None:
     m = Model()
     arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])

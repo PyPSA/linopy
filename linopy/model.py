@@ -61,6 +61,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.csr import _densify_notice
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -1291,11 +1292,10 @@ class Model:
         penalty : constant-like, optional
             If given, soften the constraint right away by calling
             :meth:`Constraint.soften` with this penalty, adding a slack variable
-            and a penalty term to the objective. Not allowed together with
-            ``freeze=True`` (or a model default of ``freeze_constraints=True``),
-            since softening requires a mutable, registered ``Constraint``.
-            The resulting Slack is not returned by this shortcut; retrieve
-            the slack variable(s) from model.variables using the derived
+            and a penalty term to the objective. A frozen constraint is
+            softened natively on its sparse rows. The resulting Slack is not
+            returned by this shortcut; retrieve the slack variable(s) from
+            model.variables using the derived
             name f"{name}_slack_pos" (and f"{name}_slack_neg" for
             equality constraints).
 
@@ -1308,13 +1308,8 @@ class Model:
         name = self._resolve_constraint_name(name)
         if freeze is None:
             freeze = self.freeze_constraints
+        chunked = bool(freeze and self.chunk)
         freeze = freeze and not self.chunk
-
-        if penalty is not None and freeze:
-            raise ValueError(
-                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
-                "since `soften` is not supported on frozen constraints."
-            )
 
         if isinstance(sign, str):
             sign = maybe_replace_sign(sign)
@@ -1329,17 +1324,11 @@ class Model:
             rhs_da = as_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
-        if (
-            isinstance(lhs, LinearExpression)
-            and lhs.is_sparse
-            and freeze
-            and mask is not None
-        ):
-            mask = broadcast_to_coords(mask, lhs.coords, label="mask").astype(bool)
-            lhs = lhs.where(mask)
-            mask = None
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        if isinstance(con, CSRConstraint) and freeze and mask is None:
+        if isinstance(con, CSRConstraint) and freeze:
+            if mask is not None:
+                mask = broadcast_to_coords(mask, con.coords, label="mask")
+                con = con.masked(mask.astype(bool))
             _check_infinities(con._sign, con._rhs, name)
             self.check_force_dim_names(con.coords.to_dataset())
             enforce_no_multiindex(con, context=f"constraint {name!r}")
@@ -1350,7 +1339,13 @@ class Model:
             cindex = self._cCounter
             self._cCounter += con.full_size
             con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
-            return self.constraints.add(con)
+            return self._soften_added(self.constraints.add(con), penalty)
+        if isinstance(con, CSRConstraint):
+            if chunked:
+                reason = "chunked model, `Model.chunk` adds constraints unfrozen"
+            else:
+                reason = "constraint added unfrozen, `freeze=False`"
+            _densify_notice(reason)
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)
@@ -1414,10 +1409,15 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        added = self.constraints.add(constraint, freeze=freeze)
+        return self._soften_added(self.constraints.add(constraint, freeze), penalty)
+
+    @staticmethod
+    def _soften_added(
+        constraint: ConstraintBase, penalty: ConstantLike | None
+    ) -> ConstraintBase:
         if penalty is not None:
             constraint.soften(penalty=penalty)
-        return added
+        return constraint
 
     def add_indicator_constraints(
         self,

@@ -113,24 +113,6 @@ def test_add_constraints_penalty_softens_constraint(
     assert_linequal(m.objective.expression, expected_objective)
 
 
-def test_add_constraints_penalty_with_freeze_true_raises(
-    m: Model, x: linopy.Variable
-) -> None:
-    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
-        m.add_constraints(x >= 0, name="frozen_penalized", freeze=True, penalty=10)
-
-
-def test_add_constraints_penalty_with_model_freeze_default_raises() -> None:
-    """
-    `freeze=None` resolves to the model's `freeze_constraints` default, which must
-    also be checked against `penalty`, not just an explicit `freeze=True`.
-    """
-    m = Model(freeze_constraints=True)
-    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
-    with pytest.raises(ValueError, match="`penalty` cannot be combined"):
-        m.add_constraints(x >= 0, name="frozen_by_default_penalized", penalty=10)
-
-
 def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
     assert c.name == "c"
 

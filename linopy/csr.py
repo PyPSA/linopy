@@ -1,22 +1,22 @@
 """
 The sparse backing of a LinearExpression: ``A @ x + c`` in CSR form.
 
-``expr.groupby(g).sum(sparse=True)`` (or ``linopy.options["sparse_groupby"]``
-under v1) returns an ordinary :class:`~linopy.expressions.LinearExpression`
-backed by a :class:`CSRLinearExpression` instead of the dense dataset — same
-public type, different backing, akin to dask-backed xarray objects. The CSR
-form is canonical (duplicate variables summed, terms label-ordered) and ragged
-along ``_term``, so the group-size padding of issue #745 has no analog;
-grouping, ``sum``, ``merge``/``+``/``-``, scaling and ``@``/``dot``
-(:meth:`contracted`) become sparse linear algebra. Zero policy: the structural
-operations (grouping and ``sum`` via :meth:`aggregated`, merge via
+Under v1 semantics, ``expr.groupby(g).sum(sparse=True)`` (or
+``linopy.options["sparse_groupby"]``) returns an ordinary
+:class:`~linopy.expressions.LinearExpression` backed by a
+:class:`CSRLinearExpression`: same public type, different backing, akin to
+dask-backed xarray objects. The CSR form is canonical (duplicate variables
+summed, terms label-ordered) and ragged along ``_term``, with no fixed term
+count per row; grouping, ``sum``, ``merge``/``+``/``-``, scaling and
+``@``/``dot`` (:meth:`contracted`) are sparse linear algebra. Zero policy: the
+structural operations (grouping and ``sum`` via :meth:`aggregated`, merge via
 :meth:`added`, scaling, reindexing) go through COO and keep explicit zero
-coefficients, like the dense path; only the product with a constant matrix,
-``@``/``dot``, prunes them. Either way cell activeness is carried by ``const``
-alone (issue #925), so the two differ in term layout only.
-Anything without a sparse branch expands through ``.data`` to the
-mathematically identical dense rectangle in canonical term layout — the reason
-the feature is v1-gated, where term layout is non-contractual.
+coefficients; only the product with a constant matrix, ``@``/``dot``, prunes
+them. Either way cell activeness is carried by ``const`` alone, independent of
+term layout.
+Any operation without a sparse branch expands the expression through
+``.data`` to the mathematically identical dense rectangle in canonical term
+layout; this is valid because v1 semantics do not fix the term layout.
 
 This module documents the CSR structure only, working on plain datasets. The
 one bridge back to a dense type is :meth:`CSRLinearExpression.to_dense`, which
@@ -38,6 +38,7 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset
 
+from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import (
@@ -55,6 +56,9 @@ CONTRACTION_CHUNK = 64
 
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
+
+_AUX_PREFIX = "_aux"
+_SCALAR_DIM = "_scalar"
 
 
 @dataclass(frozen=True, eq=False)
@@ -84,6 +88,31 @@ class Grid:
         dims = tuple(dims)
         indexes = {d: ds.get_index(d).rename(d) for d in dims}
         return cls(indexes, _aux_coords(ds, set(dims)))
+
+    @classmethod
+    def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
+        """Read back a grid written by :meth:`to_netcdf_vars`."""
+        aux: AuxCoords = {
+            da.attrs["name"]: (da.attrs.get("dim", ()), da.to_numpy())
+            for k, da in ds.data_vars.items()
+            if str(k).startswith(_AUX_PREFIX)
+        }
+        return cls(cls.from_coords(coords_from_dataset(ds, list(dims))).indexes, aux)
+
+    def to_netcdf_vars(self) -> dict[str, DataArray]:
+        """
+        The indexes and auxiliary coordinates as plain data variables for
+        netcdf, named by position with the coordinate names as attributes.
+        """
+        aux = {
+            f"{_AUX_PREFIX}{j}": DataArray(
+                v,
+                dims=[f"{_AUX_PREFIX}dim{j}"] if isinstance(d, str) else [],
+                attrs={"name": n} | ({"dim": d} if isinstance(d, str) else {}),
+            )
+            for j, (n, (d, v)) in enumerate(self.aux.items())
+        }
+        return coords_to_dataset_vars(self.coords) | aux
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -240,6 +269,14 @@ class CSRLinearExpression:
     grid: Grid
     model: Model
 
+    def __post_init__(self) -> None:
+        csr = self.csr
+        dtype = index_dtype(csr.nnz, csr.shape, self.model)
+        if csr.indices.dtype != dtype or csr.indptr.dtype != dtype:
+            indices, indptr = csr.indices.astype(dtype), csr.indptr.astype(dtype)
+            csr = scipy.sparse.csr_array((csr.data, indices, indptr), shape=csr.shape)
+            object.__setattr__(self, "csr", csr)
+
     @property
     def shape(self) -> tuple[int, ...]:
         return self.grid.shape
@@ -255,7 +292,8 @@ class CSRLinearExpression:
     def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
         """
         Coefficients, label-ordered variable labels and constant of the grid
-        cell at ``indices``, as in the dense form: an absent cell has no terms.
+        cell at ``indices``. An absent cell returns empty coefficient and
+        label arrays.
         """
         row = int(np.ravel_multi_index(indices, self.grid.shape)) if indices else 0
         const = float(self.const[row])
@@ -277,18 +315,18 @@ class CSRLinearExpression:
         coord_dims: tuple[str, ...],
     ) -> CSRLinearExpression:
         """
-        Build the grouped sum directly in CSR form (no padded rectangle).
+        Build the grouped sum in CSR form.
 
         The grouper is conformed to the expression's member index by label
         (upstream alignment checks guarantee equal label sets) and group
-        labels are sorted, matching the dense kernel's output grid. A
-        DataFrame grouper (one column per key) yields one grid dim per key
-        -- the cartesian grid, absent combinations being empty cells -- or,
-        ``stacked``, a single ``group_dim`` over the observed key combinations
-        only, the key values attached as auxiliary coordinates. The new dims
-        take the member dim's slot in ``coord_dims``, as on the dense path.
-        ``source`` is a dense expression dataset or an already CSR-backed
-        expression, which is regrouped through :meth:`aggregated`.
+        labels are sorted. A DataFrame grouper (one column per key) yields
+        one grid dim per key -- the cartesian grid, absent combinations being
+        empty cells -- or, ``stacked``, a single ``group_dim`` over the
+        observed key combinations only, the key values attached as auxiliary
+        coordinates. The new dims take the member dim's slot in
+        ``coord_dims``. ``source`` is a dense expression dataset or an
+        already CSR-backed expression, which is regrouped through
+        :meth:`aggregated`.
         """
         ds = source if isinstance(source, Dataset) else source.grid.to_dataset()
         member_dim = str(grouper.index.name)
@@ -343,6 +381,9 @@ class CSRLinearExpression:
         """Convert a dense expression to CSR form on its own coordinate grid."""
         grid_dims = tuple(str(d) for d in ds.coeffs.dims if d not in HELPER_DIMS)
         grid = Grid.from_dataset(ds, grid_dims)
+        if not grid_dims:
+            scalar = ds.expand_dims(_SCALAR_DIM)
+            return cls._from_scatter(scalar, model, grid, _SCALAR_DIM, {}, False)
         first = grid_dims[0]
         codes = {first: np.arange(len(grid.indexes[first]))}
         return cls._from_scatter(ds, model, grid, first, codes, False)
@@ -361,14 +402,14 @@ class CSRLinearExpression:
         Scatter an expression's terms into grid rows (conceptually ``G @ A``):
         ``member_dim`` lands in the contiguous block of grid dims named by
         ``scatter_codes`` (one row-position array per dim), every other grid
-        dim maps one-to-one, and the COO→CSR conversion sums duplicates --
-        which is the group sum. Cells no member lands in stay absent (NaN
-        const). With ``skipna`` the constant is reduced as by the dense group
-        kernel (NaN members count as 0); without it an absent cell (NaN const)
-        stays absent, as on the dense v1 merge path.
+        dim maps one-to-one, and the COO to CSR conversion sums duplicate
+        variables, giving the group sum. Cells no member lands in stay absent
+        (NaN const). With ``skipna``, NaN member constants count as 0 in the
+        sum; without it, a NaN member constant propagates and leaves the cell
+        absent (NaN const).
         """
         grid_dims = grid.dims
-        slot = min(grid_dims.index(d) for d in scatter_codes)
+        slot = min((grid_dims.index(d) for d in scatter_codes), default=0)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
         member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
@@ -380,9 +421,8 @@ class CSRLinearExpression:
         keep = (vars_ != -1) & ~np.isnan(coeffs)
 
         full_size = grid.size
-        coo = scipy.sparse.coo_array(
-            (coeffs[keep], (rows[keep], vars_[keep])),
-            shape=(full_size, model._xCounter),
+        csr = coo_to_csr(
+            coeffs[keep], rows[keep], vars_[keep], (full_size, model._xCounter), model
         )
 
         const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
@@ -392,31 +432,31 @@ class CSRLinearExpression:
         const[cell_rows] = 0.0
         np.add.at(const, cell_rows, const_vals)
 
-        return cls(scipy.sparse.csr_array(coo), const, grid, model)
+        return cls(csr, const, grid, model)
 
     def aggregated(self, grid: Grid, rows: np.ndarray) -> CSRLinearExpression:
         """
         Sum source rows into the cells of ``grid``, row ``i`` landing in cell
         ``rows[i]`` (conceptually ``G @ A``). Goes through COO, so duplicate
         variables are summed and explicit zeros kept, as by :meth:`added`. The
-        constant is reduced as by the dense group kernel (NaN counts as 0);
-        cells no row lands in are absent. Auxiliary coordinates are ``grid``'s.
+        constant is the NaN-skipping sum of its rows' constants (NaN counts as
+        0); cells no row lands in are absent. Auxiliary coordinates are
+        ``grid``'s.
         """
         coo = self.csr.tocoo()
-        coo = scipy.sparse.coo_array(
-            (coo.data, (rows[coo.coords[0]], coo.coords[1])),
-            shape=(grid.size, self.csr.shape[1]),
-        )
+        shape = (grid.size, self.csr.shape[1])
+        rows_ = rows[coo.coords[0]]
+        csr = coo_to_csr(coo.data, rows_, coo.coords[1], shape, self.model)
         weights = np.nan_to_num(self.const)
         const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
         const[np.bincount(rows, minlength=grid.size) == 0] = np.nan
-        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
+        return replace(self, csr=csr, const=const, grid=grid)
 
     def summed(self, dims: Iterable[str]) -> CSRLinearExpression:
         """
-        Sum over grid dimensions, as the dense ``sum``: the kept dims stay in
-        grid order with their auxiliary coordinates, and every kept cell is
-        present, its constant the NaN-skipping sum of its members.
+        Sum over grid dimensions. The kept dims stay in grid order with their
+        auxiliary coordinates, and every kept cell is present, its constant
+        the NaN-skipping sum of its members.
         """
         dims = set(dims)
         grid = self.grid.reordered(d for d in self.grid.dims if d not in dims)
@@ -428,6 +468,14 @@ class CSRLinearExpression:
             ]
         )
         return self.aggregated(grid, rows).filled(0.0)
+
+    def live_terms(self) -> np.ndarray:
+        """
+        Mask over the stored terms: the cell is present and the coefficient
+        is nonzero.
+        """
+        present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
+        return present & (self.csr.data != 0)
 
     def pruned(self) -> CSRLinearExpression:
         """Drop explicit zero coefficients; cell activeness stays with ``const``."""
@@ -455,8 +503,8 @@ class CSRLinearExpression:
 
     def with_const(self, const: np.ndarray) -> CSRLinearExpression:
         """
-        Replace the per-cell constant, leaving the terms alone. A cell it makes
-        absent (NaN) drops its terms (v1 dead-term invariant).
+        Replace the per-cell constant, leaving the terms alone. A cell made
+        absent (NaN) has its terms dropped: an absent cell carries no terms.
         """
         absent = np.isnan(const)
         counts = np.diff(self.csr.indptr)
@@ -483,10 +531,10 @@ class CSRLinearExpression:
 
     def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
-        Remap rows onto a new grid, possibly in a new dim order, without the
-        dense rectangle: dropped labels vanish, new labels get ``fill`` as
-        their constant (NaN: absent cells). Auxiliary coordinates follow the
-        rows; those of ``grid`` are ignored.
+        Remap rows onto a new grid, possibly in a new dim order: dropped
+        labels vanish, new labels get ``fill`` as their constant (NaN: absent
+        cells). Auxiliary coordinates follow the rows; those of ``grid`` are
+        ignored.
         """
         row_map, valid = grid.indexer(self.grid)
 
@@ -495,14 +543,13 @@ class CSRLinearExpression:
         rows = row_map[coo.coords[0][keep]]
         cols = coo.coords[1][keep]
         n_cells = grid.size
-        coo = scipy.sparse.coo_array(
-            (coo.data[keep], (rows, cols)), shape=(n_cells, self.csr.shape[1])
-        )
+        shape = (n_cells, self.csr.shape[1])
+        csr = coo_to_csr(coo.data[keep], rows, cols, shape, self.model)
         const = np.full(n_cells, fill)
         const[row_map[valid]] = self.const[valid]
         return replace(
             self,
-            csr=scipy.sparse.csr_array(coo),
+            csr=csr,
             const=const,
             grid=self.grid.conformed(grid),
         )
@@ -525,10 +572,9 @@ class CSRLinearExpression:
         Sparse matrix addition == merge along the term dimension. Goes through
         COO so explicit zero coefficients survive (scipy's ``+`` drops them),
         keeping a cell with only zero-coefficient terms distinguishable from
-        an empty cell, as on the dense path. A cell absent in either operand
-        is absent in the sum and carries no terms (v1 dead-term invariant).
-        Auxiliary coordinates propagate and conflicting ones raise (§11), as
-        on the dense path.
+        an empty cell. A cell absent in either operand is absent in the sum
+        and carries no terms. Auxiliary coordinates propagate and conflicting
+        ones raise (§11).
         """
         const = self.const + other.const
         a, b = self.csr.tocoo(), other.csr.tocoo()
@@ -537,12 +583,10 @@ class CSRLinearExpression:
         cols = np.concatenate([a.coords[1], b.coords[1]])
         data = np.concatenate([a.data, b.data])
         present = ~np.isnan(const)[rows]
-        coo = scipy.sparse.coo_array(
-            (data[present], (rows[present], cols[present])), shape=shape
-        )
+        csr = coo_to_csr(data[present], rows[present], cols[present], shape, self.model)
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in (self, other)])
         grid = replace(self.grid, aux=other.grid.aux | self.grid.aux)
-        return replace(self, csr=scipy.sparse.csr_array(coo), const=const, grid=grid)
+        return replace(self, csr=csr, const=const, grid=grid)
 
     def contracted(
         self,
@@ -562,11 +606,11 @@ class CSRLinearExpression:
         ``kron(I_kept, matrix.T) @ csr``, evaluated in chunks of the kept axis
         so the operator never grows with the kept size.
 
-        The result is compact canonical form: duplicate variables summed, terms
-        label-ordered and explicit zeros pruned -- unlike :meth:`added`, the
-        sparse product drops them, so cell activeness is carried by ``const``
-        alone (see issue #925). Auxiliary coordinates on kept dims propagate,
-        those on contracted dims drop.
+        The result is in compact canonical form: duplicate variables summed,
+        terms label-ordered and explicit zeros pruned -- unlike :meth:`added`,
+        the sparse product drops them, so cell activeness is carried by
+        ``const`` alone. Auxiliary coordinates on kept dims propagate, those
+        on contracted dims drop.
         """
         contracted_dims = tuple(contracted_dims)
         kept = tuple(d for d in self.grid.dims if d not in contracted_dims)
@@ -613,8 +657,8 @@ class CSRLinearExpression:
         """
         Expand to the dense equivalent in canonical form: terms label-ordered,
         duplicates summed, padded to the widest cell with the usual fill.
-        Absent cells (NaN const) carry no terms, per the v1 dead-term invariant.
-        The expanded dataset is wrapped in a :class:`LinearExpression`.
+        Absent cells (NaN const) carry no terms. The expanded dataset is
+        wrapped in a :class:`LinearExpression`.
         """
         from linopy.expressions import LinearExpression
 
@@ -636,6 +680,28 @@ class CSRLinearExpression:
             coords=self.grid.indexes | self.grid.aux,
         )
         return LinearExpression(absorb_absence(ds), self.model)
+
+
+def index_dtype(nnz: int, shape: tuple[int, ...], model: Model) -> np.dtype:
+    """
+    Index dtype of a CSR store: the model's label dtype, widened to int64
+    only when the nonzeros or the shape outgrow it.
+    """
+    dtype = np.dtype(model._dtypes["labels"])
+    return dtype if max(nnz, *shape) <= np.iinfo(dtype).max else np.dtype(np.int64)
+
+
+def coo_to_csr(
+    data: np.ndarray,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    shape: tuple[int, int],
+    model: Model,
+) -> scipy.sparse.csr_array:
+    """Build a CSR store from COO triplets in the model's index dtype."""
+    dtype = index_dtype(len(data), shape, model)
+    coords = (rows.astype(dtype, copy=False), cols.astype(dtype, copy=False))
+    return scipy.sparse.csr_array(scipy.sparse.coo_array((data, coords), shape=shape))
 
 
 def csr_nterm(csr: scipy.sparse.csr_array) -> int:
@@ -687,7 +753,7 @@ def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
     """Scalar and one-dimensional auxiliary coordinates of ``ds`` lying on ``dims``."""
     aux: AuxCoords = {}
     for n, c in ds.coords.items():
-        if n in ds.dims:
+        if n in ds.xindexes:
             continue
         if c.ndim == 0:
             aux[str(n)] = ((), c.to_numpy())

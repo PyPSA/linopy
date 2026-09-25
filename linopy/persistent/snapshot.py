@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from linopy import expressions
 from linopy.constraints import Constraint
 
 if TYPE_CHECKING:
@@ -38,19 +37,8 @@ def _objective_linear_vector(model: Model) -> np.ndarray:
     vlabels = model.variables.label_index.vlabels
     label_to_pos = model.variables.label_index.label_to_pos
     result = np.zeros(len(vlabels), dtype=np.float64)
-    expr = model.objective.expression
-    if isinstance(expr, expressions.QuadraticExpression):
-        vars_2d = expr.data.vars.values
-        coeffs_all = expr.data.coeffs.values.ravel()
-        vars1, vars2 = vars_2d[0], vars_2d[1]
-        linear = (vars1 == -1) | (vars2 == -1)
-        var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
-        coeffs = coeffs_all[linear]
-    else:
-        var_labels = expr.data.vars.values.ravel()
-        coeffs = expr.data.coeffs.values.ravel()
-    mask = var_labels != -1
-    np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
+    var_labels, coeffs = model.objective.linear_terms()
+    np.add.at(result, label_to_pos[var_labels], coeffs)
     return result
 
 
