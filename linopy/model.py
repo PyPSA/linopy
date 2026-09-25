@@ -314,7 +314,7 @@ class Model:
         self.chunk = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
-        self._freeze_constraints: bool = self._sparse
+        self._freeze_constraints: bool = False
         if freeze_constraints is not None:
             self.freeze_constraints = freeze_constraints
         self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
@@ -549,7 +549,7 @@ class Model:
     @property
     def freeze_constraints(self) -> bool:
         """Whether constraints are frozen to CSR by default when added."""
-        return self._freeze_constraints
+        return self._sparse or self._freeze_constraints
 
     @freeze_constraints.setter
     def freeze_constraints(self, value: bool) -> None:
