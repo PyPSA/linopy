@@ -64,7 +64,10 @@ class Case:
 
 
 def base_model(
-    gens_per_bus: tuple[int, ...] = (7, 1, 3, 1, 2), n_snap: int = 3, seed: int = 0
+    gens_per_bus: tuple[int, ...] = (7, 1, 3, 1, 2),
+    n_snap: int = 3,
+    seed: int = 0,
+    sparse: bool = False,
 ) -> Case:
     rng = np.random.default_rng(seed)
     n_bus = len(gens_per_bus)
@@ -74,7 +77,7 @@ def base_model(
     lines = pd.Index([f"line{i}" for i in range(n_bus)], name="line")
     snaps = pd.Index(range(n_snap), name="snapshot")
 
-    m = linopy.Model()
+    m = linopy.Model(sparse=sparse)
     gen_p = m.add_variables(coords=[gens, snaps], name="gen_p")
     flow = m.add_variables(coords=[lines, snaps], name="flow")
     flow_t = m.add_variables(coords=[snaps, lines], name="flow_t")
@@ -342,17 +345,17 @@ def test_namelist_sparse_grid_warns_and_observed_silences() -> None:
     require_v1()
     n = 200
     s = pd.RangeIndex(n, name="s")
-    m = Model()
+    m = Model(sparse=True)
     x = m.add_variables(coords=[s], name="x")
     expr = (1.0 * x).assign_coords(
         period=xr.DataArray(np.arange(n), dims="s", coords={"s": s}),
         season=xr.DataArray(np.arange(n), dims="s", coords={"s": s}),
     )
     with pytest.warns(UserWarning, match="dense .* grid"):
-        expr.groupby(["period", "season"]).sum(sparse=True)
+        expr.groupby(["period", "season"]).sum()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        res = expr.groupby(["period", "season"]).sum(sparse=True, observed=True)
+        res = expr.groupby(["period", "season"]).sum(observed=True)
     assert res._csr is not None
     assert res._csr.shape == (n,)
 
@@ -455,16 +458,131 @@ def test_frozen_constraint_applies_row_scaling(sparse: bool) -> None:
     xr.testing.assert_equal(con.scaling, expected)
 
 
-def test_option_gates_csr_and_freeze_model_default() -> None:
+def sparse_model_results(c: Case) -> dict[str, Any]:
+    weights = xr.DataArray(
+        np.eye(len(c.gbus))[:, :2],
+        coords=[c.gbus.index, pd.Index(["a", "b"], name="k")],
+    )
+    lhs = c.balance_lhs(sparse=None)
+    return {
+        "expression groupby": (1.0 * c.gen_p).groupby(c.gbus).sum(),
+        "variable groupby": c.gen_p.groupby(c.gbus).sum(),
+        "expression @": (1.0 * c.gen_p) @ weights,
+        "variable @": c.gen_p @ weights,
+        "constraint": c.m.add_constraints(lhs == c.load, name="bal"),
+        "unfrozen": c.m.add_constraints(lhs >= 0, name="free", freeze=False),
+        "copy": c.m.copy().constraints["bal"],
+    }
+
+
+@pytest.mark.parametrize("sparse", [False, True])
+def test_model_sparse_switches_the_whole_build(sparse: bool) -> None:
+    require_v1()
+    res = sparse_model_results(base_model(sparse=sparse))
+    unfrozen = res.pop("unfrozen")
+    assert isinstance(unfrozen, Constraint)
+    for key, obj in res.items():
+        if isinstance(obj, LinearExpression):
+            assert obj.is_sparse is sparse, key
+        else:
+            assert isinstance(obj, CSRConstraint) is sparse, key
+
+
+def test_model_sparse_persists_through_netcdf(tmp_path: Path) -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    c.m.to_netcdf(tmp_path / "m.nc")
+    read = linopy.read_netcdf(tmp_path / "m.nc")
+    assert read.sparse and read.freeze_constraints
+    assert read.copy().sparse
+    linopy.options["semantics"] = "legacy"
+    with pytest.raises(ValueError, match="requires v1 semantics"):
+        linopy.read_netcdf(tmp_path / "m.nc")
+
+
+def test_file_without_sparse_key_keeps_freeze_default(tmp_path: Path) -> None:
+    Model(freeze_constraints=True).to_netcdf(tmp_path / "m.nc")
+    ds = xr.load_dataset(tmp_path / "m.nc")
+    del ds.attrs["sparse"]
+    ds.to_netcdf(tmp_path / "old.nc")
+    read = linopy.read_netcdf(tmp_path / "old.nc")
+    assert read.freeze_constraints and not read.sparse
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda c: (1.0 * c.gen_p).groupby(c.gbus).sum(),
+        lambda c: (1.0 * c.gen_p) @ xr.DataArray(np.ones(len(c.gbus)), [c.gbus.index]),
+    ],
+    ids=["groupby", "matmul"],
+)
+def test_sparse_model_raises_under_legacy(op: Callable[[Case], Any]) -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    linopy.options["semantics"] = "legacy"
+    with pytest.raises(ValueError, match="requires v1 semantics"):
+        op(c)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: Model(sparse=True, chunk=10),
+        lambda: Model(sparse=True, freeze_constraints=True),
+        lambda: setattr(Model(sparse=True), "chunk", 10),
+        lambda: setattr(Model(sparse=True), "freeze_constraints", False),
+    ],
+    ids=["chunk", "freeze_constraints", "set-chunk", "set-freeze_constraints"],
+)
+def test_sparse_model_rejects_conflicting_config(build: Callable[[], Any]) -> None:
+    require_v1()
+    with pytest.raises(ValueError, match="sparse"):
+        build()
+
+
+@pytest.mark.legacy
+def test_model_sparse_requires_v1() -> None:
+    with pytest.raises(ValueError, match="requires v1 semantics"):
+        Model(sparse=True)
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
+        lambda c: Model(freeze_constraints=True),
+        lambda c: setattr(c.m, "freeze_constraints", True),
+        lambda c: (1.0 * c.gen_p).groupby(c.gbus).sum(sparse=False),
+        lambda c: linopy.options.set_value(sparse_groupby=True),
+    ],
+    ids=[
+        "Model(freeze_constraints)",
+        "set-freeze_constraints",
+        "sum(sparse)",
+        "option",
+    ],
+)
+def test_deprecated_sparse_switches_warn(switch: Callable[[Case], Any]) -> None:
+    c = base_model()
+    with linopy.options, pytest.warns(FutureWarning, match="deprecated"):
+        switch(c)
+
+
+def test_sparse_groupby_option_covers_groupby_only() -> None:
     require_v1()
     c = base_model()
-    c.m.freeze_constraints = True
-    linopy.options["sparse_groupby"] = True
-    try:
-        con = c.m.add_constraints(c.balance_lhs(sparse=None) == c.load, name="bal")
-    finally:
-        linopy.options["sparse_groupby"] = False
-    assert isinstance(con, CSRConstraint)
+    weights = xr.DataArray(np.ones(len(c.gbus)), [c.gbus.index])
+    with linopy.options:
+        linopy.options.set_value(sparse_groupby=True)
+        assert (1.0 * c.gen_p).groupby(c.gbus).sum().is_sparse
+        assert not ((1.0 * c.gen_p) @ weights).is_sparse
+
+
+def test_sparse_model_notices_groupby_without_sparse_path() -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    with no_densify(), pytest.raises(linopy.PerformanceWarning, match="grouper"):
+        (1.0 * c.gen_p).groupby(c.gbus).sum(use_fallback=True)
 
 
 def test_materialized_csr_still_freezes_via_dense_path() -> None:
@@ -2062,9 +2180,8 @@ def softened(
     max_violation: float | None,
     freeze: bool,
 ) -> tuple[Case, ConstraintBase]:
-    c = base_model()
+    c = base_model(sparse=freeze and route == "penalty-default")
     c.m.add_objective(1.0 * c.gen_p.sum())
-    c.m.freeze_constraints = freeze and route == "penalty-default"
     mask = MASK_KINDS[mask_kind](c)
     args = (c.balance_lhs(sparse=freeze), sign, c.load)
     kwargs: dict[str, Any] = dict(name="c", mask=mask)

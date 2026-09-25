@@ -411,7 +411,7 @@ CSRConstraint
 =============
 
 Memory-efficient, immutable constraint representation backed by a scipy
-CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
+CSR sparse matrix. Opt in via ``Model(sparse=True)`` or
 ``Model.add_constraints(..., freeze=True)``. See the
 :doc:`creating-constraints` guide for usage.
 

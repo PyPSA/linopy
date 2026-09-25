@@ -1099,6 +1099,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
+    scalars |= {"sparse": m.sparse, "freeze_constraints": m.freeze_constraints}
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
@@ -1279,6 +1280,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
+    m._sparse = bool(ds.attrs.get("sparse", False))
+    m._freeze_constraints = bool(ds.attrs.get("freeze_constraints", False))
+    m._check_sparse_semantics()
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
         m._dtypes["labels"] = np.int64
@@ -1354,7 +1358,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
         auto_mask=m._auto_mask,
-        freeze_constraints=m.freeze_constraints,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
     )
@@ -1438,6 +1441,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+    new_model._sparse = m.sparse
+    new_model._freeze_constraints = m.freeze_constraints
 
     if m._sos_reformulation_state is not None:
         new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)

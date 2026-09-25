@@ -41,6 +41,7 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
+from linopy.config import SPARSE_DEPRECATION
 from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
@@ -90,7 +91,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex, is_v1
+from linopy.semantics import enforce_no_multiindex, is_v1, warn_outside_linopy
 
 try:
     from linopy.remote import OetcHandler
@@ -171,6 +172,7 @@ class Model:
     _chunk: T_Chunks
     _force_dim_names: bool
     _freeze_constraints: bool
+    _sparse: bool
     _set_names_in_solver_io: bool
     _solver_dir: Path
     __slots__ = (
@@ -199,6 +201,7 @@ class Model:
         "_force_dim_names",
         "_auto_mask",
         "_freeze_constraints",
+        "_sparse",
         "_set_names_in_solver_io",
         "_solver_dir",
         "_relaxed_registry",
@@ -233,9 +236,10 @@ class Model:
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
         auto_mask: bool = False,
-        freeze_constraints: bool = False,
+        freeze_constraints: bool | None = None,
         set_names_in_solver_io: bool = True,
         dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
+        sparse: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -259,9 +263,11 @@ class Model:
             Whether to automatically mask variables and constraints where
             bounds, coefficients, or RHS values contain NaN. The default is
             False.
-        freeze_constraints : bool
-            Whether constraints added to the model should be frozen to the
-            CSR-backed representation by default. The default is False.
+        freeze_constraints : bool, optional
+            Deprecated, use ``sparse=True`` instead. Whether constraints added
+            to the model are frozen to the CSR-backed representation by
+            default, without making expressions sparse. Raises together with
+            ``sparse=True``. The default is False.
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. The default is True.
@@ -272,11 +278,26 @@ class Model:
             halves label memory but caps the model at ~2.1 billion labels,
             after which it widens to ``np.int64`` automatically; pass
             ``np.int64`` upfront to avoid that mid-build upcast.
+        sparse : bool
+            Build the model on the sparse (CSR) path, exposed read-only as
+            ``Model.sparse``. ``groupby(...).sum()`` and ``@``/``dot`` against
+            a constant return CSR-backed expressions, and ``add_constraints``
+            freezes constraints to a CSRConstraint unless ``freeze=False`` is
+            passed. Requires v1 semantics and no ``chunk``. See
+            :mod:`linopy.csr`. The default is False.
 
         Returns
         -------
         linopy.Model
         """
+        if sparse:
+            if not is_v1():
+                raise ValueError(
+                    "Model(sparse=True) requires v1 semantics; opt in with "
+                    "linopy.options['semantics'] = 'v1'."
+                )
+            if chunk:
+                raise ValueError("Model(sparse=True) does not support `chunk`.")
         self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
             dtypes
         )
@@ -299,7 +320,10 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
-        self._freeze_constraints: bool = bool(freeze_constraints)
+        self._sparse: bool = bool(sparse)
+        self._freeze_constraints: bool = self._sparse
+        if freeze_constraints is not None:
+            self.freeze_constraints = freeze_constraints
         self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
@@ -490,6 +514,8 @@ class Model:
         """
         Set the chunk sizes of the model.
         """
+        if value and self._sparse:
+            raise ValueError("A sparse model does not support `chunk`.")
         self._chunk = value
 
     @property
@@ -534,7 +560,33 @@ class Model:
 
     @freeze_constraints.setter
     def freeze_constraints(self, value: bool) -> None:
+        if self._sparse:
+            raise ValueError(
+                "A sparse model freezes constraints by default; pass `freeze=` "
+                "to add_constraints instead."
+            )
+        warn_outside_linopy(
+            f"Model.freeze_constraints {SPARSE_DEPRECATION}, or "
+            "add_constraints(..., freeze=True) per constraint.",
+            FutureWarning,
+        )
         self._freeze_constraints = bool(value)
+
+    @property
+    def sparse(self) -> bool:
+        """
+        Whether the model is built on the sparse (CSR) path, set once by
+        ``Model(sparse=True)``.
+        """
+        return self._sparse
+
+    def _check_sparse_semantics(self) -> None:
+        """Raise if the model is sparse but the semantics are legacy."""
+        if self._sparse and not is_v1():
+            raise ValueError(
+                "The model was created with sparse=True, which requires v1 "
+                "semantics, but linopy.options['semantics'] is 'legacy'."
+            )
 
     @property
     def set_names_in_solver_io(self) -> bool:
@@ -609,7 +661,6 @@ class Model:
             "_pwlCounter",
             "force_dim_names",
             "auto_mask",
-            "freeze_constraints",
             "set_names_in_solver_io",
         ]
 
@@ -1283,8 +1334,8 @@ class Model:
             Default is None.
         freeze : bool, optional
             If True, convert the constraint to an immutable CSR-backed CSRConstraint
-            for better memory efficiency. If None, uses the model default
-            ``Model.freeze_constraints`` setting (default False).
+            for better memory efficiency. If None, freezes if the model is
+            sparse (``Model(sparse=True)``).
         scaling : float/array_like, optional
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
