@@ -72,7 +72,7 @@ PWL_CONVEXITY: TypeAlias = Literal["convex", "concave", "linear", "mixed"]
 PWL_CONVEXITIES: frozenset[str] = frozenset(get_args(PWL_CONVEXITY))
 """Set of valid :data:`~linopy.constants.PWL_CONVEXITY` values."""
 # All internal dims are underscore-prefixed — user-facing dims never start
-# with "_". ``Model._check_coord_consistency`` relies on this to exempt them.
+# with "_".
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"

@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import warnings
-from collections.abc import Callable, Hashable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -2194,8 +2194,6 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
-        self._check_coord_consistency()
-
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -2465,46 +2463,6 @@ class Model:
             *self.constraints.data.values(),
             *self.expressions.data.values(),
         ]
-
-    def _check_coord_consistency(self) -> None:
-        """
-        Raise if containers carry incompatible labels on a shared dimension.
-
-        v1-only guard: under v1 semantics (convention §8) shared dimensions
-        must carry identical labels, and models can only diverge through
-        internal-state corruption. Under legacy, non-aligned containers are
-        documented positional behavior and the check is a no-op.
-
-        Allowed are label sets that nest by inclusion (a container may hold a
-        subset of the dimension, like a piecewise commitment gate); what
-        cannot be aligned by subset — same-length relabelings, disjoint or
-        partially overlapping labels — raises. Internal dims
-        (underscore-prefixed, like ``_term`` or ``_breakpoint_piece``) are
-        exempt: they are per-container bookkeeping which the piecewise
-        machinery labels differently on purpose.
-        """
-        if not is_v1():
-            return
-        indexes_by_dim: dict[Hashable, list[tuple[str, pd.Index]]] = {}
-        for item in self._coordinate_carriers():
-            for dim, index in item.indexes.items():
-                if str(dim).startswith("_"):
-                    continue
-                indexes_by_dim.setdefault(dim, []).append((str(item.name), index))
-
-        for dim, entries in indexes_by_dim.items():
-            master_name, master_index = max(entries, key=lambda e: len(e[1]))
-            for other_name, other_index in entries:
-                if other_index.isin(master_index).all():
-                    continue
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' are incompatible "
-                    f"across the model: '{other_name}' carries labels not "
-                    f"contained in the largest carrier '{master_name}', so "
-                    "they are neither equal nor subsets of a shared index. "
-                    "Use Model.assign_coords to relabel the model, or align "
-                    "the containers with `.sel`."
-                )
 
     def assign_result(
         self,
