@@ -2203,3 +2203,83 @@ def test_soften_rejects(error: str, freeze: bool) -> None:
     call, exc, match = SOFTEN_ERRORS[error]
     with pytest.raises(exc, match=match):
         call(con)
+
+
+def frozen_model(soften: bool) -> tuple[Model, CSRConstraint]:
+    c = base_model()
+    for var in (c.gen_p, c.flow):
+        var.update(lower=0, upper=1)
+    with no_densify():
+        c.m.add_objective((1.0 * c.gen_p).groupby(c.gbus).sum(sparse=True).sum())
+        con = c.m.add_constraints(
+            c.balance_lhs(sparse=True), ">=", c.load, name="c", freeze=True
+        )
+        if soften:
+            con.soften(penalty=2.0, max_violation=20.0)
+    assert isinstance(con, CSRConstraint)
+    return c.m, con
+
+
+@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.parametrize("include_solution", [True, False])
+@pytest.mark.parametrize("deep", [True, False])
+def test_copy_keeps_frozen_constraints(deep: bool, include_solution: bool) -> None:
+    require_v1()
+    m, con = frozen_model(soften=True)
+    m.solve("highs")
+    with no_densify():
+        c = m.copy(deep=deep, include_solution=include_solution)
+    copied = c.constraints["c"]
+    assert copied.model is c and copied.name == "c"
+    assert c.objective.expression.is_sparse
+    assert con.slack is not None and copied.slack is not None
+    assert copied.slack.positive.labels.equals(con.slack.positive.labels)
+    assert copied.slack.positive.model is c
+    assert ("dual" in copied.mutable().data) == include_solution
+
+
+@pytest.mark.parametrize("deep", [True, False])
+def test_softening_frozen_copy_leaves_original(deep: bool) -> None:
+    require_v1()
+    m, con = frozen_model(soften=False)
+    with no_densify():
+        copied = m.copy(deep=deep)
+        copied.constraints["c"].soften(penalty=2.0)
+    assert con.slack is None and "c_slack_pos" not in m.variables
+    assert m.objective.expression.nterm < copied.objective.expression.nterm
+    assert con.nterm < copied.constraints["c"].nterm
+
+
+@pytest.mark.parametrize("deep", [True, False])
+def test_copy_frozen_matrices(deep: bool) -> None:
+    m = Model(freeze_constraints=True)
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(lower=0, coords=[i], name="x")
+    b = m.add_variables(coords=[i], binary=True, name="b")
+    lhs = (2 * x).assign_coords(aux=("i", [1.0, 2, 3, 4]))
+    mask = xr.DataArray([True, False, True, True], coords=[i])
+    scaling = xr.DataArray([1.0, 2, 3, 4], coords=[i])
+    m.add_constraints(lhs >= 1, name="c", mask=mask, scaling=scaling)
+    m.add_indicator_constraints(b, 1, x <= 5, name="ind")
+    c = m.copy(deep=deep)
+    for name, con in m.constraints.items():
+        copied = c.constraints[name]
+        assert isinstance(con, CSRConstraint) and isinstance(copied, CSRConstraint)
+        assert np.shares_memory(con._csr.data, copied._csr.data) != deep
+    got, want = c.matrices, m.matrices
+    assert got.A is not None and want.A is not None
+    assert got.indicator_A is not None and want.indicator_A is not None
+    pairs = [
+        (got.A.toarray(), want.A.toarray()),
+        (got.b, want.b),
+        (got.sense, want.sense),
+        (got.clabels, want.clabels),
+        (got.indicator_A.toarray(), want.indicator_A.toarray()),
+        (got.indicator_b, want.indicator_b),
+        (got.indicator_binvar, want.indicator_binvar),
+    ]
+    for g, w in pairs:
+        assert np.array_equal(g, w)
+    with pytest.raises(ValueError, match="read-only"):
+        c.constraints["c"].coords["aux"].values[0] = -1
+    assert c.constraints["c"].coords["aux"].equals(m.constraints["c"].coords["aux"])

@@ -17,11 +17,12 @@ from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
@@ -33,6 +34,8 @@ from linopy.common import (
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+
+Buffer = TypeVar("Buffer", np.ndarray, scipy.sparse.sparray)
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -1335,7 +1338,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, ConstraintBase, Constraints
+    from linopy.constraints import (
+        Constraint,
+        ConstraintBase,
+        Constraints,
+        CSRConstraint,
+    )
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1378,17 +1386,28 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
-        d = con.mutable().data
-        if include_solution:
-            return d.copy(deep=deep)
-        return d[con.data_attrs].copy(deep=deep)
+    def _buffer(value: Buffer) -> Buffer:
+        return value.copy() if deep else value
+
+    def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
+        if isinstance(con, CSRConstraint):
+            buffer_types = (np.ndarray, scipy.sparse.sparray)
+            changes: dict[str, Any] = {"model": new_model}
+            if deep:
+                kwargs = con._init_kwargs().items()
+                changes |= {
+                    k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)
+                }
+            if not include_solution:
+                changes["dual"] = None
+            return con._replace(**changes)
+        d = con.data
+        if not include_solution:
+            d = d[con.data_attrs]
+        return Constraint(d.copy(deep=deep), new_model, name)
 
     new_model._constraints = Constraints(
-        {
-            name: Constraint(_copy_con_data(con), new_model, name)
-            for name, con in m.constraints.items()
-        },
+        {name: _copy_con(name, con) for name, con in m.constraints.items()},
         new_model,
     )
 
@@ -1397,7 +1416,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     obj_expr = (
         type(expr)(expr.data.copy(deep=deep), new_model)
         if csr is None
-        else LinearExpression._from_csr(replace(csr, model=new_model), new_model)
+        else LinearExpression._from_csr(
+            replace(
+                csr, csr=_buffer(csr.csr), const=_buffer(csr.const), model=new_model
+            ),
+            new_model,
+        )
     )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling

@@ -77,6 +77,11 @@ class Grid:
     indexes: dict[str, pd.Index]
     aux: AuxCoords = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "aux", {n: (d, _readonly(v)) for n, (d, v) in self.aux.items()}
+        )
+
     @classmethod
     def from_coords(cls, coords: Iterable[pd.Index]) -> Grid:
         """Build from one index per dimension, each named after its dim."""
@@ -747,6 +752,15 @@ def _densify_notice(reason: str) -> None:
         warn_outside_linopy(
             f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
         )
+
+
+def _readonly(values: np.ndarray) -> np.ndarray:
+    """``values`` as a read-only array, copied first if it is writable."""
+    if not values.flags.writeable:
+        return values
+    values = values.copy()
+    values.setflags(write=False)
+    return values
 
 
 def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
