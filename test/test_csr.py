@@ -179,8 +179,10 @@ def test_zero_coefficient_rows_stay_active(sparse: bool) -> None:
     c = base_model(sparse=sparse)
     lhs = (0.0 * c.gen_p).groupby(c.gbus).sum()
     lhs = lhs + (0.0 * c.flow).groupby(c.bus0).sum()
+    nterm = lhs.nterm
     con = c.m.add_constraints(lhs == c.load, name="bal", freeze=True)
     assert len(con.active_labels()) == c.load.size
+    assert lhs.nterm == nterm
 
 
 def test_merge_keeps_absent_cell_absent() -> None:
@@ -462,18 +464,72 @@ def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
         c.m.add_constraints(c.balance_lhs() <= -np.inf, name="bal", freeze=True)
 
 
+ROW_SCALINGS: dict[str, Callable[[xr.DataArray], Any]] = {
+    "scalar": lambda load: 2.0,
+    "snapshot": lambda load: xr.DataArray(
+        np.arange(1.0, load.sizes["snapshot"] + 1), coords=[load.indexes["snapshot"]]
+    ),
+    "grid": lambda load: load,
+}
+
+
+@pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
+@pytest.mark.parametrize("scaling", list(ROW_SCALINGS))
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_constraint_applies_row_scaling(sparse: bool) -> None:
+def test_frozen_constraint_applies_row_scaling(
+    sparse: bool, scaling: str, masked: bool
+) -> None:
     require_v1()
-    c = base_model(sparse=sparse)
-    snaps = c.load.indexes["snapshot"]
-    scaling = xr.DataArray(np.arange(1.0, len(snaps) + 1), coords=[snaps])
+    c = base_model(n_snap=6, sparse=sparse)
+    row_scaling = ROW_SCALINGS[scaling](c.load)
+    mask = c.load.bus == "bus1" if masked else None
     con = c.m.add_constraints(
-        c.balance_lhs() == c.load, name="bal", freeze=True, scaling=scaling
+        c.balance_lhs() == c.load,
+        name="bal",
+        freeze=True,
+        scaling=row_scaling,
+        mask=mask,
     )
     assert isinstance(con, CSRConstraint)
-    expected = scaling.broadcast_like(con.scaling).transpose(*con.scaling.dims)
-    xr.testing.assert_equal(con.scaling, expected)
+    active = con.labels != -1
+    expected = xr.DataArray(row_scaling).broadcast_like(c.load).astype(float)
+    xr.testing.assert_equal(
+        con.scaling.where(active), expected.transpose(*con.scaling.dims).where(active)
+    )
+
+
+@pytest.mark.parametrize("grid", [False, True], ids=["scalar", "grid"])
+@pytest.mark.parametrize("invalid", [-1.0, np.nan])
+@pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
+def test_frozen_constraint_rejects_invalid_row_scaling_on_masked_rows(
+    sparse: bool, invalid: float, grid: bool
+) -> None:
+    require_v1()
+    c = base_model(sparse=sparse)
+    mask = c.load.bus == "bus1"
+    scaling = c.load.where(mask, invalid) if grid else invalid
+    with pytest.raises(ValueError, match="finite positive"):
+        c.m.add_constraints(
+            c.balance_lhs() == c.load, freeze=True, scaling=scaling, mask=mask
+        )
+
+
+@pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
+def test_freeze_does_not_copy_lhs_matrix(masked: bool) -> None:
+    require_v1()
+    c = base_model(gens_per_bus=(400,) * 50, n_snap=20, sparse=True)
+    lhs = c.balance_lhs()
+    assert lhs._csr is not None
+    csr = lhs._csr.csr
+    csr_bytes = csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes
+    mask = c.load.bus == "bus1" if masked else None
+    tracemalloc.start()
+    try:
+        c.m.add_constraints(lhs == c.load, name="bal", freeze=True, mask=mask)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < csr_bytes / 4
 
 
 def sparse_model_results(c: Case) -> dict[str, Any]:

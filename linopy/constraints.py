@@ -939,24 +939,53 @@ class CSRConstraint(ConstraintBase):
         return new
 
     def assign_labels(
-        self, cindex: int, name: str, scaling: np.ndarray | None = None
+        self, cindex: int, name: str, scaling: float | DataArray = 1.0
     ) -> CSRConstraint:
         """
         Return a copy labelled from ``cindex`` and named ``name``.
 
         Rows without terms are dropped, as when freezing a dense constraint;
-        a zero coefficient counts as a term. ``scaling`` is a row scaling over
-        the full flat grid.
+        a zero coefficient counts as a term. ``scaling`` is a scalar or a row
+        scaling broadcast on the grid; its distinct values are validated
+        without expanding a broadcast view.
         """
+        values = np.asarray(scaling)
+        distinct = values[tuple(slice(None) if s else 0 for s in values.strides)]
+        validate_scaling(distinct, "constraint scaling")
         kept = self._kept(np.diff(self._csr.indptr) > 0)
-        kept._csr.eliminate_zeros()
-        changes: dict[str, Any] = dict(cindex=cindex, name=name)
-        if scaling is not None:
-            changes["scaling"] = scaling[kept._active_positions]
-        return kept._replace(**changes)
+        csr = kept._csr
+        if not csr.data.all():
+            csr = csr.copy() if csr is self._csr else csr
+            csr.eliminate_zeros()
+        if isinstance(scaling, DataArray):
+            row_scaling = kept._active_values(scaling)
+        else:
+            row_scaling = np.full(csr.shape[0], float(scaling))
+        return kept._replace(csr=csr, cindex=cindex, name=name, scaling=row_scaling)
+
+    def _active_values(self, values: DataArray) -> np.ndarray:
+        """
+        Values of ``values``, broadcast on the grid, at the active rows.
+
+        A broadcast view is indexed per dimension instead of being expanded
+        to the full grid, unless the per-dimension indices would be larger.
+        """
+        grid_values = values.transpose(*self._grid.dims).values
+        positions = self._active_positions
+        if (
+            grid_values.flags.c_contiguous
+            or positions.size * grid_values.ndim >= grid_values.size
+        ):
+            return grid_values.reshape(-1)[positions]
+        return grid_values[np.unravel_index(positions, grid_values.shape)]
 
     def _kept(self, keep: np.ndarray) -> CSRConstraint:
-        """Copy holding only the active rows where ``keep`` is True."""
+        """
+        Copy holding only the active rows where ``keep`` is True, sharing the
+        row arrays when every row is kept.
+        """
+        if keep.all():
+            return self._replace()
 
         def rows(values: Any) -> Any:
             is_rows = isinstance(values, np.ndarray) and values.ndim
@@ -978,8 +1007,7 @@ class CSRConstraint(ConstraintBase):
         Copy with the cells where the boolean ``mask`` is False made inactive,
         without the dense rectangle. ``mask`` must lie on the constraint grid.
         """
-        flat = mask.transpose(*self._grid.dims).to_numpy().reshape(-1)
-        return self._kept(flat[self._active_positions])
+        return self._kept(self._active_values(mask).astype(bool))
 
     def _assign_coords(self, **coords: Any) -> CSRConstraint:
         """
@@ -1643,10 +1671,11 @@ class CSRConstraint(ConstraintBase):
         sign = maybe_replace_sign(sign)
         rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
         active = np.flatnonzero(~np.isnan(rhs_flat))
+        all_active = active.size == rhs_flat.size
         return cls(
-            expr.csr[active],
+            expr.csr if all_active else expr.csr[active],
             active,
-            rhs_flat[active],
+            rhs_flat if all_active else rhs_flat[active],
             sign,
             grid=expr.grid,
             model=expr.model,

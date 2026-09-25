@@ -1371,18 +1371,20 @@ class Model:
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if isinstance(con, CSRConstraint) and freeze:
             if mask is not None:
-                mask = broadcast_to_coords(mask, con.coords, label="mask")
-                con = con.masked(mask.astype(bool))
+                con = con.masked(broadcast_to_coords(mask, con.coords, label="mask"))
             _check_infinities(con._sign, con._rhs, name)
             self.check_force_dim_names(con.coords.to_dataset())
             enforce_no_multiindex(con, context=f"constraint {name!r}")
-            scaling_grid = validate_scaling(
-                broadcast_to_coords(scaling, con.coords, label="constraint scaling"),
-                "constraint scaling",
+            row_scaling = (
+                float(scaling)
+                if isinstance(scaling, int | float | np.number)
+                else broadcast_to_coords(
+                    scaling, con.coords, label="constraint scaling"
+                )
             )
             cindex = self._cCounter
             self._cCounter += con.full_size
-            con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
+            con = con.assign_labels(cindex, name, row_scaling)
             return self._soften_added(self.constraints.add(con), penalty)
         if isinstance(con, CSRConstraint):
             if chunked:
