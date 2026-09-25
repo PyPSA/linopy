@@ -700,16 +700,16 @@ def column_compacted_matmul(
     left: scipy.sparse.csr_array, right: scipy.sparse.csr_array
 ) -> scipy.sparse.csr_array:
     """
-    ``left @ right`` on the columns ``right`` uses only.
+    ``left @ right`` on the columns ``right`` uses only, label-ordered.
 
     scipy sizes its product scratch to the column count, which for a model
     CSR is every variable label; compacting keeps it to the used columns.
     """
     used, compact = np.unique(right.indices, return_inverse=True)
     product = left @ scipy.sparse.csr_array(
-        (right.data, compact.reshape(-1), right.indptr),
-        shape=(right.shape[0], used.size),
+        (right.data, compact, right.indptr), shape=(right.shape[0], used.size)
     )
+    product.sort_indices()
     return scipy.sparse.csr_array(
         (product.data, used[product.indices], product.indptr),
         shape=(left.shape[0], right.shape[1]),

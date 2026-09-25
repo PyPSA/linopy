@@ -26,7 +26,7 @@ import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
-from linopy.csr import CSRLinearExpression, Grid
+from linopy.csr import CSRLinearExpression, Grid, column_compacted_matmul
 from linopy.semantics import is_v1
 from linopy.testing import (
     assert_conequal,
@@ -1088,6 +1088,53 @@ def flat_operand(
 
 def gen_csr(c: Case) -> CSRLinearExpression:
     return CSRLinearExpression.from_dense((c.eff * c.gen_p).data, c.m)
+
+
+BIG = 2**31
+
+
+@pytest.mark.parametrize(
+    "n_col, right_rows, expected",
+    [
+        (
+            1000,
+            [{900: 1.0, 3: 2.0, 500: 3.0}, {3: 4.0, 999: 5.0}],
+            [
+                {3: 10.0, 500: 3.0, 900: 1.0, 999: 10.0},
+                {3: 12.0, 999: 15.0},
+                {3: 8.0, 500: 12.0, 900: 4.0},
+            ],
+        ),
+        (1000, [{}, {}], [{}, {}, {}]),
+        (
+            BIG + 10,
+            [{BIG + 5: 1.0, 7: 2.0}, {BIG: 3.0}],
+            [{7: 2.0, BIG: 6.0, BIG + 5: 1.0}, {BIG: 9.0}, {7: 8.0, BIG + 5: 4.0}],
+        ),
+    ],
+    ids=["wide", "empty", "beyond-int32"],
+)
+def test_column_compacted_matmul(
+    n_col: int, right_rows: list[dict[int, float]], expected: list[dict[int, float]]
+) -> None:
+    right = scipy.sparse.csr_array(
+        (
+            [v for row in right_rows for v in row.values()],
+            np.array([c for row in right_rows for c in row], dtype=np.int64),
+            np.cumsum([0, *map(len, right_rows)]),
+        ),
+        shape=(2, n_col),
+    )
+    left = scipy.sparse.csr_array([[1.0, 2.0], [0.0, 3.0], [4.0, 0.0]])
+
+    res = column_compacted_matmul(left, right)
+
+    assert res.shape == (3, n_col)
+    rows = [
+        dict(zip(res.indices[a:b].tolist(), res.data[a:b].tolist()))
+        for a, b in zip(res.indptr[:-1], res.indptr[1:])
+    ]
+    assert [list(r.items()) for r in rows] == [sorted(r.items()) for r in expected]
 
 
 @pytest.mark.parametrize("n_snap", [3, 70], ids=["one-chunk", "chunk-boundary"])
