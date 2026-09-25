@@ -17,7 +17,7 @@ from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -34,6 +34,8 @@ from linopy.common import (
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+
+Buffer = TypeVar("Buffer", np.ndarray, scipy.sparse.sparray)
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -1384,17 +1386,21 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _buffer(value: Any) -> Any:
-        is_buffer = isinstance(value, np.ndarray | scipy.sparse.sparray)
-        return value.copy() if deep and is_buffer else value
+    def _buffer(value: Buffer) -> Buffer:
+        return value.copy() if deep else value
 
     def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
         if isinstance(con, CSRConstraint):
-            kwargs = {k: _buffer(v) for k, v in con._init_kwargs().items()}
-            kwargs["model"] = new_model
+            buffer_types = (np.ndarray, scipy.sparse.sparray)
+            changes: dict[str, Any] = {"model": new_model}
+            if deep:
+                kwargs = con._init_kwargs().items()
+                changes |= {
+                    k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)
+                }
             if not include_solution:
-                kwargs["dual"] = None
-            return con._replace(**kwargs)
+                changes["dual"] = None
+            return con._replace(**changes)
         d = con.data
         if not include_solution:
             d = d[con.data_attrs]
