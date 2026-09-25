@@ -3,6 +3,7 @@ name: Test models
 on:
   schedule:
     - cron: "0 5 * * 1"
+  workflow_dispatch:
 
 # Cancel any in-progress runs when a new run is triggered
 concurrency:
