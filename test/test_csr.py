@@ -2203,3 +2203,51 @@ def test_soften_rejects(error: str, freeze: bool) -> None:
     call, exc, match = SOFTEN_ERRORS[error]
     with pytest.raises(exc, match=match):
         call(con)
+
+
+def frozen_model(soften: bool) -> tuple[Model, CSRConstraint]:
+    c = base_model()
+    for var in (c.gen_p, c.flow):
+        var.update(lower=0, upper=1)
+    with no_densify():
+        c.m.add_objective((1.0 * c.gen_p).groupby(c.gbus).sum(sparse=True).sum())
+        con = c.m.add_constraints(
+            c.balance_lhs(sparse=True), ">=", c.load, name="c", freeze=True
+        )
+        if soften:
+            con.soften(penalty=2.0, max_violation=20.0)
+    assert isinstance(con, CSRConstraint)
+    return c.m, con
+
+
+@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.parametrize("include_solution", [True, False])
+@pytest.mark.parametrize("deep", [True, False])
+def test_copy_keeps_frozen_constraints(deep: bool, include_solution: bool) -> None:
+    require_v1()
+    m, con = frozen_model(soften=True)
+    m.solve("highs")
+    with no_densify():
+        c = m.copy(deep=deep, include_solution=include_solution)
+    copied = c.constraints["c"]
+    assert isinstance(copied, CSRConstraint)
+    assert copied.model is c and copied.name == "c"
+    assert c.objective.expression.is_sparse
+    assert np.shares_memory(con.active_positions, copied.active_positions) != deep
+    assert_frozen_equal(con, copied)
+    assert con.slack is not None and copied.slack is not None
+    assert copied.slack.positive.labels.equals(con.slack.positive.labels)
+    assert copied.slack.positive.model is c
+    assert ("dual" in copied.mutable().data) == include_solution
+
+
+@pytest.mark.parametrize("deep", [True, False])
+def test_softening_frozen_copy_leaves_original(deep: bool) -> None:
+    require_v1()
+    m, con = frozen_model(soften=False)
+    with no_densify():
+        copied = m.copy(deep=deep)
+        copied.constraints["c"].soften(penalty=2.0)
+    assert con.slack is None and "c_slack_pos" not in m.variables
+    assert m.objective.expression.nterm < copied.objective.expression.nterm
+    assert con.nterm < copied.constraints["c"].nterm

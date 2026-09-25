@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
@@ -1335,7 +1336,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, ConstraintBase, Constraints
+    from linopy.constraints import (
+        Constraint,
+        ConstraintBase,
+        Constraints,
+        CSRConstraint,
+    )
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1378,17 +1384,24 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
-        d = con.mutable().data
-        if include_solution:
-            return d.copy(deep=deep)
-        return d[con.data_attrs].copy(deep=deep)
+    def _buffer(value: Any) -> Any:
+        is_buffer = isinstance(value, np.ndarray | scipy.sparse.sparray)
+        return value.copy() if deep and is_buffer else value
+
+    def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
+        if isinstance(con, CSRConstraint):
+            kwargs = {k: _buffer(v) for k, v in con._init_kwargs().items()}
+            kwargs["model"] = new_model
+            if not include_solution:
+                kwargs["dual"] = None
+            return con._replace(**kwargs)
+        d = con.data
+        if not include_solution:
+            d = d[con.data_attrs]
+        return Constraint(d.copy(deep=deep), new_model, name)
 
     new_model._constraints = Constraints(
-        {
-            name: Constraint(_copy_con_data(con), new_model, name)
-            for name, con in m.constraints.items()
-        },
+        {name: _copy_con(name, con) for name, con in m.constraints.items()},
         new_model,
     )
 
@@ -1397,7 +1410,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     obj_expr = (
         type(expr)(expr.data.copy(deep=deep), new_model)
         if csr is None
-        else LinearExpression._from_csr(replace(csr, model=new_model), new_model)
+        else LinearExpression._from_csr(
+            replace(
+                csr, csr=_buffer(csr.csr), const=_buffer(csr.const), model=new_model
+            ),
+            new_model,
+        )
     )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
