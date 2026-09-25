@@ -758,7 +758,7 @@ class Solver(ABC, Generic[EnvType]):
                 "Use a solver that supports them."
             )
 
-    def _build_direct(self, **build_kwargs: Any) -> None:
+    def _build_direct(self, *, set_names: bool, **build_kwargs: Any) -> None:
         """Build the native solver model from ``self.model``. Override per-solver."""
         raise NotImplementedError(
             f"Solver {self.solver_name.value} does not support direct API model export."
@@ -1117,6 +1117,17 @@ class Solver(ABC, Generic[EnvType]):
 
     def update_solver_model(self, model: Model, **kwargs: Any) -> None:
         raise NotImplementedError
+
+    def _detach_solver_model(self) -> Any:
+        """
+        Hand ownership of the native solver model to the caller: unregister it
+        from the solver's teardown so ``close()`` does not dispose it.
+        """
+        m = self.solver_model
+        if self._env_stack is not None:
+            self._env_stack.pop_all()
+        self.close()
+        return m
 
     def close(self) -> None:
         """
@@ -1638,7 +1649,8 @@ class Highs(Solver[None]):
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
         log_fn: Path | None = None,
         **kwargs: Any,
     ) -> None:
@@ -1672,7 +1684,8 @@ class Highs(Solver[None]):
     def _build_solver_model(
         model: Model,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
     ) -> highspy.Highs:
         """Build a highspy.Highs instance that mirrors the linopy `model`."""
         if model.variables.sos:
@@ -1975,23 +1988,12 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         assert self._env_stack is not None
         return self._env_stack.enter_context(m)
 
-    def _detach_solver_model(self) -> gurobipy.Model:
-        """
-        Hand ownership of the gurobipy model to the caller: unregister it from
-        the solver's teardown so ``close()`` does not dispose it. gurobipy
-        frees the underlying env once the caller drops the model.
-        """
-        m = self.solver_model
-        if self._env_stack is not None:
-            self._env_stack.pop_all()
-        self.close()
-        return m
-
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
         env: gurobipy.Env | dict[str, Any] | None = None,
-        set_names: bool = True,
+        *,
+        set_names: bool,
         **kwargs: Any,
     ) -> None:
         model = self.model
@@ -2013,7 +2015,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         model: Model,
         env: gurobipy.Env | None = None,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
     ) -> gurobipy.Model:
         """Build a gurobipy.Model that mirrors the linopy `model`."""
         model.constraints.sanitize_missings()
@@ -2743,7 +2746,8 @@ class Xpress(Solver[None]):
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
         **kwargs: Any,
     ) -> None:
         model = self.model
@@ -2765,7 +2769,8 @@ class Xpress(Solver[None]):
     def _build_solver_model(
         model: Model,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
     ) -> xpress.problem:
         """
         Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``.
@@ -3467,15 +3472,18 @@ class Mosek(Solver[None]):
     def _build_direct(
         self,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
+        task: mosek.Task | None = None,
         **kwargs: Any,
     ) -> None:
         model = self.model
         assert model is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
-        env = self._env_stack.enter_context(mosek.Env())
-        task = self._env_stack.enter_context(env.Task(0, 0))
+        if task is None:
+            env = self._env_stack.enter_context(mosek.Env())
+            task = self._env_stack.enter_context(env.Task(0, 0))
         m = self._build_solver_model(
             model,
             task,
@@ -3492,7 +3500,8 @@ class Mosek(Solver[None]):
         model: Model,
         task: mosek.Task,
         explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        *,
+        set_names: bool,
     ) -> mosek.Task:
         """Populate an empty MOSEK task with the contents of `model`."""
         if model.variables.sos:

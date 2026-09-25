@@ -10,6 +10,7 @@ import json
 import pickle
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -608,38 +609,10 @@ def test_to_gurobipy(model: Model) -> None:
     assert gm.NumVars > 0
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_gurobipy_no_names(model: Model) -> None:
-    m_with = model.to_gurobipy(set_names=True)
-    m_without = model.to_gurobipy(set_names=False)
-    names_with = [v.VarName for v in m_with.getVars()]
-    names_without = [v.VarName for v in m_without.getVars()]
-    assert names_with != names_without
-
-
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
     h = model.to_highspy()
     assert h.getLp().num_col_ > 0
-
-
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-@pytest.mark.parametrize(
-    "model_default,set_names,expected",
-    [
-        (False, None, False),
-        (True, None, True),
-        (False, True, True),
-        (True, False, False),
-    ],
-)
-def test_to_highspy_set_names(
-    model: Model, model_default: bool, set_names: bool | None, expected: bool
-) -> None:
-    model.set_names_in_solver_io = model_default
-    lp = model.to_highspy(set_names=set_names).getLp()
-    assert (len(lp.col_names_) > 0) == expected
-    assert (len(lp.row_names_) > 0) == expected
 
 
 @pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
@@ -655,13 +628,41 @@ def test_to_xpress(model: Model) -> None:
     assert p.attributes.rows > 0
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
-def test_to_xpress_no_names(model: Model) -> None:
-    p_with = model.to_xpress(set_names=True)
-    p_without = model.to_xpress(set_names=False)
-    names_with = [v.name for v in p_with.getVariable()]
-    names_without = [v.name for v in p_without.getVariable()]
-    assert names_with != names_without
+SOLVER_IO: dict[str, tuple[Callable[..., Any], Callable[[Any], list[str]]]] = {
+    "highs": (Model.to_highspy, lambda h: list(h.getLp().col_names_)),
+    "gurobi": (Model.to_gurobipy, lambda gm: [v.VarName for v in gm.getVars()]),
+    "xpress": (Model.to_xpress, lambda p: [v.name for v in p.getVariable()]),
+    "mosek": (
+        Model.to_mosek,
+        lambda task: [task.getvarname(i) for i in range(task.getnumvar())],
+    ),
+}
+
+
+@pytest.mark.parametrize("solver", SOLVER_IO)
+@pytest.mark.parametrize(
+    "model_default,set_names,expected",
+    [
+        (False, None, False),
+        (True, None, True),
+        (False, True, True),
+        (True, False, False),
+    ],
+)
+def test_to_solver_set_names(
+    model: Model,
+    solver: str,
+    model_default: bool,
+    set_names: bool | None,
+    expected: bool,
+) -> None:
+    if solver not in available_solvers:
+        pytest.skip(f"{solver} not installed")
+    to_solver, var_names = SOLVER_IO[solver]
+    named = to_solver(model, set_names=True)
+    model.set_names_in_solver_io = model_default
+    built = to_solver(model, set_names=set_names)
+    assert (var_names(built) == var_names(named)) == expected
 
 
 @pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")

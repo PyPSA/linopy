@@ -798,7 +798,7 @@ def to_file(
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
         h = solvers.Highs._build_solver_model(
-            m, explicit_coordinate_names=explicit_coordinate_names
+            m, explicit_coordinate_names=explicit_coordinate_names, set_names=True
         )
         h.writeModel(str(fn))
     else:
@@ -818,16 +818,14 @@ def to_mosek(
     """Build the MOSEK task for `m`."""
     import mosek
 
-    if task is None:
-        task = mosek.Task()
-    if set_names is None:
-        set_names = m.set_names_in_solver_io
-    return solvers.Mosek._build_solver_model(
+    solver = solvers.Mosek.from_model(
         m,
-        task,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
+        task=mosek.Task() if task is None else task,
     )
+    return solver._detach_solver_model()
 
 
 def to_gurobipy(
@@ -868,13 +866,13 @@ def to_xpress(
     set_names: bool | None = None,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
-    if set_names is None:
-        set_names = m.set_names_in_solver_io
-    return solvers.Xpress._build_solver_model(
+    solver = solvers.Xpress.from_model(
         m,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
+    return solver._detach_solver_model()
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:
