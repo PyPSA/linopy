@@ -127,11 +127,13 @@ logger = logging.getLogger(__name__)
 DtypeKey = Literal["labels"]
 
 
-def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
+def _check_infinities(
+    sign: Any, rhs: Any, name: str, where: np.ndarray | None = None
+) -> None:
     invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
         (sign == GREATER_EQUAL) & (rhs == np.inf)
     )
-    if np.any(invalid):
+    if np.any(invalid if where is None else invalid & where):
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
@@ -1371,9 +1373,14 @@ class Model:
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if isinstance(con, CSRConstraint) and freeze:
-            if mask is not None:
-                con = con.masked(broadcast_to_coords(mask, con.coords, label="mask"))
-            _check_infinities(con._sign, con._rhs, name)
+            row_mask = (
+                None
+                if mask is None
+                else con.active_values(
+                    broadcast_to_coords(mask, con.coords, label="mask")
+                ).astype(bool)
+            )
+            _check_infinities(con._sign, con._rhs, name, row_mask)
             self.check_force_dim_names(con.coords.to_dataset())
             enforce_no_multiindex(con, context=f"constraint {name!r}")
             row_scaling = (
@@ -1385,7 +1392,7 @@ class Model:
             )
             cindex = self._cCounter
             self._cCounter += con.full_size
-            con = con.assign_labels(cindex, name, row_scaling)
+            con = con.assign_labels(cindex, name, row_scaling, row_mask)
             return self._soften_added(self.constraints.add(con), penalty)
         if isinstance(con, CSRConstraint):
             if chunked:
@@ -2523,6 +2530,10 @@ class Model:
                 if con.is_indicator:
                     continue
                 start, end = con.range
+                if isinstance(con, CSRConstraint):
+                    active = dual[start:end][con.active_positions]
+                    con._dual = active * con._scaling / self.objective.scaling
+                    continue
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 values = (
                     dual[start:end].reshape(con.shape)
