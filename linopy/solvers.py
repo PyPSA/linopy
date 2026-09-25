@@ -714,6 +714,8 @@ class Solver(ABC, Generic[EnvType]):
             raise RuntimeError("Solver has no model attached; cannot build.")
         self._validate_model()
         if self.io_api == "direct":
+            if build_kwargs.get("set_names") is None:
+                build_kwargs["set_names"] = self.model.set_names_in_solver_io
             self._build_direct(**build_kwargs)
             if self.track_updates:
                 self.snapshot = ModelSnapshot.capture(self.model)

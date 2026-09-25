@@ -813,13 +813,15 @@ def to_mosek(
     m: Model,
     task: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the MOSEK task for `m`."""
     import mosek
 
     if task is None:
         task = mosek.Task()
+    if set_names is None:
+        set_names = m.set_names_in_solver_io
     return solvers.Mosek._build_solver_model(
         m,
         task,
@@ -832,7 +834,7 @@ def to_gurobipy(
     m: Model,
     env: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the gurobipy.Model for `m`."""
     solver = solvers.Gurobi.from_model(
@@ -848,7 +850,7 @@ def to_gurobipy(
 def to_highspy(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Highs:
     """Build the highspy.Highs instance for `m`."""
     solver = solvers.Highs.from_model(
@@ -863,9 +865,11 @@ def to_highspy(
 def to_xpress(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
+    if set_names is None:
+        set_names = m.set_names_in_solver_io
     return solvers.Xpress._build_solver_model(
         m,
         explicit_coordinate_names=explicit_coordinate_names,

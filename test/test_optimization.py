@@ -1140,6 +1140,16 @@ def test_basis_and_warmstart(
     )
 
 
+@pytest.mark.parametrize("solver", set_names_direct_solvers)
+def test_warmstart_direct_from_lp_basis(
+    tmp_path: Any, model: Model, solver: str
+) -> None:
+    basis_fn = tmp_path / "basis.bas"
+    model.solve(solver, basis_fn=basis_fn, io_api="lp")
+    status, _ = model.solve(solver, warmstart_fn=basis_fn, io_api="direct")
+    assert status == "ok"
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_solution_fn_parent_dir_doesnt_exist(
     model: Model,
@@ -1177,6 +1187,29 @@ def test_solver_attribute_getter(
         rc = model.variables.get_solver_attribute("RC")
         assert isinstance(rc, xr.Dataset)
         assert set(rc) == set(model.variables)
+
+
+@pytest.mark.skipif("gurobi" not in direct_solvers, reason="Gurobi not available")
+@pytest.mark.parametrize(
+    "io_api,set_names", [("lp", None), ("direct", True), ("direct", False)]
+)
+def test_solver_attribute_getter_maps_labels(
+    io_api: str, set_names: bool | None
+) -> None:
+    m = Model()
+    x = m.add_variables(
+        0, 10, coords=[range(4)], name="x", mask=pd.Series([True, False, True, True])
+    )
+    y = m.add_variables(0, 10, name="y")
+    m.add_constraints(x.sum() + y >= 1)
+    m.add_objective(x.sum() + 2 * y)
+    m.solve("gurobi", io_api=io_api, set_names=set_names)
+    obj = m.variables.get_solver_attribute("Obj")
+    np.testing.assert_array_equal(obj.x, [1.0, np.nan, 1.0, 1.0])
+    assert obj.y.item() == 2.0
+    np.testing.assert_array_equal(
+        x.isel(dim_0=[3, 1]).get_solver_attribute("Obj"), [1.0, np.nan]
+    )
 
 
 def assert_semantically_equal_direct_solves(

@@ -247,8 +247,13 @@ class TestInfeasibility:
         assert len(subset) > 0
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
+    @pytest.mark.parametrize("io_api,set_names", [("lp", None), ("direct", False)])
     def test_masked_constraint_infeasibility(
-        self, solver: str, capsys: pytest.CaptureFixture[str]
+        self,
+        solver: str,
+        io_api: str,
+        set_names: bool | None,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """
         Test infeasibility detection with masked constraints.
@@ -275,7 +280,9 @@ class TestInfeasibility:
         m.add_constraints(x <= 4, name="x_upper", mask=mask)
 
         m.add_objective(x.sum() + y.sum())
-        status, condition = m.solve(solver_name=solver)
+        status, condition = m.solve(
+            solver_name=solver, io_api=io_api, set_names=set_names
+        )
 
         assert status == "warning"
         assert "infeasible" in condition

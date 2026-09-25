@@ -237,7 +237,7 @@ class Model:
         force_dim_names: bool = False,
         auto_mask: bool = False,
         freeze_constraints: bool | None = None,
-        set_names_in_solver_io: bool = True,
+        set_names_in_solver_io: bool = False,
         dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
         sparse: bool = False,
     ) -> None:
@@ -270,7 +270,8 @@ class Model:
             ``sparse=True``. The default is False.
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
-            constraint names by default. The default is True.
+            constraint names by default. Names cost build time and are not
+            needed to map the solution back. The default is False.
         dtypes : mapping, optional
             Integer dtypes for the model's data, exposed read-only as
             ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
@@ -2115,8 +2116,10 @@ class Model:
         set_names : bool, optional
             Whether to set variable and constraint names when using the direct
             solver API (io_api='direct'). Setting to False can significantly
-            speed up model export. If None, uses the model default
-            ``Model.set_names_in_solver_io`` setting (default True).
+            speed up model export. If None, names are set when
+            ``warmstart_fn`` or ``basis_fn`` is given, as basis files refer
+            to names, and otherwise the model default
+            ``Model.set_names_in_solver_io`` (default False) applies.
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -2291,8 +2294,8 @@ class Model:
             try:
                 self.solver = None  # closes any previous solver
                 if io_api == "direct":
-                    if set_names is None:
-                        set_names = self.set_names_in_solver_io
+                    if set_names is None and (warmstart_fn or basis_fn):
+                        set_names = True
                     build_kwargs: dict[str, Any] = {
                         "explicit_coordinate_names": explicit_coordinate_names,
                         "set_names": set_names,
@@ -2664,22 +2667,16 @@ class Model:
 
     def _compute_infeasibilities_gurobi(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Gurobi solver."""
+        solver = self.solver
+        assert solver is not None
         solver_model.computeIIS()
-        f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
-        solver_model.write(f.name)
-        labels = []
-        pattern = re.compile(r"^ [^:]+#([0-9]+):")
-        for line in f.readlines():
-            line_decoded = line.decode()
-            try:
-                if line_decoded.startswith(" c"):
-                    labels.append(int(line_decoded.split(":")[0][2:]))
-            except ValueError as _:
-                match = pattern.match(line_decoded)
-                if match:
-                    labels.append(int(match.group(1)))
-        f.close()
-        return labels
+        constrs = solver_model.getConstrs()
+        in_iis = np.asarray(solver_model.getAttr("IISConstr", constrs), dtype=bool)
+        if solver.io_api == "direct":
+            clabels = self.constraints.label_index.clabels
+        else:
+            clabels = solvers._names_to_labels([c.ConstrName for c in constrs])
+        return sorted(int(label) for label in clabels[in_iis] if label >= 0)
 
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
         """

@@ -59,10 +59,10 @@ def test_model_config_defaults(sparse: bool) -> None:
 
 @SPARSE_CONFIG
 def test_model_copy_preserves_config(sparse: bool) -> None:
-    copied = Model(sparse=sparse, set_names_in_solver_io=False).copy()
+    copied = Model(sparse=sparse, set_names_in_solver_io=True).copy()
     assert copied.sparse is sparse
     assert copied.freeze_constraints is sparse
-    assert copied.set_names_in_solver_io is False
+    assert copied.set_names_in_solver_io is True
 
 
 def test_model_is_weakrefable() -> None:

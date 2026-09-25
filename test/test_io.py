@@ -624,11 +624,22 @@ def test_to_highspy(model: Model) -> None:
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_to_highspy_no_names(model: Model) -> None:
-    h = model.to_highspy(set_names=False)
-    lp = h.getLp()
-    assert len(lp.col_names_) == 0
-    assert len(lp.row_names_) == 0
+@pytest.mark.parametrize(
+    "model_default,set_names,expected",
+    [
+        (False, None, False),
+        (True, None, True),
+        (False, True, True),
+        (True, False, False),
+    ],
+)
+def test_to_highspy_set_names(
+    model: Model, model_default: bool, set_names: bool | None, expected: bool
+) -> None:
+    model.set_names_in_solver_io = model_default
+    lp = model.to_highspy(set_names=set_names).getLp()
+    assert (len(lp.col_names_) > 0) == expected
+    assert (len(lp.row_names_) > 0) == expected
 
 
 @pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
@@ -667,7 +678,7 @@ def test_to_cuopt(model: Model) -> None:
 
 
 def test_model_set_names_in_solver_io_default() -> None:
-    assert Model().set_names_in_solver_io is True
+    assert Model().set_names_in_solver_io is False
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
@@ -675,9 +686,12 @@ def test_model_set_names_in_solver_io(model: Model) -> None:
     model.solve(solver_name="highs", io_api="direct")
     expected_obj = model.objective.value
 
-    model.set_names_in_solver_io = False
+    assert len(model.solver_model.getLp().col_names_) == 0
+
+    model.set_names_in_solver_io = True
     status, _ = model.solve(solver_name="highs", io_api="direct")
     assert status == "ok"
+    assert len(model.solver_model.getLp().col_names_) > 0
     assert model.objective.value == pytest.approx(expected_obj)
 
 

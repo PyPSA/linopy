@@ -51,7 +51,6 @@ from linopy.common import (
     has_optimized_model,
     iterate_slices,
     save_join,
-    set_int_index,
     to_dataframe,
     to_polars,
 )
@@ -1195,6 +1194,7 @@ class Variable:
         xr.DataArray
         """
         from linopy.solver_capabilities import SolverFeature, solver_supports
+        from linopy.solvers import _solution_from_labels, _solution_from_names
 
         solver_model = self.model.solver_model
         if not solver_supports(
@@ -1204,17 +1204,18 @@ class Variable:
                 "Solver attribute getter only supports the Gurobi solver for now."
             )
 
-        vals = pd.Series(
-            {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
-        )
-        vals = set_int_index(vals)
+        solver = self.model.solver
+        assert solver is not None
+        gurobi_vars = solver_model.getVars()
+        vals = solver_model.getAttr(attr, gurobi_vars)
+        if solver.io_api == "direct":
+            lookup = _solution_from_labels(vals, solver._vlabels, solver._n_vars)
+        else:
+            names = [v.VarName for v in gurobi_vars]
+            lookup = _solution_from_names(vals, names, solver._n_vars)
 
-        idx = np.ravel(self.labels)
-        try:
-            values = vals[idx].to_numpy().reshape(self.labels.shape)
-        except KeyError:
-            values = vals.reindex(idx).to_numpy().reshape(self.labels.shape)
-
+        labels = self.labels.values
+        values = np.where(labels == -1, np.nan, lookup[labels])
         return DataArray(values, self.coords)
 
     @property
