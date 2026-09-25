@@ -748,6 +748,62 @@ def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
     assert_linequal(sparse, dense)
 
 
+def case_twins(
+    build: Callable[[Case], LinearExpression],
+) -> Callable[[], tuple[LinearExpression, LinearExpression]]:
+    def twins() -> tuple[LinearExpression, LinearExpression]:
+        c1, c2 = twin_models()
+        return build(c1), build(c2)
+
+    return twins
+
+
+def keyed_observed_twins() -> tuple[LinearExpression, LinearExpression]:
+    dense, sparse = (keyed_model(sparse=s)[1] for s in (False, True))
+    keys = ["period", "season"]
+    return dense.groupby(keys).sum(observed=True), sparse.groupby(keys).sum(
+        observed=True
+    )
+
+
+@pytest.mark.parametrize("nan_every_other", [False, True], ids=["full", "nan"])
+@pytest.mark.parametrize(
+    "twins",
+    [
+        case_twins(lambda c: c.balance_lhs() + 2.0),
+        case_twins(lambda c: c.gen_sum().reindex(bus=["bus3", "bus9", "bus0"])),
+        case_twins(
+            lambda c: linopy.merge(
+                cross_grid_parts(c) + cross_grid_parts(c, ("line3", "line4"))[1:],
+                join="outer",
+                fill_value=linopy.ABSENT,
+                cls=LinearExpression,
+            )
+        ),
+        keyed_observed_twins,
+    ],
+    ids=["composed", "absent_cell", "absent_merge", "aux_coords"],
+)
+def test_csr_solution_matches_dense(
+    twins: Callable[[], tuple[LinearExpression, LinearExpression]],
+    nan_every_other: bool,
+) -> None:
+    require_v1()
+    dense, sparse = twins()
+    assert sparse._csr is not None
+    rng = np.random.default_rng(0)
+    for name, var in dense.model.variables.items():
+        values = rng.uniform(-1, 1, var.shape)
+        if nan_every_other:
+            values.ravel()[::2] = np.nan
+        for m in (dense.model, sparse.model):
+            m.variables[name].solution = xr.DataArray(values, coords=var.labels.coords)
+            m._status = "ok"
+    sol = sparse.solution
+    assert sparse._csr is not None
+    xr.testing.assert_allclose(sol, dense.solution)
+
+
 def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
     require_v1()
     c1, c2 = twin_models()
@@ -894,16 +950,20 @@ def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
     assert_terms_equal(res, linopy.merge(dense, cls=LinearExpression))
 
 
+@pytest.mark.parametrize("fill_value", [None, linopy.ABSENT], ids=["fill", "absent"])
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
-def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None:
+def test_three_operand_cross_grid_merge_matches_dense(
+    join: JoinOptions, fill_value: Any
+) -> None:
     require_v1()
     c1, c2 = twin_models()
     third_lines = ("line3", "line4")
     sparse = cross_grid_parts(c2) + cross_grid_parts(c2, third_lines)[1:]
     dense = cross_grid_parts(c1) + cross_grid_parts(c1, third_lines)[1:]
-    res = linopy.merge(sparse, join=join, cls=LinearExpression)
+    kwargs: dict[str, Any] = {"join": join, "fill_value": fill_value}
+    res = linopy.merge(sparse, **kwargs, cls=LinearExpression)
     assert res._csr is not None
-    assert_terms_equal(res, linopy.merge(dense, join=join, cls=LinearExpression))
+    assert_terms_equal(res, linopy.merge(dense, **kwargs, cls=LinearExpression))
 
 
 def test_cross_grid_merge_absent_fill_matches_dense() -> None:
