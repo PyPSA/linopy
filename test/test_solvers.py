@@ -170,9 +170,9 @@ def test_assign_result_explicit(simple_model: Model) -> None:
 def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    m = Model(freeze_constraints=True)
+    m = Model()
     x = m.add_variables(coords=[range(3)], name="x")
-    m.add_constraints(x >= 0, name="c")
+    m.add_constraints(x >= 0, name="c", freeze=True)
     con = m.constraints["c"]
     assert isinstance(con, CSRConstraint)
 

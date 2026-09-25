@@ -1,8 +1,8 @@
 """
 The sparse backing of a LinearExpression: ``A @ x + c`` in CSR form.
 
-Under v1 semantics, ``expr.groupby(g).sum(sparse=True)`` (or
-``linopy.options["sparse_groupby"]``) returns an ordinary
+In a sparse model (``Model(sparse=True)``, v1 semantics only),
+``expr.groupby(g).sum()`` returns an ordinary
 :class:`~linopy.expressions.LinearExpression` backed by a
 :class:`CSRLinearExpression`: same public type, different backing, akin to
 dask-backed xarray objects. The CSR form is canonical (duplicate variables

@@ -44,16 +44,24 @@ def test_model_solver_dir() -> None:
     assert m.solver_dir == Path(d)
 
 
-def test_model_config_defaults() -> None:
-    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
-    assert m.freeze_constraints is True
+SPARSE_CONFIG = pytest.mark.parametrize(
+    "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
+)
+
+
+@SPARSE_CONFIG
+def test_model_config_defaults(sparse: bool) -> None:
+    m = Model(sparse=sparse, set_names_in_solver_io=False)
+    assert m.sparse is sparse
+    assert m.freeze_constraints is sparse
     assert m.set_names_in_solver_io is False
 
 
-def test_model_copy_preserves_config() -> None:
-    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
-    copied = m.copy()
-    assert copied.freeze_constraints is True
+@SPARSE_CONFIG
+def test_model_copy_preserves_config(sparse: bool) -> None:
+    copied = Model(sparse=sparse, set_names_in_solver_io=False).copy()
+    assert copied.sparse is sparse
+    assert copied.freeze_constraints is sparse
     assert copied.set_names_in_solver_io is False
 
 
@@ -168,7 +176,7 @@ def test_remove_masked_variable_keeps_unrelated_constraints(
     freeze: bool, quadratic: bool
 ) -> None:
     # https://github.com/PyPSA/linopy/issues/883
-    m: Model = Model(freeze_constraints=freeze)
+    m: Model = Model()
 
     i = pd.Index(range(3), name="i")
     mask = [True, False, True]
@@ -178,10 +186,12 @@ def test_remove_masked_variable_keeps_unrelated_constraints(
 
     # `b` is masked, so the constraint carries empty term slots (-1), but it
     # never references `a`
-    without_a = m.add_constraints(b.sum() + c, EQUAL, 0, name="without_a")
+    without_a = m.add_constraints(
+        b.sum() + c, EQUAL, 0, name="without_a", freeze=freeze
+    )
     assert not without_a.has_variable(a)
 
-    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
+    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a", freeze=freeze)
     assert with_a.has_variable(a)
 
     if quadratic:

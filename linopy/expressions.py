@@ -94,6 +94,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import (
+    SPARSE_DEPRECATION,
     options,
 )
 from linopy.constants import (
@@ -127,6 +128,7 @@ from linopy.semantics import (
     join_fill,
     reindex_like_if_needed,
     warn_legacy,
+    warn_outside_linopy,
 )
 from linopy.types import (
     CONSTANT_TYPES,
@@ -571,6 +573,7 @@ class LinearExpressionGroupby:
             default one. Kept as an escape hatch. Leave at False unless the
             default misbehaves. Defaults to False.
         sparse : bool, optional
+            Deprecated, build the model with ``Model(sparse=True)`` instead.
             Build the grouped sum in CSR form behind the ordinary
             LinearExpression type — no group-size padding; a still-sparse
             lhs reaching ``Model.add_constraints`` with ``freeze=True``
@@ -579,7 +582,8 @@ class LinearExpressionGroupby:
             Series/DataFrame, 1-D DataArray and coordinate-name-list groupers
             over an existing dimension; with a name list and ``observed=True``
             the CSR result stays compact over the observed key combinations.
-            Requires v1 semantics. Defaults to
+            Requires v1 semantics. Defaults to True for a sparse model, a
+            CSR-backed expression or the deprecated
             ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
@@ -607,15 +611,22 @@ class LinearExpressionGroupby:
 
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
+        self.model._check_sparse_semantics()
         csr = self._csr
         explicit_sparse = sparse is True
         if sparse is None:
-            sparse = is_v1() and (options["sparse_groupby"] or csr is not None)
-        elif sparse and not is_v1():
-            raise ValueError(
-                "sparse groupby-sum requires v1 semantics; opt in with "
-                "linopy.options['semantics'] = 'v1'."
+            sparse = is_v1() and (
+                self.model.sparse or options["sparse_groupby"] or csr is not None
             )
+        else:
+            warn_outside_linopy(
+                f"groupby(...).sum(sparse=...) {SPARSE_DEPRECATION}.", FutureWarning
+            )
+            if sparse and not is_v1():
+                raise ValueError(
+                    "sparse groupby-sum requires v1 semantics; opt in with "
+                    "linopy.options['semantics'] = 'v1'."
+                )
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
@@ -653,6 +664,8 @@ class LinearExpressionGroupby:
                     "DataArray or list of coordinate names as grouper over an "
                     "existing dimension, without use_fallback."
                 )
+            if csr is None:
+                _densify_notice("groupby-sum with a grouper without a sparse path")
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -1586,7 +1599,8 @@ class BaseExpression(ABC):
 
         Identical to ``@``. For a :class:`LinearExpression` that includes the
         sparse contraction under v1; :class:`QuadraticExpression` always takes
-        the dense path. There is no per-call ``sparse=`` flag.
+        the dense path. The result is CSR-backed for a sparse model
+        (``Model(sparse=True)``) or a CSR-backed input.
         """
         return self.__matmul__(other)
 
@@ -2829,8 +2843,9 @@ class LinearExpression(BaseExpression):
         form -- duplicate variables summed, terms label-ordered, explicit
         zeros pruned -- so its term count may differ from the dense path's
         while the values agree. Returns a CSR-backed result when ``self`` is
-        CSR-backed.
+        CSR-backed or the model is sparse.
         """
+        self.model._check_sparse_semantics()
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
         if other_is_const and is_v1() and type(self) is LinearExpression:
@@ -2857,7 +2872,7 @@ class LinearExpression(BaseExpression):
         grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRLinearExpression.contracted`, so its term
         count may differ from the dense path's while the values agree; the
-        result is CSR-backed when the input was.
+        result is CSR-backed when the input was or the model is sparse.
         """
         if is_nan_scalar(other):
             check_user_nan(op_kind="mul")
@@ -2890,7 +2905,7 @@ class LinearExpression(BaseExpression):
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
         res = csr.contracted(matrix, contracted, new_indexes)
-        if self._csr is not None or options["sparse_groupby"]:
+        if self._csr is not None or self.model.sparse:
             return type(self)._from_csr(res, self.model)
         return res.to_dense()
 
