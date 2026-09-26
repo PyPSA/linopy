@@ -6,6 +6,7 @@ Created on Tue Jan 28 09:03:35 2025.
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -126,7 +127,8 @@ def test_from_name_applies_solver_options(simple_model: Model) -> None:
 def test_scip_quiet_model_solve(
     simple_model: Model, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    status, condition = simple_model.solve("scip", **{"display/verblevel": 0})
+    solver_options: dict[str, Any] = {"display/verblevel": 0}
+    status, condition = simple_model.solve("scip", **solver_options)
     assert (status, condition) == ("ok", "optimal")
     assert capfd.readouterr() == ("", "")
 
