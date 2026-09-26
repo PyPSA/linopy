@@ -76,6 +76,7 @@ Upcoming Version
 
 **Bug fixes**
 
+* SCIP now applies solver options before reading the problem file, so ``model.solve("scip", **{"display/verblevel": 0})`` also suppresses the initial model-loading output.
 * ``Variable.get_solver_attribute`` for Gurobi now maps values by position for the direct API. It parsed labels from the solver's variable names, which returned the values of the wrong variables when names were off and a variable was masked. (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
 * ``densify_terms`` no longer raises on expressions without coordinate dimensions (``expr.sum(drop_zeros=True)`` over all dimensions) and now works on ``QuadraticExpression``, where it previously indexed the ``_factor`` axis as the term axis.
 * ``sum()`` over a dimension no longer raises when another dimension of the expression has size 0; it returns an expression without terms over the kept coordinates, as summing over the empty dimension itself already did. (https://github.com/PyPSA/linopy/issues/906)

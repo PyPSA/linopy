@@ -121,6 +121,17 @@ def test_from_name_applies_solver_options(simple_model: Model) -> None:
 
 
 @pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_quiet_model_solve(
+    simple_model: Model, capfd: pytest.CaptureFixture[str]
+) -> None:
+    status, condition = simple_model.solve("scip", **{"display/verblevel": 0})
+    assert (status, condition) == ("ok", "optimal")
+    assert capfd.readouterr() == ("", "")
+
+
+@pytest.mark.skipif(
     "highs" not in set(solvers.licensed_solvers), reason="HiGHS is not installed"
 )
 def test_solver_state_compatibility_setters(simple_model: Model) -> None:
