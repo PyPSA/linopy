@@ -1016,17 +1016,17 @@ def test_to_file_lp_frozen_mixed_sign(tmp_path: Path) -> None:
     assert fn_frozen.read_text() == fn_mutable.read_text()
 
 
-def _lp_constraint_section(m: Model, path: Path, **kwargs: int) -> str:
-    m.to_file(path, progress=False, **kwargs)
+def _lp_constraint_section(m: Model, path: Path, slice_size: int = 2_000_000) -> str:
+    m.to_file(path, progress=False, slice_size=slice_size)
     return path.read_text().split("s.t.\n\n")[1].split("\n\nbounds")[0]
 
 
 @pytest.mark.parametrize("freeze", [True, False])
 @pytest.mark.parametrize(
-    "to_file_kwargs",
+    "slice_size",
     [
-        pytest.param({}, id="default-slices"),
-        pytest.param({"slice_size": 1}, id="slice-1"),
+        pytest.param(2_000_000, id="default-slices"),
+        pytest.param(1, id="slice-1"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1051,7 +1051,7 @@ def _lp_constraint_section(m: Model, path: Path, **kwargs: int) -> str:
 def test_to_file_lp_constraint_section(
     tmp_path: Path,
     freeze: bool,
-    to_file_kwargs: dict[str, int],
+    slice_size: int,
     scaled: bool,
     expected: str,
 ) -> None:
@@ -1065,7 +1065,7 @@ def test_to_file_lp_constraint_section(
     m.add_objective(x.sum())
 
     fn = tmp_path / "constraints.lp"
-    assert _lp_constraint_section(m, fn, **to_file_kwargs) == expected
+    assert _lp_constraint_section(m, fn, slice_size) == expected
 
 
 def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
