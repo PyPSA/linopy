@@ -930,13 +930,16 @@ class VariableLabelIndex:
         """
         Mapping from variable label to dense position, shape (_xCounter,).
 
+        Positions share the model's label dtype, since they never exceed a label.
+
         Position i in the active variable array corresponds to label vlabels[i].
         Masked or unused labels map to -1.
         """
         vlabels = self.vlabels
-        n = self._variables.model._xCounter
-        label_to_pos = np.full(n, -1, dtype=np.intp)
-        label_to_pos[vlabels] = np.arange(len(vlabels), dtype=np.intp)
+        model = self._variables.model
+        dtype = model._dtypes["labels"]
+        label_to_pos = np.full(model._xCounter, -1, dtype=dtype)
+        label_to_pos[vlabels] = np.arange(len(vlabels), dtype=dtype)
         return label_to_pos
 
     @property
@@ -969,17 +972,17 @@ class ConstraintLabelIndex:
             for c in self._constraints.data.values()
             if not c.is_indicator
         ]
-        return (
-            np.concatenate(label_lists) if label_lists else np.array([], dtype=np.intp)
-        )
+        dtype = self._constraints.model._dtypes["labels"]
+        return np.concatenate([np.array([], dtype=dtype), *label_lists], dtype=dtype)
 
     @cached_property
     def label_to_pos(self) -> np.ndarray:
         """Mapping from constraint label to dense position, shape (_cCounter,)."""
         clabels = self.clabels
-        n = self._constraints.model._cCounter
-        label_to_pos = np.full(n, -1, dtype=np.intp)
-        label_to_pos[clabels] = np.arange(len(clabels), dtype=np.intp)
+        model = self._constraints.model
+        dtype = model._dtypes["labels"]
+        label_to_pos = np.full(model._cCounter, -1, dtype=dtype)
+        label_to_pos[clabels] = np.arange(len(clabels), dtype=dtype)
         return label_to_pos
 
     @property

@@ -1726,11 +1726,11 @@ class Highs(Solver[None]):
             print_variables, print_constraints = linopy.io.get_printers_scalar(
                 model, explicit_coordinate_names=explicit_coordinate_names
             )
-            lp = h.getLp()
-            lp.col_names_ = print_variables(M.vlabels)
+            mdl = h.getModel()
+            mdl.lp_.col_names_ = print_variables(M.vlabels)
             if len(M.clabels):
-                lp.row_names_ = print_constraints(M.clabels)
-            h.passModel(lp)
+                mdl.lp_.row_names_ = print_constraints(M.clabels)
+            h.passModel(mdl)
 
         Q = M.Q
         if Q is not None:
@@ -3526,56 +3526,49 @@ class Mosek(Solver[None]):
                 np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
             )
 
-        bkx = [
-            (
-                (
-                    (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
-                    if ub < np.inf
-                    else mosek.boundkey.lo
-                )
-                if (lb > -np.inf)
-                else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
-            )
-            for (lb, ub) in zip(M.lb, M.ub)
-        ]
-        blx = [b if b > -np.inf else 0.0 for b in M.lb]
-        bux = [b if b < np.inf else 0.0 for b in M.ub]
-        task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+        bk = mosek.boundkey
+        keys = np.array([bk.fr, bk.lo, bk.up, bk.fx, bk.ra], dtype=object)
+        lb_fin = M.lb > -np.inf
+        ub_fin = M.ub < np.inf
+        bkx_code = np.select(
+            [lb_fin & ub_fin & (M.lb < M.ub), lb_fin & ub_fin, lb_fin, ub_fin],
+            [4, 3, 1, 2],
+            default=0,
+        )
+        blx = np.where(lb_fin, M.lb, 0.0)
+        bux = np.where(ub_fin, M.ub, 0.0)
+        task.putvarboundslice(0, model.nvars, keys[bkx_code].tolist(), blx, bux)
 
         if len(model.binaries.labels) + len(model.integers.labels) > 0:
-            idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+            idx = np.flatnonzero(np.isin(M.vtypes, ["B", "I"])).astype(np.int32)
             task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
 
         if len(model.constraints) > 0:
             if set_names:
                 names = print_constraints(M.clabels)
-                for i, n in enumerate(names):
-                    task.putconname(i, n)
-            bkc = [
-                (
-                    (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
-                    if s == "<"
-                    else (
-                        (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
-                        if s == ">"
-                        else mosek.boundkey.fx
-                    )
+                task.generateconnames(
+                    np.arange(0, len(names)), "%0", [len(names)], None, [0], names
                 )
-                for s, b in zip(M.sense, M.b)
-            ]
-            blc = [b if b > -np.inf else 0.0 for b in M.b]
-            buc = [b if b < np.inf else 0.0 for b in M.b]
+            b_lo = M.b > -np.inf
+            b_up = M.b < np.inf
+            leq = M.sense == "<"
+            geq = M.sense == ">"
+            bkc_code = np.select(
+                [leq & b_up, leq, geq & b_lo, geq], [2, 0, 1, 2], default=3
+            )
+            blc = np.where(b_lo, M.b, 0.0)
+            buc = np.where(b_up, M.b, 0.0)
             if M.A is not None:
                 A = M.A.tocsr()
                 task.putarowslice(
                     0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
                 )
-                task.putconboundslice(0, model.ncons, bkc, blc, buc)
+                task.putconboundslice(0, model.ncons, keys[bkc_code].tolist(), blc, buc)
 
         if M.Q is not None:
             Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
             task.putqobj(Q.row, Q.col, Q.data)
-        task.putclist(list(np.arange(model.nvars)), M.c)
+        task.putclist(np.arange(model.nvars, dtype=np.int32), M.c)
 
         if model.objective.sense == "max":
             task.putobjsense(mosek.objsense.maximize)

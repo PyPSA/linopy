@@ -1737,17 +1737,25 @@ class BaseExpression(ABC):
         return None
 
     @has_optimized_model
+    def _label_solution(self) -> np.ndarray:
+        """
+        Solution values indexed by variable label, with a trailing NaN that
+        label ``-1`` reads.
+        """
+        sol = np.full(self.model._xCounter + 1, np.nan)
+        for _, var in self.model.variables.items():
+            labels = var.labels.values.ravel()
+            mask = labels != -1
+            sol[labels[mask]] = var.solution.values.ravel()[mask]
+        return sol
+
     def _map_solution(self) -> DataArray:
         """
         Replace variable labels by solution values.
         """
-        m = self.model
-        M = m.matrices
-        sol = pd.Series(M.sol, M.vlabels)
-        sol[-1] = np.nan
-        idx = np.ravel(self.vars)
-        values = np.asarray(sol[idx]).reshape(self.vars.shape)
-        return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
+        labels = self.vars
+        values = self._label_solution()[labels.values]
+        return xr.DataArray(values, dims=labels.dims, coords=labels.coords)
 
     @property
     def solution(self) -> DataArray:
@@ -2495,6 +2503,20 @@ class LinearExpression(BaseExpression):
     @const.setter
     def const(self, value: DataArray) -> None:
         self._data = assign_multiindex_safe(self.data, const=value)
+
+    @property
+    def solution(self) -> DataArray:
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        csr = self._csr
+        if csr is None:
+            return super().solution
+        sol = np.nan_to_num(self._label_solution()[: csr.csr.shape[1]])
+        return csr.grid.dataarray(csr.csr @ sol + csr.const, name="solution")
 
     def _combined_with_constant(
         self,
@@ -3736,9 +3758,7 @@ def _try_csr_merge(
             return None
         csrs = aligned
 
-    combined = csrs[0]
-    for csr in csrs[1:]:
-        combined = combined.added(csr)
+    combined = csrs[0].added(*csrs[1:])
     return LinearExpression._from_csr(combined, exprs[0].model)
 
 
