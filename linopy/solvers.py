@@ -2547,7 +2547,6 @@ class SCIP(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = scip.Model()
-        m.readProblem(path_to_string(problem_fn))
 
         if self.solver_options is not None:
             emphasis = self.solver_options.pop("setEmphasis", None)
@@ -2563,6 +2562,8 @@ class SCIP(Solver[None]):
                 m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, presolve.upper()))
 
             m.setParams(self.solver_options)
+
+        m.readProblem(path_to_string(problem_fn))
 
         if log_fn is not None:
             m.setLogfile(path_to_string(log_fn))

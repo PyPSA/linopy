@@ -6,6 +6,7 @@ Created on Tue Jan 28 09:03:35 2025.
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -118,6 +119,18 @@ def test_from_name_applies_solver_options(simple_model: Model) -> None:
     option_status, time_limit = built.solver_model.getOptionValue("time_limit")
     assert str(option_status) == "HighsStatus.kOk"
     assert time_limit == 123
+
+
+@pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_quiet_model_solve(
+    simple_model: Model, capfd: pytest.CaptureFixture[str]
+) -> None:
+    solver_options: dict[str, Any] = {"display/verblevel": 0}
+    status, condition = simple_model.solve("scip", **solver_options)
+    assert (status, condition) == ("ok", "optimal")
+    assert capfd.readouterr() == ("", "")
 
 
 @pytest.mark.skipif(
