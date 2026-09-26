@@ -647,7 +647,7 @@ class CSRLinearExpression:
                 )
             )
             rows = slice(start * n_contracted, (start + size) * n_contracted)
-            blocks.append(block @ source.csr[rows])
+            blocks.append(column_compacted_matmul(block, source.csr[rows]))
             const_blocks.append(block @ const[rows])
 
         indexes = kept_grid.indexes | {str(i.name): i for i in new_indexes}
@@ -694,6 +694,26 @@ def index_dtype(nnz: int, shape: tuple[int, ...], model: Model) -> np.dtype:
     """
     dtype = np.dtype(model._dtypes["labels"])
     return dtype if max(nnz, *shape) <= np.iinfo(dtype).max else np.dtype(np.int64)
+
+
+def column_compacted_matmul(
+    left: scipy.sparse.csr_array, right: scipy.sparse.csr_array
+) -> scipy.sparse.csr_array:
+    """
+    ``left @ right`` on the columns ``right`` uses only, label-ordered.
+
+    scipy sizes its product scratch to the column count, which for a model
+    CSR is every variable label; compacting keeps it to the used columns.
+    """
+    used, compact = np.unique(right.indices, return_inverse=True)
+    product = left @ scipy.sparse.csr_array(
+        (right.data, compact, right.indptr), shape=(right.shape[0], used.size)
+    )
+    product.sort_indices()
+    return scipy.sparse.csr_array(
+        (product.data, used[product.indices], product.indptr),
+        shape=(left.shape[0], right.shape[1]),
+    )
 
 
 def coo_to_csr(
