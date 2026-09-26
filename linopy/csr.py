@@ -52,8 +52,8 @@ if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
     from linopy.model import Model
 
-CONTRACTION_CHUNK_NNZ = 1 << 22
-"""Target nonzeros per kept-axis block of the chunked Kronecker product in ``contracted``."""
+CONTRACTION_CHUNK = 64
+"""Kept-axis block size of the chunked Kronecker product in ``contracted``."""
 
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
@@ -615,7 +615,7 @@ class CSRLinearExpression:
         off its ``name``. The result lives on the kept grid dims followed by
         ``new_indexes`` and is
         ``kron(I_kept, matrix.T) @ csr``, evaluated in chunks of the kept axis
-        sized by nonzero count so the operator never grows with the kept size.
+        so the operator never grows with the kept size.
 
         The result is in compact canonical form: duplicate variables summed,
         terms label-ordered and explicit zeros pruned -- unlike :meth:`added`,
@@ -636,8 +636,7 @@ class CSRLinearExpression:
         kept_grid = source.grid.reordered(kept)
         n_kept = kept_grid.size
         const = np.nan_to_num(source.const)
-        nnz_per_kept = matrix.nnz + source.csr.nnz // max(n_kept, 1)
-        chunk = min(max(CONTRACTION_CHUNK_NNZ // max(nnz_per_kept, 1), 1), n_kept)
+        chunk = min(CONTRACTION_CHUNK, n_kept)
         operator = scipy.sparse.kron(
             scipy.sparse.eye_array(chunk), matrix.T, format="csr"
         )
