@@ -119,23 +119,30 @@ def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarra
     return values
 
 
+def _non_identity(lookup: np.ndarray) -> np.ndarray | None:
+    """Return the scaling lookup, or None if all factors are 1."""
+    return None if (lookup == 1).all() else lookup
+
+
 def _scale_objective_dataframe(
-    df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
+    df: pl.DataFrame, variable_scaling: np.ndarray | None, objective_scaling: float
 ) -> pl.DataFrame:
     """Apply column scaling and row-like objective scaling to objective terms."""
     if df.is_empty():
         return df
 
-    if "vars" in df.columns:
-        scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    else:
-        scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
-        scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
-        scales = scale1 * scale2
+    if variable_scaling is not None:
+        if "vars" in df.columns:
+            scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        else:
+            scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
+            scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
+            scales = scale1 * scale2
+        df = df.with_columns(pl.col("coeffs") / pl.Series(scales))
 
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(scales) * objective_scaling).alias("coeffs")
-    )
+    if objective_scaling != 1:
+        df = df.with_columns(pl.col("coeffs") * objective_scaling)
+    return df
 
 
 def _scale_bounds_dataframe(
@@ -154,19 +161,22 @@ def _scale_bounds_dataframe(
 
 def _scale_constraint_dataframe(
     df: pl.DataFrame,
-    variable_scaling: np.ndarray,
-    constraint_scaling: np.ndarray,
+    variable_scaling: np.ndarray | None,
+    constraint_scaling: np.ndarray | None,
 ) -> pl.DataFrame:
     """Divide by column scaling and multiply by row scaling."""
-    if df.is_empty():
-        return df
-    row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
-    var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    row_scale_series = pl.Series(row_scales)
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(var_scales) * row_scale_series).alias("coeffs"),
-        (pl.col("rhs") * row_scale_series).alias("rhs"),
-    )
+    if variable_scaling is not None:
+        var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        df = df.with_columns(pl.col("coeffs") / pl.Series(var_scales))
+    if constraint_scaling is not None:
+        row_scales = _lookup_positive_labels(
+            constraint_scaling, df["labels"].to_numpy()
+        )
+        row_scale_series = pl.Series(row_scales)
+        df = df.with_columns(
+            pl.col("coeffs") * row_scale_series, pl.col("rhs") * row_scale_series
+        )
+    return df
 
 
 def format_coord(coord: str) -> str:
@@ -281,6 +291,7 @@ def objective_write_quadratic_terms(
 def objective_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
     progress: bool = False,
     explicit_coordinate_names: bool = False,
 ) -> None:
@@ -293,7 +304,6 @@ def objective_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
@@ -325,6 +335,7 @@ def _binary_has_nondefault_bounds(var: Variable) -> bool:
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
     progress: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
@@ -348,7 +359,6 @@ def bounds_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     f.write(b"\n\nbounds\n\n")
     if progress:
@@ -362,7 +372,8 @@ def bounds_to_file(
         var = m.variables[name]
         for var_slice in var.iterate_slices(slice_size):
             df = var_slice.to_polars()
-            df = _scale_bounds_dataframe(df, variable_scaling)
+            if variable_scaling is not None:
+                df = _scale_bounds_dataframe(df, variable_scaling)
 
             columns = [
                 *signed_number(pl.col("lower")),
@@ -557,6 +568,7 @@ def sos_to_file(
 def indicator_constraints_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray,
     explicit_coordinate_names: bool = False,
 ) -> None:
     """
@@ -574,7 +586,6 @@ def indicator_constraints_to_file(
     print_variable_scalar, _ = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     for con in m.constraints.indicator.data.values():
         ic_data = con.data
@@ -619,6 +630,8 @@ def indicator_constraints_to_file(
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
+    constraint_scaling: np.ndarray | None,
     progress: bool = False,
     lazy: bool = False,
     slice_size: int = 2_000_000,
@@ -631,8 +644,7 @@ def constraints_to_file(
     print_variable, print_constraint = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
-    constraint_scaling = constraint_scaling_lookup(m)
+    scaled = variable_scaling is not None or constraint_scaling is not None
 
     f.write(b"\n\ns.t.\n\n")
     names = list(regular)
@@ -643,48 +655,53 @@ def constraints_to_file(
             colour=TQDM_COLOR,
         )
 
-    # to make this even faster, we can use polars expression
-    # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
         con = regular[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
-            df = _scale_constraint_dataframe(df, variable_scaling, constraint_scaling)
-
             if df.height == 0:
                 continue
+            if scaled:
+                df = _scale_constraint_dataframe(
+                    df, variable_scaling, constraint_scaling
+                )
+            if not df["labels"].is_sorted():
+                df = df.sort("labels", maintain_order=True)
+            _write_constraint_rows(df, f, print_constraint, print_variable)
 
-            # Sort by labels and mark first/last occurrences
-            df = df.sort("labels").with_columns(
+
+def _write_constraint_rows(
+    df: pl.DataFrame,
+    f: BufferedWriter,
+    print_constraint: Callable,
+    print_variable: Callable,
+) -> None:
+    labels = df["labels"].to_numpy()
+    first = np.empty(len(labels), dtype=bool)
+    first[0] = True
+    np.not_equal(labels[1:], labels[:-1], out=first[1:])
+    last = np.append(first[1:], True)
+    columns = [
+        pl.when(pl.Series(first)).then(
+            pl.concat_str(
+                [*print_constraint(pl.col("labels")), pl.lit(":\n")],
+                ignore_nulls=True,
+            )
+        ),
+        *signed_number(pl.col("coeffs")),
+        *print_variable(pl.col("vars")),
+        pl.when(pl.Series(last)).then(
+            pl.concat_str(
                 [
-                    pl.col("labels").is_first_distinct().alias("is_first_in_group"),
-                    (pl.col("labels") != pl.col("labels").shift(-1))
-                    .fill_null(True)
-                    .alias("is_last_in_group"),
+                    pl.lit("\n"),
+                    pl.col("sign"),
+                    pl.lit(" "),
+                    pl.col("rhs").cast(pl.String),
                 ]
             )
-
-            row_labels = print_constraint(pl.col("labels"))
-            col_labels = print_variable(pl.col("vars"))
-            columns = [
-                pl.when(pl.col("is_first_in_group")).then(row_labels[0]),
-                pl.when(pl.col("is_first_in_group")).then(row_labels[1]),
-                pl.when(pl.col("is_first_in_group")).then(pl.lit(":\n")).alias(":"),
-                *signed_number(pl.col("coeffs")),
-                col_labels[0],
-                col_labels[1],
-                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
-                pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
-                pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
-                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
-            ]
-
-            _format_and_write(df, columns, f)
-
-            # in the future, we could use lazy dataframes when they support appending
-            # tp existent files
-            # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
-            # formatted.sink_csv(f,  **kwargs)
+        ),
+    ]
+    _format_and_write(df, columns, f)
 
 
 def to_lp_file(
@@ -697,13 +714,21 @@ def to_lp_file(
 ) -> None:
     with open(fn, mode="wb") as f:
         start = time.time()
+        variable_scaling = variable_scaling_lookup(m)
+        active_variable_scaling = _non_identity(variable_scaling)
 
         objective_to_file(
-            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
+            m,
+            f,
+            active_variable_scaling,
+            progress=progress,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         constraints_to_file(
             m,
             f=f,
+            variable_scaling=active_variable_scaling,
+            constraint_scaling=_non_identity(constraint_scaling_lookup(m)),
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
@@ -711,11 +736,13 @@ def to_lp_file(
         indicator_constraints_to_file(
             m,
             f=f,
+            variable_scaling=variable_scaling,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
             m,
             f=f,
+            variable_scaling=active_variable_scaling,
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
