@@ -1,0 +1,37 @@
+[workspace]
+authors = ["Jonas Hoersch <jonas.hoersch@openenergytransition.org>"]
+channels = ["conda-forge", "bioconda"]
+name = "experiment"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.14.5,<3.15"
+pyjuliapkg = ">=0.1.24,<0.2"
+ipython = ">=9.14.1,<10"
+pyjuliacall = ">=0.9.35,<0.10"
+# linopy's runtime deps, pinned as conda packages so the editable install
+# below satisfies them from conda-forge instead of pulling wheels from pypi
+numpy = "*"
+scipy = "*"
+bottleneck = "*"
+toolz = "*"
+numexpr = "*"
+xarray = ">=2024.2.0"
+dask = ">=0.18.0"
+polars = ">=1.31.1"
+tqdm = "*"
+deprecation = "*"
+packaging = "*"
+# HiGHS Python bindings for the monolithic cross-check solve
+highspy = "*"
+nbconvert = ">=7.17.1,<8"
+ipykernel = ">=7.3.0,<8"
+jupyterlab = ">=4.6.1,<5"
+
+[pypi-dependencies]
+# editable install of the repo's linopy (../) so we develop against the CSR
+# `Model.matrices` of 0.8-dev, not the older conda linopy
+linopy = { path = "..", editable = true }
