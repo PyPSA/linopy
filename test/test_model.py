@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, Model, available_solvers
+from linopy import EQUAL, Model, licensed_solvers
 from linopy.testing import (
     assert_conequal,
     assert_equal,
@@ -425,7 +425,7 @@ def test_model_copy_preserves_quadratic_objective(
     assert_model_equal(m, c)
 
 
-@pytest.mark.skipif(not available_solvers, reason="No solver installed")
+@pytest.mark.skipif(not licensed_solvers, reason="No solver installed")
 class TestModelCopySolved:
     def test_model_deepcopy_protocol_excludes_solution(
         self, solved_copy_test_model: Model
