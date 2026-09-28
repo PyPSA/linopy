@@ -83,6 +83,20 @@ bound, swap a constraint, or copy it for what-if analysis.
   variables.
 
 
+Building a model from a spec
+-----------------------------
+
+Instead of calling ``add_variables`` / ``add_constraints`` directly,
+you can declare a model as a `mathspec
+<https://mathspec.readthedocs.io>`__ YAML program attached to
+data, and let linopy build it.
+
+- :doc:`building-models-from-specs` — ``Model.from_spec`` and
+  ``model.add_spec``, attaching data to a spec, and reading named
+  expressions back through ``model.spec`` after solving. Requires
+  ``pip install "linopy[spec]"`` (Python >= 3.12) and v1 semantics.
+
+
 Where to go next
 ----------------
 

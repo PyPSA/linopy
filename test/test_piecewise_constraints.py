@@ -3266,7 +3266,7 @@ class TestEvolvingAPIWarning:
         Warnings dedup is module-global so order between tests would
         otherwise matter.  Clear before each test.
         """
-        from linopy.piecewise import _emitted_evolving_warnings
+        from linopy.constants import _emitted_evolving_warnings
 
         _emitted_evolving_warnings.clear()
         yield

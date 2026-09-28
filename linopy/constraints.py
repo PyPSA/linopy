@@ -81,6 +81,7 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SPEC_STAMP_ATTR,
     TERM_DIM,
     PerformanceWarning,
     SIGNS_pretty,
@@ -166,6 +167,15 @@ class ConstraintBase(ABC):
     @abstractmethod
     def name(self) -> str:
         """Get the constraint name."""
+
+    @property
+    @abstractmethod
+    def spec(self) -> str | None:
+        """The name of the spec that built this constraint; ``None`` for one built by hand."""
+
+    @spec.setter
+    @abstractmethod
+    def spec(self, name: str) -> None: ...
 
     @property
     @abstractmethod
@@ -796,6 +806,7 @@ class CSRConstraint(ConstraintBase):
         "_dual",
         "_binvar_labels",
         "_binval",
+        "_spec",
         "_slack",
         "_positional_cache",
     )
@@ -814,6 +825,7 @@ class CSRConstraint(ConstraintBase):
         binvar_labels: np.ndarray | None = None,
         binval: int | np.ndarray | None = None,
         scaling: np.ndarray | None = None,
+        spec: str | None = None,
         slack: tuple[str, str] | None = None,
     ) -> None:
         self._csr = csr
@@ -832,6 +844,7 @@ class CSRConstraint(ConstraintBase):
         self._dual = dual
         self._binvar_labels = binvar_labels
         self._binval = binval
+        self._spec = spec
         self._slack = slack
         self._positional_cache: _PositionalCache | None = None
 
@@ -871,9 +884,19 @@ class CSRConstraint(ConstraintBase):
         d: dict[str, Any] = {"name": self._name}
         if self._cindex is not None:
             d["label_range"] = (self._cindex, self._cindex + self.full_size)
+        if self._spec is not None:
+            d[SPEC_STAMP_ATTR] = self._spec
         if self._slack is not None:
             d["slack_positive"], d["slack_negative"] = self._slack
         return d
+
+    @property
+    def spec(self) -> str | None:
+        return self._spec
+
+    @spec.setter
+    def spec(self, name: str) -> None:
+        self._spec = name
 
     @property
     def coords(self) -> DatasetCoordinates:
@@ -926,6 +949,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=self._binvar_labels,
             binval=self._binval,
             scaling=self._scaling,
+            spec=self._spec,
             slack=self._slack,
         )
 
@@ -961,7 +985,9 @@ class CSRConstraint(ConstraintBase):
             row_scaling = kept._active_values(scaling)
         else:
             row_scaling = np.full(csr.shape[0], float(scaling))
-        return kept._replace(csr=csr, cindex=cindex, name=name, scaling=row_scaling)
+        return kept._replace(
+            csr=csr, cindex=cindex, name=name, scaling=row_scaling, spec=None
+        )
 
     def _active_values(self, values: DataArray) -> np.ndarray:
         """
@@ -1364,6 +1390,8 @@ class CSRConstraint(ConstraintBase):
         }
         if isinstance(self._sign, str):
             attrs["sign"] = self._sign
+        if self._spec is not None:
+            attrs[SPEC_STAMP_ATTR] = self._spec
         if self._slack is not None:
             attrs["slack_positive"], attrs["slack_negative"] = self._slack
         if self._binvar_labels is not None:
@@ -1435,6 +1463,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            spec=attrs.get(SPEC_STAMP_ATTR),
             slack=slack,
         )
 
@@ -1653,6 +1682,7 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=binvar_labels,
             binval=binval,
             scaling=scaling,
+            spec=con.data.attrs.get(SPEC_STAMP_ATTR),
             slack=_slack_names(con.attrs),
         )
 
@@ -1782,6 +1812,14 @@ class Constraint(ConstraintBase):
     @property
     def name(self) -> str:
         return self.attrs["name"]
+
+    @property
+    def spec(self) -> str | None:
+        return self.attrs.get(SPEC_STAMP_ATTR)
+
+    @spec.setter
+    def spec(self, name: str) -> None:
+        self.attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def is_assigned(self) -> bool:
@@ -2443,8 +2481,10 @@ class Constraints:
         """
         return {format_string_as_variable_name(n): n for n in self}
 
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format constraint items, optionally excluding names in a group."""
+    def _format_items(
+        self, exclude: set[str] | None = None, tagged: bool = False
+    ) -> str:
+        """Format constraint items, optionally excluding names in a group and, if *tagged*, naming each one's spec."""
         r = ""
         count = 0
         for name, ds in self.items():
@@ -2456,7 +2496,8 @@ class Constraints:
                 if ds.coords
                 else ""
             )
-            r += f" * {name}{coords}\n"
+            suffix = f" [{ds.spec}]" if tagged and ds.spec is not None else ""
+            r += f" * {name}{coords}{suffix}\n"
         if count == 0:
             r += "<empty>\n"
         return r

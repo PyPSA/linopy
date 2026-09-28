@@ -82,7 +82,16 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc]"
+        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc,spec]"
+
+    - name: Fetch mathspec examples
+      if: matrix.python-version != '3.11'
+      shell: bash
+      run: |
+        version=$(python -c "import mathspec; print(mathspec.__version__)")
+        git clone --depth 1 --branch "v$version" --filter=blob:none --sparse https://github.com/energy-models/mathspec.git "$RUNNER_TEMP/mathspec"
+        git -C "$RUNNER_TEMP/mathspec" sparse-checkout set examples
+        echo "MATHSPEC_EXAMPLES=$RUNNER_TEMP/mathspec/examples" >> "$GITHUB_ENV"
 
     - name: Test with pytest
       env:
@@ -120,7 +129,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev]"
+        uv pip install --system "$(ls dist/*.whl)[dev,spec]"
 
     - name: Run type checker (mypy)
       run: |
