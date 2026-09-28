@@ -36,6 +36,7 @@ from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -50,7 +51,6 @@ from linopy.common import (
     has_optimized_model,
     iterate_slices,
     save_join,
-    set_int_index,
     to_dataframe,
     to_polars,
 )
@@ -1144,6 +1144,18 @@ class Variable:
             )
         return updates
 
+    def _assign_coords(self, **coords: Any) -> Variable:
+        """
+        Reassign coordinate values on the variable, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        return self
+
     @property
     @has_optimized_model
     def solution(self) -> DataArray:
@@ -1193,6 +1205,7 @@ class Variable:
         xr.DataArray
         """
         from linopy.solver_capabilities import SolverFeature, solver_supports
+        from linopy.solvers import _solution_from_labels, _solution_from_names
 
         solver_model = self.model.solver_model
         if not solver_supports(
@@ -1202,17 +1215,18 @@ class Variable:
                 "Solver attribute getter only supports the Gurobi solver for now."
             )
 
-        vals = pd.Series(
-            {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
-        )
-        vals = set_int_index(vals)
+        solver = self.model.solver
+        assert solver is not None
+        gurobi_vars = solver_model.getVars()
+        vals = solver_model.getAttr(attr, gurobi_vars)
+        if solver.io_api == "direct":
+            lookup = _solution_from_labels(vals, solver._vlabels, solver._n_vars)
+        else:
+            names = [v.VarName for v in gurobi_vars]
+            lookup = _solution_from_names(vals, names, solver._n_vars)
 
-        idx = np.ravel(self.labels)
-        try:
-            values = vals[idx].to_numpy().reshape(self.labels.shape)
-        except KeyError:
-            values = vals.reindex(idx).to_numpy().reshape(self.labels.shape)
-
+        labels = self.labels.values
+        values = np.where(labels == -1, np.nan, lookup[labels])
         return DataArray(values, self.coords)
 
     @property

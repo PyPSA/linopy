@@ -79,20 +79,39 @@ def test_assign_multiindex_safe() -> None:
 def test_coords_dataset_vars_roundtrip_multiindex() -> None:
     """MultiIndex and plain coords survive serialization to Dataset vars and back."""
     mi = pd.MultiIndex.from_product(
-        [[2020, 2030], ["t1", "t2"]], names=("period", "timestep")
+        [[2020, 2030], ["t1", "t2"]], names=("period", "time-step")
     )
-    mi.name = "snapshot"
-    plain = pd.Index([1, 2, 3], name="simple")
+    mi.name = "snap-shot"
+    plain = pd.Index([1, 2, 3], name="my-simple")
 
     ds = xr.Dataset(coords_to_dataset_vars([mi, plain]))
-    restored = coords_from_dataset(ds, ["snapshot", "simple"])
+    assert not any("-" in str(k) for k in ds)
+    restored = coords_from_dataset(ds, ["snap-shot", "my-simple"])
 
     assert isinstance(restored[0], pd.MultiIndex)
     assert restored[0].equals(mi)
-    assert list(restored[0].names) == ["period", "timestep"]
-    assert restored[0].name == "snapshot"
+    assert list(restored[0].names) == ["period", "time-step"]
+    assert restored[0].name == "snap-shot"
     assert restored[1].equals(plain)
-    assert restored[1].name == "simple"
+    assert restored[1].name == "my-simple"
+
+
+def test_coords_from_dataset_reads_name_keyed_format() -> None:
+    """Files written before the positional format keyed the variables by name."""
+    ds = xr.Dataset(
+        {
+            "_coord_snapshot_level_period": ("a", [2020, 2030]),
+            "_coord_snapshot_level_timestep": ("b", ["t1", "t2"]),
+            "_coord_snapshot_codes": (("c", "d"), [[0, 0], [0, 1], [1, 0], [1, 1]]),
+            "_coord_simple": ("e", [1, 2, 3]),
+        }
+    )
+    mi, plain = coords_from_dataset(ds, ["snapshot", "simple"])
+    want = pd.MultiIndex.from_product(
+        [[2020, 2030], ["t1", "t2"]], names=("period", "timestep")
+    )
+    assert mi.equals(want) and mi.name == "snapshot"
+    assert plain.equals(pd.Index([1, 2, 3])) and plain.name == "simple"
 
 
 def test_iterate_slices_basic() -> None:

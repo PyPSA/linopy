@@ -12,6 +12,10 @@ from typing import Any
 LEGACY_SEMANTICS = "legacy"
 V1_SEMANTICS = "v1"
 VALID_SEMANTICS = {LEGACY_SEMANTICS, V1_SEMANTICS}
+SPARSE_DEPRECATION = (
+    "is deprecated and will be removed with the legacy semantics; use "
+    "Model(sparse=True) instead"
+)
 
 
 class LinopySemanticsWarning(FutureWarning):
@@ -50,6 +54,13 @@ class OptionSettings:
                     f"Invalid semantics: {v!r}. "
                     f"Must be one of {sorted(VALID_SEMANTICS)}."
                 )
+            if k == "sparse_groupby" and v:
+                from linopy.semantics import warn_outside_linopy
+
+                warn_outside_linopy(
+                    f'linopy.options["sparse_groupby"] {SPARSE_DEPRECATION}.',
+                    FutureWarning,
+                )
             self._current_values[k] = v
 
     def get_value(self, name: str) -> Any:
@@ -85,4 +96,5 @@ options = OptionSettings(
     display_max_terms=6,
     semantics=LEGACY_SEMANTICS,
     sparse_groupby=False,
+    warn_on_densify=False,
 )

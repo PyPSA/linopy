@@ -7,8 +7,9 @@ This module contains commonly used functions.
 
 from __future__ import annotations
 
+import json
 import operator
-from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
@@ -25,6 +26,7 @@ from xarray import align as xr_align
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
 
+from linopy.alignment import _as_index
 from linopy.config import options
 from linopy.constants import (
     SIGNS,
@@ -335,6 +337,112 @@ def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
     """
     remainders = list(set(ds) - set(fields))
     return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
+
+
+def _as_renamed_index(values: Any, name: Hashable, context: str) -> pd.Index:
+    """
+    Convert coordinate-like values to a pandas Index named ``name``.
+
+    The dimension name is authoritative: a passed Index or DataArray with a
+    different (or missing) name is renamed to ``name``, like
+    :meth:`xarray.Dataset.assign_coords` does for keyword-assigned coords.
+    """
+    try:
+        index = _as_index(values)
+        if index.name != name:
+            index = index.rename(name)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"New coordinates for dimension '{name}' on {context} must be "
+            f"index-like, got {type(values).__name__}: {values!r}."
+        ) from e
+    return index
+
+
+def validate_coords_reassignment(
+    sizes: Mapping[str, int], coords: Mapping[str, Any], context: str
+) -> dict[str, pd.Index]:
+    """
+    Validate values-only coordinate reassignment and convert the new values.
+
+    Single-sourced per-item invariants for coordinate reassignment, used by
+    the Dataset-backed (:func:`assign_coords_multiindex_safe`) and the
+    CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
+    on its own. Model-level aggregate checks (dimension exists somewhere in
+    the model, consistent lengths across containers) live on top of this.
+
+    The keyword key is authoritative: values converted to an Index with a
+    different (or missing) name are renamed to the target dimension, like
+    :meth:`xarray.Dataset.assign_coords` does.
+
+    Parameters
+    ----------
+    sizes : Mapping
+        Existing dimension name to length, defining which coordinates may be
+        reassigned.
+    coords : Mapping
+        New coordinate values, keyed by existing dimension name.
+    context : str
+        Name of the object being reassigned, used in error messages.
+
+    Returns
+    -------
+    dict
+        New coordinate values converted to named pandas Index objects, ready
+        for assignment.
+
+    Raises
+    ------
+    ValueError
+        If a named coordinate does not exist in ``sizes``, the new values are
+        not index-like, or their length differs from the existing dimension.
+    """
+    missing = [name for name in coords if name not in sizes]
+    if missing:
+        raise ValueError(f"Cannot assign missing coordinates {missing} to {context}.")
+    new_indexes: dict[str, pd.Index] = {}
+    for name, values in coords.items():
+        index = _as_renamed_index(values, name, context)
+        if len(index) != sizes[name]:
+            raise ValueError(
+                f"Cannot assign coordinates to dimension '{name}' on {context} "
+                f"with a different length: expected {sizes[name]}, got "
+                f"{len(index)}."
+            )
+        new_indexes[name] = index
+    return new_indexes
+
+
+def assign_coords_multiindex_safe(ds: Dataset, **coords: Any) -> Dataset:
+    """
+    Reassign coordinate values on an existing Dataset, keeping the shape.
+
+    Values-only replacement of existing dimension coordinates: each new value
+    must match the length of the dimension it replaces. Neither the order of
+    the dataset's variables nor the order of its coordinates is altered —
+    plain :meth:`xarray.Dataset.assign_coords` moves every reassigned
+    coordinate to the end, which breaks downstream dimension inference.
+
+    Parameters
+    ----------
+    ds : Dataset
+        Dataset to reassign the coordinates on.
+    **coords : Any
+        New coordinate values, keyed by existing dimension name. Accepted
+        like in :meth:`xarray.Dataset.assign_coords`: index-likes such as
+        numpy arrays, pandas Index objects, DataArrays or lists.
+
+    Returns
+    -------
+    Dataset
+        Dataset with reassigned coordinate values.
+    """
+    sizes = {str(name): coord.size for name, coord in ds.coords.items()}
+    new_indexes = validate_coords_reassignment(sizes, coords, "dataset")
+    new = ds.assign_coords(new_indexes)
+    ordered = {name: new[name] for name in ds.coords}
+    data_vars = {name: new[name].variable for name in new.data_vars}
+    return Dataset(data_vars, coords=ordered, attrs=new.attrs)
 
 
 T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
@@ -1211,24 +1319,25 @@ def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
 
     Suitable for embedding coordinate metadata as plain data variables in a
     Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
+    The variables are named by position, never by the (possibly dashed)
+    dimension or level names, since the netcdf reader splits variable names
+    on ``-``; the level names of a MultiIndex are stored as a JSON attribute.
     Reconstruct with :func:`coords_from_dataset`.
     """
     data_vars: dict[str, DataArray] = {}
-    for c in coords:
+    for i, c in enumerate(coords):
         if isinstance(c, pd.MultiIndex):
-            for level_name, level_values in zip(c.names, c.levels):
-                data_vars[f"_coord_{c.name}_level_{level_name}"] = DataArray(
-                    np.array(level_values),
-                    dims=[f"_coorddim_{c.name}_level_{level_name}"],
+            for j, level_values in enumerate(c.levels):
+                data_vars[f"_index{i}_level{j}"] = DataArray(
+                    np.array(level_values), dims=[f"_indexdim{i}_level{j}"]
                 )
-            data_vars[f"_coord_{c.name}_codes"] = DataArray(
+            data_vars[f"_index{i}_codes"] = DataArray(
                 np.array(c.codes).T,
-                dims=[f"_coorddim_{c.name}", f"_coorddim_{c.name}_nlevels"],
+                dims=[f"_indexdim{i}", f"_indexdim{i}_nlevels"],
+                attrs={"level_names": json.dumps([str(n) for n in c.names])},
             )
         else:
-            data_vars[f"_coord_{c.name}"] = DataArray(
-                np.array(c), dims=[f"_coorddim_{c.name}"]
-            )
+            data_vars[f"_index{i}"] = DataArray(np.array(c), dims=[f"_indexdim{i}"])
     return data_vars
 
 
@@ -1236,27 +1345,42 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
     """
     Deserialize a list of pd.Index (including MultiIndex) from a Dataset.
 
-    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`.
+    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
+    or by its earlier name-keyed format (``_coord_<dim>``).
     """
     coords = []
-    for d in coord_dims:
-        if f"_coord_{d}_codes" in ds:
-            codes_2d = ds[f"_coord_{d}_codes"].values.T
+    for i, d in enumerate(coord_dims):
+        if f"_index{i}_codes" in ds:
+            codes = ds[f"_index{i}_codes"]
+            level_names = json.loads(codes.attrs["level_names"])
+            level_keys = [f"_index{i}_level{j}" for j in range(len(level_names))]
+            coords.append(_multiindex(ds, codes.values.T, level_keys, level_names, d))
+        elif f"_index{i}" in ds:
+            coords.append(pd.Index(ds[f"_index{i}"].values, name=d))
+        elif f"_coord_{d}_codes" in ds:
+            prefix = f"_coord_{d}_level_"
             level_names = [
-                str(k)[len(f"_coord_{d}_level_") :]
-                for k in ds
-                if str(k).startswith(f"_coord_{d}_level_")
+                str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)
             ]
-            arrays = [
-                ds[f"_coord_{d}_level_{ln}"].values[codes_2d[i]]
-                for i, ln in enumerate(level_names)
-            ]
-            mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
-            mi.name = d
-            coords.append(mi)
+            level_keys = [prefix + ln for ln in level_names]
+            codes_2d = ds[f"_coord_{d}_codes"].values.T
+            coords.append(_multiindex(ds, codes_2d, level_keys, level_names, d))
         else:
             coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
     return coords
+
+
+def _multiindex(
+    ds: Dataset,
+    codes_2d: np.ndarray,
+    level_keys: list[str],
+    level_names: list[str],
+    name: str,
+) -> pd.MultiIndex:
+    arrays = [ds[k].values[codes_2d[j]] for j, k in enumerate(level_keys)]
+    mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
+    mi.name = name
+    return mi
 
 
 def is_constant(x: SideLike) -> bool:

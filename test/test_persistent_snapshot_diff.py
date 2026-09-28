@@ -208,6 +208,75 @@ def test_ignore_dims_detects_coord_change() -> None:
     assert isinstance(ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"}), ModelDiff)
 
 
+def _model_with_time_coords(index: pd.Index) -> Model:
+    m = Model()
+    m.add_variables(0, 10, coords=[index], name="x")
+    m.add_constraints(m.variables["x"] >= 0, name="c1")
+    m.add_objective(m.variables["x"].sum())
+    return m
+
+
+def test_tz_aware_coords_roundtrip_no_rebuild() -> None:
+    """
+    A tz-aware index snapshots to UTC-ns arrays; identical coordinates must
+    diff clean (the snapshot conversion must not change equality semantics).
+    """
+    idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="Etc/GMT-10", name="t")
+    snap = ModelSnapshot.capture(_model_with_time_coords(idx))
+    assert isinstance(
+        ModelDiff.from_snapshot(snap, _model_with_time_coords(idx)), ModelDiff
+    )
+
+
+def test_tz_aware_coords_survive_dst_instants() -> None:
+    """
+    Coordinates around a DST transition compare by instant, and equal
+    instants across the boundary stay equal (no re-localization happens).
+    """
+    idx = pd.date_range(
+        "2025-03-30 00:00", periods=6, freq="30min", tz="Australia/Sydney", name="t"
+    )
+    snap = ModelSnapshot.capture(_model_with_time_coords(idx))
+    assert isinstance(
+        ModelDiff.from_snapshot(snap, _model_with_time_coords(idx)), ModelDiff
+    )
+
+
+def test_naive_coords_never_equal_tz_aware_coords() -> None:
+    """
+    A naive index and a tz-aware index with identical wall labels must
+    rebuild: pandas never equates naive and aware timestamps, and the
+    snapshot's tz key preserves that.
+    """
+    naive = pd.date_range("2025-01-01", periods=3, freq="h", name="t")
+    aware = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC", name="t")
+    snap = ModelSnapshot.capture(_model_with_time_coords(aware))
+    assert (
+        ModelDiff.from_snapshot(snap, _model_with_time_coords(naive))
+        is RebuildReason.COORD_REINDEX
+    )
+
+
+def test_different_tz_same_instants_reindex() -> None:
+    """
+    Differently-zoned indexes never diff clean, even with equal instants:
+    a tz identity change is a coordinate change and triggers a rebuild (the
+    conservative direction - a rebuild is always safe, an in-place update
+    against re-labeled coordinates would not be).
+    """
+    utc = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC", name="t")
+    gmt10 = pd.date_range(
+        "2025-01-01 10:00", periods=3, freq="h", tz="Etc/GMT-10", name="t"
+    )  # Etc/GMT-10 is UTC+10: wall 10:00 == 00:00 UTC
+    assert (gmt10.tz_convert(None) == utc.tz_convert(None)).all()  # same instants
+
+    snap = ModelSnapshot.capture(_model_with_time_coords(utc))
+    assert (
+        ModelDiff.from_snapshot(snap, _model_with_time_coords(gmt10))
+        is RebuildReason.COORD_REINDEX
+    )
+
+
 def _assert_snapshot_equal(a: ModelSnapshot, b: ModelSnapshot) -> None:
     assert a.structural_key == b.structural_key
     assert a.var_buffers.keys() == b.var_buffers.keys()
@@ -230,7 +299,10 @@ def _assert_snapshot_equal(a: ModelSnapshot, b: ModelSnapshot) -> None:
         for name in coords_a:
             assert coords_a[name].keys() == coords_b[name].keys()
             for dim in coords_a[name]:
-                np.testing.assert_array_equal(coords_a[name][dim], coords_b[name][dim])
+                tz_a, arr_a = coords_a[name][dim]
+                tz_b, arr_b = coords_b[name][dim]
+                assert tz_a == tz_b
+                np.testing.assert_array_equal(arr_a, arr_b)
     np.testing.assert_array_equal(a.obj_c, b.obj_c)
     assert a.obj_quad_present == b.obj_quad_present
     assert a.obj_sense == b.obj_sense

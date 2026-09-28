@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
-from linopy import expressions
 from linopy.constraints import Constraint
 
 if TYPE_CHECKING:
@@ -37,19 +37,8 @@ def _objective_linear_vector(model: Model) -> np.ndarray:
     vlabels = model.variables.label_index.vlabels
     label_to_pos = model.variables.label_index.label_to_pos
     result = np.zeros(len(vlabels), dtype=np.float64)
-    expr = model.objective.expression
-    if isinstance(expr, expressions.QuadraticExpression):
-        vars_2d = expr.data.vars.values
-        coeffs_all = expr.data.coeffs.values.ravel()
-        vars1, vars2 = vars_2d[0], vars_2d[1]
-        linear = (vars1 == -1) | (vars2 == -1)
-        var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
-        coeffs = coeffs_all[linear]
-    else:
-        var_labels = expr.data.vars.values.ravel()
-        coeffs = expr.data.coeffs.values.ravel()
-    mask = var_labels != -1
-    np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
+    var_labels, coeffs = model.objective.linear_terms()
+    np.add.at(result, label_to_pos[var_labels], coeffs)
     return result
 
 
@@ -130,8 +119,28 @@ class ContainerConBuffers:
     active_labels: np.ndarray
 
 
-def _coord_snapshot(obj: Variable | ConstraintBase) -> dict[str, np.ndarray]:
-    return {str(name): np.asarray(idx) for name, idx in obj.indexes.items()}
+def _coord_snapshot(
+    obj: Variable | ConstraintBase,
+) -> dict[str, tuple[str | None, np.ndarray]]:
+    """
+    Snapshot a container's coordinate indexes.
+
+    Each coordinate is stored as a ``(tz_key, values)`` pair: the raw values as
+    a numpy array plus the tz identity for equality purposes. For tz-aware
+    ``DatetimeIndex`` coordinates the values are stored as UTC-ns
+    ``datetime64`` — ``np.asarray`` would instead materialize an object array
+    of Timestamps (O(n) Python objects per container and per diff) — and the
+    tz string is carried so tz identity stays part of the equality: a naive
+    index never equals a tz-aware one, matching pandas' own naive/aware
+    comparison semantics.
+    """
+    out: dict[str, tuple[str | None, np.ndarray]] = {}
+    for name, idx in obj.indexes.items():
+        if isinstance(idx, pd.DatetimeIndex) and idx.tz is not None:
+            out[str(name)] = (str(idx.tz), idx.tz_convert(None).to_numpy())
+        else:
+            out[str(name)] = (None, np.asarray(idx))
+    return out
 
 
 def clear_coef_dirty(model: Model) -> None:
@@ -152,8 +161,12 @@ class ModelSnapshot:
     structural_key: StructuralKey
     var_buffers: dict[str, ContainerVarBuffers] = field(default_factory=dict)
     con_buffers: dict[str, ContainerConBuffers] = field(default_factory=dict)
-    var_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-    con_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    var_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = field(
+        default_factory=dict
+    )
+    con_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = field(
+        default_factory=dict
+    )
     obj_c: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
     obj_quad_present: bool = False
     obj_sense: str = "min"

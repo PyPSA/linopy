@@ -72,6 +72,7 @@ Modifying a model
    model.Model.remove_expressions
    model.Model.remove_objective
    model.Model.remove_sos_constraints
+   model.Model.assign_coords
    model.Model.copy
    model.Model.apply_sos_reformulation
    model.Model.undo_sos_reformulation
@@ -439,7 +440,7 @@ CSRConstraint
 =============
 
 Memory-efficient, immutable constraint representation backed by a scipy
-CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
+CSR sparse matrix. Opt in via ``Model(sparse=True)`` or
 ``Model.add_constraints(..., freeze=True)``. See the
 :doc:`creating-constraints` guide for usage.
 

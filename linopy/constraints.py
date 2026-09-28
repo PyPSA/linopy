@@ -10,12 +10,22 @@ import functools
 import warnings
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
+from collections.abc import (
+    Callable,
+    Generator,
+    Hashable,
+    ItemsView,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
+    NamedTuple,
+    NoReturn,
     overload,
 )
 from warnings import warn
@@ -39,13 +49,12 @@ from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
+    assign_coords_multiindex_safe,
     assign_multiindex_safe,
     assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
     contains_labels,
-    coords_from_dataset,
-    coords_to_dataset_vars,
     filter_nulls_polars,
     format_coord,
     format_single_constraint,
@@ -56,7 +65,6 @@ from linopy.common import (
     get_label_position,
     get_printout_labels,
     has_optimized_model,
-    is_constant,
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_sign,
@@ -65,6 +73,7 @@ from linopy.common import (
     save_join,
     to_dataframe,
     to_polars,
+    validate_coords_reassignment,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -77,7 +86,13 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
-from linopy.csr import Grid, csr_nterm, csr_to_term_arrays
+from linopy.csr import (
+    Grid,
+    _densify_notice,
+    csr_nterm,
+    csr_to_term_arrays,
+    index_dtype,
+)
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.types import (
@@ -212,6 +227,17 @@ class ConstraintBase(ABC):
     def dual(self, value: DataArray) -> None:
         """Set the dual values DataArray."""
 
+    @abstractmethod
+    def _assign_coords(self, **coords: Any) -> ConstraintBase:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+
     @property
     @abstractmethod
     def is_indicator(self) -> bool:
@@ -293,6 +319,128 @@ class ConstraintBase(ABC):
     @abstractmethod
     def active_row_mask(self) -> np.ndarray:
         """Boolean mask over raveled rows selecting active constraint rows."""
+
+    @property
+    def slack(self) -> Slack | None:
+        """
+        Slack variable(s) added via :meth:`soften`, or ``None`` if the
+        constraint has never been softened.
+        """
+        names = _slack_names(self.attrs)
+        if names is None:
+            return None
+        positive, negative = names
+        return Slack(
+            positive=self.model.variables[positive],
+            negative=self.model.variables[negative] if negative else None,
+        )
+
+    def soften(
+        self,
+        penalty: ConstantLike,
+        *,
+        max_violation: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> Slack:
+        """
+        Soften a constraint, adding a slack variable and a penalty to the objective function.
+
+        Parameters
+        ----------
+        penalty : constant-like
+            The penalty that will match the slack variable inside the objective function. Must be bigger than 0.
+        max_violation: constant-like
+            The max violation possible that caps the slack (upper bound). If None, the slack will be unbounded.
+        name: string
+            The name for the slack variable. If None, it will reuse the constraint name and add a '_slack'.
+
+        Returns
+        -------
+        Slack
+            Named tuple with the `positive` slack variable, and the `negative` one for equality constraints (`None`
+            for inequality constraints).
+
+        Notes
+        -----
+        On a frozen CSRConstraint the slack terms are appended to the sparse rows in place, without densifying.
+        A detached copy (from `.mutable()`, `.sel()`, `.isel()` or `.freeze()`) is not registered in
+        model.constraints, so soften raises ValueError on it.
+
+        Softening an already-softened constraint raises ValueError instead of stacking a second, redundant slack term
+        onto the same lhs.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+
+        >>> m = Model()
+        >>> investments = pd.Index(["A", "B", "C"], name="investments")
+        >>> expected_return = pd.Series(
+        ...     [0.08, 0.03, 0.1], index=investments, name="expected_return"
+        ... )
+        >>> w = m.add_variables(lower=0, upper=1, coords=[investments], name="weights")
+        >>> m.add_objective((expected_return * w).sum(), sense="max")
+        >>> budget_penalty = 2
+
+        >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
+        >>> slack = budget_constraint.soften(penalty=budget_penalty)
+        """
+        if not bool(np.all(np.asarray(penalty) > 0)):
+            raise ValueError("Penalty is not positive.")
+
+        model = self.model
+        if model.objective.expression.empty:
+            raise ValueError(
+                "Objective must be defined via `model.add_objective` before calling `soften` on constraints."
+            )
+
+        if model.constraints.data.get(self.name) is not self:
+            raise ValueError(
+                f"Constraint {self.name!r} is not the constraint registered in the model, so "
+                "`soften` would not affect it (it may be a detached copy from `.mutable()`, "
+                "`.sel()`, `.isel()`, or `.freeze()`). Call `soften` on `model.constraints[name]` "
+                "directly."
+            )
+
+        existing_slack = self.slack
+        if existing_slack is not None:
+            raise ValueError(
+                f"Constraint {self.name!r} was already softened (existing slack "
+                f"variable {existing_slack.positive.name!r})"
+            )
+
+        sign_values = pd.unique(self.sign.values.ravel())
+        if len(sign_values) > 1:
+            raise NotImplementedError(
+                "Constraint.soften does not support constraints with mixed signs."
+            )
+        sign = sign_values.item()
+
+        name = name or f"{self.name}_slack"
+        upper = np.inf if max_violation is None else max_violation
+
+        def add_slack(suffix: str) -> variables.Variable:
+            return model.add_variables(
+                lower=0,
+                upper=upper,
+                coords=self.coords,
+                mask=self.mask,
+                name=f"{name}_{suffix}",
+            )
+
+        positive = add_slack("pos")
+        slack = Slack(positive, add_slack("neg") if sign == EQUAL else None)
+        self._attach_slack(slack, sign)
+
+        violation = positive if slack.negative is None else positive + slack.negative
+        direction = 1 if model.sense == "min" else -1
+        model.objective += direction * (penalty * violation).sum()
+        return slack
+
+    @abstractmethod
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        """Add the slack terms to the lhs and record the slack variable names."""
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
@@ -588,12 +736,35 @@ def _positional_csr(
     return csr
 
 
+_UNSUPPORTED = "is not supported on a frozen constraint"
+
+
+def _slack_names(attrs: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Names of the positive and negative slack variables recorded by ``soften``."""
+    positive = attrs.get("slack_positive")
+    if positive is None:
+        return None
+    return str(positive), str(attrs.get("slack_negative", ""))
+
+
+def _frozen_error(
+    attr: str,
+    what: str = "is read-only",
+    remedy: str = "call .mutable() to modify",
+) -> AttributeError:
+    return AttributeError(f"CSRConstraint.{attr} {what}; {remedy}.")
+
+
 _PositionalCache = tuple[scipy.sparse.csr_array, np.ndarray, "weakref.ref[np.ndarray]"]
 
 
 class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
+
+    The structure is frozen: rows, coeffs, sign and rhs cannot be mutated
+    (see the raising setters below). The one exception is ``soften``, which
+    appends slack terms to the CSR matrix in place.
 
     Parameters
     ----------
@@ -636,6 +807,7 @@ class CSRConstraint(ConstraintBase):
         "_binvar_labels",
         "_binval",
         "_spec",
+        "_slack",
         "_positional_cache",
     )
 
@@ -654,6 +826,7 @@ class CSRConstraint(ConstraintBase):
         binval: int | np.ndarray | None = None,
         scaling: np.ndarray | None = None,
         spec: str | None = None,
+        slack: tuple[str, str] | None = None,
     ) -> None:
         self._csr = csr
         self._active_positions = active_positions
@@ -672,6 +845,7 @@ class CSRConstraint(ConstraintBase):
         self._binvar_labels = binvar_labels
         self._binval = binval
         self._spec = spec
+        self._slack = slack
         self._positional_cache: _PositionalCache | None = None
 
     @property
@@ -712,6 +886,8 @@ class CSRConstraint(ConstraintBase):
             d["label_range"] = (self._cindex, self._cindex + self.full_size)
         if self._spec is not None:
             d[SPEC_STAMP_ATTR] = self._spec
+        if self._slack is not None:
+            d["slack_positive"], d["slack_negative"] = self._slack
         return d
 
     @property
@@ -724,7 +900,7 @@ class CSRConstraint(ConstraintBase):
 
     @property
     def coords(self) -> DatasetCoordinates:
-        return Dataset(coords=self._grid.indexes).coords
+        return self._grid.to_dataset().coords
 
     @property
     def dims(self) -> Frozen[Hashable, int]:
@@ -774,6 +950,7 @@ class CSRConstraint(ConstraintBase):
             binval=self._binval,
             scaling=self._scaling,
             spec=self._spec,
+            slack=self._slack,
         )
 
     def _replace(self, **changes: Any) -> CSRConstraint:
@@ -786,38 +963,101 @@ class CSRConstraint(ConstraintBase):
         return new
 
     def assign_labels(
-        self, cindex: int, name: str, scaling: np.ndarray | None = None
+        self, cindex: int, name: str, scaling: float | DataArray = 1.0
     ) -> CSRConstraint:
         """
         Return a copy labelled from ``cindex`` and named ``name``.
 
         Rows without terms are dropped, as when freezing a dense constraint;
-        a zero coefficient counts as a term. ``scaling`` is a row scaling over
-        the full flat grid.
+        a zero coefficient counts as a term. ``scaling`` is a scalar or a row
+        scaling broadcast on the grid; its distinct values are validated
+        without expanding a broadcast view.
         """
-        keep = np.diff(self._csr.indptr) > 0
-        positions = self._active_positions[keep]
-        csr = self._csr[keep]
-        csr.eliminate_zeros()
-        changes: dict[str, Any] = dict(
-            csr=csr,
-            active_positions=positions,
-            rhs=self._rhs[keep],
-            sign=self._sign if isinstance(self._sign, str) else self._sign[keep],
-            cindex=cindex,
-            name=name,
-            spec=None,
+        values = np.asarray(scaling)
+        distinct = values[tuple(slice(None) if s else 0 for s in values.strides)]
+        validate_scaling(distinct, "constraint scaling")
+        kept = self._kept(np.diff(self._csr.indptr) > 0)
+        csr = kept._csr
+        if not csr.data.all():
+            csr = csr.copy() if csr is self._csr else csr
+            csr.eliminate_zeros()
+        if isinstance(scaling, DataArray):
+            row_scaling = kept._active_values(scaling)
+        else:
+            row_scaling = np.full(csr.shape[0], float(scaling))
+        return kept._replace(
+            csr=csr, cindex=cindex, name=name, scaling=row_scaling, spec=None
         )
-        if scaling is not None:
-            changes["scaling"] = scaling[positions]
-        return self._replace(**changes)
+
+    def _active_values(self, values: DataArray) -> np.ndarray:
+        """
+        Values of ``values``, broadcast on the grid, at the active rows.
+
+        A broadcast view is indexed per dimension instead of being expanded
+        to the full grid, unless the per-dimension indices would be larger.
+        """
+        grid_values = values.transpose(*self._grid.dims).values
+        positions = self._active_positions
+        if (
+            grid_values.flags.c_contiguous
+            or positions.size * grid_values.ndim >= grid_values.size
+        ):
+            return grid_values.reshape(-1)[positions]
+        return grid_values[np.unravel_index(positions, grid_values.shape)]
+
+    def _kept(self, keep: np.ndarray) -> CSRConstraint:
+        """
+        Copy holding only the active rows where ``keep`` is True, sharing the
+        row arrays when every row is kept.
+        """
+        if keep.all():
+            return self._replace()
+
+        def rows(values: Any) -> Any:
+            is_rows = isinstance(values, np.ndarray) and values.ndim
+            return values[keep] if is_rows else values
+
+        return self._replace(
+            csr=self._csr[keep],
+            active_positions=self._active_positions[keep],
+            rhs=self._rhs[keep],
+            sign=rows(self._sign),
+            scaling=self._scaling[keep],
+            dual=rows(self._dual),
+            binvar_labels=rows(self._binvar_labels),
+            binval=rows(self._binval),
+        )
+
+    def masked(self, mask: DataArray) -> CSRConstraint:
+        """
+        Copy with the cells where the boolean ``mask`` is False made inactive,
+        without the dense rectangle. ``mask`` must lie on the constraint grid.
+        """
+        return self._kept(self._active_values(mask).astype(bool))
+
+    def _assign_coords(self, **coords: Any) -> CSRConstraint:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        new_indexes = validate_coords_reassignment(
+            {dim: len(index) for dim, index in self._grid.indexes.items()},
+            coords,
+            f"constraint '{self.name}'",
+        )
+        self._grid = self._grid.with_indexes(new_indexes)
+        return self
 
     def _active_to_dataarray(
         self, active_values: np.ndarray, fill: float | int | str = -1
     ) -> DataArray:
         full = np.full(self.full_size, fill, dtype=active_values.dtype)
         full[self.active_positions] = active_values
-        return DataArray(full.reshape(self.shape), coords=self._grid.coords)
+        return self._grid.dataarray(full)
 
     @property
     def labels(self) -> DataArray:
@@ -837,6 +1077,10 @@ class CSRConstraint(ConstraintBase):
         )
         return self.data.coeffs
 
+    @coeffs.setter
+    def coeffs(self, value: ConstantLike) -> None:
+        raise _frozen_error("coeffs")
+
     @property
     def vars(self) -> DataArray:
         """Get variable labels DataArray, shape (*coord_dims, _term)."""
@@ -848,12 +1092,20 @@ class CSRConstraint(ConstraintBase):
         )
         return self.data.vars
 
+    @vars.setter
+    def vars(self, value: variables.Variable | DataArray) -> None:
+        raise _frozen_error("vars")
+
     @property
     def sign(self) -> DataArray:
         """Get sign DataArray."""
         if isinstance(self._sign, str):
-            return DataArray(np.full(self.shape, self._sign), coords=self._grid.coords)
+            return self._grid.dataarray(np.full(self.full_size, self._sign))
         return self._active_to_dataarray(self._sign, fill="")
+
+    @sign.setter
+    def sign(self, value: SignLike) -> None:
+        raise _frozen_error("sign")
 
     @property
     def rhs(self) -> DataArray:
@@ -862,9 +1114,7 @@ class CSRConstraint(ConstraintBase):
 
     @rhs.setter
     def rhs(self, value: ConstantLike) -> None:
-        raise AttributeError(
-            "CSRConstraint.rhs is read-only; call .mutable() to modify."
-        )
+        raise _frozen_error("rhs")
 
     @property
     def scaling(self) -> DataArray:
@@ -873,9 +1123,7 @@ class CSRConstraint(ConstraintBase):
 
     @scaling.setter
     def scaling(self, value: ConstantLike) -> None:
-        raise AttributeError(
-            "CSRConstraint.scaling is read-only; call .mutable() to modify."
-        )
+        raise _frozen_error("scaling")
 
     @property
     def lhs(self) -> expressions.LinearExpression:
@@ -885,8 +1133,42 @@ class CSRConstraint(ConstraintBase):
 
     @lhs.setter
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        raise AttributeError(
-            "CSRConstraint.lhs is read-only; call .mutable() to modify term structure."
+        raise _frozen_error("lhs")
+
+    @property
+    def loc(self) -> LocIndexer:
+        raise _frozen_error("loc", _UNSUPPORTED)
+
+    def update(self, *args: Any, **kwargs: Any) -> NoReturn:
+        raise _frozen_error("update", _UNSUPPORTED)
+
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        slacks = [v for v in slack if v is not None]
+        sign_coeff = 1.0 if sign == GREATER_EQUAL else -1.0
+        coeffs = np.array([sign_coeff, 1.0][: len(slacks)])
+        labels = [v.labels.transpose(*self._grid.dims).values.ravel() for v in slacks]
+        cols = np.stack(labels, axis=1)[self._active_positions].ravel()
+        n = self.ncons
+        data = np.tile(coeffs.astype(self._csr.dtype), n)
+        shape = (n, self._model._xCounter)
+        indptr = np.arange(n + 1) * len(slacks)
+        extra = scipy.sparse.csr_array((data, cols, indptr), shape=shape)
+        widened = scipy.sparse.csr_array(
+            (self._csr.data, self._csr.indices, self._csr.indptr), shape=shape
+        )
+        self._csr = widened + extra
+        self._positional_cache = None
+        self._slack = (
+            slack.positive.name,
+            slack.negative.name if slack.negative is not None else "",
+        )
+
+    @classmethod
+    def from_rule(cls, *args: Any, **kwargs: Any) -> NoReturn:
+        raise _frozen_error(
+            "from_rule",
+            "is not supported",
+            "build with Constraint.from_rule and call .freeze() on the result",
         )
 
     @property
@@ -945,7 +1227,7 @@ class CSRConstraint(ConstraintBase):
         )
 
         dim_names = self.coord_names
-        xr_coords = self._grid.indexes
+        xr_coords = self._grid.indexes | self._grid.aux
         dims_with_term = dim_names + [TERM_DIM]
         coeffs_da = DataArray(
             coeffs_2d.reshape(shape + (nterm,)),
@@ -963,7 +1245,7 @@ class CSRConstraint(ConstraintBase):
             labels_flat[active_positions] = self.active_labels()
             ds = assign_multiindex_safe(
                 ds,
-                labels=DataArray(labels_flat.reshape(shape), coords=self._grid.coords),
+                labels=self._grid.dataarray(labels_flat),
             )
         return ds
 
@@ -1094,7 +1376,7 @@ class CSRConstraint(ConstraintBase):
         }
         if isinstance(self._sign, np.ndarray):
             data_vars["_sign"] = DataArray(self._sign, dims=["_flat"])
-        data_vars.update(coords_to_dataset_vars(self._grid.coords))
+        data_vars.update(self._grid.to_netcdf_vars())
         if self._dual is not None:
             data_vars["dual"] = DataArray(self._dual, dims=["_flat"])
         dim_names = list(self._grid.dims)
@@ -1110,6 +1392,8 @@ class CSRConstraint(ConstraintBase):
             attrs["sign"] = self._sign
         if self._spec is not None:
             attrs[SPEC_STAMP_ATTR] = self._spec
+        if self._slack is not None:
+            attrs["slack_positive"], attrs["slack_negative"] = self._slack
         if self._binvar_labels is not None:
             attrs["is_indicator"] = True
             data_vars["_binvar_labels"] = DataArray(self._binvar_labels, dims=["_flat"])
@@ -1125,8 +1409,8 @@ class CSRConstraint(ConstraintBase):
         """
         Reconstruct a Constraint from a netcdf Dataset (CSR format).
 
-        Files without the ``_csr_columns`` attribute were written before #926
-        and hold dense variable positions instead of labels.
+        Files without the ``_csr_columns`` attribute hold dense variable
+        positions instead of labels.
         """
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
@@ -1152,7 +1436,7 @@ class CSRConstraint(ConstraintBase):
         coord_dims = attrs["coord_dims"]
         if isinstance(coord_dims, str):
             coord_dims = [coord_dims]
-        grid = Grid.from_coords(coords_from_dataset(ds, coord_dims))
+        grid = Grid.from_netcdf_vars(ds, coord_dims)
         dual = ds["dual"].values if "dual" in ds else None
         if "_active_positions" in ds:
             active_positions = ds["_active_positions"].values
@@ -1165,6 +1449,7 @@ class CSRConstraint(ConstraintBase):
         if "_binvar_labels" in ds:
             binvar_labels = ds["_binvar_labels"].values
             binval = ds["_binval"].values if "_binval" in ds else attrs["binval"]
+        slack = _slack_names(attrs)
         return cls(
             csr,
             active_positions,
@@ -1179,6 +1464,7 @@ class CSRConstraint(ConstraintBase):
             binval=binval,
             scaling=scaling,
             spec=attrs.get(SPEC_STAMP_ATTR),
+            slack=slack,
         )
 
     def has_labels(self, labels: np.ndarray) -> bool:
@@ -1254,11 +1540,12 @@ class CSRConstraint(ConstraintBase):
         return self
 
     def freeze(self) -> CSRConstraint:
-        """Return self (already immutable)."""
+        """Return self (structure is already frozen)."""
         return self
 
     def to_dense(self) -> Constraint:
         """Convert to a Constraint."""
+        _densify_notice("frozen constraint converted by `to_dense()`/`mutable()`")
         return Constraint(self.data, self._model, self._name)
 
     def mutable(self) -> Constraint:
@@ -1354,14 +1641,17 @@ class CSRConstraint(ConstraintBase):
         )
         csr.sum_duplicates()
         csr.eliminate_zeros()
-        grid = Grid.from_coords(con.indexes[d] for d in con.coord_dims)
+        grid = Grid.from_dataset(con.data, map(str, con.coord_dims))
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
         active_signs = sign_vals[active_mask]
         unique_signs = np.unique(active_signs)
         if len(unique_signs) == 0:
-            sign: str | np.ndarray = "="
+            full_unique_signs = np.unique(sign_vals)
+            sign: str | np.ndarray = (
+                str(full_unique_signs.item()) if len(full_unique_signs) == 1 else "="
+            )
         elif len(unique_signs) == 1:
             sign = str(unique_signs[0])
         else:
@@ -1393,6 +1683,7 @@ class CSRConstraint(ConstraintBase):
             binval=binval,
             scaling=scaling,
             spec=con.data.attrs.get(SPEC_STAMP_ATTR),
+            slack=_slack_names(con.attrs),
         )
 
     @classmethod
@@ -1402,40 +1693,39 @@ class CSRConstraint(ConstraintBase):
         """
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
-        The sparse counterpart of :meth:`from_dense`: instead of converting a
-        dense :class:`Constraint`, it realizes a
-        :class:`~linopy.csr.CSRLinearExpression` directly. The expression's
-        label columns are kept as they are, its constant moves to the rhs, and
-        rows with a NaN rhs are inactive, as on the dense path. ``rhs`` must
-        come from :func:`csr_rhs`.
+        Builds directly from a :class:`~linopy.csr.CSRLinearExpression`. The
+        expression's label columns are kept as they are, its constant moves to
+        the rhs, and rows with a NaN rhs are inactive. ``rhs`` must come from
+        :func:`csr_rhs`.
         """
         sign = maybe_replace_sign(sign)
         rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
         active = np.flatnonzero(~np.isnan(rhs_flat))
+        all_active = active.size == rhs_flat.size
         return cls(
-            expr.csr[active],
+            expr.csr if all_active else expr.csr[active],
             active,
-            rhs_flat[active],
+            rhs_flat if all_active else rhs_flat[active],
             sign,
             grid=expr.grid,
             model=expr.model,
         )
 
 
-def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | None:
+def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
     """
-    Return ``rhs`` as a DataArray on the expression grid, or None if the sparse
-    path cannot take it: a non-constant rhs, one that is no DataArray-like, or
-    one with helper dims or dims outside the grid falls back to the dense path.
+    Return the constant ``rhs`` as a DataArray on the expression grid, or the
+    reason the sparse path cannot take it: an rhs that is no DataArray-like,
+    or one with helper dims or dims outside the grid falls back to the dense
+    path. An expression rhs is moved to the lhs before, see
+    :meth:`LinearExpression.to_constraint`.
     """
-    if not is_constant(rhs):
-        return None
     try:
         da = as_dataarray(rhs)
     except (TypeError, ValueError):
-        return None
+        return "constraint with an rhs that is not array-like"
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
-        return None
+        return "constraint with an rhs over dimensions outside the grid"
     return da
 
 
@@ -1458,6 +1748,18 @@ def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
     if missing:
         rhs = rhs.expand_dims(missing)
     return rhs.transpose(*expr.grid.dims).to_numpy().reshape(-1)
+
+
+class Slack(NamedTuple):
+    """
+    Slack variable(s) added by :meth:`Constraint.soften`.
+
+    `negative` is None for inequality constraints, since those only
+    need one slack variable to absorb a violation in a single direction.
+    """
+
+    positive: variables.Variable
+    negative: variables.Variable | None
 
 
 class Constraint(ConstraintBase):
@@ -1851,6 +2153,18 @@ class Constraint(ConstraintBase):
 
         return self
 
+    def _assign_coords(self, **coords: Any) -> Constraint:
+        """
+        Reassign coordinate values on the constraint, keeping the shape.
+
+        Internal: values-only replacement of existing dimension coordinates,
+        used by :meth:`linopy.Model.assign_coords`. No relabeling, no
+        reindexing, no shape change, and the order of the underlying data is
+        preserved.
+        """
+        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        return self
+
     @property
     @has_optimized_model
     def dual(self) -> DataArray:
@@ -1890,7 +2204,8 @@ class Constraint(ConstraintBase):
         data = coeffs_final[valid_final]
 
         counts = valid_final.sum(axis=1)
-        indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
+        dtype = index_dtype(len(data), (len(con_labels),), self.model)
+        indptr = np.empty(len(con_labels) + 1, dtype=dtype)
         indptr[0] = 0
         np.cumsum(counts, out=indptr[1:])
         return con_labels, row_mask, vlabel_cols, data, indptr
@@ -2051,6 +2366,17 @@ class Constraint(ConstraintBase):
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
+
+    def _attach_slack(self, slack: Slack, sign: str) -> None:
+        positive = slack.positive
+        lhs = self.lhs + positive if sign == GREATER_EQUAL else self.lhs - positive
+        if slack.negative is not None:
+            lhs = lhs + slack.negative
+        self.update(lhs=lhs)
+        self._data = self._data.assign_attrs(
+            slack_positive=slack.positive.name,
+            slack_negative=slack.negative.name if slack.negative is not None else "",
+        )
 
     def to_polars(self) -> pl.DataFrame:
         """

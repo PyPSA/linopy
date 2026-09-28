@@ -8,7 +8,7 @@ solver-side scaling lookups for variables and constraints.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 from xarray import DataArray, Dataset
@@ -18,8 +18,10 @@ from linopy.common import assign_multiindex_safe
 if TYPE_CHECKING:
     from linopy.model import Model
 
+ScalingT = TypeVar("ScalingT", DataArray, np.ndarray)
 
-def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
+
+def validate_scaling(scaling: ScalingT, label: str = "scaling") -> ScalingT:
     """
     Validate and normalize a scaling array.
 
@@ -28,7 +30,7 @@ def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
     multiply exported coefficients. They must be finite and strictly positive.
     """
     scaling = scaling.astype(float)
-    values = scaling.values
+    values = np.asarray(scaling)
     if not np.isfinite(values).all() or (values <= 0).any():
         raise ValueError(f"{label} must contain only finite positive values.")
     return scaling

@@ -63,12 +63,21 @@ def _same(a: np.ndarray, b: np.ndarray) -> bool:
 
 
 def _coords_equal(
-    a: dict[str, np.ndarray], b: dict[str, np.ndarray], ignored: frozenset[str]
+    a: dict[str, tuple[str | None, np.ndarray]],
+    b: dict[str, tuple[str | None, np.ndarray]],
+    ignored: frozenset[str],
 ) -> bool:
     keys = a.keys() - ignored
     if keys != b.keys() - ignored:
         return False
-    return all(np.array_equal(a[k], b[k]) for k in keys)
+    for k in keys:
+        tz_a, arr_a = a[k]
+        tz_b, arr_b = b[k]
+        # the tz key carries tz identity: a naive index never equals a
+        # tz-aware one, and differently-zoned indexes always reindex
+        if tz_a != tz_b or not np.array_equal(arr_a, arr_b):
+            return False
+    return True
 
 
 def _structural_reason(base: StructuralKey, model: Model) -> RebuildReason | None:
@@ -359,8 +368,8 @@ class _DiffBuilder:
         # Target-state material for the snapshot assembled in finalize().
         self.var_buffers: dict[str, ContainerVarBuffers] = {}
         self.con_buffers: dict[str, ContainerConBuffers] = {}
-        self.var_coords: dict[str, dict[str, np.ndarray]] = {}
-        self.con_coords: dict[str, dict[str, np.ndarray]] = {}
+        self.var_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = {}
+        self.con_coords: dict[str, dict[str, tuple[str | None, np.ndarray]]] = {}
         self._snap_obj_c: np.ndarray | None = None
         self._snap_obj_sense: str | None = None
 
@@ -395,7 +404,7 @@ class _DiffBuilder:
         name: str,
         var: Variable,
         base_buf: ContainerVarBuffers,
-        base_coords: dict[str, np.ndarray],
+        base_coords: dict[str, tuple[str | None, np.ndarray]],
     ) -> RebuildReason | None:
         new_buf = _extract_var_buffers(var)
         new_coords = _coord_snapshot(var)
@@ -442,7 +451,7 @@ class _DiffBuilder:
         name: str,
         con: ConstraintBase,
         base_buf: ContainerConBuffers,
-        base_coords: dict[str, np.ndarray],
+        base_coords: dict[str, tuple[str | None, np.ndarray]],
         skip_coef_compare: bool,
     ) -> RebuildReason | None:
         new_buf = _extract_con_buffers(con, self.var_label_index)

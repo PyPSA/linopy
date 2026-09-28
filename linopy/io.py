@@ -12,16 +12,18 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from importlib.metadata import version
 from importlib.util import find_spec
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
@@ -31,8 +33,10 @@ from linopy.common import (
     to_polars,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.objective import Objective
+from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+
+Buffer = TypeVar("Buffer", np.ndarray, scipy.sparse.sparray)
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -306,14 +310,7 @@ def objective_to_file(
 
     elif m.is_quadratic:
         df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
-        linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
-        linear_terms = linear_terms.with_columns(
-            pl.when(pl.col("vars1").eq(-1))
-            .then(pl.col("vars2"))
-            .otherwise(pl.col("vars1"))
-            .alias("vars")
-        )
-        objective_write_linear_terms(f, linear_terms, print_variable)
+        objective_write_linear_terms(f, linear_part(df), print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
         objective_write_quadratic_terms(f, quads, print_variable)
@@ -806,7 +803,7 @@ def to_file(
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
         h = solvers.Highs._build_solver_model(
-            m, explicit_coordinate_names=explicit_coordinate_names
+            m, explicit_coordinate_names=explicit_coordinate_names, set_names=True
         )
         h.writeModel(str(fn))
     else:
@@ -821,26 +818,26 @@ def to_mosek(
     m: Model,
     task: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the MOSEK task for `m`."""
     import mosek
 
-    if task is None:
-        task = mosek.Task()
-    return solvers.Mosek._build_solver_model(
+    solver = solvers.Mosek.from_model(
         m,
-        task,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
+        task=mosek.Task() if task is None else task,
     )
+    return solver._detach_solver_model()
 
 
 def to_gurobipy(
     m: Model,
     env: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the gurobipy.Model for `m`."""
     solver = solvers.Gurobi.from_model(
@@ -856,7 +853,7 @@ def to_gurobipy(
 def to_highspy(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Highs:
     """Build the highspy.Highs instance for `m`."""
     solver = solvers.Highs.from_model(
@@ -871,14 +868,16 @@ def to_highspy(
 def to_xpress(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
-    return solvers.Xpress._build_solver_model(
+    solver = solvers.Xpress.from_model(
         m,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
+    return solver._detach_solver_model()
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:
@@ -1231,8 +1230,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         )
         for name, expr in m.expressions.items()
     ]
-    objective = m.objective.data
-    objective = objective.assign_attrs(
+    objective = m.objective.to_netcdf_ds().assign_attrs(
         sense=m.objective.sense,
         scaling=m.objective.scaling,
         **{EXPR_TYPE_ATTR: m.objective.expression.type},
@@ -1248,6 +1246,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     params = [with_prefix(record_dtypes(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
+    scalars |= {"sparse": m.sparse, "freeze_constraints": m._freeze_constraints}
     ds = xr.merge(
         vars + cons + exprs + obj + params + specs, combine_attrs="drop_conflicts"
     )
@@ -1325,8 +1324,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     if isinstance(path, str):
         path = Path(path)
 
-    m = Model()
     ds = xr.load_dataset(path, **kwargs)
+    m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
@@ -1411,6 +1410,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
+    m._freeze_constraints = bool(ds.attrs.get("freeze_constraints", False))
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
         m._dtypes["labels"] = np.int64
@@ -1470,7 +1470,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, ConstraintBase, Constraints
+    from linopy.constraints import (
+        Constraint,
+        ConstraintBase,
+        Constraints,
+        CSRConstraint,
+    )
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1481,9 +1486,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
         auto_mask=m._auto_mask,
-        freeze_constraints=m.freeze_constraints,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
+        sparse=m.sparse,
     )
 
     new_model._variables = Variables(
@@ -1513,22 +1518,42 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
-        d = con.mutable().data
-        if include_solution:
-            return d.copy(deep=deep)
-        return d[con.data_attrs].copy(deep=deep)
+    def _buffer(value: Buffer) -> Buffer:
+        return value.copy() if deep else value
+
+    def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
+        if isinstance(con, CSRConstraint):
+            buffer_types = (np.ndarray, scipy.sparse.sparray)
+            changes: dict[str, Any] = {"model": new_model}
+            if deep:
+                kwargs = con._init_kwargs().items()
+                changes |= {
+                    k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)
+                }
+            if not include_solution:
+                changes["dual"] = None
+            return con._replace(**changes)
+        d = con.data
+        if not include_solution:
+            d = d[con.data_attrs]
+        return Constraint(d.copy(deep=deep), new_model, name)
 
     new_model._constraints = Constraints(
-        {
-            name: Constraint(_copy_con_data(con), new_model, name)
-            for name, con in m.constraints.items()
-        },
+        {name: _copy_con(name, con) for name, con in m.constraints.items()},
         new_model,
     )
 
-    obj_expr = type(m.objective.expression)(
-        m.objective.expression.data.copy(deep=deep), new_model
+    expr = m.objective.expression
+    csr = expr._csr if isinstance(expr, LinearExpression) else None
+    obj_expr = (
+        type(expr)(expr.data.copy(deep=deep), new_model)
+        if csr is None
+        else LinearExpression._from_csr(
+            replace(
+                csr, csr=_buffer(csr.csr), const=_buffer(csr.const), model=new_model
+            ),
+            new_model,
+        )
     )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
@@ -1547,6 +1572,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+    new_model._freeze_constraints = m._freeze_constraints
 
     if m._sos_reformulation_state is not None:
         new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
