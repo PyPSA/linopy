@@ -615,7 +615,7 @@ def test_to_highspy(model: Model) -> None:
     assert h.getLp().num_col_ > 0
 
 
-@pytest.mark.skipif("mosek" not in licensed_solvers, reason="Mosek not installed")
+@pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
 def test_to_mosek(model: Model) -> None:
     task = model.to_mosek()
     assert task.getnumvar() > 0
