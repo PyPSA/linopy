@@ -584,8 +584,8 @@ def test_a_spec_read_from_a_file_is_named_after_it(tmp_path: Path) -> None:
     assert m.variables["p"].spec == "dispatch"
 
 
-def test_a_frozen_constraint_carries_the_stamp_through_its_dense_form() -> None:
-    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, freeze_constraints=True)
+def test_a_sparse_constraint_carries_the_stamp_through_its_dense_form() -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, sparse=True)
     con = m.constraints["power_balance"]
     assert isinstance(con, CSRConstraint)
     assert con.spec == "spec"

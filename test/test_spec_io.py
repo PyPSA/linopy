@@ -247,16 +247,16 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("frozen", [False, True], ids=["dataset", "csr"])
+@pytest.mark.parametrize("sparse", [False, True], ids=["dataset", "csr"])
 def test_every_container_shares_the_master_coordinate_dtypes(
-    tmp_path: Path, engine: str, frozen: bool
+    tmp_path: Path, engine: str, sparse: bool
 ) -> None:
     """The master coordinates are canonical: no container may disagree with them."""
-    if frozen and engine == "scipy":
+    if sparse and engine == "scipy":
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a CSR constraint writes one"
         )
-    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", freeze_constraints=frozen)
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", sparse=sparse)
     p = roundtrip(m, tmp_path, engine)
 
     master = {dim: index.dtype for dim, index in p.spec.coords.items()}
@@ -432,12 +432,10 @@ def test_a_round_trip_keeps_the_stamp_and_the_name(tmp_path: Path, engine: str) 
     assert p.spec.expressions["spend"].expression is p.expressions["spend"]
 
 
-def test_a_frozen_constraint_keeps_the_stamp_through_a_round_trip(
+def test_a_sparse_constraint_keeps_the_stamp_through_a_round_trip(
     tmp_path: Path,
 ) -> None:
-    """A frozen constraint carries the stamp beside its rows; the scipy engine cannot write its dimension attribute at all."""
-    m = Model.from_spec(
-        EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", freeze_constraints=True
-    )
+    """A sparse constraint carries the stamp beside its rows; the scipy engine cannot write its dimension attribute at all."""
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, retain="all", sparse=True)
     p = roundtrip(m, tmp_path, "netcdf4")
     assert p.constraints["power_balance"].spec == "spec"
