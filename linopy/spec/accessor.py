@@ -40,7 +40,6 @@ from linopy.spec.attach import EVOLVING_MESSAGE, Attached, Retain
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build
 from linopy.spec.context import Context, Parameters, Resolve, Value
-from linopy.spec.coverage import dims_of
 from linopy.spec.errors import SpecDataError, unknown
 from linopy.spec.evaluate import evaluate_named, fold
 
@@ -691,7 +690,7 @@ class NamedExpression(Declaration):
     @property
     def dims(self) -> tuple[str, ...]:
         """The dimensions the expression spans, read off the spec without binding data."""
-        return dims_of(self.node, self._spec.program)
+        return self._spec.program.expressions[self._name].dims
 
     @functools.cached_property
     def expression(self) -> Value:

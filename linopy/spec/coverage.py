@@ -60,32 +60,6 @@ def amounts_of(node: ms.Expression) -> Iterator[str]:
         yield node.width
 
 
-def dims_of(node: ms.Expression, program: ms.Program) -> tuple[str, ...]:
-    """The dimensions *node* spans, in the program's dimension order, before any data is bound."""
-    spanned = _dims(node, program)
-    return tuple(d for d in program.dimensions if d in spanned)
-
-
-def _dims(node: ms.Expression, program: ms.Program) -> frozenset[str]:
-    if isinstance(node, ms.Constant):
-        return frozenset()
-    if isinstance(node, ms.Variable):
-        return frozenset(program.variables[node.name].dims)
-    if isinstance(node, ms.Parameter):
-        return frozenset(program.parameters[node.name].dims)
-    if isinstance(node, ms.Dual):
-        return frozenset(program.constraints[node.constraint].dims)
-    if isinstance(node, ms.Sum):
-        return _dims(node.operand, program) - set(node.over)
-    if isinstance(node, ms.GroupSum | ms.Pullback):
-        direction = node.direction
-        operand = _dims(node.operand, program) - set(direction.consumed_dims)
-        return operand | set(direction.produced_dims)
-    if isinstance(node, ms.Cases):
-        return frozenset().union(*(_dims(r.value, program) for r in node.regions))
-    return frozenset().union(*(_dims(c, program) for c in ms.children(node)))
-
-
 def gaps_under(array: xr.DataArray, rows: Rows) -> int:
     """How many slots of *array* are null where *rows* still admits the row; ``None`` narrows nothing."""
     missing = array.isnull()

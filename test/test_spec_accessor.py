@@ -609,3 +609,14 @@ def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> N
     expr = m.spec.expressions[name]
     assert expr.dims == dims
     assert set(expr.expression.coord_dims) == set(dims)
+
+
+def test_a_cased_expression_spans_its_declared_dims_not_its_body() -> None:
+    spec = yaml_dict()
+    spec["expressions"]["floor"] = {
+        "dims": ["snapshot", "generator"],
+        "cases": {"cheap": {"when": "cost == 0", "expression": "p_max"}},
+        "otherwise": 0,
+    }
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert m.spec.expressions["floor"].dims == ("snapshot", "generator")
