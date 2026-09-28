@@ -675,7 +675,8 @@ def test_to_solver_set_names(
     set_names: bool | None,
     expected: bool,
 ) -> None:
-    if solver not in licensed_solvers:
+    usable = available_solvers if solver == "mosek" else licensed_solvers
+    if solver not in usable:
         pytest.skip(f"{solver} not installed")
     to_solver, names = SOLVER_IO[solver]
     named = to_solver(model, set_names=True)
