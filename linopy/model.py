@@ -511,7 +511,7 @@ class Model:
         ----------
         spec : str, pathlib.Path, dict or mathspec.Spec
             The spec. A ``str`` is YAML text if it holds a newline, opens a
-            mapping or a sequence, or holds a ``:`` and names no file; any
+            mapping or a sequence, or holds a ``: `` and names no file; any
             other ``str`` is a path. A lowered ``mathspec.Program`` and an
             open file are refused, having no YAML form to keep on the model.
         sources : mapping or xarray.Dataset

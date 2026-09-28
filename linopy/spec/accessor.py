@@ -206,7 +206,7 @@ def _is_yaml_text(spec: str) -> bool:
     """A ``str`` is YAML rather than a path if it looks like YAML and names no file."""
     if "\n" in spec or spec.lstrip()[:1] in ("{", "-"):
         return True
-    return ":" in spec and not Path(spec).is_file()
+    return ": " in spec and not Path(spec).is_file()
 
 
 def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
@@ -214,7 +214,7 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
     *spec* as the YAML text kept on the model, lowered, and the file's stem where it came from one.
 
     A ``str`` is YAML text if it holds a newline, opens a mapping or a
-    sequence, or holds a ``:`` and names no file; every other ``str`` is a
+    sequence, or holds a ``: `` and names no file; every other ``str`` is a
     path.
 
     Raises

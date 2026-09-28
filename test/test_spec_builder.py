@@ -55,7 +55,7 @@ REFUSED = {
 
 def example(path: str) -> Any:
     """*path* as a sweep case, expected to raise :class:`SpecDataError` where :data:`REFUSED` names it."""
-    name = str(Path(path).relative_to(EXAMPLES_DIR or ""))
+    name = Path(path).relative_to(EXAMPLES_DIR or "").as_posix()
     marks = (
         [pytest.mark.xfail(strict=True, raises=SpecDataError, reason=REFUSED[name])]
         if name in REFUSED
@@ -77,7 +77,7 @@ EXAMPLES = (
 @pytest.mark.parametrize("path", [example(p) for p in EXAMPLES])
 def test_every_mathspec_example_builds_and_solves(path: str) -> None:
     """Every mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
-    if "/symbols/" in path:
+    if Path(path).parent.name == "symbols":
         pytest.skip("typesetting input, not a spec")
     program = lower(path)
     m = solved(path, synthetic_sources(program), retain="all")

@@ -19,6 +19,8 @@ import xarray as xr
 mathspec = pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 
+from mathspec.typesetting import FormatName  # noqa: E402
+
 import linopy  # noqa: E402
 from conftest import (  # noqa: E402
     DISPATCH_DATA,
@@ -29,7 +31,7 @@ from conftest import (  # noqa: E402
     with_,
     yaml_dict,
 )
-from linopy import Model, breakpoints  # noqa: E402
+from linopy import LinearExpression, Model, breakpoints  # noqa: E402
 from linopy.spec import (  # noqa: E402
     ModelSpec,
     NamedExpression,
@@ -77,7 +79,7 @@ def test_spec_forms_build_the_same_model(
 def test_a_lowered_program_is_refused() -> None:
     program = lower(yaml_dict())
     with pytest.raises(TypeError, match="not a lowered Program"):
-        Model().add_spec(program, DISPATCH_DATA)
+        Model().add_spec(program, DISPATCH_DATA)  # type: ignore[arg-type]
 
 
 def _opened(tmp_path: Path) -> Any:
@@ -106,6 +108,12 @@ UNREADABLE_SPECS: list[Any] = [
         FileNotFoundError,
         "no spec file at",
         id="missing-path-string",
+    ),
+    pytest.param(
+        lambda tmp_path: "C:\\models\\absent.yaml",
+        FileNotFoundError,
+        "no spec file at",
+        id="missing-drive-path-string",
     ),
     pytest.param(
         lambda tmp_path: {"description": "a spec that declares nothing"},
@@ -381,7 +389,7 @@ def test_the_spec_typesets_in_every_format() -> None:
 
 
 @pytest.mark.parametrize("fmt", ["latex", "markdown", "typst"])
-def test_typeset_and_its_named_aliases_agree(fmt: str) -> None:
+def test_typeset_and_its_named_aliases_agree(fmt: FormatName) -> None:
     """The format is a parameter; the named methods only spell a common one."""
     spec = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec
     declaration = spec.declaration("p")
@@ -464,7 +472,7 @@ def test_a_piecewise_formulation_is_named_as_one_and_not_as_its_parts() -> None:
     ("fmt", "opener"), [("latex", "%"), ("markdown", "<!--"), ("typst", "//")]
 )
 def test_typesetting_a_hybrid_model_warns_and_says_so_in_the_source(
-    fmt: str, opener: str
+    fmt: FormatName, opener: str
 ) -> None:
     """The tally is a comment of the format's own: gone once compiled, there in the source."""
     with pytest.warns(UserWarning, match="drifted from the spec"):
@@ -608,6 +616,7 @@ def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> N
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
     expr = m.spec.expressions[name]
     assert expr.dims == dims
+    assert isinstance(expr.expression, LinearExpression)
     assert set(expr.expression.coord_dims) == set(dims)
 
 
