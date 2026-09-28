@@ -15,8 +15,8 @@ import xarray as xr
 
 from linopy import (
     Model,
-    available_solvers,
     breakpoints,
+    licensed_solvers,
     segments,
     tangent_lines,
 )
@@ -54,7 +54,7 @@ Sign: TypeAlias = Literal["==", "<=", ">="]
 Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
 
 _sos2_solvers = get_available_solvers_with_feature(
-    SolverFeature.SOS_CONSTRAINTS, available_solvers
+    SolverFeature.SOS_CONSTRAINTS, licensed_solvers
 )
 _sos2_direct_solvers = sorted(
     s for s in _sos2_solvers if solver_supports(s, SolverFeature.DIRECT_API)
@@ -64,7 +64,7 @@ _SOS_PATHS = [
     *[pytest.param(s, "lp", id=f"{s}-lp") for s in sorted(_sos2_solvers)],
 ]
 _any_solvers = [
-    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
+    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in licensed_solvers
 ]
 
 # Solver-output tolerance for solution-value assertions in this file.  Matches

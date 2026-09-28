@@ -11,7 +11,7 @@ import xarray as xr
 from linopy import Model, read_netcdf
 from linopy.constants import Result, Solution, Status
 from linopy.constraints import CSRConstraint
-from linopy.solvers import available_solvers
+from linopy.solvers import licensed_solvers
 
 
 def _dense(matrix: Any) -> np.ndarray:
@@ -275,7 +275,7 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_scaled_solve_preserves_user_units() -> None:
     reference = Model()
     rx = reference.add_variables(lower=0, name="x")

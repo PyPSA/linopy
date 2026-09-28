@@ -1745,7 +1745,7 @@ def test_objective_stays_csr_and_exports_like_dense(
     assert rs.objective.expression.attrs["name"] == "objective"
 
 
-@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")
 @pytest.mark.parametrize("io_api", ["lp", "direct"])
 @pytest.mark.parametrize("build", list(SPARSE_BUILDS))
 def test_sparse_objective_solves_like_dense(build: str, io_api: str) -> None:
@@ -2380,7 +2380,7 @@ def test_frozen_soften_max_sense_with_array_penalty() -> None:
     assert_cells_equal(obj, expected_objective, ())
 
 
-@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
 def test_frozen_soften_solves_like_dense(sign: str) -> None:
     require_v1()
@@ -2454,7 +2454,7 @@ def frozen_model(soften: bool) -> tuple[Model, CSRConstraint]:
     return c.m, con
 
 
-@pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs")
+@pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")
 @pytest.mark.parametrize("include_solution", [True, False])
 @pytest.mark.parametrize("deep", [True, False])
 def test_copy_keeps_frozen_constraints(deep: bool, include_solution: bool) -> None:

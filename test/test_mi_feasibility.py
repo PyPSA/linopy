@@ -21,7 +21,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, Variable, available_solvers
+from linopy import Model, Variable, licensed_solvers
 from linopy.testing import assert_linequal
 
 PERIODS = [2020, 2030]
@@ -31,7 +31,7 @@ STEP_OF = np.tile(["t1", "t2", "t3"], 2)
 DEMAND = {2020: 5.0, 2030: 7.0}
 
 needs_highs = pytest.mark.skipif(
-    "highs" not in available_solvers, reason="highs solver not available"
+    "highs" not in licensed_solvers, reason="highs solver not available"
 )
 
 

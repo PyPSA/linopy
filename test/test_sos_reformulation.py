@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, Variable, available_solvers
+from linopy import Model, Variable, licensed_solvers
 from linopy.constants import SOS_TYPE_ATTR
 from linopy.remote import RemoteHandler
 from linopy.sos_reformulation import (
@@ -426,7 +426,7 @@ class TestApplyUndoSOSReformulation:
             m.to_netcdf(tmp_path / "m.nc")
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestSolverPathSOSCheck:
     """Solver._build() must raise on SOS-bearing model with non-SOS solver."""
 
@@ -443,7 +443,7 @@ class TestSolverPathSOSCheck:
             solvers.Solver.from_name("highs", m, io_api="lp")
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestSolveAutoUndoOnFailure:
     """Model.solve must auto-undo SOS reformulation when build/solve raises."""
 
@@ -475,7 +475,7 @@ class TestSolveAutoUndoOnFailure:
         m.solve(solver_name="highs", reformulate_sos=True)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestSolveWithReformulation:
     """Tests for solving with SOS reformulation."""
 
@@ -485,13 +485,13 @@ class TestSolveWithReformulation:
             pytest.param(
                 "gurobi",
                 marks=pytest.mark.skipif(
-                    "gurobi" not in available_solvers, reason="Gurobi not installed"
+                    "gurobi" not in licensed_solvers, reason="Gurobi not installed"
                 ),
             ),
             pytest.param(
                 "highs",
                 marks=pytest.mark.skipif(
-                    "highs" not in available_solvers, reason="HiGHS not installed"
+                    "highs" not in licensed_solvers, reason="HiGHS not installed"
                 ),
             ),
         ],
@@ -651,7 +651,7 @@ class TestSolveWithReformulation:
                 assert abs(nonzero_indices[1] - nonzero_indices[0]) == 1
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 class TestEquivalenceWithGurobi:
     """Tests comparing reformulated solutions with native Gurobi SOS."""
 
@@ -677,7 +677,7 @@ class TestEquivalenceWithGurobi:
         m2.add_sos_constraints(x2, sos_type=1, sos_dim="i")
         m2.add_objective(x2 * np.array([1, 2, 3]), sense="max")
 
-        if "highs" in available_solvers:
+        if "highs" in licensed_solvers:
             m2.solve(solver_name="highs", reformulate_sos=True)
             assert m1.objective.value is not None
             assert m2.objective.value is not None
@@ -705,7 +705,7 @@ class TestEquivalenceWithGurobi:
         m2.add_sos_constraints(x2, sos_type=2, sos_dim="i")
         m2.add_objective(x2 * np.array([1, 2, 3]), sense="max")
 
-        if "highs" in available_solvers:
+        if "highs" in licensed_solvers:
             m2.solve(solver_name="highs", reformulate_sos=True)
             assert m1.objective.value is not None
             assert m2.objective.value is not None
@@ -788,7 +788,7 @@ class TestEdgeCases:
         assert "big_m_upper" not in x.attrs
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestCustomBigM:
     """Tests for custom Big-M functionality."""
 
@@ -853,7 +853,7 @@ class TestCustomBigM:
         assert np.isclose(obj1, obj2, atol=1e-5)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestNoSosConstraints:
     def test_reformulate_sos_true_with_no_sos(self) -> None:
         m = Model()
@@ -991,7 +991,7 @@ class TestUndoReformulation:
         assert list(m.variables.sos) == ["x"]
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestUnsortedCoords:
     def test_sos2_unsorted_coords_matches_sorted(self) -> None:
         coeffs = np.array([1, 2, 3])
@@ -1032,7 +1032,7 @@ class TestUnsortedCoords:
         assert np.isclose(m.objective.value, 3, atol=1e-5)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestAutoReformulation:
     """Tests for reformulate_sos='auto' functionality."""
 
@@ -1084,9 +1084,7 @@ class TestAutoReformulation:
         assert any("Reformulating SOS" in msg for msg in caplog.messages)
         assert not any("supports SOS natively" in msg for msg in caplog.messages)
 
-    @pytest.mark.skipif(
-        "gurobi" not in available_solvers, reason="Gurobi not installed"
-    )
+    @pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
     def test_auto_passes_through_native_sos_without_reformulation(self) -> None:
         import gurobipy
 
@@ -1172,7 +1170,7 @@ class TestResolveSOSReformulation:
             self._sos_model()._resolve_sos_reformulation(None, "auto")
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 class TestRemoteBracket:
     """
     Model.solve(remote=...) must bracket SOS reformulation around the remote

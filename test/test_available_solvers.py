@@ -238,3 +238,23 @@ def test_mindopt_license_probe_disposes_env(
     cls._license_probe()
 
     assert events == ["env_init", "env_dispose"]
+
+
+def test_xpress_license_probe_failure_marks_unlicensed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cls = _solver_class_for("xpress")
+    assert cls is not None
+    monkeypatch.setattr(cls, "is_available", classmethod(lambda c: True))
+
+    class _FakeXpress:
+        @staticmethod
+        def init() -> None:
+            raise RuntimeError("licensing error 21")
+
+    monkeypatch.setattr(solvers_mod, "xpress", _FakeXpress, raising=False)
+
+    status = cls.license_status()
+
+    assert status.ok is False
+    assert "licensing error 21" in (status.message or "")
