@@ -7,12 +7,12 @@ import pandas as pd
 import pytest
 
 import linopy
-from linopy import Model, available_solvers
+from linopy import Model, available_solvers, licensed_solvers
 from linopy.constraints import Constraint, CSRConstraint
 from linopy.variables import Variable
 
 requires_gurobi = pytest.mark.skipif(
-    "gurobi" not in available_solvers, reason="Gurobi not installed"
+    "gurobi" not in licensed_solvers, reason="Gurobi not installed"
 )
 
 
