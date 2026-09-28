@@ -13,6 +13,7 @@ answered.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
+from itertools import accumulate
 
 import xarray as xr
 from mathspec import program as ms
@@ -85,8 +86,9 @@ def check_coverage(
     A divisor is checked before evaluation, the last moment the gap is
     visible: the coefficient fill would turn it into a division by zero.
 
-    Returns every arithmetic on data alone the walk passed, with the rows it
-    is read on, for :func:`linopy.spec.evaluate.check_finite`.
+    Returns every arithmetic on data alone the walk passed, and the sum of
+    the data a term's constant adds up across a sum or a comparison, with the
+    rows it is read on, for :func:`linopy.spec.evaluate.check_finite`.
     """
     found, arithmetic = _walk(expressions, ctx, rows, comparison)
     for kind, obligations in found.items():
@@ -123,7 +125,15 @@ def _walk(
     arithmetic: Arithmetic = []
     for expression in expressions:
         constant = comparison and not ms.carries_variable(expression)
-        _collect(expression, ctx, rows, constant, found, arithmetic)
+        for summand in _summands(expression):
+            _collect(summand, ctx, rows, constant, found, arithmetic)
+    wholes = (
+        [ms.Add(expressions[0], ms.Negate(expressions[1]))]
+        if comparison
+        else expressions
+    )
+    for whole in wholes:
+        _constant_sum(whole, rows, arithmetic)
     found["constant"].sort(key=lambda pair: pair[0])
     return found, arithmetic
 
@@ -149,6 +159,11 @@ def _collect(
             into["constant"].append((node.name, rows))
         into["coefficient"].append((node.name, rows))
     into["coefficient"].extend((name, None) for name in amounts_of(node))
+    if isinstance(node, ms.Add) and ms.carries_variable(node):
+        _constant_sum(node, rows, arithmetic)
+        for summand in _summands(node):
+            _collect(summand, ctx, rows, constant, into, arithmetic)
+        return
     if isinstance(node, ms.Cases):
         for region in node.regions:
             inside = evaluate_where(region.when, ctx)
@@ -157,6 +172,22 @@ def _collect(
         return
     for child in ms.children(node):
         _collect(child, ctx, rows, constant, into, arithmetic)
+
+
+def _summands(node: ms.Expression) -> list[ms.Expression]:
+    """The summands of a sum carrying a variable, its data ones added into the constant of the term it builds."""
+    if isinstance(node, ms.Add) and ms.carries_variable(node):
+        return _summands(node.left) + _summands(node.right)
+    if isinstance(node, ms.Negate) and ms.carries_variable(node):
+        return [ms.Negate(s) for s in _summands(node.operand)]
+    return [node]
+
+
+def _constant_sum(node: ms.Expression, rows: Rows, arithmetic: Arithmetic) -> None:
+    """The data summands of *node* as the partial sums, in order, that add them into the constant of the term it builds."""
+    data = [s for s in _summands(node) if not ms.carries_variable(s)]
+    partials = list(accumulate(data, ms.Add))[1:]
+    arithmetic.extend((partial, rows) for partial in partials)
 
 
 def _divisor_uses(quotient: ms.Divide, ctx: Context, rows: Rows) -> list[Obligation]:

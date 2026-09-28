@@ -350,19 +350,37 @@ ZERO_AT_0 = {"t": T, "a": pd.Series([0.0, 1.0, 1.0], index=T), "b": FULL_C}
 INF_AT_0 = {"t": T, "a": pd.Series([float("inf"), 1.0, 1.0], index=T), "b": FULL_C}
 
 
+SHIFTED = "shift(a, along=t, offset=1, edge=0)"
+
+
 @pytest.mark.parametrize(
-    ("expression", "data"),
+    ("expression", "data", "at"),
     [
-        pytest.param("x + a / b >= 1", ZERO_AT_0, id="added"),
-        pytest.param("x * (a / b) >= 1", ZERO_AT_0, id="coefficient-right"),
-        pytest.param("a / b * x >= 1", ZERO_AT_0, id="coefficient-left"),
-        pytest.param("x + (a - a) >= 1", INF_AT_0, id="inf-minus-inf"),
+        pytest.param("x + a / b >= 1", ZERO_AT_0, "t=0", id="added"),
+        pytest.param("x * (a / b) >= 1", ZERO_AT_0, "t=0", id="coefficient-right"),
+        pytest.param("a / b * x >= 1", ZERO_AT_0, "t=0", id="coefficient-left"),
+        pytest.param("x + (a - a) >= 1", INF_AT_0, "t=0", id="inf-minus-inf"),
+        pytest.param("x + a - a >= 1", INF_AT_0, "t=0", id="beside-a-term"),
+        pytest.param("a - x - a >= 1", INF_AT_0, "t=0", id="across-a-term"),
+        pytest.param("x + a >= a", INF_AT_0, "t=0", id="across-sides"),
+        pytest.param(
+            "x + sum(a, over=t) - sum(a, over=t) >= 1",
+            INF_AT_0,
+            "the only row",
+            id="sums-beside-a-term",
+        ),
+        pytest.param(
+            f"x + {SHIFTED} - {SHIFTED} >= 1",
+            INF_AT_0,
+            "t=1",
+            id="shifts-beside-a-term",
+        ),
     ],
 )
 def test_arithmetic_that_makes_data_non_finite_is_refused(
-    expression: str, data: dict[str, Any]
+    expression: str, data: dict[str, Any], at: str
 ) -> None:
-    with pytest.raises(SpecDataError, match=r"constraint 'row'.*not finite at t=0"):
+    with pytest.raises(SpecDataError, match=rf"constraint 'row'.*not finite at {at}"):
         Model.from_spec(quotient(expression), data)
 
 
