@@ -160,14 +160,14 @@ def u(m: Model) -> Variable:
     return m.variables["u"]
 
 
-if find_spec("math_spec") is not None:
-    import math_spec
+if find_spec("mathspec") is not None:
+    import mathspec
     import xarray as xr
     import yaml
 
     from linopy import Model
 
-    EXAMPLES_DIR = os.environ.get("MATH_SPEC_EXAMPLES")
+    EXAMPLES_DIR = os.environ.get("MATHSPEC_EXAMPLES")
     EXAMPLE_DISPATCH = """
 description: Least-cost dispatch of a generator fleet against an hourly load.
 
@@ -221,7 +221,7 @@ expressions:
         return m
 
     def yaml_dict() -> dict[str, Any]:
-        return math_spec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict()
+        return mathspec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict()
 
     def with_(spec: dict[str, Any], **sections: dict[str, Any]) -> dict[str, Any]:
         out = dict(spec)

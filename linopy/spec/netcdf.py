@@ -4,9 +4,10 @@ Persist the spec of a spec-built model in its netcdf file.
 Variables, constraints and the solution round trip through :mod:`linopy.io`
 already. Besides them a spec-built model carries the spec text, the master
 coordinates and the relations; the program is re-lowered from the text on read,
-so no lowered ``Program`` ever reaches the file. A header names the math-spec
+so no lowered ``Program`` ever reaches the file. A header names the mathspec
 version that lowered the text and the number of this layout, ``FORMAT``; a
-read under another of either warns.
+read under another mathspec version warns, and a file in another layout warns
+and loads as a plain model, since its text may no longer lower.
 
 No netcdf type holds a dtype as written, so every array carries the dtype it
 had in memory (:func:`linopy.io.record_dtypes`) and is cast back to it on
@@ -32,7 +33,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xarray as xr
-from math_spec import __version__ as MATH_SPEC_VERSION
+from mathspec import __version__ as MATHSPEC_VERSION
 
 from linopy.io import (
     DTYPE_ATTR,
@@ -49,7 +50,7 @@ from linopy.model import Model
 from linopy.spec.accessor import ModelSpec, restore
 
 PREFIX = "spec"
-FORMAT = 1
+FORMAT = 2
 OBJECTIVE_ATTR = "_linopy_spec_objective_replaced"
 COORD = "coords__"
 PARAM = "param__"
@@ -85,7 +86,7 @@ def encode(spec: ModelSpec) -> xr.Dataset:
             arrays[PARAM + str(name)] = record_dtype(
                 xr.DataArray(arr.to_numpy(), dims=arr.dims), str(arr.dtype)
             )
-    header = json.dumps({"math_spec": MATH_SPEC_VERSION, "format": FORMAT})
+    header = json.dumps({"mathspec": MATHSPEC_VERSION, "format": FORMAT})
     written = with_prefix(xr.Dataset(arrays), PREFIX).assign_attrs(
         {SPEC_ATTR: spec.text, SPEC_VERSION_ATTR: header, SPEC_NAME_ATTR: spec.name}
     )
@@ -95,9 +96,12 @@ def encode(spec: ModelSpec) -> xr.Dataset:
     return written
 
 
-def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
+def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec | None:
     """
     Re-lower *text* onto *model* and read back the dataset :func:`encode` wrote.
+
+    ``None`` where the file writes its spec in another layout: the model then
+    loads plain, without ``model.spec``.
 
     The master coordinates, the plainly written parameters and the coded ones
     together are the dataset :func:`linopy.spec.accessor.attach` gave the spec
@@ -107,10 +111,11 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     Warns
     -----
     UserWarning
-        The file names another math-spec version or another layout number
+        The file names another mathspec version or another layout number
         than this reader's.
     """
-    _check_header(ds)
+    if not _readable(ds):
+        return None
     sub = get_prefix(ds, PREFIX)
     coords = {
         _stripped(name, COORD): _index(sub[name])
@@ -139,25 +144,29 @@ def decode(model: Model, ds: xr.Dataset, text: str) -> ModelSpec:
     )
 
 
-def _check_header(ds: xr.Dataset) -> None:
-    """Warn where the file was written under another math-spec version or layout; a file without a header is older than both."""
-    if SPEC_VERSION_ATTR not in ds.attrs:
-        return
-    header = json.loads(ds.attrs[SPEC_VERSION_ATTR])
+def _readable(ds: xr.Dataset) -> bool:
+    """Whether the file writes its spec in this reader's layout, warning where not or where another mathspec version lowered it; a file without a header is older than both."""
+    header = (
+        json.loads(ds.attrs[SPEC_VERSION_ATTR])
+        if SPEC_VERSION_ATTR in ds.attrs
+        else {"format": 0}
+    )
     if header["format"] != FORMAT:
         warnings.warn(
             f"the file writes its spec in layout {header['format']} and this linopy "
-            f"reads layout {FORMAT}; what the spec holds may not come back as written.",
+            f"reads layout {FORMAT}; loaded as a plain model, without model.spec.",
             UserWarning,
             stacklevel=4,
         )
-    if header["math_spec"] != MATH_SPEC_VERSION:
+        return False
+    if header["mathspec"] != MATHSPEC_VERSION:
         warnings.warn(
-            f"the file's spec was lowered by math-spec {header['math_spec']} and is "
-            f"re-lowered by {MATH_SPEC_VERSION}; the same text may lower differently.",
+            f"the file's spec was lowered by mathspec {header['mathspec']} and is "
+            f"re-lowered by {MATHSPEC_VERSION}; the same text may lower differently.",
             UserWarning,
             stacklevel=4,
         )
+    return True
 
 
 def _coded(spec: ModelSpec) -> set[str]:

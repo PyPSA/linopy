@@ -1,5 +1,5 @@
 """
-Attach user data to a math-spec program.
+Attach user data to a mathspec program.
 
 The language fixes three attachment rules and this module enforces them: a
 dimension's members come only from the source keyed by the dimension's
@@ -22,9 +22,9 @@ from typing import Any, Literal, get_args
 import numpy as np
 import pandas as pd
 import xarray as xr
-from math_spec import did_you_mean
-from math_spec import program as ms
-from math_spec.program import parameters_of, walk
+from mathspec import did_you_mean
+from mathspec import program as ms
+from mathspec.program import parameters_of, walk
 
 from linopy.constants import warn_evolving_api
 from linopy.spec.coverage import amounts_of
@@ -320,7 +320,6 @@ def _reached(program: ms.Program) -> set[str]:
     dims: set[str] = set()
     for declared in (program.parameters, program.variables, program.constraints):
         dims.update(d for decl in declared.values() for d in decl.dims)
-    dims.update(pw.over for pw in program.piecewise.values())
     for rel in program.relations.values():
         dims.update(rel.dims)
     return dims

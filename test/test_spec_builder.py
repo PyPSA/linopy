@@ -1,5 +1,5 @@
 """
-Building declarations from math-spec programs: variables, constraints, the
+Building declarations from mathspec programs: variables, constraints, the
 objective, SOS-constrained curves, coverage refusals and side-swapped
 expressions.
 """
@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-math_spec = pytest.importorskip("math_spec")
+pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
@@ -36,12 +36,33 @@ from conftest import (  # noqa: E402
 from linopy import Model  # noqa: E402
 from linopy.constraints import CSRConstraint  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
     pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
 ]
+
+MULTI_COLUMN = "linopy reads no relation of more than one key or value column"
+REFUSED = {
+    "operators/at_columns.yaml": MULTI_COLUMN,
+    "operators/sum_by_columns.yaml": MULTI_COLUMN,
+    "operators/sum_by_column_lists.yaml": MULTI_COLUMN,
+    "operators/shift_by_parameter.yaml": "the synthetic data leaves a 0 >= demand row",
+}
+
+
+def example(path: str) -> Any:
+    """*path* as a sweep case, expected to raise :class:`SpecDataError` where :data:`REFUSED` names it."""
+    name = str(Path(path).relative_to(EXAMPLES_DIR or ""))
+    marks = (
+        [pytest.mark.xfail(strict=True, raises=SpecDataError, reason=REFUSED[name])]
+        if name in REFUSED
+        else []
+    )
+    return pytest.param(path, id=name, marks=marks)
+
 
 EXAMPLES = (
     sorted(glob.glob(f"{EXAMPLES_DIR}/*.yaml") + glob.glob(f"{EXAMPLES_DIR}/*/*.yaml"))
@@ -51,15 +72,14 @@ EXAMPLES = (
 
 
 @pytest.mark.skipif(
-    not EXAMPLES, reason="set MATH_SPEC_EXAMPLES to a math-spec examples directory"
+    not EXAMPLES, reason="set MATHSPEC_EXAMPLES to a mathspec examples directory"
 )
-@pytest.mark.parametrize(
-    "path", EXAMPLES, ids=lambda p: str(Path(p).relative_to(EXAMPLES_DIR or ""))
-)
-def test_every_math_spec_example_builds_and_solves(path: str) -> None:
+@pytest.mark.parametrize("path", [example(p) for p in EXAMPLES])
+def test_every_mathspec_example_builds_and_solves(path: str) -> None:
+    """Every mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
     if "/symbols/" in path:
         pytest.skip("typesetting input, not a spec")
-    program = math_spec.to_program(path)
+    program = lower(path)
     m = solved(path, synthetic_sources(program), retain="all")
     assert m.nvars == sum(int(m.variables[v].labels.count()) for v in program.variables)
     assert m.termination_condition in ("optimal", "infeasible")
@@ -293,31 +313,62 @@ def test_a_bare_variable_in_a_where_asks_whether_it_exists() -> None:
 
 
 @pytest.mark.parametrize(
-    ("spec", "match"),
+    ("spec", "name"),
     [
+        pytest.param(ENVELOPE_SPEC, "envelope", id="an-absent-term"),
         pytest.param(
-            ENVELOPE_SPEC,
-            r"(?s)constraint 'envelope': 1 row\(s\) hold no variable term.*f='b'",
-            id="an-absent-term-empties-the-whole-row",
-        ),
-        pytest.param(
-            sized("undefined", "size <= relmax"),
-            r"(?s)constraint 'sized'.*absence: zero on the variables",
-            id="an-undefined-absence-is-refused-either-way",
-        ),
-        pytest.param(
-            sized("zero", "size <= relmax"),
-            r"(?s)constraint 'sized'.*Supply the rows of the variables",
-            id="a-zero-absence-is-refused-where-the-other-side-binds",
+            sized("undefined", "size <= relmax"), "sized", id="an-absent-variable"
         ),
     ],
 )
-def test_a_row_the_data_emptied_of_variables_is_refused(
-    spec: dict[str, Any], match: str
+def test_absence_takes_the_row_with_it(spec: dict[str, Any], name: str) -> None:
+    m = Model.from_spec(spec, ENVELOPE_DATA)
+    assert int(m.constraints[name].labels.sel(f="b")) == -1
+
+
+def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
+    """A zero absence leaves ``0 <= relmax`` standing, which linopy cannot carry and a solver would never see."""
+    with pytest.raises(
+        SpecDataError, match=r"(?s)constraint 'sized'.*Supply the rows of the variables"
+    ):
+        Model.from_spec(sized("zero", "size <= relmax"), ENVELOPE_DATA)
+
+
+def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
+    """A row over ``t`` reading the data ``a`` and ``b``, which :data:`ZERO_AT_0` holds at 0 on ``t=0``."""
+    row: dict[str, Any] = {"dims": ["t"], "expression": expression}
+    return {
+        "dimensions": {"t": {"dtype": "int"}},
+        "parameters": {"a": {"dims": ["t"]}, "b": {"dims": ["t"]}},
+        "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}}},
+        "constraints": {"row": row if where is None else {**row, "where": where}},
+        "objective": {"sense": "minimize", "expression": "sum(x, over=t)"},
+    }
+
+
+ZERO_AT_0 = {"t": T, "a": pd.Series([0.0, 1.0, 1.0], index=T), "b": FULL_C}
+INF_AT_0 = {"t": T, "a": pd.Series([float("inf"), 1.0, 1.0], index=T), "b": FULL_C}
+
+
+@pytest.mark.parametrize(
+    ("expression", "data"),
+    [
+        pytest.param("x + a / b >= 1", ZERO_AT_0, id="added"),
+        pytest.param("x * (a / b) >= 1", ZERO_AT_0, id="coefficient-right"),
+        pytest.param("a / b * x >= 1", ZERO_AT_0, id="coefficient-left"),
+        pytest.param("x + (a - a) >= 1", INF_AT_0, id="inf-minus-inf"),
+    ],
+)
+def test_arithmetic_that_makes_data_non_finite_is_refused(
+    expression: str, data: dict[str, Any]
 ) -> None:
-    """Such a row would read ``0 sense rhs``, leave the problem and let the solver call it optimal."""
-    with pytest.raises(SpecDataError, match=match):
-        Model.from_spec(spec, ENVELOPE_DATA)
+    with pytest.raises(SpecDataError, match=r"constraint 'row'.*not finite at t=0"):
+        Model.from_spec(quotient(expression), data)
+
+
+def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
+    m = Model.from_spec(quotient("x + a / b >= 1", where="b > 0"), ZERO_AT_0)
+    assert int(m.constraints["row"].labels.sel(t=0)) == -1
 
 
 def test_a_dead_row_of_zero_absences_against_a_zero_side_is_only_warned_about() -> None:
@@ -407,7 +458,7 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
     )
     m = Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": FULL_Y})
     assert m.variables["cost_curve_lam"].attrs["sos_type"] == 2
-    # math-spec lowers the block into ordinary declarations, so none of it is drift.
+    # Expanding the block writes it out as ordinary declarations, so none of it is drift.
     assert not m.spec.unspecified
 
 

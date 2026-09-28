@@ -444,7 +444,7 @@ class Model:
     @property
     def spec(self) -> ModelSpec:
         """
-        The math-spec program this model was built from, see :meth:`add_spec`.
+        The mathspec program this model was built from, see :meth:`add_spec`.
 
         Raises
         ------
@@ -466,9 +466,9 @@ class Model:
         build_expressions: bool = True,
     ) -> Model:
         """
-        Build a math-spec program with its data into this empty model.
+        Build a mathspec program with its data into this empty model.
 
-        Requires the ``math-spec`` package and linopy's v1 semantics
+        Requires the ``mathspec`` package and linopy's v1 semantics
         (``linopy.options["semantics"] = "v1"``). Variables, constraints and
         the objective are added as the spec declares them; the spec text, the
         parameters the named expressions read and the lookups are kept on the
@@ -488,10 +488,10 @@ class Model:
 
         Parameters
         ----------
-        spec : str, pathlib.Path, dict or math_spec.Spec
+        spec : str, pathlib.Path, dict or mathspec.Spec
             The spec. A ``str`` is YAML text if it holds a newline, opens a
             mapping or a sequence, or holds a ``:`` and names no file; any
-            other ``str`` is a path. A lowered ``math_spec.Program`` and an
+            other ``str`` is a path. A lowered ``mathspec.Program`` and an
             open file are refused, having no YAML form to keep on the model.
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters and
@@ -548,7 +548,7 @@ class Model:
         **model_kwargs: Any,
     ) -> Model:
         """
-        A new model built from a math-spec program, see :meth:`add_spec`.
+        A new model built from a mathspec program, see :meth:`add_spec`.
 
         ``model_kwargs`` are passed to :class:`Model`.
         """
@@ -740,7 +740,7 @@ class Model:
         model_string = f"Linopy {self.type} model"
         tag_variables = tag_constraints = tag_expressions = False
         if self._spec is not None:
-            model_string += ", built from a math-spec"
+            model_string += ", built from a mathspec"
             unspecified = self._spec.drift((var_names, con_names))
             tag_variables = bool(unspecified.variables)
             tag_constraints = bool(unspecified.constraints)

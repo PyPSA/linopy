@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-math_spec = pytest.importorskip("math_spec")
+pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
@@ -181,7 +181,7 @@ CURVES = {"bp_x": FULL_X, "bp_y": FULL_Y}
                 "holds": "p_max >= 50",
                 "description": "a small unit is not worth a curve",
             },
-            "assumption 'sized' does not hold for the data bound to 'p_max' — a small "
+            "assumption 'sized' does not hold for the data attached to 'p_max' — a small "
             "unit is not worth a curve\n  Not so at generator='hydro'",
             id="fails-with-the-description",
         ),

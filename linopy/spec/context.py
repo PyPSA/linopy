@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 
 import pandas as pd
 import xarray as xr
-from math_spec import program as ms
+from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model

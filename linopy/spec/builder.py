@@ -13,17 +13,19 @@ from __future__ import annotations
 import warnings
 from typing import TypeGuard
 
+import numpy as np
 import xarray as xr
-from math_spec import program as ms
-from math_spec.program import walk
+from mathspec import program as ms
+from mathspec.program import walk
 
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec.assumptions import check_assumptions
 from linopy.spec.attach import Attached
 from linopy.spec.context import Context, Parameters, Term, Value
 from linopy.spec.coverage import check_bounds_cover, check_coverage
 from linopy.spec.errors import SpecDataError, first_coordinates
-from linopy.spec.evaluate import carried, evaluate
+from linopy.spec.evaluate import carried, check_finite, evaluate
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
@@ -84,8 +86,8 @@ def _variables(ctx: Context) -> None:
         mask = as_linopy_mask(evaluate_where(declared.where, ctx))
         check_bounds_cover(name, declared, ctx, mask)
         variable = ctx.model.add_variables(
-            lower=_bound(declared.lower, ctx),
-            upper=_bound(declared.upper, ctx),
+            lower=_bound(declared.lower, ctx, -np.inf),
+            upper=_bound(declared.upper, ctx, np.inf),
             coords={d: ctx.coords[d] for d in declared.dims},
             name=name,
             mask=mask,
@@ -95,8 +97,12 @@ def _variables(ctx: Context) -> None:
         variable.spec = ctx.name
 
 
-def _bound(node: ms.Expression, ctx: Context) -> float | xr.DataArray:
-    """A bound as linopy takes it, read raw: an uncovered slot stays NaN for :func:`check_bounds_cover`."""
+def _bound(
+    node: ms.Expression | None, ctx: Context, open_side: float
+) -> float | xr.DataArray:
+    """A bound as linopy takes it, read raw: an uncovered slot stays NaN for :func:`check_bounds_cover`, an open side is *open_side*."""
+    if node is None:
+        return open_side
     if isinstance(node, ms.Constant):
         return node.value
     if isinstance(node, ms.Parameter):
@@ -109,7 +115,7 @@ def _sos(ctx: Context) -> None:
         ctx.model.add_sos_constraints(
             ctx.model.variables[sos.variable],
             sos_type=sos.sos_type,
-            sos_dim=sos.over,
+            sos_dim=sos.along,
         )
 
 
@@ -117,9 +123,11 @@ def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
         rows = evaluate_where(row.where, ctx)
         mask = as_linopy_mask(rows)
-        check_coverage(
-            f"constraint '{name}'", (row.lhs, row.rhs), ctx, mask, comparison=True
+        subject = f"constraint '{name}'"
+        arithmetic = check_coverage(
+            subject, (row.lhs, row.rhs), ctx, mask, comparison=True
         )
+        check_finite(subject, arithmetic, ctx)
         lhs, rhs = evaluate(row.lhs, ctx), evaluate(row.rhs, ctx)
         if _has_term(lhs):
             term, other, sign = lhs, rhs, _SIGN[row.sense]
@@ -148,10 +156,16 @@ def _check_live(
     Such a row reads as ``0 sense rhs``: linopy carries no column there, the
     row leaves the problem and the constraint silently stops binding. Where
     every variable of the row declares ``absence: zero`` the zero is what the
-    math says, so a zero other side is warned about rather than refused.
+    math says, so a zero other side is warned about rather than refused. An
+    absent row is not emptied: absence spread through arithmetic, a masked
+    variable or a vacated translation, takes the row with it. A null row is
+    only ever absent, since :func:`check_finite` refused the NaN arithmetic
+    makes of present data. A bare variable term is never emptied: a row of it
+    exists exactly where the variable does.
     """
-    live = term.mask if isinstance(term, Variable) else term.has_terms
-    dead = rows & ~live
+    if isinstance(term, Variable):
+        return
+    dead = rows & ~(term.has_terms | term.isnull())
     if not bool(dead.any()):
         return
     said = (
@@ -201,7 +215,8 @@ def _objective(ctx: Context) -> None:
     declared = ctx.program.objective
     if declared is None:
         return
-    check_coverage("the objective", (declared.expression,), ctx, None)
+    arithmetic = check_coverage("the objective", (declared.expression,), ctx, None)
+    check_finite("the objective", arithmetic, ctx)
     expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
@@ -219,9 +234,19 @@ def _expressions(ctx: Context, build: bool) -> None:
     """
     for name, declared in ctx.program.expressions.items():
         body = declared.expression
-        check_coverage(f"expression '{name}'", (body,), ctx, None)
+        subject = f"expression '{name}'"
+        arithmetic = check_coverage(subject, (body,), ctx, None)
         if not build or any(isinstance(n, ms.Dual) for n in walk(body)):
             continue
         value = evaluate(body, ctx)
         if isinstance(value, Term):
-            ctx.model.add_expressions(value, name=name).spec = ctx.name
+            check_finite(subject, arithmetic, ctx)
+            ctx.model.add_expressions(_bare(value), name=name).spec = ctx.name
+
+
+def _bare(term: Term) -> LinearExpression | QuadraticExpression:
+    """*term* without the coordinates a lookup leaves beside its dimensions, which no file keeps."""
+    expression = term.to_linexpr() if isinstance(term, Variable) else term
+    return expression.drop_vars(
+        [c for c in expression.coords if c not in expression.dims]
+    )

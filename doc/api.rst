@@ -118,9 +118,9 @@ IO
 Building from specs
 -------------------
 
-Build a model from a `math-spec
-<https://github.com/energy-models/math-spec>`__ YAML program attached to
-data. Requires the ``spec`` dependency group.
+Build a model from a `mathspec <https://mathspec.readthedocs.io>`__ YAML
+program attached to data. Requires ``pip install "linopy[spec]"`` (Python >=
+3.12).
 
 A spec's grouped sums and windows build dense by default, which is wasteful on
 a skewed topology (a lookup with a few large groups and many small ones, or a

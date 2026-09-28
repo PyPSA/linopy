@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-math_spec = pytest.importorskip("math_spec")
+mathspec = pytest.importorskip("mathspec")
 
 import linopy  # noqa: E402
 from conftest import (  # noqa: E402
@@ -29,10 +29,12 @@ from conftest import (  # noqa: E402
     WHERE_DATA,
     WHERE_SPEC,
     solved,
+    with_,
 )
 from linopy import Model, read_netcdf  # noqa: E402
 from linopy.io import SPEC_ATTR, SPEC_VERSION_ATTR  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
 from linopy.spec.netcdf import FORMAT  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
@@ -198,6 +200,24 @@ def test_a_relation_round_trips_exactly(
     assert name in p.spec.relations
 
 
+AT_SPEC = with_(
+    RELATION_SPEC,
+    variables={"y": {"dims": ["s2"], "bounds": {"lower": 0, "upper": 1}}},
+    expressions={"pulled": "x + at(y, by=str_to_str, over=s2, into=s1)"},
+)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_named_expression_read_through_a_lookup_round_trips(
+    tmp_path: Path, engine: str
+) -> None:
+    m = Model.from_spec(AT_SPEC, relation_sources(2))
+    p = roundtrip(m, tmp_path, engine)
+
+    assert_model_equal(m, p)
+    assert_linequal(p.expressions["pulled"], m.expressions["pulled"])
+
+
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("name", ["count", "flag", "cost", "tag"])
 def test_a_parameter_keeps_its_dtype(tmp_path: Path, engine: str, name: str) -> None:
@@ -308,42 +328,69 @@ def rewritten(tmp_path: Path, m: Model, **attrs: Any) -> Path:
     return other
 
 
-def test_the_file_names_the_math_spec_version_and_the_layout(tmp_path: Path) -> None:
+def test_the_file_names_the_mathspec_version_and_the_layout(tmp_path: Path) -> None:
     path = tmp_path / "model.nc"
     Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
     header = json.loads(xr.load_dataset(path).attrs[SPEC_VERSION_ATTR])
-    assert header == {"math_spec": math_spec.__version__, "format": FORMAT}
+    assert header == {"mathspec": mathspec.__version__, "format": FORMAT}
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         read_netcdf(path)
 
 
-@pytest.mark.parametrize(
-    ("header", "match"),
-    [
-        ({"math_spec": "0.0.0", "format": FORMAT}, "lowered by math-spec 0.0.0"),
-        ({"math_spec": math_spec.__version__, "format": FORMAT + 1}, "layout 2"),
-    ],
-    ids=["math-spec", "format"],
-)
-def test_a_file_from_another_writer_warns_and_still_reads(
-    tmp_path: Path, header: dict[str, Any], match: str
+def test_a_file_from_another_mathspec_version_warns_and_still_reads(
+    tmp_path: Path,
 ) -> None:
     m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    path = rewritten(tmp_path, m, **{SPEC_VERSION_ATTR: json.dumps(header)})
-    with pytest.warns(UserWarning, match=match):
+    header = json.dumps({"mathspec": "0.0.0", "format": FORMAT})
+    path = rewritten(tmp_path, m, **{SPEC_VERSION_ATTR: header})
+    with pytest.warns(UserWarning, match="lowered by mathspec 0.0.0"):
         p = read_netcdf(path)
     assert_model_equal(m, p)
 
 
-def test_a_spec_file_reads_as_a_plain_model_without_math_spec(
+ALPHA_115_SPEC = """
+dimensions:
+  i: {dtype: int}
+variables:
+  x: {dims: [i], bounds: {lower: 0, upper: 1}}
+  y: {dims: [i], bounds: {lower: 0, upper: .inf}}
+sos:
+  one: {variable: x, over: i, type: 1}
+objective: {sense: minimize, expression: sum(x) + sum(y)}
+"""
+
+
+@pytest.mark.parametrize(
+    ("header", "text"),
+    [
+        ({"mathspec": mathspec.__version__, "format": FORMAT + 1}, EXAMPLE_DISPATCH),
+        ({"math_spec": "0.0.0a115", "format": 1}, ALPHA_115_SPEC),
+    ],
+    ids=["newer", "alpha115"],
+)
+def test_a_file_in_another_layout_warns_and_reads_as_a_plain_model(
+    tmp_path: Path, header: dict[str, Any], text: str
+) -> None:
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    attrs = {SPEC_VERSION_ATTR: json.dumps(header), SPEC_ATTR: text}
+    path = rewritten(tmp_path, m, **attrs)
+    match = f"layout {header['format']} .* plain model"
+    with pytest.warns(UserWarning, match=match):
+        p = read_netcdf(path)
+    assert p._spec is None
+    assert list(p.variables) == list(m.variables)
+    assert list(p.constraints) == list(m.constraints)
+
+
+def test_a_spec_file_reads_as_a_plain_model_without_mathspec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     path = tmp_path / "model.nc"
     m.to_netcdf(path)
     monkeypatch.setattr(linopy.io, "spec_available", lambda: False)
-    with pytest.warns(UserWarning, match="math-spec is not installed"):
+    with pytest.warns(UserWarning, match="mathspec is not installed"):
         p = read_netcdf(path)
 
     assert p._spec is None
@@ -359,13 +406,13 @@ def test_a_spec_file_reads_as_a_plain_model_without_math_spec(
 
 
 @pytest.mark.skipif(
-    EXAMPLES_DIR is None, reason="set MATH_SPEC_EXAMPLES to a math-spec examples dir"
+    EXAMPLES_DIR is None, reason="set MATHSPEC_EXAMPLES to a mathspec examples dir"
 )
 @pytest.mark.parametrize("engine", ENGINES)
 def test_the_pypsa_example_round_trips(tmp_path: Path, engine: str) -> None:
     """Nine relations into one dimension, a datetime axis, bool and str parameters."""
     path = Path(EXAMPLES_DIR or "", "pypsa.yaml")
-    program = math_spec.to_program(str(path))
+    program = lower(str(path))
     m = Model.from_spec(path, synthetic_sources(program, 3), retain="all")
     p = roundtrip(m, tmp_path, engine)
 

@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xarray as xr
-from math_spec import program as ms
+from mathspec import program as ms
 
 _START = "2030-01-01"
 

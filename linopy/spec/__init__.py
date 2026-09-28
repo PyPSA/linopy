@@ -1,7 +1,7 @@
 """
-Build linopy models from math-spec programs.
+Build linopy models from mathspec programs.
 
-The package needs the ``math-spec`` distribution (import name ``math_spec``,
+The package needs the ``mathspec`` distribution (import name ``mathspec``,
 Python >= 3.12). It is imported here and nowhere else in linopy, so
 ``import linopy`` never pulls it in.
 """
@@ -11,10 +11,10 @@ from __future__ import annotations
 import sys
 from importlib.util import find_spec
 
-if find_spec("math_spec") is None:
+if find_spec("mathspec") is None:
     message = (
-        "linopy.spec needs the math-spec package. Install it from a checkout "
-        "with `uv sync --group spec` or `pip install --group spec`."
+        "linopy.spec needs the mathspec package. Install it with "
+        "`pip install 'linopy[spec]'`."
     )
     if sys.version_info < (3, 12):
         message = "linopy.spec needs Python >= 3.12. " + message

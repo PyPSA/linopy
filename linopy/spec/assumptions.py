@@ -5,13 +5,13 @@ The language decides a program's shape and can decide nothing about its
 numbers, so every fact it needs of them is stated as an ``assumptions:``
 entry: the file's own, and the ones a ``piecewise:`` method implies, which
 the expansion writes beside them. Each is a predicate over the bound data
-and is checked here, in the words :func:`~math_spec.program.assumption_message`
+and is checked here, in the words :func:`~mathspec.program.assumption_message`
 gives every consumer.
 """
 
 from __future__ import annotations
 
-from math_spec import program as ms
+from mathspec import program as ms
 
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError, first_coordinates

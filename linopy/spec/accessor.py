@@ -28,16 +28,9 @@ from typing import Any, TypeAlias
 
 import pandas as pd
 import xarray as xr
-import yaml
-from math_spec import (
-    Spec,
-    to_program,
-    to_spec,
-    typeset,
-    typeset_declaration,
-)
-from math_spec import program as ms
-from math_spec.typesetting import FormatName
+from mathspec import Spec, to_spec, typeset, typeset_declaration
+from mathspec import program as ms
+from mathspec.typesetting import FormatName
 
 from linopy.constants import warn_evolving_api
 from linopy.expressions import LinearExpression, QuadraticExpression
@@ -54,7 +47,7 @@ from linopy.spec.evaluate import evaluate_named, fold
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 
 # A note about what is missing, spelled as a comment of the format's own. A
-# format math-spec grows later renders without one rather than with a wrong one.
+# format mathspec grows later renders without one rather than with a wrong one.
 _DRIFTED = "This model has drifted from the spec typeset here: {}."
 
 _COMMENT: dict[str, str] = {
@@ -70,9 +63,9 @@ class Unspecified:
     How a spec-built model has drifted from the spec it was built from.
 
     A model goes on taking everything linopy can add to it, and none of that
-    carries a math-spec declaration to typeset. A spec's own ``piecewise:``
-    and ``sos:`` are not drift: math-spec lowers them into ordinary
-    declarations, so they sit in the program like any other.
+    carries a mathspec declaration to typeset. A spec's own ``piecewise:``
+    and ``sos:`` are not drift: the curves are expanded into ordinary
+    declarations and the sets stay declared, so both sit in the program.
 
     Attributes
     ----------
@@ -191,8 +184,23 @@ def restore(
     only what ``retain`` kept can be read back.
     """
     return ModelSpec(
-        model, name, to_program(text), text, parameters, None, objective_replaced
+        model, name, lower(_read(text)), text, parameters, None, objective_replaced
     )
+
+
+def lower(spec: SpecLike) -> ms.Program:
+    """
+    *spec* lowered to the program linopy builds, its piecewise curves written out.
+
+    Only ``piecewise:`` is expanded: a special-ordered set stays a set, which
+    linopy builds natively rather than as binaries.
+    """
+    return to_spec(spec).expand("piecewise").program
+
+
+def _read(text: str) -> Spec:
+    """YAML *text* as a Spec, a one-line text included, which ``to_spec`` would read as a path."""
+    return to_spec(f"{text}\n")
 
 
 def _is_yaml_text(spec: str) -> bool:
@@ -217,18 +225,19 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
         keep on the model.
     FileNotFoundError
         *spec* reads as a path and there is no file there.
+    mathspec.SchemaError
+        The spec is not valid under the installed mathspec.
     SpecDataError
-        The spec is not a mapping of sections, or declares no dimension,
-        parameter or variable.
+        The spec declares no dimension, parameter or variable.
     """
     if isinstance(spec, ms.Program):
         raise TypeError(
-            "add_spec takes the spec as a path, YAML text, a mapping or a math_spec.Spec, "
+            "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             "not a lowered Program: a Program has no YAML form to keep on the model."
         )
     if isinstance(spec, io.IOBase):
         raise TypeError(
-            "add_spec takes the spec as a path, YAML text, a mapping or a math_spec.Spec, "
+            "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             "not an open file: pass the path it was opened on, or spec.read()."
         )
     if isinstance(spec, str) and not _is_yaml_text(spec):
@@ -245,14 +254,8 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
     elif isinstance(spec, str):
         text = spec
     else:
-        text = (to_spec(dict(spec)) if isinstance(spec, Mapping) else spec).to_yaml()
-    sections = yaml.safe_load(text)
-    if not isinstance(sections, Mapping):
-        raise SpecDataError(
-            f"a spec is a mapping of sections, and this one reads as "
-            f"{type(sections).__name__}: {text[:80]!r}."
-        )
-    program = to_program(dict(sections))
+        text = to_spec(dict(spec) if isinstance(spec, Mapping) else spec).to_yaml()
+    program = lower(_read(text))
     if not (program.dimensions or program.parameters or program.variables):
         raise SpecDataError(
             "the spec declares nothing: no dimension, no parameter and no variable. "
@@ -344,7 +347,7 @@ class ModelSpec:
     @property
     def description(self) -> str:
         """The spec's own description, its first line, or an empty string."""
-        lines = str(self._schema.get("description", "")).strip().splitlines()
+        lines = (self.program.description or "").strip().splitlines()
         return lines[0] if lines else ""
 
     @property
@@ -450,9 +453,9 @@ class ModelSpec:
         Parameters
         ----------
         fmt : {"latex", "markdown", "typst"}
-            What spells the math, as ``math_spec.typeset`` takes it.
+            What spells the math, as ``mathspec.typeset`` takes it.
         **options
-            Passed on to ``math_spec.typeset``: ``symbols``, ``standalone``,
+            Passed on to ``mathspec.typeset``: ``symbols``, ``standalone``,
             ``legend``, ``numbered``, ``inline_expressions``.
 
         Warns
@@ -517,9 +520,9 @@ class ModelSpec:
         return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
 
     @functools.cached_property
-    def _schema(self) -> dict[str, Any]:
-        """The spec as the mapping the typesetter reads (a bare string it reads as a path)."""
-        return yaml.safe_load(self.text)
+    def _schema(self) -> Spec:
+        """The spec as the typesetter reads it."""
+        return _read(self.text)
 
     def evaluate(
         self, name: str, sources: Mapping[str, Any] | xr.Dataset
@@ -642,7 +645,7 @@ def _notebook_math(markdown: str) -> str:
     r"""
     GitHub's verbatim math delimiters as the ``$``-pairs a notebook's MathJax reads.
 
-    math-spec prints ``$\`...\`$`` and ```` ```math ```` fences because GitHub
+    mathspec prints ``$\`...\`$`` and ```` ```math ```` fences because GitHub
     runs Markdown's escape pass inside ``$...$``; Jupyter does not, and renders
     only the classic pair.
     """
@@ -666,7 +669,7 @@ class NamedExpression(Declaration):
     Attributes
     ----------
     node
-        The lowered expression body, math-spec's own AST handle.
+        The lowered expression body, mathspec's own AST handle.
     """
 
     def __init__(
@@ -682,7 +685,7 @@ class NamedExpression(Declaration):
 
     @property
     def node(self) -> ms.Expression:
-        """The expression body as lowered, math-spec's own AST handle."""
+        """The expression body as lowered, mathspec's own AST handle."""
         return self._spec.program.expressions[self._name].expression
 
     @property

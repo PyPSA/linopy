@@ -8,8 +8,9 @@ from typing import assert_never
 
 import numpy as np
 import xarray as xr
-from math_spec import program as ms
+from mathspec import program as ms
 
+from linopy.spec import operators
 from linopy.spec.context import Context, Term, Value
 from linopy.spec.errors import SpecDataError
 from linopy.spec.groups import grouped
@@ -47,8 +48,8 @@ def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
     ``None != 'north'`` with True, so a ``!=`` would otherwise keep exactly
     the labels that map nowhere; a side of an expression comparison that is
     absent is excluded the same way. A count is one number per coordinate
-    the counted predicate keeps, and a translated predicate is false where
-    the translation vacates.
+    the counted predicate keeps, a translated predicate is false where the
+    translation vacates, and a pulled-back one where the relation has no row.
     """
     if isinstance(node, ms.BooleanLiteral):
         return xr.DataArray(node.value)
@@ -64,16 +65,19 @@ def _node(node: ms.Predicate, ctx: Context) -> xr.DataArray:
         left, right = _side(node.left, ctx), _side(node.right, ctx)
         compared = _PREDICATE_OPS[node.op](left, right) & left.notnull()
         return _bool(compared & right.notnull())
-    if isinstance(node, ms.ArithmeticComparison):
-        raise TypeError(
-            "an ArithmeticComparison is rewritten by lowering and never reaches a program"
-        )
     if isinstance(node, ms.CountComparison):
         count = _node(node.predicate.root, ctx).sum(node.over)
         return _PREDICATE_OPS[node.op](count, node.value).astype(bool)
     if isinstance(node, ms.TranslatedPredicate):
         shifted = _node(node.operand.root, ctx).shift({node.along: node.offset})
         return _bool(shifted)
+    if isinstance(node, ms.PulledBackPredicate):
+        pulled = operators.at(
+            _node(node.operand.root, ctx),
+            (ctx.relations[node.direction.name],),
+            into=node.direction.consumed_dims,
+        )
+        return _bool(pulled)
     if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
         arr = xr.DataArray(labels, coords={node.name: labels}, dims=[node.name])

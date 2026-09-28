@@ -30,7 +30,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system -e ".[docs]" --group spec
+        uv pip install --system -e ".[docs,spec]"
 
     - name: Execute notebooks
       run: |

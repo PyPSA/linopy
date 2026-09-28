@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-math_spec = pytest.importorskip("math_spec")
+mathspec = pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
@@ -36,6 +36,7 @@ from linopy.spec import (  # noqa: E402
     SpecDataError,
     Unspecified,
 )
+from linopy.spec.accessor import lower  # noqa: E402
 
 pytestmark = [
     pytest.mark.v1,
@@ -52,10 +53,10 @@ SPEC_FORMS: dict[str, Callable[[Path], Any]] = {
     "path-string": str,
     "yaml-text": lambda path: path.read_text(),
     "flow-yaml": lambda path: yaml.safe_dump(
-        math_spec.to_spec(path).to_dict(), default_flow_style=True, width=10**6
+        mathspec.to_spec(path).to_dict(), default_flow_style=True, width=10**6
     ).strip(),
-    "dict": lambda path: math_spec.to_spec(path).to_dict(),
-    "spec": lambda path: math_spec.to_spec(path),
+    "dict": lambda path: mathspec.to_spec(path).to_dict(),
+    "spec": lambda path: mathspec.to_spec(path),
 }
 
 
@@ -68,13 +69,13 @@ def test_spec_forms_build_the_same_model(
     m = Model.from_spec(form(path), DISPATCH_DATA)
     assert list(m.variables) == ["p"]
     assert list(m.constraints) == ["power_balance"]
-    reread = math_spec.to_program(yaml.safe_load(m.spec.text))
+    reread = lower(yaml.safe_load(m.spec.text))
     assert reread.constraints == m.spec.program.constraints
     assert isinstance(m.spec, ModelSpec)
 
 
 def test_a_lowered_program_is_refused() -> None:
-    program = math_spec.to_program(yaml_dict())
+    program = lower(yaml_dict())
     with pytest.raises(TypeError, match="not a lowered Program"):
         Model().add_spec(program, DISPATCH_DATA)
 
@@ -114,8 +115,8 @@ UNREADABLE_SPECS: list[Any] = [
     ),
     pytest.param(
         lambda tmp_path: "- p_max\n- load\n",
-        SpecDataError,
-        "a spec is a mapping of sections",
+        mathspec.SchemaError,
+        "must be a mapping of sections",
         id="sequence",
     ),
 ]
@@ -246,7 +247,7 @@ def test_a_fold_over_variables_needs_a_solution_and_one_over_data_does_not() -> 
 # ---------------------------------------------------------------------------
 
 VIEWS_SPEC: dict[str, Any] = {
-    **math_spec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict(),
+    **mathspec.to_spec(yaml.safe_load(EXAMPLE_DISPATCH)).to_dict(),
     "expressions": {
         "spend": "sum(p * cost, over=generator)",
         "bare": "p",
@@ -337,7 +338,7 @@ def test_repr_caps_long_sections() -> None:
 def test_model_repr_of_a_whole_spec_model_carries_no_tags() -> None:
     """Everything is the spec's, so naming the spec on every line would say nothing."""
     text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
-    assert "Linopy LP model, built from a math-spec" in text
+    assert "Linopy LP model, built from a mathspec" in text
     assert "Least-cost dispatch of a generator fleet against an hourly load." in text
     assert " * spend (snapshot)\n" in text
     assert " * usage (snapshot, generator)\n" in text
@@ -351,7 +352,7 @@ def test_model_repr_of_a_spec_without_a_description() -> None:
     spec = {k: v for k, v in yaml_dict().items() if k != "description"}
     m = Model.from_spec(spec, DISPATCH_DATA)
     assert m.spec.description == ""
-    assert repr(m).startswith("Linopy LP model, built from a math-spec\n=")
+    assert repr(m).startswith("Linopy LP model, built from a mathspec\n=")
 
 
 def test_hybrid_model_tags_spec_variables_constraints_and_expressions() -> None:

@@ -45,8 +45,8 @@ To run the test suite:
     # Install development dependencies
     uv sync --extra dev --extra solvers
 
-    # Also run the math-spec binder tests (needs Python >= 3.12)
-    uv sync --extra dev --extra solvers --group spec
+    # Also run the mathspec binder tests (needs Python >= 3.12)
+    uv sync --extra dev --extra solvers --extra spec
 
     # Run all tests
     pytest

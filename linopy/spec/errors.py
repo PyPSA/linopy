@@ -1,4 +1,4 @@
-"""Errors raised while attaching data to a math-spec program, and how they spell what they name."""
+"""Errors raised while attaching data to a mathspec program, and how they spell what they name."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Hashable, Iterable, Sequence
 from typing import Any
 
 import xarray as xr
-from math_spec import did_you_mean
+from mathspec import did_you_mean
 
 
 class SpecDataError(ValueError):

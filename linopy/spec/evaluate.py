@@ -7,13 +7,14 @@ import operator
 from collections.abc import Callable
 from typing import assert_never, cast
 
+import numpy as np
 import xarray as xr
-from math_spec import program as ms
+from mathspec import program as ms
 
 from linopy.spec import context, operators
 from linopy.spec.context import Array, Context, Term, Value
-from linopy.spec.coverage import check_kind, obligations_of
-from linopy.spec.errors import SpecDataError, unknown
+from linopy.spec.coverage import Arithmetic, check_kind, obligations_of
+from linopy.spec.errors import SpecDataError, first_coordinates, unknown
 from linopy.spec.where import evaluate_where
 from linopy.variables import Variable
 
@@ -27,6 +28,34 @@ def evaluate_named(name: str, ctx: Context) -> Value:
     check_kind(f"expression '{name}'", "divisor", found["divisor"], ctx)
     value = evaluate(body, ctx)
     return _named(value, name) if isinstance(value, xr.DataArray) else value
+
+
+def check_finite(subject: str, arithmetic: Arithmetic, ctx: Context) -> None:
+    """
+    Refuse the first *arithmetic* that makes data non-finite on a row it is read on, though every operand there is finite or present.
+
+    A NaN is how an absence travels, so a NaN arithmetic made of present data
+    -- ``0 / 0``, ``inf - inf``, ``0 * inf`` -- would drop its row as if it
+    were one; an infinity it made -- ``1 / 0`` -- would stand in the problem.
+    """
+    for node, rows in arithmetic:
+        value = evaluate(node, ctx)
+        if not isinstance(value, xr.DataArray):
+            continue
+        left, right = (xr.DataArray(evaluate(c, ctx)) for c in ms.children(node))
+        made_nan = value.isnull() & left.notnull() & right.notnull()
+        made_inf = np.isinf(value) & np.isfinite(left) & np.isfinite(right)
+        made = made_nan | made_inf if rows is None else (made_nan | made_inf) & rows
+        if bool(made.any()):
+            params = ", ".join(f"'{p}'" for p in sorted(ms.parameters_of(node)))
+            raise SpecDataError(
+                f"{subject}: the {type(node).__name__.lower()} of {params} is not finite at "
+                f"{first_coordinates(made, 3)}, though its operands are. A NaN made there "
+                f"would read as an absence and silently drop the row; an infinity would "
+                f"stand in the problem.\n"
+                f"  Mask the coordinates out with a where, or supply data the arithmetic "
+                f"is defined on."
+            )
 
 
 def fold(name: str, ctx: Context) -> xr.DataArray:
@@ -45,6 +74,8 @@ def _named(value: xr.DataArray, name: str) -> xr.DataArray:
 
 def evaluate(node: ms.Expression, ctx: Context) -> Value:
     """One node as a linopy term, an array or a number."""
+    if isinstance(node, ms.Named):
+        return evaluate(node.body, ctx)
     if isinstance(node, ms.Constant):
         return node.value
     if isinstance(node, ms.Variable):

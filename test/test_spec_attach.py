@@ -1,4 +1,4 @@
-"""Binding user data to a math-spec program."""
+"""Binding user data to a mathspec program."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-math_spec = pytest.importorskip("math_spec")
+pytest.importorskip("mathspec")
 
 from linopy.spec import SpecDataError, attach  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int"}, "g": {"dtype": "str"}},
@@ -72,7 +73,7 @@ def sources_from(
 
 @pytest.fixture(scope="module")
 def program() -> Any:
-    return math_spec.to_program(SPEC)
+    return lower(SPEC)
 
 
 @pytest.fixture
@@ -133,7 +134,7 @@ def test_an_unnamed_wide_frame_of_unequal_widths_is_read_by_position() -> None:
     values = np.arange(6.0).reshape(2, 3)
     frame = pd.DataFrame(values, index=list(f), columns=list(t))
     sources = {"f": list(f), "t": list(t), "cap": frame}
-    got = attach(math_spec.to_program(OBLONG_SPEC), sources).parameter("cap")
+    got = attach(lower(OBLONG_SPEC), sources).parameter("cap")
     xr.testing.assert_equal(
         got, xr.DataArray(values, coords={"f": f, "t": t}, name="cap")
     )
@@ -651,7 +652,7 @@ def test_report_closure_reads_names_and_masks() -> None:
             },
         },
     }
-    program = math_spec.to_program(spec)
+    program = lower(spec)
     f = pd.Index(["a"], name="f")
     sources = {
         "f": f,
@@ -668,7 +669,7 @@ def test_report_closure_reads_names_and_masks() -> None:
 
 def test_unreached_dimension_needs_no_source() -> None:
     dimensions = {**PARITY_SPEC["dimensions"], "z": {"dtype": "int"}}
-    program = math_spec.to_program({**PARITY_SPEC, "dimensions": dimensions})
+    program = lower({**PARITY_SPEC, "dimensions": dimensions})
     assert list(attach(program, GOOD).coords) == ["f"]
 
 
@@ -733,7 +734,7 @@ PARITY_CASES = [
 def test_parity_with_lpspec_data_verdicts(
     override: dict[str, Any], verdict: Any
 ) -> None:
-    program = math_spec.to_program(PARITY_SPEC)
+    program = lower(PARITY_SPEC)
     sources = sources_from(GOOD, override)
     if verdict is ACCEPTED:
         read_all(program, sources)
@@ -743,7 +744,7 @@ def test_parity_with_lpspec_data_verdicts(
 
 
 def test_a_hole_is_named_where_it_sits() -> None:
-    program = math_spec.to_program(PARITY_SPEC)
+    program = lower(PARITY_SPEC)
     with pytest.raises(SpecDataError, match="parameter 'cost'") as error:
         read_all(program, {**GOOD, "cost": NULL_ROW})
     assert "divisor" not in str(error.value)
@@ -771,7 +772,7 @@ FLAG_SPEC = {
     ],
 )
 def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> None:
-    program = math_spec.to_program(FLAG_SPEC)
+    program = lower(FLAG_SPEC)
     sources = {"g": ["a", "b"], "active": column}
     if verdict is ACCEPTED:
         assert attach(program, sources).parameter("active").dtype == bool
@@ -831,15 +832,13 @@ RELATION_GOOD = {
     ],
 )
 def test_a_relation_defect_is_refused(override: dict[str, Any], match: str) -> None:
-    program = math_spec.to_program(RELATION_SPEC)
+    program = lower(RELATION_SPEC)
     with pytest.raises(SpecDataError, match=match):
         read_all(program, sources_from(RELATION_GOOD, override))
 
 
 def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:
-    program = math_spec.to_program(
-        {**RELATION_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}}
-    )
+    program = lower({**RELATION_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}})
     numbered = {"b": [1, 2], "gen_bus": pd.Series({"w": 1, "s": 99})}
     sources = sources_from(RELATION_GOOD, numbered)
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:

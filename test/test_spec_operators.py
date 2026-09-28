@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-math_spec = pytest.importorskip("math_spec")
+pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 
 import linopy  # noqa: E402
@@ -267,6 +267,11 @@ WHERE_CASES: dict[str, tuple[str, str, list[Any]]] = {
     "relation-not-equal-skips-unmapped": ("x", "season_of != 'a'", [2]),
     "relation-pair": ("x", "season_of != other_of", [1]),
     "relation-defined": ("x", "season_of", [0, 1, 2]),
+    "pulled-back-skips-unmapped": (
+        "x",
+        "at(s != 'a', by=season_of, over=s, into=t)",
+        [2],
+    ),
     "not": ("x", "NOT (t > 1)", [0, 1]),
     "and": ("x", "t > 0 AND t < 3", [1, 2]),
     "or": ("x", "t == 0 OR t == 3", [0, 3]),

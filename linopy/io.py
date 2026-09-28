@@ -1194,7 +1194,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ``spec-`` prefix of its own: the YAML text, the master coordinates and the
     parameters the spec retained, apart from ``m.parameters``. ``read_netcdf``
     lowers the program from the text again, so reading such a file needs
-    the ``math-spec`` package; a file without a spec does not.
+    the ``mathspec`` package; a file without a spec does not.
 
     The SOS reformulation lifecycle token lives only on the in-memory
     Model and is not persisted. If the model has an active SOS
@@ -1282,8 +1282,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
 
 
 def spec_available() -> bool:
-    """Whether the ``math-spec`` package is importable, so a file's spec can be read."""
-    return find_spec("math_spec") is not None
+    """Whether the ``mathspec`` package is importable, so a file's spec can be read."""
+    return find_spec("mathspec") is not None
 
 
 def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
@@ -1402,8 +1402,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             m._spec = decode(m, ds, ds.attrs[SPEC_ATTR])
         else:
             warnings.warn(
-                f"'{path}' holds a spec and math-spec is not installed; loaded as a "
-                f"plain model, without model.spec. Install math-spec to read the spec.",
+                f"'{path}' holds a spec and mathspec is not installed; loaded as a "
+                f"plain model, without model.spec. Install mathspec to read the spec.",
                 UserWarning,
                 stacklevel=2,
             )

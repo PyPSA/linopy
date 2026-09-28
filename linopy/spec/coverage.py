@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Sequence
 
 import xarray as xr
-from math_spec import program as ms
-from math_spec.program import parameters_of
+from mathspec import program as ms
+from mathspec.program import parameters_of
 
 from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
@@ -25,6 +25,7 @@ from linopy.spec.where import evaluate_where
 Rows = xr.DataArray | None
 Obligation = tuple[str, Rows]
 Obligations = dict[str, list[Obligation]]
+Arithmetic = list[tuple[ms.Add | ms.Multiply | ms.Divide | ms.Power, Rows]]
 
 _REFUSALS: dict[str, str] = {
     "divisor": (
@@ -100,7 +101,7 @@ def check_coverage(
     rows: Rows,
     *,
     comparison: bool = False,
-) -> None:
+) -> Arithmetic:
     """
     Refuse *subject* if a parameter it reads leaves a row it builds uncovered.
 
@@ -109,10 +110,14 @@ def check_coverage(
     *comparison*, the side without a variable term, then every coefficient.
     A divisor is checked before evaluation, the last moment the gap is
     visible: the coefficient fill would turn it into a division by zero.
+
+    Returns every arithmetic on data alone the walk passed, with the rows it
+    is read on, for :func:`linopy.spec.evaluate.check_finite`.
     """
-    found = obligations_of(expressions, ctx, rows, comparison=comparison)
+    found, arithmetic = _walk(expressions, ctx, rows, comparison)
     for kind, obligations in found.items():
         check_kind(subject, kind, obligations, ctx)
+    return arithmetic
 
 
 def check_kind(
@@ -134,12 +139,19 @@ def obligations_of(
     comparison: bool = False,
 ) -> Obligations:
     """What the parameters under *expressions* have to cover, by kind of use; a side of a *comparison* without a variable is its constant side."""
+    return _walk(expressions, ctx, rows, comparison)[0]
+
+
+def _walk(
+    expressions: Sequence[ms.Expression], ctx: Context, rows: Rows, comparison: bool
+) -> tuple[Obligations, Arithmetic]:
     found: Obligations = {"divisor": [], "constant": [], "coefficient": []}
+    arithmetic: Arithmetic = []
     for expression in expressions:
         constant = comparison and not ms.carries_variable(expression)
-        _collect(expression, ctx, rows, constant, found)
+        _collect(expression, ctx, rows, constant, found, arithmetic)
     found["constant"].sort(key=lambda pair: pair[0])
-    return found
+    return found, arithmetic
 
 
 def _collect(
@@ -148,7 +160,12 @@ def _collect(
     rows: Rows,
     constant: bool,
     into: Obligations,
+    arithmetic: Arithmetic,
 ) -> None:
+    if isinstance(
+        node, ms.Add | ms.Multiply | ms.Divide | ms.Power
+    ) and not ms.carries_variable(node):
+        arithmetic.append((node, rows))
     if isinstance(node, ms.Multiply):
         rows = _where_present(rows, ms.variables_of(node), ctx)
     if isinstance(node, ms.Divide):
@@ -162,10 +179,10 @@ def _collect(
         for region in node.regions:
             inside = evaluate_where(region.when, ctx)
             narrowed = inside if rows is None else rows & inside
-            _collect(region.value, ctx, narrowed, constant, into)
+            _collect(region.value, ctx, narrowed, constant, into, arithmetic)
         return
     for child in ms.children(node):
-        _collect(child, ctx, rows, constant, into)
+        _collect(child, ctx, rows, constant, into, arithmetic)
 
 
 def _divisor_uses(quotient: ms.Divide, ctx: Context, rows: Rows) -> list[Obligation]:
@@ -189,7 +206,8 @@ def check_bounds_cover(
     name: str, declared: ms.VariableDeclaration, ctx: Context, rows: Rows
 ) -> None:
     """A bound parameter must have a value at every coordinate the variable occupies."""
-    names = sorted(parameters_of(declared.lower, declared.upper))
+    bounds = [b for b in (declared.lower, declared.upper) if b is not None]
+    names = sorted(parameters_of(*bounds))
     missing = sum(gaps_under(ctx.parameters[p], rows) for p in names)
     if missing:
         raise SpecDataError(
