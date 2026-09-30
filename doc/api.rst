@@ -579,6 +579,32 @@ Construction
 
    solvers.Solver.from_name
    solvers.Solver.from_model
+   solvers.Solver.from_file
+
+Existing LP/MPS files
+---------------------
+
+Use ``Solver.from_file`` to solve an existing file without constructing a
+linopy ``Model``. The input is read during ``solve()`` and remains owned by
+the caller.
+
+.. code-block:: python
+
+    from linopy.solvers import Solver
+
+    solver = Solver.from_file("highs", "problem.mps", options={"time_limit": 60})
+    try:
+        result = solver.solve()
+        print(result.status)
+        print(result.solution.objective)
+    finally:
+        solver.close()
+
+Backend restrictions on file contents and names still apply. Without a linopy
+``Model``, label-indexed primal and dual arrays may be empty. Variable values
+can be accessed through the native solver model, when available, or through
+a backend-supported solution file. Read native model values before calling
+``close()``.
 
 Solving
 -------
