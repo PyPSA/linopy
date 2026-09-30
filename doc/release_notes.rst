@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Added ``Solver.from_file(name, problem_fn, options=...)`` for solving existing
+  LP/MPS files without constructing a linopy model or using deprecated solve
+  methods. The input file is not rewritten or deleted by the new constructor.
+
+
 
 *Strict "v1" arithmetic semantics (opt-in)*
 

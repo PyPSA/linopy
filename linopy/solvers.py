@@ -425,7 +425,8 @@ class Solver(ABC, Generic[EnvType]):
 
     Subclasses provide ``_build_direct`` / ``_run_direct`` (when supporting the
     direct API) and ``_run_file`` (when supporting LP/MPS files). Construction
-    goes via :meth:`Solver.from_name` or :meth:`Solver.from_model`.
+    goes via :meth:`Solver.from_name`, :meth:`Solver.from_model`,
+    or :meth:`Solver.from_file` for existing LP/MPS files.
 
     ``track_updates`` toggles persistent-update support:
 
@@ -679,6 +680,61 @@ class Solver(ABC, Generic[EnvType]):
             track_updates=track_updates,
             **build_kwargs,
         )
+
+    @staticmethod
+    def from_file(
+        name: str,
+        problem_fn: Path | str,
+        options: dict[str, Any] | None = None,
+    ) -> Solver:
+        """
+        Prepare a solver for an existing LP or MPS file.
+
+        No linopy Model is required. The input file is read by the backend
+        when solve() is called and is not rewritten or owned by linopy.
+        Existing backend restrictions on file contents and names still apply.
+        Without a linopy Model, label-indexed primal and dual arrays may be
+        empty. Access variable values through the native solver model or a
+        backend-supported solution file.
+
+        Parameters
+        ----------
+        name : str
+            Registered solver name.
+        problem_fn : Path or str
+            Path to an existing .lp or .mps file.
+        options : dict, optional
+            Backend solver options.
+
+        Returns
+        -------
+        Solver
+            A solver ready for solve(). Pass log_fn, solution_fn and other
+            execution arguments to solve().
+        """
+        cls = _solver_class_for(name)
+        if cls is None:
+            raise ValueError(f"unknown solver: {name}")
+        if not cls.supports(SolverFeature.READ_MODEL_FROM_FILE):
+            raise NotImplementedError(
+                f"{name} does not support reading an existing problem file."
+            )
+
+        problem_fn = Path(problem_fn).resolve(strict=True)
+        if not problem_fn.is_file():
+            raise ValueError(f"Problem path is not a regular file: {problem_fn}")
+
+        io_api = read_io_api_from_problem_file(problem_fn)
+        if io_api not in {"lp", "mps"}:
+            raise ValueError("Expected an existing .lp or .mps file.")
+
+        instance = cls(
+            model=None,
+            io_api=io_api,
+            options=dict(options) if options is not None else {},
+        )
+        instance._problem_fn = problem_fn
+        return instance
 
     @classmethod
     def from_model(
@@ -1003,8 +1059,10 @@ class Solver(ABC, Generic[EnvType]):
         """Deprecated. Use ``Solver.from_name(...).solve(...)`` or ``Model.solve(...)``."""
         warnings.warn(
             "Solver.solve_problem is deprecated and will be removed in a future "
-            "release. Use Solver.from_name(name, model, ...).solve(...) or "
-            "Model.solve(...) instead.",
+            "release. For existing files, use "
+            "Solver.from_file(name, problem_fn, ...).solve(...). "
+            "For models, use Solver.from_name(name, model, ...).solve(...) "
+            "or Model.solve(...) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1085,7 +1143,7 @@ class Solver(ABC, Generic[EnvType]):
         """Deprecated shim that caches ``problem_fn`` and runs via ``_run_file``."""
         warnings.warn(
             "Solver.solve_problem_from_file is deprecated and will be removed in a "
-            "future release. Use Solver.from_name(name, model, problem_fn=..., ...)"
+            "future release. Use Solver.from_file(name, problem_fn, ...)"
             ".solve(...) instead.",
             DeprecationWarning,
             stacklevel=2,
