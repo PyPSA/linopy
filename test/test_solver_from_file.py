@@ -57,6 +57,7 @@ def test_from_file_solves_existing_input(
 
             result = solver.solve(log_fn=log)
 
+            assert result.solution is not None
             assert result.status.status.value == "ok"
             assert result.status.termination_condition.value == "optimal"
             assert result.solution.objective == pytest.approx(2.0)
@@ -117,6 +118,8 @@ def test_from_file_matches_legacy_api(
             warnings.simplefilter("error", DeprecationWarning)
             actual = current.solve()
 
+        assert actual.solution is not None
+        assert expected.solution is not None
         assert actual.status.status == expected.status.status
         assert (
             actual.status.termination_condition == expected.status.termination_condition
