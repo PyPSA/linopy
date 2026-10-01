@@ -96,7 +96,7 @@ benchmarks = [
     "pytest==9.1.1",
     "pytest-benchmark==5.3.0",
     "pytest-benchmem[plot-static]==0.5.5",
-    "pytest-memray==1.10.0",
+    "pytest-memray==1.11.0",
     "pytest-codspeed==5.0.3",
 ]
 solvers = [
