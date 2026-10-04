@@ -25,6 +25,7 @@ from itertools import product, zip_longest
 from typing import (
     TYPE_CHECKING,
     Any,
+    Literal,
     Self,
     TypeAlias,
     TypeVar,
@@ -2496,6 +2497,17 @@ class LinearExpression(BaseExpression):
     def const(self, value: DataArray) -> None:
         self._data = assign_multiindex_safe(self.data, const=value)
 
+    @property
+    def has_terms(self) -> DataArray:
+        """Check live variable terms directly from sparse rows."""
+        csr = self._csr
+        if csr is None:
+            return super().has_terms
+        present = ~np.isnan(csr.const)
+        return csr.grid.dataarray(
+            present & (np.diff(csr.csr.indptr) > 0), name="has_terms"
+        )
+
     def _combined_with_constant(
         self,
         self_const: DataArray,
@@ -2985,6 +2997,23 @@ class LinearExpression(BaseExpression):
             relabel = {str(k): str(v) for k, v in name_dict.items()}
             return type(self)._from_csr(csr.renamed(relabel), self._model)
         return super().rename(name_dict)
+
+    def drop_vars(
+        self,
+        names: str | Iterable[Hashable] | Callable[[Dataset], str | Iterable[Hashable]],
+        *,
+        errors: Literal["raise", "ignore"] = "raise",
+    ) -> Self:
+        """Drop auxiliary coordinates without materializing sparse terms."""
+        csr = self._csr
+        if csr is None or callable(names):
+            return super().drop_vars(names, errors=errors)
+        names = [names] if isinstance(names, str) else list(names)
+        if set(names) & (set(csr.grid.dims) | {"coeffs", "vars", "const"}):
+            return super().drop_vars(names, errors=errors)
+        coords = csr.grid.to_dataset().drop_vars(names, errors=errors)
+        grid = Grid.from_dataset(coords, csr.grid.dims)
+        return type(self)._from_csr(replace(csr, grid=grid), self._model)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""

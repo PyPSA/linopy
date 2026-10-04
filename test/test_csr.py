@@ -14,15 +14,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import linopy
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
-from xarray.core.types import JoinOptions
-
-import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
@@ -34,6 +32,7 @@ from linopy.testing import (
     assert_quadequal,
     assert_varequal,
 )
+from xarray.core.types import JoinOptions
 
 
 def require_v1() -> None:
@@ -1559,6 +1558,7 @@ METADATA: dict[str, Callable[[LinearExpression], Any]] = {
     "coords": lambda e: xr.Dataset(coords=e.coords),
     "indexes": lambda e: {k: list(v) for k, v in e.indexes.items()},
     "isnull": lambda e: e.isnull(),
+    "has_terms": lambda e: e.has_terms,
     "repr": lambda e: repr(e).splitlines()[2:],
 }
 
@@ -1586,6 +1586,44 @@ def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
     assert not sparse.is_sparse
     assert repr(sparse).startswith("LinearExpression [")
     assert not (1.0 * c.gen_p).is_sparse
+
+
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_drop_aux_coordinates_preserves_sparse_backing(build: str) -> None:
+    """
+    Dropping auxiliary coordinates must preserve terms and sparse storage.
+
+    Failures: auxiliary coordinates survive, missing ignored names densify,
+    the source is mutated, or dropping coordinates changes expression values.
+    """
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    names = [str(n) for n in sparse.coords if n not in sparse.coord_dims]
+    names.append("missing-coordinate")
+    result = sparse.drop_vars(names, errors="ignore")
+    expected = dense.drop_vars(names, errors="ignore")
+    assert result.is_sparse
+    assert sparse.is_sparse
+    assert not set(names) & set(result.coords)
+    assert_linequal(result, expected)
+
+
+def test_drop_missing_coordinate_raises_without_densifying() -> None:
+    """A missing coordinate must raise the xarray error without materializing terms."""
+    require_v1()
+    sparse, _ = sparse_and_dense("grouped")
+    with pytest.raises(ValueError, match="cannot be found"):
+        sparse.drop_vars("missing-coordinate")
+    assert sparse.is_sparse
+
+
+def test_has_terms_counts_explicit_zero_coefficients() -> None:
+    """Zero coefficients still reference variables and must count as terms."""
+    require_v1()
+    c = base_model(sparse=True)
+    expression = (0.0 * c.gen_p).groupby(c.gbus).sum()
+    assert expression.has_terms.all().item()
+    assert expression.is_sparse
 
 
 def add_chunked(e: LinearExpression, c: Case) -> Any:
