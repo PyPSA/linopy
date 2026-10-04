@@ -5,6 +5,7 @@ import weakref
 
 import numpy as np
 import pytest
+
 from linopy import Model
 from linopy.persistent import ModelDiff, ModelSnapshot, RebuildReason
 from linopy.persistent.snapshot import _extract_con_buffers

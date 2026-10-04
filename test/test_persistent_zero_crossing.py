@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from linopy import Model
 from linopy.solvers import Solver
 

@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+
 from linopy import Model
 from linopy.persistent import ModelDiff, RebuildReason, UpdatesDisabledError
 from linopy.solvers import Gurobi, Highs, Solver
