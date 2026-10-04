@@ -14,13 +14,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import linopy
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
+from xarray.core.types import JoinOptions
+
+import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
@@ -32,7 +34,6 @@ from linopy.testing import (
     assert_quadequal,
     assert_varequal,
 )
-from xarray.core.types import JoinOptions
 
 
 def require_v1() -> None:
