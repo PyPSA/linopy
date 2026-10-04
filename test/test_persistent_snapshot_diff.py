@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-
 from linopy import Model
 from linopy.persistent import (
     ContainerConBuffers,
@@ -148,7 +147,8 @@ def test_coef_sparsity_change(baseline: Model) -> None:
     x = baseline.variables["x"]
     baseline.constraints["c2"].lhs = 2 * x.sum()
     diff = ModelDiff.from_snapshot(snap, baseline)
-    assert diff is RebuildReason.SPARSITY
+    assert isinstance(diff, ModelDiff)
+    np.testing.assert_array_equal(diff.con_coef_vals, [2, 2, 2, 0, 0])
 
 
 def test_deep_copy_invariant(baseline: Model) -> None:
@@ -431,7 +431,7 @@ def test_constraint_count_change_is_structural() -> None:
     assert diff is RebuildReason.STRUCTURAL_LABELS
 
 
-def test_indices_change_triggers_sparsity() -> None:
+def test_indices_change_clears_old_coefficient() -> None:
     def build(on: int) -> Model:
         m = Model()
         x = m.add_variables(0, 10, coords=[range(2)], name="x")
@@ -439,7 +439,11 @@ def test_indices_change_triggers_sparsity() -> None:
         m.add_objective(x.sum())
         return m
 
-    assert ModelDiff.from_models(build(0), build(1)) is RebuildReason.SPARSITY
+    diff = ModelDiff.from_models(build(0), build(1))
+    assert isinstance(diff, ModelDiff)
+    np.testing.assert_array_equal(diff.con_coef_rows, [0, 0])
+    np.testing.assert_array_equal(diff.con_coef_cols, [0, 1])
+    np.testing.assert_array_equal(diff.con_coef_vals, [0, 1])
 
 
 def test_sign_only_mutation(baseline: Model) -> None:

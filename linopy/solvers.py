@@ -818,8 +818,8 @@ class Solver(ABC, Generic[EnvType]):
         between solves.
 
         Pass ``disallow_rebuild=True`` to guarantee that an existing solver
-        model is updated in place — any condition that would force a rebuild
-        (structural change, sparsity change, backend rejection, …) raises
+        model is updated in place. Any condition that would force a rebuild
+        (structural change or backend rejection) raises
         :class:`RebuildRequiredError` instead. The initial build on the first
         ``solve(model, ...)`` is still allowed.
 

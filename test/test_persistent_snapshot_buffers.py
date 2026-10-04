@@ -5,7 +5,6 @@ import weakref
 
 import numpy as np
 import pytest
-
 from linopy import Model
 from linopy.persistent import ModelDiff, ModelSnapshot, RebuildReason
 from linopy.persistent.snapshot import _extract_con_buffers
@@ -57,16 +56,16 @@ def baseline_model() -> Model:
     return m
 
 
-def test_shape_mismatch_triggers_sparsity_rebuild(baseline_model: Model) -> None:
+def test_added_terms_produce_coefficient_updates(baseline_model: Model) -> None:
     snap = ModelSnapshot.capture(baseline_model)
     x = baseline_model.variables["x"]
     y = baseline_model.variables["y"]
     baseline_model.constraints["c1"].lhs = 2 * x + 1 * y.sum()
     diff = ModelDiff.from_snapshot(snap, baseline_model)
-    assert diff in {
-        RebuildReason.SPARSITY,
-        RebuildReason.STRUCTURAL_LABELS,
-    }
+    assert isinstance(diff, ModelDiff)
+    np.testing.assert_array_equal(diff.con_coef_rows, np.repeat([0, 1, 2], 2))
+    np.testing.assert_array_equal(diff.con_coef_cols, np.tile([3, 4], 3))
+    np.testing.assert_array_equal(diff.con_coef_vals, np.ones(6))
 
 
 def test_zero_coefficient_term_needs_no_rebuild(baseline_model: Model) -> None:

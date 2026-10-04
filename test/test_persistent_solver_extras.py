@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-
 from linopy import Model
 from linopy.persistent import ModelDiff, RebuildReason, UpdatesDisabledError
 from linopy.solvers import Gurobi, Highs, Solver
@@ -128,7 +127,7 @@ def test_cross_model_scenario_sweep(solver_name: str) -> None:
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
-def test_cross_model_sparsity_change_rebuilds(solver_name: str) -> None:
+def test_cross_model_sparsity_change_updates_in_place(solver_name: str) -> None:
     def build(include_y_in_c1: bool) -> Model:
         m = Model()
         x = m.add_variables(0, 10, coords=[range(3)], name="x")
@@ -148,12 +147,16 @@ def test_cross_model_sparsity_change_rebuilds(solver_name: str) -> None:
     m2 = build(include_y_in_c1=False)
 
     s.solve(m2, assign=True)
-    assert s._rebuilds == 1
-    assert s._last_rebuild_reason in {
-        RebuildReason.SPARSITY,
-        RebuildReason.STRUCTURAL_LABELS,
-        RebuildReason.STRUCTURAL_CONTAINERS,
-    }
+    assert s._rebuilds == 0
+    assert s._in_place_updates == 1
+    fresh = build(include_y_in_c1=False)
+    fresh_solver = _built(solver_name, fresh)
+    try:
+        fresh_solver.solve(assign=True)
+        np.testing.assert_allclose(_obj(m2), _obj(fresh))
+    finally:
+        fresh_solver.close()
+        s.close()
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
