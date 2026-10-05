@@ -46,6 +46,7 @@ def test_zero_crossing_updates_match_fresh_solve(
     for ratio in ratios[1:]:
         if same_model:
             updated = solver.model
+            assert updated is not None
             activation = updated.variables["activation"]
             reservation = updated.variables["reservation"]
             updated.constraints["limit"].update(lhs=activation - ratio * reservation)
@@ -55,8 +56,12 @@ def test_zero_crossing_updates_match_fresh_solve(
         solver.solve(assign=True)
         fresh = _activation_model(ratio, frozen)
         fresh.solve(solver_name="highs", io_api="direct")
-        np.testing.assert_allclose(updated.objective.value, fresh.objective.value)
-        np.testing.assert_allclose(updated.objective.value, -ratio)
+        updated_value = updated.objective.value
+        fresh_value = fresh.objective.value
+        assert updated_value is not None
+        assert fresh_value is not None
+        np.testing.assert_allclose(updated_value, fresh_value)
+        np.testing.assert_allclose(updated_value, -ratio)
         assert solver._rebuilds == 0
     solver.close()
 
@@ -80,6 +85,8 @@ def test_entire_row_zero_crossing_updates_in_place(frozen: bool) -> None:
     for ratio in (0.0, 1.0):
         model = build(ratio)
         solver.solve(model, assign=True)
-        np.testing.assert_allclose(model.objective.value, ratio - 1)
+        value = model.objective.value
+        assert value is not None
+        np.testing.assert_allclose(value, ratio - 1)
         assert solver._rebuilds == 0
     solver.close()
