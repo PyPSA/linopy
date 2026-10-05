@@ -4,14 +4,23 @@ explicit zeros, ragged terms, metadata, empty grids, and unsupported fallbacks.
 Term merging already owns addition coverage; these tests stack disjoint rows.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
 import linopy
 from linopy.csr import CSRLinearExpression
 from linopy.expressions import LinearExpression
+
+
+def backing(expression: LinearExpression) -> CSRLinearExpression:
+    """Require the sparse backing protected by these tests."""
+    assert expression._csr is not None
+    return expression._csr
 
 
 def parts(model: linopy.Model, buses: list[list[str]]) -> list[LinearExpression]:
@@ -33,27 +42,30 @@ def parts(model: linopy.Model, buses: list[list[str]]) -> list[LinearExpression]
 @pytest.mark.parametrize(
     "join", ["outer", "inner", "left", "right", "exact", "override"]
 )
-def test_coordinate_concat_preserves_sparse_inputs_and_rows(join: str) -> None:
+def test_coordinate_concat_preserves_sparse_inputs_and_rows(join: JoinOptions) -> None:
     model = linopy.Model(sparse=True)
     labels = [["b", "a"], ["b", "a"]] if join == "exact" else [["b", "a"], ["c", "b"]]
     sparse = parts(model, labels)
-    dense = [e._csr.to_dense() for e in sparse]
-    expected = linopy.merge(dense, dim="snapshot", join=join)
-    result = linopy.merge(sparse, dim="snapshot", join=join)
+    dense = [backing(e).to_dense() for e in sparse]
+    expected = linopy.merge(dense, cls=LinearExpression, dim="snapshot", join=join)
+    result = linopy.merge(sparse, cls=LinearExpression, dim="snapshot", join=join)
     assert result.is_sparse and all(e.is_sparse for e in sparse)
-    actual = result._csr.to_dense()
+    actual = backing(result).to_dense()
     xr.testing.assert_equal(actual.const, expected.const)
     xr.testing.assert_equal(actual.coords.to_dataset(), expected.coords.to_dataset())
     np.testing.assert_array_equal(
-        result._csr.const.reshape(result._csr.grid.shape)[0], expected.const.values[0]
+        backing(result).const.reshape(backing(result).grid.shape)[0],
+        expected.const.values[0],
     )
     for row, snapshot in enumerate([2, 1]):
-        for bus in result._csr.grid.indexes["bus"]:
-            cell = result._csr.cell((row, result._csr.grid.indexes["bus"].get_loc(bus)))
+        for bus in backing(result).grid.indexes["bus"]:
+            cell = backing(result).cell(
+                (row, backing(result).grid.indexes["bus"].get_loc(bus))
+            )
             if join == "override" or bus in labels[row]:
                 np.testing.assert_array_equal(cell[0], [row + 1])
                 source_position = (
-                    result._csr.grid.indexes["bus"].get_loc(bus)
+                    backing(result).grid.indexes["bus"].get_loc(bus)
                     if join == "override"
                     else labels[row].index(bus)
                 )
@@ -69,7 +81,7 @@ def test_ragged_concat_empty_absence_and_frozen_matrix(empty: str | None) -> Non
     model = linopy.Model(sparse=True)
     blocks = parts(model, [["a", "b"], ["a", "b"]])
     # A real zero term remains stored, while a masked cell remains absent.
-    first = blocks[0]._csr
+    first = backing(blocks[0])
     from dataclasses import replace
 
     matrix = first.csr.copy()
@@ -78,27 +90,31 @@ def test_ragged_concat_empty_absence_and_frozen_matrix(empty: str | None) -> Non
     y = model.add_variables(
         coords=[pd.Index([1], name="snapshot"), pd.Index(["a", "b"], name="bus")]
     )
-    second_dense = blocks[1]._csr.to_dense() + 5 * y
+    second_dense = backing(blocks[1]).to_dense() + 5 * y
     second = CSRLinearExpression.from_dense(second_dense.data, model)
     blocks[1] = LinearExpression._from_csr(
         second.with_const(np.array([np.nan, 9.0])), model
     )
     # Reverse dimension order without expanding term rectangles.
     blocks[1] = LinearExpression._from_csr(
-        blocks[1]._csr.reindexed(blocks[1]._csr.grid.reordered(("bus", "snapshot"))),
+        backing(blocks[1]).reindexed(
+            backing(blocks[1]).grid.reordered(("bus", "snapshot"))
+        ),
         model,
     )
     if empty is not None:
         blocks[1] = blocks[1].isel({empty: slice(0, 0)})
-    dense = [b._csr.to_dense() for b in blocks]
-    expected = linopy.merge(dense, dim="snapshot", join="outer")
-    actual = linopy.merge(blocks, dim="snapshot", join="outer")
+    dense = [backing(b).to_dense() for b in blocks]
+    expected = linopy.merge(dense, cls=LinearExpression, dim="snapshot", join="outer")
+    actual = linopy.merge(blocks, cls=LinearExpression, dim="snapshot", join="outer")
     assert actual.is_sparse and all(b.is_sparse for b in blocks)
-    xr.testing.assert_equal(actual._csr.to_dense().const, expected.const)
-    assert np.count_nonzero(actual._csr.csr.data == 0) == 1
+    xr.testing.assert_equal(backing(actual).to_dense().const, expected.const)
+    assert np.count_nonzero(backing(actual).csr.data == 0) == 1
     dense_csr = CSRLinearExpression.from_dense(expected.data, model)
-    np.testing.assert_array_equal(actual._csr.csr.toarray(), dense_csr.csr.toarray())
-    np.testing.assert_array_equal(actual._csr.const, dense_csr.const)
+    np.testing.assert_array_equal(
+        backing(actual).csr.toarray(), dense_csr.csr.toarray()
+    )
+    np.testing.assert_array_equal(backing(actual).const, dense_csr.const)
     # Frozen constraints exercise the solver-facing export, including masked rows.
     left = model.add_constraints(actual == 0, name="sparse", freeze=True)
     right = model.add_constraints(expected == 0, name="dense", freeze=True)
@@ -115,21 +131,25 @@ def test_unsupported_concat_keeps_observable_dense_fallback(unsupported: str) ->
 
     model = linopy.Model(sparse=True)
     blocks = parts(model, [["a"], ["a"]])
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if unsupported == "overlap":
         blocks[1] = blocks[1].reindex(snapshot=[2])
     elif unsupported == "repeated":
         blocks[0] = blocks[0].isel(snapshot=[0, 0])
     elif unsupported == "mixed":
-        blocks[1] = blocks[1]._csr.to_dense()
+        blocks[1] = backing(blocks[1]).to_dense()
     else:
         kwargs = {"compat": "override", "coords": "minimal"}
-    dense = [b._csr.to_dense() if b.is_sparse else b for b in blocks]
-    expected = linopy.merge(dense, dim="snapshot", join="outer", **kwargs)
+    dense = [backing(b).to_dense() if b.is_sparse else b for b in blocks]
+    expected = linopy.merge(
+        dense, cls=LinearExpression, dim="snapshot", join="outer", **kwargs
+    )
     with linopy.options as options:
         options.set_value(warn_on_densify=True)
         with pytest.warns(PerformanceWarning, match="merge along a coordinate"):
-            actual = linopy.merge(blocks, dim="snapshot", join="outer", **kwargs)
+            actual = linopy.merge(
+                blocks, cls=LinearExpression, dim="snapshot", join="outer", **kwargs
+            )
     assert not actual.is_sparse
     xr.testing.assert_equal(actual.data, expected.data)
 
@@ -141,13 +161,13 @@ def test_single_block_preserves_empty_grid_and_scalar_metadata(size: int) -> Non
     block = parts(model, [["a", "b"]])[0].isel(snapshot=slice(0, size))
     from dataclasses import replace
 
-    csr = block._csr
+    csr = backing(block)
     grid = replace(csr.grid, aux=csr.grid.aux | {"country": ((), np.array("NL"))})
     block = LinearExpression._from_csr(replace(csr, grid=grid), model)
-    expected = block._csr.to_dense()
-    actual = linopy.merge([block], dim="snapshot", join="outer")
+    expected = backing(block).to_dense()
+    actual = linopy.merge([block], cls=LinearExpression, dim="snapshot", join="outer")
     assert actual.is_sparse and block.is_sparse
-    xr.testing.assert_equal(actual._csr.to_dense().data, expected.data)
+    xr.testing.assert_equal(backing(actual).to_dense().data, expected.data)
 
 
 @pytest.mark.v1
@@ -155,7 +175,7 @@ def test_single_block_preserves_empty_grid_and_scalar_metadata(size: int) -> Non
 def test_coordinate_alignment_errors_preserve_inputs(contract: str) -> None:
     model = linopy.Model(sparse=True)
     blocks = parts(model, [["a", "b"], ["b", "c"]])
-    join = "outer"
+    join: JoinOptions = "outer"
     if contract == "exact":
         join = "exact"
     elif contract == "override":
@@ -163,13 +183,13 @@ def test_coordinate_alignment_errors_preserve_inputs(contract: str) -> None:
         blocks[1] = blocks[1].isel(bus=[0])
     else:
         for i, country in enumerate(["NL", "DE"]):
-            dense = blocks[i]._csr.to_dense().assign_coords(country=country)
+            dense = backing(blocks[i]).to_dense().assign_coords(country=country)
             blocks[i] = LinearExpression._from_csr(
                 CSRLinearExpression.from_dense(dense.data, model), model
             )
-    expected = [b._csr.to_dense() for b in blocks]
+    expected = [backing(b).to_dense() for b in blocks]
     with pytest.raises(ValueError):
-        linopy.merge(expected, dim="snapshot", join=join)
+        linopy.merge(expected, cls=LinearExpression, dim="snapshot", join=join)
     with pytest.raises(ValueError):
-        linopy.merge(blocks, dim="snapshot", join=join)
+        linopy.merge(blocks, cls=LinearExpression, dim="snapshot", join=join)
     assert all(b.is_sparse for b in blocks)
