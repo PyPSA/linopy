@@ -345,6 +345,44 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_lp_returns_duals() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(x + y >= 4, name="c1")
+    m.add_constraints(x + 3 * y >= 6, name="c2")
+    m.add_objective(2 * x + 3 * y)
+    status, _ = m.solve("scip")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(9)
+    assert m.constraints["c1"].dual.item() == pytest.approx(1.5)
+    assert m.constraints["c2"].dual.item() == pytest.approx(0.5)
+
+
+@pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_milp_returns_no_duals() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, integer=True, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(x + y >= 4.5, name="c1")
+    m.add_constraints(x + 3 * y >= 6, name="c2")
+    m.add_constraints(x <= 3.5, name="c3")
+    m.add_objective(2 * x + 3 * y)
+    status, _ = m.solve("scip")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(10.5)
+    # A MILP has no dual values
+    with pytest.raises(AttributeError, match="dual"):
+        _ = m.constraints["c1"].dual
+
+
+@pytest.mark.skipif(
     "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_mps(tmp_path: Path) -> None:

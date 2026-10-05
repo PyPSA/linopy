@@ -2548,6 +2548,10 @@ class SCIP(Solver[None]):
 
         m = scip.Model()
         m.readProblem(path_to_string(problem_fn))
+        # Read the original problem before solving. Afterwards this needs
+        # `getConss(transformed=False)`, which PySCIPOpt < 5 doesn't have.
+        original_cons = m.getConss()
+        is_mip = m.getNIntVars() + m.getNBinVars() > 0
 
         if self.solver_options is not None:
             emphasis = self.solver_options.pop("setEmphasis", None)
@@ -2598,17 +2602,18 @@ class SCIP(Solver[None]):
                 self._n_vars,
             )
 
-            cons = m.getConss(False)
-            if len(cons) != 0:
-                kept_cons = [c for c in cons if c.name not in vars_to_ignore]
+            if is_mip:
+                # A MILP has no dual values, and asking SCIP for them prints
+                # errors and returns meaningless values
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = np.array([], dtype=float)
+            else:
+                kept_cons = [c for c in original_cons if c.name not in vars_to_ignore]
                 dual = _solution_from_names(
                     np.array([m.getDualSolVal(c) for c in kept_cons], dtype=float),
                     [c.name for c in kept_cons],
                     self._n_cons,
                 )
-            else:
-                logger.warning("Dual values not available (is this an MILP?)")
-                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
