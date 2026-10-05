@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
+from scipy.sparse import csr_array
 
 from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
 from linopy.constraints import Constraint
@@ -460,17 +461,38 @@ class _DiffBuilder:
         self.con_coords[name] = new_coords
         if not _coords_equal(base_coords, new_coords, self.ignored):
             return RebuildReason.COORD_REINDEX
-        if not _same(new_buf.indptr, base_buf.indptr):
-            return RebuildReason.SPARSITY
-        if not _same(new_buf.indices, base_buf.indices):
-            return RebuildReason.SPARSITY
-
         n_rows = new_buf.active_labels.size
         if n_rows == 0:
             return None
 
+        coef_buf = new_buf
         changed_rows = None
-        if not (skip_coef_compare or new_buf.data is base_buf.data):
+        same_pattern = _same(new_buf.indptr, base_buf.indptr) and _same(
+            new_buf.indices, base_buf.indices
+        )
+        if not same_pattern:
+            # Native coefficient setters insert nonzeros and remove zeros.
+            # Compare by matrix position so culled terms are explicitly cleared.
+            shape = (n_rows, len(self.var_label_index.vlabels))
+            before = csr_array(
+                (base_buf.data, base_buf.indices, base_buf.indptr), shape=shape
+            )
+            after = csr_array(
+                (new_buf.data, new_buf.indices, new_buf.indptr), shape=shape
+            )
+            changes = (after - before).tocsr()
+            changes.eliminate_zeros()
+            if changes.nnz:
+                rows = np.repeat(np.arange(n_rows), np.diff(changes.indptr))
+                values = np.asarray(after[rows, changes.indices]).ravel()
+                coef_buf = replace(
+                    new_buf,
+                    indptr=changes.indptr,
+                    indices=changes.indices,
+                    data=values,
+                )
+                changed_rows = np.flatnonzero(np.diff(changes.indptr))
+        elif not (skip_coef_compare or new_buf.data is base_buf.data):
             data_diff = new_buf.data != base_buf.data
             if data_diff.any():
                 nnz_per_row = np.diff(new_buf.indptr)
@@ -496,10 +518,10 @@ class _DiffBuilder:
             row_positions = self.con_l2p[new_buf.active_labels[changed_rows]].astype(
                 np.int32, copy=False
             )
-            indptr = new_buf.indptr
+            indptr = coef_buf.indptr
             nnz = int((indptr[changed_rows + 1] - indptr[changed_rows]).sum())
             self.coef_deltas.append(
-                _CoefDelta(new_buf, changed_rows, row_positions, nnz)
+                _CoefDelta(coef_buf, changed_rows, row_positions, nnz)
             )
             self._cc_cur += nnz
         if rhs_idx is not None:
