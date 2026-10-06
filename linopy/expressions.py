@@ -3765,9 +3765,7 @@ def _try_csr_merge(
             return None
         csrs = aligned
 
-    combined = csrs[0]
-    for csr in csrs[1:]:
-        combined = combined.added(csr)
+    combined = csrs[0].added(*csrs[1:])
     return LinearExpression._from_csr(combined, exprs[0].model)
 
 
