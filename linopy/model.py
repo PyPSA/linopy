@@ -1399,7 +1399,7 @@ class Model:
                 reason = "chunked model, `Model.chunk` adds constraints unfrozen"
             else:
                 reason = "constraint added unfrozen, `freeze=False`"
-            _densify_notice(reason)
+            _densify_notice(reason, self, explicit=not chunked)
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)

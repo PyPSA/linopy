@@ -1520,7 +1520,11 @@ class CSRConstraint(ConstraintBase):
 
     def to_dense(self) -> Constraint:
         """Convert to a Constraint."""
-        _densify_notice("frozen constraint converted by `to_dense()`/`mutable()`")
+        _densify_notice(
+            "frozen constraint converted by `to_dense()`/`mutable()`",
+            self._model,
+            explicit=True,
+        )
         return Constraint(self.data, self._model, self._name)
 
     def mutable(self) -> Constraint:
@@ -2787,7 +2791,11 @@ class Constraints:
 
         for name, constraint in self.items():
             if not isinstance(constraint, Constraint):
-                self.data[name] = constraint = constraint.mutable()
+                _densify_notice(
+                    "frozen constraint converted by `set_blocks`", self.model
+                )
+                constraint = Constraint(constraint.data, self.model, name)
+                self.data[name] = constraint
             res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
             entries = replace_by_map(constraint.vars, block_map)
 
