@@ -154,3 +154,6 @@ def test_expression_solution_maps_variable_values() -> None:
     xr.testing.assert_equal((2 * y + z).solution, expected.rename("solution"))
     expected = y.solution * z.solution
     xr.testing.assert_equal((y * z).solution, expected.rename("solution"))
+    m.remove_variables("z")
+    with pytest.raises(KeyError):
+        (2 * y + z).solution
