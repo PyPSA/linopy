@@ -10,6 +10,8 @@ independent arithmetic expectations require no production test seam.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -82,7 +84,7 @@ def test_static_x_and_per_snapshot_y0_broadcast() -> None:
 )
 def test_invalid_snapshot_slopes_raise(invalid: str, message: str) -> None:
     x, slopes = arrays()
-    align = "pieces"
+    align: Literal["pieces", "leading"] = "pieces"
     if invalid == "count":
         slopes[0, 0, 1] = np.nan
     elif invalid == "interior":
@@ -126,6 +128,7 @@ def test_mismatched_entity_coordinates_are_rejected() -> None:
 )
 def test_invalid_initial_values_are_rejected(invalid: str, message: str) -> None:
     x, slopes = arrays()
+    y0: xr.DataArray | float
     if invalid == "unknown-axis":
         y0 = xr.DataArray([1], dims=["unrelated"])
     elif invalid == "missing-coordinate":
