@@ -5,11 +5,16 @@ Created on Mon Oct 10 14:21:23 2022.
 @author: fabian
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, Model
+from linopy.matrices import MatrixAccessor
 
 
 def test_basic_matrices() -> None:
@@ -98,3 +103,64 @@ def test_matrices_float_c() -> None:
 
     c = m.matrices.c
     assert np.all(c == np.array([1.5, 1.5]))
+
+
+def _sparse_model() -> Model:
+    m = Model(sparse=True)
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(0, 1, coords=[i], name="x")
+    n = m.add_variables(0, 5, coords=[i], name="n", integer=True)
+    m.add_constraints(x + n >= 1, name="c")
+    m.add_constraints(x - n <= 1, name="d")
+    m.add_objective((x + 2 * n).sum())
+    return m
+
+
+MUTATIONS = {
+    "add_variables": lambda m: m.add_variables(coords=[m.variables["x"].indexes["i"]]),
+    "add_constraints": lambda m: m.add_constraints(m.variables["x"] <= 0.5),
+    "remove_constraints": lambda m: m.remove_constraints("c"),
+    "update_bounds": lambda m: m.variables["x"].update(upper=2),
+    "variable_scaling": lambda m: setattr(m.variables["x"], "scaling", 2),
+    "relax": lambda m: m.variables["n"].relax(),
+    "objective": lambda m: m.add_objective(-m.variables["x"].sum(), overwrite=True),
+    "objective_scaling": lambda m: setattr(m.objective, "scaling", 2),
+}
+
+
+@pytest.mark.v1
+def test_matrices_cached_for_frozen_model() -> None:
+    m = _sparse_model()
+    assert m.matrices is m.matrices
+
+
+@pytest.mark.v1
+def test_matrices_not_cached_with_mutable_constraint() -> None:
+    m = _sparse_model()
+    m.add_constraints(m.variables["x"] >= 0, name="mutable", freeze=False)
+    assert m.matrices is not m.matrices
+
+
+@pytest.mark.v1
+@pytest.mark.parametrize("mutate", MUTATIONS.values(), ids=MUTATIONS.keys())
+def test_matrices_cache_invalidated(mutate: Callable[[Model], Any]) -> None:
+    m = _sparse_model()
+    cached = m.matrices
+    mutate(m)
+    fresh = MatrixAccessor(m)
+    assert m.matrices is not cached
+    assert m.matrices is m.matrices
+    for attr in ("vlabels", "clabels", "lb", "ub", "vtypes", "b", "sense", "c"):
+        np.testing.assert_array_equal(getattr(m.matrices, attr), getattr(fresh, attr))
+    assert m.matrices.A is not None and fresh.A is not None
+    np.testing.assert_array_equal(m.matrices.A.toarray(), fresh.A.toarray())
+
+
+@pytest.mark.v1
+def test_matrices_cache_refreshes_solution() -> None:
+    m = _sparse_model()
+    m._mock_solve()
+    first = m.matrices.sol
+    for var in m.variables.data.values():
+        var.solution = var.solution + 1
+    np.testing.assert_array_equal(m.matrices.sol, first + 1)

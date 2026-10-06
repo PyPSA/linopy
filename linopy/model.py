@@ -135,6 +135,10 @@ def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
+def _same(a: tuple, b: tuple) -> bool:
+    return len(a) == len(b) and all(x is y for x, y in zip(a, b))
+
+
 class Model:
     """
     Linear optimization model.
@@ -208,6 +212,7 @@ class Model:
         "_piecewise_formulations",
         "_solver",
         "_sos_reformulation_state",
+        "_matrices",
         "__weakref__",
     )
 
@@ -326,6 +331,7 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
+        self._matrices: tuple[tuple, tuple, MatrixAccessor] | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -357,10 +363,44 @@ class Model:
             raise AttributeError("solver state is managed via model.solver")
         self.solver = None
 
+    def _matrices_key(self) -> tuple[tuple, tuple] | None:
+        data = self.constraints.data
+        constraints = [c for c in data.values() if isinstance(c, CSRConstraint)]
+        if len(constraints) < len(data):
+            return None
+        objective = self.objective
+        identities = (
+            objective,
+            objective._expression,
+            *(v._data for v in self.variables.data.values()),
+            *(a for c in constraints for a in (c, c._csr, c._rhs, c._dual)),
+        )
+        values = (
+            self._status,
+            objective._sense,
+            objective._scaling,
+            tuple(self._relaxed_registry.items()),
+        )
+        return identities, values
+
     @property
     def matrices(self) -> MatrixAccessor:
-        """Matrix representation of the model, computed fresh on each access."""
-        return MatrixAccessor(self)
+        """
+        Matrix representation of the model.
+
+        The accessor is cached while every constraint is frozen and the
+        model is unchanged; otherwise it is rebuilt on each access.
+        """
+        key = self._matrices_key()
+        if key is None:
+            self._matrices = None
+            return MatrixAccessor(self)
+        identities, values = key
+        cached = self._matrices
+        if cached is None or cached[1] != values or not _same(cached[0], identities):
+            cached = (identities, values, MatrixAccessor(self))
+            self._matrices = cached
+        return cached[2]
 
     @property
     def variables(self) -> Variables:
