@@ -5,8 +5,8 @@ Benchmark the build and export of a PyPSA-like dispatch model.
 Run as ``python benchmark/benchmark_sparse_export.py {sparse,dense,frozen}``.
 ``sparse`` uses ``Model(sparse=True)``, ``dense`` keeps mutable constraints and
 ``frozen`` freezes each constraint of a dense model. Every phase reports its
-wall time, its peak traced memory and the operations that densified. In the
-``sparse`` and ``frozen`` modes, ``to_highspy`` reuses the cached matrices.
+wall time, its peak traced memory and the operations that densified. The
+``matrices``, ``to_highspy`` and ``to_file(lp)`` phases each build the matrices.
 """
 
 from __future__ import annotations

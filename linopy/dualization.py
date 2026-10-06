@@ -479,12 +479,13 @@ def _add_dual_feasibility_constraints(
     dual_vars : dict
         ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
     """
-    A = m.matrices.A
+    M = m.matrices
+    A = M.A
     if A is None:
         raise ValueError("Constraint matrix is None, model has no constraints.")
 
-    vlabels = np.asarray(m.matrices.vlabels, dtype=np.int64)
-    clabels = np.asarray(m.matrices.clabels, dtype=np.int64)
+    vlabels = np.asarray(M.vlabels, dtype=np.int64)
+    clabels = np.asarray(M.clabels, dtype=np.int64)
 
     flat_con_to_dual = _build_flat_con_to_dual_label_lookup(m, dual_vars)
     if not len(flat_con_to_dual):
@@ -496,7 +497,7 @@ def _add_dual_feasibility_constraints(
     flat_v, flat_d, nnz_data = _extract_dual_feas_entries(
         A, vlabels, clabels, flat_con_to_dual
     )
-    c_lookup = _build_obj_coeff_lookup(vlabels, m.matrices.c)
+    c_lookup = _build_obj_coeff_lookup(vlabels, M.c)
 
     logger.debug("Building dual feasibility constraints for each primal variable.")
     for var_name, var in m.variables.items():

@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, get_args, overload
+from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -135,16 +135,6 @@ def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
-class _MatricesCache(NamedTuple):
-    identities: tuple[object, ...]
-    values: tuple[object, ...]
-    accessor: MatrixAccessor
-
-
-def _same(a: tuple[object, ...], b: tuple[object, ...]) -> bool:
-    return len(a) == len(b) and all(x is y for x, y in zip(a, b))
-
-
 class Model:
     """
     Linear optimization model.
@@ -218,7 +208,6 @@ class Model:
         "_piecewise_formulations",
         "_solver",
         "_sos_reformulation_state",
-        "_matrices",
         "__weakref__",
     )
 
@@ -337,7 +326,6 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
-        self._matrices: _MatricesCache | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -369,52 +357,10 @@ class Model:
             raise AttributeError("solver state is managed via model.solver")
         self.solver = None
 
-    def _matrices_key(self) -> tuple[tuple[object, ...], tuple[object, ...]] | None:
-        data = self.constraints.data
-        constraints = [c for c in data.values() if isinstance(c, CSRConstraint)]
-        if len(constraints) < len(data):
-            return None
-        objective = self.objective
-        expression = objective._expression
-        csr = expression._csr if isinstance(expression, LinearExpression) else None
-        identities = (
-            objective,
-            expression,
-            expression._data,
-            csr,
-            *(v._data for v in self.variables.data.values()),
-            *(a for c in constraints for a in (c, c._csr, c._rhs, c._dual)),
-        )
-        values = (
-            self._status,
-            objective._sense,
-            objective._scaling,
-            tuple(self._relaxed_registry.items()),
-        )
-        return identities, values
-
     @property
     def matrices(self) -> MatrixAccessor:
-        """
-        Matrix representation of the model.
-
-        The accessor is cached while every constraint is frozen and the
-        model is unchanged; otherwise it is rebuilt on each access.
-        """
-        key = self._matrices_key()
-        if key is None:
-            self._matrices = None
-            return MatrixAccessor(self)
-        identities, values = key
-        cached = self._matrices
-        if (
-            cached is None
-            or cached.values != values
-            or not _same(cached.identities, identities)
-        ):
-            cached = _MatricesCache(identities, values, MatrixAccessor(self))
-            self._matrices = cached
-        return cached.accessor
+        """Matrix representation of the model, computed fresh on each access."""
+        return MatrixAccessor(self)
 
     @property
     def variables(self) -> Variables:
