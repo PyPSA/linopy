@@ -21,22 +21,11 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 
-def _stack(csrs: list, pruned: bool) -> scipy.sparse.csr_array | None:
-    """
-    Vertically stack CSR blocks, or None when there are none.
-
-    Explicit zeros are dropped: expressions that broadcast against a dense
-    coordinate store one coefficient per pair, most of them zero, and a zero
-    coefficient never changes a constraint. Keeping them only inflates the
-    stored nnz handed to the solvers/writers (e.g. ``highspy.addRows`` scales
-    with stored nnz), so we prune them once, centrally, for every backend.
-    """
+def _stack(csrs: list[scipy.sparse.csr_array]) -> scipy.sparse.csr_array | None:
+    """Vertically stack CSR blocks, or None when there are none."""
     if not csrs:
         return None
-    stacked = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
-    if not pruned:
-        stacked.eliminate_zeros()
-    return stacked
+    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
 
 
 def _concat(arrays: list, dtype: type | None = None) -> ndarray:
@@ -155,17 +144,18 @@ class MatrixAccessor:
                 ind_binval.append(_binval_per_row(binval, len(b)))
             else:
                 csr, _, b, sense = c.to_matrix_with_rhs(label_index)
+                if not isinstance(c, CSRConstraint):
+                    csr.eliminate_zeros()
                 csr, b = scale_rows_and_cols(csr, _row_scaling(c), b)
                 reg_csrs.append(csr)
                 reg_b.append(b)
                 reg_sense.append(sense)
 
         self.clabels: ndarray = m.constraints.label_index.clabels
-        frozen = all(isinstance(c, CSRConstraint) for c in m.constraints.data.values())
-        self.A: scipy.sparse.csr_array | None = _stack(reg_csrs, frozen)
+        self.A: scipy.sparse.csr_array | None = _stack(reg_csrs)
         self.b: ndarray = _concat(reg_b)
         self.sense: ndarray = _concat(reg_sense, dtype=object)
-        self.indicator_A: scipy.sparse.csr_array | None = _stack(ind_csrs, True)
+        self.indicator_A: scipy.sparse.csr_array | None = _stack(ind_csrs)
         self.indicator_b: ndarray = _concat(ind_b)
         self.indicator_sense: ndarray = _concat(ind_sense, dtype=object)
         self.indicator_binvar: ndarray = _concat(ind_binvar, dtype=np.intp)

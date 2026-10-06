@@ -5,7 +5,8 @@ Benchmark the build and export of a PyPSA-like dispatch model.
 Run as ``python benchmark/benchmark_sparse_export.py {sparse,dense,frozen}``.
 ``sparse`` uses ``Model(sparse=True)``, ``dense`` keeps mutable constraints and
 ``frozen`` freezes each constraint of a dense model. Every phase reports its
-wall time, its peak traced memory and the operations that densified.
+wall time, its peak traced memory and the operations that densified. In the
+``sparse`` and ``frozen`` modes, ``to_highspy`` reuses the cached matrices.
 """
 
 from __future__ import annotations
@@ -27,8 +28,6 @@ import xarray as xr
 import linopy
 from linopy.constants import PerformanceWarning
 from linopy.io import to_highspy
-
-MATRIX_ATTRS = ("A", "b", "c", "lb", "ub", "sense", "vlabels", "clabels")
 
 
 class Phases:
@@ -114,17 +113,15 @@ def run(mode: str, n_bus: int, n_t: int, n_gen: int, n_line: int, n_sto: int) ->
     with phase("objective"):
         m.add_objective((p * 2).sum() + (ch + dis).sum())
     with phase("matrices"):
-        matrices = m.matrices
-        for attr in MATRIX_ATTRS:
-            getattr(matrices, attr)
+        m.matrices.c
     with phase("to_highspy"):
         to_highspy(m)
-    with phase("to_file(lp)"):
-        m.to_file(Path(tempfile.mkdtemp()) / "model.lp", progress=False)
+    with phase("to_file(lp)"), tempfile.TemporaryDirectory() as tmp:
+        m.to_file(Path(tmp) / "model.lp", progress=False)
 
     print(
         f"=== {mode}  buses={n_bus} snapshots={n_t} generators={n_gen} "
-        f"lines={n_line} storage={n_sto}  nvars={m._xCounter} ncons={m._cCounter}"
+        f"lines={n_line} storage={n_sto}  nvars={m.nvars} ncons={m.ncons}"
     )
     phase.report()
 

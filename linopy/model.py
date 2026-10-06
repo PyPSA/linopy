@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, get_args, overload
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, get_args, overload
 from warnings import warn
 
 import numpy as np
@@ -135,7 +135,13 @@ def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
 
-def _same(a: tuple, b: tuple) -> bool:
+class _MatricesCache(NamedTuple):
+    identities: tuple[object, ...]
+    values: tuple[object, ...]
+    accessor: MatrixAccessor
+
+
+def _same(a: tuple[object, ...], b: tuple[object, ...]) -> bool:
     return len(a) == len(b) and all(x is y for x, y in zip(a, b))
 
 
@@ -331,7 +337,7 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
-        self._matrices: tuple[tuple, tuple, MatrixAccessor] | None = None
+        self._matrices: _MatricesCache | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -363,7 +369,7 @@ class Model:
             raise AttributeError("solver state is managed via model.solver")
         self.solver = None
 
-    def _matrices_key(self) -> tuple[tuple, tuple] | None:
+    def _matrices_key(self) -> tuple[tuple[object, ...], tuple[object, ...]] | None:
         data = self.constraints.data
         constraints = [c for c in data.values() if isinstance(c, CSRConstraint)]
         if len(constraints) < len(data):
@@ -397,10 +403,14 @@ class Model:
             return MatrixAccessor(self)
         identities, values = key
         cached = self._matrices
-        if cached is None or cached[1] != values or not _same(cached[0], identities):
-            cached = (identities, values, MatrixAccessor(self))
+        if (
+            cached is None
+            or cached.values != values
+            or not _same(cached.identities, identities)
+        ):
+            cached = _MatricesCache(identities, values, MatrixAccessor(self))
             self._matrices = cached
-        return cached[2]
+        return cached.accessor
 
     @property
     def variables(self) -> Variables:

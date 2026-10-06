@@ -73,7 +73,8 @@ def test_matrices_duplicated_variables() -> None:
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
-def test_matrices_drops_explicit_zeros() -> None:
+@pytest.mark.parametrize("freeze", [False, True])
+def test_matrices_drops_explicit_zeros(freeze: bool) -> None:
     # https://github.com/PyPSA/linopy/issues/814
     # Expressions that broadcast against a dense coordinate store one coefficient
     # per pair, most of them structurally zero. Those must not reach A, whose
@@ -84,7 +85,9 @@ def test_matrices_drops_explicit_zeros() -> None:
     coeff = xr.DataArray(
         np.eye(4), dims=["j", "i"], coords={"j": range(4), "i": range(4)}
     )
-    m.add_constraints((coeff * x.rename(dim_0="i")).sum("i") <= 1, name="c")
+    m.add_constraints(
+        (coeff * x.rename(dim_0="i")).sum("i") <= 1, name="c", freeze=freeze
+    )
 
     A = m.matrices.A
     assert A is not None
@@ -159,8 +162,13 @@ def test_matrices_cache_invalidated(mutate: Callable[[Model], Any]) -> None:
 @pytest.mark.v1
 def test_matrices_cache_refreshes_solution() -> None:
     m = _sparse_model()
+    cached = m.matrices
     m._mock_solve()
-    first = m.matrices.sol
+    assert m.matrices is not cached
+    sol, dual = m.matrices.sol, m.matrices.dual
     for var in m.variables.data.values():
         var.solution = var.solution + 1
-    np.testing.assert_array_equal(m.matrices.sol, first + 1)
+    for con in m.constraints.data.values():
+        con.dual = con.dual + 1
+    np.testing.assert_array_equal(m.matrices.sol, sol + 1)
+    np.testing.assert_array_equal(m.matrices.dual, dual + 1)
