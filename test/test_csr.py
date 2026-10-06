@@ -2183,7 +2183,7 @@ def test_n_ary_merge_unites_aux_coords_and_raises_on_conflict() -> None:
     parts = [tagged, extra, 2 * tagged]
     with no_densify():
         res = linopy.merge(parts, cls=LinearExpression)
-    want = linopy.merge([p._csr.to_dense() for p in parts], cls=LinearExpression)
+    want = linopy.merge([densified(p) for p in parts], cls=LinearExpression)
     assert_sparse_matches(res, want)
     with pytest.raises(ValueError, match="conflicting values"):
         linopy.merge([*parts, tagged_by(c, tag=c.gbus + "z")], cls=LinearExpression)
