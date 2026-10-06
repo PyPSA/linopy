@@ -375,9 +375,13 @@ class Model:
         if len(constraints) < len(data):
             return None
         objective = self.objective
+        expression = objective._expression
+        csr = expression._csr if isinstance(expression, LinearExpression) else None
         identities = (
             objective,
-            objective._expression,
+            expression,
+            expression._data,
+            csr,
             *(v._data for v in self.variables.data.values()),
             *(a for c in constraints for a in (c, c._csr, c._rhs, c._dual)),
         )

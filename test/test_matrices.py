@@ -128,6 +128,12 @@ MUTATIONS = {
     "relax": lambda m: m.variables["n"].relax(),
     "objective": lambda m: m.add_objective(-m.variables["x"].sum(), overwrite=True),
     "objective_scaling": lambda m: setattr(m.objective, "scaling", 2),
+    "objective_coeffs": lambda m: setattr(
+        m.objective.expression, "coeffs", m.objective.expression.coeffs * 2
+    ),
+    "objective_vars": lambda m: setattr(
+        m.objective.expression, "vars", m.objective.expression.vars.roll(_term=1)
+    ),
 }
 
 
