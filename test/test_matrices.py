@@ -102,3 +102,19 @@ def test_matrices_float_c() -> None:
 
     c = m.matrices.c
     assert np.all(c == np.array([1.5, 1.5]))
+
+
+def test_matrices_sol_aligned_with_vlabels() -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x", mask=pd.Series([True, False, True], i))
+    y = m.add_variables(coords=[i], name="y")
+    m.add_constraints(x + y >= 0, name="c")
+    with pytest.raises(ValueError, match="not optimized"):
+        m.matrices.sol
+    m._mock_solve()
+    x.solution = xr.DataArray([1.0, np.nan, 3.0], coords=[i])
+    y.solution = xr.DataArray([4.0, 5.0, 6.0], coords=[i])
+    M = m.matrices
+    np.testing.assert_array_equal(M.vlabels, [0, 2, 3, 4, 5])
+    np.testing.assert_array_equal(M.sol, [1.0, 3.0, 4.0, 5.0, 6.0])
