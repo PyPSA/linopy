@@ -373,7 +373,7 @@ class CSRLinearExpression:
         )
         for d in coord_dims:
             if d != member_dim:
-                indexes[d] = ds.get_index(d).rename(d)
+                indexes[d] = _named(ds.get_index(d), d)
         aux |= _aux_coords(ds, set(coord_dims) - {member_dim})
         grid = Grid({d: indexes[d] for d in grid_dims}, aux)
         if isinstance(source, Dataset):
