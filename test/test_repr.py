@@ -184,6 +184,21 @@ def test_print_options(obj: Variable | LinearExpression | Constraint) -> None:
     obj.print(display_max_rows=20)
 
 
+def test_truncated_expression_repr_prints_constant_once() -> None:
+    expr = (np.arange(1, 11) * x).sum() + 5
+    assert repr(expr).splitlines()[-1] == (
+        "+1 x[0] + 2 x[1] + 3 x[2] ... +8 x[7] + 9 x[8] + 10 x[9] + 5"
+    )
+
+
+def test_truncated_quadratic_expression_repr_shows_last_terms() -> None:
+    expr = (np.arange(1, 11) * x * a).sum()
+    assert repr(expr).splitlines()[-1] == (
+        "+1 x[0] a[0] + 2 x[1] a[1] + 3 x[2] a[2] ... "
+        "+8 x[7] a[7] + 9 x[8] a[8] + 10 x[9] a[9]"
+    )
+
+
 def test_format_labels() -> None:
     assert m.variables.format_labels([1, 2, 3])
     assert m.constraints.format_labels([1, 2, 3])
