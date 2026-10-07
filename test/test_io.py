@@ -197,6 +197,46 @@ def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+@pytest.mark.parametrize(
+    ("multiindex", "freeze"), [(False, False), (False, True), (True, False)]
+)
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_coords(
+    tz: str, multiindex: bool, freeze: bool, tmp_path: Path
+) -> None:
+    # Spans the spring DST change in Europe/Amsterdam (02:00 does not exist)
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz, name="time")
+    m = Model()
+    if multiindex:
+        from linopy.semantics import is_v1
+
+        if is_v1():
+            pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
+        index = pd.MultiIndex.from_product(
+            [[2030, 2040], time], names=["period", "time"]
+        )
+        x = m.add_variables(0, pd.Series(10.0, index=index), name="x")
+    else:
+        x = m.add_variables(lower=0, coords=[time], name="x")
+    m.add_constraints(x >= 1, name="c", freeze=freeze)
+    m.add_objective(x.sum())
+    m.parameters = m.parameters.assign(snapshots=("snapshot", time.rename(None)))
+    assert "snapshots" in m.parameters.data_vars
+
+    fn = tmp_path / "tz.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+    assert p.parameters.equals(m.parameters)
+    assert str(p.parameters["snapshots"].dtype.tz) == tz
+
+    for obj in (p.variables["x"], p.constraints["c"]):
+        idx = obj.indexes[x.dims[0]]
+        values = idx.get_level_values("time") if multiindex else idx
+        assert values.unique().equals(time)
+        assert str(values.tz) == tz
+
+
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")
 def test_model_to_netcdf_compression(tmp_path: Path) -> None:
     m = Model()
