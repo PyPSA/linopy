@@ -2799,10 +2799,8 @@ class Xpress(Solver[None]):
             rowind = np.empty(0, dtype=np.int64)
             rowcoef = np.empty(0, dtype=float)
 
-        lb = np.asarray(M.lb, dtype=float)
-        ub = np.asarray(M.ub, dtype=float)
-        np.place(lb, np.isneginf(lb), -xpress.infinity)
-        np.place(ub, np.isposinf(ub), xpress.infinity)
+        lb = np.where(np.isneginf(M.lb), -xpress.infinity, M.lb)
+        ub = np.where(np.isposinf(M.ub), xpress.infinity, M.ub)
 
         rowtype: np.ndarray
         rhs: np.ndarray

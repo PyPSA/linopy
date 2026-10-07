@@ -19,6 +19,38 @@ def _dense(matrix: Any) -> np.ndarray:
     return matrix.toarray()
 
 
+@pytest.mark.parametrize("freeze", [False, True])
+def test_masked_scaling_in_matrices(freeze: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    mask = xr.DataArray([True, False, True], coords=[i])
+    x = m.add_variables(
+        0,
+        1,
+        coords=[i],
+        name="x",
+        mask=mask,
+        scaling=xr.DataArray([2.0, 3.0, 4.0], coords=[i]),
+    )
+    y = m.add_variables(0, 1, coords=[i], name="y")
+    m.add_constraints(
+        x.where(mask) + y >= 1,
+        name="c",
+        mask=mask,
+        scaling=xr.DataArray([5.0, 6.0, 7.0], coords=[i]),
+        freeze=freeze,
+    )
+
+    matrices = m.matrices
+
+    np.testing.assert_allclose(matrices.var_scaling, [2.0, 4.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(matrices.b, [5.0, 7.0])
+    np.testing.assert_allclose(
+        _dense(matrices.A),
+        [[5 / 2, 0.0, 5.0, 0.0, 0.0], [0.0, 7 / 4, 0.0, 0.0, 7.0]],
+    )
+
+
 def test_variable_constraint_and_objective_scaling_in_matrices() -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")

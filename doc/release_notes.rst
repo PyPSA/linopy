@@ -41,6 +41,7 @@ Upcoming Version
 * ``@``/``dot`` against a sparse constant no longer scales with the total number of variables in the model: each chunk of the sparse product now runs on only the variables it uses, which removes several seconds of allocation overhead on models with millions of variables. (`#990 <https://github.com/PyPSA/linopy/pull/990>`__)
 * Deprecated in favour of ``Model(sparse=True)``, each with a ``FutureWarning`` and to be removed with the legacy semantics: ``Model(freeze_constraints=...)`` and the ``Model.freeze_constraints`` setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. They keep their current behaviour until then, except that ``@`` ignores ``sparse_groupby``, and netcdf files that store ``freeze_constraints`` still load. (`#976 <https://github.com/PyPSA/linopy/issues/976>`__)
 * Adding a frozen constraint from a sparse expression no longer copies the lhs matrix when every row stays active, and picks the mask and the row scaling at the active rows without expanding them over the full coordinate grid. This roughly halves the peak memory of ``add_constraints`` on a sparse model. (`#977 <https://github.com/PyPSA/linopy/issues/977>`__)
+* Building ``Model.matrices`` no longer allocates label-sized scaling lookups and skips ``eliminate_zeros`` for frozen constraints. On a model with 2M variables this makes each build of a sparse or frozen model about 20 to 35 ms faster. (`#1008 <https://github.com/PyPSA/linopy/issues/1008>`__)
 
 *Other*
 

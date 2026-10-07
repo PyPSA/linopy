@@ -1743,11 +1743,15 @@ class BaseExpression(ABC):
         Replace variable labels by solution values.
         """
         m = self.model
-        M = m.matrices
-        sol = pd.Series(M.sol, M.vlabels)
+        labels = self.vars.values
+        known = np.append(m.variables.label_index.label_to_pos != -1, True)
+        if not known[labels].all():
+            raise KeyError("Expression references variables missing from the model.")
+        sol = np.full(m._xCounter + 1, np.nan)
+        for var in m.variables.data.values():
+            sol[var.labels.values] = var.solution.values
         sol[-1] = np.nan
-        idx = np.ravel(self.vars)
-        values = np.asarray(sol[idx]).reshape(self.vars.shape)
+        values = sol[labels]
         return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
 
     @property
