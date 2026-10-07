@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Concatenating ordinary sparse linear expressions along an existing coordinate dimension now preserves sparse backing for unique disjoint labels. Remaining axes and auxiliary coordinates retain xarray join semantics. Unsupported cases keep the existing dense fallback.
+
 
 *Strict "v1" arithmetic semantics (opt-in)*
 

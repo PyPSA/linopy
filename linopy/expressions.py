@@ -110,7 +110,13 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRLinearExpression, Grid, _aux_coords, _densify_notice
+from linopy.csr import (
+    CSRLinearExpression,
+    Grid,
+    _aux_coords,
+    _densify_notice,
+    coo_to_csr,
+)
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -3713,6 +3719,76 @@ def _aligned(
     return [p.reindexed(grid, fill) for p in csrs]
 
 
+def _try_csr_concat(
+    exprs: Any, dim: str, join: JoinOptions | None
+) -> LinearExpression | None:
+    """Stack disjoint sparse rows, leaving labelled metadata alignment to xarray."""
+    if not all(type(e) is LinearExpression and e._csr is not None for e in exprs):
+        return None
+    csrs = [e._csr for e in exprs]
+    template = csrs[0]
+    dims = template.grid.dims
+    if dim not in dims or any(
+        e.model is not exprs[0].model
+        or set(p.grid.dims) != set(dims)
+        or not p.grid.is_unique
+        or any(isinstance(index, pd.MultiIndex) for index in p.grid.indexes.values())
+        for e, p in zip(exprs, csrs)
+    ):
+        return None
+    labels = template.grid.indexes[dim].append([p.grid.indexes[dim] for p in csrs[1:]])
+    if not labels.is_unique:
+        return None
+    metadata = [
+        p.grid.to_dataset().assign(const=(p.grid.dims, p.const.reshape(p.grid.shape)))
+        for p in csrs
+    ]
+    if join is None:
+        enforce_merge_dims(metadata, concat_dim=dim, context=f"merge along dim {dim!r}")
+    enforce_aux_conflict(metadata, concat_dim=dim)
+    combined = xr.concat(
+        metadata,
+        dim=dim,
+        join=join or "outer",
+        coords="minimal",
+        compat="override",
+        fill_value={"const": np.nan},
+    ).transpose(*dims)
+    grid = Grid.from_dataset(combined, dims)
+    rows: list[np.ndarray] = []
+    cols: list[np.ndarray] = []
+    values: list[np.ndarray] = []
+    for p in csrs:
+        source_grid = p.grid
+        if join == "override":
+            source_grid = replace(
+                source_grid,
+                indexes={
+                    d: source_grid.indexes[d] if d == dim else grid.indexes[d]
+                    for d in source_grid.dims
+                },
+            )
+        row_map, valid = grid.indexer(source_grid)
+        coo = p.csr.tocoo()
+        keep = valid[coo.coords[0]]
+        rows.append(row_map[coo.coords[0][keep]])
+        cols.append(coo.coords[1][keep])
+        values.append(coo.data[keep])
+    csr = coo_to_csr(
+        np.concatenate(values),
+        np.concatenate(rows),
+        np.concatenate(cols),
+        (grid.size, max(p.csr.shape[1] for p in csrs)),
+        template.model,
+    )
+    return LinearExpression._from_csr(
+        CSRLinearExpression(
+            csr, combined.const.to_numpy().reshape(-1), grid, template.model
+        ),
+        template.model,
+    )
+
+
 def _try_csr_merge(
     exprs: Any,
     dim: str,
@@ -3733,6 +3809,10 @@ def _try_csr_merge(
     """
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
         return None
+    if dim != TERM_DIM and not kwargs:
+        result = _try_csr_concat(exprs, dim, join)
+        if result is not None:
+            return result
     if dim != TERM_DIM or kwargs:
         _densify_all(
             exprs, "merge along a coordinate dimension or with extra arguments"
