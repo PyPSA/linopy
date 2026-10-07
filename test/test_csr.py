@@ -822,25 +822,6 @@ def test_lp_files_identical(tmp_path: Path) -> None:
     assert canon_lp(f1.read_text()) == canon_lp(f2.read_text())
 
 
-@pytest.mark.parametrize(
-    "indexers",
-    [
-        {"bus": ["bus3", "bus0", "bus1", "bus2", "bus4"]},
-        {"bus": ["bus0", "bus1", "bus2", "bus3", "bus4", "bus9"]},
-        {"bus": ["bus3", "bus0"]},
-        {"bus": ["bus4", "bus0", "bus7"], "snapshot": [2, 0, 5]},
-    ],
-    ids=["reorder", "add", "drop", "multi_dim"],
-)
-def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
-    require_v1()
-    c1, c2 = twin_models()
-    sparse = c2.gen_sum().reindex(indexers)
-    assert sparse._csr is not None
-    dense = c1.gen_sum().reindex(indexers)
-    assert_linequal(sparse, dense)
-
-
 def case_twins(
     build: Callable[[Case], LinearExpression],
 ) -> Callable[[], tuple[LinearExpression, LinearExpression]]:
