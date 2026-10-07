@@ -228,7 +228,7 @@ def test_model_to_netcdf_tz_aware_coords(
     p = read_netcdf(fn)
     assert_model_equal(m, p)
     assert p.parameters.equals(m.parameters)
-    assert str(p.parameters["snapshots"].dtype.tz) == tz
+    assert str(pd.DatetimeIndex(p.parameters["snapshots"].data).tz) == tz
 
     for obj in (p.variables["x"], p.constraints["c"]):
         idx = obj.indexes[x.dims[0]]
