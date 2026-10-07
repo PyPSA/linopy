@@ -1018,7 +1018,12 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
+DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
+
+
+def to_netcdf(
+    m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
+) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -1028,6 +1033,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Model to write out.
     *args
         Arguments passed to ``xarray.Dataset.to_netcdf``.
+    compression : dict or bool, default True
+        Encoding applied to every array in the file. ``True`` applies
+        ``{"zlib": True, "complevel": 3}``, ``False`` disables
+        compression. It is set as a fallback in each array's
+        ``.encoding``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
@@ -1129,6 +1139,12 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
 
     for k in ds:
         ds[k].attrs = non_bool_dict(ds[k].attrs)
+
+    if compression is True:
+        compression = DEFAULT_NETCDF_COMPRESSION
+    if compression:
+        for v in ds.variables.values():
+            v.encoding = compression | v.encoding
 
     ds.to_netcdf(*args, **kwargs)
 
