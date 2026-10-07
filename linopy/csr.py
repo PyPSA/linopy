@@ -92,7 +92,7 @@ class Grid:
     def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
         """Build from the indexes and auxiliary coordinates ``ds`` carries on ``dims``."""
         dims = tuple(dims)
-        indexes = {d: ds.get_index(d).rename(d) for d in dims}
+        indexes = {d: _named(ds.get_index(d), d) for d in dims}
         return cls(indexes, _aux_coords(ds, set(dims)))
 
     @classmethod
@@ -835,6 +835,15 @@ def _readonly(values: np.ndarray) -> np.ndarray:
     values = values.copy()
     values.setflags(write=False)
     return values
+
+
+def _named(index: pd.Index, dim: str) -> pd.Index:
+    """``index`` named after ``dim``, keeping the level names of a MultiIndex."""
+    if isinstance(index, pd.MultiIndex):
+        index = index.copy()
+        index.name = dim
+        return index
+    return index.rename(dim)
 
 
 def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:

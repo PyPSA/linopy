@@ -399,6 +399,24 @@ def test_model_to_netcdf_with_multiindex(
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_with_multiindex_frozen_constraint(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    from linopy.constraints import CSRConstraint
+
+    m = model_with_multiindex
+    x, y = m.variables["x-var"], m.variables["y-var"]
+    con = m.add_constraints(x + y, LESS_EQUAL, 10, name="frozen", freeze=True)
+    assert isinstance(con, CSRConstraint)
+
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.constraints["frozen"], CSRConstraint)
+    assert_model_equal(m, p)
+
+
 # Regression for https://github.com/PyPSA/linopy/issues/525.
 def test_model_to_netcdf_with_multiindex_scipy_engine(
     model_with_multiindex: Model, tmp_path: Path
