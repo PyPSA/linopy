@@ -822,25 +822,6 @@ def test_lp_files_identical(tmp_path: Path) -> None:
     assert canon_lp(f1.read_text()) == canon_lp(f2.read_text())
 
 
-@pytest.mark.parametrize(
-    "indexers",
-    [
-        {"bus": ["bus3", "bus0", "bus1", "bus2", "bus4"]},
-        {"bus": ["bus0", "bus1", "bus2", "bus3", "bus4", "bus9"]},
-        {"bus": ["bus3", "bus0"]},
-        {"bus": ["bus4", "bus0", "bus7"], "snapshot": [2, 0, 5]},
-    ],
-    ids=["reorder", "add", "drop", "multi_dim"],
-)
-def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
-    require_v1()
-    c1, c2 = twin_models()
-    sparse = c2.gen_sum().reindex(indexers)
-    assert sparse._csr is not None
-    dense = c1.gen_sum().reindex(indexers)
-    assert_linequal(sparse, dense)
-
-
 def case_twins(
     build: Callable[[Case], LinearExpression],
 ) -> Callable[[], tuple[LinearExpression, LinearExpression]]:
@@ -2284,6 +2265,92 @@ def test_selection_stays_csr_and_matches_dense(build: str, select: str) -> None:
     with no_densify():
         res = func(sparse)
     assert_sparse_matches(res, func(dense))
+
+
+def dim_last(e: LinearExpression) -> str:
+    return str(e.coord_dims[-1])
+
+
+def fresh_last(e: LinearExpression) -> list[Any]:
+    """The last dimension's labels with one new label appended."""
+    labels = e.indexes[dim_last(e)]
+    return [*labels, labels.max() + 1]
+
+
+REINDEXERS: dict[str, Callable[[LinearExpression], dict[str, Any]]] = {
+    "rotate": lambda e: {dim0(e): np.roll(labels0(e), 1)},
+    "rotate-all": lambda e: {str(d): np.roll(e.indexes[d], 1) for d in e.coord_dims},
+    "drop": lambda e: {dim0(e): labels0(e)[[2, 0]]},
+    "add": lambda e: {dim_last(e): fresh_last(e)},
+    "swap": lambda e: {dim_last(e): fresh_last(e)[1:]},
+    "multi-dim": lambda e: {
+        dim0(e): labels0(e)[[2, 0]],
+        dim_last(e): fresh_last(e)[::-1],
+    },
+}
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["coeffs", "zeros"])
+@pytest.mark.parametrize("reindexer", list(REINDEXERS))
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_reindex_matches_dense(build: str, reindexer: str, scale: float) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    indexers = REINDEXERS[reindexer](sparse)
+    with no_densify():
+        res = (scale * sparse).reindex(indexers)
+    want = (scale * dense).reindex(indexers)
+    xr.testing.assert_identical(res.has_terms, want.has_terms)
+    assert_sparse_matches(res, want)
+
+
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_reindexed_onto_transposed_dims_matches_dense(build: str) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    csr = sparse._csr
+    assert csr is not None
+    dims = csr.grid.dims[::-1]
+    assert_contracted_equal(csr.reindexed(csr.grid.reordered(dims)), dense, dims)
+
+
+def merge_operands(e: LinearExpression, n: int) -> list[LinearExpression]:
+    """Explicit zeros everywhere, terms on every other cell, absent cells."""
+    parts = [0.0 * e, e.where(alternating(e), 0.0), e.where(grid_operand(e) > 1.2)]
+    return parts + [k * e.where(alternating(e), 1.0) for k in range(2, n - 1)]
+
+
+@pytest.mark.parametrize("n", [3, 5])
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_n_ary_merge_keeps_absent_cells_and_explicit_zeros(build: str, n: int) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    with no_densify():
+        res = linopy.merge(merge_operands(sparse, n), cls=LinearExpression)
+    csr = res._csr
+    assert csr is not None
+    assert (np.diff(csr.csr.indptr)[np.isnan(csr.const)] == 0).all()
+    want = linopy.merge(merge_operands(dense, n), cls=LinearExpression)
+    xr.testing.assert_identical(res.has_terms, want.has_terms)
+    assert_sparse_matches(res, want)
+
+
+def tagged_by(c: Case, **aux: pd.Series) -> LinearExpression:
+    grouper = pd.DataFrame({"bus": c.gbus, **aux})
+    return (1.0 * c.gen_p).groupby(grouper).sum(observed=True)
+
+
+def test_n_ary_merge_unites_aux_coords_and_raises_on_conflict() -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    tagged, extra = tagged_by(c, tag=c.gbus), tagged_by(c, extra=c.gbus + "e")
+    parts = [tagged, extra, 2 * tagged]
+    with no_densify():
+        res = linopy.merge(parts, cls=LinearExpression)
+    want = linopy.merge([densified(p) for p in parts], cls=LinearExpression)
+    assert_sparse_matches(res, want)
+    with pytest.raises(ValueError, match="conflicting values"):
+        linopy.merge([*parts, tagged_by(c, tag=c.gbus + "z")], cls=LinearExpression)
 
 
 ABSENT_KEEPING_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = {

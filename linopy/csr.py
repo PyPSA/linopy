@@ -10,10 +10,10 @@ summed, terms label-ordered) and ragged along ``_term``, with no fixed term
 count per row; grouping, ``sum``, ``merge``/``+``/``-``, scaling and
 ``@``/``dot`` (:meth:`contracted`) are sparse linear algebra. Zero policy: the
 structural operations (grouping and ``sum`` via :meth:`aggregated`, merge via
-:meth:`added`, scaling, reindexing) go through COO and keep explicit zero
-coefficients; only the product with a constant matrix, ``@``/``dot``, prunes
-them. Either way cell activeness is carried by ``const`` alone, independent of
-term layout.
+:meth:`added`, scaling, reindexing) keep explicit zero coefficients, going
+through COO or, for a reindex that only permutes cells, gathering rows; only
+the product with a constant matrix, ``@``/``dot``, prunes them. Either way
+cell activeness is carried by ``const`` alone, independent of term layout.
 Any operation without a sparse branch expands the expression through
 ``.data`` to the mathematically identical dense rectangle in canonical term
 layout; this is valid because v1 semantics do not fix the term layout.
@@ -451,7 +451,8 @@ class CSRLinearExpression:
         """
         coo = self.csr.tocoo()
         shape = (grid.size, self.csr.shape[1])
-        rows_ = rows[coo.coords[0]]
+        dtype = index_dtype(coo.nnz, shape, self.model)
+        rows_ = rows.astype(dtype, copy=False)[coo.coords[0]]
         csr = coo_to_csr(coo.data, rows_, coo.coords[1], shape, self.model)
         weights = np.nan_to_num(self.const)
         const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
@@ -539,10 +540,21 @@ class CSRLinearExpression:
         """
         Remap rows onto a new grid, possibly in a new dim order: dropped
         labels vanish, new labels get ``fill`` as their constant (NaN: absent
-        cells). Auxiliary coordinates follow the rows; those of ``grid`` are
-        ignored.
+        cells). A target that only permutes the cells gathers the rows
+        directly, otherwise the remap goes through COO. Auxiliary coordinates
+        follow the rows; those of ``grid`` are ignored.
         """
         row_map, valid = grid.indexer(self.grid)
+        if valid.all() and grid.size == self.n_cells:
+            source = np.full(grid.size, -1, dtype=row_map.dtype)
+            source[row_map] = np.arange(grid.size)
+            if (source >= 0).all():
+                return replace(
+                    self,
+                    csr=self.csr[source],
+                    const=self.const[source],
+                    grid=self.grid.conformed(grid),
+                )
 
         coo = self.csr.tocoo()
         keep = valid[coo.coords[0]]
