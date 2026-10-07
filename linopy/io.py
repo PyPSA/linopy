@@ -33,6 +33,8 @@ from linopy.common import (
     index_to_naive_utc,
     sos_weights,
     to_polars,
+    values_from_naive_utc,
+    values_to_naive_utc,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
@@ -1115,11 +1117,14 @@ def to_netcdf(
                 if any(zones):
                     zones_by_name[str(dim)] = zones
                     ds = _assign_index(ds, dim, idx)
-        for name, var in ds.data_vars.items():
-            if isinstance(var.dtype, pd.DatetimeTZDtype):
-                zones_by_name[str(name)] = [str(var.dtype.tz)]
-                naive = pd.DatetimeIndex(var.data).tz_convert("UTC").tz_localize(None)
-                ds = ds.assign({name: var.copy(data=naive.values)})
+        for name, var in ds.variables.items():
+            if name in ds.indexes:
+                continue
+            values, zone = values_to_naive_utc(var.data)
+            if zone is not None:
+                zones_by_name[str(name)] = [zone]
+                naive = {name: var.copy(data=values)}
+                ds = ds.assign_coords(naive) if name in ds.coords else ds.assign(naive)
         if zones_by_name:
             ds = ds.assign_attrs({TZ_ATTR: json.dumps(zones_by_name)})
 
@@ -1283,11 +1288,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
                 if name in ds.indexes:
                     idx = index_from_naive_utc(ds.indexes[name], zones)
                     ds = _assign_index(ds, name, idx)
-                else:
-                    var = ds[name]
-                    utc = pd.DatetimeIndex(var.values).tz_localize("UTC")
-                    tz_values = utc.tz_convert(zones[0])
-                    ds = ds.assign({name: (var.dims, tz_values, var.attrs)})
+                elif name in ds.variables:
+                    var = ds.variables[name]
+                    values = values_from_naive_utc(var.values, zones[0])
+                    aware = {name: (var.dims, values, var.attrs)}
+                    if name in ds.coords:
+                        ds = ds.assign_coords(aware)
+                    else:
+                        ds = ds.assign(aware)
 
         return ds
 

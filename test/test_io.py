@@ -23,7 +23,7 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
-from linopy.testing import assert_exprequal, assert_model_equal
+from linopy.testing import assert_conequal, assert_exprequal, assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -235,6 +235,32 @@ def test_model_to_netcdf_tz_aware_coords(
         values = idx.get_level_values("time") if multiindex else idx
         assert values.unique().equals(time)
         assert str(values.tz) == tz
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_aux_coords(
+    tz: str, freeze: bool, tmp_path: Path
+) -> None:
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz)
+    coords = xr.Coordinates({"snapshot": np.arange(4), "time": ("snapshot", time)})
+    m = Model()
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c", freeze=freeze)
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "tz_aux.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert p.variables["x"].labels.equals(m.variables["x"].labels.drop_vars("time"))
+    assert p.variables["x"].lower.equals(m.variables["x"].lower.drop_vars("time"))
+    assert (p.constraints["c"].rhs.values == m.constraints["c"].rhs.values).all()
+    if freeze:
+        assert_conequal(m.constraints["c"], p.constraints["c"])
+        aux = pd.DatetimeIndex(p.constraints["c"].data.coords["time"].values)
+        assert aux.equals(time)
+        assert str(aux.tz) == tz
 
 
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")
