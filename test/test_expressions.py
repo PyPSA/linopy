@@ -141,3 +141,19 @@ def test_expressions_solution() -> None:
     assert isinstance(sol, xr.Dataset)
     assert "double_x" in sol
     assert (sol["double_x"] == 4).all()
+
+
+def test_expression_solution_maps_variable_values() -> None:
+    m = Model()
+    y = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="y")
+    z = m.add_variables(coords=[pd.RangeIndex(2, name="j")], name="z")
+    m._mock_solve()
+    y.solution = xr.DataArray([10.0, 20.0, 30.0], coords=y.coords)
+    z.solution = xr.DataArray([1.0, 2.0], coords=z.coords)
+    expected = 2 * y.solution + z.solution
+    xr.testing.assert_equal((2 * y + z).solution, expected.rename("solution"))
+    expected = y.solution * z.solution
+    xr.testing.assert_equal((y * z).solution, expected.rename("solution"))
+    m.remove_variables("z")
+    with pytest.raises(KeyError):
+        (2 * y + z).solution

@@ -1738,17 +1738,30 @@ class BaseExpression(ABC):
         return None
 
     @has_optimized_model
+    def _label_solution(self, labels: np.ndarray) -> np.ndarray:
+        """
+        Solution values indexed by variable label, with a trailing NaN that
+        label ``-1`` reads.
+
+        Raises if ``labels`` reference variables missing from the model.
+        """
+        m = self.model
+        known = np.append(m.variables.label_index.label_to_pos != -1, True)
+        if not known[labels].all():
+            raise KeyError("Expression references variables missing from the model.")
+        sol = np.full(m._xCounter + 1, np.nan)
+        for var in m.variables.data.values():
+            sol[var.labels.values] = var.solution.values
+        sol[-1] = np.nan
+        return sol
+
     def _map_solution(self) -> DataArray:
         """
         Replace variable labels by solution values.
         """
-        m = self.model
-        M = m.matrices
-        sol = pd.Series(M.sol, M.vlabels)
-        sol[-1] = np.nan
-        idx = np.ravel(self.vars)
-        values = np.asarray(sol[idx]).reshape(self.vars.shape)
-        return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
+        labels = self.vars
+        values = self._label_solution(labels.values)[labels.values]
+        return xr.DataArray(values, dims=labels.dims, coords=labels.coords)
 
     @property
     def solution(self) -> DataArray:
@@ -2507,6 +2520,21 @@ class LinearExpression(BaseExpression):
         return csr.grid.dataarray(
             present & (np.diff(csr.csr.indptr) > 0), name="has_terms"
         )
+
+    @property
+    def solution(self) -> DataArray:
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        csr = self._csr
+        if csr is None:
+            return super().solution
+        sol = self._label_solution(csr.csr.indices)[: csr.csr.shape[1]]
+        sol = np.nan_to_num(sol)
+        return csr.grid.dataarray(csr.csr @ sol + csr.const, name="solution")
 
     def _combined_with_constant(
         self,

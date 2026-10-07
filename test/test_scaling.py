@@ -19,6 +19,38 @@ def _dense(matrix: Any) -> np.ndarray:
     return matrix.toarray()
 
 
+@pytest.mark.parametrize("freeze", [False, True])
+def test_masked_scaling_in_matrices(freeze: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    mask = xr.DataArray([True, False, True], coords=[i])
+    x = m.add_variables(
+        0,
+        1,
+        coords=[i],
+        name="x",
+        mask=mask,
+        scaling=xr.DataArray([2.0, 3.0, 4.0], coords=[i]),
+    )
+    y = m.add_variables(0, 1, coords=[i], name="y")
+    m.add_constraints(
+        x.where(mask) + y >= 1,
+        name="c",
+        mask=mask,
+        scaling=xr.DataArray([5.0, 6.0, 7.0], coords=[i]),
+        freeze=freeze,
+    )
+
+    matrices = m.matrices
+
+    np.testing.assert_allclose(matrices.var_scaling, [2.0, 4.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(matrices.b, [5.0, 7.0])
+    np.testing.assert_allclose(
+        _dense(matrices.A),
+        [[5 / 2, 0.0, 5.0, 0.0, 0.0], [0.0, 7 / 4, 0.0, 0.0, 7.0]],
+    )
+
+
 def test_variable_constraint_and_objective_scaling_in_matrices() -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
@@ -180,13 +212,14 @@ def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path: Path) -> No
     assert f"<= {40.0 * 4}" in text
 
 
-def test_assign_result_unscales_solution_objective_and_dual() -> None:
+@pytest.mark.parametrize("freeze", [False, True])
+def test_assign_result_unscales_solution_objective_and_dual(freeze: bool) -> None:
     m = Model()
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
     b = m.add_variables(binary=True, name="b", scaling=50.0)
 
-    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0])
+    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0], freeze=freeze)
     m.add_objective(x.sum() + b, scaling=10.0)
 
     primal = np.full(m._xCounter, np.nan)

@@ -11,6 +11,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,7 @@ def canon(df: pl.DataFrame) -> pl.DataFrame:
     return (
         df.group_by(["labels", "vars"])
         .agg(pl.col("coeffs").sum(), pl.col("sign").first(), pl.col("rhs").first())
+        .filter(pl.col("coeffs") != 0)
         .sort(["labels", "vars"])
     )
 
@@ -412,6 +414,88 @@ def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
     assert np.array_equal(con1.labels.values, con2.labels.values)
 
 
+def gen_mask(c: Case) -> xr.DataArray:
+    return xr.DataArray(np.arange(len(c.gbus)) % 3 > 0, coords=[c.gbus.index])
+
+
+def all_but_last_gen(c: Case) -> xr.DataArray:
+    return xr.DataArray(np.arange(len(c.gbus)) < len(c.gbus) - 1, coords=[c.gbus.index])
+
+
+def gen_line_eye(c: Case) -> xr.DataArray:
+    eye = np.eye(len(c.gbus), len(c.bus0))
+    return xr.DataArray(eye, coords=[c.gbus.index, c.bus0.index])
+
+
+def mixed_signs(c: Case) -> xr.DataArray:
+    signs = np.where(np.arange(len(c.gbus)) % 2, "<=", ">=")
+    return xr.DataArray(signs, coords=[c.gbus.index])
+
+
+DENSE_FREEZES: dict[str, Callable[[Case], Constraint]] = {
+    "one-term": lambda c: c.m.add_constraints(c.gen_p <= 1, freeze=False),
+    "one-term-masked": lambda c: c.m.add_constraints(
+        c.gen_p <= 1, mask=gen_mask(c), freeze=False
+    ),
+    "one-term-all-masked": lambda c: c.m.add_constraints(
+        c.gen_p <= 1, mask=xr.zeros_like(gen_mask(c)), freeze=False
+    ),
+    "one-term-absent": lambda c: c.m.add_constraints(
+        c.gen_p.shift(snapshot=1) <= 1, freeze=False
+    ),
+    "one-term-zeros": lambda c: c.m.add_constraints(
+        c.eff.where(gen_mask(c), 0) * c.gen_p <= 1, freeze=False
+    ),
+    "terms-absent": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p.shift(snapshot=1) <= 1, freeze=False
+    ),
+    "terms-duplicates": lambda c: c.m.add_constraints(
+        c.gen_p.shift(snapshot=1) + 2 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0,
+        freeze=False,
+    ),
+    "terms-zeros-masked": lambda c: c.m.add_constraints(
+        0 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0, mask=gen_mask(c), freeze=False
+    ),
+    "terms-cancelling": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p + c.gen_p.shift(snapshot=1) >= 0, freeze=False
+    ),
+    "terms-empty-trailing-rows": lambda c: c.m.add_constraints(
+        all_but_last_gen(c) * (c.gen_p + c.gen_p.shift(snapshot=1)) >= 0,
+        freeze=False,
+    ),
+    "terms-sparse-strided": lambda c: c.m.add_constraints(
+        (c.gen_p * gen_line_eye(c)).sum("gen") >= 0, freeze=False
+    ),
+    "terms-dense-strided": lambda c: c.m.add_constraints(
+        (c.gen_p * xr.ones_like(gen_line_eye(c))).sum("gen") >= 0, freeze=False
+    ),
+    "terms-mixed-signs": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p.shift(snapshot=1), mixed_signs(c), 1, freeze=False
+    ),
+    "grouped": lambda c: c.m.add_constraints(c.balance_lhs() == c.load, freeze=False),
+}
+
+
+@pytest.mark.parametrize("build", list(DENSE_FREEZES))
+def test_freeze_of_dense_constraint_is_canonical_and_equal(build: str) -> None:
+    require_v1()
+    con = DENSE_FREEZES[build](base_model())
+    frozen = con.freeze()
+    assert_frozen_equal(con, frozen)
+    np.testing.assert_array_equal(frozen.active_labels(), con.active_labels())
+    csr = frozen._csr
+    ref = scipy.sparse.csr_array(
+        (csr.data.copy(), csr.indices.copy(), csr.indptr.copy()), shape=csr.shape
+    )
+    ref.sum_duplicates()
+    ref.eliminate_zeros()
+    assert csr.has_canonical_format
+    for got, want in zip(
+        (csr.indptr, csr.indices, csr.data), (ref.indptr, ref.indices, ref.data)
+    ):
+        np.testing.assert_array_equal(got, want)
+
+
 def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
     require_v1()
     c1, c2 = twin_models()
@@ -456,12 +540,21 @@ def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
     np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
 
 
+@pytest.mark.parametrize("masked", [False, True], ids=["unmasked", "masked"])
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_invalid_infinite_rhs_raises(sparse: bool) -> None:
+def test_frozen_invalid_infinite_rhs_raises(sparse: bool, masked: bool) -> None:
     require_v1()
     c = base_model(sparse=sparse)
+    valid = c.load.bus != "bus0"
+    rhs = c.load.where(valid, -np.inf)
+    mask = valid if masked else None
+    add = partial(c.m.add_constraints, name="bal", freeze=True, mask=mask)
+    if masked and sparse:
+        con = add(c.balance_lhs() <= rhs)
+        assert con.ncons == int(valid.sum()) * c.load.sizes["snapshot"]
+        return
     with pytest.raises(ValueError, match="incorrect infinite values"):
-        c.m.add_constraints(c.balance_lhs() <= -np.inf, name="bal", freeze=True)
+        add(c.balance_lhs() <= rhs)
 
 
 ROW_SCALINGS: dict[str, Callable[[xr.DataArray], Any]] = {
@@ -729,6 +822,92 @@ def test_lp_files_identical(tmp_path: Path) -> None:
     assert canon_lp(f1.read_text()) == canon_lp(f2.read_text())
 
 
+@pytest.mark.parametrize(
+    "indexers",
+    [
+        {"bus": ["bus3", "bus0", "bus1", "bus2", "bus4"]},
+        {"bus": ["bus0", "bus1", "bus2", "bus3", "bus4", "bus9"]},
+        {"bus": ["bus3", "bus0"]},
+        {"bus": ["bus4", "bus0", "bus7"], "snapshot": [2, 0, 5]},
+    ],
+    ids=["reorder", "add", "drop", "multi_dim"],
+)
+def test_reindex_stays_csr_and_matches_dense(indexers: dict) -> None:
+    require_v1()
+    c1, c2 = twin_models()
+    sparse = c2.gen_sum().reindex(indexers)
+    assert sparse._csr is not None
+    dense = c1.gen_sum().reindex(indexers)
+    assert_linequal(sparse, dense)
+
+
+def case_twins(
+    build: Callable[[Case], LinearExpression],
+) -> Callable[[], tuple[LinearExpression, LinearExpression]]:
+    def twins() -> tuple[LinearExpression, LinearExpression]:
+        c1, c2 = twin_models()
+        return build(c1), build(c2)
+
+    return twins
+
+
+def keyed_observed_twins() -> tuple[LinearExpression, LinearExpression]:
+    dense, sparse = (keyed_model(sparse=s)[1] for s in (False, True))
+    keys = ["period", "season"]
+    return dense.groupby(keys).sum(observed=True), sparse.groupby(keys).sum(
+        observed=True
+    )
+
+
+@pytest.mark.parametrize("nan_every_other", [False, True], ids=["full", "nan"])
+@pytest.mark.parametrize(
+    "twins",
+    [
+        case_twins(lambda c: c.balance_lhs() + 2.0),
+        case_twins(lambda c: c.gen_sum().reindex(bus=["bus3", "bus9", "bus0"])),
+        case_twins(
+            lambda c: linopy.merge(
+                cross_grid_parts(c) + cross_grid_parts(c, ("line3", "line4"))[1:],
+                join="outer",
+                fill_value=linopy.ABSENT,
+                cls=LinearExpression,
+            )
+        ),
+        keyed_observed_twins,
+    ],
+    ids=["composed", "absent_cell", "absent_merge", "aux_coords"],
+)
+def test_csr_solution_matches_dense(
+    twins: Callable[[], tuple[LinearExpression, LinearExpression]],
+    nan_every_other: bool,
+) -> None:
+    require_v1()
+    dense, sparse = twins()
+    assert sparse._csr is not None
+    rng = np.random.default_rng(0)
+    for name, var in dense.model.variables.items():
+        values = rng.uniform(-1, 1, var.shape)
+        if nan_every_other:
+            values.ravel()[::2] = np.nan
+        for m in (dense.model, sparse.model):
+            m.variables[name].solution = xr.DataArray(values, coords=var.labels.coords)
+            m._status = "ok"
+    sol = sparse.solution
+    assert sparse._csr is not None
+    xr.testing.assert_allclose(sol, dense.solution)
+
+
+def test_csr_solution_raises_on_removed_variable() -> None:
+    require_v1()
+    _, sparse = case_twins(lambda c: c.balance_lhs())()
+    assert sparse._csr is not None
+    m = sparse.model
+    m._mock_solve()
+    m.remove_variables(next(iter(m.variables)))
+    with pytest.raises(KeyError, match="missing from the model"):
+        sparse.solution
+
+
 def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
     require_v1()
     c1, c2 = twin_models()
@@ -875,16 +1054,20 @@ def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
     assert_terms_equal(res, linopy.merge(dense, cls=LinearExpression))
 
 
+@pytest.mark.parametrize("fill_value", [None, linopy.ABSENT], ids=["fill", "absent"])
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
-def test_three_operand_cross_grid_merge_matches_dense(join: JoinOptions) -> None:
+def test_three_operand_cross_grid_merge_matches_dense(
+    join: JoinOptions, fill_value: Any
+) -> None:
     require_v1()
     c1, c2 = twin_models()
     third_lines = ("line3", "line4")
     sparse = cross_grid_parts(c2) + cross_grid_parts(c2, third_lines)[1:]
     dense = cross_grid_parts(c1) + cross_grid_parts(c1, third_lines)[1:]
-    res = linopy.merge(sparse, join=join, cls=LinearExpression)
+    kwargs: dict[str, Any] = {"join": join, "fill_value": fill_value}
+    res = linopy.merge(sparse, **kwargs, cls=LinearExpression)
     assert res._csr is not None
-    assert_terms_equal(res, linopy.merge(dense, join=join, cls=LinearExpression))
+    assert_terms_equal(res, linopy.merge(dense, **kwargs, cls=LinearExpression))
 
 
 def test_cross_grid_merge_absent_fill_matches_dense() -> None:

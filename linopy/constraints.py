@@ -729,6 +729,17 @@ def _positional_csr(
 _UNSUPPORTED = "is not supported on a frozen constraint"
 
 
+def _is_uniform(values: np.ndarray) -> bool:
+    return values.size > 0 and bool((values == values[0]).all())
+
+
+def _take_flat(values: np.ndarray, flat: np.ndarray) -> np.ndarray:
+    """Gather C-order flat positions, copying a non-contiguous array only if dense."""
+    if values.flags.c_contiguous or 4 * flat.size > values.size:
+        return values.ravel()[flat]
+    return values.flat[flat]
+
+
 def _slack_names(attrs: Mapping[str, Any]) -> tuple[str, str] | None:
     """Names of the positive and negative slack variables recorded by ``soften``."""
     positive = attrs.get("slack_positive")
@@ -939,45 +950,43 @@ class CSRConstraint(ConstraintBase):
         return new
 
     def assign_labels(
-        self, cindex: int, name: str, scaling: float | DataArray = 1.0
+        self,
+        cindex: int,
+        name: str,
+        scaling: float | DataArray = 1.0,
+        mask: np.ndarray | None = None,
     ) -> CSRConstraint:
         """
         Return a copy labelled from ``cindex`` and named ``name``.
 
         Rows without terms are dropped, as when freezing a dense constraint;
-        a zero coefficient counts as a term. ``scaling`` is a scalar or a row
-        scaling broadcast on the grid; its distinct values are validated
-        without expanding a broadcast view.
+        a zero coefficient counts as a term. Active rows where the boolean
+        ``mask`` is False are dropped in the same gather. ``scaling`` is a
+        scalar or a row scaling broadcast on the grid; its distinct values are
+        validated without expanding a broadcast view.
         """
         values = np.asarray(scaling)
         distinct = values[tuple(slice(None) if s else 0 for s in values.strides)]
         validate_scaling(distinct, "constraint scaling")
-        kept = self._kept(np.diff(self._csr.indptr) > 0)
+        keep = np.diff(self._csr.indptr) > 0
+        if mask is not None:
+            keep &= mask
+        kept = self._kept(keep)
         csr = kept._csr
         if not csr.data.all():
             csr = csr.copy() if csr is self._csr else csr
             csr.eliminate_zeros()
         if isinstance(scaling, DataArray):
-            row_scaling = kept._active_values(scaling)
+            row_scaling = kept.active_values(scaling)
         else:
             row_scaling = np.full(csr.shape[0], float(scaling))
         return kept._replace(csr=csr, cindex=cindex, name=name, scaling=row_scaling)
 
-    def _active_values(self, values: DataArray) -> np.ndarray:
-        """
-        Values of ``values``, broadcast on the grid, at the active rows.
-
-        A broadcast view is indexed per dimension instead of being expanded
-        to the full grid, unless the per-dimension indices would be larger.
-        """
-        grid_values = values.transpose(*self._grid.dims).values
-        positions = self._active_positions
-        if (
-            grid_values.flags.c_contiguous
-            or positions.size * grid_values.ndim >= grid_values.size
-        ):
-            return grid_values.reshape(-1)[positions]
-        return grid_values[np.unravel_index(positions, grid_values.shape)]
+    def active_values(self, values: DataArray) -> np.ndarray:
+        """Values of ``values``, broadcast on the grid, at the active rows."""
+        return _take_flat(
+            values.transpose(*self._grid.dims).values, self._active_positions
+        )
 
     def _kept(self, keep: np.ndarray) -> CSRConstraint:
         """
@@ -1001,13 +1010,6 @@ class CSRConstraint(ConstraintBase):
             binvar_labels=rows(self._binvar_labels),
             binval=rows(self._binval),
         )
-
-    def masked(self, mask: DataArray) -> CSRConstraint:
-        """
-        Copy with the cells where the boolean ``mask`` is False made inactive,
-        without the dense rectangle. ``mask`` must lie on the constraint grid.
-        """
-        return self._kept(self._active_values(mask).astype(bool))
 
     def _assign_coords(self, **coords: Any) -> CSRConstraint:
         """
@@ -1448,7 +1450,7 @@ class CSRConstraint(ConstraintBase):
         if isinstance(self._sign, str):
             sense = np.full(len(self._rhs), self._sign[0])
         else:
-            sense = np.array([s[0] for s in self._sign])
+            sense = self._sign.astype("U1")
         return (
             self._to_positional_csr(label_index),
             self.active_labels(),
@@ -1472,7 +1474,9 @@ class CSRConstraint(ConstraintBase):
         external holders of the previous arrays (e.g. a ModelSnapshot
         sharing them) keep a valid baseline.
         """
-        zeros = np.abs(self._csr.data) <= 1e-10
+        data = self._csr.data
+        zeros = data <= 1e-10
+        zeros &= data >= -1e-10
         if zeros.any():
             csr = self._csr.copy()
             csr.data[zeros] = 0
@@ -1610,21 +1614,21 @@ class CSRConstraint(ConstraintBase):
             (data, vlabel_cols, indptr),
             shape=(len(active_positions), con.model._xCounter),
         )
-        csr.sum_duplicates()
-        csr.eliminate_zeros()
+        if con.nterm > 1:
+            csr.sum_duplicates()
+            csr.eliminate_zeros()
+        else:
+            csr.has_canonical_format = True
         grid = Grid.from_dataset(con.data, map(str, con.coord_dims))
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
         active_signs = sign_vals[active_mask]
-        unique_signs = np.unique(active_signs)
-        if len(unique_signs) == 0:
-            full_unique_signs = np.unique(sign_vals)
-            sign: str | np.ndarray = (
-                str(full_unique_signs.item()) if len(full_unique_signs) == 1 else "="
-            )
-        elif len(unique_signs) == 1:
-            sign = str(unique_signs[0])
+        sign: str | np.ndarray
+        if not active_signs.size:
+            sign = str(sign_vals[0]) if _is_uniform(sign_vals) else "="
+        elif _is_uniform(active_signs):
+            sign = str(active_signs[0])
         else:
             sign = active_signs
         dual = (
@@ -2150,22 +2154,17 @@ class Constraint(ConstraintBase):
         """Return (con_labels, row_mask, vlabel_cols, data, indptr) with raw labels."""
         labels_flat = self.labels.values.ravel()
         vars_vals = self.vars.values
-        n_rows = len(labels_flat)
-        vars_2d = (
-            vars_vals.reshape(n_rows, -1)
-            if n_rows > 0
-            else vars_vals.reshape(0, max(1, vars_vals.size))
-        )
-
-        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+        coeffs_vals = self.coeffs.values
+        valid = vars_vals != -1
+        row_mask = (labels_flat != -1) & valid.any(axis=-1).ravel()
         con_labels = labels_flat[row_mask]
-        vars_final = vars_2d[row_mask]
-        coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
-        valid_final = (vars_final != -1) & (coeffs_final != 0)
-        vlabel_cols = vars_final[valid_final]
-        data = coeffs_final[valid_final]
-
-        counts = valid_final.sum(axis=1)
+        valid &= coeffs_vals != 0
+        valid &= (self.labels.values != -1)[..., None]
+        flat = np.flatnonzero(valid)
+        vlabel_cols = _take_flat(vars_vals, flat)
+        data = _take_flat(coeffs_vals, flat)
+        flat //= valid.shape[-1]
+        counts = np.bincount(flat, minlength=len(row_mask))[row_mask]
         dtype = index_dtype(len(data), (len(con_labels),), self.model)
         indptr = np.empty(len(con_labels) + 1, dtype=dtype)
         indptr[0] = 0
@@ -2197,15 +2196,8 @@ class Constraint(ConstraintBase):
 
     def active_row_mask(self) -> np.ndarray:
         """Boolean mask over raveled rows: label set and at least one variable present."""
-        labels_flat = self.labels.values.ravel()
-        vars_vals = self.vars.values
-        n_rows = len(labels_flat)
-        vars_2d = (
-            vars_vals.reshape(n_rows, -1)
-            if n_rows > 0
-            else vars_vals.reshape(0, max(1, vars_vals.size))
-        )
-        return (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+        present = (self.vars.values != -1).any(axis=-1).ravel()
+        return (self.labels.values.ravel() != -1) & present
 
     def active_labels(self) -> np.ndarray:
         return self.labels.values.ravel()[self.active_row_mask()]
@@ -2221,12 +2213,7 @@ class Constraint(ConstraintBase):
         csr.sum_duplicates()
 
         b = self.rhs.values.ravel()[row_mask]
-        sign_flat = self.sign.values.ravel()[row_mask]
-        unique_signs = np.unique(sign_flat)
-        if len(unique_signs) == 1:
-            sense = np.full(len(con_labels), str(unique_signs[0])[0], dtype="U1")
-        else:
-            sense = sign_flat.astype("U1")
+        sense = self.sign.values.ravel()[row_mask].astype("U1")
         return csr, con_labels, b, sense
 
     def sanitize_zeros(self) -> Constraint:
