@@ -104,6 +104,7 @@ def canon(df: pl.DataFrame) -> pl.DataFrame:
     return (
         df.group_by(["labels", "vars"])
         .agg(pl.col("coeffs").sum(), pl.col("sign").first(), pl.col("rhs").first())
+        .filter(pl.col("coeffs") != 0)
         .sort(["labels", "vars"])
     )
 
@@ -410,6 +411,88 @@ def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
     assert isinstance(con2, Constraint)
     assert_conequal(con1, con2, strict=False)
     assert np.array_equal(con1.labels.values, con2.labels.values)
+
+
+def gen_mask(c: Case) -> xr.DataArray:
+    return xr.DataArray(np.arange(len(c.gbus)) % 3 > 0, coords=[c.gbus.index])
+
+
+def all_but_last_gen(c: Case) -> xr.DataArray:
+    return xr.DataArray(np.arange(len(c.gbus)) < len(c.gbus) - 1, coords=[c.gbus.index])
+
+
+def gen_line_eye(c: Case) -> xr.DataArray:
+    eye = np.eye(len(c.gbus), len(c.bus0))
+    return xr.DataArray(eye, coords=[c.gbus.index, c.bus0.index])
+
+
+def mixed_signs(c: Case) -> xr.DataArray:
+    signs = np.where(np.arange(len(c.gbus)) % 2, "<=", ">=")
+    return xr.DataArray(signs, coords=[c.gbus.index])
+
+
+DENSE_FREEZES: dict[str, Callable[[Case], Constraint]] = {
+    "one-term": lambda c: c.m.add_constraints(c.gen_p <= 1, freeze=False),
+    "one-term-masked": lambda c: c.m.add_constraints(
+        c.gen_p <= 1, mask=gen_mask(c), freeze=False
+    ),
+    "one-term-all-masked": lambda c: c.m.add_constraints(
+        c.gen_p <= 1, mask=xr.zeros_like(gen_mask(c)), freeze=False
+    ),
+    "one-term-absent": lambda c: c.m.add_constraints(
+        c.gen_p.shift(snapshot=1) <= 1, freeze=False
+    ),
+    "one-term-zeros": lambda c: c.m.add_constraints(
+        c.eff.where(gen_mask(c), 0) * c.gen_p <= 1, freeze=False
+    ),
+    "terms-absent": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p.shift(snapshot=1) <= 1, freeze=False
+    ),
+    "terms-duplicates": lambda c: c.m.add_constraints(
+        c.gen_p.shift(snapshot=1) + 2 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0,
+        freeze=False,
+    ),
+    "terms-zeros-masked": lambda c: c.m.add_constraints(
+        0 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0, mask=gen_mask(c), freeze=False
+    ),
+    "terms-cancelling": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p + c.gen_p.shift(snapshot=1) >= 0, freeze=False
+    ),
+    "terms-empty-trailing-rows": lambda c: c.m.add_constraints(
+        all_but_last_gen(c) * (c.gen_p + c.gen_p.shift(snapshot=1)) >= 0,
+        freeze=False,
+    ),
+    "terms-sparse-strided": lambda c: c.m.add_constraints(
+        (c.gen_p * gen_line_eye(c)).sum("gen") >= 0, freeze=False
+    ),
+    "terms-dense-strided": lambda c: c.m.add_constraints(
+        (c.gen_p * xr.ones_like(gen_line_eye(c))).sum("gen") >= 0, freeze=False
+    ),
+    "terms-mixed-signs": lambda c: c.m.add_constraints(
+        c.gen_p - c.gen_p.shift(snapshot=1), mixed_signs(c), 1, freeze=False
+    ),
+    "grouped": lambda c: c.m.add_constraints(c.balance_lhs() == c.load, freeze=False),
+}
+
+
+@pytest.mark.parametrize("build", list(DENSE_FREEZES))
+def test_freeze_of_dense_constraint_is_canonical_and_equal(build: str) -> None:
+    require_v1()
+    con = DENSE_FREEZES[build](base_model())
+    frozen = con.freeze()
+    assert_frozen_equal(con, frozen)
+    np.testing.assert_array_equal(frozen.active_labels(), con.active_labels())
+    csr = frozen._csr
+    ref = scipy.sparse.csr_array(
+        (csr.data.copy(), csr.indices.copy(), csr.indptr.copy()), shape=csr.shape
+    )
+    ref.sum_duplicates()
+    ref.eliminate_zeros()
+    assert csr.has_canonical_format
+    for got, want in zip(
+        (csr.indptr, csr.indices, csr.data), (ref.indptr, ref.indices, ref.data)
+    ):
+        np.testing.assert_array_equal(got, want)
 
 
 def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
