@@ -666,7 +666,9 @@ class LinearExpressionGroupby:
                     "existing dimension, without use_fallback."
                 )
             if csr is None:
-                _densify_notice("groupby-sum with a grouper without a sparse path")
+                _densify_notice(
+                    "groupby-sum with a grouper without a sparse path", self.model
+                )
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -2609,31 +2611,51 @@ class LinearExpression(BaseExpression):
         flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
         return csr.taken(flat, grid)
 
-    def sel(self, *args: Any, **kwargs: Any) -> LinearExpression:
+    def _gathered(
+        self, name: str, dense: Callable[..., Self], /, *args: Any, **kwargs: Any
+    ) -> Self:
+        """
+        Apply the dense method ``name`` to the grid's row numbers via
+        :meth:`_selected`, falling back to ``dense`` off the grid.
+        """
+        csr = self._selected(operator.methodcaller(name, *args, **kwargs), name)
+        if csr is None:
+            return dense(*args, **kwargs)
+        return type(self)._from_csr(csr, self._model)
+
+    def sel(self, *args: Any, **kwargs: Any) -> Self:
         """
         Select by label as ``Dataset.sel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        csr = self._selected(lambda rows: rows.sel(*args, **kwargs), "sel")
-        if csr is None:
-            return super().sel(*args, **kwargs)
-        return type(self)._from_csr(csr, self._model)
+        return self._gathered("sel", super().sel, *args, **kwargs)
 
-    def isel(self, *args: Any, **kwargs: Any) -> LinearExpression:
+    def isel(self, *args: Any, **kwargs: Any) -> Self:
         """
         Select by position as ``Dataset.isel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        csr = self._selected(lambda rows: rows.isel(*args, **kwargs), "isel")
-        if csr is None:
-            return super().isel(*args, **kwargs)
-        return type(self)._from_csr(csr, self._model)
+        return self._gathered("isel", super().isel, *args, **kwargs)
 
     def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
-        csr = self._selected(lambda rows: rows[selector], "__getitem__")
-        if csr is None:
-            return super().__getitem__(selector)
-        return type(self)._from_csr(csr, self._model)
+        return self._gathered("__getitem__", super().__getitem__, selector)
+
+    def shift(self, *args: Any, **kwargs: Any) -> Self:
+        """
+        Shift along dimensions as ``Dataset.shift``. For a CSR-backed
+        expression, returns a CSR-backed result with the shifted-in cells
+        absent, unless a ``fill_value`` is passed.
+        """
+        if len(args) > 1 or "fill_value" in kwargs:
+            self._densify("`shift` with a fill_value")
+        return self._gathered("shift", super().shift, *args, **kwargs)
+
+    def roll(self, *args: Any, **kwargs: Any) -> Self:
+        """
+        Roll along dimensions as ``Dataset.roll``. For a CSR-backed
+        expression, returns a CSR-backed result.
+        """
+        return self._gathered("roll", super().roll, *args, **kwargs)
 
     def where(
         self,
@@ -3703,7 +3725,7 @@ def _densify_all(exprs: Iterable[Any], reason: str) -> None:
         if isinstance(e, LinearExpression) and (csr := e._csr) is not None
     ]
     if sparse:
-        _densify_notice(reason)
+        _densify_notice(reason, sparse[0][0].model)
     for e, csr in sparse:
         e._data = csr.to_dense()._data
         e._csr = None
@@ -3737,6 +3759,40 @@ def _aligned(
     return [p.reindexed(grid, fill) for p in csrs]
 
 
+def _concatenated(
+    csrs: list[CSRLinearExpression], dim: str, join: JoinOptions | None
+) -> CSRLinearExpression | str:
+    """
+    Stack CSR expressions sharing one dim order along the grid dim ``dim``,
+    in order. The result's coordinates are what the dense path's
+    ``xr.concat`` yields on the grids alone: labels and auxiliary
+    coordinates concatenated along ``dim``, the other dims joined as
+    ``join`` says (``outer`` by default, after the v1 label check for the
+    auto-detected join), with the cells the join creates absent. Returns the
+    reason as a string where the dense path owns the semantics instead: a
+    join over non-unique labels.
+    """
+    dims = csrs[0].grid.dims
+    metadata = [p.grid.to_dataset() for p in csrs]
+    if join is None:
+        enforce_merge_dims(metadata, concat_dim=dim, context=f"merge along dim {dim!r}")
+    enforce_aux_conflict(metadata, concat_dim=dim)
+    combined = xr.concat(
+        metadata, dim, join=join or "outer", coords="minimal", compat="override"
+    )
+    grid = Grid.from_dataset(combined, dims)
+    aligned = []
+    for p in csrs:
+        target = grid.with_indexes({dim: p.grid.indexes[dim]})
+        if join == "override" or p.grid.same_layout(target):
+            aligned.append(replace(p, grid=target))
+        elif p.grid.is_unique:
+            aligned.append(p.reindexed(target))
+        else:
+            return "merge over non-unique labels"
+    return aligned[0].concatenated(aligned[1:], dim, grid)
+
+
 def _try_csr_merge(
     exprs: Any,
     dim: str,
@@ -3747,20 +3803,19 @@ def _try_csr_merge(
     """
     Sparse branch of :func:`merge`: combine plain LinearExpressions over one
     set of grid dimensions (CSR-backed or dense-convertible) as sparse matrix
-    addition. Grids that share dims in a different order are transposed onto
-    the template order first. Grids that differ in their labels are aligned
-    row-wise onto the joined grid, the cells the join creates carrying the
-    fill of the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary
-    coordinates are checked for conflicts on the operands as given and follow
-    their rows onto the joined grid. Returns None to fall through to the
-    dense path.
+    addition along the term dimension, or as a row stack along one of the
+    grid dimensions (:func:`_concatenated`). Grids that share dims in a
+    different order are transposed onto the template order first. Grids that
+    differ in their labels are aligned row-wise onto the joined grid, the
+    cells the join creates carrying the fill of the dense path (zero, or NaN
+    for ``fill_value=ABSENT``). Auxiliary coordinates are checked for
+    conflicts on the operands as given and follow their rows onto the joined
+    grid. Returns None to fall through to the dense path.
     """
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
         return None
-    if dim != TERM_DIM or kwargs:
-        _densify_all(
-            exprs, "merge along a coordinate dimension or with extra arguments"
-        )
+    if kwargs:
+        _densify_all(exprs, "merge with extra arguments")
         return None
     if not all(type(e) is LinearExpression for e in exprs):
         _densify_all(exprs, "merge with an operand that is not a LinearExpression")
@@ -3768,6 +3823,9 @@ def _try_csr_merge(
     dims = set(exprs[0].coord_dims)
     if any(set(e.coord_dims) != dims for e in exprs[1:]):
         _densify_all(exprs, "merge of operands over different dimensions")
+        return None
+    if dim != TERM_DIM and dim not in dims:
+        _densify_all(exprs, "merge along a new dimension")
         return None
     for e in exprs:
         if e._csr is None and set(e.data.coords) - dims != set(
@@ -3785,6 +3843,12 @@ def _try_csr_merge(
         p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
         for p in csrs
     ]
+    if dim != TERM_DIM:
+        stacked = _concatenated(csrs, dim, join)
+        if isinstance(stacked, str):
+            _densify_all(exprs, stacked)
+            return None
+        return LinearExpression._from_csr(stacked, exprs[0].model)
     if not all(template.same_grid(p) for p in csrs[1:]):
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
         aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))

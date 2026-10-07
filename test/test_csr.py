@@ -36,6 +36,10 @@ from linopy.testing import (
     assert_varequal,
 )
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Sparse \\(CSR\\) backing densified:linopy.PerformanceWarning"
+)
+
 
 def require_v1() -> None:
     if not is_v1():
@@ -1780,6 +1784,11 @@ def add_chunked(e: LinearExpression, c: Case) -> Any:
     return chunked.m.add_constraints(lhs >= 1, freeze=True)
 
 
+def set_blocks(e: LinearExpression, c: Case) -> None:
+    c.m.add_constraints(e >= 1, name="blocked")
+    c.m.constraints.set_blocks(np.zeros(c.m._xCounter, dtype=int))
+
+
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
     "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
@@ -1795,6 +1804,7 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         "constraint added unfrozen, `freeze=False`",
     ),
     "add-chunked": (add_chunked, "chunked model"),
+    "set-blocks": (set_blocks, "frozen constraint converted by `set_blocks`"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
     "groupby-fallback": (
@@ -1813,6 +1823,23 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: e.where(lambda ds: ds.const > 0),
         "`where` with a condition that is no DataArray",
     ),
+    "shift-fill": (lambda e, c: e.shift(bus=1, fill_value=0), "`shift` with a fill"),
+    "concat-new-dim": (
+        lambda e, c: linopy.merge([e, e], dim="new"),
+        "merge along a new dimension",
+    ),
+    "concat-kwargs": (
+        lambda e, c: linopy.merge([e, e], dim="snapshot", coords="minimal"),
+        "merge with extra arguments",
+    ),
+    "concat-non-unique": (
+        lambda e, c: linopy.merge(
+            [e.isel(snapshot=[0, 0], bus=[0, 2]), e.isel(snapshot=[1])],
+            dim="snapshot",
+            join="outer",
+        ),
+        "merge over non-unique labels",
+    ),
 }
 
 
@@ -1822,9 +1849,11 @@ def halves(e: LinearExpression) -> pd.Series:
     return pd.Series(np.arange(len(index)) % 2, index=index).map({0: "a", 1: "b"})
 
 
-@pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "default"])
+@pytest.mark.parametrize(
+    "enabled", [True, None, False], ids=["enabled", "default", "disabled"]
+)
 @pytest.mark.parametrize("op", list(DENSIFY_OPS))
-def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
+def test_warn_on_densify_names_the_reason(op: str, enabled: bool | None) -> None:
     require_v1()
     c = base_model(sparse=True)
     sparse = SPARSE_BUILDS["grouped"](c)
@@ -1834,12 +1863,25 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool) -> None:
         opts.set_value(warn_on_densify=enabled)
         func(sparse, c)
     notices = [w for w in caught if issubclass(w.category, linopy.PerformanceWarning)]
-    if not enabled:
+    implicit_in_sparse_model = op not in {"add-chunked", "mutable", "add-unfrozen"}
+    if enabled is False or (enabled is None and not implicit_in_sparse_model):
         assert notices == []
         return
     assert len(notices) == 1
     assert re.search(reason, str(notices[0].message))
     assert notices[0].filename == __file__
+
+
+def test_warn_on_densify_default_is_quiet_in_dense_model() -> None:
+    require_v1()
+    c = base_model()
+    with pytest.warns(FutureWarning, match="deprecated"):
+        sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
+    assert sparse.is_sparse
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", linopy.PerformanceWarning)
+        sparse.data
+    assert not any(issubclass(w.category, linopy.PerformanceWarning) for w in caught)
 
 
 @pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
@@ -2788,3 +2830,179 @@ def test_copy_frozen_matrices(deep: bool) -> None:
     with pytest.raises(ValueError, match="read-only"):
         c.constraints["c"].coords["aux"].values[0] = -1
     assert c.constraints["c"].coords["aux"].equals(m.constraints["c"].coords["aux"])
+
+
+SHIFT_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "shift": lambda e: e.shift({dim0(e): 1}),
+    "shift-back": lambda e: e.shift({dim0(e): -2}),
+    "shift-all": lambda e: e.shift({str(d): 1 for d in e.coord_dims}),
+    "roll": lambda e: e.roll({dim0(e): 1}),
+    "roll-coords": lambda e: e.roll({dim0(e): -1}, roll_coords=True),
+    "diff": lambda e: e.diff(dim0(e)),
+    "diff-2": lambda e: e.diff(dim0(e), 2),
+}
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("op", list(SHIFT_OPS))
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_shift_roll_diff_stay_csr_and_match_dense(
+    build: str, op: str, scale: float
+) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    sparse, dense = scale * sparse, scale * dense
+    with no_densify():
+        res = SHIFT_OPS[op](sparse)
+    assert_sparse_matches(res, SHIFT_OPS[op](dense))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [lambda e: e.shift({dim0(e): 1}, 0), lambda e: e.roll({dim0(e): 1}, True)],
+    ids=["shift-fill", "roll-coords"],
+)
+def test_shift_roll_take_positional_args(
+    op: Callable[[LinearExpression], LinearExpression],
+) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense("grouped")
+    assert_linequal(op(sparse), op(dense))
+
+
+def concat(
+    parts: list[LinearExpression],
+    join: JoinOptions | None = None,
+    dim: str = "snapshot",
+) -> LinearExpression:
+    return linopy.merge(parts, dim=dim, join=join, cls=LinearExpression)
+
+
+def split(e: LinearExpression, dim: str, *parts: list[int]) -> list[LinearExpression]:
+    return [e.isel({dim: p}) for p in parts]
+
+
+CONCAT_PARTS: dict[str, Callable[[int], list[list[int]]]] = {
+    "halves": lambda n: [list(range(n // 2)), list(range(n // 2, n))],
+    "three": lambda n: [[0], list(range(1, n - 1)), [n - 1]],
+    "overlap": lambda n: [[0, 1], list(range(1, n))],
+    "reordered": lambda n: [[n - 1, 1], [0, *range(2, n - 1)]],
+    "duplicate-within": lambda n: [[0, 0], [1]],
+    "empty-part": lambda n: [[], list(range(1, n))],
+    "single": lambda n: [[n - 1, 0]],
+}
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
+@pytest.mark.parametrize("parts", list(CONCAT_PARTS))
+@pytest.mark.parametrize("axis", ["first", "last"])
+@pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
+def test_concat_stays_csr_and_matches_dense(
+    build: str, axis: str, parts: str, scale: float
+) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    sparse, dense = scale * sparse, scale * dense
+    dim = str(sparse.coord_dims[0 if axis == "first" else -1])
+    positions = CONCAT_PARTS[parts](sparse.sizes[dim])
+    operands = split(sparse, dim, *positions)
+    with no_densify():
+        res = concat(operands, dim=dim)
+    assert all(e.is_sparse for e in operands)
+    assert_sparse_matches(res, concat(split(dense, dim, *positions), dim=dim))
+
+
+@pytest.mark.parametrize("transposed", [False, True], ids=["same-order", "transposed"])
+def test_concat_with_dense_operand_stays_csr_and_matches_dense(
+    transposed: bool,
+) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense("grouped")
+    tail = dense.isel(snapshot=[1, 2])
+    if transposed:
+        tail = LinearExpression(
+            tail.data.transpose(*reversed(tail.coord_dims), ...), tail.model
+        )
+    with no_densify():
+        res = concat([sparse.isel(snapshot=[0]), tail])
+    assert_sparse_matches(res, concat([dense.isel(snapshot=[0]), tail]))
+
+
+def joined_parts(e: LinearExpression) -> list[LinearExpression]:
+    """Two snapshot blocks, the second over a subset of the buses."""
+    return [e.isel(snapshot=[0]), e.isel(snapshot=[1, 2], bus=[0, 2])]
+
+
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+def test_concat_join_stays_csr_and_matches_dense(join: JoinOptions) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense("grouped")
+    with no_densify():
+        res = concat(joined_parts(sparse), join)
+    assert_sparse_matches(res, concat(joined_parts(dense), join))
+
+
+def override_parts(e: LinearExpression) -> list[LinearExpression]:
+    buses = list(e.indexes["bus"])
+    return [e.isel(snapshot=[0]), e.isel(snapshot=[1]).reindex(bus=buses[1:] + ["new"])]
+
+
+def one_sided_aux_parts(e: LinearExpression) -> list[LinearExpression]:
+    return [e.isel(snapshot=[0]), e.isel(snapshot=[1, 2]).drop_vars(["bus", "tag"])]
+
+
+@pytest.mark.parametrize(
+    ("build", "parts", "join"),
+    [
+        ("grouped", override_parts, "override"),
+        ("aux", one_sided_aux_parts, "outer"),
+        ("aux", one_sided_aux_parts, None),
+    ],
+)
+def test_concat_coords_follow_dense(
+    build: str,
+    parts: Callable[[LinearExpression], list[LinearExpression]],
+    join: JoinOptions | None,
+) -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense(build)
+    with no_densify():
+        res = concat(parts(sparse), join)
+    assert_sparse_matches(res, concat(parts(dense), join))
+
+
+def test_concat_freezes_like_dense() -> None:
+    require_v1()
+    dense_c, sparse_c = twin_models()
+
+    def lhs(c: Case) -> LinearExpression:
+        parts = split(c.gen_sum(), "bus", [0, 1], [2, 3, 4])
+        return linopy.merge(parts, dim="bus", cls=LinearExpression)
+
+    with no_densify():
+        frozen = sparse_c.m.add_constraints(lhs(sparse_c) >= 1, name="c")
+    assert isinstance(frozen, CSRConstraint)
+    assert_frozen_equal(dense_c.m.add_constraints(lhs(dense_c) >= 1, name="c"), frozen)
+
+
+@pytest.mark.parametrize(
+    ("parts", "join"),
+    [
+        (joined_parts, None),
+        (joined_parts, "exact"),
+        (joined_parts, "override"),
+        (lambda e: [e.isel(snapshot=[0]), e.isel(snapshot=[1], group=[0])], "outer"),
+    ],
+    ids=["auto-mismatch", "exact", "override-size", "aux-conflict"],
+)
+def test_concat_raises_like_dense(
+    parts: Callable[[LinearExpression], list[LinearExpression]],
+    join: JoinOptions | None,
+) -> None:
+    require_v1()
+    build = "aux" if join == "outer" else "grouped"
+    sparse, dense = sparse_and_dense(build)
+    with pytest.raises(ValueError) as want:
+        concat(parts(dense), join)
+    with pytest.raises(type(want.value)), no_densify():
+        concat(parts(sparse), join)
