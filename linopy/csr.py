@@ -28,6 +28,7 @@ The reverse bridges live at the dense call sites, in
 
 from __future__ import annotations
 
+import functools
 import operator
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -572,25 +573,30 @@ class CSRLinearExpression:
         """Whether both live on the same cells, auxiliary coordinates aside."""
         return self.grid.same_layout(other.grid)
 
-    def added(self, other: CSRLinearExpression) -> CSRLinearExpression:
+    def added(self, *others: CSRLinearExpression) -> CSRLinearExpression:
         """
-        Sparse matrix addition == merge along the term dimension. Goes through
-        COO so explicit zero coefficients survive (scipy's ``+`` drops them),
+        Sparse matrix addition == merge along the term dimension, over any
+        number of operands on the same grid in one COO pass. Goes through COO
+        so explicit zero coefficients survive (scipy's ``+`` drops them),
         keeping a cell with only zero-coefficient terms distinguishable from
-        an empty cell. A cell absent in either operand is absent in the sum
-        and carries no terms. Auxiliary coordinates propagate and conflicting
-        ones raise (§11).
+        an empty cell. A cell absent in any operand is absent in the sum and
+        carries no terms. Auxiliary coordinates propagate, earlier operands
+        taking precedence, and conflicting ones raise (§11).
         """
-        const = self.const + other.const
-        a, b = self.csr.tocoo(), other.csr.tocoo()
-        shape = (self.n_cells, max(a.shape[1], b.shape[1]))
-        rows = np.concatenate([a.coords[0], b.coords[0]])
-        cols = np.concatenate([a.coords[1], b.coords[1]])
-        data = np.concatenate([a.data, b.data])
+        parts = (self, *others)
+        const = functools.reduce(np.add, (p.const for p in parts))
+        coos = [p.csr.tocoo() for p in parts]
+        shape = (self.n_cells, max(c.shape[1] for c in coos))
+        rows = np.concatenate([c.coords[0] for c in coos])
+        cols = np.concatenate([c.coords[1] for c in coos])
+        data = np.concatenate([c.data for c in coos])
         present = ~np.isnan(const)[rows]
         csr = coo_to_csr(data[present], rows[present], cols[present], shape, self.model)
-        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in (self, other)])
-        grid = replace(self.grid, aux=other.grid.aux | self.grid.aux)
+        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in parts])
+        aux: AuxCoords = {}
+        for p in reversed(parts):
+            aux |= p.grid.aux
+        grid = replace(self.grid, aux=aux)
         return replace(self, csr=csr, const=const, grid=grid)
 
     def contracted(

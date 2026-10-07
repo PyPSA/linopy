@@ -7,30 +7,40 @@ Created on Mon Oct 10 13:33:55 2022.
 
 from __future__ import annotations
 
-from functools import cached_property
-from typing import TYPE_CHECKING, cast
+from collections.abc import Callable
+from functools import cached_property, partial
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import numpy as np
 import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
-from linopy.constraints import ConstraintBase, CSRConstraint
+from linopy.constraints import CSRConstraint
+from linopy.csr import index_dtype
 
 if TYPE_CHECKING:
+    from linopy.common import VariableLabelIndex
+    from linopy.constraints import ConstraintBase
     from linopy.model import Model
 
 
-def _stack(csrs: list[scipy.sparse.csr_array]) -> scipy.sparse.csr_array | None:
-    """Vertically stack CSR blocks, or None when there are none."""
-    if not csrs:
-        return None
-    return cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
+class _RowBlock(NamedTuple):
+    """
+    Rows of one constraint. ``positional`` returns its positional CSR; for a
+    frozen constraint it is built only while the rows are gathered.
+    """
+
+    positional: Callable[[], scipy.sparse.csr_array]
+    n_rows: int
+    nnz: int
+    rhs: ndarray
+    sign: str | ndarray
+    row_scaling: ndarray | None
 
 
-def _concat(arrays: list, dtype: type | None = None) -> ndarray:
-    """Concatenate arrays, or an empty array when there are none."""
-    return np.concatenate(arrays) if arrays else np.array([], dtype=dtype)
+def _unit_or(scaling: ndarray) -> ndarray | None:
+    return None if (scaling == 1).all() else scaling
 
 
 def _row_scaling(c: ConstraintBase) -> ndarray:
@@ -38,6 +48,95 @@ def _row_scaling(c: ConstraintBase) -> ndarray:
     if isinstance(c, CSRConstraint):
         return c._scaling
     return c.scaling.values.ravel()[c.active_row_mask()]
+
+
+def _row_block(con: ConstraintBase, label_index: VariableLabelIndex) -> _RowBlock:
+    row_scaling = _unit_or(_row_scaling(con))
+    if isinstance(con, CSRConstraint):
+        stored = con._csr
+        return _RowBlock(
+            partial(con._to_positional_csr, label_index),
+            stored.shape[0],
+            int(np.count_nonzero(stored.data)),
+            con._rhs,
+            con._sign,
+            row_scaling,
+        )
+    csr, _, rhs, sense = con.to_matrix_with_rhs(label_index)
+    return _RowBlock(
+        lambda: csr,
+        csr.shape[0],
+        int(np.count_nonzero(csr.data)),
+        rhs,
+        sense,
+        row_scaling,
+    )
+
+
+def _stack(
+    blocks: list[_RowBlock],
+    label_index: VariableLabelIndex,
+    col_scaling: ndarray | None,
+    model: Model,
+) -> tuple[scipy.sparse.csr_array | None, ndarray, ndarray]:
+    """
+    Gather the scaled row blocks into one preallocated CSR, rhs and sense.
+
+    With solver variables y = Scol * x, constraints A x = b become
+    Srow * A * Scol^-1 * y = Srow * b.
+
+    Explicit zeros are dropped: expressions that broadcast against a dense
+    coordinate store one coefficient per pair, most of them zero, and a zero
+    coefficient never changes a constraint. Keeping them only inflates the
+    stored nnz handed to the solvers/writers (e.g. ``highspy.addRows`` scales
+    with stored nnz), so we prune them once, centrally, for every backend.
+    """
+    if not blocks:
+        return None, np.array([]), np.array([], dtype=object)
+    nnz = sum(block.nnz for block in blocks)
+    n_rows = sum(block.n_rows for block in blocks)
+    n_cols = label_index.n_active_vars
+    dtype = index_dtype(nnz, (n_rows, n_cols), model)
+    data = np.empty(nnz, dtype=float)
+    indices = np.empty(nnz, dtype=dtype)
+    indptr = np.empty(n_rows + 1, dtype=dtype)
+    b = np.empty(n_rows, dtype=float)
+    sense = np.empty(n_rows, dtype="U1")
+    indptr[0] = 0
+    pos = row = 0
+    for block in blocks:
+        source = block.positional()
+        count = block.nnz
+        block_data, block_indices, block_indptr = (
+            source.data,
+            source.indices,
+            source.indptr,
+        )
+        if count < source.nnz:
+            keep = block_data != 0
+            block_data, block_indices = block_data[keep], block_indices[keep]
+            block_indptr = np.concatenate([[0], np.cumsum(keep)])[block_indptr]
+        rows = slice(row, row + source.shape[0])
+        entries = slice(pos, pos + count)
+        if block.row_scaling is None:
+            data[entries] = block_data
+            b[rows] = block.rhs
+        else:
+            row_counts = np.diff(block_indptr)
+            np.multiply(
+                block_data, np.repeat(block.row_scaling, row_counts), out=data[entries]
+            )
+            np.multiply(block.rhs, block.row_scaling, out=b[rows])
+        if col_scaling is not None:
+            data[entries] /= col_scaling[block_indices]
+        indices[entries] = block_indices
+        block_offsets = indptr[rows.start + 1 : rows.stop + 1]
+        block_offsets[:] = block_indptr[1:]
+        block_offsets += pos
+        sense[rows] = block.sign
+        pos, row = entries.stop, rows.stop
+    A = scipy.sparse.csr_array((data, indices, indptr), shape=(n_rows, n_cols))
+    return A, b, sense
 
 
 def _binval_per_row(binval: int | np.ndarray, n: int) -> ndarray:
@@ -69,16 +168,16 @@ class MatrixAccessor:
     def _build_vars(self) -> None:
         m = self._parent
         self.vlabels: ndarray = m.variables.label_index.vlabels
+        n = len(self.vlabels)
+        self.var_scaling: ndarray = np.empty(n, dtype=float)
+        self.lb: ndarray = np.empty(n, dtype=float)
+        self.ub: ndarray = np.empty(n, dtype=float)
+        self.vtypes: ndarray = np.empty(n, dtype="U1")
 
-        lb_list = []
-        ub_list = []
-        vtypes_list = []
-        scaling_list = []
-
+        pos = 0
         for name, var in m.variables.items():
-            labels = var.labels.values.ravel()
-            mask = labels != -1
-
+            mask = var.labels.values.ravel() != -1
+            cols = slice(pos, pos + int(np.count_nonzero(mask)))
             if name in m.binaries:
                 vtype = "B"
             elif name in m.integers:
@@ -87,79 +186,48 @@ class MatrixAccessor:
                 vtype = "S"
             else:
                 vtype = "C"
+            self.vtypes[cols] = vtype
+            self.var_scaling[cols] = var.solver_scaling.values.ravel()[mask]
+            self.lb[cols] = var.lower.values.ravel()[mask]
+            self.ub[cols] = var.upper.values.ravel()[mask]
+            pos = cols.stop
 
-            lb_list.append(var.lower.values.ravel()[mask])
-            ub_list.append(var.upper.values.ravel()[mask])
-            vtypes_list.append(np.full(mask.sum(), vtype))
-            scaling_list.append(var.solver_scaling.values.ravel()[mask])
-
-        self.var_scaling: ndarray = _concat(scaling_list, dtype=float)
-        if lb_list:
-            self.lb: ndarray = np.concatenate(lb_list) * self.var_scaling
-            self.ub: ndarray = np.concatenate(ub_list) * self.var_scaling
-            self.vtypes: ndarray = np.concatenate(vtypes_list)
-        else:
-            self.lb = np.array([])
-            self.ub = np.array([])
-            self.vtypes = np.array([], dtype=object)
+        if not (self.var_scaling == 1).all():
+            self.lb *= self.var_scaling
+            self.ub *= self.var_scaling
 
     def _build_cons(self) -> None:
         m = self._parent
         label_index = m.variables.label_index
         label_to_pos = label_index.label_to_pos
-        unit_cols = bool((self.var_scaling == 1).all())
+        col_scaling = None if (self.var_scaling == 1).all() else self.var_scaling
 
-        def scale_rows_and_cols(
-            csr: scipy.sparse.csr_array, row_scaling: np.ndarray, b: np.ndarray
-        ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
-            if csr.shape[0] == 0:
-                return csr, b
-            unit_rows = bool((row_scaling == 1).all())
-            if unit_rows and unit_cols:
-                return csr, b
-            # With solver variables y = Scol * x, constraints A x = b become
-            # Srow * A * Scol^-1 * y = Srow * b.
-            data = csr.data
-            if not unit_rows:
-                data = data * np.repeat(row_scaling, np.diff(csr.indptr))
-            if not unit_cols:
-                data = data / self.var_scaling[csr.indices]
-            scaled = scipy.sparse.csr_array(
-                (data, csr.indices, csr.indptr), shape=csr.shape
-            )
-            return scaled, b * row_scaling
-
-        reg_csrs, reg_b, reg_sense = [], [], []
-        ind_csrs, ind_b, ind_sense, ind_binvar, ind_binval = [], [], [], [], []
+        regular, indicator = [], []
+        binvar, binval = [], []
         for c in m.constraints.data.values():
-            if c.is_indicator:
-                cc = c if isinstance(c, CSRConstraint) else c.freeze()
-                csr, _, b, sense = cc.to_matrix_with_rhs(label_index)
-                csr, b = scale_rows_and_cols(csr, cc._scaling, b)
-                ind_csrs.append(csr)
-                ind_b.append(b)
-                ind_sense.append(sense)
-                ind_binvar.append(label_to_pos[cc._binvar_labels])
-                binval = cast("int | np.ndarray", cc._binval)
-                ind_binval.append(_binval_per_row(binval, len(b)))
-            else:
-                csr, _, b, sense = c.to_matrix_with_rhs(label_index)
-                if not isinstance(c, CSRConstraint):
-                    csr.eliminate_zeros()
-                csr, b = scale_rows_and_cols(csr, _row_scaling(c), b)
-                reg_csrs.append(csr)
-                reg_b.append(b)
-                reg_sense.append(sense)
+            if not c.is_indicator:
+                regular.append(_row_block(c, label_index))
+                continue
+            cc = c if isinstance(c, CSRConstraint) else c.freeze()
+            indicator.append(_row_block(cc, label_index))
+            binvar.append(label_to_pos[cc._binvar_labels])
+            cc_binval = cast("int | np.ndarray", cc._binval)
+            binval.append(_binval_per_row(cc_binval, len(cc._rhs)))
 
         self.clabels: ndarray = m.constraints.label_index.clabels
-        self.A: scipy.sparse.csr_array | None = _stack(reg_csrs)
-        self.b: ndarray = _concat(reg_b)
-        self.sense: ndarray = _concat(reg_sense, dtype=object)
-        self.indicator_A: scipy.sparse.csr_array | None = _stack(ind_csrs)
-        self.indicator_b: ndarray = _concat(ind_b)
-        self.indicator_sense: ndarray = _concat(ind_sense, dtype=object)
-        self.indicator_binvar: ndarray = _concat(ind_binvar, dtype=np.intp)
-        self.indicator_binval: ndarray = _concat(ind_binval, dtype=np.intp)
+        self.A: scipy.sparse.csr_array | None
+        self.A, self.b, self.sense = _stack(regular, label_index, col_scaling, m)
+        self.indicator_A: scipy.sparse.csr_array | None
+        self.indicator_A, self.indicator_b, self.indicator_sense = _stack(
+            indicator, label_index, col_scaling, m
+        )
+        label_dtype = m._dtypes["labels"]
+        self.indicator_binvar: ndarray = np.concatenate(
+            [np.array([], dtype=label_dtype), *binvar]
+        )
+        self.indicator_binval: ndarray = (
+            np.concatenate(binval) if binval else np.array([], dtype=np.intp)
+        )
 
     @cached_property
     def c(self) -> ndarray:
