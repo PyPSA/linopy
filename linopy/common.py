@@ -1367,6 +1367,40 @@ def _with_levels(idx: pd.Index, levels: list[pd.Index]) -> pd.Index:
     return new
 
 
+def values_to_naive_utc(values: Any) -> tuple[np.ndarray, str | None]:
+    """
+    Convert timezone-aware datetime values of any shape to naive UTC.
+
+    ``values`` holds timezone-aware datetimes if it has a
+    ``pd.DatetimeTZDtype`` or is an object array of timestamps sharing one
+    timezone; other values are returned as an array, unconverted. Reverse
+    with :func:`values_from_naive_utc`.
+
+    Returns
+    -------
+    tuple[np.ndarray, str | None]
+        The converted values and their timezone name, None if the values
+        were not timezone-aware.
+    """
+    arr = np.asarray(values)
+    if arr.dtype != object:
+        return arr, None
+    idx = pd.Index(arr.ravel())
+    if not isinstance(idx, pd.DatetimeIndex) or idx.tz is None:
+        return arr, None
+    naive = idx.tz_convert("UTC").tz_localize(None)
+    return naive.to_numpy().reshape(arr.shape), str(idx.tz)
+
+
+def values_from_naive_utc(values: np.ndarray, tz: str) -> pd.DatetimeIndex:
+    """
+    Localize naive UTC datetime values to ``tz``, flattened to an index.
+
+    Reverses :func:`values_to_naive_utc`.
+    """
+    return pd.DatetimeIndex(np.ravel(values)).tz_localize("UTC").tz_convert(tz)
+
+
 def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
     """
     Serialize a list of pd.Index (including MultiIndex) to a DataArray dict.

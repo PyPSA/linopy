@@ -39,7 +39,13 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset
 
-from linopy.common import coords_from_dataset, coords_to_dataset_vars
+from linopy.common import (
+    TZ_ATTR,
+    coords_from_dataset,
+    coords_to_dataset_vars,
+    values_from_naive_utc,
+    values_to_naive_utc,
+)
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import (
@@ -99,7 +105,7 @@ class Grid:
     def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
         """Read back a grid written by :meth:`to_netcdf_vars`."""
         aux: AuxCoords = {
-            da.attrs["name"]: (da.attrs.get("dim", ()), da.to_numpy())
+            da.attrs["name"]: (da.attrs.get("dim", ()), _aux_from_netcdf(da))
             for k, da in ds.data_vars.items()
             if str(k).startswith(_AUX_PREFIX)
         }
@@ -110,14 +116,17 @@ class Grid:
         The indexes and auxiliary coordinates as plain data variables for
         netcdf, named by position with the coordinate names as attributes.
         """
-        aux = {
-            f"{_AUX_PREFIX}{j}": DataArray(
-                v,
+        aux = {}
+        for j, (n, (d, v)) in enumerate(self.aux.items()):
+            # netCDF has no timezone-aware datetime type, write them as naive UTC
+            values, zone = values_to_naive_utc(v)
+            aux[f"{_AUX_PREFIX}{j}"] = DataArray(
+                values,
                 dims=[f"{_AUX_PREFIX}dim{j}"] if isinstance(d, str) else [],
-                attrs={"name": n} | ({"dim": d} if isinstance(d, str) else {}),
+                attrs={"name": n}
+                | ({"dim": d} if isinstance(d, str) else {})
+                | ({TZ_ATTR: zone} if zone is not None else {}),
             )
-            for j, (n, (d, v)) in enumerate(self.aux.items())
-        }
         return coords_to_dataset_vars(self.coords) | aux
 
     @property
@@ -848,6 +857,18 @@ def _aux_coords(ds: Dataset | DataArray, dims: set[str]) -> AuxCoords:
         elif c.ndim == 1 and str(c.dims[0]) in dims:
             aux[str(n)] = (str(c.dims[0]), c.to_numpy())
     return aux
+
+
+def _aux_from_netcdf(da: DataArray) -> np.ndarray:
+    """
+    The values of an auxiliary coordinate written by :meth:`Grid.to_netcdf_vars`,
+    timezone-aware datetimes restored as the object array ``_aux_coords`` holds.
+    """
+    values = da.to_numpy()
+    if TZ_ATTR not in da.attrs:
+        return values
+    aware = values_from_naive_utc(values, da.attrs[TZ_ATTR])
+    return np.asarray(aware, dtype=object).reshape(values.shape)
 
 
 def _member_rows(
