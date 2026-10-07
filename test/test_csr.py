@@ -897,6 +897,17 @@ def test_csr_solution_matches_dense(
     xr.testing.assert_allclose(sol, dense.solution)
 
 
+def test_csr_solution_raises_on_removed_variable() -> None:
+    require_v1()
+    _, sparse = case_twins(lambda c: c.balance_lhs())()
+    assert sparse._csr is not None
+    m = sparse.model
+    m._mock_solve()
+    m.remove_variables(next(iter(m.variables)))
+    with pytest.raises(KeyError, match="missing from the model"):
+        sparse.solution
+
+
 def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
     require_v1()
     c1, c2 = twin_models()
