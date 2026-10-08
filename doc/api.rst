@@ -60,6 +60,7 @@ Inspecting a model
    model.Model.type
    model.Model.is_linear
    model.Model.is_quadratic
+   model.Model.sparse
 
 Modifying a model
 -----------------
@@ -292,6 +293,7 @@ Structure
    expressions.LinearExpression.const
    expressions.LinearExpression.nterm
    expressions.LinearExpression.has_terms
+   expressions.LinearExpression.is_sparse
 
 Conversion
 ----------
@@ -413,7 +415,7 @@ CSRConstraint
 Memory-efficient, immutable constraint representation backed by a scipy
 CSR sparse matrix. Opt in via ``Model(sparse=True)`` or
 ``Model.add_constraints(..., freeze=True)``. See the
-:doc:`creating-constraints` guide for usage.
+:doc:`creating-constraints` and :doc:`sparse-models` guides for usage.
 
 .. autosummary::
    :toctree: generated/
@@ -449,6 +451,8 @@ Conversion
    :toctree: generated/
 
    constraints.CSRConstraint.to_polars
+   constraints.CSRConstraint.to_dense
+   constraints.CSRConstraint.mutable
 
 
 Constraints
@@ -683,6 +687,17 @@ Utilities
    align
    options
    ABSENT
+
+``options`` holds these keys:
+
+- ``display_max_rows``, ``display_max_terms``: size of the printed repr.
+- ``semantics``: ``"legacy"`` (default) or ``"v1"``, see
+  :doc:`migrating-to-v1`.
+- ``warn_on_densify``: emit a ``PerformanceWarning`` when a sparse (CSR)
+  backing is converted to dense. ``None`` (default) warns in a sparse model
+  on implicit conversions only, ``True`` always warns, ``False`` never
+  warns. See :doc:`sparse-models`.
+- ``sparse_groupby``: deprecated, use ``Model(sparse=True)``.
 
 
 Warnings
