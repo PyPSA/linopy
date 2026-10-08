@@ -1230,16 +1230,24 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             return [str(n) for n in json.loads(value)]
         return [str(n) for n in value]
 
+    # Selecting a container's data variables attaches the scalar coords of all
+    # containers, so each is mapped to its owner: the longest matching prefix,
+    # as names may contain dashes. Coords with dimensions only attach to the
+    # container whose dimensions they share.
+    prefixes = {str(k).rsplit("-", 1)[0] for k in ds}
+    scalar_owner = {
+        c: max(
+            (p for p in prefixes if str(c).startswith(f"{p}-")), key=len, default=None
+        )
+        for c in ds.coords
+        if ds[c].ndim == 0
+    }
+
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        ds = ds.drop_vars(
+            [c for c in ds.coords if scalar_owner.get(c, prefix) != prefix]
+        )
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
