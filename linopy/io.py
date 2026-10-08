@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
+from itertools import chain
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -1219,7 +1220,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
     def has_prefix(k: str, prefix: str) -> bool:
-        return k.rsplit("-", 1)[0] == prefix
+        return owner(k) == prefix
 
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
@@ -1269,15 +1270,32 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             )
         return ordered
 
+    containers = {
+        kind: container_names(kind)
+        for kind in ("variables", "expressions", "constraints")
+    }
+    # Data variables and attributes are stored as ``<prefix>-<key>``, with
+    # prefix ``<kind>-<name>``, ``objective`` or ``parameters``. Names and keys
+    # (parameter names, attribute names, dimensions) may contain dashes, so a
+    # key belongs to the longest known prefix.
+    prefixes = {"objective", "parameters", *chain.from_iterable(containers.values())}
+
+    def owner(k: str) -> str | None:
+        parts = k.split("-")
+        for i in range(len(parts) - 1, 0, -1):
+            if (prefix := "-".join(parts[:i])) in prefixes:
+                return prefix
+        return None
+
     variables = {}
-    for k in container_names("variables"):
+    for k in containers["variables"]:
         name = remove_prefix(k, "variables")
         variables[name] = Variable(get_prefix(ds, k), m, name)
 
     m._variables = Variables(variables, m)
 
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
-    for k in container_names("expressions"):
+    for k in containers["expressions"]:
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
         expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
@@ -1295,7 +1313,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._expressions = Expressions(expressions, m)
 
     constraints: dict[str, ConstraintBase] = {}
-    for k in container_names("constraints"):
+    for k in containers["constraints"]:
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)
         if con_ds.attrs.get("_linopy_format") == "csr":
