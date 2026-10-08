@@ -253,8 +253,10 @@ def test_model_to_netcdf_tz_aware_aux_coords(
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert p.variables["x"].labels.equals(m.variables["x"].labels.drop_vars("time"))
-    assert p.variables["x"].lower.equals(m.variables["x"].lower.drop_vars("time"))
+    # Dense aux coords are dropped on read until #1024 lands; compare without them
+    for attr in ("labels", "lower"):
+        read = getattr(p.variables["x"], attr).drop_vars("time", errors="ignore")
+        assert read.equals(getattr(m.variables["x"], attr).drop_vars("time"))
     assert (p.constraints["c"].rhs.values == m.constraints["c"].rhs.values).all()
     if freeze:
         assert_conequal(m.constraints["c"], p.constraints["c"])
