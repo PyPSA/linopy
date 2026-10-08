@@ -1229,14 +1229,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if owners[str(k)] == prefix]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        ds = ds.drop_vars(
+            [c for c in ds.coords if ds[c].ndim == 0 and owners[str(c)] != prefix]
+        )
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
@@ -1279,7 +1274,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
                 return k
         return None
 
-    owners = {k: owner(k) for k in [*map(str, ds), *ds.attrs]}
+    owners = {k: owner(k) for k in [*map(str, ds.variables), *ds.attrs]}
 
     variables = {}
     for k in containers["variables"]:
