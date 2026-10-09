@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
@@ -28,8 +28,13 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import (
+    TZ_ATTR,
+    index_from_naive_utc,
+    index_to_naive_utc,
     sos_weights,
     to_polars,
+    values_from_naive_utc,
+    values_to_naive_utc,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
@@ -1048,6 +1053,12 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
+def _assign_index(ds: xr.Dataset, dim: Hashable, idx: pd.Index) -> xr.Dataset:
+    if isinstance(idx, pd.MultiIndex):
+        return ds.assign_coords(xr.Coordinates.from_pandas_multiindex(idx, dim))
+    return ds.assign_coords({dim: idx})
+
+
 def to_netcdf(
     m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
 ) -> None:
@@ -1098,6 +1109,25 @@ def to_netcdf(
         )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+        # netCDF cannot store timezone-aware datetimes, write them as naive UTC
+        zones_by_name = {}
+        for dim in ds.dims:
+            if dim in ds.indexes:
+                idx, zones = index_to_naive_utc(ds.indexes[dim])
+                if any(zones):
+                    zones_by_name[str(dim)] = zones
+                    ds = _assign_index(ds, dim, idx)
+        for name, var in ds.variables.items():
+            if name in ds.indexes:
+                continue
+            values, zone = values_to_naive_utc(var.data)
+            if zone is not None:
+                zones_by_name[str(name)] = [zone]
+                naive = {name: var.copy(data=values)}
+                ds = ds.assign_coords(naive) if name in ds.coords else ds.assign(naive)
+        if zones_by_name:
+            ds = ds.assign_attrs({TZ_ATTR: json.dumps(zones_by_name)})
+
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
@@ -1252,6 +1282,20 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             if f"{dim}_multiindex" in ds.attrs:
                 names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
                 ds = ds.set_index({dim: names})  # type: ignore[dict-item]
+
+        if TZ_ATTR in ds.attrs:
+            for name, zones in json.loads(ds.attrs.pop(TZ_ATTR)).items():
+                if name in ds.indexes:
+                    idx = index_from_naive_utc(ds.indexes[name], zones)
+                    ds = _assign_index(ds, name, idx)
+                elif name in ds.variables:
+                    var = ds.variables[name]
+                    values = values_from_naive_utc(var.values, zones[0])
+                    aware = {name: (var.dims, values, var.attrs)}
+                    if name in ds.coords:
+                        ds = ds.assign_coords(aware)
+                    else:
+                        ds = ds.assign(aware)
 
         return ds
 
