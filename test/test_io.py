@@ -360,6 +360,44 @@ def test_model_to_netcdf_with_dash_names(
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_with_dash_named_parameters(
+    model: Model, tmp_path: Path
+) -> None:
+    m = model
+    m.parameters["my-param"] = xr.DataArray(
+        [5, 6], dims=["my-dim"], coords={"my-dim": ["a", "b"]}
+    )
+    m.parameters.attrs["my-attr"] = "kept"
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+    assert p.parameters.attrs == m.parameters.attrs
+
+
+def test_model_to_netcdf_with_dash_named_multiindex_dim(tmp_path: Path) -> None:
+    from linopy.semantics import is_v1
+
+    if is_v1():
+        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
+    index = pd.MultiIndex.from_tuples(
+        [(1, "a"), (1, "b"), (2, "a")], names=["first", "second"]
+    )
+    coords = xr.Coordinates.from_pandas_multiindex(index, "multi-dim")
+    m = Model()
+    x = m.add_variables(coords=coords, name="x")
+    m.add_objective(x.sum())
+    m.parameters["param"] = xr.DataArray([1, 2, 3], coords=coords)
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+    for index in (p.variables["x"].indexes, p.parameters.indexes):
+        assert isinstance(index["multi-dim"], pd.MultiIndex)
+
+
 def test_model_to_netcdf_with_status_and_condition(
     model_with_dash_names: Model, tmp_path: Path
 ) -> None:
