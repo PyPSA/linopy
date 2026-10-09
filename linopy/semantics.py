@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, TypeAlias
 from warnings import warn
 
@@ -40,17 +42,27 @@ def _user_nan_message() -> str:
     )
 
 
-def _shared_dim_mismatch_message(dim: str, left: Any, right: Any) -> str:
-    """Shared-dim error text — names the dim and shows the disagreeing labels."""
+def _shared_dim_mismatch_message(
+    dim: str, left: Any, right: Any, *, joinable: bool = True
+) -> str:
+    """
+    Shared-dim error text — names the dim and shows the disagreeing labels.
+    ``joinable=False`` drops the ``join=`` hint for operations that reject it.
+    """
+    join_hint = (
+        ", or by passing an explicit `join=` argument to `.add` / `.sub` /"
+        " `.mul` / `.div` / `.le` / `.ge` / `.eq` (accepts inner / outer /"
+        " left / right / override)."
+        if joinable
+        else "."
+    )
     return (
         f"Coordinate mismatch on shared dimension {dim!r}: "
         f"left={_short_repr(left)}, right={_short_repr(right)}. "
         "Resolve with `.sel(...)` / `.reindex(...)` to align before "
         "combining, with `.assign_coords(...)` to relabel one side "
         "(positional alignment, made explicit), with `linopy.align(...)` "
-        "to pre-align several operands at once, or by passing an explicit "
-        "`join=` argument to `.add` / `.sub` / `.mul` / `.div` / `.le` / "
-        "`.ge` / `.eq` (accepts inner / outer / left / right / override)."
+        "to pre-align several operands at once" + join_hint
     )
 
 
@@ -158,14 +170,29 @@ def check_user_nan_breakpoints(*, context: str = "breakpoints") -> None:
     warn_legacy(_legacy_nan_breakpoint_message(context))
 
 
+_LEGACY_POSITIONAL_ALIGNMENT = "positional when sizes match, otherwise left-join"
+_LEGACY_MERGE_ALIGNMENT = "positional when sizes match, otherwise outer join by label"
+_V1_RAISES = "Under v1 this raises ValueError."
+_JOIN_HINT = "\n             or pass an explicit `join=` argument."
+
+
+def _join_hint(joinable: bool) -> str:
+    """The trailing ``join=`` resolve line, omitted where ``join=`` is rejected."""
+    return _JOIN_HINT if joinable else ""
+
+
 def _legacy_coord_mismatch_message(
     context: str,
     dim: str | None = None,
     left: Any = None,
     right: Any = None,
+    *,
+    alignment: str = _LEGACY_POSITIONAL_ALIGNMENT,
+    v1: str = _V1_RAISES,
+    joinable: bool = True,
 ) -> str:
     """
-    Mismatched dim coords silently aligned (positional or left-join).
+    Mismatched dim coords silently aligned the way ``alignment`` describes.
 
     When ``dim`` / ``left`` / ``right`` are given, the message names the
     offending dim and shows the diff — same shape as the v1-raise text
@@ -178,26 +205,35 @@ def _legacy_coord_mismatch_message(
     )
     return (
         f"Coordinate mismatch in {context} silently aligned by legacy"
-        " (positional when sizes match, otherwise left-join)."
-        " Under v1 this raises ValueError."
+        f" ({alignment}). {v1}"
         + diff
         + "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
         "\n             `.assign_coords(...)` to relabel one side"
         "\n             `linopy.align(...)` to pre-align several operands"
-        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+        + _join_hint(joinable)
+        + _OPT_IN_HINT
     )
 
 
-def _legacy_coord_reorder_message(context: str, dim: str, left: Any, right: Any) -> str:
-    """Same labels, different order — aligned positionally by legacy; v1 raises."""
+def _legacy_coord_reorder_message(
+    context: str,
+    dim: str,
+    left: Any,
+    right: Any,
+    *,
+    alignment: str = _LEGACY_MERGE_ALIGNMENT,
+    joinable: bool = True,
+) -> str:
+    """Same labels, different order — aligned the way ``alignment`` describes."""
     return (
-        f"Coordinate order mismatch in {context} aligned positionally by legacy."
+        f"Coordinate order mismatch in {context} aligned by legacy ({alignment})."
         " Under v1 the same labels in a different order raise ValueError (§8);"
         " reindex or sort one side to align by label."
         f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
         "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
         "\n             `.assign_coords(...)` to relabel one side"
-        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+        + _join_hint(joinable)
+        + _OPT_IN_HINT
     )
 
 
@@ -259,9 +295,30 @@ def _legacy_masked_variable_message(name: str) -> str:
         " propagates through arithmetic instead (`x + y` becomes absent"
         " at the slot and the constraint drops)."
         f"\n  Resolve:   wrap with `{name}.fillna(0)` for the legacy"
-        " behaviour under v1"
-        "\n             (no fix needed if you only use the variable in a"
-        " constraint LHS alone — `y >= 0` drops the same way in both)." + _OPT_IN_HINT
+        " behaviour under v1." + _OPT_IN_HINT
+    )
+
+
+def _legacy_absent_operand_message() -> str:
+    """An expression's absent slots silently filled by legacy arithmetic."""
+    return (
+        "An operand has absent slots (from `.where()` / `.shift()` / `.diff()`"
+        " / `.reindex()`) that legacy silently filled with 0 (so `expr + y`"
+        " keeps `y` there). Under v1 the absence propagates through arithmetic"
+        " instead (the result is absent at the slot and a constraint built from"
+        " it drops the row)."
+        "\n  Resolve:   `.fillna(0)` on the operand for the legacy behaviour under"
+        " v1." + _OPT_IN_HINT
+    )
+
+
+def _legacy_join_divisor_fill_message() -> str:
+    """A reindexing join created divisor positions, filled with 1 by legacy."""
+    return (
+        "The explicit `join=` created divisor positions, which legacy silently"
+        " filled with 1 (leaving the term unscaled). Under v1 they take"
+        " `fill_value=inf`, so the term is zeroed there."
+        "\n  Resolve:   pass `fill_value=` explicitly." + _OPT_IN_HINT
     )
 
 
@@ -323,16 +380,29 @@ def warn_outside_linopy(message: str, category: type[Warning]) -> None:
     warn(message, category, stacklevel=stacklevel)
 
 
-def warn_legacy(message: str, *, stacklevel: int | None = None) -> None:
+_LEGACY_WARNINGS_MUTED: ContextVar[bool] = ContextVar(
+    "_LEGACY_WARNINGS_MUTED", default=False
+)
+
+
+@contextmanager
+def legacy_warnings_muted() -> Iterator[None]:
+    """Silence legacy warnings for an operation that already emitted its own."""
+    token = _LEGACY_WARNINGS_MUTED.set(True)
+    try:
+        yield
+    finally:
+        _LEGACY_WARNINGS_MUTED.reset(token)
+
+
+def warn_legacy(message: str) -> None:
     """
     Emit a `LinopySemanticsWarning` pointing at the first call-stack frame
-    outside the linopy package (see :func:`warn_outside_linopy`). Pass an
-    explicit ``stacklevel`` to override (e.g. for tests).
+    outside the linopy package (see :func:`warn_outside_linopy`). Nothing is
+    emitted inside :func:`legacy_warnings_muted`.
     """
-    if stacklevel is None:
+    if not _LEGACY_WARNINGS_MUTED.get():
         warn_outside_linopy(message, LinopySemanticsWarning)
-    else:
-        warn(message, LinopySemanticsWarning, stacklevel=stacklevel)
 
 
 def _short_repr(values: Any, limit: int = 6) -> str:
@@ -365,6 +435,17 @@ def is_nan_scalar(value: Any) -> bool:
     return isinstance(value, (float, np.floating)) and bool(np.isnan(value))
 
 
+def warn_legacy_absence(*consts: DataArray) -> None:
+    """
+    Warn when legacy arithmetic is about to fill an operand's absent slots
+    (NaN ``const``) with 0, which v1 propagates instead (§6).
+    """
+    if is_v1():
+        return
+    if any(bool(c.isnull().any()) for c in consts):
+        warn_legacy(_legacy_absent_operand_message())
+
+
 def check_user_nan(*, op_kind: str = "add") -> None:
     """
     Enforce §5 for a user-supplied constant (scalar or array).
@@ -375,7 +456,7 @@ def check_user_nan(*, op_kind: str = "add") -> None:
     """
     if is_v1():
         raise ValueError(_user_nan_message())
-    warn_legacy(_legacy_nan_constant_message(op_kind), stacklevel=5)
+    warn_legacy(_legacy_nan_constant_message(op_kind))
 
 
 class AbsentType:
@@ -442,7 +523,7 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
 
 
 def enforce_aux_conflict(
-    datasets: Sequence[Any], *, concat_dim: str | None = None, stacklevel: int = 5
+    datasets: Sequence[Any], *, concat_dim: str | None = None
 ) -> None:
     """
     Enforce §11 across the given operands: v1 raises on aux-coord
@@ -453,12 +534,10 @@ def enforce_aux_conflict(
         return
     if is_v1():
         raise ValueError(_aux_conflict_message(*conflict))
-    warn_legacy(_legacy_aux_conflict_message(*conflict), stacklevel=stacklevel)
+    warn_legacy(_legacy_aux_conflict_message(*conflict))
 
 
-def enforce_no_multiindex(
-    obj: Any, *, context: str = "input", stacklevel: int = 4
-) -> None:
+def enforce_no_multiindex(obj: Any, *, context: str = "input") -> None:
     """Reject (v1) / deprecate (legacy) any MultiIndex dimension on ``obj``."""
     indexes = getattr(obj, "indexes", None) or {}
     dim = next((d for d, i in indexes.items() if isinstance(i, pd.MultiIndex)), None)
@@ -466,7 +545,7 @@ def enforce_no_multiindex(
         return
     if is_v1():
         raise ValueError(_v1_multiindex_message(str(dim), context))
-    warn_legacy(_legacy_multiindex_message(str(dim), context), stacklevel=stacklevel)
+    warn_legacy(_legacy_multiindex_message(str(dim), context))
 
 
 def first_mismatched_dim(
@@ -556,21 +635,36 @@ def shared_dim_mismatches(
 
 
 def enforce_merge_dims(
-    datasets: Sequence[Dataset], *, concat_dim: str, context: str
+    datasets: Sequence[Dataset],
+    *,
+    concat_dim: str,
+    context: str,
+    alignment: str = _LEGACY_MERGE_ALIGNMENT,
+    joinable: bool = True,
 ) -> None:
     """
     Enforce §8 across the operands of a merge: v1 raises on a differing label
     set or a pure reorder, legacy warns and leaves the alignment to the merge.
+    ``alignment`` describes how legacy aligns them, ``joinable`` whether the
+    operation accepts ``join=``.
     """
     mismatch, reorder = shared_dim_mismatches(datasets, concat_dim)
     if is_v1():
         problem = mismatch or reorder
         if problem is not None:
-            raise ValueError(_shared_dim_mismatch_message(*problem))
+            raise ValueError(_shared_dim_mismatch_message(*problem, joinable=joinable))
     elif mismatch is not None:
-        warn_legacy(_legacy_coord_mismatch_message(context, *mismatch))
+        warn_legacy(
+            _legacy_coord_mismatch_message(
+                context, *mismatch, alignment=alignment, joinable=joinable
+            )
+        )
     elif reorder is not None:
-        warn_legacy(_legacy_coord_reorder_message(context, *reorder))
+        warn_legacy(
+            _legacy_coord_reorder_message(
+                context, *reorder, alignment=alignment, joinable=joinable
+            )
+        )
 
 
 def conflicting_aux_coord(
