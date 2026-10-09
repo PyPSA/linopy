@@ -1158,12 +1158,13 @@ def format_single_expression(
         truncate = max_terms // 2
         positions = model.variables.get_label_position(v[..., :truncate])
         expr = list(zip(c[:truncate], positions))
-        res = format_line(expr, const)
+        # the constant is printed once, after the last terms
+        res = format_line(expr, np.nan)
         res += " ... "
         expr = list(
             zip(
                 c[-truncate:],
-                model.variables.get_label_position(v[-truncate:]),
+                model.variables.get_label_position(v[..., -truncate:]),
             )
         )
         residual = format_line(expr, const)
