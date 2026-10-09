@@ -791,8 +791,7 @@ def _reindex_reordered_dims(
                 warn_legacy(
                     _legacy_const_reorder_message(
                         str(dim), expected_idx.values, actual_idx.values
-                    ),
-                    stacklevel=6,
+                    )
                 )
             arr = arr.reindex({dim: expected_idx})
     return arr
