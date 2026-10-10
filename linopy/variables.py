@@ -6,7 +6,6 @@ This module contains variable related definitions of the package.
 
 from __future__ import annotations
 
-import functools
 import logging
 from collections.abc import Callable, Hashable, ItemsView, Iterator, Mapping
 from dataclasses import dataclass
@@ -14,6 +13,9 @@ from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    Concatenate,
+    ParamSpec,
+    Protocol,
     cast,
     overload,
 )
@@ -100,20 +102,24 @@ logger = logging.getLogger(__name__)
 
 FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan, "scaling": 1.0}
 
+P = ParamSpec("P")
+
+
+class DatasetMethod(Protocol[P]):
+    def __call__(self, __ds: Dataset, /, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+
 
 def varwrap(
-    method: Callable, *default_args: Any, **new_default_kwargs: Any
-) -> Callable:
-    @functools.wraps(method)
-    def _varwrap(var: Variable, *args: Any, **kwargs: Any) -> Variable:
+    method: DatasetMethod[P], **new_default_kwargs: Any
+) -> Callable[Concatenate[Variable, P], Variable]:
+
+    def _varwrap(var: Variable, /, *args: P.args, **kwargs: P.kwargs) -> Variable:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        return var.__class__(
-            method(var.data, *default_args, *args, **kwargs), var.model, var.name
-        )
+        return var.__class__(method(var.data, *args, **kwargs), var.model, var.name)
 
     _varwrap.__doc__ = (
-        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"  # type: ignore
     )
     if new_default_kwargs:
         _varwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
@@ -1508,29 +1514,29 @@ class Variable:
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(Dataset.assign_attrs)
 
-    assign_coords = varwrap(Dataset.assign_coords)
+    assign_coords = varwrap(Dataset.assign_coords)  # type: ignore[arg-type]
 
-    assign = varwrap(assign_multiindex_safe)
+    assign = varwrap(assign_multiindex_safe)  # type: ignore[arg-type]
 
-    assign_multiindex_safe = varwrap(assign_multiindex_safe)
+    assign_multiindex_safe = varwrap(assign_multiindex_safe)  # type: ignore[arg-type]
 
     broadcast_like = varwrap(Dataset.broadcast_like)
 
-    compute = varwrap(Dataset.compute)
+    compute = varwrap(Dataset.compute)  # type: ignore[arg-type]
 
     # drop = varwrap(Dataset.drop)
 
-    drop_sel = varwrap(Dataset.drop_sel)
+    drop_sel = varwrap(Dataset.drop_sel)  # type: ignore[arg-type]
 
-    drop_isel = varwrap(Dataset.drop_isel)
+    drop_isel = varwrap(Dataset.drop_isel)  # type: ignore[arg-type]
 
-    expand_dims = varwrap(Dataset.expand_dims)
+    expand_dims = varwrap(Dataset.expand_dims)  # type: ignore[arg-type]
 
-    sel = varwrap(Dataset.sel)
+    sel = varwrap(Dataset.sel)  # type: ignore[arg-type]
 
-    isel = varwrap(Dataset.isel)
+    isel = varwrap(Dataset.isel)  # type: ignore[arg-type]
 
-    shift = varwrap(Dataset.shift, fill_value=_fill_value)
+    shift = varwrap(Dataset.shift, fill_value=_fill_value)  # type: ignore[arg-type]
 
     def reindex(
         self,
@@ -1574,15 +1580,15 @@ class Variable:
             self.name,
         )
 
-    swap_dims = varwrap(Dataset.swap_dims)
+    swap_dims = varwrap(Dataset.swap_dims)  # type: ignore[arg-type]
 
-    set_index = varwrap(Dataset.set_index)
+    set_index = varwrap(Dataset.set_index)  # type: ignore[arg-type]
 
-    rename = varwrap(Dataset.rename)
+    rename = varwrap(Dataset.rename)  # type: ignore[arg-type]
 
-    roll = varwrap(Dataset.roll)
+    roll = varwrap(Dataset.roll)  # type: ignore[arg-type]
 
-    stack = varwrap(Dataset.stack)
+    stack = varwrap(Dataset.stack)  # type: ignore[arg-type]
 
     unstack = varwrap(Dataset.unstack, fill_value=_fill_value)
 

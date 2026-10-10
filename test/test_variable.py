@@ -300,7 +300,7 @@ def test_variable_swap_dims(x: linopy.Variable) -> None:
 
 def test_variable_set_index(x: linopy.Variable) -> None:
     x = x.assign_coords({"second": ("first", x.indexes["first"] + 100)})
-    x = x.set_index({"multi": ["first", "second"]})
+    x = x.set_index(indexes={"multi": ["first", "second"]})  # type: ignore
     assert isinstance(x, linopy.variables.Variable)
     assert x.dims == ("multi",)
     assert isinstance(x.indexes["multi"], pd.MultiIndex)

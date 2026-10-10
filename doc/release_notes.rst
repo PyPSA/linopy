@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+*Improve type hints for Variable methods inherited from xarray*
+
+* Now the type checker properly understands the wrapped functions
+
 Version 0.10.0
 --------------
 
