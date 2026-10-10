@@ -3,9 +3,10 @@ Migrating to the v1 arithmetic convention
 
 .. note::
 
-   v1 is **opt-in** in this release and legacy remains the default. Nothing
-   changes until you set ``linopy.options["semantics"] = "v1"``. This guide is
-   for deciding *when* to opt in and *what* to change when you do.
+   v1 is **opt-in** in linopy 0.10 and legacy remains the default. linopy 1.0
+   removes legacy, so 0.10 is the release to migrate in. Nothing changes until
+   you set ``linopy.options["semantics"] = "v1"``. This guide tells you *what*
+   to change when you do.
 
 Why v1 exists
 -------------
@@ -28,16 +29,18 @@ per-case bug catalogue is in `issue #714 <https://github.com/PyPSA/linopy/issues
 The rollout
 -----------
 
-The transition happens over three steps so that no model changes behaviour
+The transition happens in two steps, so that no model changes behaviour
 without warning first:
 
-#. **Now — opt-in.** v1 is available via ``linopy.options["semantics"] = "v1"``.
-   Legacy is the default. Under legacy, every operation whose result *would*
-   change under v1 emits a :class:`linopy.LinopySemanticsWarning` that names the
-   rule and the fix.
-#. **A later minor release — default.** v1 becomes the default; legacy stays
-   reachable via ``options["semantics"] = "legacy"`` for one more cycle.
-#. **linopy 1.0 — legacy removed.** Only v1 remains.
+#. **linopy 0.10 — opt-in.** v1 is available via
+   ``linopy.options["semantics"] = "v1"``. Legacy is the default. Under legacy,
+   every operation whose result *would* change under v1 emits a
+   :class:`linopy.LinopySemanticsWarning` that names the rule and the fix.
+#. **linopy 1.0 — legacy removed.** v1 is the only convention. There is no
+   opt-out.
+
+Migrate while on 0.10. Every difference between the two conventions is either
+warned about under legacy or raised under v1, so no model changes silently.
 
 Who this affects
 ----------------
