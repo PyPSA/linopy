@@ -10,10 +10,10 @@ summed, terms label-ordered) and ragged along ``_term``, with no fixed term
 count per row; grouping, ``sum``, ``merge``/``+``/``-``, scaling and
 ``@``/``dot`` (:meth:`contracted`) are sparse linear algebra. Zero policy: the
 structural operations (grouping and ``sum`` via :meth:`aggregated`, merge via
-:meth:`added`, scaling, reindexing) go through COO and keep explicit zero
-coefficients; only the product with a constant matrix, ``@``/``dot``, prunes
-them. Either way cell activeness is carried by ``const`` alone, independent of
-term layout.
+:meth:`added`, scaling, reindexing) keep explicit zero coefficients, going
+through COO or, for a reindex that only permutes cells, gathering rows; only
+the product with a constant matrix, ``@``/``dot``, prunes them. Either way
+cell activeness is carried by ``const`` alone, independent of term layout.
 Any operation without a sparse branch expands the expression through
 ``.data`` to the mathematically identical dense rectangle in canonical term
 layout; this is valid because v1 semantics do not fix the term layout.
@@ -451,7 +451,8 @@ class CSRLinearExpression:
         """
         coo = self.csr.tocoo()
         shape = (grid.size, self.csr.shape[1])
-        rows_ = rows[coo.coords[0]]
+        dtype = index_dtype(coo.nnz, shape, self.model)
+        rows_ = rows.astype(dtype, copy=False)[coo.coords[0]]
         csr = coo_to_csr(coo.data, rows_, coo.coords[1], shape, self.model)
         weights = np.nan_to_num(self.const)
         const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
@@ -535,14 +536,58 @@ class CSRLinearExpression:
         csr = self.csr[np.where(present, rows, 0)]
         return replace(self, csr=csr, grid=grid).with_const(const)
 
+    def concatenated(
+        self, others: Iterable[CSRLinearExpression], dim: str, grid: Grid
+    ) -> CSRLinearExpression:
+        """
+        Stack this and ``others``, in that order, along ``dim`` into the
+        cells of ``grid``, all operands sharing the labels of the other dims
+        in this grid's dim order. Rows are gathered with their terms,
+        explicit zeros included, and their constants. Auxiliary coordinates
+        are ``grid``'s.
+        """
+        parts = (self, *others)
+        n_cols = max(p.csr.shape[1] for p in parts)
+        blocks = [
+            scipy.sparse.csr_array(
+                (p.csr.data, p.csr.indices, p.csr.indptr), shape=(p.n_cells, n_cols)
+            )
+            for p in parts
+        ]
+        csr = scipy.sparse.vstack(blocks, format="csr")
+        if csr.shape[0] != grid.size:
+            raise ValueError(
+                f"Stacked {csr.shape[0]} rows into a grid of {grid.size} cells."
+            )
+        const = np.concatenate([p.const for p in parts])
+        stacked = replace(self, csr=csr, const=const, grid=grid)
+        axis = self.grid.dims.index(dim)
+        if not axis:
+            return stacked
+        offsets = np.cumsum([0, *(p.n_cells for p in parts[:-1])])
+        order = np.concatenate(
+            [
+                (o + np.arange(p.n_cells)).reshape(p.shape)
+                for o, p in zip(offsets, parts)
+            ],
+            axis=axis,
+        ).reshape(-1)
+        return stacked.taken(order, grid)
+
     def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
         Remap rows onto a new grid, possibly in a new dim order: dropped
         labels vanish, new labels get ``fill`` as their constant (NaN: absent
-        cells). Auxiliary coordinates follow the rows; those of ``grid`` are
-        ignored.
+        cells). A target that only permutes the cells gathers the rows
+        directly, otherwise the remap goes through COO. Auxiliary coordinates
+        follow the rows; those of ``grid`` are ignored.
         """
         row_map, valid = grid.indexer(self.grid)
+        if valid.all() and grid.size == self.n_cells:
+            source = np.full(grid.size, -1, dtype=row_map.dtype)
+            source[row_map] = np.arange(grid.size)
+            if (source >= 0).all():
+                return self.taken(source, self.grid.conformed(grid))
 
         coo = self.csr.tocoo()
         keep = valid[coo.coords[0]]
@@ -769,12 +814,15 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _densify_notice(reason: str) -> None:
+def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
     """
     Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
-    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set.
+    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set, or
+    left at its default ``None``, ``model`` is sparse and the conversion is
+    an implicit fallback rather than an ``explicit`` user request.
     """
-    if options["warn_on_densify"]:
+    enabled = options["warn_on_densify"]
+    if model.sparse and not explicit if enabled is None else enabled:
         warn_outside_linopy(
             f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
         )

@@ -15,7 +15,7 @@ This release adds an opt-in strict arithmetic convention (v1), an end-to-end spa
 
 **Strict "v1" arithmetic (opt-in)**
 
-Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default in 0.10 but is removed in 1.0, so we recommend switching now. Under legacy, every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` that names the fix, so a model can migrate step by step. The full rules are in :doc:`the arithmetic convention <design/convention>`. Under v1:
+Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default in 0.10 but is removed in 1.0, so we recommend switching now. Under legacy, every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` that names the fix, so a model can migrate step by step. The warnings fire exactly where the two results diverge, once per operation, and point at the user's code. The full rules are in :doc:`the arithmetic convention <design/convention>`. Under v1:
 
 * **Exact alignment.** Shared dimensions align by label with ``join="exact"``. Differing labels or a pure reorder raise. Resolve with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass ``join=`` to ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq``.
 * **Unlabeled operands.** Numpy arrays, lists and polars ``Series`` pair with dimensions by size. An ambiguous match (square array, equal-length dimensions) or no match raises. Wrap the operand in a ``DataArray`` to name its dimensions. (https://github.com/PyPSA/linopy/issues/736)
@@ -23,6 +23,7 @@ Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default 
 * **Absence propagates.** Masked, reindexed and shifted-in slots stay absent through every operator instead of collapsing to zero.
 * **Explicit fill on joins.** A reindexing ``join=`` fills the positions it creates per side: the linopy operand with the zero expression, the constant with the new ``fill_value=`` of ``.add`` / ``.sub`` / ``.mul`` / ``.div``. The default means "does not apply": a missing divisor zeroes the term, and a missing numerator no longer gives ``1 / divisor``. ``fill_value=linopy.ABSENT`` keeps all created positions absent, also in ``linopy.merge``. (https://github.com/PyPSA/linopy/issues/890)
 * **Conflicting auxiliary coordinates raise** instead of being dropped silently.
+* **Aligned quadratic products.** ``x * y`` or ``expr * expr`` over shared dimensions with differing or reordered labels raises instead of an outer join by label. Align the factors first with ``.sel`` / ``.reindex`` / ``linopy.align``, as the product takes no ``join=``.
 * **No MultiIndex dimensions.** Use a flat dimension with the levels as auxiliary coordinates.
 * **Label-aligned groupby.** A grouper must match the grouped dimension's labels in set and order. A multi-key grouper gives a flat ``group`` dimension with the keys as auxiliary coordinates. (https://github.com/PyPSA/linopy/issues/827)
 
@@ -34,6 +35,8 @@ Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default 
 
   * metadata reads: ``repr()``, ``shape``, ``sizes``, ``dims``, ``coords``, ``indexes``, ``isnull()``, ``const``, ``has_terms`` and ``drop_vars`` of auxiliary coordinates (`#962 <https://github.com/PyPSA/linopy/issues/962>`__, `#1003 <https://github.com/PyPSA/linopy/pull/1003>`__)
   * arithmetic with a non-scalar constant, aligned as on the dense path (`#965 <https://github.com/PyPSA/linopy/issues/965>`__)
+  * ``shift``, ``roll`` and ``diff``; ``shift`` with a ``fill_value`` still densifies (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
+  * ``linopy.merge(..., dim=<grid dimension>)``, with the coordinates of the dense ``xr.concat`` (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
   * ``sum(dim=...)`` and a further ``groupby(...).sum()`` (`#964 <https://github.com/PyPSA/linopy/issues/964>`__)
   * ``where``, ``sel``, ``isel``, ``loc`` and ``[]``, with the dense semantics; masked cells become absent (`#966 <https://github.com/PyPSA/linopy/issues/966>`__)
   * ``linopy.merge`` of differing grids with auxiliary coordinates (`#966 <https://github.com/PyPSA/linopy/issues/966>`__)
@@ -43,7 +46,8 @@ Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default 
   * use as linear objective, through ``matrices.c``, LP/MPS, netcdf, ``Model.copy``, persistent snapshots and direct solver APIs (`#967 <https://github.com/PyPSA/linopy/issues/967>`__)
 
   An operand or indexer that adds dimensions still densifies.
-* **Visibility.** ``LinearExpression.is_sparse`` tells if an expression is CSR-backed, and its repr reads ``LinearExpression (sparse)``. The opt-in ``linopy.options["warn_on_densify"]`` emits a ``PerformanceWarning`` with the reason whenever a sparse backing is dropped. (`#969 <https://github.com/PyPSA/linopy/issues/969>`__)
+* **Visibility.** ``LinearExpression.is_sparse`` tells if an expression is CSR-backed, and its repr reads ``LinearExpression (sparse)``. ``linopy.options["warn_on_densify"]`` emits a ``PerformanceWarning`` with the reason whenever a sparse backing is dropped. It is on by default in a sparse model, where it also flags a merge of operands over different dimensions. Explicit conversions such as ``to_dense()`` or ``freeze=False`` warn only when the option is ``True``; ``False`` silences it. (`#969 <https://github.com/PyPSA/linopy/issues/969>`__)
+* **Guide.** The new :doc:`sparse-models` guide covers how to opt in, which operations stay sparse and which densify. (`#971 <https://github.com/PyPSA/linopy/issues/971>`__)
 
 **Numerical scaling**
 
@@ -76,8 +80,9 @@ Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default 
 
 * ``@``/``dot`` against a constant with zeros drops the zero terms instead of keeping one term per contracted member: 852 to 3 terms on PyPSA's KVL (Kirchhoff Voltage Law) constraint. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
 * Sparse ``@``/``dot`` runs each chunk on only the variables it uses, which removes seconds of overhead on models with millions of variables. Chunks are sized by nonzeros. (`#990 <https://github.com/PyPSA/linopy/pull/990>`__)
+* Sparse ``shift`` on an uneven ``groupby`` result (2000 x 720 cells, 800 terms wide) takes 14 ms and 54 MB instead of 1 s and 4.4 GB. (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
 * ``densify_terms`` (``sum(drop_zeros=True)``) is vectorised: 127 s to 3 ms on a (2000 x 60) expression.
-* An N-way ``linopy.merge`` of CSR-backed expressions concatenates once and scales with the nonzeros, not quadratically with the operand count.
+* An N-way ``linopy.merge`` of CSR-backed expressions runs in one pass and scales with the nonzeros, not quadratically with the operand count: about 30% faster for three operands. A sparse ``reindex`` that only reorders cells gathers the rows directly, about 4x faster. (`#1010 <https://github.com/PyPSA/linopy/issues/1010>`__)
 * ``add_constraints`` on a sparse model no longer copies the lhs matrix or expands the mask and scaling over the full grid: about half the peak memory. (`#977 <https://github.com/PyPSA/linopy/issues/977>`__)
 * Freezing a dense constraint builds the CSR matrix directly and sorts only rows with more than one term: 465 to 185 ms and 1.74 to 0.25 GB on a 2M-variable nodal balance. (`#1009 <https://github.com/PyPSA/linopy/issues/1009>`__)
 
