@@ -238,3 +238,23 @@ def test_mindopt_license_probe_disposes_env(
     cls._license_probe()
 
     assert events == ["env_init", "env_dispose"]
+
+
+def test_xpress_license_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cls = _solver_class_for("xpress")
+    assert cls is not None
+
+    events: list[str] = []
+
+    class _FakeXpress:
+        @staticmethod
+        def init() -> None:
+            events.append("init")
+
+    monkeypatch.setattr(solvers_mod, "xpress", _FakeXpress)
+
+    cls._license_probe()
+
+    assert events == ["init"]

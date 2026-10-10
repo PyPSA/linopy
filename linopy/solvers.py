@@ -306,6 +306,7 @@ mindoptpy = _LazyModule("mindoptpy")
 coptpy = _LazyModule("coptpy")
 cupdlpx = _LazyModule("cupdlpx")
 cuopt = _LazyModule("cuopt")
+xpress = _LazyModule("xpress")
 
 
 def _has_module(name: str) -> bool:
@@ -2664,6 +2665,10 @@ class Xpress(Solver[None]):
     @functools.cache
     def is_available(cls) -> bool:
         return _has_module("xpress")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        xpress.init()
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
