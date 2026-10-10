@@ -14,6 +14,8 @@ from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    Concatenate,
+    ParamSpec,
     cast,
     overload,
 )
@@ -100,17 +102,17 @@ logger = logging.getLogger(__name__)
 
 FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan, "scaling": 1.0}
 
+P = ParamSpec("P")
+
 
 def varwrap(
-    method: Callable, *default_args: Any, **new_default_kwargs: Any
-) -> Callable:
+    method: Callable[Concatenate[Dataset, P], Dataset], **new_default_kwargs: Any
+) -> Callable[Concatenate[Dataset, P], Variable]:
     @functools.wraps(method)
-    def _varwrap(var: Variable, *args: Any, **kwargs: Any) -> Variable:
+    def _varwrap(var: Variable, *args: P.args, **kwargs: P.kwargs) -> Variable:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        return var.__class__(
-            method(var.data, *default_args, *args, **kwargs), var.model, var.name
-        )
+        return var.__class__(method(var.data, *args, **kwargs), var.model, var.name)
 
     _varwrap.__doc__ = (
         f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
@@ -118,7 +120,7 @@ def varwrap(
     if new_default_kwargs:
         _varwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
-    return _varwrap
+    return _varwrap  # type: ignore
 
 
 def _var_unwrap(var: Variable | Dataset) -> Dataset:
