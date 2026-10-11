@@ -302,6 +302,34 @@ def test_assign_coords_maps_subset_carriers(m: Model) -> None:
         m2.assign_coords(gen=["h1", "h2", "h3"])
 
 
+def test_assign_coords_tz_aware_datetime_index() -> None:
+    """
+    A tz-aware DatetimeIndex relabels across every container, full-length and
+    subset alike.
+
+    The tz-aware path is the expensive one: mapping labels through a Python
+    dict falls into pandas' object-to-datetime inference, so the relabel locates
+    labels positionally instead. This guards that both the full-length
+    (``equals``) and subset (``get_indexer``) branches keep the right labels.
+    """
+    idx = pd.date_range(
+        "2026-01-01", periods=4, freq="h", tz="Australia/Melbourne", name="time"
+    )
+    new = idx + pd.Timedelta("1h")
+    model = Model()
+    x = model.add_variables(coords=[idx], name="x")
+    model.add_variables(coords=[idx[:2]], name="u")
+    model.add_constraints(x >= 0, name="c")
+    model.add_constraints(x.isel(time=slice(0, 2)) >= 1, name="c_subset")
+
+    model.assign_coords(time=new)
+
+    assert model.variables["x"].coords["time"].to_index().equals(new)
+    assert model.variables["u"].coords["time"].to_index().equals(new[:2])
+    assert model.constraints["c"].coords["time"].to_index().equals(new)
+    assert model.constraints["c_subset"].coords["time"].to_index().equals(new[:2])
+
+
 def test_assign_coords_rejects_unmatched_master_length(m: Model) -> None:
     """New values matching no carrier's length raise, listing the lengths."""
     with pytest.raises(ValueError, match="no container carries it"):
