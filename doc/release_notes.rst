@@ -7,6 +7,10 @@ Upcoming Version
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
 * ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
 
+**Performance**
+
+* ``Model.assign_coords`` no longer relabels containers through a Python dict. It maps full-length containers straight to the new values and locates subset containers' labels with a positional ``get_indexer`` / ``take``: on a tz-aware ``DatetimeIndex`` — the rolling-horizon case it is built for — the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~3 ms, down from ~817 ms.
+
 Version 0.10.0
 --------------
 
