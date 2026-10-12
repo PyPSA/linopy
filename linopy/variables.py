@@ -386,16 +386,18 @@ class Variable:
         """
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
-            enforce_aux_conflict([self.labels, coeff_da], stacklevel=4)
+            enforce_aux_conflict([self.labels, coeff_da])
             mismatch = first_mismatched_dim(self.labels, coeff_da)
             if mismatch is not None:
                 if is_v1():
                     raise ValueError(_shared_dim_mismatch_message(*mismatch))
                 warn_legacy(
                     _legacy_coord_mismatch_message(
-                        "this operator's constant operand", *mismatch
-                    ),
-                    stacklevel=4,
+                        "this operator's constant operand",
+                        *mismatch,
+                        alignment="by label, the coefficient being 0 at the"
+                        " variable's labels it lacks",
+                    )
                 )
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         if coefficient.isnull().any():
@@ -834,7 +836,7 @@ class Variable:
             A `LinearExpressionGroupBy` containing the xarray groups and ensuring
             the correct return type.
         """
-        return self.to_linexpr().groupby(
+        return self.to_linexpr(_warn_absence=False).groupby(
             group=group, restore_coord_dims=restore_coord_dims
         )
 
@@ -1286,7 +1288,7 @@ class Variable:
         if kwargs:
             raise ValueError(f"Unknown keyword argument(s): {kwargs}")
 
-        return self.to_linexpr().sum(dim)
+        return self.to_linexpr(_warn_absence=False).sum(dim)
 
     def diff(self, dim: str, n: int = 1) -> LinearExpression:
         """
