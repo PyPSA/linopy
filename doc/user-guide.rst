@@ -72,6 +72,26 @@ For a worked example that builds a badly-scaled model and applies each of the
 three variants step by step, see the :doc:`numerical-scaling` tutorial.
 
 
+Sparse models
+-------------
+
+Models that aggregate many entities into few rows, such as generators
+into buses, can store their expressions as sparse matrices instead of
+padded dense arrays. Opt in with ``Model(sparse=True)`` under the v1
+semantics. ``groupby(...).sum()`` and ``@`` then return sparse-backed
+expressions, and by default every constraint is stored as a frozen
+``CSRConstraint``. Operations without a sparse path convert an
+expression to dense and emit a ``PerformanceWarning``.
+
+.. code-block:: python
+
+    linopy.options["semantics"] = "v1"
+    m = linopy.Model(sparse=True)
+
+See :doc:`sparse-models` for the operations that keep the sparse
+backing, the ones that densify, and the ``warn_on_densify`` option.
+
+
 Working with an existing model
 ------------------------------
 

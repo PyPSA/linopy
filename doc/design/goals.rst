@@ -41,7 +41,6 @@ Transitioning goals
 
 **Schedule:**
 
-1. Introduce v1 as opt-in — warn about behaviour changes on legacy, raise if
-   opted into v1.
-2. Make v1 the default, allow opt-out.
-3. linopy 1.0 — drop the legacy convention entirely.
+1. linopy 0.10 — introduce v1 as opt-in. Warn about behaviour changes on
+   legacy, raise if opted into v1.
+2. linopy 1.0 — make v1 the only convention and drop legacy entirely.
