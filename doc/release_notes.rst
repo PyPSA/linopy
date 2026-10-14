@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
+
 Version 0.10.0
 --------------
 
@@ -103,7 +105,6 @@ Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default 
 * ``to_netcdf``/``read_netcdf`` keep a quadratic objective quadratic. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
 * ``read_netcdf`` restores containers in insertion order, so a round trip no longer permutes ``matrices.A``. ``assert_model_equal`` now compares the order. (`#934 <https://github.com/PyPSA/linopy/issues/934>`__)
 * ``read_netcdf`` no longer fails when a frozen constraint has a dimension or level name with ``-``.
-* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``.
 * ``Model.copy`` keeps frozen constraints frozen; ``deep=True`` copies their arrays and a CSR-backed objective. (`#981 <https://github.com/PyPSA/linopy/issues/981>`__)
 
 Files from earlier versions load as before.
