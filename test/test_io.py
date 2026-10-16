@@ -20,7 +20,7 @@ import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.constants import FACTOR_DIM
-from linopy.constraints import Constraint
+from linopy.constraints import Constraint, CSRConstraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
 from linopy.testing import assert_exprequal, assert_model_equal
@@ -181,8 +181,6 @@ def test_read_netcdf_inconsistent_order_attr_raises(
 
 
 def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import CSRConstraint
-
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
     m.add_constraints(x >= 1, name="c", freeze=True)
@@ -283,8 +281,6 @@ def test_model_to_netcdf_compression_scipy(
 
 def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) -> None:
     """Files written before #926 stored dense positions as CSR columns."""
-    from linopy.constraints import CSRConstraint
-
     m = Model()
     i = pd.RangeIndex(3, name="i")
     mask = xr.DataArray([True, False, False], dims=["i"])
@@ -315,8 +311,6 @@ def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) ->
 
 
 def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import CSRConstraint
-
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
 
@@ -402,8 +396,6 @@ def test_model_to_netcdf_with_multiindex(
 def test_model_to_netcdf_with_multiindex_frozen_constraint(
     model_with_multiindex: Model, tmp_path: Path
 ) -> None:
-    from linopy.constraints import CSRConstraint
-
     m = model_with_multiindex
     x, y = m.variables["x-var"], m.variables["y-var"]
     con = m.add_constraints(x + y, LESS_EQUAL, 10, name="frozen", freeze=True)

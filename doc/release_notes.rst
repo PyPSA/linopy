@@ -112,7 +112,7 @@ Files from earlier versions load as before.
 * Adding or removing variables after ``freeze=True`` no longer breaks ``model.matrices`` with ``inconsistent shapes``. (`#926 <https://github.com/PyPSA/linopy/issues/926>`__)
 * A ``CSRConstraint`` from a CSR-backed expression keeps its auxiliary coordinates through ``to_dense()``, ``freeze()`` and netcdf. (`#941 <https://github.com/PyPSA/linopy/issues/941>`__)
 * Unsupported ``CSRConstraint`` operations (``loc``, ``update``, ``from_rule``, setting ``coeffs``/``vars``/``sign``) raise an ``AttributeError`` that points to ``.mutable()``. (`#963 <https://github.com/PyPSA/linopy/issues/963>`__)
-* Freezing a constraint with a ``MultiIndex`` dimension no longer raises ``TypeError: Must pass list-like as `names```.
+* Freezing a constraint with a ``MultiIndex`` dimension no longer raises ``TypeError: Must pass list-like as `names```. (`#1022 <https://github.com/PyPSA/linopy/pull/1022>`__)
 * Repeated matrix builds on an unchanged model reuse the cached column mapping again, so persistent snapshot diffs skip untouched frozen constraints. (`#933 <https://github.com/PyPSA/linopy/issues/933>`__)
 
 *Expressions*

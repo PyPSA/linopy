@@ -172,7 +172,7 @@ class Grid:
     def renamed(self, names: Mapping[str, str]) -> Grid:
         """Relabel dimensions; the cell layout is unchanged."""
         indexes = {
-            names.get(d, d): i.rename(names.get(d, d)) for d, i in self.indexes.items()
+            names.get(d, d): _named(i, names.get(d, d)) for d, i in self.indexes.items()
         }
         aux = {
             n: (names.get(d, d) if isinstance(d, str) else d, v)

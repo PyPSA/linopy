@@ -957,6 +957,24 @@ def test_rename_stays_csr_and_matches_dense() -> None:
     assert_linequal(sparse, dense)
 
 
+def test_rename_multiindex_dim_stays_csr_and_matches_dense() -> None:
+    require_v1()
+
+    def build(sparse: bool) -> LinearExpression:
+        m = Model(sparse=sparse)
+        gen = pd.RangeIndex(4, name="gen")
+        coords = [gen, pd.Index([1, 2], name="a"), pd.Index(["u", "v"], name="b")]
+        x = m.add_variables(coords=coords, name="x")
+        bus = pd.Series([0, 0, 1, 1], index=gen, name="bus")
+        expr = (1.0 * x).stack(multi=["a", "b"]).groupby(bus).sum()
+        return expr.rename(multi="ab")
+
+    sparse = build(sparse=True)
+    assert sparse._csr is not None
+    assert sparse.indexes["ab"].names == ["a", "b"]
+    assert_linequal(sparse, build(sparse=False))
+
+
 @pytest.mark.parametrize(
     "op",
     [lambda e: e.reindex(group=[3, 0, 9]), lambda e: e.rename(group="g")],
