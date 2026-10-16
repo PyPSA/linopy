@@ -1,0 +1,21 @@
+{
+    "julia": "1.10",
+    "packages": {
+        "JuMP": {
+            "uuid": "4076af6c-e467-56ae-b986-b466b2749572",
+            "version": "^1.30"
+        },
+        "Plasmo": {
+            "uuid": "d3f7391f-f14a-50cc-bbe4-76a32d1bad3c",
+            "version": "^0.6.5"
+        },
+        "PlasmoBenders": {
+            "uuid": "491f1417-53b2-48aa-b9da-44cdd6c031b7",
+            "version": "^0.2"
+        },
+        "HiGHS": {
+            "uuid": "87dc4568-4c63-4d18-b0c0-bb2238e4078b",
+            "version": "^1.24"
+        }
+    }
+}

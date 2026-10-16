@@ -137,6 +137,7 @@ This package is published under MIT license.
    numerical-scaling
    sparse-models
    testing-framework
+   plasmo-benders
 
 .. toctree::
    :hidden:
