@@ -116,6 +116,7 @@ from linopy.semantics import (
     FillValueLike,
     _legacy_coord_mismatch_message,
     _legacy_group_multiindex_message,
+    _legacy_join_divisor_fill_message,
     _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
@@ -127,8 +128,10 @@ from linopy.semantics import (
     is_nan_scalar,
     is_v1,
     join_fill,
+    legacy_warnings_muted,
     reindex_like_if_needed,
     warn_legacy,
+    warn_legacy_absence,
     warn_outside_linopy,
 )
 from linopy.types import (
@@ -1075,13 +1078,25 @@ class BaseExpression(ABC):
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants
         # merge on factor dimension only returns v1 * v2 + c1 * c2
+        enforce_merge_dims(
+            [self.data, other.data],
+            concat_dim=FACTOR_DIM,
+            context="quadratic product",
+            alignment="by label, as an outer join",
+            joinable=False,
+        )
+        warn_legacy_absence(self.const, other.const)
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
-        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
-        if self.has_constant:
-            res = res + other.reset_const() * self.const.fillna(0)
-        if other.has_constant:
-            res = res + self.reset_const() * other.const.fillna(0)
+        join: JoinOptions = (
+            "override" if _coord_sizes_agree([self.data, ds]) else "outer"
+        )
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression, join=join)
+        with legacy_warnings_muted():
+            if self.has_constant:
+                res = res + other.reset_const() * self.const.fillna(0)
+            if other.has_constant:
+                res = res + self.reset_const() * other.const.fillna(0)
         return cast(QuadraticExpression, res)
 
     def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
@@ -1134,7 +1149,7 @@ class BaseExpression(ABC):
         rather than by ``xr.align(join="exact")``, whose wording is not
         API-stable across xarray releases.
         """
-        enforce_aux_conflict([self.const, other], stacklevel=4)
+        enforce_aux_conflict([self.const, other])
         other_fill = {other.name: join_fill(fill_value, 0)}
         if join is None:
             if is_v1():
@@ -1145,8 +1160,7 @@ class BaseExpression(ABC):
                     warn_legacy(
                         _legacy_coord_mismatch_message(
                             "this operator's constant operand", *mismatch
-                        ),
-                        stacklevel=4,
+                        )
                     )
                 if other.sizes == self.const.sizes:
                     return self.const, other.assign_coords(coords=self.coords), False
@@ -1260,10 +1274,12 @@ class BaseExpression(ABC):
         if np.isscalar(other) and join is None:
             if is_nan_scalar(other):
                 check_user_nan()
+            warn_legacy_absence(self.const)
             return self.assign(const=self.const.fillna(0) + other)
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
         )
+        warn_legacy_absence(self_const)
         expr = self._reindexed_to(self_const, needs_reindex)
         return expr.assign(const=self_const.fillna(0) + da.fillna(0))
 
@@ -1317,6 +1333,7 @@ class BaseExpression(ABC):
         self_const, factor, needs_reindex = self._broadcast_and_align(
             other, factor_fill, join, op_kind
         )
+        warn_legacy_absence(self_const)
         factor = factor.fillna(nan_fill)
         self_const = self_const.fillna(0)
         expr = self._reindexed_to(self_const, needs_reindex)
@@ -1345,8 +1362,14 @@ class BaseExpression(ABC):
         join: JoinOptions | None = None,
         fill_value: FillValueLike = None,
     ) -> Self:
-        if fill_value is None:
-            fill_value = np.inf if is_v1() else 1
+        if fill_value is None and is_v1():
+            fill_value = np.inf
+        elif fill_value is None:  # LEGACY: remove at 1.0
+            if join in ("left", "outer") and not _labels_within(
+                self.const, as_dataarray(other)
+            ):
+                warn_legacy(_legacy_join_divisor_fill_message())
+            fill_value = 1
         return self._apply_constant_op(
             other,
             operator.truediv,
@@ -1914,19 +1937,14 @@ class BaseExpression(ABC):
                 rhs = self._broadcast_rhs(rhs)
                 if rhs.isnull().any():
                     check_user_nan()
-        else:  # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
-            if isinstance(rhs, CONSTANT_TYPES):
-                rhs = self._broadcast_rhs(rhs)
-                mismatch = first_mismatched_dim(self.const, rhs)
-                if mismatch is not None:
-                    warn_legacy(
-                        _legacy_coord_mismatch_message("constraint RHS", *mismatch)
-                    )
-                if bool(rhs.isnull().any()):
-                    warn_legacy(_legacy_nan_rhs_constraint_message())
-                rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-            if isinstance(rhs, DataArray):
-                rhs_nan_mask = rhs.isnull()
+        elif isinstance(rhs, CONSTANT_TYPES):  # LEGACY: remove at 1.0
+            rhs = self._broadcast_rhs(rhs)
+            self._warn_legacy_rhs_alignment(rhs, join)
+            rhs_nan = rhs.isnull()
+            if bool(rhs_nan.any()):
+                warn_legacy(_legacy_nan_rhs_constraint_message())
+            rhs_nan_mask = rhs_nan.reindex_like(self.const, fill_value=True)
+            rhs = rhs.fillna(0).reindex_like(self.const, fill_value=0)
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
@@ -1936,6 +1954,40 @@ class BaseExpression(ABC):
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
+
+    # LEGACY: remove at 1.0
+    def _warn_legacy_rhs_alignment(
+        self, rhs: DataArray, join: JoinOptions | None
+    ) -> None:
+        """
+        Legacy reindexes a constant RHS onto the expression by label, whatever
+        ``join``; warn unless the RHS covers every label and ``join`` would not
+        add, drop or reorder any.
+        """
+        mismatch = first_mismatched_dim(self.const, rhs)
+        if mismatch is None:
+            return
+        alignment = (
+            "by label onto the expression, no constraint where the RHS lacks a label"
+        )
+        if join is None:
+            warn_legacy(
+                _legacy_coord_mismatch_message(
+                    "constraint RHS", *mismatch, alignment=alignment
+                )
+            )
+            return
+        covered = join in ("left", "inner", "outer") and _labels_within(self.const, rhs)
+        if covered and (join != "outer" or _labels_within(rhs, self.const)):
+            return
+        warn_legacy(
+            _legacy_coord_mismatch_message(
+                "constraint RHS",
+                *mismatch,
+                alignment=f"{alignment}, ignoring `join={join!r}`",
+                v1=f"Under v1 `join={join!r}` is applied instead.",
+            )
+        )
 
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
         """Broadcast a constant RHS onto the expression's coordinates."""
@@ -3451,11 +3503,11 @@ class QuadraticExpression(BaseExpression):
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
-        super().__init__(data, model)
-
         if data is None:
             da = xr.DataArray([[], []], dims=[FACTOR_DIM, TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": 0})
+            data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
+        super().__init__(data, model)
+        data = self._data
         if FACTOR_DIM not in data.vars.dims:
             raise ValueError(f"Data does not include dimension {FACTOR_DIM}")
         elif data.sizes[FACTOR_DIM] != 2:
@@ -3731,6 +3783,18 @@ def _densify_all(exprs: Iterable[Any], reason: str) -> None:
         e._csr = None
 
 
+def _coord_sizes_agree(objs: Sequence[Any]) -> bool:
+    """Whether all ``objs`` carry the same non-helper dimension sizes."""
+    sizes = [{k: v for k, v in o.sizes.items() if k not in HELPER_DIMS} for o in objs]
+    return check_common_keys_values(sizes)
+
+
+def _labels_within(a: DataArray, b: DataArray) -> bool:
+    """Whether every label of ``a`` on a dim shared with ``b`` is also in ``b``."""
+    shared = set(a.indexes) & set(b.indexes)
+    return all(a.indexes[d].isin(b.indexes[d]).all() for d in shared)
+
+
 def _aligned(
     csrs: list[CSRLinearExpression], join: JoinOptions | None, fill: float
 ) -> list[CSRLinearExpression] | str:
@@ -3993,10 +4057,7 @@ def merge(
     if join is not None:
         override = join == "override"
     elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
+        override = _coord_sizes_agree(exprs)
     else:
         override = False
 
@@ -4019,6 +4080,7 @@ def merge(
 
     skipna = not is_v1()
     if dim == TERM_DIM:
+        warn_legacy_absence(*(d["const"] for d in data))
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
         subkwargs = {**kwargs, "fill_value": {"const": join_fill(fill_value, 0)}}
         const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]

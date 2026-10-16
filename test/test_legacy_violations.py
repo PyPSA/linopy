@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import contextlib
 import operator
+import re
 import warnings
 from collections.abc import Generator
 from typing import Any, cast
@@ -55,6 +56,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
 from linopy import LinearExpression, Model, QuadraticExpression
 from linopy.config import LinopySemanticsWarning
@@ -693,7 +695,7 @@ class TestLegacyWarning:
         assert msg == (
             "Coordinate mismatch in merge along dim '_term' silently "
             "aligned by legacy (positional when sizes match, otherwise "
-            "left-join). Under v1 this raises ValueError."
+            "outer join by label). Under v1 this raises ValueError."
             "\n  Dim:       'time': left=[0, 1, 2, 3, 4], "
             "right=[10, 11, 12, 13, 14]"
             "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
@@ -820,10 +822,7 @@ class TestLegacyWarning:
             "propagates through arithmetic instead (`x + y` becomes "
             "absent at the slot and the constraint drops)."
             "\n  Resolve:   wrap with `y.fillna(0)` for the legacy "
-            "behaviour under v1"
-            "\n             (no fix needed if you only use the variable "
-            "in a constraint LHS alone — `y >= 0` drops the same way in "
-            "both)." + _OPT_IN_HINT
+            "behaviour under v1." + _OPT_IN_HINT
         )
 
     @pytest.mark.legacy
@@ -851,6 +850,335 @@ class TestLegacyWarning:
             f"warning frame is {relevant[0].filename!r}, "
             "should be the user's source file"
         )
+
+
+class TestLegacyWarnsAtDivergence:
+    """
+    Legacy warns exactly where its result departs from v1, and stays silent
+    where both agree.
+    """
+
+    @pytest.fixture
+    def mask(self, time: pd.RangeIndex) -> xr.DataArray:
+        return xr.DataArray([True, False, True, True, True], coords=[time])
+
+    @pytest.fixture
+    def far(self) -> xr.DataArray:
+        return xr.DataArray(
+            [2.0, 3.0], dims=["time"], coords={"time": pd.Index([0, 5], name="time")}
+        )
+
+    _HOLE_AT_1 = [False, True, False, False, False]
+    _HOLE_AT_0 = [True, False, False, False, False]
+    _ABSENT_EXPRS = [
+        pytest.param(
+            lambda x, mask: (2 * x).where(mask) + x, _HOLE_AT_1, id="where_plus_var"
+        ),
+        pytest.param(
+            lambda x, mask: (1 * x).where(mask) + 5, _HOLE_AT_1, id="where_plus_scalar"
+        ),
+        pytest.param(
+            lambda x, mask: (1 * x).where(mask) * 2, _HOLE_AT_1, id="where_times_scalar"
+        ),
+        pytest.param(
+            lambda x, mask: (1 * x).shift(time=1) + x, _HOLE_AT_0, id="shift_plus_var"
+        ),
+        pytest.param(lambda x, mask: x.diff("time"), _HOLE_AT_0, id="var_diff"),
+        pytest.param(
+            lambda x, mask: (1 * x).reindex(time=range(6)) + 1,
+            [False] * 5 + [True],
+            id="reindex_plus_scalar",
+        ),
+        pytest.param(
+            lambda x, mask: (x * x).where(mask) + 1,
+            _HOLE_AT_1,
+            id="quad_where_plus_scalar",
+        ),
+        pytest.param(
+            lambda x, mask: (1 * x).where(mask) * x, _HOLE_AT_1, id="where_times_var"
+        ),
+    ]
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(("build", "absent"), _ABSENT_EXPRS)
+    def test_legacy_warns_on_filled_absence(
+        self,
+        x: Variable,
+        mask: xr.DataArray,
+        build: Any,
+        absent: list[bool],
+        unsilenced: None,
+    ) -> None:
+        with pytest.warns(LinopySemanticsWarning, match="absent slots"):
+            build(x, mask)
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize(("build", "absent"), _ABSENT_EXPRS)
+    def test_absence_propagates(
+        self, x: Variable, mask: xr.DataArray, build: Any, absent: list[bool]
+    ) -> None:
+        assert build(x, mask).isnull().values.tolist() == absent
+
+    _MASKED_CONSTRAINTS = [
+        pytest.param(lambda x, mask: x.where(mask) <= 3, id="var_le_scalar"),
+        pytest.param(lambda x, mask: (1 * x).where(mask) >= 3, id="expr_ge_scalar"),
+    ]
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize("build", _MASKED_CONSTRAINTS)
+    def test_legacy_masked_constraint_warns_once_and_keeps_row(
+        self, m: Model, x: Variable, mask: xr.DataArray, build: Any, unsilenced: None
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", LinopySemanticsWarning)
+            con = m.add_constraints(build(x, mask))
+        assert len(caught) == 1
+        assert "absent slots" in str(caught[0].message)
+        assert con.labels.values.tolist() == [0, 1, 2, 3, 4]
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("build", _MASKED_CONSTRAINTS)
+    def test_masked_constraint_drops_row(
+        self, m: Model, x: Variable, mask: xr.DataArray, build: Any
+    ) -> None:
+        assert m.add_constraints(build(x, mask)).labels.values.tolist() == [
+            0,
+            -1,
+            2,
+            3,
+            4,
+        ]
+
+    @pytest.mark.legacy
+    def test_legacy_diff_constraint_keeps_first_row(
+        self, x: Variable, unsilenced: None
+    ) -> None:
+        with pytest.warns(LinopySemanticsWarning, match="absent slots"):
+            con = x.diff("time") >= 0
+        assert con.vars.values[0].tolist() == [0, -1]
+
+    @pytest.mark.v1
+    def test_diff_constraint_drops_first_row(self, x: Variable) -> None:
+        con = x.diff("time") >= 0
+        assert con.vars.values[0].tolist() == [-1, -1]
+        assert np.isnan(con.rhs.values[0])
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize("join", ["left", "outer"])
+    @pytest.mark.parametrize("operand", ["var", "expr"])
+    def test_legacy_warns_on_join_created_divisor(
+        self,
+        x: Variable,
+        far: xr.DataArray,
+        join: JoinOptions,
+        operand: str,
+        unsilenced: None,
+    ) -> None:
+        lhs = x if operand == "var" else 1 * x
+        with pytest.warns(LinopySemanticsWarning, match="created divisor positions"):
+            result = lhs.div(far, join=join)
+        assert result.coeffs.values[1:5, 0].tolist() == [1.0] * 4
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize("join", ["left", "outer"])
+    def test_join_created_divisor_zeroes_term(
+        self, x: Variable, far: xr.DataArray, join: JoinOptions
+    ) -> None:
+        assert x.div(far, join=join).coeffs.values[1:5, 0].tolist() == [0.0] * 4
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(
+        "div",
+        [
+            pytest.param(lambda x, far: x.div(far, join="inner"), id="inner"),
+            pytest.param(
+                lambda x, far: x.div(far, join="left", fill_value=1), id="fill_value"
+            ),
+        ],
+    )
+    def test_legacy_divisor_join_without_divergence_is_silent(
+        self, x: Variable, far: xr.DataArray, div: Any, unsilenced: None
+    ) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            div(x, far)
+
+    @staticmethod
+    def _subset(m: Model) -> Variable:
+        return m.add_variables(coords=[pd.Index([0, 1, 2], name="time")], name="s")
+
+    _PAIRED = [[[i], [i + 5]] for i in range(3)] + [[[3], [-1]], [[4], [-1]]]
+    _MISMATCH = r"Coordinate mismatch in quadratic product silently aligned by legacy \(by label, as an outer join\)"
+    _REORDER = r"Coordinate order mismatch in quadratic product aligned by legacy \(by label, as an outer join\)"
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(
+        ("product", "expected_vars", "match"),
+        [
+            pytest.param(
+                lambda x, s: x * s, _PAIRED, _MISMATCH, id="superset_times_subset"
+            ),
+            pytest.param(
+                lambda x, s: (1 * x) * (1 * s), _PAIRED, _MISMATCH, id="expressions"
+            ),
+            pytest.param(
+                lambda x, s: x * x.sel(time=[4, 3, 2, 1, 0]),
+                [[[i], [i]] for i in range(5)],
+                _REORDER,
+                id="reordered",
+            ),
+            pytest.param(
+                lambda x, s: (x + 1) * (s + 2),
+                [[[i, i + 5, i], [i + 5, -1, -1]] for i in range(3)]
+                + [[[i, -1, i], [-1, -1, -1]] for i in (3, 4)],
+                _MISMATCH,
+                id="both_constants",
+            ),
+            pytest.param(
+                lambda x, s: (x + 1) * s,
+                [[[i, i + 5], [i + 5, -1]] for i in range(3)]
+                + [[[i, -1], [-1, -1]] for i in (3, 4)],
+                _MISMATCH,
+                id="left_constant",
+            ),
+            pytest.param(
+                lambda x, s: x * (s + 2),
+                [[[i + 5, i], [i, -1]] for i in range(3)]
+                + [[[-1, i], [i, -1]] for i in (3, 4)],
+                _MISMATCH,
+                id="right_constant",
+            ),
+        ],
+    )
+    def test_legacy_quadratic_mismatch_warns_once_with_int_labels(
+        self,
+        m: Model,
+        x: Variable,
+        product: Any,
+        expected_vars: list[Any],
+        match: str,
+        unsilenced: None,
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", LinopySemanticsWarning)
+            result = product(x, self._subset(m))
+        assert len(caught) == 1
+        message = str(caught[0].message)
+        assert re.match(match, message)
+        assert "join=" not in message
+        assert result.vars.values.tolist() == expected_vars
+
+    @pytest.mark.v1
+    @pytest.mark.parametrize(
+        "product",
+        [
+            pytest.param(lambda x, s: x * s, id="superset_times_subset"),
+            pytest.param(lambda x, s: s * x, id="subset_times_superset"),
+            pytest.param(lambda x, s: (1 * x) * (1 * s), id="expressions"),
+            pytest.param(lambda x, s: x * x.sel(time=[4, 3, 2, 1, 0]), id="reordered"),
+        ],
+    )
+    def test_quadratic_mismatch_raises(
+        self, m: Model, x: Variable, product: Any
+    ) -> None:
+        with pytest.raises(
+            ValueError, match="Coordinate mismatch on shared dimension"
+        ) as err:
+            product(x, self._subset(m))
+        assert "join=" not in str(err.value)
+
+    @pytest.mark.legacy
+    def test_legacy_rhs_explicit_join_message(
+        self, x: Variable, far: xr.DataArray, unsilenced: None
+    ) -> None:
+        msg = _one_legacy_warning(lambda: x.le(far, join="outer"))
+        assert msg == (
+            "Coordinate mismatch in constraint RHS silently aligned by legacy "
+            "(by label onto the expression, no constraint where the RHS lacks "
+            "a label, ignoring `join='outer'`). Under v1 `join='outer'` is "
+            "applied instead."
+            "\n  Dim:       'time': left=[0, 1, 2, 3, 4], right=[0, 5]"
+            "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
+            "\n             `.assign_coords(...)` to relabel one side"
+            "\n             `linopy.align(...)` to pre-align several operands"
+            "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
+        )
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda x, mask: x.where(mask).sum(), id="sum"),
+            pytest.param(
+                lambda x, mask: (
+                    x.where(mask)
+                    .groupby(xr.DataArray([0, 0, 1, 1, 1], coords=[x.indexes["time"]]))
+                    .sum()
+                ),
+                id="groupby_sum",
+            ),
+            pytest.param(
+                lambda x, mask: (1 * x).le(
+                    xr.DataArray(
+                        np.arange(6.0), coords=[pd.RangeIndex(6, name="time")]
+                    ),
+                    join="left",
+                ),
+                id="le_superset_join_left",
+            ),
+        ],
+    )
+    def test_legacy_silent_without_divergence(
+        self, x: Variable, mask: xr.DataArray, build: Any, unsilenced: None
+    ) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopySemanticsWarning)
+            build(x, mask)
+
+    @pytest.mark.legacy
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(
+                lambda x: (
+                    (1 * x)
+                    <= xr.DataArray([1.0, 2.0], coords=[pd.Index([0, 1], name="time")])
+                ),
+                id="rhs_subset",
+            ),
+            pytest.param(
+                lambda x: (
+                    (1 * x)
+                    + xr.DataArray(
+                        [1.0, np.nan, 3.0, 4.0, 5.0], coords=[x.indexes["time"]]
+                    )
+                ),
+                id="nan_operand",
+            ),
+        ],
+    )
+    def test_legacy_single_warning_points_at_user_code(
+        self, x: Variable, build: Any, unsilenced: None
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", LinopySemanticsWarning)
+            build(x)
+        assert [w.filename for w in caught] == [__file__]
+
+    @pytest.mark.legacy
+    def test_legacy_variable_coefficient_mismatch_message(
+        self, x: Variable, unsilenced: None
+    ) -> None:
+        coeff = xr.DataArray(
+            [1.0, 2.0, 3.0, 4.0, 5.0], coords=[pd.Index([1, 2, 3, 4, 5], name="time")]
+        )
+        msg = _one_legacy_warning(lambda: x * coeff)
+        assert msg.startswith(
+            "Coordinate mismatch in this operator's constant operand silently "
+            "aligned by legacy (by label, the coefficient being 0 at the "
+            "variable's labels it lacks). Under v1 this raises ValueError."
+        )
+        assert (x * coeff).coeffs.values[:, 0].tolist() == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
 # =====================================================================
@@ -1081,7 +1409,8 @@ class TestExactAlignmentMerge:
         msg = _one_legacy_warning(lambda: (1 * a) + (1 * b))
         assert msg == (
             "Coordinate order mismatch in merge along dim '_term' aligned "
-            "positionally by legacy. Under v1 the same labels in a different "
+            "by legacy (positional when sizes match, otherwise outer join by "
+            "label). Under v1 the same labels in a different "
             "order raise ValueError (§8); reindex or sort one side to align "
             "by label."
             "\n  Dim:       'e': left=['costs', 'penalty'], "
@@ -1191,7 +1520,7 @@ class TestExactAlignmentMerge:
         assert msg == (
             "Coordinate mismatch in merge along dim '_term' silently "
             "aligned by legacy (positional when sizes match, otherwise "
-            "left-join). Under v1 this raises ValueError."
+            "outer join by label). Under v1 this raises ValueError."
             "\n  Dim:       'time': left=[0, 1, 2, 3, 4], "
             "right=[10, 11, 12, 13, 14]"
             "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
@@ -1904,8 +2233,8 @@ class TestConstraintRHS:
     )
     _LEGACY_COORD_MISMATCH_RHS_MSG = (
         "Coordinate mismatch in constraint RHS silently aligned by legacy "
-        "(positional when sizes match, otherwise left-join). Under v1 this "
-        "raises ValueError."
+        "(by label onto the expression, no constraint where the RHS lacks a "
+        "label). Under v1 this raises ValueError."
         "\n  Dim:       'time': left=[0, 1, 2, 3, 4], right=[1, 3]"
         "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
         "\n             `.assign_coords(...)` to relabel one side"

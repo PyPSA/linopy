@@ -1528,7 +1528,7 @@ class CSRConstraint(ConstraintBase):
         return Constraint(self.data, self._model, self._name)
 
     def mutable(self) -> Constraint:
-        """Convert to a Constraint."""
+        """Return a modifiable Constraint (same as to_dense)."""
         return self.to_dense()
 
     def to_polars(self) -> pl.DataFrame:
