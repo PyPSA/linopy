@@ -1220,7 +1220,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
     def has_prefix(k: str, prefix: str) -> bool:
-        return owner(k) == prefix
+        return owners[k] == prefix
 
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
@@ -1286,6 +1286,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             if (prefix := "-".join(parts[:i])) in prefixes:
                 return prefix
         return None
+
+    owners = {k: owner(k) for k in chain(map(str, ds), ds.attrs)}
 
     variables = {}
     for k in containers["variables"]:
