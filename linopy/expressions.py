@@ -1275,8 +1275,12 @@ class BaseExpression(ABC):
             if is_nan_scalar(other):
                 check_user_nan()
             warn_legacy_absence(self.const)
-            return self.assign(
-                const=self.const.fillna(0) + cast("float | np.number", other)
+            return self._combined_with_constant(
+                self.const.fillna(0),
+                other,
+                operator.add,
+                needs_data_reindex=False,
+                scale=False,
             )
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
