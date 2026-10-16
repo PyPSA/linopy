@@ -842,7 +842,7 @@ def test_model_set_names_in_solver_io(model: Model) -> None:
     assert model.objective.value == pytest.approx(expected_obj)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 def test_highs_direct_qp_keeps_hessian_with_names() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="x")
