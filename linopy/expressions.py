@@ -668,10 +668,10 @@ class LinearExpressionGroupby:
                     "DataArray or list of coordinate names as grouper over an "
                     "existing dimension, without use_fallback."
                 )
+            reason = "groupby-sum with a grouper without a sparse path"
             if csr is None:
-                _densify_notice(
-                    "groupby-sum with a grouper without a sparse path", self.model
-                )
+                _densify_notice(reason, self.model)
+            _densify_all([self.obj], reason)
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -2799,13 +2799,13 @@ class LinearExpression(BaseExpression):
         | dict[str, float | int | DataArray],
     ) -> Self:
         csr = self._csr
-        unwrapped = _expr_unwrap(value)
         if (
             csr is not None
-            and isinstance(unwrapped, np.floating | np.integer | int | float)
-            and not isinstance(unwrapped, bool)
+            and isinstance(value, np.floating | np.integer | int | float)
+            and not isinstance(value, bool)
         ):
-            return type(self)._from_csr(csr.filled(float(unwrapped)), self._model)
+            return type(self)._from_csr(csr.filled(float(value)), self._model)
+        _densify_all([self, value], "fillna with a non-scalar value")
         return super().fillna(value)
 
     def to_constraint(
@@ -2916,7 +2916,9 @@ class LinearExpression(BaseExpression):
             return other.__rmul__(self)
 
         try:
-            if isinstance(other, variables.Variable | variables.ScalarVariable):
+            if isinstance(other, variables.Variable):
+                other = other.to_linexpr(_dense=True)
+            elif isinstance(other, variables.ScalarVariable):
                 other = other.to_linexpr()
 
             if isinstance(other, LinearExpression | ScalarLinearExpression):
@@ -3801,32 +3803,59 @@ def _labels_within(a: DataArray, b: DataArray) -> bool:
     return all(a.indexes[d].isin(b.indexes[d]).all() for d in shared)
 
 
+def _merge_dims(e: LinearExpression, union: set[str]) -> list[str]:
+    """
+    The dims ``e`` brings to a merge over ``union``, in the order the dense
+    path lays them out: first appearance over its coordinates, a scalar one
+    named after a dim of another operand standing for that dim. A CSR
+    operand's coordinates are taken in the order of its dense equivalent,
+    which xarray's broadcast sets.
+    """
+    coords = e.coords
+    if e._csr is not None:
+        coords = xr.broadcast(e._csr.grid.to_dataset())[0].coords
+    dims = [str(d) for n, c in coords.items() for d in (c.dims or [n])]
+    return [d for d in dims if d in union] + [str(d) for d in e.coord_dims]
+
+
 def _aligned(
-    csrs: list[CSRLinearExpression], join: JoinOptions | None, fill: float
+    csrs: list[CSRLinearExpression],
+    dims: tuple[str, ...],
+    join: JoinOptions | None,
+    fill: float,
 ) -> list[CSRLinearExpression] | str:
     """
-    Conform the CSR expressions to the grid an explicit join produces, the
-    cells the join creates carrying ``fill`` as constant. Returns the reason
-    as a string where the dense path owns the semantics instead: ``exact``
-    and the auto-detected join raise there on differing grids, ``override``
-    on differing shapes, any join on non-unique labels.
+    Conform the CSR expressions to the grid on ``dims`` that ``join``
+    produces, per dim among the operands carrying it, each spread over the
+    dims it lacks. The cells the join creates carry ``fill`` as constant.
+    Returns the reason as a string where the dense path owns the semantics
+    instead: ``exact`` and the auto-detected join raise there on differing
+    labels, ``override`` on differing sizes, any join on non-unique labels.
     """
-    template = csrs[0].grid
-    dims = template.dims
     if any(not p.grid.is_unique for p in csrs):
         return "merge over non-unique labels"
-    if join == "override":
-        if any(p.grid.dims != dims or p.grid.shape != template.shape for p in csrs):
+    indexes: dict[str, pd.Index] = {}
+    for d in dims:
+        own = [p.grid.indexes[d] for p in csrs if d in p.grid.indexes]
+        if join in (None, "exact") and not all(own[0].equals(i) for i in own):
+            return f"merge of differing grids with join={join!r}"
+        if join == "override" and len({len(i) for i in own}) > 1:
             return '`join="override"` merge of differently shaped grids'
-        return [replace(p, grid=template) for p in csrs]
-    if join in ("left", "right"):
-        source = csrs[0] if join == "left" else csrs[-1]
-        grid = source.grid.reordered(dims)
-    elif join in ("outer", "inner"):
-        grid = template.combined([p.grid for p in csrs[1:]], join)
-    else:
-        return f"merge of differing grids with join={join!r}"
-    return [p.reindexed(grid, fill) for p in csrs]
+        if join in ("outer", "inner"):
+            combine = pd.Index.union if join == "outer" else pd.Index.intersection
+            indexes[d] = pd.Index(functools.reduce(combine, own), name=d)
+        else:
+            indexes[d] = own[-1] if join == "right" else own[0]
+    grid = Grid(indexes)
+    aligned = []
+    for p in csrs:
+        target = grid.reordered(p.grid.dims)
+        if join == "override":
+            p = replace(p, grid=p.grid.with_indexes(target.indexes))
+        elif not p.grid.same_layout(target):
+            p = p.reindexed(target, fill)
+        aligned.append(p if p.grid.dims == grid.dims else p.broadcast(grid))
+    return aligned
 
 
 def _concatenated(
@@ -3871,14 +3900,15 @@ def _try_csr_merge(
     kwargs: dict[str, Any],
 ) -> LinearExpression | None:
     """
-    Sparse branch of :func:`merge`: combine plain LinearExpressions over one
-    set of grid dimensions (CSR-backed or dense-convertible) as sparse matrix
-    addition along the term dimension, or as a row stack along one of the
-    grid dimensions (:func:`_concatenated`). Grids that share dims in a
-    different order are transposed onto the template order first. Grids that
-    differ in their labels are aligned row-wise onto the joined grid, the
-    cells the join creates carrying the fill of the dense path (zero, or NaN
-    for ``fill_value=ABSENT``). Auxiliary coordinates are checked for
+    Sparse branch of :func:`merge`: combine plain LinearExpressions
+    (CSR-backed or dense-convertible) as sparse matrix addition along the
+    term dimension, or as a row stack along one of the grid dimensions
+    (:func:`_concatenated`). Along the term dimension, operands over
+    differing dimensions are broadcast onto the union grid, grids that share
+    dims in a different order are transposed onto the template order, and
+    grids that differ in their labels are aligned row-wise onto the joined
+    grid (:func:`_aligned`), the cells the join creates carrying the fill of
+    the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary coordinates are checked for
     conflicts on the operands as given and follow their rows onto the joined
     grid. Returns None to fall through to the dense path.
     """
@@ -3890,38 +3920,41 @@ def _try_csr_merge(
     if not all(type(e) is LinearExpression for e in exprs):
         _densify_all(exprs, "merge with an operand that is not a LinearExpression")
         return None
-    dims = set(exprs[0].coord_dims)
-    if any(set(e.coord_dims) != dims for e in exprs[1:]):
+    union = {str(d) for e in exprs for d in e.coord_dims}
+    dims = tuple(dict.fromkeys(d for e in exprs for d in _merge_dims(e, union)))
+    spread = any(len(e.coord_dims) != len(dims) for e in exprs)
+    if spread and dim != TERM_DIM:
         _densify_all(exprs, "merge of operands over different dimensions")
         return None
     if dim != TERM_DIM and dim not in dims:
         _densify_all(exprs, "merge along a new dimension")
         return None
+    if spread and _has_multiindex(i for e in exprs for i in e.indexes.values()):
+        _densify_all(exprs, "merge over different dimensions with a MultiIndex")
+        return None
     for e in exprs:
-        if e._csr is None and set(e.data.coords) - dims != set(
-            _aux_coords(e.data, dims)
-        ):
+        own = set(map(str, e.coord_dims))
+        if e._csr is None and set(e.data.coords) - own != set(_aux_coords(e.data, own)):
             _densify_all(
                 exprs, "merge with a dense operand carrying non-grid coordinates"
             )
             return None
 
     csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
-    template = csrs[0]
-    order = template.grid.dims
-    csrs = [
-        p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
-        for p in csrs
-    ]
     if dim != TERM_DIM:
+        order = csrs[0].grid.dims
+        csrs = [
+            p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
+            for p in csrs
+        ]
         stacked = _concatenated(csrs, dim, join)
         if isinstance(stacked, str):
             _densify_all(exprs, stacked)
             return None
         return LinearExpression._from_csr(stacked, exprs[0].model)
-    if not all(template.same_grid(p) for p in csrs[1:]):
+    if not all(csrs[0].same_grid(p) for p in csrs[1:]):
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
-        aligned = _aligned(csrs, join, join_fill(fill_value, 0.0))
+        aligned = _aligned(csrs, dims, join, join_fill(fill_value, 0.0))
         if isinstance(aligned, str):
             _densify_all(exprs, aligned)
             return None

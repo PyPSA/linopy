@@ -64,6 +64,7 @@ from linopy.constants import (
     STASHED_UPPER,
     TERM_DIM,
 )
+from linopy.csr import CSRLinearExpression
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
@@ -359,6 +360,7 @@ class Variable:
         coefficient: ConstantLike = 1,
         *,
         _warn_absence: bool = True,  # LEGACY: remove at 1.0
+        _dense: bool = False,
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
@@ -382,7 +384,9 @@ class Variable:
         raises under v1 (§5). Under v1 the expression carries the variable's
         absence as NaN so that §6 propagates it through downstream arithmetic;
         legacy contributes 0 there instead and warns, that being the most
-        common legacy↔v1 divergence and one no other warn site catches.
+        common legacy↔v1 divergence and one no other warn site catches. In a
+        sparse model the expression is CSR-backed; ``_dense`` builds it dense
+        for callers that continue on a path without a sparse branch.
         """
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
@@ -412,9 +416,12 @@ class Variable:
             if has_absence and _warn_absence:
                 warn_legacy(_legacy_masked_variable_message(self.name))
             coefficient = reindex_like_if_needed(coefficient, self.labels, 0).fillna(0)
-        ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
-            TERM_DIM, -1
-        )
+        ds = Dataset({"coeffs": coefficient, "vars": self.labels})
+        if self.model.sparse and not _dense:
+            self.model._check_sparse_semantics()
+            csr = CSRLinearExpression.from_labels(ds, self.model)
+            return expressions.LinearExpression._from_csr(csr, self.model)
+        ds = ds.expand_dims(TERM_DIM, -1)
         if is_v1() and has_absence:
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
             ds = ds.assign(const=const)
@@ -497,7 +504,7 @@ class Variable:
         """
         try:
             if isinstance(other, Variable | ScalarVariable):
-                return self.to_linexpr() * other
+                return self.to_linexpr(_dense=True) * other
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
@@ -518,7 +525,7 @@ class Variable:
         if not isinstance(other, int):
             return NotImplemented
         if other == 2:
-            expr = self.to_linexpr()
+            expr = self.to_linexpr(_dense=True)
             return cast(
                 "QuadraticExpression", expr._multiply_by_linear_expression(expr)
             )
@@ -871,7 +878,7 @@ class Variable:
         -------
         linopy.expression.LinearExpressionRolling
         """
-        return self.to_linexpr().rolling(
+        return self.to_linexpr(_dense=True).rolling(
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
 
@@ -911,7 +918,7 @@ class Variable:
         -------
         linopy.expression.LinearExpression
         """
-        return self.to_linexpr().cumsum(
+        return self.to_linexpr(_dense=True).cumsum(
             dim=dim, skipna=skipna, keep_attrs=keep_attrs, **kwargs
         )
 
