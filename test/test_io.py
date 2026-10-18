@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021.
 import importlib.util
 import json
 import pickle
+import sys
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +20,7 @@ import polars as pl
 import pytest
 import xarray as xr
 
+import linopy
 from linopy import LESS_EQUAL, Model, available_solvers, licensed_solvers, read_netcdf
 from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
@@ -674,6 +676,48 @@ def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         fn = tmp_path / "test.failedtype"
         model.to_file(fn)
+
+
+def test_to_file_lp_progress_without_tqdm(
+    model: Model, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The progress bars are cosmetic: without tqdm the LP file is unchanged."""
+    monkeypatch.setattr(linopy.io, "_tqdm", None)
+
+    quiet = tmp_path / "quiet.lp"
+    loud = tmp_path / "loud.lp"
+    model.to_file(quiet, io_api="lp", progress=False)
+    model.to_file(loud, io_api="lp", progress=True)
+
+    assert loud.read_bytes() == quiet.read_bytes()
+
+
+def test_to_file_lp_without_polars(
+    model: Model, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LP export names the missing extra instead of failing inside polars."""
+    monkeypatch.setitem(sys.modules, "polars", None)
+
+    with pytest.raises(ImportError, match=r"linopy\[polars\]"):
+        model.to_file(tmp_path / "test.lp", io_api="lp")
+
+
+def test_missing_polars_placeholder() -> None:
+    """The polars stand-in raises on first attribute access, not on import."""
+    from linopy._polars import missing_polars
+
+    with pytest.raises(ImportError, match=r"linopy\[polars\]"):
+        missing_polars.DataFrame
+
+
+def test_missing_polars_placeholder_dunder_probe() -> None:
+    """Dunder probes must raise AttributeError, not the install hint."""
+    from linopy._polars import missing_polars
+
+    with pytest.raises(AttributeError):
+        missing_polars.__wrapped__
+
+    assert hasattr(missing_polars, "__class__")
 
 
 @pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")

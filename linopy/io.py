@@ -20,10 +20,18 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-import polars as pl
 import scipy.sparse
 import xarray as xr
-from tqdm import tqdm
+
+try:
+    import polars as pl
+except ImportError:
+    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
+
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:
+    _tqdm = None
 
 from linopy import solvers
 from linopy.common import (
@@ -53,6 +61,13 @@ CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
 
 TQDM_COLOR = "#80bfff"
+
+
+def tqdm(iterable: Any, **kwargs: Any) -> Any:
+    """Wrap in a progress bar when tqdm is installed, otherwise pass through."""
+    if _tqdm is None:
+        return iterable
+    return _tqdm(iterable, **kwargs)
 
 
 name_sanitizer = str.maketrans("-+*^[] ", "_______")
@@ -186,7 +201,7 @@ def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
     """
-    Get batch printer functions for numpy label arrays (non-polars).
+    Get batch printer functions for numpy label arrays.
 
     Returns two callables that take an int64 numpy array of labels and return
     a list of name strings.
@@ -213,10 +228,10 @@ def get_printers_scalar(
     else:
 
         def print_variables(labels: np.ndarray) -> list[str]:
-            return ("x" + pl.Series(labels).cast(pl.String)).to_list()
+            return np.char.add("x", labels.astype(str)).tolist()
 
         def print_constraints(labels: np.ndarray) -> list[str]:
-            return ("c" + pl.Series(labels).cast(pl.String)).to_list()
+            return np.char.add("c", labels.astype(str)).tolist()
 
         return print_variables, print_constraints
 
@@ -707,6 +722,20 @@ def to_lp_file(
     progress: bool = True,
     explicit_coordinate_names: bool = False,
 ) -> None:
+    """
+    Write out a model to an LP file.
+
+    Requires the optional ``polars`` dependency. Progress bars require ``tqdm``;
+    without it the export runs silently.
+    """
+    try:
+        import polars  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "LP file export requires polars. Install it with "
+            "`pip install linopy[polars]`, or pass io_api='direct' to solve()."
+        ) from exc
+
     with open(fn, mode="wb") as f:
         start = time.time()
         variable_scaling = variable_scaling_lookup(m)

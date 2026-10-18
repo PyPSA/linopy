@@ -17,13 +17,17 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-import polars as pl
 from numpy import nan, signedinteger
 from numpy.typing import DTypeLike
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
+
+try:
+    import polars as pl
+except ImportError:
+    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 from linopy.alignment import _as_index
 from linopy.config import options

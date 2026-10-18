@@ -125,3 +125,63 @@ jobs:
     - name: Run type checker (mypy)
       run: |
         mypy .
+
+  no-extras:
+    # The base install must work without polars, dask, tqdm and deprecation.
+    # This job catches a hard import reintroduced into the core path.
+    name: Core install without optional dependencies
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: 3.12
+
+    - name: Download package
+      uses: actions/download-artifact@v8
+      with:
+        name: Packages
+        path: dist
+
+    - name: Install the wheel with no extras
+      run: |
+        python -m pip install uv
+        uv pip install --system "$(ls dist/*.whl)"
+        uv pip install --system highspy
+
+    - name: Smoke test the core install
+      run: |
+        python - <<'PY'
+        import importlib.util
+
+        # The wheel with no extras must not pull in any of the optional extras.
+        for optional in ("polars", "dask", "tqdm"):
+            assert importlib.util.find_spec(optional) is None, optional
+
+        import pandas as pd
+
+        from linopy import Model
+
+        m = Model()
+        t = pd.RangeIndex(6, name="t")
+        x = m.add_variables(lower=0, coords=[t], name="x")
+        y = m.add_variables(lower=0, coords=[t], name="y")
+        m.add_constraints(x + y >= 1)
+        m.add_objective(2 * x + 3 * y)
+
+        # xarray's ffill/bfill import bottleneck directly, with no numpy
+        # fallback, so bottleneck has to stay a declared dependency.
+        x.ffill("t")
+        x.bfill("t")
+
+        status, condition = m.solve(io_api="direct")
+        assert status == "ok", (status, condition)
+        # One x per time step at cost 2, since x + y >= 1 and 2x + 3y.
+        assert abs(float(m.objective.value) - 2.0 * len(t)) < 1e-9
+
+        m.to_file("smoke.mps", io_api="mps")
+
+        print("core install smoke test passed")
+        PY

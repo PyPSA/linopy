@@ -20,11 +20,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import numpy as np
 import pandas as pd
-import polars as pl
 import scipy.sparse
 from numpy import arange
 from xarray import Coordinates, DataArray, Dataset
@@ -48,7 +47,12 @@ from linopy.semantics import (
     enforce_no_multiindex,
     first_mismatched_dim,
 )
-from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
+from linopy.types import (
+    POLARS_SERIES_TYPES,
+    UNLABELED_TYPES,
+    CoordsLike,
+    DimsLike,
+)
 
 
 def as_constant(other: Any) -> Any:
@@ -384,8 +388,11 @@ def as_dataarray(
         arr = pandas_to_dataarray(arr, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, pl.Series):
-        arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
+    elif isinstance(arr, POLARS_SERIES_TYPES):
+        # mypy cannot narrow `arr` through the runtime polars type tuple.
+        arr = numpy_to_dataarray(
+            cast(Any, arr).to_numpy(), coords=coords, dims=dims, **kwargs
+        )
     elif isinstance(arr, np.number | int | float | str | bool | list):
         if isinstance(arr, np.number):
             arr = float(arr)
@@ -406,7 +413,7 @@ def as_dataarray(
             pd.DataFrame,
             np.ndarray,
             DataArray,
-            pl.Series,
+            *POLARS_SERIES_TYPES,
         ]
         supported_types_str = ", ".join([t.__name__ for t in supported_types])
         raise TypeError(

@@ -21,7 +21,6 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-import polars as pl
 from numpy import floating, int64, issubdtype, ndarray, str_
 from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
@@ -29,6 +28,11 @@ from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
+
+try:
+    import polars as pl
+except ImportError:
+    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 import linopy.expressions as expressions
 from linopy.alignment import as_dataarray, broadcast_to_coords
