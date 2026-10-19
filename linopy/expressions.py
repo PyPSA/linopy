@@ -671,7 +671,8 @@ class LinearExpressionGroupby:
             reason = "groupby-sum with a grouper without a sparse path"
             if csr is None:
                 _densify_notice(reason, self.model)
-            _densify_all([self.obj], reason)
+            else:
+                _densify_all([self.obj], reason)
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -3908,9 +3909,10 @@ def _try_csr_merge(
     dims in a different order are transposed onto the template order, and
     grids that differ in their labels are aligned row-wise onto the joined
     grid (:func:`_aligned`), the cells the join creates carrying the fill of
-    the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary coordinates are checked for
-    conflicts on the operands as given and follow their rows onto the joined
-    grid. Returns None to fall through to the dense path.
+    the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary
+    coordinates are checked for conflicts on the operands as given and follow
+    their rows onto the joined grid. Returns None to fall through to the
+    dense path.
     """
     if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
         return None

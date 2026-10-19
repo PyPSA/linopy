@@ -40,6 +40,7 @@ The reverse bridges live at the dense call sites, in
 from __future__ import annotations
 
 import functools
+import math
 import operator
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -169,28 +170,20 @@ class Grid:
 
     def indexer(self, other: Grid) -> tuple[np.ndarray, np.ndarray]:
         """
-        Map ``other``'s cells onto this grid: the flat target row of each
-        source cell, and a mask of the cells whose labels all survive.
+        Map ``other``'s cells onto this grid, matched by dim name: the flat
+        target row of each source cell, and a mask of the cells whose labels
+        all survive. A dim this grid lacks is broadcast.
         """
+        strides = self.strides
         positions = {
-            d: self.indexes[d].get_indexer(i) for d, i in other.indexes.items()
-        }
-        return _flat_rows(positions, self.strides)
-
-    def broadcast_rows(self, source: Grid) -> np.ndarray:
-        """
-        The ``source`` row each cell of this grid takes, matched by dim name:
-        a dim ``source`` lacks is broadcast, a label it lacks gives ``-1``.
-        """
-        strides = source.strides
-        positions = {
-            d: source.indexes[d].get_indexer(i)
+            d: self.indexes[d].get_indexer(i)
             if d in strides
             else np.zeros(len(i), dtype=np.int64)
-            for d, i in self.indexes.items()
+            for d, i in other.indexes.items()
         }
-        rows, valid = _flat_rows(positions, {d: strides.get(d, 0) for d in self.dims})
-        return np.where(valid, rows, -1)
+        rows = _outer_sum([pos * strides.get(d, 0) for d, pos in positions.items()])
+        valid = _outer_sum([pos == -1 for pos in positions.values()]) == 0
+        return rows, valid
 
     def renamed(self, names: Mapping[str, str]) -> Grid:
         """Relabel dimensions; the cell layout is unchanged."""
@@ -287,8 +280,8 @@ class CSRLinearExpression:
         dtype = index_dtype(csr.nnz, csr.shape, self.model)
         indices = csr.indices.astype(dtype, copy=False)
         indptr = csr.indptr.astype(dtype, copy=False)
-        arrays = [_readonly(a, copy=False) for a in (csr.data, indices, indptr)]
-        csr = scipy.sparse.csr_array(tuple(arrays), shape=csr.shape)
+        arrays = tuple(_readonly(a, copy=False) for a in (csr.data, indices, indptr))
+        csr = scipy.sparse.csr_array(arrays, shape=csr.shape)
         object.__setattr__(self, "csr", csr)
         object.__setattr__(self, "const", _readonly(self.const, copy=False))
 
@@ -418,20 +411,15 @@ class CSRLinearExpression:
         coeffs = coeff_da.transpose(*labels.dims).to_numpy().reshape(-1)
         shape = (vars_.size, model._xCounter)
         dtype = index_dtype(vars_.size, shape, model)
-        absent = vars_ == -1
-        if absent.any():
-            present = ~absent
+        present = vars_ != -1
+        indptr = np.zeros(vars_.size + 1, dtype=dtype)
+        np.cumsum(present, out=indptr[1:])
+        if not present.all():
             vars_, coeffs = vars_[present], coeffs[present]
-            indptr = np.concatenate([[0], np.cumsum(present)]).astype(dtype)
-            const = np.where(absent, np.nan, 0.0)
-        else:
-            indptr = np.arange(shape[0] + 1, dtype=dtype)
-            const = np.zeros(shape[0])
-        csr = scipy.sparse.csr_array(
-            (coeffs.astype(float, copy=False), vars_.astype(dtype, copy=False), indptr),
-            shape=shape,
-        )
-        return cls(csr, const, grid, model)
+        indices = vars_.astype(dtype, copy=False)
+        arrays = (coeffs.astype(float, copy=False), indices, indptr)
+        csr = scipy.sparse.csr_array(arrays, shape=shape)
+        return cls(csr, np.where(present, 0.0, np.nan), grid, model)
 
     @classmethod
     def _from_scatter(
@@ -517,7 +505,7 @@ class CSRLinearExpression:
         grid = self.grid.reordered(kept)
         summed = [d for d in source_dims if d in dims]
         axes = [source_dims.index(d) for d in (*kept, *summed)]
-        block = self.n_cells // grid.size if grid.size else 0
+        block = math.prod(len(self.grid.indexes[d]) for d in summed)
         source = self.csr
         if axes != sorted(axes):
             cells = np.arange(self.n_cells).reshape(self.grid.shape)
@@ -596,7 +584,8 @@ class CSRLinearExpression:
         dims, terms and constant included; a label missing here leaves the
         cell absent. Auxiliary coordinates follow the rows.
         """
-        return self.taken(grid.broadcast_rows(self.grid), self.grid.conformed(grid))
+        rows, valid = self.grid.indexer(grid)
+        return self.taken(np.where(valid, rows, -1), self.grid.conformed(grid))
 
     def concatenated(
         self, others: Iterable[CSRLinearExpression], dim: str, grid: Grid
@@ -694,14 +683,13 @@ class CSRLinearExpression:
         parts = (self, *others)
         const = functools.reduce(np.add, (p.const for p in parts))
         shape = (self.n_cells, max(p.csr.shape[1] for p in parts))
-        merged = _interleaved([p.csr for p in parts], shape, self.model)
-        csr = replace(self, csr=merged).with_const(const).csr
+        csr = _interleaved([p.csr for p in parts], shape, self.model)
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in parts])
         aux: AuxCoords = {}
         for p in reversed(parts):
             aux |= p.grid.aux
         grid = replace(self.grid, aux=aux)
-        return replace(self, csr=csr, const=const, grid=grid)
+        return replace(self, csr=csr, grid=grid).with_const(const)
 
     def contracted(
         self,
@@ -1032,18 +1020,6 @@ def _cell_rows(
             for d in dims
         ]
     )
-
-
-def _flat_rows(
-    positions: Mapping[str, np.ndarray], strides: Mapping[str, int]
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Flat row of every cell of the outer product of per-dim ``positions``
-    under ``strides``, and a mask of the cells with no ``-1`` position.
-    """
-    rows = _outer_sum([pos * strides[d] for d, pos in positions.items()])
-    valid = _outer_sum([pos == -1 for pos in positions.values()]) == 0
-    return rows, valid
 
 
 def _outer_sum(axis_positions: list[np.ndarray]) -> np.ndarray:
