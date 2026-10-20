@@ -138,6 +138,7 @@ This package is published under MIT license.
 
    sos-constraints
    piecewise-linear-constraints
+   rolling-horizon
    numerical-scaling
    testing-framework
 
