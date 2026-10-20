@@ -8,7 +8,7 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, licensed_solvers
 
 
 class TestInfeasibility:
@@ -80,7 +80,7 @@ class TestInfeasibility:
         self, simple_infeasible_model: Model, solver: str
     ) -> None:
         """Test basic infeasibility detection."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = simple_infeasible_model
@@ -103,7 +103,7 @@ class TestInfeasibility:
         self, complex_infeasible_model: Model, solver: str
     ) -> None:
         """Test infeasibility detection on more complex model."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = complex_infeasible_model
@@ -126,7 +126,7 @@ class TestInfeasibility:
         self, multi_dimensional_infeasible_model: Model, solver: str
     ) -> None:
         """Test infeasibility detection on multi-dimensional model."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = multi_dimensional_infeasible_model
@@ -155,7 +155,7 @@ class TestInfeasibility:
     @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_no_solver_model_error(self, solver: str) -> None:
         """Test error when solver model is not available after solving."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = Model()
@@ -176,7 +176,7 @@ class TestInfeasibility:
     @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     def test_feasible_model_iis(self, solver: str) -> None:
         """Test IIS computation on a feasible model."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = Model()
@@ -213,7 +213,7 @@ class TestInfeasibility:
         m.add_objective(1 * x)
 
         # Use a solver that doesn't support IIS
-        if "cbc" in available_solvers:
+        if "cbc" in licensed_solvers:
             status, condition = m.solve(solver_name="cbc")
             assert "infeasible" in condition
 
@@ -225,7 +225,7 @@ class TestInfeasibility:
         self, simple_infeasible_model: Model, solver: str
     ) -> None:
         """Test that deprecated method still works."""
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = simple_infeasible_model
@@ -263,7 +263,7 @@ class TestInfeasibility:
         The enumeration creates positions [0, 1, 2, ...] that should correspond
         to the actual constraint labels which may have gaps like [0, 2, 4, 6].
         """
-        if solver not in available_solvers:
+        if solver not in licensed_solvers:
             pytest.skip(f"{solver} not available")
 
         m = Model()

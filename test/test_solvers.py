@@ -578,7 +578,7 @@ class TestValidateModelOnBuild:
             solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_solve_without_objective_raises(self) -> None:
         m = Model()
@@ -594,7 +594,7 @@ class TestSolverDoesNotMutateModel:
     """Solver.from_model() must not mutate model state (sanitize stays Model-level)."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_from_model_leaves_constraints_untouched(self) -> None:
         m = Model()
@@ -620,7 +620,7 @@ class TestAssignResultWiring:
     """assign_result(result, solver=...) populates model.solver."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_with_solver_wires_model_solver(self) -> None:
         m = Model()
@@ -636,7 +636,7 @@ class TestAssignResultWiring:
         assert m.solver_model is solver.solver_model
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_without_solver_kwarg_leaves_solver_unset(self) -> None:
         m = Model()
