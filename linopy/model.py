@@ -121,6 +121,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.restrict.window import WindowModel
 
 logger = logging.getLogger(__name__)
 
@@ -2473,6 +2474,69 @@ class Model:
             *self.constraints.data.values(),
             *self.expressions.data.values(),
         ]
+
+    def restrict(
+        self,
+        fix: Mapping[str, Any] | None = None,
+        **selection: Any,
+    ) -> WindowModel:
+        """
+        Build a matrix-backed window along one coordinate dimension.
+
+        A window is a slice of the model's flattened matrices: the parent is
+        built once, and each selection slices its rows and columns. Terms whose
+        variables fall outside the window are folded into the right-hand side at
+        their actual coefficient when ``fix`` supplies their values. Rows that
+        lose every term are dropped when their folded right-hand side satisfies
+        their sign, and raise otherwise.
+
+        The returned :class:`~linopy.restrict.WindowModel` exposes ``matrices``
+        directly, so solving never rebuilds a container. Variables and
+        constraints are materialised only when their values are read.
+
+        Parameters
+        ----------
+        fix : mapping, optional
+            Fixed values for out-of-window variables, keyed by variable name and
+            broadcast against the variable's coordinates. Values for in-window
+            variables are ignored.
+        **selection : Any
+            Exactly one dimension and the labels of the window, e.g.
+            ``snapshot=sns[:24]``.
+
+        Returns
+        -------
+        WindowModel
+            The window, with its matrices computed.
+
+        Raises
+        ------
+        RestrictionError
+            If the dimension does not exist, a carrier does not contain the
+            window's labels, or a fully folded row is unsatisfiable.
+        NotImplementedError
+            If the selection names several dimensions, or the model has
+            indicators, a quadratic objective, SOS or piecewise formulations.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>>
+        >>> sns = pd.date_range("2026-01-01", periods=4, freq="h", name="snapshot")
+        >>> m = linopy.Model()
+        >>> storage = m.add_variables(0, 10, coords=[sns], name="storage")
+        >>> flow = m.add_variables(0, 100, coords=[sns], name="flow")
+        >>> _ = m.add_constraints(storage - flow <= 0, name="cap")
+        >>> _ = m.add_objective(flow.sum(), sense="min")
+        >>>
+        >>> window = m.restrict(snapshot=sns[:2])
+        >>> window.matrices.A.shape
+        (2, 4)
+        """
+        from linopy.restrict import restrict_model
+
+        return restrict_model(self, fix, selection)
 
     def assign_result(
         self,

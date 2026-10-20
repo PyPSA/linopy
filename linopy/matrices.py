@@ -204,9 +204,11 @@ class MatrixAccessor:
 
         regular, indicator = [], []
         binvar, binval = [], []
+        scalings = []
         for c in m.constraints.data.values():
             if not c.is_indicator:
                 regular.append(_row_block(c, label_index))
+                scalings.append(_row_scaling(c))
                 continue
             cc = c if isinstance(c, CSRConstraint) else c.freeze()
             indicator.append(_row_block(cc, label_index))
@@ -215,6 +217,11 @@ class MatrixAccessor:
             binval.append(_binval_per_row(cc_binval, len(cc._rhs)))
 
         self.clabels: ndarray = m.constraints.label_index.clabels
+        #: Row scaling actually applied to ``A``, aligned with ``clabels``. Consumers
+        #: that report duals need it to invert the scaling on the way back.
+        self.con_scaling: ndarray = (
+            np.concatenate(scalings) if scalings else np.empty(0, dtype=float)
+        )
         self.A: scipy.sparse.csr_array | None
         self.A, self.b, self.sense = _stack(regular, label_index, col_scaling, m)
         self.indicator_A: scipy.sparse.csr_array | None
