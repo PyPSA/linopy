@@ -25,12 +25,12 @@ import xarray as xr
 
 try:
     import polars as pl
-except ImportError:
+except ImportError:  # pragma: no cover
     from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 try:
     from tqdm import tqdm as _tqdm
-except ImportError:
+except ImportError:  # pragma: no cover
     _tqdm = None
 
 from linopy import solvers

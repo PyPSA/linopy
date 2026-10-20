@@ -39,7 +39,7 @@ from xarray.core.utils import Frozen
 
 try:
     import polars as pl
-except ImportError:
+except ImportError:  # pragma: no cover
     from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 from linopy import expressions, variables

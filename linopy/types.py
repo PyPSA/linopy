@@ -10,7 +10,7 @@ from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 try:
     import polars as pl
-except ImportError:
+except ImportError:  # pragma: no cover
     pl = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
@@ -35,7 +35,7 @@ DimsLike: TypeAlias = str | Iterable[Hashable]
 # checks keep working and simply never match a polars input.
 POLARS_SERIES_TYPES: tuple[type, ...] = (pl.Series,) if pl is not None else ()
 
-if pl is None:
+if pl is None:  # pragma: no cover
     ConstantLike: TypeAlias = (
         int
         | float

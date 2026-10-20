@@ -678,6 +678,16 @@ def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
         model.to_file(fn)
 
 
+def test_to_file_lp_progress_with_tqdm(model: Model, tmp_path: Path) -> None:
+    """The installed progress bar runs and leaves the LP file unchanged."""
+    quiet = tmp_path / "quiet.lp"
+    loud = tmp_path / "loud.lp"
+    model.to_file(quiet, io_api="lp", progress=False)
+    model.to_file(loud, io_api="lp", progress=True)
+
+    assert loud.read_bytes() == quiet.read_bytes()
+
+
 def test_to_file_lp_progress_without_tqdm(
     model: Model, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

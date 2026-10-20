@@ -26,7 +26,7 @@ from xarray.namedarray.utils import is_dict_like
 
 try:
     import polars as pl
-except ImportError:
+except ImportError:  # pragma: no cover
     from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 from linopy.alignment import _as_index
