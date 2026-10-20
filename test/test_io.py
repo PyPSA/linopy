@@ -18,7 +18,7 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
+from linopy import LESS_EQUAL, Model, available_solvers, licensed_solvers, read_netcdf
 from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
@@ -743,7 +743,7 @@ def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None
     assert_model_equal(model, read_netcdf(fn_legacy))
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_file_lp(model: Model, tmp_path: Path) -> None:
     import gurobipy
 
@@ -753,7 +753,7 @@ def test_to_file_lp(model: Model, tmp_path: Path) -> None:
     gurobipy.read(str(fn))
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_file_lp_explicit_coordinate_names(model: Model, tmp_path: Path) -> None:
     import gurobipy
 
@@ -763,7 +763,7 @@ def test_to_file_lp_explicit_coordinate_names(model: Model, tmp_path: Path) -> N
     gurobipy.read(str(fn))
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_file_lp_None(model: Model) -> None:
     import gurobipy
 
@@ -775,7 +775,7 @@ def test_to_file_lp_None(model: Model) -> None:
 
 
 @pytest.mark.skipif(
-    not {"gurobi", "highs"}.issubset(available_solvers),
+    not {"gurobi", "highs"}.issubset(licensed_solvers),
     reason="Gurobipy of highspy not installed",
 )
 def test_to_file_mps(model: Model, tmp_path: Path) -> None:
@@ -794,13 +794,13 @@ def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
         model.to_file(fn)
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy(model: Model) -> None:
     gm = model.to_gurobipy()
     assert gm.NumVars > 0
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 @pytest.mark.parametrize("set_names", [True, False])
 def test_to_highspy(model: Model, set_names: bool) -> None:
     lp = model.to_highspy(set_names=set_names).getLp()
@@ -815,7 +815,7 @@ def test_to_mosek(model: Model) -> None:
     assert task.getnumvar() > 0
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+@pytest.mark.skipif("xpress" not in licensed_solvers, reason="Xpress not installed")
 def test_to_xpress(model: Model) -> None:
     p = model.to_xpress()
     assert p.attributes.cols > 0
@@ -869,7 +869,8 @@ def test_to_solver_set_names(
     set_names: bool | None,
     expected: bool,
 ) -> None:
-    if solver not in available_solvers:
+    usable = available_solvers if solver == "mosek" else licensed_solvers
+    if solver not in usable:
         pytest.skip(f"{solver} not installed")
     to_solver, names = SOLVER_IO[solver]
     named = to_solver(model, set_names=True)
@@ -878,13 +879,13 @@ def test_to_solver_set_names(
     assert (names(built) == names(named)) == expected
 
 
-@pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
+@pytest.mark.skipif("cupdlpx" not in licensed_solvers, reason="cuPDLPx not installed")
 def test_to_cupdlpx(model: Model) -> None:
     cu = model.to_cupdlpx()
     assert cu is not None
 
 
-@pytest.mark.skipif("cuopt" not in available_solvers, reason="cuOpt not installed")
+@pytest.mark.skipif("cuopt" not in licensed_solvers, reason="cuOpt not installed")
 def test_to_cuopt(model: Model) -> None:
     dm = model.to_cuopt()
     assert len(dm.get_objective_coefficients()) > 0
@@ -895,7 +896,7 @@ def test_model_set_names_in_solver_io_default() -> None:
     assert Model().set_names_in_solver_io is False
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 def test_model_set_names_in_solver_io(model: Model) -> None:
     model.solve(solver_name="highs", io_api="direct")
     expected_obj = model.objective.value
@@ -909,7 +910,7 @@ def test_model_set_names_in_solver_io(model: Model) -> None:
     assert model.objective.value == pytest.approx(expected_obj)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 def test_highs_direct_qp_keeps_hessian_with_names() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="x")
@@ -985,7 +986,7 @@ class TestSignedNumberExpr:
             assert "+-" not in v
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_file_lp_with_negative_zero_bounds(tmp_path: Path) -> None:
     """
     Test that LP files with negative zero bounds are valid.
@@ -1019,7 +1020,7 @@ def test_to_file_lp_with_negative_zero_bounds(tmp_path: Path) -> None:
     gurobipy.read(str(fn))
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_file_lp_with_negative_zero_coefficients(tmp_path: Path) -> None:
     """
     Test that LP files with negative zero coefficients are valid.
@@ -1130,12 +1131,12 @@ class TestLPBinaryBounds:
         for label in m.variables["x"].labels.values[2:]:
             assert f"x{label} <= +0.0" in bounds_section
 
-    @pytest.mark.skipif(not available_solvers, reason="No solver installed")
+    @pytest.mark.skipif(not licensed_solvers, reason="No solver installed")
     def test_lp_and_direct_agree(
         self, make_tightened_model: Callable[[], Model]
     ) -> None:
         """LP and direct paths see the same feasible set for tightened binaries."""
-        solver = available_solvers[0]
+        solver = licensed_solvers[0]
 
         m_direct = make_tightened_model()
         m_direct.solve(solver_name=solver, io_api="direct")

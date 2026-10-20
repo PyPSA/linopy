@@ -6,6 +6,7 @@ Upcoming Version
 
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
 * ``to_netcdf`` no longer raises on timezone-aware datetimes in indexes, ``MultiIndex`` levels, auxiliary coordinates, frozen constraints and ``Model.parameters``; they are written as naive UTC with the zone in an attribute and restored by ``read_netcdf``. (`#1021 <https://github.com/PyPSA/linopy/pull/1021>`__)
+* ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
 
 Version 0.10.0
 --------------

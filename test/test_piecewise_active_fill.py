@@ -18,7 +18,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, available_solvers, segments
+from linopy import Model, licensed_solvers, segments
 from linopy.piecewise import _resolve_active
 from linopy.solver_capabilities import (
     SolverFeature,
@@ -29,10 +29,10 @@ Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
 GateBuilder: TypeAlias = Callable[[Model], Any]
 
 _any_solvers = [
-    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
+    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in licensed_solvers
 ]
 _sos2_solvers = get_available_solvers_with_feature(
-    SolverFeature.SOS_CONSTRAINTS, available_solvers
+    SolverFeature.SOS_CONSTRAINTS, licensed_solvers
 )
 
 
