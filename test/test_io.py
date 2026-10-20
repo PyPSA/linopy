@@ -455,9 +455,6 @@ def test_model_to_netcdf_with_multiindex_scipy_engine(
 
 
 def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
-    # Flat dimension with levels as auxiliary coordinates (the v1 alternative
-    # to a MultiIndex), on a variable, a constraint, a named expression and a
-    # parameter.
     m = Model()
     coords = xr.Coordinates(
         {
@@ -469,11 +466,10 @@ def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
     x = m.add_variables(lower=0, coords=coords, name="x")
     m.add_constraints(x >= 1, name="c")
     m.add_expressions(2 * x, name="e")
-    # Scalar coords are attached to every container on read; the dash name
-    # makes this container's prefix extend the prefix of "c".
     m.add_constraints(x.sel(snapshot=0) >= 2, name="c-first")
     m.add_objective(x.sum())
     m.parameters["demand"] = xr.DataArray(np.ones(4), coords=coords)
+    m.parameters["my-param"] = m.parameters["demand"].sel(snapshot=1)
 
     fn = tmp_path / "test_aux_coords.nc"
     m.to_netcdf(fn)
