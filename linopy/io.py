@@ -1218,9 +1218,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     ds = xr.load_dataset(path, **kwargs)
     m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
-    def has_prefix(k: str, prefix: str) -> bool:
-        return k.rsplit("-", 1)[0] == prefix
-
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
@@ -1231,7 +1228,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return [str(n) for n in value]
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
+        ds = ds[[k for k in ds if owners[str(k)] == prefix]]
         multiindexes = []
         for dim in ds.dims:
             attr = ds.attrs.get(f"{dim}_multiindex")
@@ -1245,7 +1242,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         ds.attrs = {
             remove_prefix(k, prefix): v
             for k, v in ds.attrs.items()
-            if has_prefix(k, prefix)
+            if owners[k] == prefix
         }
 
         for dim in ds.dims:
@@ -1269,15 +1266,30 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             )
         return ordered
 
+    containers = {
+        kind: container_names(kind)
+        for kind in ("variables", "expressions", "constraints")
+    }
+    prefixes = {"objective", "parameters"}.union(*containers.values())
+
+    def owner(k: str) -> str | None:
+        while "-" in k:
+            k = k.rsplit("-", 1)[0]
+            if k in prefixes:
+                return k
+        return None
+
+    owners = {k: owner(k) for k in [*map(str, ds), *ds.attrs]}
+
     variables = {}
-    for k in container_names("variables"):
+    for k in containers["variables"]:
         name = remove_prefix(k, "variables")
         variables[name] = Variable(get_prefix(ds, k), m, name)
 
     m._variables = Variables(variables, m)
 
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
-    for k in container_names("expressions"):
+    for k in containers["expressions"]:
         name = remove_prefix(k, "expressions")
         expr_ds = get_prefix(ds, k)
         expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
@@ -1295,7 +1307,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._expressions = Expressions(expressions, m)
 
     constraints: dict[str, ConstraintBase] = {}
-    for k in container_names("constraints"):
+    for k in containers["constraints"]:
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)
         if con_ds.attrs.get("_linopy_format") == "csr":

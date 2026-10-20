@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
+
 Version 0.10.0
 --------------
 
