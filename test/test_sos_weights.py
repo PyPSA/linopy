@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, licensed_solvers
 from linopy.common import sos_weights
 
 #: Gains that separate the two orders: the first two members declared are worth
@@ -24,7 +24,7 @@ from linopy.common import sos_weights
 GAINS = [1.0, 1.0, 0.1]
 
 needs_highs = pytest.mark.skipif(
-    "highs" not in available_solvers, reason="HiGHS not installed"
+    "highs" not in licensed_solvers, reason="HiGHS not installed"
 )
 
 

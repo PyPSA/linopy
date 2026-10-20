@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, Variable, available_solvers
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, Variable, licensed_solvers
 from linopy.testing import assert_conequal
 
 # Test model functions
@@ -490,9 +490,9 @@ class TestConstraintCoordinateAlignment:
         assert "extra" in c.dims
 
     def test_subset_constraint_solve_integration(self) -> None:
-        if not available_solvers:
+        if not licensed_solvers:
             pytest.skip("No solver available")
-        solver = "highs" if "highs" in available_solvers else available_solvers[0]
+        solver = "highs" if "highs" in licensed_solvers else licensed_solvers[0]
         m = Model()
         coords = pd.RangeIndex(5, name="i")
         x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
