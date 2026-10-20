@@ -20,7 +20,8 @@ import pandas as pd
 import polars as pl
 from numpy import nan, signedinteger
 from numpy.typing import DTypeLike
-from xarray import DataArray, Dataset, Variable, apply_ufunc, broadcast
+from xarray import DataArray, Dataset, apply_ufunc, broadcast
+from xarray import Variable as XrVariable
 from xarray import align as xr_align
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
@@ -286,10 +287,15 @@ def set_data_var(
     out = ds.copy(deep=False)
     data = np.asarray(values)
     existing = out._variables.get(name)
-    if existing is not None:
-        out._variables[name] = existing._replace(data=data)
-    else:
-        out._variables[name] = Variable(dims, data)
+    if existing is None:
+        out._variables[name] = XrVariable(dims, data)
+        return out
+    if data.shape != existing.shape:
+        raise ValueError(
+            f"Cannot write {name!r}: shape {data.shape} does not match "
+            f"existing shape {existing.shape}."
+        )
+    out._variables[name] = existing._replace(data=data)
     return out
 
 

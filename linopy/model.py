@@ -2452,6 +2452,7 @@ class Model:
                     * con.scaling.values
                     / objective_scaling
                 )
+                assert isinstance(con, Constraint)
                 con._assign_dual(values)
 
         return status_value, termination_condition
