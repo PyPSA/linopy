@@ -65,6 +65,7 @@ from linopy.common import (
     reassign_coords,
     replace_by_map,
     save_join,
+    set_data_var,
     to_dataframe,
     to_polars,
     validate_coords_reassignment,
@@ -2053,6 +2054,16 @@ class Constraint(ConstraintBase):
     def dual(self, value: ConstantLike) -> None:
         value = DataArray(value).broadcast_like(self.labels)
         self._data = assign_fields(self.data, dual=value)
+
+    def _assign_dual(self, values: np.ndarray) -> None:
+        """
+        Write dual values without rebuilding the dataset.
+
+        Internal: values-only overwrite used by :meth:`Model.assign_result`. The
+        values already match the row shape, so the ``DataArray`` construction and
+        merge in the public setter are pure overhead.
+        """
+        self._data = set_data_var(self._data, "dual", tuple(self.coord_dims), values)
 
     def has_labels(self, labels: np.ndarray) -> bool:
         return contains_labels(self.data["vars"].values.ravel(), labels)
