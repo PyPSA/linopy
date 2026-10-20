@@ -590,9 +590,64 @@ def _breakpoints_from_slopes(
 
     # Multi-dim case: per-entity slopes
     entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
-    if len(entity_dims) != 1:
-        raise ValueError(
-            f"Expected exactly one entity dimension in slopes, got {entity_dims}"
+    if len(entity_dims) > 1:
+        if xp_arr.sizes[BREAKPOINT_DIM] == 0:
+            raise ValueError("Multidimensional slopes require at least one x_point")
+        # Align entity coordinates exactly, while breakpoint positions remain
+        # positional: pieces and points intentionally have different lengths.
+        slopes_arr, xp_arr = xr.align(
+            slopes_arr, xp_arr, join="exact", exclude={BREAKPOINT_DIM}
+        )
+        template = xr.broadcast(
+            slopes_arr.sum(BREAKPOINT_DIM),
+            xp_arr.sum(BREAKPOINT_DIM),
+        )[0]
+        slopes_arr = slopes_arr.broadcast_like(template)
+        xp_arr = xp_arr.broadcast_like(template)
+        for values in (slopes_arr, xp_arr):
+            if bool(np.isinf(values).any()):
+                raise ValueError("Slopes and x_points must be finite or trailing NaN")
+            present = values.notnull()
+            if bool((present & (values.isnull().cumsum(BREAKPOINT_DIM) > 0)).any()):
+                raise ValueError(
+                    "Slopes and x_points may only have trailing NaN padding"
+                )
+        if bool(
+            (slopes_arr.count(BREAKPOINT_DIM) != xp_arr.count(BREAKPOINT_DIM) - 1).any()
+        ):
+            raise ValueError("Slope count must be x_point count minus one per entity")
+        if bool((xp_arr.count(BREAKPOINT_DIM) < 1).any()):
+            raise ValueError("At least one x_point is required per entity")
+        if isinstance(y0, Real):
+            initial = xr.full_like(template, float(y0), dtype=float)
+        elif isinstance(y0, DataArray):
+            if not set(y0.dims).issubset(template.dims):
+                raise ValueError("y0 dimensions must be entity dimensions")
+            initial, _ = xr.align(y0, template, join="exact")
+            initial = initial.broadcast_like(template)
+        else:
+            raise TypeError("Multidimensional slopes require scalar or DataArray y0")
+        if not bool(np.isfinite(initial).all()):
+            raise ValueError("y0 must be finite")
+        count = xp_arr.sizes[BREAKPOINT_DIM]
+        xp_arr = xp_arr.assign_coords({BREAKPOINT_DIM: np.arange(count)})
+        slopes_arr = slopes_arr.assign_coords(
+            {BREAKPOINT_DIM: np.arange(slopes_arr.sizes[BREAKPOINT_DIM])}
+        ).reindex({BREAKPOINT_DIM: np.arange(count - 1)})
+        widths = xp_arr.diff(BREAKPOINT_DIM).assign_coords(
+            {BREAKPOINT_DIM: np.arange(count - 1)}
+        )
+        cumulative = (widths * slopes_arr).cumsum(BREAKPOINT_DIM, skipna=False)
+        cumulative = (cumulative + initial).assign_coords(
+            {BREAKPOINT_DIM: np.arange(1, count)}
+        )
+        return (
+            xr.concat(
+                [initial.expand_dims({BREAKPOINT_DIM: [0]}), cumulative],
+                dim=BREAKPOINT_DIM,
+            )
+            .transpose(*template.dims, BREAKPOINT_DIM)
+            .where(xp_arr.notnull())
         )
     entity_dim = str(entity_dims[0])
     entity_keys = slopes_arr.coords[entity_dim].values
