@@ -15,7 +15,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
-from itertools import chain
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -1219,9 +1218,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     ds = xr.load_dataset(path, **kwargs)
     m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
-    def has_prefix(k: str, prefix: str) -> bool:
-        return owners[k] == prefix
-
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
@@ -1232,7 +1228,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return [str(n) for n in value]
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
+        ds = ds[[k for k in ds if owners[str(k)] == prefix]]
         multiindexes = []
         for dim in ds.dims:
             attr = ds.attrs.get(f"{dim}_multiindex")
@@ -1246,7 +1242,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         ds.attrs = {
             remove_prefix(k, prefix): v
             for k, v in ds.attrs.items()
-            if has_prefix(k, prefix)
+            if owners[k] == prefix
         }
 
         for dim in ds.dims:
@@ -1274,20 +1270,16 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         kind: container_names(kind)
         for kind in ("variables", "expressions", "constraints")
     }
-    # Data variables and attributes are stored as ``<prefix>-<key>``, with
-    # prefix ``<kind>-<name>``, ``objective`` or ``parameters``. Names and keys
-    # (parameter names, attribute names, dimensions) may contain dashes, so a
-    # key belongs to the longest known prefix.
-    prefixes = {"objective", "parameters", *chain.from_iterable(containers.values())}
+    prefixes = {"objective", "parameters"}.union(*containers.values())
 
     def owner(k: str) -> str | None:
-        parts = k.split("-")
-        for i in range(len(parts) - 1, 0, -1):
-            if (prefix := "-".join(parts[:i])) in prefixes:
-                return prefix
+        while "-" in k:
+            k = k.rsplit("-", 1)[0]
+            if k in prefixes:
+                return k
         return None
 
-    owners = {k: owner(k) for k in chain(map(str, ds), ds.attrs)}
+    owners = {k: owner(k) for k in [*map(str, ds), *ds.attrs]}
 
     variables = {}
     for k in containers["variables"]:
