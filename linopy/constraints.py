@@ -88,6 +88,7 @@ from linopy.constants import (
 from linopy.csr import (
     Grid,
     _densify_notice,
+    canonical,
     csr_nterm,
     csr_to_term_arrays,
     index_dtype,
@@ -1621,8 +1622,6 @@ class CSRConstraint(ConstraintBase):
         if con.nterm > 1:
             csr.sum_duplicates()
             csr.eliminate_zeros()
-        else:
-            csr.has_canonical_format = True
         grid = Grid.from_dataset(con.data, map(str, con.coord_dims))
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
@@ -1672,7 +1671,8 @@ class CSRConstraint(ConstraintBase):
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
         Builds directly from a :class:`~linopy.csr.CSRLinearExpression`. The
-        expression's label columns are kept as they are, its constant moves to
+        expression's label columns are kept as they are, its rows brought to
+        canonical form (:func:`~linopy.csr.canonical`), its constant moves to
         the rhs, and rows with a NaN rhs are inactive. ``rhs`` must come from
         :func:`csr_rhs`.
         """
@@ -1680,8 +1680,9 @@ class CSRConstraint(ConstraintBase):
         rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
         active = np.flatnonzero(~np.isnan(rhs_flat))
         all_active = active.size == rhs_flat.size
+        lhs = canonical(expr.csr) if all_active else canonical(expr.csr[active], True)
         return cls(
-            expr.csr if all_active else expr.csr[active],
+            lhs,
             active,
             rhs_flat if all_active else rhs_flat[active],
             sign,

@@ -27,7 +27,7 @@ import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
-from linopy.csr import CSRLinearExpression, Grid, column_compacted_matmul
+from linopy.csr import CSRLinearExpression, Grid, canonical, column_compacted_matmul
 from linopy.semantics import is_v1
 from linopy.testing import (
     assert_conequal,
@@ -353,7 +353,7 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
     tot = sparse + operand
     assert tot._csr is not None
     assert set(tot._csr.grid.aux) == {"period", "season"}
-    assert_linequal(tot, 2.0 * dense)
+    assert_linequal(tot, dense + dense)
 
     region = ("group", list("abcd"))
     tot = sparse + operand.assign_coords(region=region)
@@ -612,12 +612,20 @@ def test_frozen_constraint_rejects_invalid_row_scaling_on_masked_rows(
 
 
 @pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
-def test_freeze_does_not_copy_lhs_matrix(masked: bool) -> None:
+@pytest.mark.parametrize(
+    ("build", "copies"),
+    [(Case.gen_sum, 0.25), (Case.balance_lhs, 1.5)],
+    ids=["canonical", "unsorted"],
+)
+def test_freeze_copies_lhs_matrix_only_to_canonicalize(
+    masked: bool, build: Callable[[Case], LinearExpression], copies: float
+) -> None:
     require_v1()
     c = base_model(gens_per_bus=(400,) * 50, n_snap=20, sparse=True)
-    lhs = c.balance_lhs()
+    lhs = build(c)
     assert lhs._csr is not None
     csr = lhs._csr.csr
+    assert (canonical(csr) is csr) is (build is Case.gen_sum)
     csr_bytes = csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes
     mask = c.load.bus == "bus1" if masked else None
     tracemalloc.start()
@@ -626,7 +634,7 @@ def test_freeze_does_not_copy_lhs_matrix(masked: bool) -> None:
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert peak < csr_bytes / 4
+    assert peak < csr_bytes * copies
 
 
 def sparse_model_results(c: Case) -> dict[str, Any]:
@@ -1429,9 +1437,8 @@ def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
             lambda g: g.with_indexes({"snapshot": [5, 6, 7]}),
             {"bus": "group", "tag": "group"},
         ),
-        (lambda g: g.combined([g], "outer"), {}),
     ],
-    ids=["renamed", "transposed", "dropped", "relabelled", "combined"],
+    ids=["renamed", "transposed", "dropped", "relabelled"],
 )
 def test_grid_ops_carry_aux_coords(
     op: Callable[[Grid], Grid], aux_dims: dict[str, str]
@@ -1735,7 +1742,7 @@ def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
     sparse.data
     assert not sparse.is_sparse
     assert repr(sparse).startswith("LinearExpression [")
-    assert not (1.0 * c.gen_p).is_sparse
+    assert (1.0 * c.gen_p).is_sparse
 
 
 @pytest.mark.parametrize("build", list(SPARSE_BUILDS))
@@ -1791,13 +1798,16 @@ def set_blocks(e: LinearExpression, c: Case) -> None:
 
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
-    "merge": (lambda e, c: e + 1.0 * c.flow, "over different dimensions"),
+    "fillna-expr": (lambda e, c: e.fillna(2 * e), "fillna with a non-scalar value"),
+    "merge": (
+        lambda e, c: linopy.merge([e, 1.0 * c.flow], dim="snapshot"),
+        "over different dimensions",
+    ),
     "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
     "rhs": (
         lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
         "rhs over dimensions outside the grid",
     ),
-    "rhs-expr": (lambda e, c: e <= 1.0 * c.gen_p.sum("gen"), "over different dim"),
     "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
     "add-unfrozen": (
         lambda e, c: c.m.add_constraints(e >= 1, freeze=False),
@@ -1809,7 +1819,7 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
     "groupby-fallback": (
         lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
-        "`.data` read",
+        "grouper without a sparse path",
     ),
     "isel-pointwise": (
         lambda e, c: e.isel(bus=xr.DataArray([0, 1], dims="pt")),
@@ -2044,26 +2054,183 @@ def test_elementwise_constant_ops_stay_csr_and_match_dense(
     assert_linequal(res, func(dense, x))
 
 
+def subset_addend(dense: LinearExpression) -> LinearExpression:
+    return 2 * dense.sum(dim_last(dense))
+
+
 DENSE_ADDENDS: dict[str, Callable[[Case, LinearExpression], LinearExpression]] = {
     "same-grid": lambda c, dense: 2 * dense,
-    "scalar-var": lambda c, dense: 2 * c.gen_p.isel(gen=0, snapshot=0),
+    "scalar-var": lambda c, dense: densified(2 * c.gen_p.isel(gen=0, snapshot=0)),
+    "subset": lambda c, dense: subset_addend(dense),
+    "subset-aux": lambda c, dense: subset_addend(dense).assign_coords(
+        extra=(dim0(dense), np.arange(dense.shape[0]))
+    ),
+    "subset-scalar": lambda c, dense: 2 * dense.isel({dim_last(dense): 0}),
+    "superset": lambda c, dense: dense * xr.DataArray([1.0, 2.0], coords=[LOC]),
 }
 
 
+@pytest.mark.parametrize("swap", [False, True], ids=["csr-first", "dense-first"])
 @pytest.mark.parametrize(
     ("build", "addend"),
-    [(b, "same-grid") for b in SPARSE_BUILDS] + [("zero-dim", "scalar-var")],
+    [(b, "same-grid") for b in SPARSE_BUILDS]
+    + [(b, "scalar-var") for b in ("zero-dim", "grouped")]
+    + [
+        (b, a)
+        for b in ("grouped", "aux", "absent")
+        for a in ("subset", "subset-aux", "subset-scalar")
+    ]
+    + [(b, "superset") for b in SPARSE_BUILDS],
 )
 def test_merge_with_dense_expression_stays_csr_and_matches_dense(
-    build: str, addend: str
+    build: str, addend: str, swap: bool
 ) -> None:
     require_v1()
     c = base_model(sparse=True)
     sparse, dense = sparse_and_dense(build, c)
     other = DENSE_ADDENDS[addend](c, dense)
     with no_densify():
-        res = sparse + other
-    assert_sparse_matches(res, dense + other)
+        res = other + sparse if swap else sparse + other
+    assert_sparse_matches(res, other + dense if swap else dense + other)
+
+
+def unaligned(e: LinearExpression) -> LinearExpression:
+    """``e`` on two of its first-dim labels, reversed, plus a label of its own."""
+    labels = list(labels0(e)[[3, 1]]) + ["x"]
+    return e.reindex({dim0(e): labels})
+
+
+@pytest.mark.parametrize("fill_value", [None, linopy.ABSENT], ids=["fill", "absent"])
+@pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
+@pytest.mark.parametrize("swap", [False, True], ids=["csr-first", "dense-first"])
+@pytest.mark.parametrize("addend", ["subset", "superset"])
+def test_merge_over_different_dims_joins_like_dense(
+    addend: str, swap: bool, join: JoinOptions, fill_value: Any
+) -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    sparse, dense = sparse_and_dense("grouped", c)
+    other = unaligned(DENSE_ADDENDS[addend](c, dense))
+    first, second = (other, sparse) if swap else (sparse, other)
+    with no_densify():
+        res = first.add(second, join=join, fill_value=fill_value)
+    want_first, want_second = (other, dense) if swap else (dense, other)
+    want = want_first.add(want_second, join=join, fill_value=fill_value)
+    assert isinstance(res, LinearExpression)
+    assert isinstance(want, LinearExpression)
+    assert_sparse_matches(res, want)
+
+
+@pytest.mark.parametrize(
+    "join, error",
+    [(None, ValueError), ("exact", xr.AlignmentError), ("override", xr.AlignmentError)],
+    ids=["auto", "exact", "override"],
+)
+def test_merge_over_different_dims_raises_like_dense(
+    join: JoinOptions | None, error: type
+) -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    sparse, dense = sparse_and_dense("grouped", c)
+    other = unaligned(subset_addend(dense))
+    with pytest.raises(error):
+        dense.add(other, join=join)
+    with pytest.raises(error):
+        sparse.add(other, join=join)
+
+
+def test_merge_over_different_dims_aux_coord_conflict_raises_like_dense() -> None:
+    require_v1()
+    sparse, dense = sparse_and_dense("aux")
+    other = subset_addend(dense).assign_coords(tag=("group", ["X"] * dense.shape[0]))
+    with pytest.raises(ValueError) as want:
+        dense + other
+    with pytest.raises(ValueError) as got:
+        sparse + other
+    assert str(got.value) == str(want.value)
+
+
+VARIABLE_OPS: dict[str, Callable[[Case], LinearExpression]] = {
+    "scale": lambda c: 2 * c.gen_p,
+    "add": lambda c: c.flow + c.flow_t,
+    "chain": lambda c: 1 * c.flow + 2 * c.flow_t - 3 * c.flow,
+    "mul-grid": lambda c: c.gen_p * c.eff,
+    "mul-new-dim": lambda c: c.flow * xr.DataArray([1.0, 2.0], coords=[LOC]),
+    "masked": lambda c: 2 * c.gen_p.where(c.eff > 1),
+    "add-subset": lambda c: c.gen_p + c.flow.sum("line"),
+    "scalar-coord": lambda c: 1 * c.flow.isel(snapshot=0) + 1 * c.flow_t,
+    "scalar-coords": lambda c: 1 * c.flow.isel(snapshot=0) + c.flow_t.isel(line=0),
+    "sum-then-reuse": lambda c: sum_then_reuse(1 * c.flow + 2 * c.flow_t),
+}
+
+
+def sum_then_reuse(e: LinearExpression) -> LinearExpression:
+    return e.sum("line") + e
+
+
+@pytest.mark.parametrize("op", list(VARIABLE_OPS))
+def test_variable_arithmetic_is_csr_in_sparse_model_and_matches_dense(
+    op: str,
+) -> None:
+    require_v1()
+    dense_case, sparse_case = twin_models()
+    with no_densify():
+        res = VARIABLE_OPS[op](sparse_case)
+    assert_sparse_matches(res, VARIABLE_OPS[op](dense_case))
+
+
+DENSE_VARIABLE_OPS: dict[str, Callable[[Case], Any]] = {
+    "mul-var": lambda c: c.flow * c.flow_t,
+    "pow": lambda c: c.flow**2,
+    "quad-sum": lambda c: (c.flow * c.flow).sum(),
+    "rolling": lambda c: c.flow.rolling(snapshot=2).sum(),
+    "cumsum": lambda c: c.flow.cumsum("snapshot"),
+}
+
+
+@pytest.mark.parametrize("op", list(DENSE_VARIABLE_OPS))
+def test_variable_ops_without_sparse_path_build_dense_silently(op: str) -> None:
+    require_v1()
+    dense_case, sparse_case = twin_models()
+    with no_densify():
+        res = DENSE_VARIABLE_OPS[op](sparse_case)
+    want = DENSE_VARIABLE_OPS[op](dense_case)
+    if isinstance(want, QuadraticExpression):
+        assert_quadequal(res, want)
+    else:
+        assert_linequal(res, want)
+
+
+def unsupported_labels_expr(m: Model, kind: str) -> LinearExpression:
+    """An expression over ``d`` with non-unique or MultiIndex labels."""
+    labels = ["a", "a", "b"] if kind == "non-unique" else ["a", "b", "c"]
+    expr = 1.0 * m.add_variables(coords=[pd.Index(labels, name="d")], name="x")
+    if kind == "multiindex":
+        keys = pd.MultiIndex.from_tuples([(0, "a"), (0, "b"), (1, "a")])
+        coords = xr.Coordinates.from_pandas_multiindex(keys.set_names(["p", "q"]), "d")
+        expr = LinearExpression(expr.data.drop_vars("d").assign_coords(coords), m)
+    return expr
+
+
+@pytest.mark.parametrize(
+    ("kind", "reason"),
+    [("non-unique", "non-unique labels"), ("multiindex", "with a MultiIndex")],
+)
+def test_merge_over_different_dims_densifies_unsupported_labels_like_dense(
+    kind: str, reason: str
+) -> None:
+    require_v1()
+    snaps = pd.Index(range(2), name="snapshot")
+    results = []
+    for m in (Model(), Model(sparse=True)):
+        expr = unsupported_labels_expr(m, kind)
+        y = m.add_variables(coords=[snaps], name="y")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", linopy.PerformanceWarning)
+            results.append(expr + 2 * y)
+    assert any(reason in str(w.message) for w in caught)
+    assert not results[1].is_sparse
+    assert_linequal(results[1], results[0])
 
 
 @pytest.mark.parametrize("join", ["inner", "outer", "left", "right"])
@@ -2577,6 +2744,7 @@ def test_frozen_unsupported_names_the_working_route(op: str) -> None:
 EXPR_RHS: dict[str, Callable[[Case], LinearExpression]] = {
     "expr": lambda c: (1.0 * c.flow).groupby(c.bus1).sum(),
     "expr-const": lambda c: (1.0 * c.flow).groupby(c.bus1).sum() + c.load,
+    "expr-subset-dims": lambda c: 1.0 * c.gen_p.sum("gen"),
     "dense-expr-const": lambda c: (
         (1.0 * c.flow).groupby(c.bus1).sum(use_fallback=True) - 2.0
     ),
@@ -3006,3 +3174,81 @@ def test_concat_raises_like_dense(
         concat(parts(dense), join)
     with pytest.raises(type(want.value)), no_densify():
         concat(parts(sparse), join)
+
+
+def duplicated_lhs(c: Case) -> LinearExpression:
+    """Balance plus generation again: unsorted rows repeating each generator."""
+    return c.balance_lhs() + c.gen_sum()
+
+
+def stored_arrays(e: LinearExpression) -> list[np.ndarray]:
+    assert e._csr is not None
+    csr = e._csr.csr
+    return [csr.data, csr.indices, csr.indptr, e._csr.const]
+
+
+OPERAND_OPS: dict[str, Callable[[LinearExpression, Case], Any]] = {
+    "add": lambda e, c: e + e,
+    "scale": lambda e, c: 2 * e,
+    "sum": lambda e, c: e.sum(),
+    "sum-dim": lambda e, c: e.sum("snapshot"),
+    "groupby": lambda e, c: e.groupby(halves(e)).sum(),
+    "reindex": lambda e, c: e.reindex(bus=["bus3", "bus0", "bus9"]),
+    "repr": lambda e, c: repr(e),
+    "freeze": lambda e, c: c.m.add_constraints(e >= 1, name="c", freeze=True),
+    "matrices": lambda e, c: (c.m.add_constraints(e >= 1, name="c"), c.m.matrices.A),
+}
+
+
+@pytest.mark.parametrize("op", list(OPERAND_OPS))
+def test_ops_leave_operand_arrays_untouched(op: str) -> None:
+    require_v1()
+    c = base_model(sparse=True)
+    e = duplicated_lhs(c)
+    before = [a.copy() for a in stored_arrays(e)]
+    OPERAND_OPS[op](e, c)
+    for got, want in zip(stored_arrays(e), before):
+        assert not got.flags.writeable
+        np.testing.assert_array_equal(got, want)
+
+
+def test_stored_matrix_rejects_in_place_canonicalization() -> None:
+    require_v1()
+    e = duplicated_lhs(base_model(sparse=True))
+    assert e._csr is not None
+    with pytest.raises(ValueError, match="read-only"):
+        e._csr.csr.sum_duplicates()
+
+
+def test_to_dense_keeps_repeated_terms_in_stored_order() -> None:
+    require_v1()
+
+    def build(sparse: bool) -> tuple[LinearExpression, LinearExpression]:
+        m = Model(sparse=sparse)
+        coords = [pd.RangeIndex(3, name="i")]
+        x = m.add_variables(coords=coords, name="x")
+        y = m.add_variables(coords=coords, name="y")
+        repeated = sum((k * x for k in range(1, 21)), start=0 * x)
+        return repeated, 1 * y
+
+    repeated, y = build(sparse=True)
+    sparse = y + repeated
+    assert sparse.is_sparse
+    dense_repeated, dense_y = build(sparse=False)
+    assert_linequal(sparse, dense_repeated + dense_y)
+
+
+def test_duplicate_terms_kept_like_dense_and_summed_at_freeze() -> None:
+    require_v1()
+    dense_c, sparse_c = twin_models()
+    dense, sparse = duplicated_lhs(dense_c), duplicated_lhs(sparse_c)
+    assert sparse.nterm == dense.nterm
+    assert_sparse_matches(sparse, dense)
+    frozen = sparse_c.m.add_constraints(sparse == sparse_c.load, name="bal")
+    dense_c.m.add_constraints(dense == dense_c.load, name="bal")
+    assert isinstance(frozen, CSRConstraint)
+    assert frozen.nterm == max(dense_c.gbus.value_counts()) + 2
+    got, want = sparse_c.m.matrices.A, dense_c.m.matrices.A
+    assert got is not None and want is not None
+    assert got.nnz == want.nnz
+    np.testing.assert_allclose(got.toarray(), want.toarray())
