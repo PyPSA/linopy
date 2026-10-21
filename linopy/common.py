@@ -1316,91 +1316,6 @@ class EmptyDeprecationWrapper:
         return self.value
 
 
-TZ_ATTR = "_linopy_tz"
-
-
-def index_to_naive_utc(idx: pd.Index) -> tuple[pd.Index, list[str | None]]:
-    """
-    Convert the timezone-aware datetime levels of an index to naive UTC.
-
-    netCDF has no timezone-aware datetime type, so these levels are written as
-    naive UTC. Levels are those of a MultiIndex, or the index itself otherwise.
-    Reverse with :func:`index_from_naive_utc`.
-
-    Returns
-    -------
-    tuple[pd.Index, list[str | None]]
-        The converted index and the timezone name per level, None for levels
-        that were not timezone-aware.
-    """
-    levels = list(idx.levels) if isinstance(idx, pd.MultiIndex) else [idx]
-    zones = [
-        None if getattr(lvl, "tz", None) is None else str(lvl.tz) for lvl in levels
-    ]
-    converted = [
-        lvl if zone is None else lvl.tz_convert("UTC").tz_localize(None)
-        for lvl, zone in zip(levels, zones)
-    ]
-    return _with_levels(idx, converted), zones
-
-
-def index_from_naive_utc(idx: pd.Index, zones: list[str | None]) -> pd.Index:
-    """
-    Localize the naive UTC levels of an index to their timezones.
-
-    Reverses :func:`index_to_naive_utc`.
-    """
-    levels = list(idx.levels) if isinstance(idx, pd.MultiIndex) else [idx]
-    converted = [
-        lvl if zone is None else lvl.tz_localize("UTC").tz_convert(zone)
-        for lvl, zone in zip(levels, zones)
-    ]
-    return _with_levels(idx, converted)
-
-
-def _with_levels(idx: pd.Index, levels: list[pd.Index]) -> pd.Index:
-    if not isinstance(idx, pd.MultiIndex):
-        return levels[0]
-    # set_levels drops the custom ``name`` attribute of a MultiIndex
-    new = idx.set_levels(levels)
-    new.name = getattr(idx, "name", None)
-    return new
-
-
-def values_to_naive_utc(values: Any) -> tuple[np.ndarray, str | None]:
-    """
-    Convert timezone-aware datetime values of any shape to naive UTC.
-
-    ``values`` holds timezone-aware datetimes if it has a
-    ``pd.DatetimeTZDtype`` or is an object array of timestamps sharing one
-    timezone; other values are returned as an array, unconverted. Reverse
-    with :func:`values_from_naive_utc`.
-
-    Returns
-    -------
-    tuple[np.ndarray, str | None]
-        The converted values and their timezone name, None if the values
-        were not timezone-aware.
-    """
-    arr = np.asarray(values)
-    if arr.dtype != object:
-        return arr, None
-    idx = pd.Index(arr.ravel())
-    if not isinstance(idx, pd.DatetimeIndex) or idx.tz is None:
-        return arr, None
-    naive = idx.tz_convert("UTC").tz_localize(None)
-    return naive.to_numpy().reshape(arr.shape), str(idx.tz)
-
-
-def values_from_naive_utc(values: np.ndarray, tz: str) -> pd.DatetimeIndex:
-    """
-    Localize naive UTC datetime values to ``tz``, flattened to an index.
-
-    Reverses :func:`values_to_naive_utc`.
-    """
-    return pd.DatetimeIndex(np.ravel(values)).tz_localize("UTC").tz_convert(tz)
-
-
 def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
     """
     Serialize a list of pd.Index (including MultiIndex) to a DataArray dict.
@@ -1414,8 +1329,6 @@ def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
     """
     data_vars: dict[str, DataArray] = {}
     for i, c in enumerate(coords):
-        c, zones = index_to_naive_utc(c)
-        tz_attrs = {TZ_ATTR: json.dumps(zones)} if any(zones) else {}
         if isinstance(c, pd.MultiIndex):
             for j, level_values in enumerate(c.levels):
                 data_vars[f"_index{i}_level{j}"] = DataArray(
@@ -1424,15 +1337,10 @@ def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
             data_vars[f"_index{i}_codes"] = DataArray(
                 np.array(c.codes).T,
                 dims=[f"_indexdim{i}", f"_indexdim{i}_nlevels"],
-                attrs={
-                    "level_names": json.dumps([str(n) for n in c.names]),
-                    **tz_attrs,
-                },
+                attrs={"level_names": json.dumps([str(n) for n in c.names])},
             )
         else:
-            data_vars[f"_index{i}"] = DataArray(
-                np.array(c), dims=[f"_indexdim{i}"], attrs=tz_attrs
-            )
+            data_vars[f"_index{i}"] = DataArray(np.array(c), dims=[f"_indexdim{i}"])
     return data_vars
 
 
@@ -1449,11 +1357,9 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
             codes = ds[f"_index{i}_codes"]
             level_names = json.loads(codes.attrs["level_names"])
             level_keys = [f"_index{i}_level{j}" for j in range(len(level_names))]
-            idx = _multiindex(ds, codes.values.T, level_keys, level_names, d)
-            coords.append(_restore_tz(idx, codes))
+            coords.append(_multiindex(ds, codes.values.T, level_keys, level_names, d))
         elif f"_index{i}" in ds:
-            values = ds[f"_index{i}"]
-            coords.append(_restore_tz(pd.Index(values.values, name=d), values))
+            coords.append(pd.Index(ds[f"_index{i}"].values, name=d))
         elif f"_coord_{d}_codes" in ds:
             prefix = f"_coord_{d}_level_"
             level_names = [
@@ -1465,12 +1371,6 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
         else:
             coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
     return coords
-
-
-def _restore_tz(idx: pd.Index, var: DataArray) -> pd.Index:
-    if TZ_ATTR not in var.attrs:
-        return idx
-    return index_from_naive_utc(idx, json.loads(var.attrs[TZ_ATTR]))
 
 
 def _multiindex(

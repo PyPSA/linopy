@@ -28,13 +28,8 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import (
-    TZ_ATTR,
-    index_from_naive_utc,
-    index_to_naive_utc,
     sos_weights,
     to_polars,
-    values_from_naive_utc,
-    values_to_naive_utc,
 )
 from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
@@ -56,6 +51,7 @@ logger = logging.getLogger(__name__)
 NETCDF_VERSION_ATTR = "_linopy_version"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
+TZ_ATTR = "_linopy_tz"
 
 
 ufunc_kwargs = dict(vectorize=True)
@@ -1053,10 +1049,51 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
-def _assign_index(ds: xr.Dataset, dim: Hashable, idx: pd.Index) -> xr.Dataset:
-    if isinstance(idx, pd.MultiIndex):
-        return ds.assign_coords(xr.Coordinates.from_pandas_multiindex(idx, dim))
-    return ds.assign_coords({dim: idx})
+def _tz_to_naive_utc(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Write timezone-aware datetimes as naive UTC with the zone in ``TZ_ATTR``.
+
+    netCDF has no timezone-aware datetime type. Reverse with
+    :func:`_tz_from_naive_utc`.
+    """
+    naive = {}
+    for name, var in ds.variables.items():
+        if var.dtype != object and not isinstance(var.dtype, pd.DatetimeTZDtype):
+            continue
+        idx = pd.Index(np.ravel(var.data))
+        if not isinstance(idx, pd.DatetimeIndex) or idx.tz is None:
+            continue
+        values = idx.tz_convert("UTC").tz_localize(None).to_numpy()
+        attrs = var.attrs | {TZ_ATTR: str(idx.tz)}
+        naive[name] = xr.Variable(
+            var.dims, values.reshape(var.shape), attrs, var.encoding
+        )
+    return _replace_variables(ds, naive)
+
+
+def _tz_from_naive_utc(ds: xr.Dataset) -> xr.Dataset:
+    """Localize the variables written by :func:`_tz_to_naive_utc`."""
+    aware = {}
+    for name, var in ds.variables.items():
+        if TZ_ATTR not in var.attrs:
+            continue
+        attrs = dict(var.attrs)
+        tz = attrs.pop(TZ_ATTR)
+        idx = pd.DatetimeIndex(np.ravel(var.values)).tz_localize("UTC").tz_convert(tz)
+        if var.dims == (name,):
+            aware[name] = xr.Variable(var.dims, idx, attrs)
+        else:
+            values = idx.astype(object).to_numpy().reshape(var.shape)
+            aware[name] = xr.Variable(var.dims, values, attrs)
+    return _replace_variables(ds, aware)
+
+
+def _replace_variables(
+    ds: xr.Dataset, variables: dict[Hashable, xr.Variable]
+) -> xr.Dataset:
+    coords = {k: v for k, v in variables.items() if k in ds.coords}
+    data = {k: v for k, v in variables.items() if k not in ds.coords}
+    return ds.assign_coords(coords).assign(data)
 
 
 def to_netcdf(
@@ -1109,25 +1146,6 @@ def to_netcdf(
         )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        # netCDF cannot store timezone-aware datetimes, write them as naive UTC
-        zones_by_name = {}
-        for dim in ds.dims:
-            if dim in ds.indexes:
-                idx, zones = index_to_naive_utc(ds.indexes[dim])
-                if any(zones):
-                    zones_by_name[str(dim)] = zones
-                    ds = _assign_index(ds, dim, idx)
-        for name, var in ds.variables.items():
-            if name in ds.indexes:
-                continue
-            values, zone = values_to_naive_utc(var.data)
-            if zone is not None:
-                zones_by_name[str(name)] = [zone]
-                naive = {name: var.copy(data=values)}
-                ds = ds.assign_coords(naive) if name in ds.coords else ds.assign(naive)
-        if zones_by_name:
-            ds = ds.assign_attrs({TZ_ATTR: json.dumps(zones_by_name)})
-
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
@@ -1203,7 +1221,7 @@ def to_netcdf(
         for v in ds.variables.values():
             v.encoding = compression | v.encoding
 
-    ds.to_netcdf(*args, **kwargs)
+    _tz_to_naive_utc(ds).to_netcdf(*args, **kwargs)
 
 
 def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
@@ -1245,7 +1263,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     if isinstance(path, str):
         path = Path(path)
 
-    ds = xr.load_dataset(path, **kwargs)
+    ds = _tz_from_naive_utc(xr.load_dataset(path, **kwargs))
     m = Model(sparse=bool(ds.attrs.get("sparse", False)))
 
     def remove_prefix(k: str, prefix: str) -> str:
@@ -1274,20 +1292,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             if f"{dim}_multiindex" in ds.attrs:
                 names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
                 ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
-        if TZ_ATTR in ds.attrs:
-            for name, zones in json.loads(ds.attrs.pop(TZ_ATTR)).items():
-                if name in ds.indexes:
-                    idx = index_from_naive_utc(ds.indexes[name], zones)
-                    ds = _assign_index(ds, name, idx)
-                elif name in ds.variables:
-                    var = ds.variables[name]
-                    values = values_from_naive_utc(var.values, zones[0])
-                    aware = {name: (var.dims, values, var.attrs)}
-                    if name in ds.coords:
-                        ds = ds.assign_coords(aware)
-                    else:
-                        ds = ds.assign(aware)
 
         return ds
 
