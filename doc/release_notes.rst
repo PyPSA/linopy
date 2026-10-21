@@ -4,16 +4,21 @@ Release Notes
 Upcoming Version
 ----------------
 
-* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
-* ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
-* ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
-
 **Sparse models**
 
 * A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. MultiIndex dimensions and non-unique labels still densify.
 * Variables enter arithmetic as CSR-backed expressions in a sparse model: ``2 * x``, ``x + y`` and ``1 * x + 2 * y`` are sparse. Variable operations without a sparse path, such as quadratic products, ``rolling`` and ``cumsum``, build the dense expression directly, without a ``PerformanceWarning``.
 * Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
 * ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
+
+Version 0.10.1
+--------------
+
+**Bug fixes**
+
+* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
+* ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
+* ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
 
 Version 0.10.0
 --------------
