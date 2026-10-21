@@ -454,6 +454,28 @@ def test_model_to_netcdf_with_multiindex_scipy_engine(
     assert_model_equal(m, read_netcdf(fn))
 
 
+def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
+    m = Model()
+    coords = xr.Coordinates(
+        {
+            "snapshot": np.arange(4),
+            "time": ("snapshot", pd.date_range("2020-01-01", periods=4, freq="h")),
+            "period": ("snapshot", [2020, 2020, 2030, 2030]),
+        }
+    )
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_expressions(2 * x, name="e")
+    m.add_constraints(x.sel(snapshot=0) >= 2, name="c-first")
+    m.add_objective(x.sum())
+    m.parameters["demand"] = xr.DataArray(np.ones(4), coords=coords)
+    m.parameters["my-param"] = m.parameters["demand"].sel(snapshot=1)
+
+    fn = tmp_path / "test_aux_coords.nc"
+    m.to_netcdf(fn)
+    assert_model_equal(m, read_netcdf(fn))
+
+
 def test_model_to_netcdf_with_expressions(
     model_with_expressions: Model, tmp_path: Path
 ) -> None:
