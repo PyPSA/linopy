@@ -2115,9 +2115,10 @@ def test_merge_over_different_dims_joins_like_dense(
     with no_densify():
         res = first.add(second, join=join, fill_value=fill_value)
     want_first, want_second = (other, dense) if swap else (dense, other)
-    assert_sparse_matches(
-        res, want_first.add(want_second, join=join, fill_value=fill_value)
-    )
+    want = want_first.add(want_second, join=join, fill_value=fill_value)
+    assert isinstance(res, LinearExpression)
+    assert isinstance(want, LinearExpression)
+    assert_sparse_matches(res, want)
 
 
 @pytest.mark.parametrize(
