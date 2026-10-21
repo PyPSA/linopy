@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+Version 0.10.1
+--------------
+
+**Bug fixes**
 
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
 * ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
