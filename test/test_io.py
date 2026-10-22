@@ -325,6 +325,22 @@ def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) ->
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    lower = xr.DataArray([0.0, np.nan, 2.0], coords=[i])
+    mask = xr.DataArray([True, False, True], coords=[i])
+    x = m.add_variables(lower, 5, coords=[i], name="x", mask=mask)
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "masked_nan_bounds.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+    assert_model_equal(m, p.copy())
+
+
 def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
     from linopy.constraints import CSRConstraint
 

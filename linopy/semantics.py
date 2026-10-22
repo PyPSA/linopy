@@ -24,10 +24,10 @@ from xarray import DataArray, Dataset
 from linopy.constants import HELPER_DIMS
 
 
-def _user_nan_message() -> str:
+def _user_nan_message(context: str = "constant") -> str:
     """User-NaN error text — distinguishes the two intents a user might have."""
     return (
-        "NaN found in a user-supplied constant. linopy treats this as "
+        f"NaN found in a user-supplied {context}. linopy treats this as "
         "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
         "if you meant *absent at this slot*, mark it on the variable "
         "instead (mask=, .where(cond), .reindex(...), .shift(...))."
@@ -168,9 +168,9 @@ def is_nan_scalar(value: Any) -> bool:
     return isinstance(value, (float, np.floating)) and bool(np.isnan(value))
 
 
-def check_user_nan() -> NoReturn:
+def check_user_nan(context: str = "constant") -> NoReturn:
     """Enforce §5 for a user-supplied constant (scalar or array): raise."""
-    raise ValueError(_user_nan_message())
+    raise ValueError(_user_nan_message(context))
 
 
 class AbsentType:

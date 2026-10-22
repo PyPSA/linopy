@@ -98,6 +98,20 @@ class TestVariableFix:
         with pytest.raises(ValueError, match="binary variable"):
             m.variables["z"].fix(value=value)
 
+    @pytest.mark.parametrize("explicit", [True, False], ids=["value", "solution"])
+    def test_fix_nan_raises_without_mutation(
+        self, model_with_solution: Model, explicit: bool
+    ) -> None:
+        y = model_with_solution.variables["y"]
+        nan_value = DataArray([2.5, np.nan], dims="dim_0")
+        if not explicit:
+            y.solution = nan_value
+        with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+            y.fix(value=nan_value if explicit else None)
+        assert not y.fixed
+        np.testing.assert_array_equal(y.lower.values, [-5, -5])
+        np.testing.assert_array_equal(y.upper.values, [5, 5])
+
     def test_fix_rounds_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["w"].fix()

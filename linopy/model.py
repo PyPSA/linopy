@@ -90,7 +90,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex
+from linopy.semantics import check_user_nan, enforce_no_multiindex
 
 try:
     from linopy.remote import OetcHandler
@@ -765,7 +765,8 @@ class Model:
         ------
         ValueError
             If neither lower bound and upper bound have coordinates, nor
-            `coords` are directly given.
+            `coords` are directly given, or if ``lower`` or ``upper`` contain
+            NaN at a position not excluded by ``mask``.
 
         Returns
         -------
@@ -909,6 +910,12 @@ class Model:
                 label="mask",
                 **kwargs,
             ).astype(bool)
+
+        nan_bounds = data.lower.isnull() | data.upper.isnull()
+        if mask is not None:
+            nan_bounds &= mask
+        if nan_bounds.any():
+            check_user_nan("variable bound")
 
         start = self._xCounter
         end = start + data.labels.size

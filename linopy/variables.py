@@ -1066,7 +1066,8 @@ class Variable:
             numeric, not symbolic).
         ValueError
             If the new bound introduces dimensions not in the variable's
-            coords, or if the resulting ``lower > upper`` anywhere.
+            coords, contains NaN at a non-masked position, or if the
+            resulting ``lower > upper`` anywhere.
         """
         if lower is None and upper is None:
             return self
@@ -1103,6 +1104,8 @@ class Variable:
             new_val = DataArray(val).broadcast_like(ref)
             if not set(new_val.dims).issubset(own_dims):
                 raise ValueError("Cannot assign new dimensions to existing variable.")
+            if (new_val.isnull() & (self.labels != -1)).any():
+                check_user_nan("variable bound")
             updates[name] = new_val
 
         final_lower = updates.get("lower", self.lower)
@@ -1687,13 +1690,13 @@ class Variable:
                 stacklevel=2,
             )
 
+        updates = self._validate_update(lower=value, upper=value)
         if not is_fixed:
             self._data = assign_multiindex_safe(
                 self.data,
                 **{STASHED_LOWER: lower, STASHED_UPPER: upper},
             )
-
-        self.update(lower=value, upper=value)
+        self._data = assign_multiindex_safe(self.data, **updates)
 
     def unfix(self) -> None:
         """
