@@ -695,7 +695,6 @@ Utilities
   backing is converted to dense. ``None`` (default) warns in a sparse model
   on implicit conversions only, ``True`` always warns, ``False`` never
   warns. See :doc:`sparse-models`.
-- ``sparse_groupby``: deprecated, use ``Model(sparse=True)``.
 
 
 Warnings

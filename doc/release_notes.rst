@@ -10,6 +10,11 @@ Upcoming Version
 * ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
 * ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
 * ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``. Netcdf files written with a ``freeze_constraints`` attribute still load; the attribute is ignored.
+
+**Deprecations**
+
+* The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
 
 **Sparse models**
 

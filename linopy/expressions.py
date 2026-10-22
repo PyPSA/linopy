@@ -94,10 +94,7 @@ from linopy.common import (
     to_dataframe,
     to_polars,
 )
-from linopy.config import (
-    SPARSE_DEPRECATION,
-    options,
-)
+from linopy.config import options
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -124,7 +121,6 @@ from linopy.semantics import (
     is_nan_scalar,
     join_fill,
     reindex_like_if_needed,
-    warn_outside_linopy,
 )
 from linopy.types import (
     CONSTANT_TYPES,
@@ -549,7 +545,6 @@ class LinearExpressionGroupby:
         self,
         use_fallback: bool = False,
         observed: bool = False,
-        sparse: bool | None = None,
     ) -> LinearExpression:
         """
         Sum the expression over each group.
@@ -563,19 +558,6 @@ class LinearExpressionGroupby:
             Use the slower fallback groupby-sum implementation instead of the
             default one. Kept as an escape hatch. Leave at False unless the
             default misbehaves. Defaults to False.
-        sparse : bool, optional
-            Deprecated, build the model with ``Model(sparse=True)`` instead.
-            Build the grouped sum in CSR form behind the ordinary
-            LinearExpression type — no group-size padding; a still-sparse
-            lhs reaching ``Model.add_constraints`` with ``freeze=True``
-            becomes a CSRConstraint directly, other operations expand to
-            the dense rectangle in canonical term layout. Supports pandas
-            Series/DataFrame, 1-D DataArray and coordinate-name-list groupers
-            over an existing dimension; with a name list and ``observed=True``
-            the CSR result stays compact over the observed key combinations.
-            Defaults to True for a sparse model, a
-            CSR-backed expression or the deprecated
-            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
             keep the result stacked over the observed key combinations (a flat
@@ -602,13 +584,7 @@ class LinearExpressionGroupby:
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
         csr = self._csr
-        explicit_sparse = sparse is True
-        if sparse is None:
-            sparse = self.model.sparse or options["sparse_groupby"] or csr is not None
-        else:
-            warn_outside_linopy(
-                f"groupby(...).sum(sparse=...) {SPARSE_DEPRECATION}.", FutureWarning
-            )
+        sparse = self.model.sparse or csr is not None
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
@@ -640,12 +616,6 @@ class LinearExpressionGroupby:
                     source, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_csr(res, self.model)
-            if explicit_sparse:
-                raise ValueError(
-                    "sparse=True supports only a pandas Series or DataFrame, 1-D "
-                    "DataArray or list of coordinate names as grouper over an "
-                    "existing dimension, without use_fallback."
-                )
             reason = "groupby-sum with a grouper without a sparse path"
             if csr is None:
                 _densify_notice(reason, self.model)

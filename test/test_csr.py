@@ -128,13 +128,6 @@ def reindexed_balance(c: Case) -> LinearExpression:
     return linopy.merge(parts, join="outer", cls=LinearExpression)
 
 
-def test_sum_sparse_kwarg_deprecated() -> None:
-    c = base_model()
-    with pytest.warns(FutureWarning, match="deprecated"):
-        res = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
-    assert type(res) is LinearExpression
-
-
 def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
     c1, c2 = twin_models()
     sparse = c2.gen_sum()
@@ -186,22 +179,6 @@ def test_merge_keeps_absent_cell_absent() -> None:
     con = c2.m.add_constraints(tot >= c2.load, name="bal")
     assert isinstance(con, CSRConstraint)
     assert con.ncons == int(mask.sum()) * c2.load.sizes["snapshot"]
-
-
-@pytest.mark.parametrize(
-    "grouper, kwargs",
-    [
-        (["gen", "snapshot"], {}),
-        ("gen", {"use_fallback": True}),
-    ],
-)
-def test_explicit_sparse_raises_on_unsupported_grouper(
-    grouper: str | list[str], kwargs: dict
-) -> None:
-    c = base_model()
-    deprecated = pytest.warns(FutureWarning, match="deprecated")
-    with deprecated, pytest.raises(ValueError, match="sparse=True supports only"):
-        (1.0 * c.gen_p).groupby(grouper).sum(sparse=True, **kwargs)
 
 
 def keyed_model(
@@ -628,64 +605,39 @@ def test_model_sparse_persists_through_netcdf(tmp_path: Path) -> None:
     c = base_model(sparse=True)
     c.m.to_netcdf(tmp_path / "m.nc")
     read = linopy.read_netcdf(tmp_path / "m.nc")
-    assert read.sparse and read.freeze_constraints
+    assert read.sparse
     assert read.copy().sparse
 
 
-def test_file_without_sparse_key_keeps_freeze_default(tmp_path: Path) -> None:
-    with pytest.warns(FutureWarning, match="deprecated"):
-        m = Model(freeze_constraints=True)
-    m.to_netcdf(tmp_path / "m.nc")
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("freeze", [0, 1])
+def test_file_with_freeze_constraints_attr_loads(
+    tmp_path: Path, sparse: bool, freeze: int
+) -> None:
+    c = base_model(sparse=sparse)
+    c.m.add_constraints(c.balance_lhs() == c.load, name="bal")
+    c.m.to_netcdf(tmp_path / "m.nc")
     ds = xr.load_dataset(tmp_path / "m.nc")
-    del ds.attrs["sparse"]
+    ds.attrs["freeze_constraints"] = freeze
     ds.to_netcdf(tmp_path / "old.nc")
-    read = linopy.read_netcdf(tmp_path / "old.nc")
-    assert read.freeze_constraints and not read.sparse
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        read = linopy.read_netcdf(tmp_path / "old.nc")
+    assert read.sparse is sparse
+    assert_conequal(read.constraints["bal"], c.m.constraints["bal"])
 
 
 @pytest.mark.parametrize(
     "build",
     [
         lambda: Model(sparse=True, chunk=10),
-        lambda: Model(sparse=True, freeze_constraints=True),
         lambda: setattr(Model(sparse=True), "chunk", 10),
-        lambda: setattr(Model(sparse=True), "freeze_constraints", False),
     ],
-    ids=["chunk", "freeze_constraints", "set-chunk", "set-freeze_constraints"],
+    ids=["chunk", "set-chunk"],
 )
 def test_sparse_model_rejects_conflicting_config(build: Callable[[], Any]) -> None:
     with pytest.raises(ValueError, match="sparse"):
         build()
-
-
-@pytest.mark.parametrize(
-    "switch",
-    [
-        lambda c: Model(freeze_constraints=True),
-        lambda c: setattr(c.m, "freeze_constraints", True),
-        lambda c: (1.0 * c.gen_p).groupby(c.gbus).sum(sparse=False),
-        lambda c: linopy.options.set_value(sparse_groupby=True),
-    ],
-    ids=[
-        "Model(freeze_constraints)",
-        "set-freeze_constraints",
-        "sum(sparse)",
-        "option",
-    ],
-)
-def test_deprecated_sparse_switches_warn(switch: Callable[[Case], Any]) -> None:
-    c = base_model()
-    with linopy.options, pytest.warns(FutureWarning, match="deprecated"):
-        switch(c)
-
-
-def test_sparse_groupby_option_covers_groupby_only() -> None:
-    c = base_model()
-    weights = xr.DataArray(np.ones(len(c.gbus)), [c.gbus.index])
-    with linopy.options, pytest.warns(FutureWarning, match="deprecated"):
-        linopy.options.set_value(sparse_groupby=True)
-        assert (1.0 * c.gen_p).groupby(c.gbus).sum().is_sparse
-        assert not ((1.0 * c.gen_p) @ weights).is_sparse
 
 
 def test_sparse_model_notices_groupby_without_sparse_path() -> None:
@@ -1648,14 +1600,6 @@ def test_has_terms_counts_explicit_zero_coefficients() -> None:
     assert expression.is_sparse
 
 
-def add_chunked(e: LinearExpression, c: Case) -> Any:
-    chunked = base_model()
-    chunked.m.chunk = {"bus": 2}
-    with pytest.warns(FutureWarning, match="deprecated"):
-        lhs = (chunked.eff * chunked.gen_p).groupby(chunked.gbus).sum(sparse=True)
-    return chunked.m.add_constraints(lhs >= 1, freeze=True)
-
-
 def set_blocks(e: LinearExpression, c: Case) -> None:
     c.m.add_constraints(e >= 1, name="blocked")
     c.m.constraints.set_blocks(np.zeros(c.m._xCounter, dtype=int))
@@ -1678,7 +1622,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: c.m.add_constraints(e >= 1, freeze=False),
         "constraint added unfrozen, `freeze=False`",
     ),
-    "add-chunked": (add_chunked, "chunked model"),
     "set-blocks": (set_blocks, "frozen constraint converted by `set_blocks`"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
     "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
@@ -1737,24 +1680,13 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool | None) -> None
         opts.set_value(warn_on_densify=enabled)
         func(sparse, c)
     notices = [w for w in caught if issubclass(w.category, linopy.PerformanceWarning)]
-    implicit_in_sparse_model = op not in {"add-chunked", "mutable", "add-unfrozen"}
+    implicit_in_sparse_model = op not in {"mutable", "add-unfrozen"}
     if enabled is False or (enabled is None and not implicit_in_sparse_model):
         assert notices == []
         return
     assert len(notices) == 1
     assert re.search(reason, str(notices[0].message))
     assert notices[0].filename == __file__
-
-
-def test_warn_on_densify_default_is_quiet_in_dense_model() -> None:
-    c = base_model()
-    with pytest.warns(FutureWarning, match="deprecated"):
-        sparse = (c.eff * c.gen_p).groupby(c.gbus).sum(sparse=True)
-    assert sparse.is_sparse
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", linopy.PerformanceWarning)
-        sparse.data
-    assert not any(issubclass(w.category, linopy.PerformanceWarning) for w in caught)
 
 
 @pytest.mark.parametrize("scale", [1.0, 0.0], ids=["plain", "zeros"])
@@ -2254,15 +2186,6 @@ def test_chained_namelist_groupby_on_aux_coords_matches_dense(observed: bool) ->
     dense = dense_build("aux")
     res = sparse.groupby(["bus", "tag"]).sum(observed=observed)
     assert_sparse_matches(res, dense.groupby(["bus", "tag"]).sum(observed=observed))
-
-
-def test_chained_groupby_sparse_false_densifies() -> None:
-    sparse, _ = sparse_and_dense("grouped")
-    dense = dense_build("grouped")
-    with pytest.warns(FutureWarning, match="deprecated"):
-        res = sparse.groupby(halves(sparse)).sum(sparse=False)
-    assert not res.is_sparse
-    assert_linequal(res, dense.groupby(halves(dense)).sum())
 
 
 def dim0(e: LinearExpression) -> str:

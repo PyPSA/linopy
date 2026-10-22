@@ -51,7 +51,6 @@ SPARSE_CONFIG = pytest.mark.parametrize("sparse", [False, True])
 def test_model_config_defaults(sparse: bool) -> None:
     m = Model(sparse=sparse, set_names_in_solver_io=False)
     assert m.sparse is sparse
-    assert m.freeze_constraints is sparse
     assert m.set_names_in_solver_io is False
 
 
@@ -59,7 +58,6 @@ def test_model_config_defaults(sparse: bool) -> None:
 def test_model_copy_preserves_config(sparse: bool) -> None:
     copied = Model(sparse=sparse, set_names_in_solver_io=True).copy()
     assert copied.sparse is sparse
-    assert copied.freeze_constraints is sparse
     assert copied.set_names_in_solver_io is True
 
 

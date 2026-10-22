@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-SPARSE_DEPRECATION = "is deprecated and will be removed; use Model(sparse=True) instead"
 SEMANTICS_DEPRECATION = (
     'linopy.options["semantics"] is deprecated and has no effect: the v1 '
     "convention is the only behaviour. Drop the setting; it is removed in "
@@ -54,13 +53,6 @@ class OptionSettings:
                 continue
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
-            if k == "sparse_groupby" and v:
-                from linopy.semantics import warn_outside_linopy
-
-                warn_outside_linopy(
-                    f'linopy.options["sparse_groupby"] {SPARSE_DEPRECATION}.',
-                    FutureWarning,
-                )
             self._current_values[k] = v
 
     def get_value(self, name: str) -> Any:
@@ -109,6 +101,5 @@ def _set_semantics(value: Any) -> None:
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
-    sparse_groupby=False,
     warn_on_densify=None,
 )

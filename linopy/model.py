@@ -41,7 +41,6 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
-from linopy.config import SPARSE_DEPRECATION
 from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
@@ -91,7 +90,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex, warn_outside_linopy
+from linopy.semantics import enforce_no_multiindex
 
 try:
     from linopy.remote import OetcHandler
@@ -173,7 +172,6 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
-    _freeze_constraints: bool
     _sparse: bool
     _set_names_in_solver_io: bool
     _solver_dir: Path
@@ -202,7 +200,6 @@ class Model:
         "_chunk",
         "_force_dim_names",
         "_auto_mask",
-        "_freeze_constraints",
         "_sparse",
         "_set_names_in_solver_io",
         "_solver_dir",
@@ -238,7 +235,6 @@ class Model:
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
         auto_mask: bool = False,
-        freeze_constraints: bool | None = None,
         set_names_in_solver_io: bool = False,
         dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
         sparse: bool = False,
@@ -265,11 +261,6 @@ class Model:
             Whether to automatically mask variables and constraints where
             bounds, coefficients, or RHS values contain NaN. The default is
             False.
-        freeze_constraints : bool, optional
-            Deprecated, use ``sparse=True`` instead. Whether constraints added
-            to the model are frozen to the CSR-backed representation by
-            default, without making expressions sparse. Raises together with
-            ``sparse=True``. The default is False.
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. Names cost build time and are not
@@ -316,9 +307,6 @@ class Model:
         self.chunk = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
-        self._freeze_constraints: bool = False
-        if freeze_constraints is not None:
-            self.freeze_constraints = freeze_constraints
         self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
@@ -547,25 +535,6 @@ class Model:
         Set whether to automatically mask variables and constraints with NaN values.
         """
         self._auto_mask = bool(value)
-
-    @property
-    def freeze_constraints(self) -> bool:
-        """Whether constraints are frozen to CSR by default when added."""
-        return self._sparse or self._freeze_constraints
-
-    @freeze_constraints.setter
-    def freeze_constraints(self, value: bool) -> None:
-        if self._sparse:
-            raise ValueError(
-                "A sparse model freezes constraints by default; pass `freeze=` "
-                "to add_constraints instead."
-            )
-        warn_outside_linopy(
-            f"Model.freeze_constraints {SPARSE_DEPRECATION}, or "
-            "add_constraints(..., freeze=True) per constraint.",
-            FutureWarning,
-        )
-        self._freeze_constraints = bool(value)
 
     @property
     def sparse(self) -> bool:
@@ -1345,8 +1314,7 @@ class Model:
 
         name = self._resolve_constraint_name(name)
         if freeze is None:
-            freeze = self.freeze_constraints
-        chunked = bool(freeze and self.chunk)
+            freeze = self._sparse
         freeze = freeze and not self.chunk
 
         if isinstance(sign, str):
@@ -1386,11 +1354,9 @@ class Model:
             con = con.assign_labels(cindex, name, row_scaling, row_mask)
             return self._soften_added(self.constraints.add(con), penalty)
         if isinstance(con, CSRConstraint):
-            if chunked:
-                reason = "chunked model, `Model.chunk` adds constraints unfrozen"
-            else:
-                reason = "constraint added unfrozen, `freeze=False`"
-            _densify_notice(reason, self, explicit=not chunked)
+            _densify_notice(
+                "constraint added unfrozen, `freeze=False`", self, explicit=True
+            )
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)
@@ -1545,8 +1511,7 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         con = Constraint(data, name=name, model=self, skip_broadcast=True)
-        freeze = self.freeze_constraints
-        return self.constraints.add(con, freeze=freeze and not self.chunk)
+        return self.constraints.add(con, freeze=self._sparse)
 
     def remove_indicator_constraints(self, name: str) -> None:
         """
