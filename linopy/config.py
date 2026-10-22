@@ -49,7 +49,9 @@ class OptionSettings:
     def set_value(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             if k == "semantics":
-                _set_semantics(v)
+                if v != "v1":
+                    raise ValueError(f"Invalid semantics: {v!r}. {SEMANTICS_MIGRATION}")
+                _warn_semantics()
                 continue
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
@@ -90,12 +92,6 @@ def _warn_semantics() -> None:
     from linopy.semantics import warn_outside_linopy
 
     warn_outside_linopy(SEMANTICS_DEPRECATION, FutureWarning)
-
-
-def _set_semantics(value: Any) -> None:
-    if value != "v1":
-        raise ValueError(f"Invalid semantics: {value!r}. {SEMANTICS_MIGRATION}")
-    _warn_semantics()
 
 
 options = OptionSettings(

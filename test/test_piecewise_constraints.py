@@ -2343,7 +2343,7 @@ class TestSignParameter:
     @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     def test_active_off_with_sign_le_and_lower_zero_pins_output(self) -> None:
         """
-        Docstring recipe: with ``y.lower = 0`` (the common case for
+        Docstring recipe: with a lower bound of 0 on ``y`` (the common case for
         fuel/cost/heat outputs), the sign='<=' + active=0 asymmetry
         disappears — the variable bound combined with y ≤ 0 forces
         y = 0 automatically.

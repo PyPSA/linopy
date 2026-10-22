@@ -209,7 +209,6 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
 
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
-    coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
@@ -224,8 +223,6 @@ def pandas_to_dataarray(
     ----------
         arr (Union[pd.DataFrame, pd.Series]):
             The input pandas DataFrame or Series.
-        coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
         dims (Union[list, None]):
             The dimensions for the DataArray. If None, the column names of the DataFrame or the index names of the Series will be used.
         **kwargs:
@@ -384,7 +381,7 @@ def as_dataarray(
         The converted input, dims and entries as ``arr`` provides them.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
-        arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
+        arr = pandas_to_dataarray(arr, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, pl.Series):

@@ -76,8 +76,6 @@ class Objective:
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value: dict[str, float | int] = {"vars": -1, "coeffs": np.nan, "const": 0}
-
     def __init__(
         self,
         expression: expressions.LinearExpression | expressions.QuadraticExpression,

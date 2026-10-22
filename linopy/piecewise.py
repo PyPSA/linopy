@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from numbers import Real
 from typing import TYPE_CHECKING, Literal, TypeAlias, TypeGuard
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from linopy.expressions import LinearExpression
     from linopy.model import Model
     from linopy.types import LinExprLike, MaskLike
-    from linopy.variables import Variables
+    from linopy.variables import Variable, Variables
 
 logger = logging.getLogger(__name__)
 
@@ -203,35 +203,10 @@ class Slopes:
 
     def __eq__(self, other: object) -> bool:
         """
-        Value-equality across the field types accepted by the constructor.
+        NaN-safe value equality over all fields; see :func:`_values_equal`.
 
-        Two ``Slopes`` are equal iff every field matches:
-
-        * ``align`` and ``dim`` compare with ``==`` (str / None).
-        * ``y0`` and ``values`` dispatch on type via :func:`_values_equal`:
-          numeric scalars compare by value across types (``int 0 ==
-          float 0.0 == np.float64(0)``); ``list`` and ``tuple`` are
-          promoted to ndarray so NaN content compares element-wise
-          regardless of which NaN object was used; ndarrays use
-          ``np.array_equal(equal_nan=True)`` (with a fallback for
-          non-numeric dtypes); ``pd.Series`` / ``pd.DataFrame`` /
-          ``DataArray`` use ``.equals``; ``dict`` recurses on matching
-          keys.
-
-        Non-``Slopes`` operands return ``NotImplemented`` per Python
-        convention.
-
-        Caveats
-        -------
-        * ``Series.equals`` / ``DataFrame.equals`` / ``DataArray.equals``
-          are *order-sensitive*: two frames with the same content but
-          reordered rows / columns / coords compare unequal.
-        * Cross-container coercion is limited to ``list``/``tuple`` →
-          ndarray.  A ``dict`` and a ``DataFrame`` describing the same
-          per-entity slopes still compare unequal.
-
-        ``__hash__`` is set to ``None`` (unhashable) since the inner
-        ``values`` may be a mutable container.
+        Container comparison is order-sensitive and does not coerce
+        across container types (a ``dict`` never equals a ``DataFrame``).
         """
         if not isinstance(other, Slopes):
             return NotImplemented
@@ -251,14 +226,10 @@ def _is_numeric_scalar(x: object) -> TypeGuard[Real]:
 
 def _values_equal(a: object, b: object) -> bool:
     """
-    Type-dispatched equality for ``Slopes`` field values (NaN-safe).
+    NaN-safe, type-dispatched equality for ``Slopes`` field values.
 
-    Numeric scalars compare by value across types (``int 0 == float 0.0 ==
-    np.float64(0)``); ``bool`` is excluded.  Lists / tuples are promoted
-    to ndarray so in-place ``float('nan')`` content compares NaN-safe.
-    Non-numeric ndarray dtypes fall back to ``np.array_equal`` without
-    ``equal_nan``.  ``DataFrame`` / ``Series`` / ``DataArray`` use
-    ``.equals``; ``dict`` recurses on matching keys.
+    Scalars compare by value, lists and tuples as ndarrays, pandas and
+    xarray containers via ``.equals``, dicts recursively.
     """
     if _is_numeric_scalar(a) and _is_numeric_scalar(b):
         af, bf = float(a), float(b)
@@ -478,18 +449,20 @@ def _sequence_to_array(values: Sequence[float] | np.ndarray | pd.Series) -> Data
     )
 
 
+def _pad_ragged(rows: Sequence[Sequence[float]]) -> np.ndarray:
+    data = np.full((len(rows), max(len(row) for row in rows)), np.nan)
+    for i, row in enumerate(rows):
+        data[i, : len(row)] = row
+    return data
+
+
 def _dict_to_array(d: dict[str, Sequence[float]], dim: str) -> DataArray:
     """Convert a dict of ragged sequences to a NaN-padded 2D DataArray."""
-    max_len = max(len(v) for v in d.values())
-    keys = list(d.keys())
-    data = np.full((len(keys), max_len), np.nan)
-    for i, k in enumerate(keys):
-        vals = d[k]
-        data[i, : len(vals)] = vals
+    data = _pad_ragged(list(d.values()))
     return DataArray(
         data,
         dims=[dim, BREAKPOINT_DIM],
-        coords={dim: keys, BREAKPOINT_DIM: np.arange(max_len)},
+        coords={dim: list(d), BREAKPOINT_DIM: np.arange(data.shape[1])},
     )
 
 
@@ -527,16 +500,13 @@ def _coerce_breaks(values: BreaksLike, dim: str | None = None) -> DataArray:
 
 
 def _segments_list_to_array(values: Sequence[Sequence[float]]) -> DataArray:
-    max_len = max(len(seg) for seg in values)
-    data = np.full((len(values), max_len), np.nan)
-    for i, seg in enumerate(values):
-        data[i, : len(seg)] = seg
+    data = _pad_ragged(values)
     return DataArray(
         data,
         dims=[SEGMENT_DIM, BREAKPOINT_DIM],
         coords={
             SEGMENT_DIM: np.arange(len(values)),
-            BREAKPOINT_DIM: np.arange(max_len),
+            BREAKPOINT_DIM: np.arange(data.shape[1]),
         },
     )
 
@@ -544,19 +514,11 @@ def _segments_list_to_array(values: Sequence[Sequence[float]]) -> DataArray:
 def _dict_segments_to_array(
     d: dict[str, Sequence[Sequence[float]]], dim: str
 ) -> DataArray:
-    parts = []
-    for key, seg_list in d.items():
-        arr = _segments_list_to_array(seg_list)
-        parts.append(arr.expand_dims({dim: [key]}))
-    combined = xr.concat(parts, dim=dim, coords="minimal")
-    max_bp = max(max(len(seg) for seg in sl) for sl in d.values())
-    max_seg = max(len(sl) for sl in d.values())
-    if combined.sizes[BREAKPOINT_DIM] < max_bp or combined.sizes[SEGMENT_DIM] < max_seg:
-        combined = combined.reindex(
-            {BREAKPOINT_DIM: np.arange(max_bp), SEGMENT_DIM: np.arange(max_seg)},
-            fill_value=np.nan,
-        )
-    return combined
+    parts = [
+        _segments_list_to_array(seg_list).expand_dims({dim: [key]})
+        for key, seg_list in d.items()
+    ]
+    return xr.concat(parts, dim=dim, coords="minimal", join="outer")
 
 
 def _breakpoints_from_slopes(
@@ -752,6 +714,9 @@ def _tangent_lines_impl(
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
 
+    if not isinstance(x, Variable | LinExpr):
+        raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
+
     x_points = _coerce_breaks(x_points)
     y_points = _coerce_breaks(y_points)
 
@@ -768,10 +733,6 @@ def _tangent_lines_impl(
     )
 
     intercepts = _drop_absent(y_base - slopes * x_base, piece_mask)
-
-    if not isinstance(x, Variable | LinExpr):
-        raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
-
     return slopes * _to_linexpr(x) + intercepts
 
 
@@ -1044,33 +1005,29 @@ def _resolve_breakpoint_mask(
     return [bp.where(declared) for bp in bp_list], declared
 
 
-def _validate_shared_coords(points: Sequence[DataArray]) -> None:
-    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
-    for i, left in enumerate(points):
-        for right in points[i + 1 :]:
-            for dim in (set(left.dims) & set(right.dims)) - skip:
-                left_index = pd.Index(left.coords[dim].values)
-                right_index = pd.Index(right.coords[dim].values)
-                if not left_index.equals(right_index):
-                    raise ValueError(
-                        f"Breakpoint coordinates for dimension '{dim}' must match."
-                    )
-
-
-def _validate_expr_coords(
-    points: Sequence[DataArray], exprs: Sequence[LinearExpression]
+def _check_coords_match(
+    point: DataArray, other: DataArray | LinearExpression, suffix: str
 ) -> None:
     skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    other_dims = other.dims if isinstance(other, DataArray) else other.coord_dims
+    for dim in (set(point.dims) & set(other_dims)) - skip:
+        point_index = pd.Index(point.coords[dim].values)
+        other_index = pd.Index(other.coords[dim].values)
+        if not point_index.equals(other_index):
+            raise ValueError(
+                f"Breakpoint coordinates for dimension '{dim}' must match{suffix}."
+            )
+
+
+def _validate_coords(
+    points: Sequence[DataArray], exprs: Sequence[LinearExpression]
+) -> None:
+    for i, left in enumerate(points):
+        for right in points[i + 1 :]:
+            _check_coords_match(left, right, "")
     for point in points:
         for expr in exprs:
-            for dim in (set(point.dims) & set(expr.coord_dims)) - skip:
-                point_index = pd.Index(point.coords[dim].values)
-                expr_index = pd.Index(expr.coords[dim].values)
-                if not point_index.equals(expr_index):
-                    raise ValueError(
-                        f"Breakpoint coordinates for dimension '{dim}' must match "
-                        "the expression coordinates."
-                    )
+            _check_coords_match(point, expr, " the expression coordinates")
 
 
 def _to_linexpr(expr: LinExprLike) -> LinearExpression:
@@ -1360,14 +1317,8 @@ def add_piecewise_formulation(
             "https://github.com/PyPSA/linopy/issues."
         )
 
-    signed_idx: int | None
-    if bounded_positions:
-        bidx = bounded_positions[0]
-        signed_idx = bidx
-        sign: str = parsed[bidx][2]
-    else:
-        signed_idx = None
-        sign = EQUAL
+    signed_idx = bounded_positions[0] if bounded_positions else None
+    sign: str = EQUAL if signed_idx is None else parsed[signed_idx][2]
 
     if method == "lp" and sign == EQUAL:
         raise ValueError(
@@ -1392,8 +1343,7 @@ def add_piecewise_formulation(
     bp_list = [
         _broadcast_points(bp, *raw_exprs, disjunctive=disjunctive) for bp in coerced_bps
     ]
-    _validate_shared_coords(bp_list)
-    _validate_expr_coords(bp_list, lin_exprs)
+    _validate_coords(bp_list, lin_exprs)
 
     bp_list, bp_mask = _resolve_breakpoint_mask(bp_list, mask)
 
@@ -1427,28 +1377,16 @@ def add_piecewise_formulation(
     else:
         active_expr = _resolve_active(_to_linexpr(active), bp_list[0], active_fill)
 
-    if signed_idx is None:
-        inputs = _PwlInputs(
-            pinned_exprs=lin_exprs,
-            pinned_bps=bp_list,
-            pinned_coords=link_coords,
-            bounded_expr=None,
-            bounded_bp=None,
-            bounded_coord=None,
-            bounded_sign=EQUAL,
-            bp_mask=bp_mask,
-        )
-    else:
-        inputs = _PwlInputs(
-            pinned_exprs=[e for j, e in enumerate(lin_exprs) if j != signed_idx],
-            pinned_bps=[b for j, b in enumerate(bp_list) if j != signed_idx],
-            pinned_coords=[c for j, c in enumerate(link_coords) if j != signed_idx],
-            bounded_expr=lin_exprs[signed_idx],
-            bounded_bp=bp_list[signed_idx],
-            bounded_coord=link_coords[signed_idx],
-            bounded_sign=sign,
-            bp_mask=bp_mask,
-        )
+    inputs = _PwlInputs(
+        pinned_exprs=[e for j, e in enumerate(lin_exprs) if j != signed_idx],
+        pinned_bps=[b for j, b in enumerate(bp_list) if j != signed_idx],
+        pinned_coords=[c for j, c in enumerate(link_coords) if j != signed_idx],
+        bounded_expr=None if signed_idx is None else lin_exprs[signed_idx],
+        bounded_bp=None if signed_idx is None else bp_list[signed_idx],
+        bounded_coord=None if signed_idx is None else link_coords[signed_idx],
+        bounded_sign=sign,
+        bp_mask=bp_mask,
+    )
 
     vars_before = set(model.variables)
     cons_before = set(model.constraints)
@@ -1506,15 +1444,13 @@ def add_piecewise_formulation(
 
 
 def _stack_along_link(
-    items: Sequence[DataArray | xr.Dataset],
-    link_coords: list[str],
-    link_dim: str,
+    items: Sequence[DataArray | xr.Dataset], link_coords: list[str]
 ) -> DataArray:
-    """Expand and concatenate DataArrays/Datasets along a new link dimension."""
+    """Expand and concatenate DataArrays/Datasets along the link dimension."""
     expanded = [
-        item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)
+        item.expand_dims({PWL_LINK_DIM: [c]}) for item, c in zip(items, link_coords)
     ]
-    return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
+    return xr.concat(expanded, dim=PWL_LINK_DIM, coords="minimal")  # type: ignore
 
 
 @dataclass
@@ -1535,7 +1471,6 @@ class _PwlInputs:
     bounded_coord: str | None
     bounded_sign: str
     bp_mask: DataArray | None
-    link_dim: str = PWL_LINK_DIM
 
     @property
     def is_equality(self) -> bool:
@@ -1554,11 +1489,6 @@ class _PwlInputs:
         if self.bounded_coord is None:
             return list(self.pinned_coords)
         return [self.bounded_coord, *self.pinned_coords]
-
-    def all_exprs(self) -> list[LinearExpression]:
-        if self.bounded_expr is None:
-            return list(self.pinned_exprs)
-        return [self.bounded_expr, *self.pinned_exprs]
 
 
 def _lp_eligibility(
@@ -1600,7 +1530,6 @@ class _PwlLinks:
     """
 
     stacked_bp: DataArray
-    link_dim: str
     bp_mask: DataArray | None
     sign: str
     eq_expr: LinearExpression | None
@@ -1613,44 +1542,17 @@ def _build_links(model: Model, inputs: _PwlInputs) -> _PwlLinks:
     """Stack ``inputs`` into the link representation."""
     from linopy.expressions import LinearExpression
 
-    stacked_bp = _stack_along_link(
-        inputs.all_bps(), inputs.all_coords(), inputs.link_dim
-    )
-
-    if inputs.is_equality:
-        eq_data = _stack_along_link(
-            [e.data for e in inputs.pinned_exprs],
-            inputs.pinned_coords,
-            inputs.link_dim,
-        )
-        return _PwlLinks(
-            stacked_bp=stacked_bp,
-            link_dim=inputs.link_dim,
-            bp_mask=inputs.bp_mask,
-            sign=EQUAL,
-            eq_expr=LinearExpression(eq_data, model),
-            eq_bp=stacked_bp,
-            signed_expr=None,
-            signed_bp=None,
-        )
-
+    eq_expr: LinearExpression | None = None
+    eq_bp: DataArray | None = None
     if inputs.pinned_exprs:
         eq_data = _stack_along_link(
-            [e.data for e in inputs.pinned_exprs],
-            inputs.pinned_coords,
-            inputs.link_dim,
+            [e.data for e in inputs.pinned_exprs], inputs.pinned_coords
         )
-        eq_expr: LinearExpression | None = LinearExpression(eq_data, model)
-        eq_bp: DataArray | None = _stack_along_link(
-            inputs.pinned_bps, inputs.pinned_coords, inputs.link_dim
-        )
-    else:
-        eq_expr = None
-        eq_bp = None
+        eq_expr = LinearExpression(eq_data, model)
+        eq_bp = _stack_along_link(inputs.pinned_bps, inputs.pinned_coords)
 
     return _PwlLinks(
-        stacked_bp=stacked_bp,
-        link_dim=inputs.link_dim,
+        stacked_bp=_stack_along_link(inputs.all_bps(), inputs.all_coords()),
         bp_mask=inputs.bp_mask,
         sign=inputs.bounded_sign,
         eq_expr=eq_expr,
@@ -1758,20 +1660,40 @@ def _add_continuous(
     return resolved
 
 
+def _add_links(
+    model: Model,
+    name: str,
+    links: _PwlLinks,
+    weighted: Callable[[DataArray], LinearExpression],
+) -> None:
+    """Link the equality side and the (optional) signed side to ``weighted``."""
+    sides = [
+        (links.eq_expr, links.eq_bp, EQUAL, PWL_LINK_SUFFIX),
+        (links.signed_expr, links.signed_bp, links.sign, PWL_OUTPUT_LINK_SUFFIX),
+    ]
+    for expr, bp, sign, suffix in sides:
+        if expr is not None and bp is not None:
+            _add_signed_link(model, expr, weighted(bp), sign, f"{name}{suffix}")
+
+
 def _add_sos2(
     model: Model,
     name: str,
     links: _PwlLinks,
-    rhs: LinearExpression | int,
+    rhs: LinearExpression | Variable | int,
+    extra_dims: Sequence[str] = (),
 ) -> None:
     """
-    SOS2 formulation.  ``links.eq_expr`` is the equality side;
-    ``links.signed_expr`` (if any) is the output-side link.
+    SOS2 formulation over ``[*extra_dims, BREAKPOINT_DIM]`` with the
+    convexity row ``sum(lambda) == rhs``.
     """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
-    extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
-    lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
+    dims = [*extra_dims, dim]
+    extra = _var_coords_from(stacked_bp, exclude={*dims, PWL_LINK_DIM})
+    lambda_coords = extra + [
+        pd.Index(stacked_bp.coords[d].values, name=d) for d in dims
+    ]
 
     lambda_var = model.add_variables(
         lower=0,
@@ -1785,23 +1707,10 @@ def _add_sos2(
         lambda_var.sum(dim=dim) == rhs, name=f"{name}{PWL_CONVEX_SUFFIX}"
     )
 
-    if links.eq_expr is not None and links.eq_bp is not None:
-        eq_bp = _drop_absent(links.eq_bp, links.bp_mask)
-        input_weighted = (lambda_var * eq_bp).sum(dim=dim)
-        model.add_constraints(
-            links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
-        )
+    def weighted(bp: DataArray) -> LinearExpression:
+        return (lambda_var * _drop_absent(bp, links.bp_mask)).sum(dim=dims)
 
-    if links.signed_expr is not None and links.signed_bp is not None:
-        signed_bp = _drop_absent(links.signed_bp, links.bp_mask)
-        output_weighted = (lambda_var * signed_bp).sum(dim=dim)
-        _add_signed_link(
-            model,
-            links.signed_expr,
-            output_weighted,
-            links.sign,
-            f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
-        )
+    _add_links(model, name, links, weighted)
 
 
 def _add_incremental(
@@ -1823,7 +1732,7 @@ def _add_incremental(
     """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
-    extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
+    extra = _var_coords_from(stacked_bp, exclude={dim, PWL_LINK_DIM})
 
     n_pieces = stacked_bp.sizes[dim] - 1
     piece_dim = LP_PIECE_DIM
@@ -1877,7 +1786,7 @@ def _add_incremental(
             binary_hi <= delta_lo, name=f"{name}{PWL_BINARY_ORDER_SUFFIX}"
         )
 
-    def _incremental_weighted(bp: DataArray) -> LinearExpression:
+    def weighted(bp: DataArray) -> LinearExpression:
         steps = bp.diff(dim).rename({dim: piece_dim})
         steps[piece_dim] = piece_index
         steps = _drop_absent(steps, delta_mask)
@@ -1887,20 +1796,7 @@ def _add_incremental(
             bp0_term = bp0 * active
         return (delta_var * steps).sum(dim=piece_dim) + bp0_term
 
-    if links.eq_expr is not None and links.eq_bp is not None:
-        model.add_constraints(
-            links.eq_expr == _incremental_weighted(links.eq_bp),
-            name=f"{name}{PWL_LINK_SUFFIX}",
-        )
-
-    if links.signed_expr is not None and links.signed_bp is not None:
-        _add_signed_link(
-            model,
-            links.signed_expr,
-            _incremental_weighted(links.signed_bp),
-            links.sign,
-            f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
-        )
+    _add_links(model, name, links, weighted)
 
 
 def _add_disjunctive(
@@ -1909,8 +1805,7 @@ def _add_disjunctive(
     inputs: _PwlInputs,
     active: LinearExpression | None = None,
 ) -> None:
-    """Disjunctive SOS2 formulation."""
-    link_dim = inputs.link_dim
+    """Disjunctive SOS2 formulation: one binary selects the active segment."""
     links = _build_links(model, inputs)
     stacked_bp = links.stacked_bp
     bp_mask = inputs.bp_mask
@@ -1923,11 +1818,7 @@ def _add_disjunctive(
         )
 
     dim = BREAKPOINT_DIM
-    extra = _var_coords_from(stacked_bp, exclude={dim, SEGMENT_DIM, link_dim})
-    lambda_coords = extra + [
-        pd.Index(stacked_bp.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
-        pd.Index(stacked_bp.coords[dim].values, name=dim),
-    ]
+    extra = _var_coords_from(stacked_bp, exclude={dim, SEGMENT_DIM, PWL_LINK_DIM})
     binary_coords = extra + [
         pd.Index(stacked_bp.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
     ]
@@ -1944,37 +1835,7 @@ def _add_disjunctive(
         binary_var.sum(dim=SEGMENT_DIM) == rhs,
         name=f"{name}{PWL_SELECT_SUFFIX}",
     )
-
-    lambda_var = model.add_variables(
-        lower=0,
-        upper=1,
-        coords=lambda_coords,
-        name=f"{name}{PWL_LAMBDA_SUFFIX}",
-        mask=bp_mask,
-    )
-    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
-    model.add_constraints(
-        lambda_var.sum(dim=dim) == binary_var,
-        name=f"{name}{PWL_CONVEX_SUFFIX}",
-    )
-
-    if links.eq_expr is not None and links.eq_bp is not None:
-        eq_bp = _drop_absent(links.eq_bp, bp_mask)
-        input_weighted = (lambda_var * eq_bp).sum(dim=[SEGMENT_DIM, dim])
-        model.add_constraints(
-            links.eq_expr == input_weighted, name=f"{name}{PWL_LINK_SUFFIX}"
-        )
-
-    if links.signed_expr is not None and links.signed_bp is not None:
-        signed_bp = _drop_absent(links.signed_bp, bp_mask)
-        output_weighted = (lambda_var * signed_bp).sum(dim=[SEGMENT_DIM, dim])
-        _add_signed_link(
-            model,
-            links.signed_expr,
-            output_weighted,
-            links.sign,
-            f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
-        )
+    _add_sos2(model, name, links, binary_var, [SEGMENT_DIM])
 
 
 def _add_signed_link(

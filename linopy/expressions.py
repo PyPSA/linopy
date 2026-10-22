@@ -70,7 +70,6 @@ from linopy.alignment import (
     fill_missing_coords,
 )
 from linopy.common import (
-    EmptyDeprecationWrapper,
     LocIndexer,
     assign_fields,
     check_common_keys_values,
@@ -871,7 +870,6 @@ class BaseExpression(ABC):
             data = assign_fields(data, const=data.const.astype(float))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
-        data = cast(Dataset, data)
         (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
         coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
         data = assign_fields(data, **coeffs_vars_dict)
@@ -885,7 +883,7 @@ class BaseExpression(ABC):
 
         data = data.assign_attrs(name=None)
         self._model = model
-        self._data = cast(Dataset, data)
+        self._data = data
 
     def __repr__(self) -> str:
         """
@@ -897,7 +895,6 @@ class BaseExpression(ABC):
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = 0  # (~self.mask).sum().values.item() if self.mask
         lines = []
 
         header_string = f"{self.type} (sparse)" if self.is_sparse else self.type
@@ -909,20 +906,14 @@ class BaseExpression(ABC):
                     lines.append("\t\t...")
                 else:
                     coord = [row_labels[i][ind] for i, ind in enumerate(indices)]
-                    if self.mask is None or self.mask.values[indices]:
-                        expr = format_single_expression(
-                            *self._printout_cell(indices), self.model
-                        )
-
-                        line = format_coord(coord) + f": {expr}"
-                    else:
-                        line = format_coord(coord) + ": None"
-                    lines.append(line)
+                    expr = format_single_expression(
+                        *self._printout_cell(indices), self.model
+                    )
+                    lines.append(format_coord(coord) + f": {expr}")
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
-            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
-            underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
-            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
+            underscore = "-" * (len(shape_str) + len(header_string) + 4)
+            lines.insert(0, f"{header_string} [{shape_str}]:\n{underscore}")
         elif size == 1:
             expr = format_single_expression(*self._printout_cell(()), self.model)
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
@@ -1008,9 +999,13 @@ class BaseExpression(ABC):
             raise TypeError("Multiplication of multiple terms is not supported.")
 
         if other.is_constant:
-            return cast(LinearExpression, self._multiply_by_constant(other.const))
+            return cast(
+                LinearExpression, self._apply_constant_op(other.const, operator.mul)
+            )
         if self.is_constant:
-            return cast(LinearExpression, other._multiply_by_constant(self.const))
+            return cast(
+                LinearExpression, other._apply_constant_op(self.const, operator.mul)
+            )
 
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants
@@ -1148,74 +1143,39 @@ class BaseExpression(ABC):
             return expr.assign(const=const)
         return expr.assign(coeffs=op(expr.coeffs, operand), const=const)
 
-    def _add_constant(
+    def _apply_constant_op(
         self,
         other: ConstantLike,
+        op: Callable[[Any, Any], Any],
+        *,
         join: JoinOptions | None = None,
         fill_value: FillValueLike = None,
     ) -> Self:
-        fill_value = 0 if fill_value is None else fill_value
-        if np.isscalar(other) and join is None:
+        """
+        Combine a constant operand into the expression with ``op``.
+
+        ``fill_value`` is what the operand takes at join-created positions and
+        defaults to the identity of ``op``. Addition touches the constant only;
+        multiplication and division scale the coefficients too.
+        """
+        scale = op is not operator.add
+        if fill_value is None:
+            fill_value = np.inf if op is operator.truediv else 0
+        if not scale and join is None and np.isscalar(other):
             if is_nan_scalar(other):
                 check_user_nan()
             return self._combined_with_constant(
-                self.const, other, operator.add, needs_data_reindex=False, scale=False
+                self.const, other, op, needs_data_reindex=False, scale=False
             )
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
         )
         expr = self._combined_with_constant(
-            self_const, da, operator.add, needs_data_reindex=needs_reindex, scale=False
+            self_const, da, op, needs_data_reindex=needs_reindex, scale=scale
         )
         return expr._absorb_join_absence(fill_value)
 
-    def _apply_constant_op(
-        self,
-        other: ConstantLike,
-        op: Callable[[DataArray, DataArray], DataArray],
-        fill_value: FillValueLike,
-        join: JoinOptions | None = None,
-    ) -> Self:
-        """
-        Apply a constant operation (mul, div) to this expression.
-
-        ``fill_value`` is what the factor takes at join-created positions.
-        """
-        self_const, factor, needs_reindex = self._broadcast_and_align(
-            other, fill_value, join
-        )
-        expr = self._combined_with_constant(
-            self_const, factor, op, needs_data_reindex=needs_reindex, scale=True
-        )
-        return expr._absorb_join_absence(fill_value)
-
-    def _multiply_by_constant(
-        self,
-        other: ConstantLike,
-        join: JoinOptions | None = None,
-        fill_value: FillValueLike = None,
-    ) -> Self:
-        return self._apply_constant_op(
-            other,
-            operator.mul,
-            fill_value=0 if fill_value is None else fill_value,
-            join=join,
-        )
-
-    def _divide_by_constant(
-        self,
-        other: ConstantLike,
-        join: JoinOptions | None = None,
-        fill_value: FillValueLike = None,
-    ) -> Self:
-        return self._apply_constant_op(
-            other,
-            operator.truediv,
-            fill_value=np.inf if fill_value is None else fill_value,
-            join=join,
-        )
-
-    def __div__(self, other: SideLike) -> Self:
+    def __truediv__(self, other: SideLike) -> Self:
         other = as_constant(other)
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
@@ -1224,12 +1184,9 @@ class BaseExpression(ABC):
                     f"{type(self)} and {type(other)}"
                     "Non-linear expressions are not yet supported."
                 )
-            return self._divide_by_constant(other)
+            return self._apply_constant_op(other, operator.truediv)
         except TypeError:
             return NotImplemented
-
-    def __truediv__(self, other: SideLike) -> Self:
-        return self.__div__(other)
 
     def __le__(self, rhs: SideLike) -> ConstraintBase:
         return self.to_constraint(LESS_EQUAL, rhs)
@@ -1278,7 +1235,9 @@ class BaseExpression(ABC):
         if join is None:
             return self.__add__(other)
         if isinstance(other, CONSTANT_TYPES):
-            return self._add_constant(other, join=join, fill_value=fill_value)
+            return self._apply_constant_op(
+                other, operator.add, join=join, fill_value=fill_value
+            )
         if fill_value is not None and not isinstance(fill_value, AbsentType):
             raise ValueError(
                 "A numeric fill_value= applies to constant operands only. An "
@@ -1352,7 +1311,9 @@ class BaseExpression(ABC):
             raise TypeError(
                 "join parameter is not supported for expression-expression multiplication"
             )
-        return self._multiply_by_constant(other, join=join, fill_value=fill_value)
+        return self._apply_constant_op(
+            other, operator.mul, join=join, fill_value=fill_value
+        )
 
     def div(
         self,
@@ -1380,14 +1341,16 @@ class BaseExpression(ABC):
         """
         check_join_fill_value(fill_value, join)
         if join is None:
-            return self.__div__(other)
+            return self.__truediv__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for /: "
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self._divide_by_constant(other, join=join, fill_value=fill_value)
+        return self._apply_constant_op(
+            other, operator.truediv, join=join, fill_value=fill_value
+        )
 
     def le(
         self,
@@ -1516,7 +1479,7 @@ class BaseExpression(ABC):
 
     @property
     def type(self) -> str:
-        return "LinearExpression"
+        return self.__class__.__name__
 
     @property
     def name(self) -> str:
@@ -1640,7 +1603,6 @@ class BaseExpression(ABC):
         self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
-        **kwargs: Any,
     ) -> Self:
         """
         Sum the expression over all or a subset of dimensions.
@@ -1652,23 +1614,12 @@ class BaseExpression(ABC):
         dim : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
-        dims : str/list, optional
-            Deprecated. Use ``dim`` instead.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        if dim is None and "dims" in kwargs:
-            dim = kwargs.pop("dims")
-            warn(
-                "The `dims` argument in `.sum` is deprecated. Use `dim` instead.",
-                DeprecationWarning,
-            )
-        if kwargs:
-            raise ValueError(f"Unknown keyword argument(s): {kwargs}")
-
         res = self.__class__(self._sum(self, dim=dim), self.model)
 
         if drop_zeros:
@@ -1714,14 +1665,10 @@ class BaseExpression(ABC):
         """
         # Along every dimensions, we want to perform cumsum along, get the size of the
         # dimension to pass that to self.rolling.
-        if not dim:
-            # If user did not specify a dimension to sum over, use all relevant
-            # dimensions
+        if not dim or isinstance(dim, EllipsisType):
             dim = self.coord_dims
-        if isinstance(dim, str):
+        elif isinstance(dim, str):
             dim = [dim]
-        elif isinstance(dim, EllipsisType) or dim is None:
-            dim = self.coord_dims
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
@@ -2059,15 +2006,11 @@ class BaseExpression(ABC):
         return self.vars.size
 
     @property
-    def empty(self) -> EmptyDeprecationWrapper:
+    def empty(self) -> bool:
         """
         Get whether the linear expression is empty.
-
-        .. versionchanged:: 0.5.1
-           Returns a EmptyDeprecationWrapper which behaves like a bool and emits
-           a DeprecationWarning when called.
         """
-        return EmptyDeprecationWrapper(not self.size)
+        return not self.size
 
     def densify_terms(self) -> Self:
         """
@@ -2103,21 +2046,6 @@ class BaseExpression(ABC):
         data_vars = {k: new.get(k, self.data[k]) for k in self.data.data_vars}
         data = Dataset(data_vars, coords=self.data.coords, attrs=self.data.attrs)
         return self.__class__(data, self.model)
-
-    def sanitize(self) -> Self:
-        """
-        Sanitize LinearExpression by ensuring int dtype for variables.
-
-        Returns
-        -------
-        linopy.LinearExpression
-        """
-        if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(
-                vars=self.vars.fillna(-1).astype(self.model._dtypes["labels"])
-            )
-
-        return self
 
     def equals(self, other: BaseExpression) -> bool:
         return self.data.equals(_expr_unwrap(other))
@@ -2613,7 +2541,7 @@ class LinearExpression(BaseExpression):
 
         try:
             if isinstance(other, CONSTANT_TYPES):
-                return self._add_constant(other)
+                return self._apply_constant_op(other, operator.add)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
                 return merge([self, other], cls=self.__class__)
@@ -2687,7 +2615,7 @@ class LinearExpression(BaseExpression):
             if isinstance(other, LinearExpression | ScalarLinearExpression):
                 return self._multiply_by_linear_expression(other)
             else:
-                return self._multiply_by_constant(other)
+                return self._apply_constant_op(other, operator.mul)
         except TypeError:
             return NotImplemented
 
@@ -3213,18 +3141,7 @@ class LinearExpression(BaseExpression):
                     model = expr.model  # TODO: Ensure equality of models
                 return expr
 
-            if len(t) == 1:
-                warn(
-                    "Passing a single value tuple to LinearExpression.from_tuples is deprecated",
-                    DeprecationWarning,
-                )
-                # assume that the element is a constant
-                const = as_dataarray(t[0])
-                if model is None:
-                    raise ValueError("Model must be provided when using constants.")
-                return LinearExpression(const, model)
-            else:
-                raise ValueError("Expected tuples of length 2")
+            raise ValueError("Expected tuples of length 2")
 
         exprs = [process_one(t) for t in tuples]
 
@@ -3259,12 +3176,7 @@ class QuadraticExpression(BaseExpression):
     apply most xarray functions on it.
     """
 
-    __slots__ = ("_data", "_model")
-    __array_ufunc__ = None
-    __array_priority__ = 10000
-    __pandas_priority__ = 10000
-
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+    __slots__ = ()
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         if data is None:
@@ -3280,10 +3192,6 @@ class QuadraticExpression(BaseExpression):
         # transpose data to have _term as last dimension and _factor as second last
         data = data.transpose(..., FACTOR_DIM, TERM_DIM)
         self._data = data
-
-    @property
-    def type(self) -> str:
-        return "QuadraticExpression"
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -3304,7 +3212,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
         try:
-            return self._multiply_by_constant(other)
+            return self._apply_constant_op(other, operator.mul)
         except TypeError:
             return NotImplemented
 
@@ -3321,7 +3229,7 @@ class QuadraticExpression(BaseExpression):
         other = as_constant(other)
         try:
             if isinstance(other, CONSTANT_TYPES):
-                return self._add_constant(other)
+                return self._apply_constant_op(other, operator.add)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
 
@@ -3708,13 +3616,13 @@ def _try_csr_merge(
     return LinearExpression._from_csr(combined, exprs[0].model)
 
 
-Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
+Mergeable: TypeAlias = BaseExpression | Dataset
 
 
 @overload
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = ...,
     cls: type[GenericExpression],
     join: JoinOptions | None = None,
@@ -3725,8 +3633,8 @@ def merge(
 
 @overload
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = ...,
     cls: None = ...,
     join: JoinOptions | None = None,
@@ -3736,8 +3644,8 @@ def merge(
 
 
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = TERM_DIM,
     cls: type[BaseExpression] | None = None,
     join: JoinOptions | None = None,
@@ -3755,7 +3663,7 @@ def merge(
 
     Parameters
     ----------
-    *exprs : tuple/list
+    exprs : list
         List of linear expressions to merge.
     dim : str
         Dimension along which the expressions should be concatenated.
@@ -3794,13 +3702,6 @@ def merge(
         raise ValueError(
             f"fill_value=ABSENT is only defined for a merge along {TERM_DIM!r}."
         )
-    if not isinstance(exprs, Sequence):
-        warn(
-            "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
-            DeprecationWarning,
-        )
-        exprs = [exprs] + list(add_exprs)
-
     has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
     has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
@@ -3822,8 +3723,6 @@ def merge(
     for e in exprs:
         enforce_no_multiindex(e, context="merge input")
 
-    linopy_types = (variables.Variable, BaseExpression)
-
     model = exprs[0].model
 
     if issubclass(cls, LinearExpression) and not has_quad_expression:
@@ -3833,7 +3732,7 @@ def merge(
         if csr_result is not None:
             return csr_result
 
-    data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
+    data = [e.data if isinstance(e, BaseExpression) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
     if join is None:
@@ -3842,7 +3741,7 @@ def merge(
 
     if join is not None:
         override = join == "override"
-    elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
+    elif dim in HELPER_DIMS:
         override = _coord_sizes_agree(exprs)
     else:
         override = False
@@ -3854,8 +3753,6 @@ def merge(
         }
         if issubclass(cls, LinearExpression):
             kwargs["fill_value"] = FILL_VALUE
-        elif issubclass(cls, variables.Variable):
-            kwargs["fill_value"] = variables.FILL_VALUE
 
         if join is not None:
             kwargs["join"] = join
@@ -4118,15 +4015,12 @@ class ScalarLinearExpression:
     def __rmul__(self, other: int) -> ScalarLinearExpression:
         return self.__mul__(other)
 
-    def __div__(self, other: float | int) -> ScalarLinearExpression:
+    def __truediv__(self, other: float | int) -> ScalarLinearExpression:
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for /: {type(self)} and {type(other)}"
             )
         return self.__mul__(1 / other)
-
-    def __truediv__(self, other: float | int) -> ScalarLinearExpression:
-        return self.__div__(other)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
         if not isinstance(other, int | float | np.number):

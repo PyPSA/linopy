@@ -143,47 +143,10 @@ def test_variable_lower_getter(z: linopy.Variable) -> None:
     assert z.lower.item() == 0
 
 
-def test_variable_upper_setter(z: linopy.Variable) -> None:
-    z.upper = 20
-    assert z.upper.item() == 20
-
-
-def test_variable_lower_setter(z: linopy.Variable) -> None:
-    z.lower = 8
-    assert z.lower == 8
-
-
-def test_variable_upper_setter_with_array(x: linopy.Variable) -> None:
-    idx = pd.RangeIndex(10, name="first")
-    upper = pd.Series(range(25, 35), index=idx)
-    x.upper = upper
-    assert isinstance(x.upper, xr.DataArray)
-    assert (x.upper == upper).all()
-
-
-def test_variable_upper_setter_with_array_invalid_dim(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        upper = pd.Series(range(25, 35))
-        x.upper = upper
-
-
-def test_variable_upper_setter_with_non_constant(z: linopy.Variable) -> None:
-    with pytest.raises(TypeError):
-        z.upper = z
-
-
-def test_variable_lower_setter_with_array(x: linopy.Variable) -> None:
-    idx = pd.RangeIndex(10, name="first")
-    lower = pd.Series(range(15, 25), index=idx)
-    x.lower = lower
-    assert isinstance(x.lower, xr.DataArray)
-    assert (x.lower == lower).all()
-
-
-def test_variable_lower_setter_with_array_invalid_dim(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        lower = pd.Series(range(15, 25))
-        x.lower = lower
+@pytest.mark.parametrize("bound", ["lower", "upper"])
+def test_variable_bound_setters_removed(z: linopy.Variable, bound: str) -> None:
+    with pytest.raises(AttributeError):
+        setattr(z, bound, 5)
 
 
 def test_variable_update_bounds(z: linopy.Variable) -> None:
@@ -245,14 +208,9 @@ def test_variable_sum(x: linopy.Variable) -> None:
     assert res.nterm == 10
 
 
-def test_variable_sum_warn_using_dims(x: linopy.Variable) -> None:
-    with pytest.warns(DeprecationWarning):
-        x.sum(dims="first")
-
-
-def test_variable_sum_warn_unknown_kwargs(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        x.sum(unknown_kwarg="first")
+def test_variable_sum_rejects_dims_kwarg(x: linopy.Variable) -> None:
+    with pytest.raises(TypeError):
+        x.sum(dims="first")  # type: ignore[call-arg]
 
 
 def test_fill_value() -> None:

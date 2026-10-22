@@ -1613,7 +1613,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     ),
     "set-blocks": (set_blocks, "frozen constraint converted by `set_blocks`"),
     "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
-    "sum-kwargs": (lambda e, c: e.sum(dims="bus"), "`.data` read"),
     "groupby-fallback": (
         lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
         "grouper without a sparse path",

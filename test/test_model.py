@@ -38,6 +38,18 @@ def test_model_force_dims_names() -> None:
         m.add_variables([-5], [10])
 
 
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("dim", ["sign", "rhs", "scaling"])
+def test_model_rejects_reserved_dim_names(sparse: bool, dim: str) -> None:
+    m = Model(sparse=sparse)
+    coords = [pd.RangeIndex(3, name=dim)]
+    with pytest.raises(ValueError, match="unsupported dimension names"):
+        m.add_variables(coords=coords)
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    with pytest.raises(ValueError, match="unsupported dimension names"):
+        m.add_constraints(x >= xr.DataArray(np.zeros(3), coords=coords))
+
+
 def test_model_solver_dir() -> None:
     d: str = gettempdir()
     m: Model = Model(solver_dir=d)

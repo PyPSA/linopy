@@ -266,32 +266,20 @@ def reformulate_sos_constraints(
             sos_type = var.attrs[SOS_TYPE_ATTR]
             sos_dim = var.attrs[SOS_DIM_ATTR]
 
-            if var.sizes[sos_dim] <= 1:
-                result.saved_attrs[var_name] = dict(var.attrs)
-                model.remove_sos_constraints(var)
-                result.reformulated.append(var_name)
-                continue
-
-            M = compute_big_m_values(var)
-            if (M == 0).all():
-                result.saved_attrs[var_name] = dict(var.attrs)
-                model.remove_sos_constraints(var)
-                result.reformulated.append(var_name)
-                continue
-
             result.saved_attrs[var_name] = dict(var.attrs)
+            M = compute_big_m_values(var) if var.sizes[sos_dim] > 1 else None
 
-            if sos_type == 1:
-                added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
-            elif sos_type == 2:
-                added_vars, added_cons = reformulate_sos2(model, var, prefix, M)
-            else:
-                raise ValueError(
-                    f"Unknown sos_type={sos_type} on variable '{var_name}'"
-                )
-
-            result.added_variables.extend(added_vars)
-            result.added_constraints.extend(added_cons)
+            if M is not None and not (M == 0).all():
+                if sos_type == 1:
+                    added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
+                elif sos_type == 2:
+                    added_vars, added_cons = reformulate_sos2(model, var, prefix, M)
+                else:
+                    raise ValueError(
+                        f"Unknown sos_type={sos_type} on variable '{var_name}'"
+                    )
+                result.added_variables.extend(added_vars)
+                result.added_constraints.extend(added_cons)
 
             model.remove_sos_constraints(var)
             result.reformulated.append(var_name)
