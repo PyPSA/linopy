@@ -80,13 +80,8 @@ def build_nodal_balance(severity: int) -> linopy.Model:
 
 
 def build_nodal_balance_sparse(severity: int) -> linopy.Model:
-    """The same balance via the sparse groupby + frozen CSR path (v1-only)."""
-    previous = linopy.options["semantics"]
-    linopy.options["semantics"] = "v1"
-    try:
-        return _build(severity, sparse=True)
-    finally:
-        linopy.options["semantics"] = previous
+    """The same balance via the sparse groupby + frozen CSR path."""
+    return _build(severity, sparse=True)
 
 
 SPEC = register_pattern(
