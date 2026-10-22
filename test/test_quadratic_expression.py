@@ -203,14 +203,9 @@ def test_quadratic_expression_sum(x: Variable, y: Variable) -> None:
     assert not summed_expr_all.coord_dims
 
 
-def test_quadratic_expression_sum_warn_using_dims(x: Variable) -> None:
-    with pytest.warns(DeprecationWarning):
-        (x**2).sum(dims="dim_0")
-
-
-def test_quadratic_expression_sum_warn_unknown_kwargs(x: Variable) -> None:
-    with pytest.raises(ValueError):
-        (x**2).sum(unknown_kwarg="dim_0")
+def test_quadratic_expression_sum_rejects_dims_kwarg(x: Variable) -> None:
+    with pytest.raises(TypeError):
+        (x**2).sum(dims="dim_0")  # type: ignore[call-arg]
 
 
 def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> None:
@@ -220,12 +215,6 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
     quad = x * x
     with pytest.raises(TypeError):
         quad * quad
-
-
-def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = x * y  # type: ignore
-    with pytest.warns(DeprecationWarning):
-        merge(expr, expr)
 
 
 def test_merge_linear_expression_and_quadratic_expression(
@@ -241,8 +230,8 @@ def test_merge_linear_expression_and_quadratic_expression(
     new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])
     assert isinstance(new_quad_ex, QuadraticExpression)
 
-    with pytest.warns(DeprecationWarning):
-        merge(quadexpr, quadexpr, cls=QuadraticExpression)
+    with pytest.raises(TypeError):
+        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore[call-arg]
 
     quadexpr_2 = linexpr.to_quadexpr()
     merged_expr = merge([quadexpr_2, quadexpr], cls=QuadraticExpression)

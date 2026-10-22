@@ -1100,37 +1100,6 @@ class LocIndexer(Generic[LocT]):
         return self.object.sel(key)  # type: ignore[attr-defined]
 
 
-class EmptyDeprecationWrapper:
-    """
-    Temporary wrapper for a smooth transition from .empty() to .empty
-
-    Use `bool(expr.empty)` to explicitly unwrap.
-
-    See Also
-    --------
-    https://github.com/PyPSA/linopy/pull/425
-    """
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: bool):
-        self.value = value
-
-    def __bool__(self) -> bool:
-        return self.value
-
-    def __repr__(self) -> str:
-        return repr(self.value)
-
-    def __call__(self) -> bool:
-        warn(
-            "Calling `.empty()` is deprecated, use `.empty` property instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.value
-
-
 def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
     """
     Serialize a list of pd.Index to a DataArray dict.

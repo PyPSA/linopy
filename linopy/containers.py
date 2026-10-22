@@ -33,9 +33,6 @@ class LabeledItem(Protocol):
     @property
     def coords(self) -> DatasetCoordinates: ...
 
-    @property
-    def flat(self) -> pd.DataFrame: ...
-
 
 T = TypeVar("T", bound=LabeledItem)
 

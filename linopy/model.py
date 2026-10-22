@@ -1302,6 +1302,7 @@ class Model:
             )
             _check_infinities(con._sign, con._rhs, name, row_mask)
             self.check_force_dim_names(con.coords.to_dataset())
+            self._check_valid_dim_names(con.coords.to_dataset())
             enforce_no_multiindex(con, context=f"constraint {name!r}")
             row_scaling = (
                 float(scaling)
@@ -1352,6 +1353,7 @@ class Model:
             mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
 
         self.check_force_dim_names(data)
+        self._check_valid_dim_names(data)
 
         data = self._allocate_constraint_labels(data, name, mask)
 
@@ -2694,20 +2696,6 @@ class Model:
         return self.constraints.format_labels(
             labels, display_max_terms=display_max_terms
         )
-
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
-        """
-        Print a list of infeasible constraints.
-
-        .. deprecated::
-            Use :meth:`format_infeasibilities` instead.
-        """
-        warn(
-            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        print(self.format_infeasibilities(display_max_terms=display_max_terms))
 
     @deprecated(
         details="Use `compute_infeasibilities`/`format_infeasibilities` instead."

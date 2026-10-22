@@ -295,7 +295,7 @@ def modified_model() -> Model:
     c = m.add_constraints(x + y, GREATER_EQUAL, 10, freeze=False)
 
     y.lower = 9
-    c.lhs = 2 * x + y
+    c.update(lhs=2 * x + y)
     m.objective = 2 * x + y
 
     return m

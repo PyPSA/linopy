@@ -70,7 +70,6 @@ from linopy.alignment import (
     fill_missing_coords,
 )
 from linopy.common import (
-    EmptyDeprecationWrapper,
     LocIndexer,
     assign_fields,
     check_common_keys_values,
@@ -1604,7 +1603,6 @@ class BaseExpression(ABC):
         self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
-        **kwargs: Any,
     ) -> Self:
         """
         Sum the expression over all or a subset of dimensions.
@@ -1616,23 +1614,12 @@ class BaseExpression(ABC):
         dim : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
-        dims : str/list, optional
-            Deprecated. Use ``dim`` instead.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        if dim is None and "dims" in kwargs:
-            dim = kwargs.pop("dims")
-            warn(
-                "The `dims` argument in `.sum` is deprecated. Use `dim` instead.",
-                DeprecationWarning,
-            )
-        if kwargs:
-            raise ValueError(f"Unknown keyword argument(s): {kwargs}")
-
         res = self.__class__(self._sum(self, dim=dim), self.model)
 
         if drop_zeros:
@@ -2019,15 +2006,11 @@ class BaseExpression(ABC):
         return self.vars.size
 
     @property
-    def empty(self) -> EmptyDeprecationWrapper:
+    def empty(self) -> bool:
         """
         Get whether the linear expression is empty.
-
-        .. versionchanged:: 0.5.1
-           Returns a EmptyDeprecationWrapper which behaves like a bool and emits
-           a DeprecationWarning when called.
         """
-        return EmptyDeprecationWrapper(not self.size)
+        return not self.size
 
     def densify_terms(self) -> Self:
         """
@@ -2063,21 +2046,6 @@ class BaseExpression(ABC):
         data_vars = {k: new.get(k, self.data[k]) for k in self.data.data_vars}
         data = Dataset(data_vars, coords=self.data.coords, attrs=self.data.attrs)
         return self.__class__(data, self.model)
-
-    def sanitize(self) -> Self:
-        """
-        Sanitize LinearExpression by ensuring int dtype for variables.
-
-        Returns
-        -------
-        linopy.LinearExpression
-        """
-        if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(
-                vars=self.vars.fillna(-1).astype(self.model._dtypes["labels"])
-            )
-
-        return self
 
     def equals(self, other: BaseExpression) -> bool:
         return self.data.equals(_expr_unwrap(other))
@@ -3173,18 +3141,7 @@ class LinearExpression(BaseExpression):
                     model = expr.model  # TODO: Ensure equality of models
                 return expr
 
-            if len(t) == 1:
-                warn(
-                    "Passing a single value tuple to LinearExpression.from_tuples is deprecated",
-                    DeprecationWarning,
-                )
-                # assume that the element is a constant
-                const = as_dataarray(t[0])
-                if model is None:
-                    raise ValueError("Model must be provided when using constants.")
-                return LinearExpression(const, model)
-            else:
-                raise ValueError("Expected tuples of length 2")
+            raise ValueError("Expected tuples of length 2")
 
         exprs = [process_one(t) for t in tuples]
 
@@ -3664,8 +3621,8 @@ Mergeable: TypeAlias = BaseExpression | Dataset
 
 @overload
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = ...,
     cls: type[GenericExpression],
     join: JoinOptions | None = None,
@@ -3676,8 +3633,8 @@ def merge(
 
 @overload
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = ...,
     cls: None = ...,
     join: JoinOptions | None = None,
@@ -3687,8 +3644,8 @@ def merge(
 
 
 def merge(
-    exprs: Sequence[Mergeable] | Mergeable,
-    *add_exprs: Mergeable,
+    exprs: Sequence[Mergeable],
+    *,
     dim: str = TERM_DIM,
     cls: type[BaseExpression] | None = None,
     join: JoinOptions | None = None,
@@ -3706,7 +3663,7 @@ def merge(
 
     Parameters
     ----------
-    *exprs : tuple/list
+    exprs : list
         List of linear expressions to merge.
     dim : str
         Dimension along which the expressions should be concatenated.
@@ -3745,13 +3702,6 @@ def merge(
         raise ValueError(
             f"fill_value=ABSENT is only defined for a merge along {TERM_DIM!r}."
         )
-    if not isinstance(exprs, Sequence):
-        warn(
-            "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
-            DeprecationWarning,
-        )
-        exprs = [exprs] + list(add_exprs)
-
     has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
     has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:

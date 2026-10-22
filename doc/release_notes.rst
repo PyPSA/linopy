@@ -18,6 +18,18 @@ Version 1.0.0
 * ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters`` and constant operands reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
 * Netcdf files written with ``MultiIndex`` dimensions load in flat form: the dimension gets a positional index and the former levels become auxiliary coordinates. This includes frozen (CSR) constraints.
 * The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
+* Long-deprecated shims are removed:
+
+  * ``LinearExpression.sum`` and ``Variable.sum`` no longer accept the deprecated ``dims`` keyword; use ``dim``. Unknown keywords raise a ``TypeError``.
+  * ``linopy.merge`` takes a single list of expressions; the ``merge(a, b)`` positional form is removed and ``dim``, ``cls``, ``join`` and ``fill_value`` are keyword-only.
+  * ``LinearExpression.from_tuples`` no longer accepts one-element tuples ``(const,)`` as constants; pass the constant directly.
+  * ``LinearExpression.empty`` and ``QuadraticExpression.empty`` are plain ``bool`` properties; the ``.empty()`` call form is removed.
+  * ``Variable.sol`` is removed; use ``Variable.solution``.
+  * The ``Constraint.coeffs``, ``.vars``, ``.sign``, ``.rhs`` and ``.lhs`` setters are removed; use ``Constraint.update(...)``.
+  * ``Constraint.update(variables=...)`` only accepts a ``Variable``; a ``DataArray`` of labels raises a ``TypeError``.
+  * ``Constraint.flat`` is removed; use ``Constraint.to_polars()``. ``Constraints.flat`` is unchanged.
+  * ``Variables.print_labels``, ``Constraints.print_labels`` and ``Model.print_infeasibilities`` are removed; use ``format_labels`` and ``Model.format_infeasibilities``.
+  * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
 
 **Deprecations**
 
@@ -35,6 +47,7 @@ Version 1.0.0
 * Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
 * ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
 * ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
+* ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
 
 **Internal**
 

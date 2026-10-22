@@ -1129,21 +1129,6 @@ class Variable:
         value = DataArray(value).broadcast_like(self.labels)
         self._data = assign_fields(self.data, solution=value)
 
-    @property
-    @has_optimized_model
-    def sol(self) -> DataArray:
-        """
-        Get the optimal values of the variable.
-
-        The function raises an error in case no model is set as a
-        reference or the model is not optimized.
-        """
-        warn(
-            "`Variable.sol` is deprecated. Use `Variable.solution` instead.",
-            DeprecationWarning,
-        )
-        return self.solution
-
     @has_optimized_model
     def get_solver_attribute(self, attr: str) -> DataArray:
         """
@@ -1222,7 +1207,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: DimsLike | None = None, **kwargs: Any) -> LinearExpression:
+    def sum(self, dim: DimsLike | None = None) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -1234,23 +1219,12 @@ class Variable:
         dim : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
-        dims : str/list, optional
-            Deprecated. Use ``dim`` instead.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        if dim is None and "dims" in kwargs:
-            dim = kwargs.pop("dims")
-            warn(
-                "The `dims` argument is deprecated. Use `dim` instead.",
-                DeprecationWarning,
-            )
-        if kwargs:
-            raise ValueError(f"Unknown keyword argument(s): {kwargs}")
-
         return self.to_linexpr().sum(dim)
 
     def diff(self, dim: str, n: int = 1) -> LinearExpression:
@@ -1727,7 +1701,6 @@ class Variables(LabelContainer[Variable]):
     _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper", "scaling"]
-    dataset_names = ["Labels", "Lower bounds", "Upper bounds", "Scaling factors"]
 
     def _item_suffix(self, item: Variable) -> str:
         suffix = ""
@@ -2046,20 +2019,6 @@ class Variables(LabelContainer[Variable]):
         """
         res = [format_single_variable(self.model, v) for v in values]
         return "\n".join(res)
-
-    def print_labels(self, values: list[int]) -> None:
-        """
-        Print a selection of labels of the variables.
-
-        .. deprecated::
-            Use :meth:`format_labels` instead.
-        """
-        warn(
-            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:

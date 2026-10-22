@@ -25,7 +25,6 @@ from typing import (
     NamedTuple,
     NoReturn,
 )
-from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -602,23 +601,7 @@ class ConstraintBase(ABC):
             )
             print(self)
 
-    @property
-    def flat(self) -> pd.DataFrame:
-        """
-        Convert the constraint to a pandas DataFrame.
-
-        The resulting DataFrame represents a long table format of the all
-        non-masked constraints with non-zero coefficients. It contains the
-        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
-
-        .. deprecated::
-            Use ``to_polars()`` instead.
-        """
-        warnings.warn(
-            "Constraint.flat is deprecated, use to_polars() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    def _flat(self) -> pd.DataFrame:
         ds = self.data
 
         def mask_func(data: dict) -> pd.Series:
@@ -1819,61 +1802,17 @@ class Constraint(ConstraintBase):
     def coeffs(self) -> DataArray:
         return self.data.coeffs
 
-    @coeffs.setter
-    def coeffs(self, value: ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.coeffs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(coeffs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(coeffs=value)
-
     @property
     def vars(self) -> DataArray:
         return self.data.vars
-
-    @vars.setter
-    def vars(self, value: variables.Variable | DataArray) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.vars setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(variables=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(variables=value)
 
     @property
     def sign(self) -> DataArray:
         return self.data.sign
 
-    @sign.setter
-    def sign(self, value: SignLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.sign setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(sign=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(sign=value)
-
     @property
     def rhs(self) -> DataArray:
         return self.data.rhs
-
-    @rhs.setter
-    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.rhs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(rhs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(rhs=value)
 
     @property
     def scaling(self) -> DataArray:
@@ -1909,17 +1848,6 @@ class Constraint(ConstraintBase):
         data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
         return expressions.LinearExpression(data, self.model)
 
-    @lhs.setter
-    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.lhs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(lhs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(lhs=value)
-
     def _assign_lhs(
         self, expr: expressions.LinearExpression, rhs: DataArray | None = None
     ) -> None:
@@ -1954,7 +1882,7 @@ class Constraint(ConstraintBase):
         rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         sign: SignLike | None = None,
         coeffs: ConstantLike | None = None,
-        variables: variables.Variable | DataArray | None = None,
+        variables: variables.Variable | None = None,
     ) -> Constraint:
         """
         Update the constraint in place.
@@ -2023,11 +1951,6 @@ class Constraint(ConstraintBase):
             Replace variable label array (same sparsity / term
             structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
 
-            A raw ``DataArray`` of integer labels is still accepted
-            for back-compat but emits a ``FutureWarning`` — pass a
-            ``Variable`` instead. The DataArray path will be removed
-            in a future release.
-
         Returns
         -------
         Constraint
@@ -2093,23 +2016,14 @@ class Constraint(ConstraintBase):
         if variables is not None:
             from linopy.variables import Variable as _Variable
 
-            if isinstance(variables, _Variable):
-                v = variables.labels
-            elif isinstance(variables, DataArray):
-                warnings.warn(
-                    "Passing a DataArray to Constraint.update(variables=...) "
-                    "is deprecated and will be removed in a future release; "
-                    "pass a Variable instead.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
-                v = variables
-            else:
+            if not isinstance(variables, _Variable):
                 raise TypeError(
                     "Constraint.update(variables=...) expects a Variable; "
                     f"got {type(variables).__name__}."
                 )
-            new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
+            new_vars = variables.labels.broadcast_like(
+                self.coeffs, exclude=[self.term_dim]
+            )
             self._update_data(vars=new_vars)
 
         # 4. sign last so it composes cleanly with the rest.
@@ -2409,14 +2323,6 @@ class Constraints(LabelContainer[ConstraintBase]):
     _constraint_label_index: ConstraintLabelIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs", "scaling"]
-    dataset_names = [
-        "Labels",
-        "Left-hand-side coefficients",
-        "Left-hand-side variables",
-        "Signs",
-        "Right-hand-side constants",
-        "Scaling factors",
-    ]
 
     def add(self, constraint: ConstraintBase, freeze: bool = False) -> ConstraintBase:
         """
@@ -2607,22 +2513,6 @@ class Constraints(LabelContainer[ConstraintBase]):
 
         return "\n".join(res)
 
-    def print_labels(
-        self, values: Sequence[int], display_max_terms: int | None = None
-    ) -> None:
-        """
-        Print a selection of labels of the constraints.
-
-        .. deprecated::
-            Use :meth:`format_labels` instead.
-        """
-        warn(
-            "`Constraints.print_labels` is deprecated. Use `Constraints.format_labels` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        print(self.format_labels(values, display_max_terms=display_max_terms))
-
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
         Get a dataset of same shape as constraints.labels with block values.
@@ -2671,7 +2561,7 @@ class Constraints(LabelContainer[ConstraintBase]):
         -------
         pd.DataFrame
         """
-        dfs = [self[k].flat for k in self]
+        dfs = [self[k]._flat() for k in self]
         if not len(dfs):
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
         return self._flat_with_keys(dfs)

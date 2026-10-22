@@ -606,14 +606,9 @@ class TestCollapseAuxCoords:
         assert "C" not in summed.coords
 
 
-def test_linear_expression_sum_warn_using_dims(z: Variable) -> None:
-    with pytest.warns(DeprecationWarning):
-        (1 * z).sum(dims="dim_0")
-
-
-def test_linear_expression_sum_warn_unknown_kwargs(z: Variable) -> None:
-    with pytest.raises(ValueError):
-        (1 * z).sum(unknown_kwarg="dim_0")
+def test_linear_expression_sum_rejects_dims_kwarg(z: Variable) -> None:
+    with pytest.raises(TypeError):
+        (1 * z).sum(dims="dim_0")  # type: ignore[call-arg]
 
 
 def test_linear_expression_power(x: Variable) -> None:
@@ -889,10 +884,7 @@ def test_linear_expression_loc(x: Variable, y: Variable) -> None:
 def test_linear_expression_empty(v: Variable) -> None:
     expr = 7 * v
     assert not expr.empty
-    assert expr.loc[[]].empty
-
-    with pytest.warns(DeprecationWarning, match="use `.empty` property instead"):
-        assert expr.loc[[]].empty()
+    assert expr.loc[[]].empty is True
 
 
 def test_linear_expression_isnull(v: Variable) -> None:
@@ -2164,14 +2156,12 @@ def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
     expr = LinearExpression.from_tuples((10, x), (1, y))
     assert isinstance(expr, LinearExpression)
 
-    with pytest.warns(DeprecationWarning):
-        expr2 = LinearExpression.from_tuples((10, x), (1,))
-    assert isinstance(expr2, LinearExpression)
-    assert (expr2.const == 1).all()
+    with pytest.raises(ValueError, match="length 2"):
+        LinearExpression.from_tuples((10, x), (1,))
 
     expr3 = LinearExpression.from_tuples((10, x), 1)
     assert isinstance(expr3, LinearExpression)
-    assert_linequal(expr2, expr3)
+    assert (expr3.const == 1).all()
 
     expr4 = LinearExpression.from_tuples((10, x), (1, y), 1)
     assert isinstance(expr4, LinearExpression)
@@ -2238,11 +2228,6 @@ def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
     assert all(const_pol["vars"].is_null())
 
 
-def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
-    expr = 10 * x + y + z
-    assert isinstance(expr.sanitize(), LinearExpression)
-
-
 def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
@@ -2268,8 +2253,8 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
 
-    with pytest.warns(DeprecationWarning):
-        merge(expr1, expr2)
+    with pytest.raises(TypeError):
+        merge(expr1, expr2)  # type: ignore[call-arg]
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:

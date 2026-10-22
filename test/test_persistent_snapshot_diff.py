@@ -63,7 +63,7 @@ def test_bounds_only_mutation(baseline: Model) -> None:
 
 def test_rhs_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
-    baseline.constraints["c1"].rhs = 9
+    baseline.constraints["c1"].update(rhs=9)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "c1" in diff.changed_constraints
@@ -115,7 +115,7 @@ def test_remove_variables_is_structural(baseline: Model) -> None:
 def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     c = baseline.constraints["c1"]
-    c.coeffs = c.coeffs * 3
+    c.update(coeffs=c.coeffs * 3)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "c1" in diff.changed_constraints
@@ -146,7 +146,7 @@ def test_coef_changes_across_containers(baseline: Model) -> None:
 def test_coef_sparsity_change(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     x = baseline.variables["x"]
-    baseline.constraints["c2"].lhs = 2 * x.sum()
+    baseline.constraints["c2"].update(lhs=2 * x.sum())
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff is RebuildReason.SPARSITY
 
@@ -162,7 +162,7 @@ def test_deep_copy_invariant(baseline: Model) -> None:
 def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     c = baseline.constraints["c1"]
-    c.coeffs = c.coeffs * 5
+    c.update(coeffs=c.coeffs * 5)
     c._coef_dirty = False
     diff_fast = ModelDiff.from_snapshot(snap, baseline, same_model=True)
     assert isinstance(diff_fast, ModelDiff)
