@@ -20,7 +20,6 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import xarray as xr
-from deprecation import deprecated
 from numpy import inf
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
@@ -2696,29 +2695,6 @@ class Model:
         return self.constraints.format_labels(
             labels, display_max_terms=display_max_terms
         )
-
-    @deprecated(
-        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
-    )
-    def compute_set_of_infeasible_constraints(self) -> Dataset:
-        """
-        Compute a set of infeasible constraints.
-
-        This function requires that the model was solved with `gurobi`, `xpress` or `highs`
-        and the termination condition was infeasible.
-
-        Returns
-        -------
-        labels : xr.DataArray
-            Labels of the infeasible constraints. Labels with value -1 are not in the set.
-        """
-        labels = self.compute_infeasibilities()
-        cons = self.constraints.labels.isin(np.array(labels))
-        subset = self.constraints.labels.where(cons, -1)
-        subset = subset.drop_vars(
-            [k for (k, v) in (subset == -1).all().items() if v.item()]
-        )
-        return subset
 
     def reset_solution(self) -> None:
         """

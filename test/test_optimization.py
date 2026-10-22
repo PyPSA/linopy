@@ -294,7 +294,7 @@ def modified_model() -> Model:
 
     c = m.add_constraints(x + y, GREATER_EQUAL, 10, freeze=False)
 
-    y.lower = 9
+    y.update(lower=9)
     c.update(lhs=2 * x + y)
     m.objective = 2 * x + y
 
@@ -670,9 +670,6 @@ def test_infeasible_model(
     assert "infeasible" in condition
 
     if solver in ["gurobi", "xpress", "highs"]:
-        # ignore deprecated warning
-        with pytest.warns(DeprecationWarning):
-            model.compute_set_of_infeasible_constraints()
         model.compute_infeasibilities()
         formatted = model.format_infeasibilities()
         assert isinstance(formatted, str)

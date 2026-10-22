@@ -52,7 +52,7 @@ def test_is_empty_on_unmutated(baseline: Model) -> None:
 
 def test_bounds_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
-    baseline.variables["x"].lower = 1
+    baseline.variables["x"].update(lower=1)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "x" in diff.changed_variables

@@ -983,7 +983,7 @@ class TestLPBinaryBounds:
             x = m.add_variables(
                 binary=True, coords=[pd.RangeIndex(4, name="t")], name="x"
             )
-            x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+            x.update(upper=pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t")))
             m.add_constraints(x.sum() >= 2, name="atleast2")
             m.add_objective(-1 * x.sum())
             return m

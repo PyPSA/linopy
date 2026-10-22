@@ -25,10 +25,11 @@ Version 1.0.0
   * ``LinearExpression.from_tuples`` no longer accepts one-element tuples ``(const,)`` as constants; pass the constant directly.
   * ``LinearExpression.empty`` and ``QuadraticExpression.empty`` are plain ``bool`` properties; the ``.empty()`` call form is removed.
   * ``Variable.sol`` is removed; use ``Variable.solution``.
+  * The ``Variable.lower`` and ``Variable.upper`` setters are removed; use ``Variable.update(lower=..., upper=...)``.
   * The ``Constraint.coeffs``, ``.vars``, ``.sign``, ``.rhs`` and ``.lhs`` setters are removed; use ``Constraint.update(...)``.
   * ``Constraint.update(variables=...)`` only accepts a ``Variable``; a ``DataArray`` of labels raises a ``TypeError``.
   * ``Constraint.flat`` is removed; use ``Constraint.to_polars()``. ``Constraints.flat`` is unchanged.
-  * ``Variables.print_labels``, ``Constraints.print_labels`` and ``Model.print_infeasibilities`` are removed; use ``format_labels`` and ``Model.format_infeasibilities``.
+  * ``Variables.print_labels``, ``Constraints.print_labels``, ``Model.print_infeasibilities`` and ``Model.compute_set_of_infeasible_constraints`` are removed; use ``format_labels``, ``Model.compute_infeasibilities`` and ``Model.format_infeasibilities``.
   * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
 
 **Deprecations**
