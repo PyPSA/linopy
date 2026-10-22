@@ -59,6 +59,10 @@ class Store(ABC):
         @property
         def const(self) -> np.ndarray: ...
 
+    @property
+    def dims(self) -> tuple[str, ...]:
+        return self.grid.dims
+
     @classmethod
     @abstractmethod
     def from_dense(cls, ds: Dataset, model: Model) -> Self | Reason:
@@ -106,7 +110,7 @@ class Store(ABC):
 
     @abstractmethod
     def has_terms(self) -> np.ndarray:
-        """Per cell, whether a present cell holds a term."""
+        """Per cell, whether it holds a term, the constant ignored."""
 
     @abstractmethod
     def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
@@ -132,7 +136,7 @@ class Store(ABC):
 
     @abstractmethod
     def assign_const(self, const: np.ndarray) -> Self:
-        """Replace the per-cell constant; a cell made absent drops its terms."""
+        """Replace the per-cell constant; an absent cell keeps its terms masked."""
 
     def fillna(self, value: float) -> Self:
         """Resolve absent cells (NaN const) to the constant ``value``."""
@@ -153,7 +157,10 @@ class Store(ABC):
 
     @abstractmethod
     def take(self, rows: np.ndarray, grid: Grid) -> Self:
-        """Gather cell ``rows[i]`` into cell ``i`` of ``grid``, ``-1`` leaving it absent."""
+        """
+        Gather cell ``rows[i]`` into cell ``i`` of ``grid``, ``-1`` leaving it
+        absent without terms.
+        """
 
     def broadcast(self, grid: Grid) -> Self:
         """Spread the cells over ``grid``, whose dims include this grid's."""
@@ -178,7 +185,10 @@ class Store(ABC):
 
     @abstractmethod
     def add(self, *others: Self) -> Self:
-        """Merge along the term dimension, all operands on the same grid."""
+        """
+        Merge along the term dimension, all operands on the same grid; absent
+        cells drop their terms.
+        """
 
     @abstractmethod
     def concat(self, others: Iterable[Self], dim: str, grid: Grid) -> Self | Reason:
@@ -239,9 +249,7 @@ def expression_dataset(data: Dataset | Any | None, model: Model) -> Dataset:
 
     data = data.transpose(..., TERM_DIM)
 
-    # ensure helper dimensions are not set as coordinates
     if drop_dims := set(HELPER_DIMS).intersection(data.coords):
-        # TODO: add a warning here, routines should be safe against this
         data = data.drop_vars(drop_dims)
 
     return data.assign_attrs(name=None)
@@ -320,7 +328,7 @@ class DenseStore(Store):
             },
             coords=grid.indexes | grid.aux,
         )
-        return cls(expression_dataset(absorb_absence(ds), model), model)
+        return cls(expression_dataset(ds, model), model)
 
     def _term_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """Coefficients and variable labels as ``(n_cells, nterm)`` arrays."""
@@ -435,7 +443,9 @@ class DenseStore(Store):
         safe = np.where(present, rows, 0)
         coeffs, vars_ = self._term_arrays()
         const = np.where(present, self.const[safe], np.nan)
-        return self.from_arrays(grid, coeffs[safe], vars_[safe], const, self.model)
+        coeffs = np.where(present[:, None], coeffs[safe], np.nan)
+        vars_ = np.where(present[:, None], vars_[safe], -1)
+        return self.from_arrays(grid, coeffs, vars_, const, self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
         row_map, valid = grid.indexer(self.grid)
@@ -469,7 +479,8 @@ class DenseStore(Store):
         coeffs = np.hstack([c for c, _ in terms])
         vars_ = np.hstack([v for _, v in terms])
         const = functools.reduce(np.add, (p.const for p in parts))
-        return self.from_arrays(merged_grid(parts), coeffs, vars_, const, self.model)
+        merged = self.from_arrays(merged_grid(parts), coeffs, vars_, const, self.model)
+        return DenseStore(absorb_absence(merged.ds), self.model)
 
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
         parts = (self, *others)

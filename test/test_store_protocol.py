@@ -5,6 +5,7 @@ The store protocol: :class:`~linopy.store.DenseStore` and
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -67,9 +68,15 @@ def taken(s: Store) -> Store:
 SAME_GRID: dict[str, Callable[[Store], Store]] = {
     "scale": lambda s: s.scale(2.0),
     "scale-cells": lambda s: s.scale(np.arange(s.n_cells, dtype=float) % 3),
+    "scale-div": lambda s: s.scale(
+        np.arange(s.n_cells, dtype=float) % 3, operator.truediv
+    ),
     "assign-const": lambda s: s.assign_const(
         np.where(np.arange(s.n_cells) % 2, np.nan, 1.0)
     ),
+    "assign-const-fillna": lambda s: s.assign_const(
+        np.where(np.arange(s.n_cells) % 2, np.nan, 1.0)
+    ).fillna(0.0),
     "fillna": lambda s: s.fillna(3.0),
     "prune": lambda s: s.scale(np.arange(s.n_cells, dtype=float) % 2).prune(),
     "canonical": lambda s: s.add(s).canonical(),

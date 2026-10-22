@@ -75,12 +75,38 @@ def frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(list(df.columns), ignore_index=True)
 
 
+def const_assigned(
+    value: xr.DataArray,
+    then: Callable[[LinearExpression], LinearExpression] = lambda e: e,
+) -> Callable[[LinearExpression], Any]:
+    def op(e: LinearExpression) -> LinearExpression:
+        e.const = value
+        return then(e).fillna(0.0)
+
+    return op
+
+
 class Case(NamedTuple):
     build: Callable[[Model], LinearExpression]
     op: Callable[[LinearExpression], Any]
     expected: str
     sparse_xfail: str | None = None
 
+
+NAN_A = OVER_A.where(OVER_A != 2.0)
+AFTER_NAN_CONST: dict[
+    str, tuple[Callable[[LinearExpression], LinearExpression], str]
+] = {
+    "isel": (lambda e: e.isel(a=[0, 1, 2]), KEPT),
+    "roll": (lambda e: e.roll(a=1), KEPT),
+    "mul": (lambda e: e * 2, KEPT),
+    "reindex": (lambda e: e.reindex(b=["q", "p"]), KEPT),
+    "add-absent": (
+        lambda e: e.add(SHIFTED_A, join="outer", fill_value=linopy.ABSENT),
+        KEPT,
+    ),
+    "data": (lambda e: LinearExpression(e.data, e.model), DATA_READ),
+}
 
 SIGN_EQ = "CSRConstraint normalizes the sign '==' to '=' while Constraint keeps it"
 
@@ -263,6 +289,13 @@ CASES: dict[str, Case] = {
     "has-terms": Case(grid, lambda e: e.where(COND).has_terms, KEPT),
     "isnull": Case(grid, lambda e: e.where(COND).isnull(), KEPT),
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
+    "const-assign-nan": Case(grid, const_assigned(NAN_A), KEPT),
+    "const-assign-partial": Case(grid, const_assigned(OVER_A.sel(a=[0, 1])), KEPT),
+    "const-assign-new-dim": Case(grid, const_assigned(OVER_C), "assignment of `const`"),
+    **{
+        f"const-assign-nan-{name}": Case(grid, const_assigned(NAN_A, then), expected)
+        for name, (then, expected) in AFTER_NAN_CONST.items()
+    },
 }
 
 

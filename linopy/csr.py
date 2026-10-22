@@ -263,8 +263,9 @@ class CSRStore(Store):
     ``csr`` has one row per flat cell of ``grid`` and one column per raw
     variable label — label columns stay valid when variables are added to
     the model later; realization maps them to dense positions. ``const`` is
-    the per-cell constant, NaN for an absent cell. Auxiliary coordinates
-    live on the ``grid``.
+    the per-cell constant, NaN for an absent cell, whose terms stay masked
+    until :meth:`fillna` revives the cell. Auxiliary coordinates live on the
+    ``grid``.
     """
 
     csr: scipy.sparse.csr_array
@@ -524,7 +525,7 @@ class CSRStore(Store):
         return self.to_dense().ds
 
     def has_terms(self) -> np.ndarray:
-        return ~np.isnan(self.const) & (np.diff(self.csr.indptr) > 0)
+        return np.diff(self.csr.indptr) > 0
 
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         cells = np.repeat(np.arange(self.n_cells), np.diff(self.csr.indptr))
@@ -573,35 +574,43 @@ class CSRStore(Store):
             (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
             shape=self.csr.shape,
         )
-        return replace(self, csr=csr).assign_const(op(self.const, factor))
+        return replace(self, csr=csr, const=op(self.const, factor))
 
     def assign_const(self, const: np.ndarray) -> CSRStore:
         """
-        Replace the per-cell constant, leaving the terms alone. A cell made
-        absent (NaN) has its terms dropped: an absent cell carries no terms.
+        Replace the per-cell constant and keep every term, those of a cell
+        made absent (NaN) masked until :meth:`fillna` revives it.
         """
-        absent = np.isnan(const)
+        return replace(self, const=const)
+
+    def absorbed(self) -> CSRStore:
+        """Drop the terms of absent cells."""
+        return self._without_terms(np.isnan(self.const))
+
+    def _without_terms(self, cells: np.ndarray) -> CSRStore:
+        """Drop the terms of the cells in the mask ``cells``."""
         counts = np.diff(self.csr.indptr)
-        if not counts[absent].any():
-            return replace(self, const=const)
-        keep = np.repeat(~absent, counts)
-        indptr = np.concatenate([[0], np.cumsum(np.where(absent, 0, counts))])
+        if not counts[cells].any():
+            return self
+        keep = np.repeat(~cells, counts)
+        indptr = np.concatenate([[0], np.cumsum(np.where(cells, 0, counts))])
         csr = scipy.sparse.csr_array(
             (self.csr.data[keep], self.csr.indices[keep], indptr),
             shape=self.csr.shape,
         )
-        return replace(self, csr=csr, const=const)
+        return replace(self, csr=csr)
 
     def take(self, rows: np.ndarray, grid: Grid) -> CSRStore:
         """
         Gather rows into the cells of ``grid``, cell ``i`` taking row
         ``rows[i]`` with its terms, explicit zeros included, and its constant;
-        ``-1`` leaves the cell absent. Auxiliary coordinates are ``grid``'s.
+        ``-1`` leaves the cell absent without terms. Auxiliary coordinates
+        are ``grid``'s.
         """
         present = rows >= 0
         const = np.where(present, self.const[rows], np.nan)
         csr = self.csr[np.where(present, rows, 0)]
-        return replace(self, csr=csr, grid=grid).assign_const(const)
+        return replace(self, csr=csr, const=const, grid=grid)._without_terms(~present)
 
     def concat(self, others: Iterable[CSRStore], dim: str, grid: Grid) -> CSRStore:
         """
@@ -693,7 +702,7 @@ class CSRStore(Store):
         const = functools.reduce(np.add, (p.const for p in parts))
         shape = (self.n_cells, max(p.csr.shape[1] for p in parts))
         csr = _interleaved([p.csr for p in parts], shape, self.model)
-        return replace(self, csr=csr, grid=merged_grid(parts)).assign_const(const)
+        return replace(self, csr=csr, const=const, grid=merged_grid(parts)).absorbed()
 
     def dot(
         self,
@@ -762,8 +771,8 @@ class CSRStore(Store):
         """
         Expand to the dense equivalent: terms label-ordered, a repeated
         variable kept per stored term as on the dense path, padded to the
-        widest cell with the usual fill. Absent cells (NaN const) carry no
-        terms. With a ``reason``, emits the densify notice naming it.
+        widest cell with the usual fill, the terms of absent cells kept
+        masked. With a ``reason``, emits the densify notice naming it.
         """
         if reason is not None:
             _densify_notice(reason, self.model)
