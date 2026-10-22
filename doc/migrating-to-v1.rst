@@ -60,7 +60,7 @@ Every row is a legacy guess that is now an explicit rule.
      - Now
      - Fix
    * - ``NaN`` in a user-supplied constant
-     - Raises (linopy will not guess a fill).
+     - Raises (linopy will not guess a fill); NaN in a variable bound raises too.
      - ``.fillna(value)`` for a data error; ``mask=`` / ``.where(cond)`` /
        ``.reindex(...)`` on the *variable* for intended absence.
    * - Shared dimension with a **different label set**

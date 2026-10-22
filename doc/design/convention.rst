@@ -74,7 +74,7 @@ introduce it.
 §5. User-supplied NaN raises
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A NaN in a user-supplied constant raises ``ValueError``. linopy trusts NaN only
+A NaN in a user-supplied constant, or in a variable bound, raises ``ValueError``. linopy trusts NaN only
 from its own structural operations (§4), which genuinely mark absence. A NaN in
 user data is ambiguous — a deliberate "absent", or a data error — so linopy
 refuses to guess and asks the caller to resolve it with ``fillna()``. This
