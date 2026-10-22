@@ -701,27 +701,27 @@ class TestBroadcastToCoordsMultiIndexProjection:
     """
     Inputs indexed by levels of a stacked MultiIndex dim are projected onto it.
 
-    Implicit projection raises under the v1 convention (sections 8 and 11);
+    Implicit projection raises (sections 8 and 11);
     coverage gaps raise under strict mode.
     """
 
     def test_broadcasts_single_level_raises(
         self, mi_coords: xr.Coordinates, by_level1: DataArray
     ) -> None:
-        """v1: the implicit level projection must be written explicitly."""
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        """The implicit level projection must be written explicitly."""
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(
                 by_level1, coords=mi_coords, dims=["dim_3"], strict=False
             )
 
     def test_stacks_full_levels_raises(self, mi_coords: xr.Coordinates) -> None:
-        """v1: implicit NaN-fill of uncovered combinations must be explicit."""
+        """Implicit NaN-fill of uncovered combinations must be explicit."""
         subset = pd.MultiIndex.from_tuples(
             [(1, "a"), (2, "b")], names=["level1", "level2"]
         )
         weights = pd.Series([10.0, 20.0], index=subset)
 
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
 
     def test_full_coverage_is_silent(
@@ -804,25 +804,25 @@ class TestBroadcastToCoordsMultiIndexProjection:
         assert set(da.dims) == {"time", "foo", "bar"}
 
     def test_partially_named_mi_levels_raises(self) -> None:
-        """v1: projection onto a partially named MultiIndex raises like any other."""
+        """Projection onto a partially named MultiIndex raises like any other."""
         mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", None))
         mi.name = "dim_3"
         by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
 
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(by_level1, coords={"dim_3": mi}, strict=False)
 
     def test_gap_detection_with_extra_dims_raises(
         self, mi_coords: xr.Coordinates
     ) -> None:
-        """v1: gap-producing projections raise regardless of extra dims."""
+        """Gap-producing projections raise regardless of extra dims."""
         arr = DataArray(
             [[[1.0, np.nan], [2.0, 2.0]], [[3.0, 3.0], [4.0, 4.0]]],
             dims=["level1", "level2", "extra"],
             coords={"level1": [1, 2], "level2": ["a", "b"], "extra": [0, 1]},
         )
 
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(arr, coords=mi_coords, dims=["dim_3"], strict=False)
 
     def test_strict_gap_error_truncates_long_missing_list(self) -> None:
@@ -848,20 +848,20 @@ class TestBroadcastToCoordsMultiIndexProjection:
     def test_strict_partial_level_raises(
         self, mi_coords: xr.Coordinates, by_level1: DataArray
     ) -> None:
-        """v1: per-level bounds must be projected onto the dim explicitly."""
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        """Per-level bounds must be projected onto the dim explicitly."""
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(
                 by_level1, mi_coords, dims=["dim_3"], label="lower bound"
             )
 
     def test_strict_rejects_coverage_gap(self, mi_coords: xr.Coordinates) -> None:
-        """v1: a coverage gap raises on both rungs (different errors, same outcome)."""
+        """A coverage gap raises on both rungs (different errors, same outcome)."""
         subset = pd.MultiIndex.from_tuples(
             [(1, "a"), (2, "b")], names=["level1", "level2"]
         )
         weights = pd.Series([10.0, 20.0], index=subset)
 
-        with pytest.raises(ValueError, match=r"not supported under the v1 convention"):
+        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
             broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
 
         with pytest.raises(ValueError, match=r"no value for .* level combination"):

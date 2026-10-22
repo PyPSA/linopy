@@ -68,15 +68,11 @@ from linopy.csr import CSRLinearExpression
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
-    _legacy_coord_mismatch_message,
-    _legacy_masked_variable_message,
     _shared_dim_mismatch_message,
     check_user_nan,
     enforce_aux_conflict,
     first_mismatched_dim,
-    is_v1,
     reindex_like_if_needed,
-    warn_legacy,
 )
 from linopy.types import (
     ConstantLike,
@@ -359,7 +355,6 @@ class Variable:
         self,
         coefficient: ConstantLike = 1,
         *,
-        _warn_absence: bool = True,  # LEGACY: remove at 1.0
         _dense: bool = False,
     ) -> expressions.LinearExpression:
         """
@@ -381,48 +376,31 @@ class Variable:
         The §8 shared-dim check runs on the raw coefficient, before the
         broadcast aligns it away — the reindex below only fills absence and
         broadcasts non-shared dims. A NaN coefficient is user data, so it
-        raises under v1 (§5). Under v1 the expression carries the variable's
-        absence as NaN so that §6 propagates it through downstream arithmetic;
-        legacy contributes 0 there instead and warns, that being the most
-        common legacy↔v1 divergence and one no other warn site catches. In a
-        sparse model the expression is CSR-backed; ``_dense`` builds it dense
-        for callers that continue on a path without a sparse branch.
+        raises (§5). The expression carries the variable's absence as NaN so
+        that §6 propagates it through downstream arithmetic. In a sparse
+        model the expression is CSR-backed; ``_dense`` builds it dense for
+        callers that continue on a path without a sparse branch.
         """
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
             mismatch = first_mismatched_dim(self.labels, coeff_da)
             if mismatch is not None:
-                if is_v1():
-                    raise ValueError(_shared_dim_mismatch_message(*mismatch))
-                warn_legacy(
-                    _legacy_coord_mismatch_message(
-                        "this operator's constant operand",
-                        *mismatch,
-                        alignment="by label, the coefficient being 0 at the"
-                        " variable's labels it lacks",
-                    )
-                )
+                raise ValueError(_shared_dim_mismatch_message(*mismatch))
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         if coefficient.isnull().any():
-            check_user_nan(op_kind="mul")
+            check_user_nan()
         absent = self.labels == -1
         has_absence = bool(absent.any())
-        if is_v1():
-            coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
-            if has_absence:
-                coefficient = coefficient.where(~absent)
-        else:  # LEGACY: remove at 1.0
-            if has_absence and _warn_absence:
-                warn_legacy(_legacy_masked_variable_message(self.name))
-            coefficient = reindex_like_if_needed(coefficient, self.labels, 0).fillna(0)
+        coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
+        if has_absence:
+            coefficient = coefficient.where(~absent)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
         if self.model.sparse and not _dense:
-            self.model._check_sparse_semantics()
             csr = CSRLinearExpression.from_labels(ds, self.model)
             return expressions.LinearExpression._from_csr(csr, self.model)
         ds = ds.expand_dims(TERM_DIM, -1)
-        if is_v1() and has_absence:
+        if has_absence:
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
             ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
@@ -664,10 +642,9 @@ class Variable:
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join
             creates. Defaults to 0; ``linopy.ABSENT`` keeps them absent.
@@ -690,10 +667,9 @@ class Variable:
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
             Defaults to 0; ``linopy.ABSENT`` keeps them absent. Requires an
@@ -716,10 +692,9 @@ class Variable:
             The coefficient to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates.
             Defaults to 0, so a term without a factor evaluates to zero;
@@ -742,10 +717,9 @@ class Variable:
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
             default that term evaluates to zero; pass ``1`` to keep it
@@ -763,10 +737,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().le(rhs, join=join)
 
@@ -780,10 +753,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().ge(rhs, join=join)
 
@@ -797,10 +769,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().eq(rhs, join=join)
 
@@ -843,7 +814,7 @@ class Variable:
             A `LinearExpressionGroupBy` containing the xarray groups and ensuring
             the correct return type.
         """
-        return self.to_linexpr(_warn_absence=False).groupby(
+        return self.to_linexpr().groupby(
             group=group, restore_coord_dims=restore_coord_dims
         )
 
@@ -1295,7 +1266,7 @@ class Variable:
         if kwargs:
             raise ValueError(f"Unknown keyword argument(s): {kwargs}")
 
-        return self.to_linexpr(_warn_absence=False).sum(dim)
+        return self.to_linexpr().sum(dim)
 
     def diff(self, dim: str, n: int = 1) -> LinearExpression:
         """
@@ -1410,20 +1381,9 @@ class Variable:
         ----------
         fill_value : numeric, Variable, or ScalarVariable
             Value to fill the absent slots with.
-
-        Notes
-        -----
-        Legacy ``to_linexpr`` marks an absent const as 0 rather than NaN, so
-        :meth:`LinearExpression.fillna` finds nothing to fill there; the value
-        is placed directly instead, to match v1. The absence warning is skipped
-        because this method is its documented resolution.
         """
         if isinstance(fill_value, int | float | np.integer | np.floating):
-            if is_v1():
-                return self.to_linexpr().fillna(fill_value)
-            # LEGACY: remove at 1.0
-            lin = self.to_linexpr(_warn_absence=False)
-            return lin.assign(const=lin.const.where(self.labels != -1, fill_value))
+            return self.to_linexpr().fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:

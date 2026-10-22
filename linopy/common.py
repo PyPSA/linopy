@@ -670,7 +670,7 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
 
 def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
     """
-    Auxiliary (non-dimension) coords aligned solely to ``dim`` — under v1 the
+    Auxiliary (non-dimension) coords aligned solely to ``dim`` — the
     levels a flattened ``pd.MultiIndex`` leaves behind, its flat-dim mirror.
     """
     return [

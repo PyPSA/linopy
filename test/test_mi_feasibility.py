@@ -4,8 +4,7 @@ MultiIndex -> flat dim + aux coords: feasibility for v1 (#744).
 
 Can v1 drop first-class ``pd.MultiIndex`` snapshots for a flat ``snapshot`` dim
 with ``period``/``timestep`` as auxiliary level coords? Each test below is an
-explicit equality check (MI form vs flat+aux form), run under both legacy and v1
-semantics.
+explicit equality check (MI form vs flat+aux form).
 
 The matrix, findings, and pinned PyPSA call sites live in the discussion on
 https://github.com/PyPSA/linopy/issues/744.
@@ -182,8 +181,8 @@ def test_period_boundary_lp_identical(tmp_path: Path, boundary: str) -> None:
     * ``ramp`` -- drop the whole *row* (no previous to ramp from): the
       ``_period_start_mask`` used as a constraint ``mask`` (L838).
 
-    ``flat`` builds the previous SOC with ``groupby("period").roll`` (legacy keeps
-    the ``period`` aux coord on the result, v1 consumes it); ``oracle`` with an
+    ``flat`` builds the previous SOC with ``groupby("period").roll`` (which
+    consumes the ``period`` aux coord); ``oracle`` with an
     explicit per-period positional roll; ``global`` with a period-unaware roll,
     the wrong build. A byte-equal LP file is the whole proof.
 

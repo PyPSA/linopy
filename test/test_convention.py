@@ -1260,8 +1260,7 @@ class TestConstraintRHS:
     ) -> None:
         """
         §5/§12 — a NaN in a user-supplied RHS raises for every sign,
-        never silently becomes "no constraint" the way legacy auto_mask
-        treats it.
+        never silently becomes "no constraint".
         """
         with pytest.raises(ValueError) as e:
             _SIGNS[sign](x, nan_rhs)

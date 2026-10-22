@@ -4,6 +4,13 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Breaking Changes**
+
+* The legacy arithmetic semantics are removed: the v1 convention (:doc:`the arithmetic convention <design/convention>`) is the only behaviour. Code that relied on legacy behaviour now raises or, where absence propagates, gives different results; see :doc:`migrating-to-v1`.
+* ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
+* ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
+* ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+
 **Sparse models**
 
 * A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. MultiIndex dimensions and non-unique labels still densify.

@@ -1009,10 +1009,9 @@ def _resolve_breakpoint_mask(
     A ragged curve is stored densely along ``BREAKPOINT_DIM`` with the
     surplus slots absent. A shorter curve and a data error are
     indistinguishable from NaN alone, so the caller declares the absence
-    with ``mask=``; without a declaration v1 raises and legacy keeps
-    inferring from NaN placement. The returned arrays carry ``NaN``
-    exactly where the mask says absent, so ``isnull()`` stays the single
-    absence predicate downstream.
+    with ``mask=``; without a declaration it raises. The returned arrays
+    carry ``NaN`` exactly where the mask says absent, so ``isnull()`` stays
+    the single absence predicate downstream.
     """
     combined_null = bp_list[0].isnull()
     for bp in bp_list[1:]:
@@ -1022,7 +1021,6 @@ def _resolve_breakpoint_mask(
         if not bool(combined_null.any()):
             return bp_list, None
         check_user_nan_breakpoints()
-        return bp_list, ~combined_null
 
     declared = (mask if isinstance(mask, DataArray) else DataArray(mask)).astype(bool)
     bp_dims = set().union(*(bp.dims for bp in bp_list))
@@ -1251,7 +1249,7 @@ def add_piecewise_formulation(
         exists, ``False`` where it is absent.  Shaped like the breakpoint
         arrays, or anything that broadcasts against them.  Needed for
         **ragged** curves (entities with different numbers of breakpoints),
-        stored densely with the surplus slots left absent: under v1 that
+        stored densely with the surplus slots left absent: that
         absence must be declared rather than read off the NaN padding, e.g.
         ``mask=x_pts.notnull()``.  Absent slots get no auxiliary variable
         and no constraint.  A mask hiding a present value drops that
@@ -1804,7 +1802,7 @@ def _add_incremental(
     ``links.signed_expr`` (if any) is the output-side link.
 
     ``piece_dim`` relates each piece to the next-higher one *positionally*, so
-    the two ``isel`` slices carry different labels for the same dim, which v1
+    the two ``isel`` slices carry different labels for the same dim, which
     §8 rejects. The high slice is relabelled onto the low slice's labels —
     §10's explicit-positional path. Scalar ``isel`` uses ``drop=True`` so a
     leftover breakpoint coord does not become a §11 aux-coord conflict against

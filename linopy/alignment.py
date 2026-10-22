@@ -561,20 +561,15 @@ def _project_onto_multiindex_levels(
 
 def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
     """
-    Semantics policy for implicit MultiIndex-level projections.
+    Reject implicit MultiIndex-level projections.
 
-    Implicit projection is legacy-only behavior (scenario B of the #732 /
-    #737 discussion): under legacy semantics it emits a deprecation warning
-    (#738: via ``warn_legacy``); under the v1 convention it raises — a dim
-    naming a level of a stacked MultiIndex dim is a shared-dim / aux-coord
-    concern (sections 8 and 11), and the projection must be written
+    A dim naming a level of a stacked MultiIndex dim is a shared-dim /
+    aux-coord concern (sections 8 and 11), so the projection must be written
     explicitly by the caller.
 
     The strict path raises on coverage gaps before reaching here, so only
     partial levels arrive there; the non-strict path sees both.
     """
-    from linopy.semantics import is_v1, warn_legacy
-
     for p in projections:
         if p.is_partial or p.has_gap:
             kind = (
@@ -583,20 +578,11 @@ def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
                 else f"filling uncovered level combinations with NaN "
                 f"(from level(s) {p.levels})"
             )
-            if is_v1():
-                raise ValueError(
-                    f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                    f"dimension {p.dim!r} is not supported under the v1 "
-                    f"convention (sections 8 and 11). Project the input onto "
-                    f"the dimension explicitly, e.g. select with the "
-                    f"dimension's level values."
-                )
-            warn_legacy(
+            raise ValueError(
                 f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                f"dimension {p.dim!r}. This is deprecated and will raise under "
-                f"the v1 convention; project the input onto the dimension "
-                f"explicitly (select with the dimension's level values) to "
-                f"keep current behavior."
+                f"dimension {p.dim!r} is not supported (sections 8 and 11). "
+                f"Project the input onto the dimension explicitly, e.g. select "
+                f"with the dimension's level values."
             )
 
 
@@ -606,7 +592,7 @@ def _pair_axes_by_size(
     """
     Pair each axis of an unlabeled array with the operand dim of matching size.
 
-    The pairing must be determined by the sizes alone (v1 convention,
+    The pairing must be determined by the sizes alone (convention,
     coordinate-alignment intro): every axis size must match exactly one
     operand dim, and no two axes may share a size. Returns
     ``(dims, None)`` on success or ``(None, problem)`` where ``problem``
@@ -642,52 +628,25 @@ def _dims_for_unlabeled_operand(
     and masks in ``add_variables`` / ``add_constraints``, and arithmetic
     operands (#736).
 
-    v1 (convention, coordinate-alignment intro): axes pair with the dims by
-    size; ambiguity or a missing match raises, with wrap-in-a-DataArray as
-    the documented resolution. Legacy: axes pair with the leading dims
-    positionally; a deprecation warning fires whenever the v1 pairing would
-    differ from or reject the positional one. A 0-d operand has no axes to
-    pair and broadcasts over every dim, like a bare scalar; helper dims
-    (``_term``) are storage book-keeping and never pairing candidates.
+    Axes pair with the dims by size (convention, coordinate-alignment
+    intro); ambiguity or a missing match raises, with wrap-in-a-DataArray as
+    the documented resolution. A 0-d operand has no axes to pair and
+    broadcasts over every dim, like a bare scalar; helper dims (``_term``)
+    are storage book-keeping and never pairing candidates.
     """
-    from linopy.semantics import is_v1, warn_legacy
-
     if len(shape) == 0:
         return []
 
     candidates = {d: v for d, v in expected.items() if d not in HELPER_DIMS}
     sizes = {d: len(_as_index(v)) for d, v in candidates.items()}
     paired, problem = _pair_axes_by_size(shape, sizes)
-    positional = list(candidates)[: len(shape)]
-
-    if is_v1():
-        if paired is None:
-            raise ValueError(
-                f"Cannot pair an unlabeled array of shape {tuple(shape)} with "
-                f"the operand's dimensions: {problem} Wrap the array in an "
-                f"xarray.DataArray with explicit dims to name its axes."
-            )
-        return paired
-
-    # LEGACY: remove at 1.0
-    paired_by_position = (
-        f"An unlabeled array of shape {tuple(shape)} was paired with the "
-        f"operand's leading dimension(s) {positional} by position. Under "
-    )
-    if problem is not None:
-        warn_legacy(
-            paired_by_position + f"the v1 convention this raises: {problem} Wrap "
-            f"the array in an xarray.DataArray with explicit dims to keep it "
-            f"working."
+    if paired is None:
+        raise ValueError(
+            f"Cannot pair an unlabeled array of shape {tuple(shape)} with "
+            f"the operand's dimensions: {problem} Wrap the array in an "
+            f"xarray.DataArray with explicit dims to name its axes."
         )
-    elif paired != positional:
-        warn_legacy(
-            paired_by_position + f"the v1 convention it pairs by size instead — "
-            f"with {paired} — which gives a different result. Wrap the array in "
-            f"an xarray.DataArray with explicit dims to make the pairing "
-            f"explicit."
-        )
-    return positional
+    return paired
 
 
 def _matmul_operand_to_dataarray(
@@ -698,9 +657,8 @@ def _matmul_operand_to_dataarray(
 
     Shared by ``LinearExpression.__matmul__`` and
     ``QuadraticExpression.__matmul__``: :func:`_dims_for_positional_input`
-    decides which dims the contraction collapses (#736) — by size under v1,
-    positionally with a warning under legacy. Unlike the broadcast pipeline
-    this only converts (no reindex / expand / transpose).
+    decides which dims the contraction collapses (#736) — by size. Unlike the
+    broadcast pipeline this only converts (no reindex / expand / transpose).
     """
     expected = {d: coords[d] for d in coord_dims}
     dims = _dims_for_positional_input(other, expected, None)
@@ -722,7 +680,7 @@ def _matmul_operand_to_matrix(
     and never broadcasts.
     """
     if other.isnull().any():
-        check_user_nan(op_kind="mul")
+        check_user_nan()
     reference = Dataset(coords={d: indexes[d] for d in contracted} | dict(aux_coords))
     mismatch = first_mismatched_dim(reference, other)
     if mismatch is not None:
@@ -776,16 +734,12 @@ def _label_input(
     )
 
 
-def _reindex_reordered_dims(
-    arr: DataArray, expected: dict[Hashable, Any], warn: bool = False
-) -> DataArray:
+def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
     """
     Reindex shared dims whose values match ``expected`` in a different order.
 
     Disagreeing value *sets* are left for downstream xarray alignment;
-    only a pure reordering of the same values is conformed here. With
-    ``warn=True`` (the legacy arithmetic path) each conformed reorder emits a
-    ``LinopySemanticsWarning`` — v1 raises on it instead of reindexing.
+    only a pure reordering of the same values is conformed here.
     """
     for dim, coord_values in expected.items():
         if dim not in arr.dims or isinstance(arr.indexes.get(dim), pd.MultiIndex):
@@ -797,17 +751,6 @@ def _reindex_reordered_dims(
         if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
             expected_idx
         ):
-            if warn:
-                from linopy.semantics import (
-                    _legacy_const_reorder_message,
-                    warn_legacy,
-                )
-
-                warn_legacy(
-                    _legacy_const_reorder_message(
-                        str(dim), expected_idx.values, actual_idx.values
-                    )
-                )
             arr = arr.reindex({dim: expected_idx})
     return arr
 
@@ -872,7 +815,6 @@ def _broadcast_to_coords(
     dims: DimsLike | None = None,
     *,
     reindex_reordered: bool = True,
-    warn_reorder: bool = False,
     **kwargs: Any,
 ) -> tuple[DataArray, list[_LevelProjection]]:
     """
@@ -880,11 +822,11 @@ def _broadcast_to_coords(
 
     Returns the broadcast DataArray together with the MultiIndex-level
     projections performed along the way, so the public entry points can
-    apply their own policy (warn or raise) to partial projections and
-    coverage gaps. Unlabeled inputs pair their axes with the coords dims by
-    size (#736); see :func:`_label_input`. ``reindex_reordered`` is False on
-    the v1 arithmetic path, so a reorder reaches the §8 exact check instead of
-    being conformed here.
+    reject partial projections and coverage gaps. Unlabeled inputs pair
+    their axes with the coords dims by size (#736); see
+    :func:`_label_input`. ``reindex_reordered`` is False on the arithmetic
+    path, so a reorder reaches the §8 exact check instead of being
+    conformed here.
     """
     if coords is None:
         return as_dataarray(arr, coords, dims, **kwargs), []
@@ -903,7 +845,7 @@ def _broadcast_to_coords(
 
     arr, projections = _project_onto_multiindex_levels(arr, expected)
     if reindex_reordered:
-        arr = _reindex_reordered_dims(arr, expected, warn=warn_reorder)
+        arr = _reindex_reordered_dims(arr, expected)
     arr = _expand_missing_dims(arr, expected)
     arr = _order_like_coords(arr, expected)
     return arr, projections
@@ -940,7 +882,6 @@ def broadcast_to_coords(
     *,
     strict: bool = True,
     label: str | None = None,
-    warn_reorder: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -948,9 +889,10 @@ def broadcast_to_coords(
 
     When ``coords`` carries named dimensions, the result is aligned with
     them: positional inputs are labeled by position, shared dims with equal
-    values in a different order are reindexed, dims missing from ``arr``
-    are expanded, dims naming levels of a stacked-MultiIndex coords dim are
-    projected onto it, and the result is transposed to ``coords`` order.
+    values in a different order are reindexed (``strict=True`` only), dims
+    missing from ``arr`` are expanded, dims naming levels of a
+    stacked-MultiIndex coords dim are projected onto it, and the result is
+    transposed to ``coords`` order.
 
     ``strict`` decides what happens to anything broadcasting alone cannot
     resolve — extra dims, disagreeing coord values, and MultiIndex coverage
@@ -964,14 +906,11 @@ def broadcast_to_coords(
     index names, e.g. ``period`` / ``timestep``) and *level combinations*
     (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
     indexed by levels instead of the dim itself are implicitly projected
-    onto the dim's level combinations. These projections are legacy-only:
-    under legacy semantics they emit a :class:`~linopy.LinopySemanticsWarning`
-    deprecation; under the v1 convention they raise. Two cases:
+    onto the dim's level combinations. Such projections raise:
 
-    - input misses a whole level → broadcasts across it; warns in both modes.
+    - input misses a whole level → broadcasting across it raises.
     - input gives some level combinations no value (a *coverage gap*) →
-      warns under ``strict=False``, raises under ``strict=True`` (the error
-      lists the missing combinations).
+      raises; under ``strict=True`` the error lists the missing combinations.
 
     Parameters
     ----------
@@ -997,17 +936,9 @@ def broadcast_to_coords(
         Broadcast against ``coords``.
     """
     if not strict:
-        from linopy.semantics import is_v1
-
-        if is_v1():
-            _reject_new_multiindex(arr, coords, dims)
+        _reject_new_multiindex(arr, coords, dims)
         da, projections = _broadcast_to_coords(
-            arr,
-            coords,
-            dims,
-            reindex_reordered=not is_v1(),
-            warn_reorder=warn_reorder,
-            **kwargs,
+            arr, coords, dims, reindex_reordered=False, **kwargs
         )
         _enforce_implicit_projections(projections)
         return da

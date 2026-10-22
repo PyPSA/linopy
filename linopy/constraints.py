@@ -1710,7 +1710,7 @@ def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
 
 def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
     """
-    Broadcast the rhs onto the expression grid and flatten it, with v1 parity:
+    Broadcast the rhs onto the expression grid and flatten it, with dense parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """

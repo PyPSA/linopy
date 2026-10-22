@@ -91,7 +91,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex, is_v1, warn_outside_linopy
+from linopy.semantics import enforce_no_multiindex, warn_outside_linopy
 
 try:
     from linopy.remote import OetcHandler
@@ -286,7 +286,7 @@ class Model:
             ``Model.sparse``. ``groupby(...).sum()`` and ``@``/``dot`` against
             a constant return CSR-backed expressions, and ``add_constraints``
             freezes constraints to a CSRConstraint unless ``freeze=False`` is
-            passed. Requires v1 semantics and no ``chunk``. See
+            passed. Requires no ``chunk``. See
             :mod:`linopy.csr`. The default is False.
 
         Returns
@@ -294,7 +294,6 @@ class Model:
         linopy.Model
         """
         self._sparse: bool = bool(sparse)
-        self._check_sparse_semantics()
         self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
             dtypes
         )
@@ -575,14 +574,6 @@ class Model:
         ``Model(sparse=True)``.
         """
         return self._sparse
-
-    def _check_sparse_semantics(self) -> None:
-        """Raise if the model is sparse but the semantics are legacy."""
-        if self._sparse and not is_v1():
-            raise ValueError(
-                "Model(sparse=True) requires v1 semantics; opt in with "
-                "linopy.options['semantics'] = 'v1'."
-            )
 
     @property
     def set_names_in_solver_io(self) -> bool:

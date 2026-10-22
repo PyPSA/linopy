@@ -61,10 +61,7 @@ def model_with_dash_names() -> Model:
 
 @pytest.fixture
 def model_with_multiindex() -> Model:
-    from linopy.semantics import is_v1
-
-    if is_v1():
-        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
+    pytest.skip("MultiIndex coords are rejected; removed with the MI machinery")
     m = Model()
 
     index = pd.MultiIndex.from_tuples(
@@ -377,10 +374,7 @@ def test_model_to_netcdf_with_dash_named_parameters(
 
 
 def test_model_to_netcdf_with_dash_named_multiindex_dim(tmp_path: Path) -> None:
-    from linopy.semantics import is_v1
-
-    if is_v1():
-        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
+    pytest.skip("MultiIndex coords are rejected; removed with the MI machinery")
     index = pd.MultiIndex.from_tuples(
         [(1, "a"), (1, "b"), (2, "a")], names=["first", "second"]
     )
