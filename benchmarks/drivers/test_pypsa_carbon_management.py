@@ -20,41 +20,24 @@ def network() -> Any:
         pytest.skip(f"pypsa example data unavailable: {exc}")
 
 
-def test_create_model_frozen(benchmark: Callable[..., object], network: Any) -> None:
-    benchmark(network.optimize.create_model, freeze_constraints=True)
+@pytest.fixture(scope="module", params=[False, True], ids=["dense", "sparse"])
+def sparse(request: pytest.FixtureRequest) -> bool:
+    return request.param
 
 
-def test_create_model_mutable(benchmark: Callable[..., object], network: Any) -> None:
-    benchmark(network.optimize.create_model, freeze_constraints=False)
+def test_create_model(
+    benchmark: Callable[..., object], network: Any, sparse: bool
+) -> None:
+    benchmark(network.optimize.create_model, sparse=sparse)
 
 
 @pytest.fixture(scope="module")
-def model_frozen(network: Any) -> Any:
-    return network.optimize.create_model(freeze_constraints=True)
+def model(network: Any, sparse: bool) -> Any:
+    return network.optimize.create_model(sparse=sparse)
 
 
-@pytest.fixture(scope="module")
-def model_mutable(network: Any) -> Any:
-    return network.optimize.create_model(freeze_constraints=False)
-
-
-def test_to_highspy_frozen(benchmark: Callable[..., object], model_frozen: Any) -> None:
-    benchmark(lp.io.to_highspy, model_frozen)
-
-
-def test_to_highspy_mutable(
-    benchmark: Callable[..., object], model_mutable: Any
+@pytest.mark.parametrize("set_names", [None, False], ids=["default", "no_names"])
+def test_to_highspy(
+    benchmark: Callable[..., object], model: Any, set_names: bool | None
 ) -> None:
-    benchmark(lp.io.to_highspy, model_mutable)
-
-
-def test_to_highspy_mutable_no_names(
-    benchmark: Callable[..., object], model_mutable: Any
-) -> None:
-    benchmark(lp.io.to_highspy, model_mutable, set_names=False)
-
-
-def test_to_highspy_frozen_no_names(
-    benchmark: Callable[..., object], model_frozen: Any
-) -> None:
-    benchmark(lp.io.to_highspy, model_frozen, set_names=False)
+    benchmark(lp.io.to_highspy, model, set_names=set_names)

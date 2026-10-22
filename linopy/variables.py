@@ -36,8 +36,7 @@ from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -50,6 +49,7 @@ from linopy.common import (
     get_printout_labels,
     has_optimized_model,
     iterate_slices,
+    reassign_coords,
     save_join,
     to_dataframe,
     to_polars,
@@ -68,15 +68,12 @@ from linopy.csr import CSRLinearExpression
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
-    _legacy_coord_mismatch_message,
-    _legacy_masked_variable_message,
     _shared_dim_mismatch_message,
     check_user_nan,
     enforce_aux_conflict,
+    enforce_no_multiindex,
     first_mismatched_dim,
-    is_v1,
     reindex_like_if_needed,
-    warn_legacy,
 )
 from linopy.types import (
     ConstantLike,
@@ -341,7 +338,7 @@ class Variable:
         )
         value = value.reindex_like(self.labels, fill_value=1.0)
         value = validate_scaling(value, f"scaling for variable '{self.name}'")
-        self._data = assign_multiindex_safe(self.data, scaling=value)
+        self._data = assign_fields(self.data, scaling=value)
 
     @property
     def solver_scaling(self) -> DataArray:
@@ -359,7 +356,6 @@ class Variable:
         self,
         coefficient: ConstantLike = 1,
         *,
-        _warn_absence: bool = True,  # LEGACY: remove at 1.0
         _dense: bool = False,
     ) -> expressions.LinearExpression:
         """
@@ -381,48 +377,31 @@ class Variable:
         The §8 shared-dim check runs on the raw coefficient, before the
         broadcast aligns it away — the reindex below only fills absence and
         broadcasts non-shared dims. A NaN coefficient is user data, so it
-        raises under v1 (§5). Under v1 the expression carries the variable's
-        absence as NaN so that §6 propagates it through downstream arithmetic;
-        legacy contributes 0 there instead and warns, that being the most
-        common legacy↔v1 divergence and one no other warn site catches. In a
-        sparse model the expression is CSR-backed; ``_dense`` builds it dense
-        for callers that continue on a path without a sparse branch.
+        raises (§5). The expression carries the variable's absence as NaN so
+        that §6 propagates it through downstream arithmetic. In a sparse
+        model the expression is CSR-backed; ``_dense`` builds it dense for
+        callers that continue on a path without a sparse branch.
         """
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
             mismatch = first_mismatched_dim(self.labels, coeff_da)
             if mismatch is not None:
-                if is_v1():
-                    raise ValueError(_shared_dim_mismatch_message(*mismatch))
-                warn_legacy(
-                    _legacy_coord_mismatch_message(
-                        "this operator's constant operand",
-                        *mismatch,
-                        alignment="by label, the coefficient being 0 at the"
-                        " variable's labels it lacks",
-                    )
-                )
+                raise ValueError(_shared_dim_mismatch_message(*mismatch))
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         if coefficient.isnull().any():
-            check_user_nan(op_kind="mul")
+            check_user_nan()
         absent = self.labels == -1
         has_absence = bool(absent.any())
-        if is_v1():
-            coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
-            if has_absence:
-                coefficient = coefficient.where(~absent)
-        else:  # LEGACY: remove at 1.0
-            if has_absence and _warn_absence:
-                warn_legacy(_legacy_masked_variable_message(self.name))
-            coefficient = reindex_like_if_needed(coefficient, self.labels, 0).fillna(0)
+        coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
+        if has_absence:
+            coefficient = coefficient.where(~absent)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
         if self.model.sparse and not _dense:
-            self.model._check_sparse_semantics()
             csr = CSRLinearExpression.from_labels(ds, self.model)
             return expressions.LinearExpression._from_csr(csr, self.model)
         ds = ds.expand_dims(TERM_DIM, -1)
-        if is_v1() and has_absence:
+        if has_absence:
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
             ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
@@ -664,10 +643,9 @@ class Variable:
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join
             creates. Defaults to 0; ``linopy.ABSENT`` keeps them absent.
@@ -690,10 +668,9 @@ class Variable:
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
             Defaults to 0; ``linopy.ABSENT`` keeps them absent. Requires an
@@ -716,10 +693,9 @@ class Variable:
             The coefficient to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates.
             Defaults to 0, so a term without a factor evaluates to zero;
@@ -742,10 +718,9 @@ class Variable:
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
             default that term evaluates to zero; pass ``1`` to keep it
@@ -763,10 +738,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().le(rhs, join=join)
 
@@ -780,10 +754,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().ge(rhs, join=join)
 
@@ -797,10 +770,9 @@ class Variable:
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows the
-            semantics setting: under v1, shared dimensions must carry
-            identical labels (same labels, same order) — a reorder or a
-            differing set raises; under legacy, positional alignment.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_linexpr().eq(rhs, join=join)
 
@@ -843,7 +815,7 @@ class Variable:
             A `LinearExpressionGroupBy` containing the xarray groups and ensuring
             the correct return type.
         """
-        return self.to_linexpr(_warn_absence=False).groupby(
+        return self.to_linexpr().groupby(
             group=group, restore_coord_dims=restore_coord_dims
         )
 
@@ -1095,13 +1067,14 @@ class Variable:
             numeric, not symbolic).
         ValueError
             If the new bound introduces dimensions not in the variable's
-            coords, or if the resulting ``lower > upper`` anywhere.
+            coords, contains NaN at a non-masked position, or if the
+            resulting ``lower > upper`` anywhere.
         """
         if lower is None and upper is None:
             return self
 
         updates = self._validate_update(lower=lower, upper=upper)
-        self._data = assign_multiindex_safe(self.data, **updates)
+        self._data = assign_fields(self.data, **updates)
         return self
 
     def _validate_update(
@@ -1132,6 +1105,8 @@ class Variable:
             new_val = DataArray(val).broadcast_like(ref)
             if not set(new_val.dims).issubset(own_dims):
                 raise ValueError("Cannot assign new dimensions to existing variable.")
+            if (new_val.isnull() & (self.labels != -1)).any():
+                check_user_nan("variable bound")
             updates[name] = new_val
 
         final_lower = updates.get("lower", self.lower)
@@ -1151,7 +1126,7 @@ class Variable:
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -1171,7 +1146,7 @@ class Variable:
         Set the optimal values of the variable.
         """
         value = DataArray(value).broadcast_like(self.labels)
-        self._data = assign_multiindex_safe(self.data, solution=value)
+        self._data = assign_fields(self.data, solution=value)
 
     @property
     @has_optimized_model
@@ -1295,7 +1270,7 @@ class Variable:
         if kwargs:
             raise ValueError(f"Unknown keyword argument(s): {kwargs}")
 
-        return self.to_linexpr(_warn_absence=False).sum(dim)
+        return self.to_linexpr().sum(dim)
 
     def diff(self, dim: str, n: int = 1) -> LinearExpression:
         """
@@ -1354,6 +1329,7 @@ class Variable:
         -------
         linopy.Variable
         """
+        enforce_no_multiindex(cond, context="The condition")
         _other: dict[str, float | int | str] | dict[str, float] | Dataset
         if other is None:
             _other = self._fill_value
@@ -1372,7 +1348,7 @@ class Variable:
         elif isinstance(other, Dataset):
             _other = other
             if "scaling" not in _other:
-                _other = assign_multiindex_safe(
+                _other = assign_fields(
                     _other,
                     scaling=DataArray(self._fill_value["scaling"]).broadcast_like(
                         _other.labels
@@ -1410,20 +1386,9 @@ class Variable:
         ----------
         fill_value : numeric, Variable, or ScalarVariable
             Value to fill the absent slots with.
-
-        Notes
-        -----
-        Legacy ``to_linexpr`` marks an absent const as 0 rather than NaN, so
-        :meth:`LinearExpression.fillna` finds nothing to fill there; the value
-        is placed directly instead, to match v1. The absence warning is skipped
-        because this method is its documented resolution.
         """
         if isinstance(fill_value, int | float | np.integer | np.floating):
-            if is_v1():
-                return self.to_linexpr().fillna(fill_value)
-            # LEGACY: remove at 1.0
-            lin = self.to_linexpr(_warn_absence=False)
-            return lin.assign(const=lin.const.where(self.labels != -1, fill_value))
+            return self.to_linexpr().fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
@@ -1451,9 +1416,7 @@ class Variable:
             .map(DataArray.ffill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign_multiindex_safe(
-            labels=data.labels.astype(self.model._dtypes["labels"])
-        )
+        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
         """
@@ -1517,9 +1480,7 @@ class Variable:
 
     assign_coords = varwrap(Dataset.assign_coords)
 
-    assign = varwrap(assign_multiindex_safe)
-
-    assign_multiindex_safe = varwrap(assign_multiindex_safe)
+    assign = varwrap(assign_fields)
 
     broadcast_like = varwrap(Dataset.broadcast_like)
 
@@ -1676,6 +1637,13 @@ class Variable:
             new value (the originally stashed bounds are kept). If False, raise
             an error if the variable is already fixed.
         """
+        self._data = assign_fields(
+            self.data, **self._fix_updates(value, decimals, overwrite)
+        )
+
+    def _fix_updates(
+        self, value: ConstantLike | None, decimals: int, overwrite: bool
+    ) -> dict[str, DataArray]:
         if value is None:
             try:
                 value = self.solution
@@ -1702,7 +1670,8 @@ class Variable:
             value, self.coords, label=f"fix() for variable '{self.name}'"
         )
 
-        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+        off_domain = ~(np.isclose(value, 0) | np.isclose(value, 1))
+        if is_binary and (off_domain & value.notnull() & (self.labels != -1)).any():
             msg = (
                 f"Cannot fix binary variable '{self.name}' to a value "
                 "other than 0 or 1."
@@ -1724,16 +1693,13 @@ class Variable:
                 f"Fix values for variable '{self.name}' lie outside its current "
                 "bounds; the bounds are overridden by the fix value.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
-        if not is_fixed:
-            self._data = assign_multiindex_safe(
-                self.data,
-                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
-            )
-
-        self.update(lower=value, upper=value)
+        updates = self._validate_update(lower=value, upper=value)
+        if is_fixed:
+            return updates
+        return {STASHED_LOWER: lower, STASHED_UPPER: upper, **updates}
 
     def unfix(self) -> None:
         """
@@ -2062,8 +2028,8 @@ class Variables:
         """
         Fix all variables in this container to their solution or a scalar value.
 
-        Delegates to each variable's ``fix()`` method. See
-        :meth:`Variable.fix` for details.
+        All variables are validated before any is fixed, so a failing variable
+        leaves the container unchanged. See :meth:`Variable.fix` for details.
 
         Parameters
         ----------
@@ -2076,8 +2042,12 @@ class Variables:
         overwrite : bool, optional
             If True, re-fix variables that are already fixed.
         """
-        for var in self.data.values():
-            var.fix(value=value, decimals=decimals, overwrite=overwrite)
+        updates = {
+            name: var._fix_updates(value, decimals, overwrite)
+            for name, var in self.data.items()
+        }
+        for name, var in self.data.items():
+            var._data = assign_fields(var.data, **updates[name])
 
     def unfix(self) -> None:
         """
@@ -2289,7 +2259,7 @@ class Variables:
 
         for name, variable in self.items():
             if dim in variable.dims:
-                variable._data = assign_multiindex_safe(
+                variable._data = assign_fields(
                     variable.data, blocks=blocks.broadcast_like(variable.labels)
                 )
 

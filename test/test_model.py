@@ -44,16 +44,13 @@ def test_model_solver_dir() -> None:
     assert m.solver_dir == Path(d)
 
 
-SPARSE_CONFIG = pytest.mark.parametrize(
-    "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
-)
+SPARSE_CONFIG = pytest.mark.parametrize("sparse", [False, True])
 
 
 @SPARSE_CONFIG
 def test_model_config_defaults(sparse: bool) -> None:
     m = Model(sparse=sparse, set_names_in_solver_io=False)
     assert m.sparse is sparse
-    assert m.freeze_constraints is sparse
     assert m.set_names_in_solver_io is False
 
 
@@ -61,7 +58,6 @@ def test_model_config_defaults(sparse: bool) -> None:
 def test_model_copy_preserves_config(sparse: bool) -> None:
     copied = Model(sparse=sparse, set_names_in_solver_io=True).copy()
     assert copied.sparse is sparse
-    assert copied.freeze_constraints is sparse
     assert copied.set_names_in_solver_io is True
 
 
@@ -481,3 +477,10 @@ class TestModelCopySolved:
             assert_conequal(c.constraints[con], m.constraints[con], strict=False)
         assert_linequal(c.objective.expression, m.objective.expression)
         assert c.objective.sense == m.objective.sense
+
+
+def test_parameters_reject_multiindex() -> None:
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    m = Model()
+    with pytest.raises(ValueError, match=r"parameters uses dimension 'd', a `pd"):
+        m.parameters = xr.Dataset(coords=xr.Coordinates.from_pandas_multiindex(mi, "d"))

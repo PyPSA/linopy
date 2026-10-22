@@ -1,15 +1,14 @@
-Migrating to the v1 arithmetic convention
-=========================================
+Upgrading to linopy 1.0
+=======================
 
 .. note::
 
-   v1 is **opt-in** in linopy 0.10 and legacy remains the default. linopy 1.0
-   removes legacy, so 0.10 is the release to migrate in. Nothing changes until
-   you set ``linopy.options["semantics"] = "v1"``. This guide tells you *what*
-   to change when you do.
+   linopy 1.0 removes the legacy arithmetic semantics. The strict "v1"
+   convention is the only behaviour and there is no opt-out. This guide tells
+   you *what* changes and how to fix it.
 
-Why v1 exists
--------------
+Why the convention changed
+--------------------------
 
 Legacy linopy silently guessed in three situations where a guess can quietly
 change a model:
@@ -21,76 +20,47 @@ change a model:
 - an absent (masked, reindexed, or shifted-in) variable was treated as a
   variable fixed to zero.
 
-The v1 convention replaces every silent guess with an explicit rule: it aligns
+The convention now replaces every silent guess with an explicit rule: it aligns
 strictly by label and *raises* where legacy would have guessed, so a wrong model
 surfaces as an error at build time instead of a wrong number at solve time. The
 per-case bug catalogue is in `issue #714 <https://github.com/PyPSA/linopy/issues/714>`_.
 
-The rollout
------------
-
-The transition happens in two steps, so that no model changes behaviour
-without warning first:
-
-#. **linopy 0.10 — opt-in.** v1 is available via
-   ``linopy.options["semantics"] = "v1"``. Legacy is the default. Under legacy,
-   every operation whose result *would* change under v1 emits a
-   :class:`linopy.LinopySemanticsWarning` that names the rule and the fix.
-#. **linopy 1.0 — legacy removed.** v1 is the only convention. There is no
-   opt-out.
-
-Migrate while on 0.10. Every difference between the two conventions is either
-warned about under legacy or raised under v1, so no model changes silently.
+linopy 1.0 removed legacy directly, without a release that made v1 the default.
+``linopy.options["semantics"]`` is a deprecated no-op: ``"v1"`` emits a
+``FutureWarning``, any other value raises, and the option is removed in 1.1.
+:class:`linopy.LinopySemanticsWarning` is no longer emitted.
 
 Who this affects
 ----------------
 
 - **Downstream library maintainers** (PyPSA, PyPSA-Eur, Calliope, …) carry most
-  of the work: opt the library into v1, fix the raises, and release so it no
-  longer warns under legacy.
+  of the work: fix the raises and release.
 - **Direct linopy users** do the same for their own call sites.
-- **End users of a downstream library** never touch linopy directly. A
-  ``LinopySemanticsWarning`` in your logs is an upstream item your maintainer
-  will handle; you can :ref:`silence it <silencing-v1>` in the meantime.
+- **End users of a downstream library** never touch linopy directly; an error
+  from linopy after the upgrade is an upstream item for your maintainer.
 
-How to migrate
+How to upgrade
 --------------
 
-The legacy warning already names the rule and the fix at every site, so the
-recipe is short:
-
-#. **Surface every site.** Run your existing test suite under legacy and turn
-   the warning into an error so nothing is missed:
-
-   .. code-block:: python
-
-       import warnings
-       from linopy import LinopySemanticsWarning
-
-       warnings.filterwarnings("error", category=LinopySemanticsWarning)
-
-#. **Fix each site** using the table below (the warning text points at the same
-   fix in context).
-#. **Opt in and run the suite** with ``linopy.options["semantics"] = "v1"``. The
-   v1 raises catch anything the warnings missed.
-#. **Release.** Set the option in your library's entry point, or simply drop it
-   once the default flips to v1.
+#. **Run your test suite** on linopy 1.0. Every difference from legacy either
+   raises or changes a result as described in the table below.
+#. **Fix each site** using the table.
+#. **Drop** any ``linopy.options["semantics"] = "v1"`` line.
 
 What changes, and how to fix it
 -------------------------------
 
-Every row is a legacy guess that becomes an explicit rule under v1. The
-``LinopySemanticsWarning`` you see under legacy names the same fix.
+Every row is a legacy guess that is now an explicit rule.
 
 .. list-table::
    :header-rows: 1
    :widths: 22 40 38
 
    * - Situation
-     - Under v1
+     - Now
      - Fix
    * - ``NaN`` in a user-supplied constant
-     - Raises (linopy will not guess a fill).
+     - Raises (linopy will not guess a fill); NaN in a variable bound raises too.
      - ``.fillna(value)`` for a data error; ``mask=`` / ``.where(cond)`` /
        ``.reindex(...)`` on the *variable* for intended absence.
    * - Shared dimension with a **different label set**
@@ -134,9 +104,11 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
    * - A first-class ``pd.MultiIndex`` **dimension** — and a per-*level* input
        onto it (e.g. per-``period`` bounds onto a ``(period, timestep)``
        ``snapshot``)
-     - Rejected; v1 uses a flat dimension with the levels as aux coords, and a
+     - Rejected; linopy uses a flat dimension with the levels as aux coords, and a
        per-level input must be mapped onto the flat dimension explicitly (no
-       implicit projection). Affects PyPSA multi-investment models.
+       implicit projection). Affects PyPSA multi-investment models. Netcdf
+       files written with such a dimension load flat: a positional index with
+       the levels as aux coords.
      - ``.reset_index(dim)`` to flatten, then project the per-level input by
        its level aux coord.
    * - A multi-key ``groupby(...).sum()`` result
@@ -152,21 +124,3 @@ Every row is a legacy guess that becomes an explicit rule under v1. The
 
 The full, normative rule list lives in the
 :doc:`arithmetic convention <design/convention>`.
-
-.. _silencing-v1:
-
-Silencing the warning
----------------------
-
-If the warning comes from a library you do not maintain, silence it until the
-upstream release lands:
-
-.. code-block:: python
-
-    import warnings
-    import linopy
-
-    warnings.filterwarnings("ignore", category=linopy.LinopySemanticsWarning)
-
-Do this only when the warning is upstream — for your own call sites, fix it
-instead, since the underlying result changes under v1.

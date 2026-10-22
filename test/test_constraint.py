@@ -7,6 +7,8 @@ Created on Tue Nov  2 22:38:48 2021.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -84,17 +86,6 @@ def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     assert isinstance(c, linopy.constraints.CSRConstraint)
     assert isinstance(m.constraints["frozen_c"], linopy.constraints.CSRConstraint)
     assert c.ncons == 10
-
-
-@pytest.mark.v1
-def test_add_constraints_uses_model_freeze_default() -> None:
-    m = Model(sparse=True)
-    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
-    c = m.add_constraints(x >= 1, name="frozen_by_default")
-    assert isinstance(c, linopy.constraints.CSRConstraint)
-    assert isinstance(
-        m.constraints["frozen_by_default"], linopy.constraints.CSRConstraint
-    )
 
 
 def test_add_constraints_penalty_softens_constraint(
@@ -275,12 +266,38 @@ def test_constraint_inherited_properties(
     assert isinstance(con.dims, xr.core.utils.Frozen)
 
 
+def test_constraint_assign_replaces_term_fields(
+    x: linopy.Variable, y: linopy.Variable
+) -> None:
+    con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
+    res = con.assign(
+        vars=con.vars.isel({TERM_DIM: [0]}), coeffs=con.coeffs.isel({TERM_DIM: [0]})
+    )
+    assert isinstance(res, Constraint)
+    assert res.sizes[TERM_DIM] == 1
+    assert_equal(res.vars, con.vars.isel({TERM_DIM: [0]}))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda x: x, lambda x: 1 * x, lambda x: x >= 0],
+    ids=["var", "expr", "con"],
+)
+def test_set_index_swaps_dim_coord(x: linopy.Variable, build: Callable) -> None:
+    obj = build(x)
+    alt = np.arange(10, 20)
+    res = obj.assign_coords(alt=("first", alt)).set_index(first="alt")
+    assert type(res) is type(obj)
+    assert res.indexes["first"].tolist() == alt.tolist()
+
+
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
     con = 10 * x + y <= 10
     assert isinstance(con, Constraint)
 
     # Test wrapped methods
-    con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
+    con.assign(new_var=xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)]))
     con.assign_attrs({"new_attr": "value"})
     con.assign_coords(
         {"new_coord": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])}
@@ -316,20 +333,6 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
     assert con.coord_dims == ("first", "third")
-
-
-def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
-    expr = 10 * x + y
-    con = expr <= 10
-    assert isinstance(con, Constraint)
-    con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
-    con = con.set_index({"multi": ["second", "third"]})
-    assert isinstance(con, ConstraintBase)
-    assert con.coord_dims == (
-        "first",
-        "multi",
-    )
-    assert isinstance(con.indexes["multi"], pd.MultiIndex)
 
 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
@@ -621,32 +624,6 @@ def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
 
     assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
     assert (con.rhs.sel(i=1) == 2.0).all()
-
-
-@pytest.mark.legacy
-def test_constraint_rhs_setter_projects_multiindex_level() -> None:
-    """
-    Rhs indexed by one MultiIndex level is projected onto the stacked dim.
-
-    Regression: as_expression must convert constants with the broadcast rung
-    (broadcast_to_coords), not plain conversion — otherwise the level dim
-    collides with the MI level coord downstream (xarray AlignmentError).
-    """
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
-    m = Model()
-    x = m.add_variables(coords=coords, name="x")
-    con = m.add_constraints(1 * x >= 0, name="con")
-
-    rhs_by_level = xr.DataArray(
-        [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
-    )
-    with pytest.warns(linopy.LinopySemanticsWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level
-
-    assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
-    assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
 
 
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:

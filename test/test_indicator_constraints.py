@@ -236,9 +236,7 @@ class TestPersistence:
         assert ic.binary_var is not None
         assert np.all(ic.binary_val == 1)
 
-    @pytest.mark.parametrize(
-        "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
-    )
+    @pytest.mark.parametrize("sparse", [False, True])
     def test_netcdf_roundtrip(self, tmp_path: Path, sparse: bool) -> None:
         """is_indicator and binary fields survive a netCDF round-trip."""
         m = Model(sparse=sparse)
@@ -255,7 +253,6 @@ class TestPersistence:
         assert ic.binary_var is not None
         assert np.all(ic.binary_val == 1)
 
-    @pytest.mark.v1
     def test_array_binval_roundtrip(self, tmp_path: Path) -> None:
         """A coords-based indicator has per-element binary_val that round-trips."""
         m = Model(sparse=True)

@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
@@ -1101,16 +1101,6 @@ def to_netcdf(
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-
-        # Flatten multiindexes
-        for dim in ds.dims:
-            if isinstance(ds[dim].to_index(), pd.MultiIndex):
-                prefix_len = len(prefix) + 1  # leave original index level name
-                names = [n[prefix_len:] for n in ds[dim].to_index().names]
-                ds = ds.reset_index(dim)
-                # scipy netCDF3 backend cannot write unicode-array attrs.
-                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
-
         return ds
 
     vars = [
@@ -1138,7 +1128,7 @@ def to_netcdf(
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    scalars |= {"sparse": m.sparse, "freeze_constraints": m._freeze_constraints}
+    scalars["sparse"] = m.sparse
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
@@ -1221,12 +1211,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
-    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
-        # str = JSON (new); iterable = legacy list from older linopy.
-        if isinstance(value, str):
-            return [str(n) for n in json.loads(value)]
-        return [str(n) for n in value]
-
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if owners[str(k)] == prefix]]
         ds = ds.drop_vars(
@@ -1240,11 +1224,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             if owners[k] == prefix
         }
 
-        for dim in ds.dims:
-            if f"{dim}_multiindex" in ds.attrs:
-                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
+        for dim in list(ds.dims):
+            if ds.attrs.pop(f"{dim}_multiindex", None) is not None:
+                ds = ds.assign_coords({dim: pd.RangeIndex(ds.sizes[dim], name=dim)})
         return ds
 
     def container_names(kind: str) -> list[str]:
@@ -1332,7 +1314,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
-    m._freeze_constraints = bool(ds.attrs.get("freeze_constraints", False))
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
         m._dtypes["labels"] = np.int64
@@ -1407,7 +1388,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model = Model(
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
-        auto_mask=m._auto_mask,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
         sparse=m.sparse,
@@ -1492,7 +1472,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
-    new_model._freeze_constraints = m._freeze_constraints
 
     if m._sos_reformulation_state is not None:
         new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)

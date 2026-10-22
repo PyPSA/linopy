@@ -37,11 +37,12 @@ f_mask[:3] = False
 f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
 
-multiindex = pd.MultiIndex.from_product(
-    [list("asdfhjkg"), list("asdfghj")], names=["level_0", "level_1"]
+levels = pd.MultiIndex.from_product([list("asdfhjkg"), list("asdfghj")])
+g = m.add_variables(coords=[pd.RangeIndex(len(levels), name="multi")], name="g")
+g = g.assign_coords(
+    level_0=("multi", levels.get_level_values(0)),
+    level_1=("multi", levels.get_level_values(1)),
 )
-multiindex.name = "multi"
-g = m.add_variables(coords=[multiindex], name="g")
 
 # create linear expression for each variable
 lu = 1 * u

@@ -31,17 +31,16 @@ from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     _as_renamed_index,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     assigned_labels,
     best_int,
     coords_reorder_set,
     maybe_replace_sign,
     maybe_replace_signs,
+    reassign_coords,
     replace_by_map,
     to_path,
 )
-from linopy.config import SPARSE_DEPRECATION
 from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
@@ -91,7 +90,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex, is_v1, warn_outside_linopy
+from linopy.semantics import check_user_nan, enforce_no_multiindex
 
 try:
     from linopy.remote import OetcHandler
@@ -173,7 +172,6 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
-    _freeze_constraints: bool
     _sparse: bool
     _set_names_in_solver_io: bool
     _solver_dir: Path
@@ -201,8 +199,6 @@ class Model:
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
-        "_auto_mask",
-        "_freeze_constraints",
         "_sparse",
         "_set_names_in_solver_io",
         "_solver_dir",
@@ -237,8 +233,6 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
-        auto_mask: bool = False,
-        freeze_constraints: bool | None = None,
         set_names_in_solver_io: bool = False,
         dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
         sparse: bool = False,
@@ -261,15 +255,6 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
-        auto_mask : bool
-            Whether to automatically mask variables and constraints where
-            bounds, coefficients, or RHS values contain NaN. The default is
-            False.
-        freeze_constraints : bool, optional
-            Deprecated, use ``sparse=True`` instead. Whether constraints added
-            to the model are frozen to the CSR-backed representation by
-            default, without making expressions sparse. Raises together with
-            ``sparse=True``. The default is False.
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
             constraint names by default. Names cost build time and are not
@@ -286,7 +271,7 @@ class Model:
             ``Model.sparse``. ``groupby(...).sum()`` and ``@``/``dot`` against
             a constant return CSR-backed expressions, and ``add_constraints``
             freezes constraints to a CSRConstraint unless ``freeze=False`` is
-            passed. Requires v1 semantics and no ``chunk``. See
+            passed. Requires no ``chunk``. See
             :mod:`linopy.csr`. The default is False.
 
         Returns
@@ -294,7 +279,6 @@ class Model:
         linopy.Model
         """
         self._sparse: bool = bool(sparse)
-        self._check_sparse_semantics()
         self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
             dtypes
         )
@@ -316,10 +300,6 @@ class Model:
 
         self.chunk = chunk
         self._force_dim_names: bool = bool(force_dim_names)
-        self._auto_mask: bool = bool(auto_mask)
-        self._freeze_constraints: bool = False
-        if freeze_constraints is not None:
-            self.freeze_constraints = freeze_constraints
         self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
@@ -449,9 +429,9 @@ class Model:
         """
         Set the parameters of the model.
         """
-        self._parameters = (
-            value.copy() if isinstance(value, Dataset) else Dataset(value)
-        )
+        parameters = value.copy() if isinstance(value, Dataset) else Dataset(value)
+        enforce_no_multiindex(parameters, context="parameters")
+        self._parameters = parameters
 
     @property
     def solution(self) -> Dataset:
@@ -535,54 +515,12 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
-    def auto_mask(self) -> bool:
-        """
-        If True, automatically mask variables and constraints where bounds,
-        coefficients, or RHS values contain NaN.
-        """
-        return self._auto_mask
-
-    @auto_mask.setter
-    def auto_mask(self, value: bool) -> None:
-        """
-        Set whether to automatically mask variables and constraints with NaN values.
-        """
-        self._auto_mask = bool(value)
-
-    @property
-    def freeze_constraints(self) -> bool:
-        """Whether constraints are frozen to CSR by default when added."""
-        return self._sparse or self._freeze_constraints
-
-    @freeze_constraints.setter
-    def freeze_constraints(self, value: bool) -> None:
-        if self._sparse:
-            raise ValueError(
-                "A sparse model freezes constraints by default; pass `freeze=` "
-                "to add_constraints instead."
-            )
-        warn_outside_linopy(
-            f"Model.freeze_constraints {SPARSE_DEPRECATION}, or "
-            "add_constraints(..., freeze=True) per constraint.",
-            FutureWarning,
-        )
-        self._freeze_constraints = bool(value)
-
-    @property
     def sparse(self) -> bool:
         """
         Whether the model is built on the sparse (CSR) path, set once by
         ``Model(sparse=True)``.
         """
         return self._sparse
-
-    def _check_sparse_semantics(self) -> None:
-        """Raise if the model is sparse but the semantics are legacy."""
-        if self._sparse and not is_v1():
-            raise ValueError(
-                "Model(sparse=True) requires v1 semantics; opt in with "
-                "linopy.options['semantics'] = 'v1'."
-            )
 
     @property
     def set_names_in_solver_io(self) -> bool:
@@ -656,7 +594,6 @@ class Model:
             "_connameCounter",
             "_pwlCounter",
             "force_dim_names",
-            "auto_mask",
             "set_names_in_solver_io",
         ]
 
@@ -828,7 +765,8 @@ class Model:
         ------
         ValueError
             If neither lower bound and upper bound have coordinates, nor
-            `coords` are directly given.
+            `coords` are directly given, or if ``lower`` or ``upper`` contain
+            NaN at a position not excluded by ``mask``.
 
         Returns
         -------
@@ -973,18 +911,11 @@ class Model:
                 **kwargs,
             ).astype(bool)
 
-        # Auto-mask based on NaN in bounds (use numpy for speed)
-        if self.auto_mask:
-            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
-                data.upper.values
-            )
-            auto_mask_arr = DataArray(
-                auto_mask_values, coords=data.coords, dims=data.dims
-            )
-            if mask is not None:
-                mask = mask & auto_mask_arr
-            else:
-                mask = auto_mask_arr
+        nan_bounds = data.lower.isnull() | data.upper.isnull()
+        if mask is not None:
+            nan_bounds &= mask
+        if nan_bounds.any():
+            check_user_nan("variable bound")
 
         start = self._xCounter
         end = start + data.labels.size
@@ -1354,22 +1285,13 @@ class Model:
 
         name = self._resolve_constraint_name(name)
         if freeze is None:
-            freeze = self.freeze_constraints
-        chunked = bool(freeze and self.chunk)
+            freeze = self._sparse
         freeze = freeze and not self.chunk
 
         if isinstance(sign, str):
             sign = maybe_replace_sign(sign)
         elif sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
-
-        # Capture original RHS for auto-masking before constraint creation
-        # (NaN values in RHS are lost during constraint creation)
-        # Use numpy for speed instead of xarray's notnull()
-        original_rhs_mask = None
-        if self.auto_mask and rhs is not None:
-            rhs_da = as_dataarray(rhs)
-            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
         if isinstance(con, CSRConstraint) and freeze:
@@ -1395,11 +1317,9 @@ class Model:
             con = con.assign_labels(cindex, name, row_scaling, row_mask)
             return self._soften_added(self.constraints.add(con), penalty)
         if isinstance(con, CSRConstraint):
-            if chunked:
-                reason = "chunked model, `Model.chunk` adds constraints unfrozen"
-            else:
-                reason = "constraint added unfrozen, `freeze=False`"
-            _densify_notice(reason, self, explicit=not chunked)
+            _densify_notice(
+                "constraint added unfrozen, `freeze=False`", self, explicit=True
+            )
         data = con.data
 
         _check_infinities(data.sign, data.rhs, name)
@@ -1411,7 +1331,7 @@ class Model:
 
         rhs_nan = data.rhs.isnull()
         if rhs_nan.any():
-            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
+            data = assign_fields(data, rhs=data.rhs.fillna(0))
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask
@@ -1422,7 +1342,7 @@ class Model:
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
         row_coords = data.labels.coords
-        data = assign_multiindex_safe(
+        data = assign_fields(
             data,
             scaling=validate_scaling(
                 broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
@@ -1432,27 +1352,6 @@ class Model:
 
         if mask is not None:
             mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
-
-        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
-        if self.auto_mask:
-            # Check if expression is null: all vars == -1
-            # Use max() instead of all() - if max == -1, all are -1 (since valid vars >= 0)
-            # This is ~30% faster for large term dimensions
-            vars_all_invalid = data.vars.values.max(axis=-1) == -1
-            auto_mask_values = ~vars_all_invalid
-            if original_rhs_mask is not None:
-                coords, dims, rhs_notnull = original_rhs_mask
-                if rhs_notnull.shape != auto_mask_values.shape:
-                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
-                    rhs_notnull = rhs_da.broadcast_like(data.labels).values
-                auto_mask_values = auto_mask_values & rhs_notnull
-            auto_mask_arr = DataArray(
-                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
-            )
-            if mask is not None:
-                mask = mask & auto_mask_arr
-            else:
-                mask = auto_mask_arr
 
         self.check_force_dim_names(data)
 
@@ -1540,7 +1439,7 @@ class Model:
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
         row_coords = data.labels.coords
-        data = assign_multiindex_safe(
+        data = assign_fields(
             data,
             scaling=validate_scaling(
                 broadcast_to_coords(
@@ -1554,8 +1453,7 @@ class Model:
 
         enforce_no_multiindex(data, context=f"constraint {name!r}")
         con = Constraint(data, name=name, model=self, skip_broadcast=True)
-        freeze = self.freeze_constraints
-        return self.constraints.add(con, freeze=freeze and not self.chunk)
+        return self.constraints.add(con, freeze=self._sparse)
 
     def remove_indicator_constraints(self, name: str) -> None:
         """
@@ -2460,9 +2358,7 @@ class Model:
             if "parameters" in indexes
         }
         if parameters_applicable:
-            self._parameters = assign_coords_multiindex_safe(
-                self.parameters, **parameters_applicable
-            )
+            self._parameters = reassign_coords(self.parameters, **parameters_applicable)
 
         return self
 

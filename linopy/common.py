@@ -315,27 +315,15 @@ def save_join(*dataarrays: DataArray, fill_dtype: DTypeLike | None = None) -> Da
     return Dataset({ds.name: ds for ds in arrs})
 
 
-def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
+def assign_fields(ds: Dataset, **fields: Any) -> Dataset:
     """
-    Assign a field to a xarray Dataset while being safe against warnings about multiindex corruption.
+    Assign data variables to a Dataset, replacing existing ones wholesale.
 
-    See https://github.com/PyPSA/linopy/issues/303 for more information
-
-    Parameters
-    ----------
-    ds : Dataset
-        Dataset to assign the field to
-    keys : Union[str, List[str]]
-        Keys of the fields
-    to_assign : Union[List[DataArray], DataArray, Dataset]
-        New values added to the dataset
-
-    Returns
-    -------
-    Dataset
-        Merged dataset with the new field added
+    Unlike :meth:`xarray.Dataset.assign`, a replaced variable is dropped
+    before the new one is added, so the new value never aligns against
+    the old one (e.g. a ``_term`` dimension may change size).
     """
-    remainders = list(set(ds) - set(fields))
+    remainders = [k for k in ds if k not in fields]
     return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
 
 
@@ -366,7 +354,7 @@ def validate_coords_reassignment(
     Validate values-only coordinate reassignment and convert the new values.
 
     Single-sourced per-item invariants for coordinate reassignment, used by
-    the Dataset-backed (:func:`assign_coords_multiindex_safe`) and the
+    the Dataset-backed (:func:`reassign_coords`) and the
     CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
     on its own. Model-level aggregate checks (dimension exists somewhere in
     the model, consistent lengths across containers) live on top of this.
@@ -413,7 +401,7 @@ def validate_coords_reassignment(
     return new_indexes
 
 
-def assign_coords_multiindex_safe(ds: Dataset, **coords: Any) -> Dataset:
+def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
     """
     Reassign coordinate values on an existing Dataset, keeping the shape.
 
@@ -670,8 +658,7 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
 
 def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
     """
-    Auxiliary (non-dimension) coords aligned solely to ``dim`` — under v1 the
-    levels a flattened ``pd.MultiIndex`` leaves behind, its flat-dim mirror.
+    Auxiliary (non-dimension) coords aligned solely to ``dim``, its levels.
     """
     return [
         str(name)
@@ -680,29 +667,20 @@ def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
     ]
 
 
-def dim_level_names(ds: Dataset, dim: Hashable) -> list[str]:
-    """Level names of ``dim`` — a MultiIndex's own levels, else its aux coords."""
-    index = ds.indexes.get(dim)
-    if isinstance(index, pd.MultiIndex):
-        return [str(name) for name in index.names]
-    return index_level_coords(ds, dim)
-
-
 def get_dims_with_index_levels(
     ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
 
-    A multi-indexed 'station' with levels ['country', 'city'] and a flat 'node'
-    with aux level coords ['region', 'tech'] both render as "dim (l0, l1)":
-    ['time', 'station (country, city)', 'node (region, tech)'].
+    A 'node' with aux level coords ['region', 'tech'] renders as
+    "dim (l0, l1)": ['time', 'node (region, tech)'].
     """
     if dims is None:
         dims = list(ds.dims)
     return [
         f"{dim} ({', '.join(levels)})"
-        if (levels := dim_level_names(ds, dim))
+        if (levels := index_level_coords(ds, dim))
         else str(dim)
         for dim in dims
     ]
@@ -710,8 +688,7 @@ def get_dims_with_index_levels(
 
 def label_coord(obj: Any, dims: Sequence[Hashable], index: Sequence[int]) -> dict:
     """
-    Identifying coordinate for a single flat position, per dimension — a
-    decomposed MultiIndex identifies the same way a first-class one does:
+    Identifying coordinate for a single flat position, per dimension:
     several aux levels stack into a tuple, one level is its bare value.
     """
     coord = {}
@@ -1318,72 +1295,58 @@ class EmptyDeprecationWrapper:
 
 def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
     """
-    Serialize a list of pd.Index (including MultiIndex) to a DataArray dict.
+    Serialize a list of pd.Index to a DataArray dict.
 
     Suitable for embedding coordinate metadata as plain data variables in a
     Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
     The variables are named by position, never by the (possibly dashed)
-    dimension or level names, since the netcdf reader splits variable names
-    on ``-``; the level names of a MultiIndex are stored as a JSON attribute.
+    dimension names, since the netcdf reader splits variable names on ``-``.
     Reconstruct with :func:`coords_from_dataset`.
     """
-    data_vars: dict[str, DataArray] = {}
-    for i, c in enumerate(coords):
-        if isinstance(c, pd.MultiIndex):
-            for j, level_values in enumerate(c.levels):
-                data_vars[f"_index{i}_level{j}"] = DataArray(
-                    np.array(level_values), dims=[f"_indexdim{i}_level{j}"]
-                )
-            data_vars[f"_index{i}_codes"] = DataArray(
-                np.array(c.codes).T,
-                dims=[f"_indexdim{i}", f"_indexdim{i}_nlevels"],
-                attrs={"level_names": json.dumps([str(n) for n in c.names])},
-            )
-        else:
-            data_vars[f"_index{i}"] = DataArray(np.array(c), dims=[f"_indexdim{i}"])
-    return data_vars
+    return {
+        f"_index{i}": DataArray(np.array(c), dims=[f"_indexdim{i}"])
+        for i, c in enumerate(coords)
+    }
 
 
-def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
+def coords_from_dataset(
+    ds: Dataset, coord_dims: list[str]
+) -> tuple[list[pd.Index], dict[str, tuple[str, np.ndarray]]]:
     """
-    Deserialize a list of pd.Index (including MultiIndex) from a Dataset.
+    Deserialize a list of pd.Index from a Dataset.
 
     Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
-    or by its earlier name-keyed format (``_coord_<dim>``).
+    or by its earlier name-keyed format (``_coord_<dim>``). A MultiIndex
+    written by linopy < 1.0 in either format loads flat: a positional index,
+    with its levels returned as auxiliary coords on the dim.
     """
-    coords = []
+    coords: list[pd.Index] = []
+    levels: dict[str, tuple[str, np.ndarray]] = {}
     for i, d in enumerate(coord_dims):
-        if f"_index{i}_codes" in ds:
-            codes = ds[f"_index{i}_codes"]
-            level_names = json.loads(codes.attrs["level_names"])
-            level_keys = [f"_index{i}_level{j}" for j in range(len(level_names))]
-            coords.append(_multiindex(ds, codes.values.T, level_keys, level_names, d))
-        elif f"_index{i}" in ds:
-            coords.append(pd.Index(ds[f"_index{i}"].values, name=d))
-        elif f"_coord_{d}_codes" in ds:
-            prefix = f"_coord_{d}_level_"
-            level_names = [
-                str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)
-            ]
-            level_keys = [prefix + ln for ln in level_names]
-            codes_2d = ds[f"_coord_{d}_codes"].values.T
-            coords.append(_multiindex(ds, codes_2d, level_keys, level_names, d))
-        else:
-            coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
-    return coords
+        mi_levels = _multiindex_levels(ds, i, d)
+        if mi_levels is None:
+            key = f"_index{i}" if f"_index{i}" in ds else f"_coord_{d}"
+            coords.append(pd.Index(ds[key].values, name=d))
+            continue
+        size = len(next(iter(mi_levels.values())))
+        coords.append(pd.RangeIndex(size, name=d))
+        levels |= {name: (d, values) for name, values in mi_levels.items()}
+    return coords, levels
 
 
-def _multiindex(
-    ds: Dataset,
-    codes_2d: np.ndarray,
-    level_keys: list[str],
-    level_names: list[str],
-    name: str,
-) -> pd.MultiIndex:
-    arrays = [ds[k].values[codes_2d[j]] for j, k in enumerate(level_keys)]
-    mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
-    mi.name = name
-    return mi
+def _multiindex_levels(ds: Dataset, i: int, d: str) -> dict[str, np.ndarray] | None:
+    if f"_index{i}_codes" in ds:
+        codes = ds[f"_index{i}_codes"]
+        names = [str(n) for n in json.loads(codes.attrs["level_names"])]
+        keys = [f"_index{i}_level{j}" for j in range(len(names))]
+    elif f"_coord_{d}_codes" in ds:
+        codes = ds[f"_coord_{d}_codes"]
+        prefix = f"_coord_{d}_level_"
+        names = [str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)]
+        keys = [prefix + n for n in names]
+    else:
+        return None
+    return {n: ds[k].values[c] for n, k, c in zip(names, keys, codes.values.T)}
 
 
 def is_constant(x: SideLike) -> bool:

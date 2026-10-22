@@ -180,4 +180,3 @@ This package is published under MIT license.
 
    design/convention
    design/goals
-   design/legacy-removal

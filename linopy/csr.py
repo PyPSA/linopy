@@ -1,7 +1,7 @@
 """
 The sparse backing of a LinearExpression: ``A @ x + c`` in CSR form.
 
-In a sparse model (``Model(sparse=True)``, v1 semantics only),
+In a sparse model (``Model(sparse=True)``),
 ``expr.groupby(g).sum()`` returns an ordinary
 :class:`~linopy.expressions.LinearExpression` backed by a
 :class:`CSRLinearExpression`: same public type, different backing, akin to
@@ -27,7 +27,7 @@ the product with a constant matrix, ``@``/``dot``, prunes them. Either way
 cell activeness is carried by ``const`` alone, independent of term layout.
 Any operation without a sparse branch expands the expression through
 ``.data`` to the mathematically identical dense rectangle in label-ordered term
-layout; this is valid because v1 semantics do not fix the term layout.
+layout; this is valid because the convention does not fix the term layout.
 
 This module documents the CSR structure only, working on plain datasets. The
 one bridge back to a dense type is :meth:`CSRLinearExpression.to_dense`, which
@@ -115,7 +115,8 @@ class Grid:
             for k, da in ds.data_vars.items()
             if str(k).startswith(_AUX_PREFIX)
         }
-        return cls(cls.from_coords(coords_from_dataset(ds, list(dims))).indexes, aux)
+        indexes, levels = coords_from_dataset(ds, list(dims))
+        return cls(cls.from_coords(indexes).indexes, aux | levels)
 
     def to_netcdf_vars(self) -> dict[str, DataArray]:
         """

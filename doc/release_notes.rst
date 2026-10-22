@@ -1,19 +1,40 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+Version 1.0.0
+-------------
+
+**Breaking Changes**
+
+* The legacy arithmetic semantics are removed: the v1 convention (:doc:`the arithmetic convention <design/convention>`) is the only behaviour. Code that relied on legacy behaviour now raises or, where absence propagates, gives different results; see :doc:`migrating-to-v1`.
+* ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
+* ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
+* ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
+* ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
+* The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``. Netcdf files written with a ``freeze_constraints`` attribute still load; the attribute is ignored.
+* ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead. Netcdf files written with an ``auto_mask`` attribute still load; the attribute is ignored.
+* NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
+* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters`` and constant operands reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
+* Netcdf files written with ``MultiIndex`` dimensions load in flat form: the dimension gets a positional index and the former levels become auxiliary coordinates. This includes frozen (CSR) constraints.
+* The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
+
+**Deprecations**
+
+* The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
 
 **Sparse models**
 
-* A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. MultiIndex dimensions and non-unique labels still densify.
+* A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. Non-unique labels still densify.
 * Variables enter arithmetic as CSR-backed expressions in a sparse model: ``2 * x``, ``x + y`` and ``1 * x + 2 * y`` are sparse. Variable operations without a sparse path, such as quadratic products, ``rolling`` and ``cumsum``, build the dense expression directly, without a ``PerformanceWarning``.
 * Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
 * ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
 
 **Bug fixes**
 
-* Under v1, arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
+* ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 
 Version 0.10.1
 --------------

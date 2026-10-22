@@ -49,8 +49,7 @@ from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
@@ -69,6 +68,7 @@ from linopy.common import (
     maybe_group_terms_polars,
     maybe_replace_sign,
     maybe_replace_signs,
+    reassign_coords,
     replace_by_map,
     save_join,
     to_dataframe,
@@ -1220,7 +1220,7 @@ class CSRConstraint(ConstraintBase):
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=self._model._dtypes["labels"])
             labels_flat[active_positions] = self.active_labels()
-            ds = assign_multiindex_safe(
+            ds = assign_fields(
                 ds,
                 labels=self._grid.dataarray(labels_flat),
             )
@@ -1246,7 +1246,7 @@ class CSRConstraint(ConstraintBase):
                 extra["binary_val"] = self._active_to_dataarray(binval, fill=-1)
             else:
                 extra["binary_val"] = binval
-        return assign_multiindex_safe(ds, **extra).assign_attrs(self.attrs)
+        return assign_fields(ds, **extra).assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
@@ -1710,7 +1710,7 @@ def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
 
 def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
     """
-    Broadcast the rhs onto the expression grid and flatten it, with v1 parity:
+    Broadcast the rhs onto the expression grid and flatten it, with dense parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """
@@ -1893,7 +1893,7 @@ class Constraint(ConstraintBase):
             label=f"scaling for constraint '{self.name}'",
         )
         scaling = validate_scaling(scaling, f"scaling for constraint '{self.name}'")
-        self._data = assign_multiindex_safe(self.data, scaling=scaling)
+        self._data = assign_fields(self.data, scaling=scaling)
 
     @property
     def is_indicator(self) -> bool:
@@ -1947,7 +1947,7 @@ class Constraint(ConstraintBase):
         Writes that touch the lhs structure (``coeffs``, ``vars``) flip
         ``_coef_dirty``. Other fields (``rhs``, ``sign``, …) leave it alone.
         """
-        self._data = assign_multiindex_safe(self.data, **fields)
+        self._data = assign_fields(self.data, **fields)
         if "coeffs" in fields or "vars" in fields:
             self._coef_dirty = True
 
@@ -2133,7 +2133,7 @@ class Constraint(ConstraintBase):
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -2148,7 +2148,7 @@ class Constraint(ConstraintBase):
     @dual.setter
     def dual(self, value: ConstantLike) -> None:
         value = DataArray(value).broadcast_like(self.labels)
-        self._data = assign_multiindex_safe(self.data, dual=value)
+        self._data = assign_fields(self.data, dual=value)
 
     def has_labels(self, labels: np.ndarray) -> bool:
         return contains_labels(self.data["vars"].values.ravel(), labels)
@@ -2234,7 +2234,7 @@ class Constraint(ConstraintBase):
         """Mask out rows where all variables are missing (-1)."""
         contains_non_missing = (self.vars != -1).any(self.term_dim)
         labels = self.labels.where(contains_non_missing, -1)
-        self._data = assign_multiindex_safe(self.data, labels=labels)
+        self._data = assign_fields(self.data, labels=labels)
         return self
 
     def sanitize_infinities(self) -> Constraint:
@@ -2243,7 +2243,7 @@ class Constraint(ConstraintBase):
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
         )
         labels = self.labels.where(~valid_infinity_values, -1)
-        self._data = assign_multiindex_safe(self.data, labels=labels)
+        self._data = assign_fields(self.data, labels=labels)
         return self
 
     def freeze(self) -> CSRConstraint:
@@ -2383,8 +2383,7 @@ class Constraint(ConstraintBase):
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     # Wrapped xarray methods — only available on Constraint
-    assign = conwrap(Dataset.assign)
-    assign_multiindex_safe = conwrap(assign_multiindex_safe)
+    assign = conwrap(assign_fields)
     assign_attrs = conwrap(Dataset.assign_attrs)
     assign_coords = conwrap(Dataset.assign_coords)
     broadcast_like = conwrap(Dataset.broadcast_like)
@@ -2809,7 +2808,7 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
+            constraint._data = assign_fields(constraint.data, blocks=res)
 
     @property
     def flat(self) -> pd.DataFrame:

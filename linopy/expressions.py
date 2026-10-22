@@ -72,8 +72,7 @@ from linopy.alignment import (
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -90,14 +89,12 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    reassign_coords,
     save_join,
     to_dataframe,
     to_polars,
 )
-from linopy.config import (
-    SPARSE_DEPRECATION,
-    options,
-)
+from linopy.config import options
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -114,25 +111,17 @@ from linopy.csr import CSRLinearExpression, Grid, _aux_coords, _densify_notice
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
-    _legacy_coord_mismatch_message,
-    _legacy_group_multiindex_message,
-    _legacy_join_divisor_fill_message,
-    _legacy_nan_rhs_constraint_message,
     _shared_dim_mismatch_message,
     absorb_absence,
     check_join_fill_value,
     check_user_nan,
     enforce_aux_conflict,
     enforce_merge_dims,
+    enforce_no_multiindex,
     first_mismatched_dim,
     is_nan_scalar,
-    is_v1,
     join_fill,
-    legacy_warnings_muted,
     reindex_like_if_needed,
-    warn_legacy,
-    warn_legacy_absence,
-    warn_outside_linopy,
 )
 from linopy.types import (
     CONSTANT_TYPES,
@@ -351,11 +340,7 @@ def _restore_group_dim_position(
             order.extend(new_dims)
             new_dims = []
     result = result.transpose(*order, missing_dims="ignore")
-    reordered_coords = {
-        d: result[d]
-        for d in order
-        if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
-    }
+    reordered_coords = {d: result[d] for d in order if d in result.coords}
     result = result.assign_coords(reordered_coords)
     for name in ("coeffs", "vars"):
         term = result[name]
@@ -446,22 +431,17 @@ def _restore_multikey_index(
     """
     Rebuild the multi-key group labels encoded by _encode_multikey_group.
 
-    Under v1 semantics a stacked result that survives (``stacked_survives``)
-    keeps a flat group dimension with the key values as auxiliary coordinates.
-    Otherwise the keys become a MultiIndex — either because the caller unstacks
-    it right after (``stacked_survives`` is False), or under legacy semantics,
-    where a *surviving* ``group`` MultiIndex additionally warns about the
-    deprecated result, whichever grouper minted it.
+    A stacked result that survives (``stacked_survives``) keeps a flat group
+    dimension with the key values as auxiliary coordinates. Otherwise the keys
+    become a MultiIndex, because the caller unstacks it right after.
     """
     index = uniques.take(ds.indexes[GROUP_DIM])
     level_names = list(index.names)
     index.name = GROUP_DIM
-    if stacked_survives and is_v1():
+    if stacked_survives:
         return ds.assign_coords(
             {n: (GROUP_DIM, index.get_level_values(n)) for n in level_names}
         )
-    if stacked_survives:
-        warn_legacy(_legacy_group_multiindex_message(level_names))
     return ds.assign_coords(Coordinates.from_pandas_multiindex(index, GROUP_DIM))
 
 
@@ -527,7 +507,6 @@ class LinearExpressionGroupby:
     def map(
         self,
         func: Callable[..., Dataset],
-        shortcut: bool | None = None,
         args: tuple[()] = (),
         **kwargs: Any,
     ) -> LinearExpression:
@@ -538,8 +517,6 @@ class LinearExpressionGroupby:
         ----------
         func : callable
             The function to apply.
-        shortcut : bool, optional
-            Deprecated and ignored. Will be removed in linopy v1.
         args : tuple, optional
             The arguments to pass to the function.
         **kwargs
@@ -550,19 +527,12 @@ class LinearExpressionGroupby:
         LinearExpression
             The result of applying the function to the groupby object.
         """
-        if shortcut is not None:
-            warn(
-                "The `shortcut` argument is deprecated, no longer has any effect "
-                "and will be removed in linopy v1.",
-                FutureWarning,
-            )
         return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
 
     def sum(
         self,
         use_fallback: bool = False,
         observed: bool = False,
-        sparse: bool | None = None,
     ) -> LinearExpression:
         """
         Sum the expression over each group.
@@ -576,25 +546,11 @@ class LinearExpressionGroupby:
             Use the slower fallback groupby-sum implementation instead of the
             default one. Kept as an escape hatch. Leave at False unless the
             default misbehaves. Defaults to False.
-        sparse : bool, optional
-            Deprecated, build the model with ``Model(sparse=True)`` instead.
-            Build the grouped sum in CSR form behind the ordinary
-            LinearExpression type — no group-size padding; a still-sparse
-            lhs reaching ``Model.add_constraints`` with ``freeze=True``
-            becomes a CSRConstraint directly, other operations expand to
-            the dense rectangle in canonical term layout. Supports pandas
-            Series/DataFrame, 1-D DataArray and coordinate-name-list groupers
-            over an existing dimension; with a name list and ``observed=True``
-            the CSR result stays compact over the observed key combinations.
-            Requires v1 semantics. Defaults to True for a sparse model, a
-            CSR-backed expression or the deprecated
-            ``linopy.options["sparse_groupby"]``. See :mod:`linopy.csr`.
         observed : bool
             Only applies when grouping by a list of coordinate names. If True,
-            keep the result stacked over the observed key combinations (a
-            ``group`` dimension: a ``MultiIndex`` under legacy semantics, a
-            flat dimension with the key values as auxiliary coordinates under
-            v1) instead of unstacking into one dimension per key, which
+            keep the result stacked over the observed key combinations (a flat
+            ``group`` dimension with the key values as auxiliary coordinates)
+            instead of unstacking into one dimension per key, which
             materialises the dense cartesian grid.
             Defaults to False, mirroring xarray. Not supported together with
             `use_fallback`.
@@ -615,22 +571,8 @@ class LinearExpressionGroupby:
 
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
-        self.model._check_sparse_semantics()
         csr = self._csr
-        explicit_sparse = sparse is True
-        if sparse is None:
-            sparse = is_v1() and (
-                self.model.sparse or options["sparse_groupby"] or csr is not None
-            )
-        else:
-            warn_outside_linopy(
-                f"groupby(...).sum(sparse=...) {SPARSE_DEPRECATION}.", FutureWarning
-            )
-            if sparse and not is_v1():
-                raise ValueError(
-                    "sparse groupby-sum requires v1 semantics; opt in with "
-                    "linopy.options['semantics'] = 'v1'."
-                )
+        sparse = self.model.sparse or csr is not None
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
@@ -662,12 +604,6 @@ class LinearExpressionGroupby:
                     source, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_csr(res, self.model)
-            if explicit_sparse:
-                raise ValueError(
-                    "sparse=True supports only a pandas Series or DataFrame, 1-D "
-                    "DataArray or list of coordinate names as grouper over an "
-                    "existing dimension, without use_fallback."
-                )
             reason = "groupby-sum with a grouper without a sparse path"
             if csr is None:
                 _densify_notice(reason, self.model)
@@ -867,7 +803,7 @@ class LinearExpressionRolling:
             .rename({TERM_DIM: STACKED_TERM_DIM})
             .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
         )
-        ds = assign_multiindex_safe(ds, const=data.const.sum("_rolling_term"))
+        ds = assign_fields(ds, const=data.const.sum("_rolling_term"))
         return LinearExpression(ds, self.model)
 
 
@@ -918,7 +854,7 @@ class BaseExpression(ABC):
             )
 
         if np.issubdtype(data.vars, np.floating):
-            data = assign_multiindex_safe(
+            data = assign_fields(
                 data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
         if not np.issubdtype(data.coeffs, np.floating):
@@ -932,13 +868,13 @@ class BaseExpression(ABC):
         if "const" not in data:
             data = data.assign(const=0.0)
         elif not np.issubdtype(data.const, np.floating):
-            data = assign_multiindex_safe(data, const=data.const.astype(float))
+            data = assign_fields(data, const=data.const.astype(float))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         data = cast(Dataset, data)
         (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
         coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
-        data = assign_multiindex_safe(data, **coeffs_vars_dict)
+        data = assign_fields(data, **coeffs_vars_dict)
 
         data = data.transpose(..., TERM_DIM)
 
@@ -1060,7 +996,7 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
+        return self.assign(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
@@ -1082,22 +1018,18 @@ class BaseExpression(ABC):
         enforce_merge_dims(
             [self.data, other.data],
             concat_dim=FACTOR_DIM,
-            context="quadratic product",
-            alignment="by label, as an outer join",
             joinable=False,
         )
-        warn_legacy_absence(self.const, other.const)
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
-        ds = assign_multiindex_safe(ds, const=other.const)
+        ds = assign_fields(ds, const=other.const)
         join: JoinOptions = (
             "override" if _coord_sizes_agree([self.data, ds]) else "outer"
         )
         res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression, join=join)
-        with legacy_warnings_muted():
-            if self.has_constant:
-                res = res + other.reset_const() * self.const.fillna(0)
-            if other.has_constant:
-                res = res + self.reset_const() * other.const.fillna(0)
+        if self.has_constant:
+            res = res + other.reset_const() * self.const.fillna(0)
+        if other.has_constant:
+            res = res + self.reset_const() * other.const.fillna(0)
         return cast(QuadraticExpression, res)
 
     def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
@@ -1124,10 +1056,8 @@ class BaseExpression(ABC):
             ``ABSENT`` fills both sides with NaN, so the created position
             comes out absent instead of carrying either operand's value.
         join : str, optional
-            Alignment method. When None, follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally
-            (size-aware).
+            Alignment method. When None, shared dims must carry identical
+            labels in identical order.
 
         Returns
         -------
@@ -1153,20 +1083,7 @@ class BaseExpression(ABC):
         enforce_aux_conflict([self.const, other])
         other_fill = {other.name: join_fill(fill_value, 0)}
         if join is None:
-            if is_v1():
-                join = "exact"
-            else:  # LEGACY: remove at 1.0
-                mismatch = first_mismatched_dim(self.const, other)
-                if mismatch is not None:
-                    warn_legacy(
-                        _legacy_coord_mismatch_message(
-                            "this operator's constant operand", *mismatch
-                        )
-                    )
-                if other.sizes == self.const.sizes:
-                    return self.const, other.assign_coords(coords=self.coords), False
-                aligned = other.reindex_like(self.const, fill_value=other_fill)
-                return self.const, aligned, False
+            join = "exact"
 
         if join == "override":
             _check_override_sizes(self.const, other)
@@ -1191,7 +1108,6 @@ class BaseExpression(ABC):
         other: ConstantLike,
         fill_value: FillValueLike,
         join: JoinOptions | None,
-        op_kind: str = "add",
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Broadcast a constant operand, enforce §5 on its NaN, and align it.
@@ -1200,12 +1116,10 @@ class BaseExpression(ABC):
         with an empty dimension has no position for a NaN scalar to show up in.
         """
         if is_nan_scalar(other):
-            check_user_nan(op_kind=op_kind)
-        da = broadcast_to_coords(
-            other, coords=self.coords, strict=False, warn_reorder=True
-        )
+            check_user_nan()
+        da = broadcast_to_coords(other, coords=self.coords, strict=False)
         if da.isnull().any():
-            check_user_nan(op_kind=op_kind)
+            check_user_nan()
         return self._align_constant(da, fill_value=fill_value, join=join)
 
     def _reindexed_to(self, const: DataArray, needs_data_reindex: bool) -> Self:
@@ -1241,16 +1155,6 @@ class BaseExpression(ABC):
         fill_value: FillValueLike = None,
     ) -> Self:
         fill_value = 0 if fill_value is None else fill_value
-        if is_v1():
-            return self._add_constant_v1(other, join, fill_value)
-        return self._add_constant_legacy(other, join, fill_value)
-
-    def _add_constant_v1(
-        self,
-        other: ConstantLike,
-        join: JoinOptions | None,
-        fill_value: FillValueLike = 0,
-    ) -> Self:
         if np.isscalar(other) and join is None:
             if is_nan_scalar(other):
                 check_user_nan()
@@ -1265,88 +1169,25 @@ class BaseExpression(ABC):
         )
         return expr._absorb_join_absence(fill_value)
 
-    # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
-    def _add_constant_legacy(
-        self,
-        other: ConstantLike,
-        join: JoinOptions | None,
-        fill_value: FillValueLike = 0,
-    ) -> Self:
-        if np.isscalar(other) and join is None:
-            if is_nan_scalar(other):
-                check_user_nan()
-            warn_legacy_absence(self.const)
-            return self._combined_with_constant(
-                self.const.fillna(0),
-                other,
-                operator.add,
-                needs_data_reindex=False,
-                scale=False,
-            )
-        self_const, da, needs_reindex = self._broadcast_and_align(
-            other, fill_value, join
-        )
-        warn_legacy_absence(self_const)
-        expr = self._reindexed_to(self_const, needs_reindex)
-        return expr.assign(const=self_const.fillna(0) + da.fillna(0))
-
     def _apply_constant_op(
         self,
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
-        nan_fill: float,
-        factor_fill: FillValueLike,
-        op_kind: str,
+        fill_value: FillValueLike,
         join: JoinOptions | None = None,
     ) -> Self:
         """
         Apply a constant operation (mul, div) to this expression.
 
-        ``factor_fill`` is what the factor takes at join-created positions;
-        ``nan_fill`` is legacy's silent fill for a NaN the factor carried in.
+        ``fill_value`` is what the factor takes at join-created positions.
         """
-        if is_v1():
-            return self._apply_constant_op_v1(other, op, factor_fill, op_kind, join)
-        return self._apply_constant_op_legacy(
-            other, op, nan_fill, factor_fill, op_kind, join
-        )
-
-    def _apply_constant_op_v1(
-        self,
-        other: ConstantLike,
-        op: Callable[[DataArray, DataArray], DataArray],
-        fill_value: FillValueLike,
-        op_kind: str,
-        join: JoinOptions | None,
-    ) -> Self:
         self_const, factor, needs_reindex = self._broadcast_and_align(
-            other, fill_value, join, op_kind
+            other, fill_value, join
         )
         expr = self._combined_with_constant(
             self_const, factor, op, needs_data_reindex=needs_reindex, scale=True
         )
         return expr._absorb_join_absence(fill_value)
-
-    # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
-    def _apply_constant_op_legacy(
-        self,
-        other: ConstantLike,
-        op: Callable[[DataArray, DataArray], DataArray],
-        nan_fill: float,
-        factor_fill: FillValueLike,
-        op_kind: str,
-        join: JoinOptions | None,
-    ) -> Self:
-        self_const, factor, needs_reindex = self._broadcast_and_align(
-            other, factor_fill, join, op_kind
-        )
-        warn_legacy_absence(self_const)
-        factor = factor.fillna(nan_fill)
-        self_const = self_const.fillna(0)
-        expr = self._reindexed_to(self_const, needs_reindex)
-        return expr.assign(
-            coeffs=op(expr.coeffs.fillna(0), factor), const=op(self_const, factor)
-        )
 
     def _multiply_by_constant(
         self,
@@ -1357,9 +1198,7 @@ class BaseExpression(ABC):
         return self._apply_constant_op(
             other,
             operator.mul,
-            nan_fill=0,
-            factor_fill=0 if fill_value is None else fill_value,
-            op_kind="mul",
+            fill_value=0 if fill_value is None else fill_value,
             join=join,
         )
 
@@ -1369,20 +1208,10 @@ class BaseExpression(ABC):
         join: JoinOptions | None = None,
         fill_value: FillValueLike = None,
     ) -> Self:
-        if fill_value is None and is_v1():
-            fill_value = np.inf
-        elif fill_value is None:  # LEGACY: remove at 1.0
-            if join in ("left", "outer") and not _labels_within(
-                self.const, as_dataarray(other)
-            ):
-                warn_legacy(_legacy_join_divisor_fill_message())
-            fill_value = 1
         return self._apply_constant_op(
             other,
             operator.truediv,
-            nan_fill=1,
-            factor_fill=fill_value,
-            op_kind="div",
+            fill_value=np.inf if fill_value is None else fill_value,
             join=join,
         )
 
@@ -1436,9 +1265,9 @@ class BaseExpression(ABC):
             The expression to add.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the constant operand takes at the positions the join creates.
             Defaults to 0, the additive identity. ``linopy.ABSENT`` keeps those
@@ -1480,9 +1309,9 @@ class BaseExpression(ABC):
             The expression to subtract.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the subtrahend takes at the positions the join creates.
             Defaults to 0; ``linopy.ABSENT`` keeps them absent, for a constant
@@ -1507,9 +1336,9 @@ class BaseExpression(ABC):
             The factor to multiply by.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the factor takes at the positions the join creates. Defaults
             to 0, so a term without a factor evaluates to zero;
@@ -1540,9 +1369,9 @@ class BaseExpression(ABC):
             The divisor.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         fill_value : float or ABSENT, optional
             Value the divisor takes at the positions the join creates. By
             default that term evaluates to zero; pass ``1`` to keep it
@@ -1574,9 +1403,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_constraint(LESS_EQUAL, rhs, join=join)
 
@@ -1594,9 +1423,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_constraint(GREATER_EQUAL, rhs, join=join)
 
@@ -1614,9 +1443,9 @@ class BaseExpression(ABC):
             Right-hand side of the constraint.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
         """
         return self.to_constraint(EQUAL, rhs, join=join)
 
@@ -1631,7 +1460,7 @@ class BaseExpression(ABC):
         Matrix multiplication with other, similar to xarray dot.
 
         Identical to ``@``. For a :class:`LinearExpression` that includes the
-        sparse contraction under v1; :class:`QuadraticExpression` always takes
+        sparse contraction; :class:`QuadraticExpression` always takes
         the dense path. The result is CSR-backed for a sparse model
         (``Model(sparse=True)``) or a CSR-backed input.
         """
@@ -1728,7 +1557,7 @@ class BaseExpression(ABC):
 
     @vars.setter
     def vars(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, vars=value)
+        self._data = assign_fields(self.data, vars=value)
 
     @property
     def coeffs(self) -> DataArray:
@@ -1737,7 +1566,7 @@ class BaseExpression(ABC):
 
     @coeffs.setter
     def coeffs(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, coeffs=value)
+        self._data = assign_fields(self.data, coeffs=value)
 
     @property
     def const(self) -> DataArray:
@@ -1746,7 +1575,7 @@ class BaseExpression(ABC):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, const=value)
+        self._data = assign_fields(self.data, const=value)
 
     def _assign_coords(self, **coords: Any) -> Self:
         """
@@ -1757,7 +1586,7 @@ class BaseExpression(ABC):
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -1907,15 +1736,14 @@ class BaseExpression(ABC):
         sign : str, array-like
             Sign(s) of the constraints.
         rhs : constant, Variable, LinearExpression
-            Right-hand side of the constraint. If a DataArray, it is
-            reindexed to match expression coordinates (fill_value=np.nan).
-            Extra dimensions in the RHS not present in the expression
-            raise a ValueError. NaN entries in the RHS mean "no constraint".
+            Right-hand side of the constraint. A constant is broadcast onto
+            the expression coordinates and aligned according to ``join``;
+            NaN entries raise a ValueError.
         join : str, optional
             How to align coordinates. One of "outer", "inner", "left",
-            "right", "exact", "override". When None (default), follows
-            ``linopy.options["semantics"]``: v1 requires identical labels in
-            identical order on shared dims, legacy aligns positionally.
+            "right", "exact", "override". When None (default), shared
+            dimensions must carry identical labels (same labels, same
+            order) — a reorder or a differing set raises.
 
         Returns
         -------
@@ -1925,12 +1753,10 @@ class BaseExpression(ABC):
 
         Notes
         -----
-        Under v1 the RHS is a user-supplied constant like any other operand: its
-        NaN raises (§5) and ``sub`` does the §8 alignment, rather than a silent
+        The RHS is a user-supplied constant like any other operand: its NaN
+        raises (§5) and ``sub`` does the §8 alignment, rather than a silent
         ``reindex_like``-pad that would mask a coordinate mismatch. An absent
         slot propagated into the RHS reads as "no constraint at this row" (§12).
-        Legacy instead keeps a NaN RHS as that auto-mask, restoring the mask
-        after the subtraction filled it with 0.
         """
         rhs = as_constant(rhs)
         if self.is_constant and is_constant(rhs):
@@ -1938,69 +1764,21 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        rhs_nan_mask = None
-        if is_v1():
-            if isinstance(rhs, CONSTANT_TYPES):
-                rhs = self._broadcast_rhs(rhs)
-                if rhs.isnull().any():
-                    check_user_nan()
-        elif isinstance(rhs, CONSTANT_TYPES):  # LEGACY: remove at 1.0
+        if isinstance(rhs, CONSTANT_TYPES):
             rhs = self._broadcast_rhs(rhs)
-            self._warn_legacy_rhs_alignment(rhs, join)
-            rhs_nan = rhs.isnull()
-            if bool(rhs_nan.any()):
-                warn_legacy(_legacy_nan_rhs_constraint_message())
-            rhs_nan_mask = rhs_nan.reindex_like(self.const, fill_value=True)
-            rhs = rhs.fillna(0).reindex_like(self.const, fill_value=0)
+            if rhs.isnull().any():
+                check_user_nan()
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
-        if rhs_nan_mask is not None and rhs_nan_mask.any():
-            computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
-        data = assign_multiindex_safe(
+        data = assign_fields(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
 
-    # LEGACY: remove at 1.0
-    def _warn_legacy_rhs_alignment(
-        self, rhs: DataArray, join: JoinOptions | None
-    ) -> None:
-        """
-        Legacy reindexes a constant RHS onto the expression by label, whatever
-        ``join``; warn unless the RHS covers every label and ``join`` would not
-        add, drop or reorder any.
-        """
-        mismatch = first_mismatched_dim(self.const, rhs)
-        if mismatch is None:
-            return
-        alignment = (
-            "by label onto the expression, no constraint where the RHS lacks a label"
-        )
-        if join is None:
-            warn_legacy(
-                _legacy_coord_mismatch_message(
-                    "constraint RHS", *mismatch, alignment=alignment
-                )
-            )
-            return
-        covered = join in ("left", "inner", "outer") and _labels_within(self.const, rhs)
-        if covered and (join != "outer" or _labels_within(rhs, self.const)):
-            return
-        warn_legacy(
-            _legacy_coord_mismatch_message(
-                "constraint RHS",
-                *mismatch,
-                alignment=f"{alignment}, ignoring `join={join!r}`",
-                v1=f"Under v1 `join={join!r}` is applied instead.",
-            )
-        )
-
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
         """Broadcast a constant RHS onto the expression's coordinates."""
-        rhs = broadcast_to_coords(
-            rhs, coords=self.coords, strict=False, warn_reorder=True
-        )
+        rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
         extra_dims = set(rhs.dims) - set(self.coord_dims)
         if extra_dims:
             logger.warning(
@@ -2020,19 +1798,13 @@ class BaseExpression(ABC):
         """
         Get a boolean mask reporting which slots are absent.
 
-        Under v1 (§3) a slot is absent iff ``const`` is NaN — every operator
-        propagates const NaN from an absent operand, so this is the universal
-        signal. A term with ``vars == -1`` is a *dead term* (contributes
-        nothing), not a slot-level absence: ``fillna(value)`` revives an absent
-        slot to a present constant while leaving the sentinel term in place.
-        Legacy has no absence concept (``const`` is always filled with 0), so
-        its historical "all vars sentinel and const NaN" is kept verbatim.
+        A slot is absent iff ``const`` is NaN (§3) — every operator propagates
+        const NaN from an absent operand, so this is the universal signal. A
+        term with ``vars == -1`` is a *dead term* (contributes nothing), not a
+        slot-level absence: ``fillna(value)`` revives an absent slot to a
+        present constant while leaving the sentinel term in place.
         """
-        if is_v1():
-            return self.const.isnull()
-        # LEGACY: remove at 1.0 — see doc/design/legacy-removal.rst.
-        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
-        return (self.vars == -1).all(helper_dims) & self.const.isnull()
+        return self.const.isnull()
 
     def where(
         self,
@@ -2068,6 +1840,8 @@ class BaseExpression(ABC):
         -------
         linopy.LinearExpression or linopy.QuadraticExpression
         """
+        enforce_no_multiindex(cond, context="The condition")
+        enforce_no_multiindex(other, context="The constant")
         # Cannot set `other` if drop=True
         _other: dict[str, float] | dict[str, int | float | DataArray] | DataArray | None
         if other is None or other is np.nan:
@@ -2116,14 +1890,9 @@ class BaseExpression(ABC):
 
         Notes
         -----
-        This fills ``NaN`` entries only. Under legacy semantics an absent slot
-        of a variable is already materialised as ``const = 0`` by the time it
-        reaches an expression, so there is no ``NaN`` here to fill and the value
-        is a no-op (under v1 absence is carried as ``NaN`` and is filled). To
-        resolve a variable's absent slots to a constant on both conventions, use
-        :meth:`Variable.fillna` (or resolve on the variable before
-        ``to_linexpr``), which still holds the absence labels.
+        This fills ``NaN`` entries only, which is how absence is carried.
         """
+        enforce_no_multiindex(value, context="The constant")
         value = _expr_unwrap(value)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
@@ -2382,14 +2151,12 @@ class BaseExpression(ABC):
                 {TERM_DIM: STACKED_TERM_DIM}
             )
             ds = _stack_into_term_dim(ds, [STACKED_TERM_DIM] + dim)
-            ds = assign_multiindex_safe(ds, const=data.const.sum(dim))
+            ds = assign_fields(ds, const=data.const.sum(dim))
 
         return ds
 
     # Wrapped function which would convert variable to dataarray
-    assign = exprwrap(assign_multiindex_safe)
-
-    assign_multiindex_safe = exprwrap(assign_multiindex_safe)
+    assign = exprwrap(assign_fields)
 
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
@@ -2569,7 +2336,7 @@ class LinearExpression(BaseExpression):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, const=value)
+        self._data = assign_fields(self.data, const=value)
 
     @property
     def has_terms(self) -> DataArray:
@@ -2612,11 +2379,8 @@ class LinearExpression(BaseExpression):
             return super()._combined_with_constant(self_const, operand, op, **flags)
         dims = csr.grid.dims
         const = op(self_const, operand)
-        if set(const.dims) != set(dims) or _has_multiindex(const.indexes.values()):
-            self._densify(
-                "elementwise operation with a constant over new dimensions or "
-                "MultiIndex labels"
-            )
+        if set(const.dims) != set(dims):
+            self._densify("elementwise operation with a constant over new dimensions")
             return super()._combined_with_constant(self_const, operand, op, **flags)
         const = const.transpose(*dims)
         grid = Grid.from_dataset(const, dims)
@@ -2647,20 +2411,17 @@ class LinearExpression(BaseExpression):
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
         cell absent. None, after a densify notice, where the selection leaves
-        the grid: new or unlabelled dimensions, MultiIndex labels, or
-        coordinates that are no auxiliary coordinates of the grid.
+        the grid: new or unlabelled dimensions, or coordinates that are no
+        auxiliary coordinates of the grid.
         """
         csr = self._csr
         if csr is None:
             return None
-        reason = f"`{name}` over MultiIndex labels, or introducing dimensions"
-        if _has_multiindex(csr.grid.indexes.values()):
-            self._densify(reason)
-            return None
+        reason = f"`{name}` introducing dimensions or coordinates"
         rows = select(csr.grid.dataarray(np.arange(csr.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
         leaves_grid = not set(dims) <= set(csr.grid.dims) & set(rows.indexes)
-        if leaves_grid or _has_multiindex(rows.indexes.values()):
+        if leaves_grid:
             self._densify(reason)
             return None
         grid = Grid.from_dataset(rows, dims)
@@ -2727,6 +2488,7 @@ class LinearExpression(BaseExpression):
         | None = None,
         **kwargs: Any,
     ) -> Self:
+        enforce_no_multiindex(cond, context="The condition")
         cond_da = _expr_unwrap(cond)
         drop = kwargs.get("drop", False)
         absent = other is None or other is np.nan
@@ -2960,7 +2722,7 @@ class LinearExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
 
-        Under v1, a constant ``other`` is contracted as one sparse matrix
+        A constant ``other`` is contracted as one sparse matrix
         product (:meth:`_sparse_matmul`) instead of the dense broadcast
         ``(self * other).sum(dim)``. The result is then the compact canonical
         form -- duplicate variables summed, terms label-ordered, explicit
@@ -2968,10 +2730,9 @@ class LinearExpression(BaseExpression):
         while the values agree. Returns a CSR-backed result when ``self`` is
         CSR-backed or the model is sparse.
         """
-        self.model._check_sparse_semantics()
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
-        if other_is_const and is_v1() and type(self) is LinearExpression:
+        if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
             if sparse is not None:
                 return sparse
@@ -2989,8 +2750,7 @@ class LinearExpression(BaseExpression):
         Contract against a constant as one sparse matrix product, skipping the
         dense broadcast intermediate of ``(self * other).sum(dim)``.
 
-        Returns None where the dense path owns the semantics: a MultiIndex on
-        the expression or on the operand, non-unique or MultiIndex grid
+        Returns None where the dense path owns the semantics: non-unique grid
         labels, a zero-size grid, an operand sharing no dimension with the
         grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRLinearExpression.contracted`, so its term
@@ -2998,24 +2758,19 @@ class LinearExpression(BaseExpression):
         result is CSR-backed when the input was or the model is sparse.
         """
         if is_nan_scalar(other):
-            check_user_nan(op_kind="mul")
-        if self._csr is None and _has_multiindex(self.data.indexes.values()):
-            return None
+            check_user_nan()
         if not self.coord_dims:
             self._densify("`@` on a zero-dimensional expression")
             return None
         csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
-        if not csr.grid.is_unique or _has_multiindex(csr.grid.indexes.values()):
-            self._densify("`@` over non-unique or MultiIndex labels")
+        if not csr.grid.is_unique:
+            self._densify("`@` over non-unique labels")
             return None
         if csr.grid.size == 0:
             self._densify("`@` over a zero-size grid")
             return None
         coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
-        if _has_multiindex(da.indexes.values()):
-            self._densify("`@` with a MultiIndex operand")
-            return None
         contracted = [d for d in csr.grid.dims if d in da.dims]
         new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
         if not contracted or any(d not in da.indexes for d in new_dims):
@@ -3275,7 +3030,7 @@ class LinearExpression(BaseExpression):
 
         # Create new dataset with simplified data
         new_data = self.data.copy()
-        new_data = assign_multiindex_safe(new_data, vars=vars, coeffs=coeffs)
+        new_data = assign_fields(new_data, vars=vars, coeffs=coeffs)
 
         return LinearExpression(new_data, self.model)
 
@@ -3774,10 +3529,6 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
-def _has_multiindex(indexes: Iterable[pd.Index]) -> bool:
-    return any(isinstance(i, pd.MultiIndex) for i in indexes)
-
-
 def _densify_all(exprs: Iterable[Any], reason: str) -> None:
     """Convert the CSR-backed LinearExpressions among ``exprs`` to dense, with one notice."""
     sparse = [
@@ -3796,12 +3547,6 @@ def _coord_sizes_agree(objs: Sequence[Any]) -> bool:
     """Whether all ``objs`` carry the same non-helper dimension sizes."""
     sizes = [{k: v for k, v in o.sizes.items() if k not in HELPER_DIMS} for o in objs]
     return check_common_keys_values(sizes)
-
-
-def _labels_within(a: DataArray, b: DataArray) -> bool:
-    """Whether every label of ``a`` on a dim shared with ``b`` is also in ``b``."""
-    shared = set(a.indexes) & set(b.indexes)
-    return all(a.indexes[d].isin(b.indexes[d]).all() for d in shared)
 
 
 def _merge_dims(e: LinearExpression, union: set[str]) -> list[str]:
@@ -3867,7 +3612,7 @@ def _concatenated(
     in order. The result's coordinates are what the dense path's
     ``xr.concat`` yields on the grids alone: labels and auxiliary
     coordinates concatenated along ``dim``, the other dims joined as
-    ``join`` says (``outer`` by default, after the v1 label check for the
+    ``join`` says (``outer`` by default, after the §8 label check for the
     auto-detected join), with the cells the join creates absent. Returns the
     reason as a string where the dense path owns the semantics instead: a
     join over non-unique labels.
@@ -3875,7 +3620,7 @@ def _concatenated(
     dims = csrs[0].grid.dims
     metadata = [p.grid.to_dataset() for p in csrs]
     if join is None:
-        enforce_merge_dims(metadata, concat_dim=dim, context=f"merge along dim {dim!r}")
+        enforce_merge_dims(metadata, concat_dim=dim)
     enforce_aux_conflict(metadata, concat_dim=dim)
     combined = xr.concat(
         metadata, dim, join=join or "outer", coords="minimal", compat="override"
@@ -3930,9 +3675,6 @@ def _try_csr_merge(
         return None
     if dim != TERM_DIM and dim not in dims:
         _densify_all(exprs, "merge along a new dimension")
-        return None
-    if spread and _has_multiindex(i for e in exprs for i in e.indexes.values()):
-        _densify_all(exprs, "merge over different dimensions with a MultiIndex")
         return None
     for e in exprs:
         own = set(map(str, e.coord_dims))
@@ -4026,7 +3768,7 @@ def merge(
     fill_value : ABSENT, optional
         Pass ``linopy.ABSENT`` to leave the positions the join creates absent
         instead of contributing the zero expression there. Requires an
-        explicit ``join`` and the v1 semantics.
+        explicit ``join``.
     **kwargs
         Additional keyword arguments passed to xarray.concat. Defaults to
         {coords: "minimal", compat: "override"} or, in the special case described
@@ -4038,7 +3780,7 @@ def merge(
 
     Notes
     -----
-    Under v1 an absent slot of any operand stays absent in the result (§6), so
+    An absent slot of any operand stays absent in the result (§6), so
     the term reduction runs with ``skipna=False`` instead of collapsing NaN to
     the additive (or, for the quadratic build, multiplicative) identity.
     """
@@ -4077,6 +3819,9 @@ def merge(
     if has_quad_expression and not issubclass(cls, QuadraticExpression):
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
+    for e in exprs:
+        enforce_no_multiindex(e, context="merge input")
+
     linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
@@ -4092,7 +3837,7 @@ def merge(
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
     if join is None:
-        enforce_merge_dims(data, concat_dim=dim, context=f"merge along dim {dim!r}")
+        enforce_merge_dims(data, concat_dim=dim)
     enforce_aux_conflict(data, concat_dim=dim)
 
     if join is not None:
@@ -4119,31 +3864,28 @@ def merge(
         else:
             kwargs.setdefault("join", "outer")
 
-    skipna = not is_v1()
     if dim == TERM_DIM:
-        warn_legacy_absence(*(d["const"] for d in data))
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
         subkwargs = {**kwargs, "fill_value": {"const": join_fill(fill_value, 0)}}
         const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
-        const = const.sum(TERM_DIM, skipna=skipna)
-        ds = assign_multiindex_safe(ds, const=const)
+        const = const.sum(TERM_DIM, skipna=False)
+        ds = assign_fields(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
         coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
-            FACTOR_DIM, skipna=skipna
+            FACTOR_DIM, skipna=False
         )
         const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
-            FACTOR_DIM, skipna=skipna
+            FACTOR_DIM, skipna=False
         )
-        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
+        ds = assign_fields(ds, coeffs=coeffs, const=const)
     else:
         ds = xr.concat(data, dim, **kwargs)
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
 
-    if is_v1():
-        ds = absorb_absence(ds)
+    ds = absorb_absence(ds)
 
     return cls(ds, model)
 

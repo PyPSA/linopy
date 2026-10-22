@@ -50,7 +50,7 @@ from linopy.constants import (
     EvolvingAPIWarning,
     sign_replace_dict,
 )
-from linopy.semantics import check_user_nan_breakpoints
+from linopy.semantics import check_user_nan_breakpoints, warn_outside_linopy
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint, Constraints
@@ -880,8 +880,9 @@ def _resolve_active(
             "`active` is not defined over the full coordinate of the "
             "piecewise formulation: it is missing labels (a subset of the "
             "coordinate) or has masked entries, which would be gated to "
-            "zero. Pass `active_fill=1` to treat those entries as always "
-            "active (or `0` as always off), or pass a fully-defined `active`."
+            "zero. Pad `active` explicitly, e.g. "
+            "`active=active.reindex(coords).fillna(1)` to treat those entries "
+            "as always active (or `fillna(0)` as always off)."
         )
     return active
 
@@ -1009,10 +1010,9 @@ def _resolve_breakpoint_mask(
     A ragged curve is stored densely along ``BREAKPOINT_DIM`` with the
     surplus slots absent. A shorter curve and a data error are
     indistinguishable from NaN alone, so the caller declares the absence
-    with ``mask=``; without a declaration v1 raises and legacy keeps
-    inferring from NaN placement. The returned arrays carry ``NaN``
-    exactly where the mask says absent, so ``isnull()`` stays the single
-    absence predicate downstream.
+    with ``mask=``; without a declaration it raises. The returned arrays
+    carry ``NaN`` exactly where the mask says absent, so ``isnull()`` stays
+    the single absence predicate downstream.
     """
     combined_null = bp_list[0].isnull()
     for bp in bp_list[1:]:
@@ -1022,7 +1022,6 @@ def _resolve_breakpoint_mask(
         if not bool(combined_null.any()):
             return bp_list, None
         check_user_nan_breakpoints()
-        return bp_list, ~combined_null
 
     declared = (mask if isinstance(mask, DataArray) else DataArray(mask)).astype(bool)
     bp_dims = set().union(*(bp.dims for bp in bp_list))
@@ -1222,8 +1221,8 @@ def add_piecewise_formulation(
 
         ``active`` must cover the formulation's full coordinate.  A
         *partial* gate — one defined over only a subset of the coordinate's
-        labels, or carrying masked entries — is rejected unless
-        ``active_fill`` is set (see below).
+        labels, or carrying masked entries — is rejected.  Pad it
+        explicitly, e.g. ``active=active.reindex(coords).fillna(1)``.
 
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
@@ -1243,15 +1242,17 @@ def add_piecewise_formulation(
         When ``None`` (the default) a partial ``active`` is rejected instead.
         Useful when one formulation mixes gated and ungated entities (e.g.
         committable and non-committable units sharing a ``status``).
-        Transitional convenience: under v1 semantics, pad ``active``
-        explicitly with ``active.reindex(coords).fillna(value)`` instead —
-        this parameter is slated for removal then.
+
+        .. deprecated:: 1.0
+            ``active_fill`` is removed in linopy 1.1.  Pad ``active``
+            explicitly instead, e.g.
+            ``active=active.reindex(coords).fillna(value)``.
     mask : MaskLike, optional
         Which breakpoint slots hold a real breakpoint — ``True`` where one
         exists, ``False`` where it is absent.  Shaped like the breakpoint
         arrays, or anything that broadcasts against them.  Needed for
         **ragged** curves (entities with different numbers of breakpoints),
-        stored densely with the surplus slots left absent: under v1 that
+        stored densely with the surplus slots left absent: that
         absence must be declared rather than read off the NaN padding, e.g.
         ``mask=x_pts.notnull()``.  Absent slots get no auxiliary variable
         and no constraint.  A mask hiding a present value drops that
@@ -1271,6 +1272,8 @@ def add_piecewise_formulation(
         sign semantics may be refined based on user feedback.  Silence
         with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
+    FutureWarning
+        If ``active_fill`` is passed; it is deprecated and removed in 1.1.
     """
     _warn_evolving_api(
         "add_piecewise_formulation",
@@ -1408,6 +1411,14 @@ def add_piecewise_formulation(
             # Internal-prefixed fallback so a user variable named e.g. "1"
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
+
+    if active_fill is not None:
+        warn_outside_linopy(
+            "`active_fill` is deprecated and will be removed in linopy 1.1. "
+            "Pad `active` explicitly instead, e.g. "
+            "`active=active.reindex(coords).fillna(value)`.",
+            FutureWarning,
+        )
 
     if active is None:
         if active_fill is not None:
@@ -1804,7 +1815,7 @@ def _add_incremental(
     ``links.signed_expr`` (if any) is the output-side link.
 
     ``piece_dim`` relates each piece to the next-higher one *positionally*, so
-    the two ``isel`` slices carry different labels for the same dim, which v1
+    the two ``isel`` slices carry different labels for the same dim, which
     §8 rejects. The high slice is relabelled onto the low slice's labels —
     §10's explicit-positional path. Scalar ``isel`` uses ``drop=True`` so a
     leftover breakpoint coord does not become a §11 aux-coord conflict against

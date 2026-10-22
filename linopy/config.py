@@ -9,22 +9,23 @@ from __future__ import annotations
 
 from typing import Any
 
-LEGACY_SEMANTICS = "legacy"
-V1_SEMANTICS = "v1"
-VALID_SEMANTICS = {LEGACY_SEMANTICS, V1_SEMANTICS}
-SPARSE_DEPRECATION = (
-    "is deprecated and will be removed with the legacy semantics; use "
-    "Model(sparse=True) instead"
+SEMANTICS_DEPRECATION = (
+    'linopy.options["semantics"] is deprecated and has no effect: the v1 '
+    "convention is the only behaviour. Drop the setting; it is removed in "
+    "linopy 1.1."
+)
+SEMANTICS_MIGRATION = (
+    "The legacy semantics were removed in linopy 1.0 and v1 is the only "
+    "behaviour. See https://linopy.readthedocs.io/en/latest/migrating-to-v1.html "
+    "to migrate, or pin linopy<1 to keep the legacy behaviour."
 )
 
 
 class LinopySemanticsWarning(FutureWarning):
     """
-    Emitted when code runs under the legacy arithmetic semantics.
+    Deprecated, no longer emitted; removed in 1.1.
 
-    Subclasses ``FutureWarning`` rather than ``DeprecationWarning`` so it is
-    shown to end users by default; the legacy-to-v1 transition changes
-    results, not just an API surface.
+    Kept so that existing warning filters referencing it keep working.
     """
 
 
@@ -47,23 +48,17 @@ class OptionSettings:
 
     def set_value(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
+            if k == "semantics":
+                _set_semantics(v)
+                continue
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
-            if k == "semantics" and v not in VALID_SEMANTICS:
-                raise ValueError(
-                    f"Invalid semantics: {v!r}. "
-                    f"Must be one of {sorted(VALID_SEMANTICS)}."
-                )
-            if k == "sparse_groupby" and v:
-                from linopy.semantics import warn_outside_linopy
-
-                warn_outside_linopy(
-                    f'linopy.options["sparse_groupby"] {SPARSE_DEPRECATION}.',
-                    FutureWarning,
-                )
             self._current_values[k] = v
 
     def get_value(self, name: str) -> Any:
+        if name == "semantics":
+            _warn_semantics()
+            return "v1"
         if name in self._defaults:
             return self._current_values[name]
         else:
@@ -91,10 +86,20 @@ class OptionSettings:
         return f"OptionSettings:\n {settings}"
 
 
+def _warn_semantics() -> None:
+    from linopy.semantics import warn_outside_linopy
+
+    warn_outside_linopy(SEMANTICS_DEPRECATION, FutureWarning)
+
+
+def _set_semantics(value: Any) -> None:
+    if value != "v1":
+        raise ValueError(f"Invalid semantics: {value!r}. {SEMANTICS_MIGRATION}")
+    _warn_semantics()
+
+
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
-    semantics=LEGACY_SEMANTICS,
-    sparse_groupby=False,
     warn_on_densify=None,
 )

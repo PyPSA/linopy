@@ -161,7 +161,7 @@ def reformulate_sos2(
     -----
     Scalar ``isel`` uses ``drop=True``: the leftover ``sos_dim`` coord would
     disagree between ``x`` / ``M`` (indexed at ``n-1``) and ``z`` (at ``n-2``),
-    which v1 §11 rejects as an aux-coord conflict.
+    which the arithmetic convention rejects as an aux-coord conflict.
     """
     sos_dim = str(var.attrs[SOS_DIM_ATTR])
     name = var.name
