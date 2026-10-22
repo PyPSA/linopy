@@ -64,7 +64,7 @@ def assert_linequal(
     return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
 
 
-def _cell_terms(expr: LinearExpression) -> tuple[np.ndarray, ...]:
+def _cell_terms(expr: LinearExpression) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Cell index, variable label and coefficient of each live term, read from
     the CSR backing of a sparse expression without densifying it, or from
@@ -92,9 +92,7 @@ def _cell_matrix(expr: LinearExpression, n_vars: int) -> scipy.sparse.csr_array:
     cells, vars_, coeffs = _cell_terms(expr)
     shape = (int(expr.const.size), n_vars)
     matrix = scipy.sparse.coo_array((coeffs, (cells, vars_)), shape=shape).tocsr()
-    matrix.sum_duplicates()
     matrix.eliminate_zeros()
-    matrix.sort_indices()
     return matrix
 
 

@@ -140,6 +140,7 @@ CASES: dict[str, Case] = {
     "reindex-copy": Case(grid, lambda e: e.reindex(a=[0, 1, 5], copy=False), DATA_READ),
     "rename-dim": Case(grid, lambda e: e.rename(a="d"), KEPT),
     "rename-aux": Case(grid, lambda e: e.rename(tag="label"), DATA_READ),
+    "rename-const": Case(grid, lambda e: e.rename(const="k"), DATA_READ),
     "drop-vars-aux": Case(grid, lambda e: e.drop_vars("tag"), KEPT),
     "drop-vars-dim": Case(grid, lambda e: e.drop_vars("b"), DATA_READ),
     "drop-vars-const": Case(grid, lambda e: e.drop_vars("const"), DATA_READ),
@@ -274,22 +275,6 @@ def no_densify() -> Iterator[None]:
         yield
 
 
-@contextmanager
-def no_notice() -> Iterator[None]:
-    """Fail on any densify notice under the default warning policy."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", linopy.PerformanceWarning)
-        yield
-
-
-def is_sparse(res: Any) -> bool:
-    if isinstance(res, LinearExpression):
-        return res.is_sparse
-    if isinstance(res, ConstraintBase):
-        return isinstance(res, CSRConstraint)
-    return True
-
-
 def assert_same(res: Any, want: Any) -> None:
     if isinstance(res, QuadraticExpression):
         pd.testing.assert_frame_equal(res.flat, want.flat)
@@ -309,14 +294,13 @@ def assert_same(res: Any, want: Any) -> None:
 def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) -> None:
     build, op, expected, sparse_xfail = CASES[case]
     if backend.sparse and sparse_xfail is not None:
-        request.applymarker(pytest.mark.xfail(strict=True, reason=sparse_xfail))
+        request.applymarker(
+            pytest.mark.xfail(strict=True, raises=AssertionError, reason=sparse_xfail)
+        )
     want = op(build(Model()))
     expr = build(backend)
     assert expr.is_sparse == backend.sparse
-    if not backend.sparse:
-        with no_notice():
-            res = op(expr)
-    elif expected == KEPT:
+    if not backend.sparse or expected == KEPT:
         with no_densify():
             res = op(expr)
     else:
@@ -327,4 +311,25 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
     assert_same(res, want)
     if backend.sparse and expected == KEPT:
         assert expr.is_sparse
-        assert is_sparse(res)
+        if isinstance(res, LinearExpression):
+            assert res.is_sparse
+        elif isinstance(res, ConstraintBase):
+            assert isinstance(res, CSRConstraint)
+
+
+DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "coeffs": lambda e: e * 2,
+    "const": lambda e: e + 1,
+    "null-mask": lambda e: e.where(COND),
+    "aux-coord": lambda e: e.drop_vars("tag"),
+}
+
+
+@pytest.mark.parametrize("diff", list(DIFFERENCES))
+def test_assert_equivalent_detects_difference(backend: Model, diff: str) -> None:
+    expr = grid(backend)
+    with no_densify():
+        other = DIFFERENCES[diff](expr)
+        assert expr.is_sparse == other.is_sparse == backend.sparse
+        with pytest.raises(AssertionError):
+            assert_equivalent(expr, other)
