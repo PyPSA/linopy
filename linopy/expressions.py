@@ -2313,11 +2313,11 @@ class LinearExpression(BaseExpression):
         const = const.transpose(*dims)
         grid = Grid.from_dataset(const, dims)
         if needs_data_reindex:
-            csr = csr.reindexed(grid)
+            csr = csr.reindex(grid)
         if scale:
             factor = operand.broadcast_like(const).transpose(*dims)
-            csr = csr.scaled(factor.to_numpy().reshape(-1), op)
-        csr = replace(csr.with_const(const.to_numpy().reshape(-1)), grid=grid)
+            csr = csr.scale(factor.to_numpy().reshape(-1), op)
+        csr = replace(csr.assign_const(const.to_numpy().reshape(-1)), grid=grid)
         return type(self)._from_csr(csr, self._model)
 
     def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
@@ -2357,7 +2357,7 @@ class LinearExpression(BaseExpression):
             self._densify(reason)
             return None
         flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
-        return csr.taken(flat, grid)
+        return csr.take(flat, grid)
 
     def _gathered(
         self, name: str, dense: Callable[..., Self], /, *args: Any, **kwargs: Any
@@ -2441,7 +2441,7 @@ class LinearExpression(BaseExpression):
             return super().where(cond, other, **kwargs)
         if not absent:
             const = self.const.where(cond_da, other).transpose(*csr.grid.dims)
-            csr = csr.with_const(const.to_numpy().reshape(-1))
+            csr = csr.assign_const(const.to_numpy().reshape(-1))
         return type(self)._from_csr(csr, self._model)
 
     def sum(
@@ -2460,8 +2460,8 @@ class LinearExpression(BaseExpression):
         summed = [str(d) for d in dims if d != TERM_DIM]
         if not set(summed) <= set(csr.grid.dims):
             return super().sum(dim, drop_zeros)
-        res = csr.summed(summed) if summed else csr
-        return type(self)._from_csr(res.pruned() if drop_zeros else res, self._model)
+        res = csr.sum(summed) if summed else csr
+        return type(self)._from_csr(res.prune() if drop_zeros else res, self._model)
 
     @property
     def nterm(self) -> int:
@@ -2477,7 +2477,7 @@ class LinearExpression(BaseExpression):
         Get the negative of the expression.
         """
         if self._csr is not None:
-            return self._from_csr(self._csr.scaled(-1.0), self._model)
+            return self._from_csr(self._csr.scale(-1.0), self._model)
         return super().__neg__()
 
     def fillna(
@@ -2495,7 +2495,7 @@ class LinearExpression(BaseExpression):
             and isinstance(value, np.floating | np.integer | int | float)
             and not isinstance(value, bool)
         ):
-            return type(self)._from_csr(csr.filled(float(value)), self._model)
+            return type(self)._from_csr(csr.fillna(float(value)), self._model)
         _densify_all([self, value], "fillna with a non-scalar value")
         return super().fillna(value)
 
@@ -2601,7 +2601,7 @@ class LinearExpression(BaseExpression):
             and isinstance(other, int | float | np.number)
             and not is_nan_scalar(other)
         ):
-            return type(self)._from_csr(self._csr.scaled(float(other)), self._model)
+            return type(self)._from_csr(self._csr.scale(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -2681,7 +2681,7 @@ class LinearExpression(BaseExpression):
         Returns None where the dense path owns the semantics: non-unique grid
         labels, a zero-size grid, an operand sharing no dimension with the
         grid, and an unlabelled output dimension. The result is the compact
-        canonical form of :meth:`CSRLinearExpression.contracted`, so its term
+        canonical form of :meth:`CSRLinearExpression.dot`, so its term
         count may differ from the dense path's while the values agree; the
         result is CSR-backed when the input was or the model is sparse.
         """
@@ -2710,7 +2710,7 @@ class LinearExpression(BaseExpression):
             da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
-        res = csr.contracted(matrix, contracted, new_indexes)
+        res = csr.dot(matrix, contracted, new_indexes)
         if self._csr is not None or self.model.sparse:
             return type(self)._from_csr(res, self.model)
         return res.to_dense()
@@ -2767,7 +2767,7 @@ class LinearExpression(BaseExpression):
             and fill_value is self._fill_value
         ):
             grid = csr.grid.with_indexes(indexers)
-            return type(self)._from_csr(csr.reindexed(grid), self._model)
+            return type(self)._from_csr(csr.reindex(grid), self._model)
         return super().reindex(
             indexers,
             method=method,
@@ -2789,7 +2789,7 @@ class LinearExpression(BaseExpression):
         csr = self._csr
         if csr is not None and set(name_dict) <= set(csr.grid.dims):
             relabel = {str(k): str(v) for k, v in name_dict.items()}
-            return type(self)._from_csr(csr.renamed(relabel), self._model)
+            return type(self)._from_csr(csr.rename(relabel), self._model)
         return super().rename(name_dict)
 
     def drop_vars(
@@ -3503,11 +3503,11 @@ def _aligned(
     grid = Grid(indexes)
     aligned = []
     for p in csrs:
-        target = grid.reordered(p.grid.dims)
+        target = grid.select(p.grid.dims)
         if join == "override":
             p = replace(p, grid=p.grid.with_indexes(target.indexes))
         elif not p.grid.same_layout(target):
-            p = p.reindexed(target, fill)
+            p = p.reindex(target, fill)
         aligned.append(p if p.grid.dims == grid.dims else p.broadcast(grid))
     return aligned
 
@@ -3540,10 +3540,10 @@ def _concatenated(
         if join == "override" or p.grid.same_layout(target):
             aligned.append(replace(p, grid=target))
         elif p.grid.is_unique:
-            aligned.append(p.reindexed(target))
+            aligned.append(p.reindex(target))
         else:
             return "merge over non-unique labels"
-    return aligned[0].concatenated(aligned[1:], dim, grid)
+    return aligned[0].concat(aligned[1:], dim, grid)
 
 
 def _try_csr_merge(
@@ -3596,8 +3596,7 @@ def _try_csr_merge(
     if dim != TERM_DIM:
         order = csrs[0].grid.dims
         csrs = [
-            p.reindexed(p.grid.reordered(order)) if p.grid.dims != order else p
-            for p in csrs
+            p.reindex(p.grid.select(order)) if p.grid.dims != order else p for p in csrs
         ]
         stacked = _concatenated(csrs, dim, join)
         if isinstance(stacked, str):
@@ -3612,7 +3611,7 @@ def _try_csr_merge(
             return None
         csrs = aligned
 
-    combined = csrs[0].added(*csrs[1:])
+    combined = csrs[0].add(*csrs[1:])
     return LinearExpression._from_csr(combined, exprs[0].model)
 
 

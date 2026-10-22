@@ -19,9 +19,9 @@ results share them with their operands, and an in-place write, e.g. scipy
 sorting or summing a stored matrix, fails; a consumer needing canonical form
 works on a copy, as :func:`canonical` does.
 Grouping, ``sum``, ``merge``/``+``/``-``, scaling and
-``@``/``dot`` (:meth:`contracted`) are sparse linear algebra. Zero policy: the
-structural operations (grouping and ``sum`` via :meth:`aggregated`, merge via
-:meth:`added`, scaling, reindexing) keep explicit zero coefficients, moving
+``@``/``dot`` are sparse linear algebra. Zero policy: the structural
+operations (grouping via :meth:`aggregate`, :meth:`sum`, merge via
+:meth:`add`, scaling, reindexing) keep explicit zero coefficients, moving
 the stored terms through COO, row stacking, interleaving or row gathers; only
 the product with a constant matrix, ``@``/``dot``, prunes them. Either way
 cell activeness is carried by ``const`` alone, independent of term layout.
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 CONTRACTION_CHUNK = 64
-"""Kept-axis block size of the chunked Kronecker product in ``contracted``."""
+"""Kept-axis block size of the chunked Kronecker product in ``dot``."""
 
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
@@ -186,7 +186,7 @@ class Grid:
         valid = _outer_sum([pos == -1 for pos in positions.values()]) == 0
         return rows, valid
 
-    def renamed(self, names: Mapping[str, str]) -> Grid:
+    def rename(self, names: Mapping[str, str]) -> Grid:
         """Relabel dimensions; the cell layout is unchanged."""
         indexes = {
             names.get(d, d): i.rename(names.get(d, d)) for d, i in self.indexes.items()
@@ -197,7 +197,7 @@ class Grid:
         }
         return Grid(indexes, aux)
 
-    def reordered(self, dims: Iterable[str]) -> Grid:
+    def select(self, dims: Iterable[str]) -> Grid:
         """
         Select and order the given dimensions; labels unchanged, auxiliary
         coordinates on dropped dimensions dropped, scalar ones kept.
@@ -221,7 +221,7 @@ class Grid:
         }
         return replace(self, indexes=indexes)
 
-    def conformed(self, target: Grid) -> Grid:
+    def conform(self, target: Grid) -> Grid:
         """``target`` carrying this grid's auxiliary coordinates, reindexed onto its labels."""
         aux = {n: a for n, a in self.aux.items() if n not in target.indexes}
         for name, (d, values) in aux.items():
@@ -336,7 +336,7 @@ class CSRLinearExpression:
         coordinates. The new dims take the member dim's slot in
         ``coord_dims``. ``source`` is a dense expression dataset or an
         already CSR-backed expression, which is regrouped through
-        :meth:`aggregated`.
+        :meth:`aggregate`.
         """
         ds = source if isinstance(source, Dataset) else source.grid.to_dataset()
         member_dim = str(grouper.index.name)
@@ -384,7 +384,7 @@ class CSRLinearExpression:
             return cls._from_scatter(ds, model, grid, member_dim, scatter_codes, True)
         member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
         rows = _cell_rows(grid, member_rows, member_dim, source.grid.dims)
-        return source.aggregated(grid, rows)
+        return source.aggregate(grid, rows)
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> CSRLinearExpression:
@@ -468,11 +468,11 @@ class CSRLinearExpression:
 
         return cls(csr, const, grid, model)
 
-    def aggregated(self, grid: Grid, rows: np.ndarray) -> CSRLinearExpression:
+    def aggregate(self, grid: Grid, rows: np.ndarray) -> CSRLinearExpression:
         """
         Sum source rows into the cells of ``grid``, row ``i`` landing in cell
         ``rows[i]`` (conceptually ``G @ A``), their terms stacked in row order,
-        explicit zeros kept, as by :meth:`added`. Rows already in cell order
+        explicit zeros kept, as by :meth:`add`. Rows already in cell order
         share the stored arrays, others are gathered into cell order first.
         The constant is the NaN-skipping sum of its rows' constants (NaN
         counts as 0); cells no row lands in are absent. Auxiliary coordinates
@@ -494,7 +494,7 @@ class CSRLinearExpression:
         const[np.diff(bounds) == 0] = np.nan
         return replace(self, csr=csr, const=const, grid=grid)
 
-    def summed(self, dims: Iterable[str]) -> CSRLinearExpression:
+    def sum(self, dims: Iterable[str]) -> CSRLinearExpression:
         """
         Sum over grid dimensions. The kept dims stay in grid order with their
         auxiliary coordinates, and every kept cell is present, its constant
@@ -503,7 +503,7 @@ class CSRLinearExpression:
         dims = set(dims)
         source_dims = self.grid.dims
         kept = [d for d in source_dims if d not in dims]
-        grid = self.grid.reordered(kept)
+        grid = self.grid.select(kept)
         summed = [d for d in source_dims if d in dims]
         axes = [source_dims.index(d) for d in (*kept, *summed)]
         block = math.prod(len(self.grid.indexes[d]) for d in summed)
@@ -526,13 +526,13 @@ class CSRLinearExpression:
         present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
         return present & (self.csr.data != 0)
 
-    def pruned(self) -> CSRLinearExpression:
+    def prune(self) -> CSRLinearExpression:
         """Drop explicit zero coefficients; cell activeness stays with ``const``."""
         csr = self.csr.copy()
         csr.eliminate_zeros()
         return replace(self, csr=csr)
 
-    def scaled(
+    def scale(
         self,
         factor: float | np.ndarray,
         op: Callable[[Any, Any], Any] = operator.mul,
@@ -540,7 +540,7 @@ class CSRLinearExpression:
         """
         Apply ``op`` with ``factor`` -- a scalar or one value per cell -- to
         every coefficient and to the constant. Explicit zeros are kept, as by
-        :meth:`added`.
+        :meth:`add`.
         """
         factor = np.broadcast_to(factor, (self.n_cells,))
         per_term = np.repeat(factor, np.diff(self.csr.indptr))
@@ -548,9 +548,9 @@ class CSRLinearExpression:
             (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
             shape=self.csr.shape,
         )
-        return replace(self, csr=csr).with_const(op(self.const, factor))
+        return replace(self, csr=csr).assign_const(op(self.const, factor))
 
-    def with_const(self, const: np.ndarray) -> CSRLinearExpression:
+    def assign_const(self, const: np.ndarray) -> CSRLinearExpression:
         """
         Replace the per-cell constant, leaving the terms alone. A cell made
         absent (NaN) has its terms dropped: an absent cell carries no terms.
@@ -567,7 +567,7 @@ class CSRLinearExpression:
         )
         return replace(self, csr=csr, const=const)
 
-    def taken(self, rows: np.ndarray, grid: Grid) -> CSRLinearExpression:
+    def take(self, rows: np.ndarray, grid: Grid) -> CSRLinearExpression:
         """
         Gather rows into the cells of ``grid``, cell ``i`` taking row
         ``rows[i]`` with its terms, explicit zeros included, and its constant;
@@ -576,7 +576,7 @@ class CSRLinearExpression:
         present = rows >= 0
         const = np.where(present, self.const[rows], np.nan)
         csr = self.csr[np.where(present, rows, 0)]
-        return replace(self, csr=csr, grid=grid).with_const(const)
+        return replace(self, csr=csr, grid=grid).assign_const(const)
 
     def broadcast(self, grid: Grid) -> CSRLinearExpression:
         """
@@ -586,9 +586,9 @@ class CSRLinearExpression:
         cell absent. Auxiliary coordinates follow the rows.
         """
         rows, valid = self.grid.indexer(grid)
-        return self.taken(np.where(valid, rows, -1), self.grid.conformed(grid))
+        return self.take(np.where(valid, rows, -1), self.grid.conform(grid))
 
-    def concatenated(
+    def concat(
         self, others: Iterable[CSRLinearExpression], dim: str, grid: Grid
     ) -> CSRLinearExpression:
         """
@@ -624,9 +624,9 @@ class CSRLinearExpression:
             ],
             axis=axis,
         ).reshape(-1)
-        return stacked.taken(order, grid)
+        return stacked.take(order, grid)
 
-    def reindexed(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
+    def reindex(self, grid: Grid, fill: float = np.nan) -> CSRLinearExpression:
         """
         Remap rows onto a new grid, possibly in a new dim order: dropped
         labels vanish, new labels get ``fill`` as their constant (NaN: absent
@@ -639,7 +639,7 @@ class CSRLinearExpression:
             source = np.full(grid.size, -1, dtype=row_map.dtype)
             source[row_map] = np.arange(grid.size)
             if (source >= 0).all():
-                return self.taken(source, self.grid.conformed(grid))
+                return self.take(source, self.grid.conform(grid))
 
         coo = self.csr.tocoo()
         keep = valid[coo.coords[0]]
@@ -654,23 +654,23 @@ class CSRLinearExpression:
             self,
             csr=csr,
             const=const,
-            grid=self.grid.conformed(grid),
+            grid=self.grid.conform(grid),
         )
 
-    def filled(self, value: float) -> CSRLinearExpression:
+    def fillna(self, value: float) -> CSRLinearExpression:
         """Resolve absent cells (NaN const) to a constant; terms untouched."""
         const = np.where(np.isnan(self.const), value, self.const)
         return replace(self, const=const)
 
-    def renamed(self, names: dict[str, str]) -> CSRLinearExpression:
+    def rename(self, names: dict[str, str]) -> CSRLinearExpression:
         """Relabel grid dims; the CSR row layout is unchanged."""
-        return replace(self, grid=self.grid.renamed(names))
+        return replace(self, grid=self.grid.rename(names))
 
     def same_grid(self, other: CSRLinearExpression) -> bool:
         """Whether both live on the same cells, auxiliary coordinates aside."""
         return self.grid.same_layout(other.grid)
 
-    def added(self, *others: CSRLinearExpression) -> CSRLinearExpression:
+    def add(self, *others: CSRLinearExpression) -> CSRLinearExpression:
         """
         Sparse matrix addition == merge along the term dimension, over any
         number of operands on the same grid in one pass that interleaves each
@@ -690,9 +690,9 @@ class CSRLinearExpression:
         for p in reversed(parts):
             aux |= p.grid.aux
         grid = replace(self.grid, aux=aux)
-        return replace(self, csr=csr, grid=grid).with_const(const)
+        return replace(self, csr=csr, grid=grid).assign_const(const)
 
-    def contracted(
+    def dot(
         self,
         matrix: scipy.sparse.csr_array,
         contracted_dims: Iterable[str],
@@ -711,7 +711,7 @@ class CSRLinearExpression:
         so the operator never grows with the kept size.
 
         The result is in compact canonical form: duplicate variables summed,
-        terms label-ordered and explicit zeros pruned -- unlike :meth:`added`,
+        terms label-ordered and explicit zeros pruned -- unlike :meth:`add`,
         the sparse product drops them, so cell activeness is carried by
         ``const`` alone. Auxiliary coordinates on kept dims propagate, those
         on contracted dims drop.
@@ -720,13 +720,11 @@ class CSRLinearExpression:
         kept = tuple(d for d in self.grid.dims if d not in contracted_dims)
         target = kept + contracted_dims
         source = (
-            self
-            if self.grid.dims == target
-            else self.reindexed(self.grid.reordered(target))
+            self if self.grid.dims == target else self.reindex(self.grid.select(target))
         )
 
         n_contracted = matrix.shape[0]
-        kept_grid = source.grid.reordered(kept)
+        kept_grid = source.grid.select(kept)
         n_kept = kept_grid.size
         const = np.nan_to_num(source.const)
         chunk = min(CONTRACTION_CHUNK, n_kept)
