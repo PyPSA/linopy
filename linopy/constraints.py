@@ -14,8 +14,6 @@ from collections.abc import (
     Callable,
     Generator,
     Hashable,
-    ItemsView,
-    Iterator,
     Mapping,
     Sequence,
 )
@@ -26,7 +24,6 @@ from typing import (
     Any,
     NamedTuple,
     NoReturn,
-    overload,
 )
 from warnings import warn
 
@@ -35,7 +32,7 @@ import pandas as pd
 import polars as pl
 import scipy.sparse
 import xarray as xr
-from numpy import array, ndarray
+from numpy import array
 from xarray import DataArray, Dataset
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
@@ -45,7 +42,6 @@ from linopy import expressions, variables
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
-    LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
@@ -58,10 +54,8 @@ from linopy.common import (
     format_coord,
     format_single_constraint,
     format_single_expression,
-    format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position,
     get_printout_labels,
     has_optimized_model,
     iterate_slices,
@@ -85,6 +79,7 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
+from linopy.containers import LabelContainer
 from linopy.csr import (
     Grid,
     _densify_notice,
@@ -1773,7 +1768,7 @@ class Constraint(ConstraintBase):
 
         if not skip_broadcast:
             (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        data = ensure_scaling(data, data.rhs, f"scaling for constraint '{name}'")
+        data = ensure_scaling(data, data.rhs)
 
         self._assigned = "labels" in data
         self._data = data
@@ -2406,14 +2401,11 @@ class Constraint(ConstraintBase):
 
 
 @dataclass(repr=False)
-class Constraints:
+class Constraints(LabelContainer[ConstraintBase]):
     """
     A constraint container used for storing multiple constraint arrays.
     """
 
-    data: dict[str, ConstraintBase]
-    model: Model
-    _label_position_index: LabelPositionIndex | None = None
     _constraint_label_index: ConstraintLabelIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs", "scaling"]
@@ -2425,96 +2417,6 @@ class Constraints:
         "Right-hand-side constants",
         "Scaling factors",
     ]
-
-    def _formatted_names(self) -> dict[str, str]:
-        """
-        Get a dictionary of formatted names to the proper constraint names.
-        This map enables a attribute like accession of variable names which
-        are not valid python variable names.
-        """
-        return {format_string_as_variable_name(n): n for n in self}
-
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format constraint items, optionally excluding names in a group."""
-        r = ""
-        count = 0
-        for name, ds in self.items():
-            if exclude and name in exclude:
-                continue
-            count += 1
-            coords = (
-                " (" + ", ".join([str(c) for c in ds.coords.keys()]) + ")"
-                if ds.coords
-                else ""
-            )
-            r += f" * {name}{coords}\n"
-        if count == 0:
-            r += "<empty>\n"
-        return r
-
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the constraints container.
-        """
-        r = "linopy.model.Constraints"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-        r += self._format_items()
-        return r
-
-    @overload
-    def __getitem__(self, names: str) -> Constraint: ...
-
-    @overload
-    def __getitem__(self, names: list[str]) -> Constraints: ...
-
-    def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
-        if isinstance(names, str):
-            return self.data[names]  # type: ignore[return-value]
-        return Constraints({name: self.data[name] for name in names}, self.model)
-
-    def __getattr__(self, name: str) -> ConstraintBase:
-        # If name is an attribute of self (including methods and properties), return that
-        if name in self.data:
-            return self.data[name]
-        else:
-            if name in (formatted_names := self._formatted_names()):
-                return self.data[formatted_names[name]]
-        raise AttributeError(
-            f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
-        )
-
-    def __getstate__(self) -> dict:
-        return self.__dict__
-
-    def __setstate__(self, d: dict) -> None:
-        self.__dict__.update(d)
-
-    def __dir__(self) -> list[str]:
-        base_attributes = list(super().__dir__())
-        formatted_names = [
-            n for n in self._formatted_names() if n not in base_attributes
-        ]
-        return base_attributes + formatted_names
-
-    def __len__(self) -> int:
-        return self.data.__len__()
-
-    def __iter__(self) -> Iterator[str]:
-        return self.data.__iter__()
-
-    def items(self) -> ItemsView[str, ConstraintBase]:
-        return self.data.items()
-
-    def _ipython_key_completions_(self) -> list[str]:
-        """
-        Provide method for the key-autocompletions in IPython.
-
-        See
-        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
-        For the details.
-        """
-        return list(self)
 
     def add(self, constraint: ConstraintBase, freeze: bool = False) -> ConstraintBase:
         """
@@ -2531,17 +2433,8 @@ class Constraints:
         self._invalidate_label_position_index()
         return constraint
 
-    def remove(self, name: str) -> None:
-        """
-        Remove constraint `name` from the constraints.
-        """
-        self.data.pop(name)
-        self._invalidate_label_position_index()
-
     def _invalidate_label_position_index(self) -> None:
-        """Invalidate the label position index cache."""
-        if self._label_position_index is not None:
-            self._label_position_index.invalidate()
+        super()._invalidate_label_position_index()
         if self._constraint_label_index is not None:
             self._constraint_label_index.invalidate()
 
@@ -2688,50 +2581,6 @@ class Constraints:
         for con in self.data.values():
             con.sanitize_infinities()
 
-    def get_name_by_label(self, label: int | float) -> str:
-        """
-        Get the constraint name of the constraint containing the passed label.
-
-        Parameters
-        ----------
-        label : int
-            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
-            constraint label.
-
-        Raises
-        ------
-        ValueError
-            If label is not contained by any constraint.
-
-        Returns
-        -------
-        name : str
-            Name of the containing constraint.
-        """
-        if not isinstance(label, float | int) or label < 0:
-            raise ValueError("Label must be a positive number.")
-        for name, ds in self.items():
-            if label in ds.labels:
-                return name
-        raise ValueError(f"No constraint found containing the label {label}.")
-
-    def get_label_position(
-        self, values: int | ndarray
-    ) -> (
-        tuple[str, dict]
-        | tuple[None, None]
-        | list[tuple[str, dict] | tuple[None, None]]
-        | list[list[tuple[str, dict] | tuple[None, None]]]
-    ):
-        """
-        Get tuple of name and coordinate for constraint labels.
-
-        Uses an optimized O(log n) binary search implementation with a cached index.
-        """
-        if self._label_position_index is None:
-            self._label_position_index = LabelPositionIndex(self)
-        return get_label_position(self, values, self._label_position_index)
-
     def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
     ) -> str:
@@ -2825,14 +2674,7 @@ class Constraints:
         dfs = [self[k].flat for k in self]
         if not len(dfs):
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
-        df = pd.concat(dfs, ignore_index=True)
-        unique_labels = df.labels.unique()
-        map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=self.model._dtypes["labels"]),
-            index=unique_labels,
-        )
-        df["key"] = df.labels.map(map_labels)
-        return df
+        return self._flat_with_keys(dfs)
 
     def to_matrix(self) -> tuple[scipy.sparse.csr_array, np.ndarray]:
         """

@@ -228,18 +228,6 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
         )
 
 
-def enforce_aux_conflict(
-    datasets: Sequence[Any], *, concat_dim: str | None = None
-) -> None:
-    """
-    Enforce §11 across the given operands: raise on an aux-coord conflict
-    (xarray would silently drop it).
-    """
-    conflict = conflicting_aux_coord(datasets, concat_dim=concat_dim)
-    if conflict is not None:
-        raise ValueError(_aux_conflict_message(*conflict))
-
-
 def enforce_no_multiindex(obj: Any, *, context: str = "input") -> None:
     """Reject any MultiIndex dimension on ``obj``."""
     indexes = getattr(obj, "indexes", None) or {}
@@ -291,48 +279,6 @@ def reindex_like_if_needed(
     return arr.reindex_like(ref, fill_value={arr.name: fill_value})
 
 
-def shared_dim_mismatches(
-    datasets: Sequence[Dataset], concat_dim: str
-) -> tuple[tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:
-    """
-    Report the shared user dims that disagree, in a single pass over the operands.
-
-    Returns ``(mismatch, reorder)``, each either ``None`` or
-    ``(dim, first_labels, other_labels)`` for the first offending dim. A dim
-    carrying the first operand's labels in a different order (same set) is a
-    *reorder*; a differing label set is a *mismatch*. Nothing is aligned — §8
-    treats both as ``join="exact"`` failures. Helper dims (``_term``, ``_factor``) and the
-    concat dim are excluded; bare dimension indexes are compared, so auxiliary
-    coords stay §11's job.
-
-    A non-unique shared index cannot be resolved to a permutation
-    (``get_indexer`` requires uniqueness) and so counts as a mismatch —
-    harmless, since both raise.
-    """
-    if len(datasets) < 2:
-        return None, None
-    skip = set(HELPER_DIMS) | {concat_dim}
-    indexed = [
-        {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
-        for d in datasets
-    ]
-    shared = set.intersection(*(set(p) for p in indexed))
-    mismatch: tuple[str, Any, Any] | None = None
-    reorder: tuple[str, Any, Any] | None = None
-    for other in indexed[1:]:
-        for d in shared:
-            ref, idx = indexed[0][d], other[d]
-            if ref.equals(idx):
-                continue
-            permutable = len(idx) == len(ref) and idx.is_unique
-            positions = idx.get_indexer(ref) if permutable else None
-            if positions is not None and (positions >= 0).all():
-                reorder = reorder or (str(d), ref.values, idx.values)
-            else:
-                mismatch = mismatch or (str(d), ref.values, idx.values)
-    return mismatch, reorder
-
-
 def enforce_merge_dims(
     datasets: Sequence[Dataset],
     *,
@@ -340,44 +286,48 @@ def enforce_merge_dims(
     joinable: bool = True,
 ) -> None:
     """
-    Enforce §8 across the operands of a merge: raise on a differing label set
-    or a pure reorder. ``joinable`` says whether the operation accepts
-    ``join=``.
+    Enforce §8 across the operands of a merge: raise on the first shared user
+    dim whose labels differ from the first operand's, in set or in order.
+    Helper dims and the concat dim are excluded; bare dimension indexes are
+    compared, so auxiliary coords stay §11's job. ``joinable`` says whether
+    the operation accepts ``join=``.
     """
-    mismatch, reorder = shared_dim_mismatches(datasets, concat_dim)
-    problem = mismatch or reorder
-    if problem is not None:
-        raise ValueError(_shared_dim_mismatch_message(*problem, joinable=joinable))
+    if len(datasets) < 2:
+        return
+    skip = set(HELPER_DIMS) | {concat_dim}
+    indexed = [
+        {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
+        for d in datasets
+    ]
+    shared = set.intersection(*(set(p) for p in indexed))
+    for other in indexed[1:]:
+        for d in shared:
+            ref, idx = indexed[0][d], other[d]
+            if not ref.equals(idx):
+                raise ValueError(
+                    _shared_dim_mismatch_message(
+                        str(d), ref.values, idx.values, joinable=joinable
+                    )
+                )
 
 
-def conflicting_aux_coord(
-    datasets: Sequence[Any],
-    *,
-    concat_dim: str | None = None,
-) -> tuple[str, Any, Any, str] | None:
+def enforce_aux_conflict(
+    datasets: Sequence[Any], *, concat_dim: str | None = None
+) -> None:
     """
-    Find an auxiliary (non-dim) coord that two or more operands carry with
-    disagreeing values.
+    Enforce §11 across the operands: raise on an auxiliary (non-dim) coord
+    that two or more operands carry with disagreeing values, which xarray
+    would silently drop.
 
-    Returns ``(name, left_values, right_values, kind)`` for the first
-    conflict found, or ``None`` if every shared aux coord agrees. ``kind``
-    is ``"shape"`` if the two operands carry differently-shaped values for
-    the coord (e.g. one is a vector, the other a scalar), or ``"value"``
-    if shapes agree but the values themselves disagree. The two failure
-    modes get different error text downstream.
-
-    Per §11, an aux coord either propagates (values agree across operands)
-    or surfaces as an error; xarray's default silently drops the conflict
-    and is what this check intercepts. When only one operand
-    carries the coord (``len(present) < 2``), it propagates from that
-    operand unchanged.
+    A coord shared with differently-shaped values (e.g. a vector and a
+    scalar) and one with equal shapes but differing values get different
+    error text. When only one operand carries the coord it propagates from
+    that operand unchanged.
 
     ``concat_dim`` names the dimension a merge concatenates along. A coord
     that lies solely along that dim is concatenated with it rather than
     reconciled, so differing values are no conflict.
     """
-    if not datasets:
-        return None
     all_names: set[str] = set()
     for d in datasets:
         all_names.update(d.coords)
@@ -393,10 +343,9 @@ def conflicting_aux_coord(
         ref = present[0]
         for vals in present[1:]:
             if ref.shape != vals.shape:
-                return str(name), ref, vals, "shape"
+                raise ValueError(_aux_conflict_message(str(name), ref, vals, "shape"))
             if not _aux_values_equal(ref, vals):
-                return str(name), ref, vals, "value"
-    return None
+                raise ValueError(_aux_conflict_message(str(name), ref, vals, "value"))
 
 
 def _aux_values_equal(a: np.ndarray, b: np.ndarray) -> bool:

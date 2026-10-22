@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable, Hashable, ItemsView, Iterator, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from types import NotImplementedType
 from typing import (
@@ -33,7 +33,6 @@ from xarray.core.utils import Frozen
 import linopy.expressions as expressions
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
-    LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
     assign_fields,
@@ -42,10 +41,8 @@ from linopy.common import (
     filter_nulls_polars,
     format_coord,
     format_single_variable,
-    format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position,
     get_printout_labels,
     has_optimized_model,
     iterate_slices,
@@ -64,6 +61,7 @@ from linopy.constants import (
     STASHED_UPPER,
     TERM_DIM,
 )
+from linopy.containers import LabelContainer
 from linopy.csr import CSRLinearExpression
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
@@ -208,7 +206,7 @@ class Variable:
         data = data.assign_attrs(name=name)
         if not skip_broadcast:
             (data,) = broadcast(data)
-        data = ensure_scaling(data, data.labels, f"scaling for variable '{name}'")
+        data = ensure_scaling(data, data.labels)
         for attr in ("lower", "upper"):
             # convert to float, important for  operations like "shift"
             if not issubdtype(data[attr].dtype, floating):
@@ -526,30 +524,13 @@ class Variable:
         """
         return self.to_linexpr() @ other
 
-    def __div__(
+    def __truediv__(
         self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
         """
-        if isinstance(other, expressions.LinearExpression | Variable):
-            raise TypeError(
-                "unsupported operand type(s) for /: "
-                f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
-            )
-        return self.to_linexpr()._divide_by_constant(other)
-
-    def __truediv__(
-        self, coefficient: ConstantLike | LinearExpression | Variable
-    ) -> LinearExpression:
-        """
-        True divide variables with a coefficient.
-        """
-        try:
-            return self.__div__(coefficient)
-        except TypeError:
-            return NotImplemented
+        return self.to_linexpr().__truediv__(other)
 
     @overload
     def __add__(
@@ -1391,7 +1372,17 @@ class Variable:
             return self.to_linexpr().fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
-    def ffill(self, dim: str, limit: None = None) -> Variable:
+    def _fill(
+        self, method: Callable[..., DataArray], dim: str, limit: int | None
+    ) -> Variable:
+        data = (
+            self.data.where(self.labels != -1)
+            .map(method, dim=dim, limit=limit)
+            .fillna(self._fill_value)
+        )
+        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
+
+    def ffill(self, dim: str, limit: int | None = None) -> Variable:
         """
         Forward fill the variable along a dimension.
 
@@ -1409,16 +1400,9 @@ class Variable:
         -------
         linopy.Variable
         """
-        data = (
-            self.data.where(self.labels != -1)
-            # .ffill(dim, limit=limit)
-            # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
-        )
-        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
+        return self._fill(DataArray.ffill, dim, limit)
 
-    def bfill(self, dim: str, limit: None = None) -> Variable:
+    def bfill(self, dim: str, limit: int | None = None) -> Variable:
         """
         Backward fill the variable along a dimension.
 
@@ -1436,14 +1420,7 @@ class Variable:
         -------
         linopy.Variable
         """
-        data = (
-            self.data.where(~self.isnull())
-            # .bfill(dim, limit=limit)
-            # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
-        )
-        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
+        return self._fill(DataArray.bfill, dim, limit)
 
     def sanitize(self) -> Variable:
         """
@@ -1742,114 +1719,25 @@ class AtIndexer:
 
 
 @dataclass(repr=False)
-class Variables:
+class Variables(LabelContainer[Variable]):
     """
     A variables container used for storing multiple variable arrays.
     """
 
-    data: dict[str, Variable]
-    model: Model
-    _label_position_index: LabelPositionIndex | None = None
     _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper", "scaling"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds", "Scaling factors"]
 
-    def _formatted_names(self) -> dict[str, str]:
-        """
-        Get a dictionary of formatted names to the proper variable names.
-        This map enables a attribute like accession of variable names which
-        are not valid python variable names.
-        """
-        return {format_string_as_variable_name(n): n for n in self}
-
-    @overload
-    def __getitem__(self, names: str) -> Variable: ...
-
-    @overload
-    def __getitem__(self, names: list[str]) -> Variables: ...
-
-    def __getitem__(self, names: str | list[str]) -> Variable | Variables:
-        if isinstance(names, str):
-            return self.data[names]
-        return Variables({name: self.data[name] for name in names}, self.model)
-
-    def __getattr__(self, name: str) -> Variable:
-        # If name is an attribute of self (including methods and properties), return that
-        if name in self.data:
-            return self.data[name]
-        else:
-            if name in (formatted_names := self._formatted_names()):
-                return self.data[formatted_names[name]]
-        raise AttributeError(
-            f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
-        )
-
-    def __getstate__(self) -> dict:
-        return self.__dict__
-
-    def __setstate__(self, d: dict) -> None:
-        self.__dict__.update(d)
-
-    def __dir__(self) -> list[str]:
-        base_attributes = list(super().__dir__())
-        formatted_names = [
-            n for n in self._formatted_names() if n not in base_attributes
-        ]
-        return base_attributes + formatted_names
-
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format variable items, optionally excluding names in a group."""
-        r = ""
-        count = 0
-        for name, ds in self.items():
-            if exclude and name in exclude:
-                continue
-            count += 1
-            coords = (
-                " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
-                if ds.coords
-                else ""
-            )
-            if (sos_type := ds.attrs.get(SOS_TYPE_ATTR)) in (1, 2) and (
-                sos_dim := ds.attrs.get(SOS_DIM_ATTR)
-            ):
-                coords += f" - sos{sos_type} on {sos_dim}"
-            if ds.attrs.get("semi_continuous", False):
-                coords += " - semi-continuous"
-            r += f" * {name}{coords}\n"
-        if count == 0:
-            r += "<empty>\n"
-        return r
-
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the variables container.
-        """
-        r = "linopy.model.Variables"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-        r += self._format_items()
-        return r
-
-    def __len__(self) -> int:
-        return self.data.__len__()
-
-    def __iter__(self) -> Iterator[str]:
-        return self.data.__iter__()
-
-    def items(self) -> ItemsView[str, Variable]:
-        return self.data.items()
-
-    def _ipython_key_completions_(self) -> list[str]:
-        """
-        Provide method for the key-autocompletions in IPython.
-
-        See
-        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
-        For the details.
-        """
-        return list(self)
+    def _item_suffix(self, item: Variable) -> str:
+        suffix = ""
+        if (sos_type := item.attrs.get(SOS_TYPE_ATTR)) in (1, 2) and (
+            sos_dim := item.attrs.get(SOS_DIM_ATTR)
+        ):
+            suffix += f" - sos{sos_type} on {sos_dim}"
+        if item.attrs.get("semi_continuous", False):
+            suffix += " - semi-continuous"
+        return suffix
 
     def add(self, variable: Variable) -> None:
         """
@@ -1858,17 +1746,8 @@ class Variables:
         self.data[variable.name] = variable
         self._invalidate_label_position_index()
 
-    def remove(self, name: str) -> None:
-        """
-        Remove variable `name` from the variables.
-        """
-        self.data.pop(name)
-        self._invalidate_label_position_index()
-
     def _invalidate_label_position_index(self) -> None:
-        """Invalidate the label position index cache."""
-        if self._label_position_index is not None:
-            self._label_position_index.invalidate()
+        super()._invalidate_label_position_index()
         if self._variable_label_index is not None:
             self._variable_label_index.invalidate()
 
@@ -2123,48 +2002,11 @@ class Variables:
             *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
         )
 
-    def get_name_by_label(self, label: int) -> str:
-        """
-        Get the variable name of the variable containing the passed label.
-
-        Parameters
-        ----------
-        label : int
-            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
-            variable label.
-
-        Raises
-        ------
-        ValueError
-            If label is not contained by any variable.
-
-        Returns
-        -------
-        name : str
-            Name of the containing variable.
-        """
-        if not isinstance(label, float | int | np.integer) or label < 0:
-            raise ValueError("Label must be a positive number.")
-        for name, labels in self.labels.items():
-            if label in labels:
-                return str(name)
-        raise ValueError(f"No variable found containing the label {label}.")
-
     def get_label_range(self, name: str) -> tuple[int, int]:
         """
         Get starting and ending label for a variable.
         """
         return self[name].range
-
-    def get_label_position(self, values: int | ndarray) -> Any:
-        """
-        Get tuple of name and coordinate for variable labels.
-
-        Uses an optimized O(log n) binary search implementation with a cached index.
-        """
-        if self._label_position_index is None:
-            self._label_position_index = LabelPositionIndex(self)
-        return get_label_position(self, values, self._label_position_index)
 
     def get_label_position_with_index(
         self, label: int
@@ -2186,9 +2028,7 @@ class Variables:
             (name, coord, index) where index is a tuple for numpy indexing,
             or (None, None, None) if label is -1.
         """
-        if self._label_position_index is None:
-            self._label_position_index = LabelPositionIndex(self)
-        return self._label_position_index.find_single_with_index(label)
+        return self._ensure_label_position_index().find_single_with_index(label)
 
     def format_labels(self, values: list[int]) -> str:
         """
@@ -2233,14 +2073,7 @@ class Variables:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].flat for k in self], ignore_index=True)
-        unique_labels = df.labels.unique()
-        map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=self.model._dtypes["labels"]),
-            index=unique_labels,
-        )
-        df["key"] = df.labels.map(map_labels)
-        return df
+        return self._flat_with_keys([self[k].flat for k in self])
 
     def reset_solution(self) -> None:
         """
@@ -2361,11 +2194,8 @@ class ScalarVariable:
             return NotImplemented
         return self.to_scalar_linexpr(coeff)
 
-    def __div__(self, coeff: int | float) -> ScalarLinearExpression:
-        return self.to_scalar_linexpr(1 / coeff)
-
     def __truediv__(self, coeff: int | float) -> ScalarLinearExpression:
-        return self.__div__(coeff)
+        return self.to_scalar_linexpr(1 / coeff)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__le__(other)

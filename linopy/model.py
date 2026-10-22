@@ -652,8 +652,6 @@ class Model:
                 "Added data contains non-customized dimension names. This is not "
                 "allowed when setting `force_dim_names` to True."
             )
-        else:
-            return
 
     def _check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
         """

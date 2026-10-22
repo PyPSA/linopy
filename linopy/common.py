@@ -12,7 +12,7 @@ import operator
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from warnings import warn
 
 import numpy as np
@@ -20,7 +20,6 @@ import pandas as pd
 import polars as pl
 from numpy import nan, signedinteger
 from numpy.typing import DTypeLike
-from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import indexing
@@ -43,20 +42,6 @@ if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
-
-
-def set_int_index(series: pd.Series) -> pd.Series:
-    """
-    Convert string index to int index.
-    """
-
-    if not series.empty and not pd.api.types.is_integer_dtype(series.index):
-        cutoff = count_initial_letters(str(series.index[0]))
-        try:
-            series.index = series.index.str[cutoff:].astype(int)
-        except ValueError:
-            series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
-    return series
 
 
 def maybe_replace_sign(sign: str) -> str:
@@ -146,34 +131,6 @@ def check_has_nulls(df: pd.DataFrame, name: str) -> None:
     if any_nan.any():
         fields = ", ".join(df.columns[any_nan].to_list())
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
-
-
-def infer_schema_polars(ds: Dataset) -> dict[str, DataTypeClass]:
-    """
-    Infer the polars data schema from a xarray dataset.
-
-    Args:
-    ----
-        ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
-
-    Returns:
-    -------
-        dict: A dictionary mapping column names to their corresponding Polars data types.
-    """
-    schema: dict[str, DataTypeClass] = {}
-    for name, array in ds.items():
-        name = str(name)
-        if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if array.dtype.itemsize <= 4 else pl.Int64
-        elif np.issubdtype(array.dtype, np.floating):
-            schema[name] = pl.Float64
-        elif np.issubdtype(array.dtype, np.bool_):
-            schema[name] = pl.Boolean
-        elif np.issubdtype(array.dtype, np.object_):
-            schema[name] = pl.Object
-        else:
-            schema[name] = pl.Utf8
-    return schema
 
 
 def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
@@ -434,38 +391,6 @@ def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
 
 
 T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
-
-
-@overload
-def iterate_slices(
-    ds: Dataset,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[Dataset, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: Variable,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[Variable, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: LinearExpression,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[LinearExpression, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: ConstraintBase,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[ConstraintBase, None, None]: ...
 
 
 def iterate_slices(
@@ -767,32 +692,7 @@ class LabelPositionIndex:
 
     def find_single(self, value: int) -> tuple[str, dict] | tuple[None, None]:
         """Find the name and coordinates for a single label value."""
-        if value == -1:
-            return None, None
-
-        self._build_index()
-        starts = self._starts
-        names = self._names
-        assert starts is not None and names is not None
-
-        # Binary search to find the right range
-        idx = int(np.searchsorted(starts, value, side="right")) - 1
-
-        if idx < 0 or idx >= len(starts):
-            raise ValueError(f"Label {value} is not existent in the model.")
-
-        name = names[idx]
-        val = self._obj[name]
-        start, stop = val.range
-
-        # Verify the value is in range
-        if value < start or value >= stop:
-            raise ValueError(f"Label {value} is not existent in the model.")
-
-        labels = val.labels
-        index = np.unravel_index(value - start, labels.shape)
-        coord = label_coord(labels, labels.dims, index)
-        return name, coord
+        return self.find_single_with_index(value)[:2]
 
     def find_single_with_index(
         self, value: int
@@ -830,50 +730,6 @@ class LabelPositionIndex:
         index = np.unravel_index(value - start, labels.shape)
         coord = label_coord(labels, labels.dims, index)
         return name, coord, index
-
-
-def _get_label_position_linear(
-    obj: Any, values: int | np.ndarray
-) -> (
-    tuple[str, dict]
-    | tuple[None, None]
-    | list[tuple[str, dict] | tuple[None, None]]
-    | list[list[tuple[str, dict] | tuple[None, None]]]
-):
-    """
-    Get tuple of name and coordinate for variable labels.
-
-    This is the original O(n) implementation that scans through all items.
-    Used only for testing/benchmarking comparisons.
-    """
-
-    def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
-        if value == -1:
-            return None, None
-        for name, val in obj.items():
-            labels = val.labels
-            start, stop = val.range
-
-            if value >= start and value < stop:
-                index = np.unravel_index(value - start, labels.shape)
-
-                coord = label_coord(labels, labels.dims, index)
-                return name, coord
-        raise ValueError(f"Label {value} is not existent in the model.")
-
-    if isinstance(values, int):
-        return find_single(values)
-
-    values = np.array(values)
-    ndim = values.ndim
-    if ndim == 0:
-        return find_single(values.item())
-    elif ndim == 1:
-        return [find_single(v) for v in values]
-    elif ndim == 2:
-        return [[find_single(v) for v in _] for _ in values.T]
-    else:
-        raise ValueError("Array's with more than two dimensions is not supported")
 
 
 class VariableLabelIndex:
@@ -1178,24 +1034,6 @@ def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
         if self.model.status != "ok":
             raise AttributeError("Underlying model not optimized.")
         return func(self, *args, **kwargs)
-
-    return wrapper
-
-
-def require_constant(func: Callable[..., Any]) -> Callable[..., Any]:
-    from linopy import expressions, variables
-
-    @wraps(func)
-    def wrapper(self: Any, arg: Any) -> Any:
-        if isinstance(
-            arg,
-            variables.Variable
-            | variables.ScalarVariable
-            | expressions.LinearExpression
-            | expressions.QuadraticExpression,
-        ):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
-        return func(self, arg)
 
     return wrapper
 

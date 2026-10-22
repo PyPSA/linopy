@@ -31,7 +31,7 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 
@@ -52,9 +52,6 @@ NETCDF_VERSION_ATTR = "_linopy_version"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
-
-ufunc_kwargs = dict(vectorize=True)
-concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 
 TQDM_COLOR = "#80bfff"
 
@@ -204,8 +201,8 @@ def get_printers_scalar(
 
         def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variables(labels: np.ndarray) -> list[str]:
             return np.vectorize(_fmt_var)(labels).tolist()
@@ -238,8 +235,8 @@ def get_printers(
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -633,7 +630,6 @@ def constraints_to_file(
     variable_scaling: np.ndarray | None,
     constraint_scaling: np.ndarray | None,
     progress: bool = False,
-    lazy: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:

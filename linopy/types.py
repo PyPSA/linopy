@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, Union, get_args
 
 import numpy
@@ -45,7 +44,6 @@ UNLABELED_TYPES = get_args(UnlabeledLike)
 
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
 MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
-PathLike: TypeAlias = str | Path
 
 # These reference types only available under TYPE_CHECKING, so use Union with strings
 VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
