@@ -608,7 +608,7 @@ class TestCollapseAuxCoords:
 
 def test_linear_expression_sum_rejects_dims_kwarg(z: Variable) -> None:
     with pytest.raises(TypeError):
-        (1 * z).sum(dims="dim_0")  # type: ignore[call-arg]
+        (1 * z).sum(dims="dim_0")
 
 
 def test_linear_expression_power(x: Variable) -> None:
@@ -2254,7 +2254,7 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert res.sel(dim_1=0).vars[2].item() == -1
 
     with pytest.raises(TypeError):
-        merge(expr1, expr2)  # type: ignore[call-arg]
+        merge(expr1, expr2)  # type: ignore[call-overload]
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:

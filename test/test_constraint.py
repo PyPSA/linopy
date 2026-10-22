@@ -580,7 +580,7 @@ def test_constraint_update_lhs_and_variables_rejected(
 ) -> None:
     """lhs= (full replacement) and variables= (partial) are mutually exclusive."""
     with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
-        mc.update(lhs=2 * x, variables=mc.vars)
+        mc.update(lhs=2 * x, variables=mc.vars)  # type: ignore[arg-type]
 
 
 def test_constraint_update_rhs_with_variable(
@@ -637,7 +637,7 @@ def test_constraint_sel(c: linopy.constraints.CSRConstraint) -> None:
 
 def test_constraint_flat_removed(c: linopy.constraints.CSRConstraint) -> None:
     with pytest.raises(AttributeError):
-        c.flat
+        c.flat  # type: ignore[attr-defined]
 
 
 def test_iterate_slices(mc: linopy.constraints.Constraint) -> None:

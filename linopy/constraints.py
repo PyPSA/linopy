@@ -24,6 +24,7 @@ from typing import (
     Any,
     NamedTuple,
     NoReturn,
+    overload,
 )
 
 import numpy as np
@@ -2323,6 +2324,15 @@ class Constraints(LabelContainer[ConstraintBase]):
     _constraint_label_index: ConstraintLabelIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs", "scaling"]
+
+    @overload
+    def __getitem__(self, names: str) -> Constraint: ...
+
+    @overload
+    def __getitem__(self, names: list[str]) -> Constraints: ...
+
+    def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
+        return super().__getitem__(names)  # type: ignore[return-value]
 
     def add(self, constraint: ConstraintBase, freeze: bool = False) -> ConstraintBase:
         """

@@ -301,7 +301,9 @@ def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) ->
 
     p = read_netcdf(legacy_fn)
     assert isinstance(p.constraints["c"], CSRConstraint)
-    np.testing.assert_array_equal(p.matrices.A.toarray(), m.matrices.A.toarray())
+    A, A_read = m.matrices.A, p.matrices.A
+    assert A is not None and A_read is not None
+    np.testing.assert_array_equal(A.toarray(), A_read.toarray())
     assert_model_equal(m, p)
 
 

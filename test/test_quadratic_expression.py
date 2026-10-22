@@ -231,7 +231,7 @@ def test_merge_linear_expression_and_quadratic_expression(
     assert isinstance(new_quad_ex, QuadraticExpression)
 
     with pytest.raises(TypeError):
-        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore[call-arg]
+        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore[call-overload]
 
     quadexpr_2 = linexpr.to_quadexpr()
     merged_expr = merge([quadexpr_2, quadexpr], cls=QuadraticExpression)
