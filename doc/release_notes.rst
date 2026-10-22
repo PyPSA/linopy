@@ -36,6 +36,10 @@ Version 1.0.0
 * ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
 * ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 
+**Internal**
+
+* The core modules are compacted after the legacy removal: ``Variables`` and ``Constraints`` share a ``LabelContainer`` base, the piecewise formulations share one link builder, and uncalled helpers are removed. ``merge`` no longer accepts bare ``Variable`` operands (pass ``var.to_linexpr()``), ``SolverReport.barrier_iterations`` (never populated) is removed, and ``linopy.common.set_int_index``, ``infer_schema_polars`` and ``require_constant`` are removed.
+
 Version 0.10.1
 --------------
 
