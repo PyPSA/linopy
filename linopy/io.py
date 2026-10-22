@@ -12,12 +12,11 @@ import shutil
 import time
 import warnings
 from collections.abc import Callable
-from dataclasses import replace
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -34,8 +33,6 @@ from linopy.common import (
 from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
-
-Buffer = TypeVar("Buffer", np.ndarray, scipy.sparse.sparray)
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -1375,7 +1372,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         Constraints,
         CSRConstraint,
     )
-    from linopy.csr import CSRStore
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1404,21 +1400,26 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
+    def _copy_expression(
+        expr: LinearExpression | QuadraticExpression,
+    ) -> LinearExpression | QuadraticExpression:
+        if isinstance(expr, LinearExpression):
+            store = expr._store.copy(new_model, deep)
+            return LinearExpression._from_store(store, new_model)
+        return QuadraticExpression(expr._to_dataset().copy(deep=deep), new_model)
+
     def _copy_expr(
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = type(expr)(expr._to_dataset().copy(deep=deep), new_model)
-        new_expr.attrs["name"] = name  # __init__ resets the name to None
+        new_expr = _copy_expression(expr)
+        new_expr.attrs["name"] = name
         return new_expr
 
     new_model._expressions = Expressions(
         {name: _copy_expr(name, expr) for name, expr in m.expressions.items()},
         new_model,
     )
-
-    def _buffer(value: Buffer) -> Buffer:
-        return value.copy() if deep else value
 
     def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
         if isinstance(con, CSRConstraint):
@@ -1442,21 +1443,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    expr = m.objective.expression
-    store = expr._store if isinstance(expr, LinearExpression) else None
-    obj_expr = (
-        LinearExpression._from_store(
-            replace(
-                store,
-                csr=_buffer(store.csr),
-                const=_buffer(store.const),
-                model=new_model,
-            ),
-            new_model,
-        )
-        if isinstance(store, CSRStore)
-        else type(expr)(expr._to_dataset().copy(deep=deep), new_model)
-    )
+    obj_expr = _copy_expression(m.objective.expression)
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )

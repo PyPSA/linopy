@@ -493,14 +493,17 @@ class CSRStore(Store):
         const[np.diff(bounds) == 0] = np.nan
         return replace(self, csr=csr, const=const, grid=grid)
 
-    def sum(self, dims: Iterable[str]) -> CSRStore:
+    def sum(self, dims: Iterable[str] | None = None) -> CSRStore:
         """
-        Sum over grid dimensions. The kept dims stay in grid order with their
-        auxiliary coordinates, and every kept cell is present, its constant
-        the NaN-skipping sum of its members.
+        Sum over grid dimensions, all if None. The kept dims stay in grid
+        order with their auxiliary coordinates, and every kept cell is
+        present, its constant the NaN-skipping sum of its members; summing
+        no dim leaves the store as is.
         """
-        dims = set(dims)
         source_dims = self.grid.dims
+        dims = set(source_dims if dims is None else dims)
+        if not dims:
+            return self
         kept = [d for d in source_dims if d not in dims]
         grid = self.grid.select(kept)
         summed = [d for d in source_dims if d in dims]
@@ -522,6 +525,14 @@ class CSRStore(Store):
 
     def to_dataset(self) -> Dataset:
         return self.to_dense().ds
+
+    def copy(self, model: Model, deep: bool = True) -> CSRStore:
+        if not deep:
+            return replace(self, model=model)
+        return replace(self, csr=self.csr.copy(), const=self.const.copy(), model=model)
+
+    def dataarray(self, values: np.ndarray, name: str) -> DataArray:
+        return self.grid.dataarray(values, name=name)
 
     def has_terms(self) -> np.ndarray:
         return np.diff(self.csr.indptr) > 0
@@ -582,8 +593,29 @@ class CSRStore(Store):
         """
         return replace(self, const=const).absorbed()
 
+    def combine(
+        self,
+        const: DataArray,
+        op: Callable[[Any, Any], Any],
+        factor: DataArray | None = None,
+        reindex: bool = False,
+    ) -> CSRStore | Reason:
+        """
+        See :meth:`Store.combine`; ``const`` and ``factor`` must lie on the
+        grid dims, the auxiliary coordinates are those ``const`` carries.
+        """
+        dims = self.grid.dims
+        if set(const.dims) != set(dims):
+            return f"{op.__name__}(constant over new dimensions)"
+        const = const.transpose(*dims)
+        grid = Grid.from_dataset(const, dims)
+        store = self.reindex(grid) if reindex else self
+        if factor is not None:
+            factor = factor.broadcast_like(const).transpose(*dims)
+            store = store.scale(factor.to_numpy().reshape(-1), op)
+        return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
+
     def absorbed(self) -> CSRStore:
-        """Drop the terms of absent cells."""
         return self._without_terms(np.isnan(self.const))
 
     def _without_terms(self, cells: np.ndarray) -> CSRStore:

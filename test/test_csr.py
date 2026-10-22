@@ -30,6 +30,7 @@ from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
 from linopy.csr import CSRStore, Grid, canonical, column_compacted_matmul
 from linopy.testing import (
     assert_conequal,
+    assert_equivalent,
     assert_linequal,
     assert_quadequal,
     assert_varequal,
@@ -1552,9 +1553,8 @@ def test_is_sparse_tracks_backing_and_repr_marks_it() -> None:
     sparse = SPARSE_BUILDS["grouped"](c)
     assert sparse.is_sparse
     assert repr(sparse).startswith("LinearExpression (sparse) [")
-    sparse.data
-    assert not sparse.is_sparse
-    assert repr(sparse).startswith("LinearExpression [")
+    assert repr(LinearExpression(sparse.data, c.m)).startswith("LinearExpression [")
+    assert sparse.is_sparse
     assert (1.0 * c.gen_p).is_sparse
 
 
@@ -1600,47 +1600,53 @@ def set_blocks(e: LinearExpression, c: Case) -> None:
 
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "data": (lambda e, c: e.data, "`.data` read"),
-    "fillna-expr": (lambda e, c: e.fillna(2 * e), "fillna with a non-scalar value"),
+    "fillna-expr": (lambda e, c: e.fillna(2 * e), r"fillna\(non-scalar value\)"),
     "merge": (
         lambda e, c: linopy.merge([e, 1.0 * c.flow], dim="snapshot"),
-        "over different dimensions",
+        r"merge\(operands over different dimensions\)",
     ),
-    "matmul": (lambda e, c: e @ loc_operand(c.gbus.index), "sharing no dimension"),
+    "matmul": (
+        lambda e, c: e @ loc_operand(c.gbus.index),
+        r"matmul\(operand sharing no dimension",
+    ),
     "rhs": (
         lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
-        "rhs over dimensions outside the grid",
+        r"to_constraint\(rhs over dimensions outside the grid\)",
     ),
-    "mutable": (lambda e, c: (e == c.load).mutable(), "`mutable\\(\\)`"),
+    "mutable": (lambda e, c: (e == c.load).mutable(), r"`mutable\(\)`"),
     "add-unfrozen": (
         lambda e, c: c.m.add_constraints(e >= 1, freeze=False),
         "constraint added unfrozen, `freeze=False`",
     ),
     "set-blocks": (set_blocks, "frozen constraint converted by `set_blocks`"),
-    "new-dim": (lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]), "new dim"),
+    "new-dim": (
+        lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]),
+        r"mul\(constant over new dimensions\)",
+    ),
     "groupby-fallback": (
         lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
-        "grouper without a sparse path",
+        r"groupby.sum\(grouper without a sparse path\)",
     ),
     "isel-pointwise": (
         lambda e, c: e.isel(bus=xr.DataArray([0, 1], dims="pt")),
-        "`isel` introducing dimensions or coordinates",
+        r"isel\(new dimensions or coordinates\)",
     ),
     "where-new-dim": (
         lambda e, c: e.where(xr.DataArray([True, False], coords=[LOC])),
-        "`where` introducing dimensions or coordinates",
+        r"where\(new dimensions or coordinates\)",
     ),
     "where-callable": (
         lambda e, c: e.where(lambda ds: ds.const > 0),
-        "`where` with a condition that is no DataArray",
+        r"where\(condition no DataArray\)",
     ),
-    "shift-fill": (lambda e, c: e.shift(bus=1, fill_value=0), "`shift` with a fill"),
+    "shift-fill": (lambda e, c: e.shift(bus=1, fill_value=0), r"shift\(fill_value\)"),
     "concat-new-dim": (
         lambda e, c: linopy.merge([e, e], dim="new"),
-        "merge along a new dimension",
+        r"merge\(new dimension\)",
     ),
     "concat-kwargs": (
         lambda e, c: linopy.merge([e, e], dim="snapshot", coords="minimal"),
-        "merge with extra arguments",
+        r"merge\(extra arguments\)",
     ),
     "concat-non-unique": (
         lambda e, c: linopy.merge(
@@ -1648,7 +1654,7 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
             dim="snapshot",
             join="outer",
         ),
-        "merge over non-unique labels",
+        r"merge\(non-unique labels\)",
     ),
 }
 
@@ -1765,6 +1771,22 @@ def test_objective_stays_csr_and_exports_like_dense(
     assert isinstance(es, LinearExpression) and isinstance(ed, LinearExpression)
     assert_cells_equal(es, ed, ())
     assert rs.objective.expression.attrs["name"] == "objective"
+
+
+@pytest.mark.parametrize("build", list(SPARSE_BUILDS))
+def test_named_expression_stays_sparse(build: str, tmp_path: Path) -> None:
+    sparse, dense = sparse_and_dense(build)
+    m = sparse.model
+    with no_densify():
+        named = m.add_expressions(sparse, name="named")
+        copied = m.copy().expressions["named"]
+        m.to_netcdf(tmp_path / "sparse.nc")
+    assert named.is_sparse and copied.is_sparse
+    assert named.name == copied.name == "named"
+    assert_equivalent(copied, dense)
+    read = linopy.read_netcdf(tmp_path / "sparse.nc").expressions["named"]
+    assert read.name == "named"
+    assert_equivalent(read, dense)
 
 
 @pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")

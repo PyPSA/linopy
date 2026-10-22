@@ -67,12 +67,10 @@ from linopy.alignment import (
     as_constant,
     as_dataarray,
     broadcast_to_coords,
-    fill_missing_coords,
 )
 from linopy.common import (
     LocIndexer,
     assign_fields,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -92,6 +90,7 @@ from linopy.common import (
     save_join,
     to_dataframe,
     to_polars,
+    validate_coords_reassignment,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -106,7 +105,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRStore, Grid, _aux_coords, _densify_notice
+from linopy.csr import CSRStore, Grid, _densify_notice
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -122,7 +121,18 @@ from linopy.semantics import (
     join_fill,
     reindex_like_if_needed,
 )
-from linopy.store import DenseStore, Store, expression_dataset
+from linopy.store import (
+    FILL_VALUE,
+    DenseStore,
+    Reason,
+    Store,
+    coord_sizes_agree,
+    expression_dataset,
+    merge_datasets,
+    merge_stores,
+    pruned_terms,
+    summed,
+)
 from linopy.types import (
     CONSTANT_TYPES,
     ConstantLike,
@@ -140,9 +150,6 @@ if TYPE_CHECKING:
     )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
-
-
-FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
 
 def exprwrap(
@@ -177,37 +184,6 @@ def _expr_unwrap(
 
 
 logger = logging.getLogger(__name__)
-
-
-def _stack_into_term_dim(ds: Dataset, dims: list[Hashable]) -> Dataset:
-    """
-    Stack ``dims`` into the term dimension.
-
-    ``Dataset.stack`` reshapes with an inferred ``-1`` that numpy cannot
-    resolve on zero-element data (https://github.com/PyPSA/linopy/issues/906),
-    so an empty dataset is stacked onto a term dimension of size 0 instead.
-    """
-    if ds.vars.size:
-        return ds.stack({TERM_DIM: dims}, create_index=False)
-
-    for name, da in ds.data_vars.items():
-        kept = [d for d in da.dims if d not in dims]
-        shape = [da.sizes[d] for d in kept] + [0]
-        ds[name] = DataArray(da.values.reshape(shape), dims=kept + [TERM_DIM])
-    return ds
-
-
-def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
-    """
-    Drop every coordinate touching the given dimensions.
-
-    A coordinate on a dimension that is being reduced away must not survive
-    the reduction: an auxiliary coordinate left in place would ride a
-    subsequent stack onto the helper term dimension and break later
-    alignment (https://github.com/PyPSA/linopy/issues/295).
-    """
-    dims = set(dims)
-    return ds.drop_vars(k for k, c in ds.coords.items() if dims & set(c.dims))
 
 
 def _check_override_sizes(left: DataArray, right: DataArray) -> None:
@@ -489,7 +465,10 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        data = self.data
+        return self._dataset_groupby(self.data)
+
+    def _dataset_groupby(self, data: Dataset) -> xarray.core.groupby.DatasetGroupBy:
+        """The xarray groupby of the dense dataset ``data``."""
         group = _resolve_group(self.group, data)
 
         if isinstance(group, pd.DataFrame):
@@ -577,8 +556,7 @@ class LinearExpressionGroupby:
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
         store = self._store
-        is_csr = isinstance(store, CSRStore)
-        sparse = self.model.sparse or is_csr
+        sparse = self.model.sparse or isinstance(store, CSRStore)
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
@@ -604,17 +582,20 @@ class LinearExpressionGroupby:
                     store, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_store(res, self.model)
-            reason = "groupby-sum with a grouper without a sparse path"
-            if is_csr:
-                _densify_all([self.obj], reason)
+            reason = "groupby.sum(grouper without a sparse path)"
+            if isinstance(self.obj, LinearExpression) and self.obj.is_sparse:
+                data = self.obj._fallback(reason).data
             else:
                 _densify_notice(reason, self.model)
+                data = self.data
+        else:
+            data = self.data
 
         if multikey_frame is not None:
             group = multikey_frame
 
-        data = self.data
-        original_dims = self.data.coeffs.dims
+        dense = data
+        original_dims = data.coeffs.dims
         grouped_dims = _grouper_dims(group)
         is_multidim_grouper = (
             isinstance(group, DataArray)
@@ -655,13 +636,14 @@ class LinearExpressionGroupby:
                     final_group_name, fill_value=LinearExpression._fill_value
                 )
         else:
+            grouped = self._dataset_groupby(dense)
 
             def func(ds: Dataset) -> Dataset:
-                ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+                ds = LinearExpression._sum(ds, str(grouped._group_dim))
                 ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
                 return ds
 
-            ds = self.groupby.map(func)
+            ds = grouped.map(func)
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
@@ -1003,7 +985,7 @@ class BaseExpression(ABC):
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_fields(ds, const=other.const)
         join: JoinOptions = (
-            "override" if _coord_sizes_agree([self.data, ds]) else "outer"
+            "override" if coord_sizes_agree([self.data, ds]) else "outer"
         )
         res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression, join=join)
         if self.has_constant:
@@ -1571,18 +1553,6 @@ class BaseExpression(ABC):
         values = self._label_solution(labels.values)[labels.values]
         return xr.DataArray(values, dims=labels.dims, coords=labels.coords)
 
-    @property
-    def solution(self) -> DataArray:
-        """
-        Get the optimal values of the expression.
-
-        The function raises an error in case no model is set as a
-        reference or the model is not optimized.
-        """
-        vals = self._map_solution()
-        sol = (self.coeffs * vals).sum(TERM_DIM) + self.const
-        return sol.rename("solution")
-
     def sum(
         self,
         dim: DimsLike | None = None,
@@ -1653,7 +1623,7 @@ class BaseExpression(ABC):
             dim = self.coord_dims
         elif isinstance(dim, str):
             dim = [dim]
-        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
+        dim_dict = {dim_name: self.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     def to_constraint(
@@ -1746,7 +1716,7 @@ class BaseExpression(ABC):
         | DataArray
         | dict[str, float | int | DataArray]
         | None = None,
-        **kwargs: Any,
+        drop: bool = False,
     ) -> Self:
         """
         Filter variables based on a condition.
@@ -1764,8 +1734,9 @@ class BaseExpression(ABC):
             If a DataArray or a scalar is provided, it is only used to fill
             the missing values of constant values (`const`).
             If a DataArray, its coordinates must match this object's.
-        **kwargs :
-            Keyword arguments passed to ``xarray.Dataset.where``
+        drop : bool, default False
+            Whether to drop the coordinate labels where ``cond`` is False
+            throughout, as ``xarray.Dataset.where``.
 
         Returns
         -------
@@ -1776,7 +1747,7 @@ class BaseExpression(ABC):
         # Cannot set `other` if drop=True
         _other: dict[str, float] | dict[str, int | float | DataArray] | DataArray | None
         if other is None or other is np.nan:
-            if not kwargs.get("drop", False):
+            if not drop:
                 _other = FILL_VALUE
             else:
                 _other = None
@@ -1790,7 +1761,9 @@ class BaseExpression(ABC):
                 raise ValueError(
                     f"Filtering by a DataArray with a helper dimension(s) ({helper_dims!r}) is not supported."
                 )
-        return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
+        return self.__class__(
+            self.data.where(cond, other=_other, drop=drop), self.model
+        )
 
     def fillna(
         self,
@@ -2001,38 +1974,13 @@ class BaseExpression(ABC):
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
         """
-        coeffs = self.data.coeffs.transpose(..., TERM_DIM)
-        vars = self.data.vars.transpose(*coeffs.dims, ...)
-        cdata = coeffs.data
-        mask = cdata != 0
-        if mask.all():
-            return self
-
-        lead = cdata.shape[:-1]
-        old_nterm = cdata.shape[-1]
-        trailing = vars.shape[cdata.ndim :]
-        mask = mask.reshape(-1, old_nterm)
-        nrows = mask.shape[0]
-        counts = mask.sum(1)
-        nterm = int(counts.max()) if nrows else 0
-        rows = np.repeat(np.arange(nrows), counts)
-        pos = np.arange(rows.size) - np.repeat(np.cumsum(counts) - counts, counts)
-
-        new_coeffs = np.zeros((nrows, nterm), dtype=cdata.dtype)
-        new_coeffs[rows, pos] = cdata.reshape(nrows, old_nterm)[mask]
-        new_vars = np.full((nrows, nterm, *trailing), -1, dtype=vars.dtype)
-        new_vars[rows, pos] = vars.data.reshape(nrows, old_nterm, *trailing)[mask]
-
-        new: dict[Hashable, Any] = {
-            "coeffs": (coeffs.dims, new_coeffs.reshape(*lead, nterm)),
-            "vars": (vars.dims, new_vars.reshape(*lead, nterm, *trailing)),
-        }
-        data_vars = {k: new.get(k, self.data[k]) for k in self.data.data_vars}
-        data = Dataset(data_vars, coords=self.data.coords, attrs=self.data.attrs)
-        return self.__class__(data, self.model)
+        data = self.data
+        pruned = pruned_terms(data)
+        return self if pruned is data else self.__class__(pruned, self.model)
 
     def equals(self, other: BaseExpression) -> bool:
-        return self.data.equals(_expr_unwrap(other))
+        left, right = _dense_copies([self, other], "equals(dense comparison)")
+        return left.data.equals(_expr_unwrap(right))
 
     def __iter__(self) -> Iterator[Hashable]:
         return self.data.__iter__()
@@ -2046,26 +1994,7 @@ class BaseExpression(ABC):
         data = _expr_unwrap(expr)
         if cls is QuadraticExpression:
             dim = dim or list(set(data.dims) - set(HELPER_DIMS))
-
-        if isinstance(dim, str):
-            dim = [dim]
-        elif isinstance(dim, EllipsisType):
-            dim = None
-
-        if dim is None:
-            vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
-            coeffs = DataArray(data.coeffs.data.ravel(), dims=TERM_DIM)
-            const = data.const.sum()
-            ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
-        else:
-            dim = [d for d in dim if d != TERM_DIM]
-            ds = _drop_coords_on_dims(data[["coeffs", "vars"]], dim).rename(
-                {TERM_DIM: STACKED_TERM_DIM}
-            )
-            ds = _stack_into_term_dim(ds, [STACKED_TERM_DIM] + dim)
-            ds = assign_fields(ds, const=data.const.sum(dim))
-
-        return ds
+        return summed(data, dim)
 
     def assign(self, **fields: Any) -> Self:
         """
@@ -2174,9 +2103,10 @@ class LinearExpression(BaseExpression):
     <class 'linopy.expressions.LinearExpression'>
     """
 
-    __slots__ = ("_store",)
+    __slots__ = ("_store", "_attrs")
 
     _store: Store
+    _attrs: dict[Any, Any]
 
     @classmethod
     def _from_store(cls, store: Store, model: Model) -> Self:
@@ -2184,35 +2114,79 @@ class LinearExpression(BaseExpression):
         obj = cls.__new__(cls)
         obj._model = model
         obj._store = store
+        obj._attrs = {"name": None}
         return obj
 
     def _set_data(self, data: Dataset) -> None:
         self._store = DenseStore(data, self._model)
 
+    def _dense_store(self, reason: Reason | None) -> DenseStore:
+        """
+        The dense store; for a sparse expression a converted copy carrying
+        the attributes, with a densify notice naming ``reason`` if given.
+        """
+        store = self._store
+        if isinstance(store, DenseStore):
+            return store
+        ds = store.to_dense(reason).ds.assign_attrs(self._attrs)
+        return DenseStore(ds, self._model)
+
     @property
     def data(self) -> Dataset:
-        self._densify("`.data` read, e.g. by an operation without a sparse path")
-        return self._store.to_dataset()
+        return self._dense_store("`.data` read").ds
 
     def _to_dataset(self) -> Dataset:
         return self._store.to_dataset()
 
-    def _densify(self, reason: str) -> None:
-        """Convert the CSR backing to dense for good, with a notice naming ``reason``."""
-        _densify_all([self], reason)
+    def _fallback(self, reason: Reason | None) -> Self:
+        """
+        A dense copy for an operation without a sparse path, with a densify
+        notice naming ``reason`` if given; the receiver keeps its store.
+        """
+        return type(self)._from_store(self._dense_store(reason), self._model)
+
+    def __iter__(self) -> Iterator[Hashable]:
+        store = self._store
+        return iter(
+            store.ds if isinstance(store, DenseStore) else ("const", "coeffs", "vars")
+        )
+
+    def _assign_coords(self, **coords: Any) -> Self:
+        store = self._store
+        if not isinstance(store, CSRStore):
+            return super()._assign_coords(**coords)
+        sizes = dict(zip(store.grid.dims, store.grid.shape))
+        new_indexes = validate_coords_reassignment(sizes, coords, "dataset")
+        self._store = store.with_grid(store.grid.with_indexes(new_indexes))
+        return self
 
     def _assign_fields(self, **fields: Any) -> None:
-        self._densify(f"assignment of `{next(iter(fields))}`")
-        super()._assign_fields(**fields)
+        data = self._fallback(f"assignment({next(iter(fields))})").data
+        self._set_data(assign_fields(data, **fields))
+
+    @property
+    def attrs(self) -> dict[Any, Any]:
+        """
+        Get the attributes of the expression; a CSR-backed expression keeps
+        them next to its store.
+        """
+        if self.is_sparse:
+            return self._attrs
+        return super().attrs
 
     @property
     def is_sparse(self) -> bool:
         """
         Whether the expression is backed by a sparse CSR matrix
         (:mod:`linopy.csr`) instead of a dense Dataset. Reading ``.data``, or
-        an operation without a sparse path, converts it to dense for good.
+        an operation without a sparse path, works on a dense copy.
         """
         return isinstance(self._store, CSRStore)
+
+    @property
+    def is_constant(self) -> bool:
+        """True if the expression contains no variables."""
+        return self._store.nterm == 0
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
@@ -2277,11 +2251,12 @@ class LinearExpression(BaseExpression):
 
     @property
     def has_terms(self) -> DataArray:
-        """Check live variable terms directly from sparse rows."""
+        """
+        Get a boolean array which is true at slots with at least one live
+        term, see :attr:`BaseExpression.has_terms`.
+        """
         store = self._store
-        if not isinstance(store, CSRStore):
-            return super().has_terms
-        return store.grid.dataarray(store.has_terms(), name="has_terms")
+        return store.dataarray(store.has_terms(), "has_terms")
 
     @property
     def solution(self) -> DataArray:
@@ -2292,10 +2267,7 @@ class LinearExpression(BaseExpression):
         reference or the model is not optimized.
         """
         store = self._store
-        if not isinstance(store, CSRStore):
-            return super().solution
-        values = store.solution(self._label_solution)
-        return store.grid.dataarray(values, name="solution")
+        return store.dataarray(store.solution(self._label_solution), "solution")
 
     def _combined_with_constant(
         self,
@@ -2306,23 +2278,13 @@ class LinearExpression(BaseExpression):
         needs_data_reindex: bool,
         scale: bool,
     ) -> Self:
-        store = self._store
-        flags = {"needs_data_reindex": needs_data_reindex, "scale": scale}
-        if not isinstance(store, CSRStore):
-            return super()._combined_with_constant(self_const, operand, op, **flags)
-        dims = store.grid.dims
         const = op(self_const, operand)
-        if set(const.dims) != set(dims):
-            self._densify("elementwise operation with a constant over new dimensions")
-            return super()._combined_with_constant(self_const, operand, op, **flags)
-        const = const.transpose(*dims)
-        grid = Grid.from_dataset(const, dims)
-        if needs_data_reindex:
-            store = store.reindex(grid)
-        if scale:
-            factor = operand.broadcast_like(const).transpose(*dims)
-            store = store.scale(factor.to_numpy().reshape(-1), op)
-        store = store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
+        factor = operand if scale else None
+        store = self._store.combine(const, op, factor, needs_data_reindex)
+        if isinstance(store, str):
+            dense = self._fallback(store)
+            flags = {"needs_data_reindex": needs_data_reindex, "scale": scale}
+            return dense._combined_with_constant(self_const, operand, op, **flags)
         return type(self)._from_store(store, self._model)
 
     def _printout_cell(
@@ -2334,28 +2296,23 @@ class LinearExpression(BaseExpression):
 
     def _selected(
         self, select: Callable[[DataArray], DataArray], name: str
-    ) -> CSRStore | None:
+    ) -> Store | Reason:
         """
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
-        cell absent. None, after a densify notice, where the selection leaves
-        the grid: new or unlabelled dimensions, or coordinates that are no
-        auxiliary coordinates of the grid.
+        cell absent. The reason where the selection leaves the grid: new or
+        unlabelled dimensions, or coordinates that are no auxiliary
+        coordinates of the grid.
         """
         store = self._store
-        if not isinstance(store, CSRStore):
-            return None
-        reason = f"`{name}` introducing dimensions or coordinates"
+        reason = f"{name.strip('_')}(new dimensions or coordinates)"
         rows = select(store.grid.dataarray(np.arange(store.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
-        leaves_grid = not set(dims) <= set(store.grid.dims) & set(rows.indexes)
-        if leaves_grid:
-            self._densify(reason)
-            return None
+        if not set(dims) <= set(store.grid.dims) & set(rows.indexes):
+            return reason
         grid = Grid.from_dataset(rows, dims)
         if set(rows.coords) != set(dims) | set(grid.aux):
-            self._densify(reason)
-            return None
+            return reason
         flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
         return store.take(flat, grid)
 
@@ -2364,12 +2321,16 @@ class LinearExpression(BaseExpression):
     ) -> Self:
         """
         Apply the dense method ``name`` to the grid's row numbers via
-        :meth:`_selected`, falling back to ``dense`` off the grid.
+        :meth:`_selected`, on a dense copy off the grid; ``dense`` serves a
+        dense expression.
         """
-        csr = self._selected(operator.methodcaller(name, *args, **kwargs), name)
-        if csr is None:
+        if not self.is_sparse:
             return dense(*args, **kwargs)
-        return type(self)._from_store(csr, self._model)
+        method = operator.methodcaller(name, *args, **kwargs)
+        store = self._selected(method, name)
+        if isinstance(store, str):
+            return method(self._fallback(store))
+        return type(self)._from_store(store, self._model)
 
     def sel(self, *args: Any, **kwargs: Any) -> Self:
         """
@@ -2394,8 +2355,8 @@ class LinearExpression(BaseExpression):
         expression, returns a CSR-backed result with the shifted-in cells
         absent, unless a ``fill_value`` is passed.
         """
-        if len(args) > 1 or "fill_value" in kwargs:
-            self._densify("`shift` with a fill_value")
+        if self.is_sparse and (len(args) > 1 or "fill_value" in kwargs):
+            return self._fallback("shift(fill_value)").shift(*args, **kwargs)
         return self._gathered("shift", super().shift, *args, **kwargs)
 
     def roll(self, *args: Any, **kwargs: Any) -> Self:
@@ -2414,71 +2375,73 @@ class LinearExpression(BaseExpression):
         | DataArray
         | dict[str, float | int | DataArray]
         | None = None,
-        **kwargs: Any,
+        drop: bool = False,
     ) -> Self:
+        if not self.is_sparse:
+            return super().where(cond, other, drop)
         enforce_no_multiindex(cond, context="The condition")
         cond_da = _expr_unwrap(cond)
-        drop = kwargs.get("drop", False)
         absent = other is None or other is np.nan
-        supported = (
-            isinstance(cond_da, DataArray)
-            and set(kwargs) <= {"drop"}
-            and (absent or (isinstance(other, int | float) and not drop))
-        )
-        if not supported:
-            self._densify(
-                "`where` with a condition that is no DataArray, an `other` that "
-                "is no scalar, or extra arguments"
+        store: Store | Reason
+        if not isinstance(cond_da, DataArray):
+            store = "where(condition no DataArray)"
+        elif not absent and not isinstance(other, int | float):
+            store = "where(non-scalar other)"
+        elif not absent and drop:
+            store = "where(other with drop)"
+        else:
+            store = self._selected(
+                lambda rows: (
+                    rows.where(cond_da, drop=True) if drop else rows.where(cond_da, -1)
+                ),
+                "where",
             )
-            return super().where(cond, other, **kwargs)
-        csr = self._selected(
-            lambda rows: (
-                rows.where(cond_da, drop=True) if drop else rows.where(cond_da, -1)
-            ),
-            "where",
-        )
-        if csr is None:
-            return super().where(cond, other, **kwargs)
+        if isinstance(store, str):
+            return self._fallback(store).where(cond, other, drop)
         if not absent:
-            const = self.const.where(cond_da, other).transpose(*csr.grid.dims)
-            csr = csr.assign_const(const.to_numpy().reshape(-1))
-        return type(self)._from_store(csr, self._model)
+            const = self.const.where(cond_da, other).transpose(*store.grid.dims)
+            store = store.assign_const(const.to_numpy().reshape(-1))
+        return type(self)._from_store(store, self._model)
 
     def sum(
         self,
         dim: DimsLike | None = None,
         drop_zeros: bool = False,
-        **kwargs: Any,
     ) -> Self:
         store = self._store
-        if not isinstance(store, CSRStore) or kwargs:
-            return super().sum(dim, drop_zeros, **kwargs)
-        if dim is None or isinstance(dim, EllipsisType):
-            dims: list[Hashable] = list(store.grid.dims)
-        else:
-            dims = [dim] if isinstance(dim, str) else list(dim)
-        summed = [str(d) for d in dims if d != TERM_DIM]
-        if not set(summed) <= set(store.grid.dims):
-            return super().sum(dim, drop_zeros)
-        res = store.sum(summed) if summed else store
+        dims: list[str] | None = None
+        if dim is not None and not isinstance(dim, EllipsisType):
+            listed = [dim] if isinstance(dim, str) else list(dim)
+            dims = [str(d) for d in listed if d != TERM_DIM]
+            if missing := [d for d in dims if d not in store.dims]:
+                raise KeyError(missing[0])
+        res = store.sum(dims)
         return type(self)._from_store(res.prune() if drop_zeros else res, self._model)
+
+    def densify_terms(self) -> Self:
+        store = self._store.prune()
+        return (
+            self if store is self._store else type(self)._from_store(store, self._model)
+        )
+
+    def reset_const(self) -> Self:
+        store = self._store
+        return type(self)._from_store(
+            store.assign_const(np.zeros(store.n_cells)), self._model
+        )
 
     @property
     def nterm(self) -> int:
         """
         Get the number of terms in the linear expression.
         """
-        if self.is_sparse:
-            return self._store.nterm
-        return super().nterm
+        return self._store.nterm
 
     def __neg__(self) -> Self:
         """
         Get the negative of the expression.
         """
-        if self.is_sparse:
-            return self._from_store(self._store.scale(-1.0), self._model)
-        return super().__neg__()
+        return type(self)._from_store(self._store.scale(-1.0), self._model)
 
     def fillna(
         self,
@@ -2489,29 +2452,31 @@ class LinearExpression(BaseExpression):
         | LinearExpression
         | dict[str, float | int | DataArray],
     ) -> Self:
-        store = self._store
-        if (
-            isinstance(store, CSRStore)
-            and isinstance(value, np.floating | np.integer | int | float)
-            and not isinstance(value, bool)
+        if isinstance(value, np.floating | np.integer | int | float) and not isinstance(
+            value, bool
         ):
-            return type(self)._from_store(store.fillna(float(value)), self._model)
-        _densify_all([self, value], "fillna with a non-scalar value")
-        return super().fillna(value)
+            return type(self)._from_store(self._store.fillna(float(value)), self._model)
+        if isinstance(value, LinearExpression):
+            value = value._to_dataset()
+        dense = self._fallback("fillna(non-scalar value)")
+        return BaseExpression.fillna(dense, value)
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> ConstraintBase:
         store = self._store
-        if isinstance(store, CSRStore) and isinstance(sign, str):
-            rhs = as_constant(rhs)
-            if join is not None or not isinstance(rhs, CONSTANT_TYPES):
-                return self.sub(rhs, join=join).to_constraint(sign, 0)
-            rhs_da = constraints.csr_rhs(store, rhs)
-            if isinstance(rhs_da, DataArray):
-                return constraints.CSRConstraint.from_csr(store, sign, rhs_da)
-            self._densify(rhs_da)
-        return super().to_constraint(sign, rhs, join)
+        if not isinstance(store, CSRStore):
+            return super().to_constraint(sign, rhs, join)
+        if not isinstance(sign, str):
+            dense = self._fallback("to_constraint(non-scalar sign)")
+            return dense.to_constraint(sign, rhs, join)
+        rhs = as_constant(rhs)
+        if join is not None or not isinstance(rhs, CONSTANT_TYPES):
+            return self.sub(rhs, join=join).to_constraint(sign, 0)
+        rhs_da = constraints.csr_rhs(store, rhs)
+        if isinstance(rhs_da, str):
+            return self._fallback(rhs_da).to_constraint(sign, rhs, join)
+        return constraints.CSRConstraint.from_csr(store, sign, rhs_da)
 
     @overload
     def __add__(
@@ -2597,11 +2562,7 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if (
-            self.is_sparse
-            and isinstance(other, int | float | np.number)
-            and not is_nan_scalar(other)
-        ):
+        if isinstance(other, int | float | np.number) and not is_nan_scalar(other):
             return type(self)._from_store(self._store.scale(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
@@ -2613,10 +2574,12 @@ class LinearExpression(BaseExpression):
             elif isinstance(other, variables.ScalarVariable):
                 other = other.to_linexpr()
 
-            if isinstance(other, LinearExpression | ScalarLinearExpression):
-                return self._multiply_by_linear_expression(other)
-            else:
-                return self._apply_constant_op(other, operator.mul)
+            if isinstance(other, ScalarLinearExpression):
+                other = other.to_linexpr()
+            if isinstance(other, LinearExpression):
+                left, right = _dense_copies([self, other], "quadratic product")
+                return left._multiply_by_linear_expression(right)
+            return self._apply_constant_op(other, operator.mul)
         except TypeError:
             return NotImplemented
 
@@ -2661,27 +2624,29 @@ class LinearExpression(BaseExpression):
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
+        expr: LinearExpression = self
         if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
-            if sparse is not None:
+            if not isinstance(sparse, str):
                 return sparse
+            expr = self._fallback(sparse)
         if other_is_const:
-            other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+            other = _matmul_operand_to_dataarray(other, expr.coords, expr.coord_dims)
 
-        common_dims = list(set(self.coord_dims).intersection(other.dims))
-        res = (self * other).sum(dim=common_dims)
+        common_dims = list(set(expr.coord_dims).intersection(other.dims))
+        res = (expr * other).sum(dim=common_dims)
         if other_is_const and common_dims and bool((other == 0).any()):
             res = res.densify_terms()
         return res
 
-    def _sparse_matmul(self, other: ConstantLike) -> LinearExpression | None:
+    def _sparse_matmul(self, other: ConstantLike) -> LinearExpression | Reason:
         """
         Contract against a constant as one sparse matrix product, skipping the
         dense broadcast intermediate of ``(self * other).sum(dim)``.
 
-        Returns None where the dense path owns the semantics: non-unique grid
-        labels, a zero-size grid, an operand sharing no dimension with the
-        grid, and an unlabelled output dimension. The result is the compact
+        Returns the reason where the dense path owns the semantics: non-unique
+        grid labels, a zero-size grid, an operand sharing no dimension with
+        the grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRStore.dot`, so its term
         count may differ from the dense path's while the values agree; the
         result is CSR-backed when the input was or the model is sparse.
@@ -2689,24 +2654,18 @@ class LinearExpression(BaseExpression):
         if is_nan_scalar(other):
             check_user_nan()
         if not self.coord_dims:
-            self._densify("`@` on a zero-dimensional expression")
-            return None
+            return "matmul(zero-dimensional expression)"
         csr = self._store.to_sparse()
         if not csr.grid.is_unique:
-            self._densify("`@` over non-unique labels")
-            return None
+            return "matmul(non-unique labels)"
         if csr.grid.size == 0:
-            self._densify("`@` over a zero-size grid")
-            return None
+            return "matmul(zero-size grid)"
         coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
         contracted = [d for d in csr.grid.dims if d in da.dims]
         new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
         if not contracted or any(d not in da.indexes for d in new_dims):
-            self._densify(
-                "`@` with an operand sharing no dimension or with an unlabelled one"
-            )
-            return None
+            return "matmul(operand sharing no dimension or with an unlabelled one)"
         matrix = _matmul_operand_to_matrix(
             da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
         )
@@ -2758,24 +2717,21 @@ class LinearExpression(BaseExpression):
         and no other keyword argument is given.
         """
         indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
+        if tolerance is not None and method is None:
+            raise ValueError(
+                "tolerance argument only valid if doing pad, backfill or nearest "
+                "reindexing"
+            )
         store = self._store
-        if (
-            isinstance(store, CSRStore)
-            and set(indexers) <= set(store.grid.dims)
-            and method is None
-            and tolerance is None
-            and copy
-            and fill_value is self._fill_value
-        ):
-            grid = store.grid.with_indexes(indexers)
-            return type(self)._from_store(store.reindex(grid), self._model)
-        return super().reindex(
-            indexers,
-            method=method,
-            tolerance=tolerance,
-            copy=copy,
-            fill_value=fill_value,
-        )
+        reason = _reindex_reason(indexers, store.dims, fill_value, method, copy)
+        if not isinstance(store, CSRStore) or reason is not None:
+            dense = self._fallback(reason)
+            kwargs: dict[str, Any] = dict(method=method, tolerance=tolerance, copy=copy)
+            return BaseExpression.reindex(
+                dense, indexers, fill_value=fill_value, **kwargs
+            )
+        grid = store.grid.with_indexes(indexers)
+        return type(self)._from_store(store.reindex(grid), self._model)
 
     def rename(
         self,
@@ -2788,10 +2744,11 @@ class LinearExpression(BaseExpression):
         """
         name_dict = either_dict_or_kwargs(name_dict, names, "rename")
         store = self._store
-        if isinstance(store, CSRStore) and set(name_dict) <= set(store.grid.dims):
-            relabel = {str(k): str(v) for k, v in name_dict.items()}
-            return type(self)._from_store(store.rename(relabel), self._model)
-        return super().rename(name_dict)
+        if not set(name_dict) <= set(store.dims):
+            dense = self._fallback("rename(non-dimension names)")
+            return BaseExpression.rename(dense, name_dict)
+        relabel = {str(k): str(v) for k, v in name_dict.items()}
+        return type(self)._from_store(store.rename(relabel), self._model)
 
     def drop_vars(
         self,
@@ -2801,21 +2758,25 @@ class LinearExpression(BaseExpression):
     ) -> Self:
         """Drop auxiliary coordinates without materializing sparse terms."""
         store = self._store
-        if not isinstance(store, CSRStore) or callable(names):
+        if not self.is_sparse:
             return super().drop_vars(names, errors=errors)
+        if callable(names):
+            return self._fallback("drop_vars(callable)").drop_vars(names, errors=errors)
         names = [names] if isinstance(names, str) else list(names)
         if set(names) & (set(store.grid.dims) | {"coeffs", "vars", "const"}):
-            return super().drop_vars(names, errors=errors)
+            dense = self._fallback("drop_vars(dimension or data variable)")
+            return dense.drop_vars(names, errors=errors)
         coords = store.grid.to_dataset().drop_vars(names, errors=errors)
         grid = Grid.from_dataset(coords, store.grid.dims)
         return type(self)._from_store(store.with_grid(grid), self._model)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""
-        vars = self.data.vars.expand_dims(FACTOR_DIM)
+        data = self.data
+        vars = data.vars.expand_dims(FACTOR_DIM)
         fill_value = self._fill_value["vars"]
         vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)
-        data = self.data.assign(vars=vars)
+        data = data.assign(vars=vars)
         return QuadraticExpression(data, self.model)
 
     def to_polars(self) -> pl.DataFrame:
@@ -2934,10 +2895,11 @@ class LinearExpression(BaseExpression):
 
         # Coeffs and vars have dimensions (.., TERM_DIM) where .. are the coordinate dimensions of the expression
         # An operation is applied over the coordinate dimensions on both coeffs and vars, which are stacked together over a new "CV_DIM" dimension
+        data = self.data
         combined: xr.DataArray = xr.apply_ufunc(
             _simplify_row,
-            self.vars,
-            self.coeffs,
+            data.vars,
+            data.coeffs,
             input_core_dims=[[TERM_DIM], [TERM_DIM]],
             output_core_dims=[[CV_DIM, TERM_DIM]],
             vectorize=True,
@@ -2954,8 +2916,7 @@ class LinearExpression(BaseExpression):
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data
-        new_data = self.data.copy()
-        new_data = assign_fields(new_data, vars=vars, coeffs=coeffs)
+        new_data = assign_fields(data.copy(), vars=vars, coeffs=coeffs)
 
         return LinearExpression(new_data, self.model)
 
@@ -3443,180 +3404,42 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
-def _densify_all(exprs: Iterable[Any], reason: str) -> None:
-    """Convert the CSR-backed LinearExpressions among ``exprs`` to dense, with one notice."""
-    sparse = [e for e in exprs if isinstance(e, LinearExpression) and e.is_sparse]
-    for i, e in enumerate(sparse):
-        e._store = e._store.to_dense(None if i else reason)
-
-
-def _coord_sizes_agree(objs: Sequence[Any]) -> bool:
-    """Whether all ``objs`` carry the same non-helper dimension sizes."""
-    sizes = [{k: v for k, v in o.sizes.items() if k not in HELPER_DIMS} for o in objs]
-    return check_common_keys_values(sizes)
-
-
-def _merge_dims(e: LinearExpression, union: set[str]) -> list[str]:
+def _dense_copies(exprs: Sequence[Any], reason: Reason) -> list[Any]:
     """
-    The dims ``e`` brings to a merge over ``union``, in the order the dense
-    path lays them out: first appearance over its coordinates, a scalar one
-    named after a dim of another operand standing for that dim. A CSR
-    operand's coordinates are taken in the order of its dense equivalent,
-    which xarray's broadcast sets.
+    ``exprs`` with every CSR-backed LinearExpression replaced by a dense
+    copy, one notice naming ``reason`` for all.
     """
-    coords = e.coords
-    if e.is_sparse:
-        coords = xr.broadcast(e._store.grid.to_dataset())[0].coords
-    dims = [str(d) for n, c in coords.items() for d in (c.dims or [n])]
-    return [d for d in dims if d in union] + [str(d) for d in e.coord_dims]
-
-
-def _aligned(
-    csrs: list[CSRStore],
-    dims: tuple[str, ...],
-    join: JoinOptions | None,
-    fill: float,
-) -> list[CSRStore] | str:
-    """
-    Conform the CSR expressions to the grid on ``dims`` that ``join``
-    produces, per dim among the operands carrying it, each spread over the
-    dims it lacks. The cells the join creates carry ``fill`` as constant.
-    Returns the reason as a string where the dense path owns the semantics
-    instead: ``exact`` and the auto-detected join raise there on differing
-    labels, ``override`` on differing sizes, any join on non-unique labels.
-    """
-    if any(not p.grid.is_unique for p in csrs):
-        return "merge over non-unique labels"
-    indexes: dict[str, pd.Index] = {}
-    for d in dims:
-        own = [p.grid.indexes[d] for p in csrs if d in p.grid.indexes]
-        if join in (None, "exact") and not all(own[0].equals(i) for i in own):
-            return f"merge of differing grids with join={join!r}"
-        if join == "override" and len({len(i) for i in own}) > 1:
-            return '`join="override"` merge of differently shaped grids'
-        if join in ("outer", "inner"):
-            combine = pd.Index.union if join == "outer" else pd.Index.intersection
-            indexes[d] = pd.Index(functools.reduce(combine, own), name=d)
-        else:
-            indexes[d] = own[-1] if join == "right" else own[0]
-    grid = Grid(indexes)
-    aligned = []
-    for p in csrs:
-        target = grid.select(p.grid.dims)
-        if join == "override":
-            p = p.with_grid(p.grid.with_indexes(target.indexes))
-        elif not p.grid.same_layout(target):
-            p = p.reindex(target, fill)
-        aligned.append(p if p.grid.dims == grid.dims else p.broadcast(grid))
-    return aligned
-
-
-def _concatenated(
-    csrs: list[CSRStore], dim: str, join: JoinOptions | None
-) -> CSRStore | str:
-    """
-    Stack CSR expressions sharing one dim order along the grid dim ``dim``,
-    in order. The result's coordinates are what the dense path's
-    ``xr.concat`` yields on the grids alone: labels and auxiliary
-    coordinates concatenated along ``dim``, the other dims joined as
-    ``join`` says (``outer`` by default, after the §8 label check for the
-    auto-detected join), with the cells the join creates absent. Returns the
-    reason as a string where the dense path owns the semantics instead: a
-    join over non-unique labels.
-    """
-    dims = csrs[0].grid.dims
-    metadata = [p.grid.to_dataset() for p in csrs]
-    if join is None:
-        enforce_merge_dims(metadata, concat_dim=dim)
-    enforce_aux_conflict(metadata, concat_dim=dim)
-    combined = xr.concat(
-        metadata, dim, join=join or "outer", coords="minimal", compat="override"
-    )
-    grid = Grid.from_dataset(combined, dims)
-    aligned = []
-    for p in csrs:
-        target = grid.with_indexes({dim: p.grid.indexes[dim]})
-        if join == "override" or p.grid.same_layout(target):
-            aligned.append(p.with_grid(target))
-        elif p.grid.is_unique:
-            aligned.append(p.reindex(target))
-        else:
-            return "merge over non-unique labels"
-    return aligned[0].concat(aligned[1:], dim, grid)
-
-
-def _try_csr_merge(
-    exprs: Any,
-    dim: str,
-    join: JoinOptions | None,
-    fill_value: FillValueLike,
-    kwargs: dict[str, Any],
-) -> LinearExpression | None:
-    """
-    Sparse branch of :func:`merge`: combine plain LinearExpressions
-    (CSR-backed or dense-convertible) as sparse matrix addition along the
-    term dimension, or as a row stack along one of the grid dimensions
-    (:func:`_concatenated`). Along the term dimension, operands over
-    differing dimensions are broadcast onto the union grid, grids that share
-    dims in a different order are transposed onto the template order, and
-    grids that differ in their labels are aligned row-wise onto the joined
-    grid (:func:`_aligned`), the cells the join creates carrying the fill of
-    the dense path (zero, or NaN for ``fill_value=ABSENT``). Auxiliary
-    coordinates are checked for conflicts on the operands as given and follow
-    their rows onto the joined grid. Returns None to fall through to the
-    dense path.
-    """
-    if not any(type(e) is LinearExpression and e.is_sparse for e in exprs):
-        return None
-    if kwargs:
-        _densify_all(exprs, "merge with extra arguments")
-        return None
-    if not all(type(e) is LinearExpression for e in exprs):
-        _densify_all(exprs, "merge with an operand that is not a LinearExpression")
-        return None
-    union = {str(d) for e in exprs for d in e.coord_dims}
-    dims = tuple(dict.fromkeys(d for e in exprs for d in _merge_dims(e, union)))
-    spread = any(len(e.coord_dims) != len(dims) for e in exprs)
-    if spread and dim != TERM_DIM:
-        _densify_all(exprs, "merge of operands over different dimensions")
-        return None
-    if dim != TERM_DIM and dim not in dims:
-        _densify_all(exprs, "merge along a new dimension")
-        return None
+    copies: dict[int, LinearExpression] = {}
     for e in exprs:
-        own = set(map(str, e.coord_dims))
-        if not e.is_sparse and set(e.data.coords) - own != set(
-            _aux_coords(e.data, own)
-        ):
-            _densify_all(
-                exprs, "merge with a dense operand carrying non-grid coordinates"
-            )
-            return None
+        if _is_sparse(e) and id(e) not in copies:
+            copies[id(e)] = e._fallback(None if copies else reason)
+    return [copies.get(id(e), e) for e in exprs]
 
-    csrs = [e._store.to_sparse() for e in exprs]
-    if dim != TERM_DIM:
-        order = csrs[0].grid.dims
-        csrs = [
-            p.reindex(p.grid.select(order)) if p.grid.dims != order else p for p in csrs
-        ]
-        stacked = _concatenated(csrs, dim, join)
-        if isinstance(stacked, str):
-            _densify_all(exprs, stacked)
-            return None
-        return LinearExpression._from_store(stacked, exprs[0].model)
-    if not all(csrs[0].same_grid(p) for p in csrs[1:]):
-        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
-        aligned = _aligned(csrs, dims, join, join_fill(fill_value, 0.0))
-        if isinstance(aligned, str):
-            _densify_all(exprs, aligned)
-            return None
-        csrs = aligned
 
-    combined = csrs[0].add(*csrs[1:])
-    return LinearExpression._from_store(combined, exprs[0].model)
+def _reindex_reason(
+    indexers: Mapping[Any, Any],
+    dims: tuple[str, ...],
+    fill_value: Any,
+    method: str | None,
+    copy: bool,
+) -> Reason | None:
+    """Why a reindex runs on the dense dataset, None if the store serves it."""
+    if method is not None:
+        return "reindex(method=...)"
+    if not copy:
+        return "reindex(copy=False)"
+    if fill_value is not FILL_VALUE:
+        return "reindex(fill_value=...)"
+    if not set(indexers) <= set(dims):
+        return "reindex(indexers off the grid)"
+    return None
 
 
 Mergeable: TypeAlias = BaseExpression | Dataset
+
+
+def _is_sparse(e: Mergeable) -> bool:
+    return isinstance(e, LinearExpression) and e.is_sparse
 
 
 @overload
@@ -3724,67 +3547,23 @@ def merge(
         enforce_no_multiindex(e, context="merge input")
 
     model = exprs[0].model
+    fill = join_fill(fill_value, 0.0)
+    linear = issubclass(cls, LinearExpression)
 
-    if issubclass(cls, LinearExpression) and not has_quad_expression:
-        csr_result = _try_csr_merge(
-            exprs, dim=dim, join=join, fill_value=fill_value, kwargs=kwargs
-        )
-        if csr_result is not None:
-            return csr_result
+    if linear and all(type(e) is LinearExpression for e in exprs):
+        stores = [cast(LinearExpression, e)._store for e in exprs]
+        res = merge_stores(stores, dim, join, fill, kwargs)
+        if not isinstance(res, str):
+            return LinearExpression._from_store(res, model)
+        exprs = _dense_copies(exprs, res)
+    elif any(map(_is_sparse, exprs)):
+        reason = "merge(operand not a LinearExpression)"
+        if not linear:
+            reason = "merge(into a QuadraticExpression)"
+        exprs = _dense_copies(exprs, reason)
 
     data = [e.data if isinstance(e, BaseExpression) else e for e in exprs]
-    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
-
-    if join is None:
-        enforce_merge_dims(data, concat_dim=dim)
-    enforce_aux_conflict(data, concat_dim=dim)
-
-    if join is not None:
-        override = join == "override"
-    elif dim in HELPER_DIMS:
-        override = _coord_sizes_agree(exprs)
-    else:
-        override = False
-
-    if not kwargs:
-        kwargs = {
-            "coords": "minimal",
-            "compat": "override",
-        }
-        if issubclass(cls, LinearExpression):
-            kwargs["fill_value"] = FILL_VALUE
-
-        if join is not None:
-            kwargs["join"] = join
-        elif override:
-            kwargs["join"] = "override"
-        else:
-            kwargs.setdefault("join", "outer")
-
-    if dim == TERM_DIM:
-        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        subkwargs = {**kwargs, "fill_value": {"const": join_fill(fill_value, 0)}}
-        const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
-        const = const.sum(TERM_DIM, skipna=False)
-        ds = assign_fields(ds, const=const)
-    elif dim == FACTOR_DIM:
-        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
-            FACTOR_DIM, skipna=False
-        )
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
-            FACTOR_DIM, skipna=False
-        )
-        ds = assign_fields(ds, coeffs=coeffs, const=const)
-    else:
-        ds = xr.concat(data, dim, **kwargs)
-
-    for d in set(HELPER_DIMS) & set(ds.coords):
-        ds = ds.reset_index(d, drop=True)
-
-    ds = absorb_absence(ds)
-
-    return cls(ds, model)
+    return cls(merge_datasets(data, dim, join, fill, kwargs, linear), model)
 
 
 @dataclass(repr=False)
