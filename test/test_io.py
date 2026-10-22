@@ -197,6 +197,49 @@ def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+@pytest.mark.parametrize("freeze", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_coords(tz: str, freeze: bool, tmp_path: Path) -> None:
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz, name="time")
+    m = Model()
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    m.add_constraints(x >= 1, name="c", freeze=freeze)
+    m.add_objective(x.sum())
+    m.parameters = m.parameters.assign(snapshots=("snapshot", time.rename(None)))
+
+    fn = tmp_path / "tz.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+    assert p.parameters.equals(m.parameters)
+    assert str(pd.DatetimeIndex(p.parameters["snapshots"].values).tz) == tz
+    for obj in (p.variables["x"], p.constraints["c"]):
+        assert obj.indexes["time"].equals(time)
+        assert str(obj.indexes["time"].tz) == tz
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_aux_coords(
+    tz: str, freeze: bool, tmp_path: Path
+) -> None:
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz)
+    coords = xr.Coordinates({"snapshot": np.arange(4), "time": ("snapshot", time)})
+    m = Model()
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c", freeze=freeze)
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "tz_aux.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+    for obj in (p.variables["x"], p.constraints["c"]):
+        aux = pd.DatetimeIndex(obj.data.coords["time"].values)
+        assert aux.equals(time)
+        assert str(aux.tz) == tz
+
+
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")
 def test_model_to_netcdf_compression(tmp_path: Path) -> None:
     m = Model()
