@@ -1406,7 +1406,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model = Model(
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
-        auto_mask=m._auto_mask,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
         sparse=m.sparse,

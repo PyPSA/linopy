@@ -11,6 +11,7 @@ Upcoming Version
 * ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
 * ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``. Netcdf files written with a ``freeze_constraints`` attribute still load; the attribute is ignored.
+* ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN bounds are kept as-is and NaN in coefficients or RHS values raises; pass ``mask=`` instead. Netcdf files written with an ``auto_mask`` attribute still load; the attribute is ignored.
 
 **Deprecations**
 

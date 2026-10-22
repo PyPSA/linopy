@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021.
 import importlib.util
 import json
 import pickle
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,19 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     p = read_netcdf(fn)
 
     assert_model_equal(m, p)
+
+
+def test_read_netcdf_ignores_auto_mask_attr(model: Model, tmp_path: Path) -> None:
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    ds.attrs["auto_mask"] = 1
+    ds.to_netcdf(fn)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        read = read_netcdf(fn)
+
+    assert_model_equal(model, read)
 
 
 @pytest.fixture

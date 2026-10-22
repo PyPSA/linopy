@@ -1288,38 +1288,6 @@ def test_solver_classes_direct(
             solver_.solve_problem(model=model)
 
 
-@pytest.fixture
-def auto_mask_variable_model() -> Model:
-    """Model with auto_mask=True and NaN in variable bounds."""
-    m = Model(auto_mask=True)
-
-    x = m.add_variables(lower=0, coords=[range(10)], name="x")
-    lower = pd.Series([0.0] * 8 + [np.nan, np.nan], range(10))
-    y = m.add_variables(lower=lower, name="y")  # NaN bounds auto-masked
-
-    m.add_constraints(x + y, GREATER_EQUAL, 10)
-    m.add_constraints(y, GREATER_EQUAL, 0)
-    m.add_objective(2 * x + y)
-    return m
-
-
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_auto_mask_variable_model(
-    auto_mask_variable_model: Model,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
-) -> None:
-    """Test that auto_mask=True correctly masks variables with NaN bounds."""
-    auto_mask_variable_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    y = auto_mask_variable_model.variables.y
-    # Same assertions as test_masked_variable_model
-    assert y.solution[-2:].isnull().all()
-    assert y.solution[:-2].notnull().all()
-
-
 # def init_model_large():
 #     m = Model()
 #     time = pd.Index(range(10), name="time")

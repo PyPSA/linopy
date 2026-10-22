@@ -1272,7 +1272,7 @@ class TestConstraintRHS:
     ) -> None:
         """
         §6 → §12 for every sign: a constraint over an absent LHS slot
-        yields NaN RHS, which downstream auto-mask interprets as "no
+        yields NaN RHS, which ``add_constraints`` interprets as "no
         constraint here".
         """
         xs = x.shift(time=1)
