@@ -8,8 +8,7 @@ from __future__ import annotations
 import re
 import tracemalloc
 import warnings
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -21,6 +20,7 @@ import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
+from test_store_conformance import no_densify
 from xarray.core.types import JoinOptions
 
 import linopy
@@ -2077,15 +2077,6 @@ def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None
     )
     xr.testing.assert_identical(res.isnull(), want.isnull())
     assert_cells_equal(res, want, tuple(map(str, want.coord_dims)))
-
-
-@contextmanager
-def no_densify() -> Iterator[None]:
-    """Fail on any densify notice inside the block."""
-    with linopy.options as opts, warnings.catch_warnings():
-        warnings.simplefilter("error", linopy.PerformanceWarning)
-        opts.set_value(warn_on_densify=True)
-        yield
 
 
 SUM_DIMS: dict[str, Callable[[tuple[str, ...]], Any]] = {
