@@ -26,11 +26,12 @@ from linopy.testing import assert_equivalent
 
 KEPT = "kept"
 ELLIPSIS: Any = ...
-DATA_READ = "`.data` read"
-QUADRATIC = "quadratic product"
+DATA_READ = "data(read)"
+QUADRATIC = "mul(quadratic product)"
 RENAME = "rename(non-dimension names)"
 DROP_VARS = "drop_vars(dimension or data variable)"
 ASSIGNMENT = "assignment(const)"
+ASSIGN_COEFFS = "assignment(coeffs)"
 
 A = pd.Index([0, 1, 2], name="a")
 B = pd.Index(["p", "q"], name="b")
@@ -43,6 +44,7 @@ OVER_B = xr.DataArray([1.0, 2.0], coords=[B])
 OVER_BC = xr.DataArray(np.arange(4.0).reshape(2, 2), coords=[B, C])
 OVER_C = xr.DataArray([1.0, 2.0], coords=[C])
 SHIFTED_A = xr.DataArray([1.0, 2.0], coords=[pd.Index([1, 5], name="a")])
+COEFFS = OVER_AB.expand_dims({TERM_DIM: 2}, axis=-1)
 SERIES = pd.Series([0, 1, 0], index=A, name="g")
 FRAME = pd.DataFrame({"k1": [0, 1, 0], "k2": [1, 1, 2]}, index=A)
 
@@ -97,6 +99,24 @@ def const_assigned(value: xr.DataArray) -> Callable[[LinearExpression], Any]:
     return op
 
 
+def coeffs_assigned(e: LinearExpression) -> LinearExpression:
+    e.coeffs = COEFFS
+    return e
+
+
+def merged_along_a(e: LinearExpression) -> LinearExpression:
+    other = 1 * var(e, "y")
+    res = linopy.merge([e.drop_vars("tag"), other], dim="a")
+    assert other.is_sparse == e.is_sparse
+    return res
+
+
+def override_merge_raises(e: LinearExpression) -> LinearExpression:
+    with pytest.raises(xr.AlignmentError):
+        linopy.merge([e, e.sel(a=[0, 1])], join="override")
+    return e
+
+
 class Case(NamedTuple):
     build: Callable[[Model], LinearExpression]
     op: Callable[[LinearExpression], Any]
@@ -129,6 +149,11 @@ CASES: dict[str, Case] = {
         lambda e: e.isel(a=xr.DataArray([0, 1], dims="c")),
         "isel(new dimensions or coordinates)",
     ),
+    "getitem-new-dim": Case(
+        grid,
+        lambda e: e[xr.DataArray([0, 1], coords=[C])],
+        "getitem(new dimensions or coordinates)",
+    ),
     "shift": Case(grid, lambda e: e.shift(a=1), KEPT),
     "shift-negative": Case(grid, lambda e: e.shift(a=-1), KEPT),
     "shift-fill-value": Case(
@@ -142,6 +167,14 @@ CASES: dict[str, Case] = {
     ),
     "where-array-other": Case(
         grid, lambda e: e.where(COND, OVER_AB), "where(non-scalar other)"
+    ),
+    "where-expression-other": Case(
+        grid, lambda e: e.where(COND, 3 * e), "where(non-scalar other)"
+    ),
+    "where-new-dim": Case(
+        grid,
+        lambda e: e.where(xr.DataArray([True, False], coords=[C])),
+        "where(new dimensions or coordinates)",
     ),
     "where-drop-scalar-other": Case(
         grid, lambda e: e.where(COND, 1.0, drop=True), "where(other with drop)"
@@ -203,8 +236,17 @@ CASES: dict[str, Case] = {
     "mul-array-new-dim": Case(
         grid, lambda e: e * OVER_C, "mul(constant over new dimensions)"
     ),
+    "div-array-new-dim": Case(
+        grid, lambda e: e / OVER_C, "truediv(constant over new dimensions)"
+    ),
     "neg": Case(grid, lambda e: -e, KEPT),
     "mul-scalar": Case(grid, lambda e: e * 3, KEPT),
+    "mul-constant-expression": Case(
+        grid, lambda e: e * LinearExpression(OVER_A, e.model), KEPT
+    ),
+    "rmul-constant-expression": Case(
+        single, lambda e: LinearExpression(OVER_A, e.model) * e, KEPT
+    ),
     "matmul-shared-dim": Case(grid, lambda e: e @ OVER_B, KEPT),
     "matmul-new-dim": Case(grid, lambda e: e @ OVER_BC, KEPT),
     "matmul-zero-dim": Case(
@@ -250,7 +292,7 @@ CASES: dict[str, Case] = {
     ),
     "merge-spread-along-dim": Case(
         grid,
-        lambda e: linopy.merge([e.drop_vars("tag"), 1 * var(e, "y")], dim="a"),
+        merged_along_a,
         "merge(operands over different dimensions)",
     ),
     "merge-new-dim": Case(
@@ -263,6 +305,11 @@ CASES: dict[str, Case] = {
         lambda m: without_tag(grid(m)),
         lambda e: linopy.merge([e.sum("a"), e.sel(a=[0, 1]), e.sel(a=[1, 2])]),
         "merge(differing grids with join=None)",
+    ),
+    "merge-override-differing-shapes": Case(
+        lambda m: without_tag(grid(m)),
+        override_merge_raises,
+        'merge(join="override" with differently shaped grids)',
     ),
     "merge-dense-2d-coord": Case(
         grid,
@@ -336,6 +383,7 @@ CASES: dict[str, Case] = {
     "isnull": Case(grid, lambda e: e.where(COND).isnull(), KEPT),
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
     "const-assign-new-dim": Case(grid, const_assigned(OVER_C), ASSIGNMENT),
+    "coeffs-assign": Case(grid, coeffs_assigned, ASSIGN_COEFFS),
 }
 
 CONST_REJECTED: dict[str, tuple[Any, str]] = {
@@ -391,7 +439,7 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
         notices = [w for w in rec if issubclass(w.category, linopy.PerformanceWarning)]
         assert len(notices) == 1
     assert_same(res, want)
-    if backend.sparse and expected != ASSIGNMENT:
+    if backend.sparse and expected not in (ASSIGNMENT, ASSIGN_COEFFS):
         assert expr.is_sparse
     if backend.sparse and expected == KEPT:
         if isinstance(res, LinearExpression):
@@ -437,29 +485,25 @@ def test_nonfinite_constant_op_drops_cell(
     np.testing.assert_array_equal(np.sort(summed[summed != -1]), np.sort(live, None))
 
 
-FALLBACK_OPS = {
-    "_assign_fields": "assignment",
-    "_combined_with_constant": "add",
-    "_gathered": "sel",
-}
+REASON_SOURCES = [linopy.expressions, linopy.store, linopy.csr, linopy.constraints]
+REASON = re.compile(
+    r"""(?<!\w)f?(["'])((?:[a-z_.]+|\{[^{}]+\})\((?:[^"'{}\n]|\{[^{}]+\}|(?!\1)["'])+\))\1"""
+)
 
 
-def calls_fallback(attr: Any) -> bool:
-    funcs = [attr.fget, attr.fset] if isinstance(attr, property) else [attr]
-    return any(callable(f) and "_fallback(" in inspect.getsource(f) for f in funcs)
+def as_pattern(reason: str) -> re.Pattern[str]:
+    return re.compile(".+".join(map(re.escape, re.split(r"\{[^{}]+\}", reason))))
 
 
 def test_every_fallback_case_is_listed() -> None:
-    names = [
-        name
-        for name, attr in vars(LinearExpression).items()
-        if name != "_fallback" and calls_fallback(attr)
+    sources = [inspect.getsource(module) for module in REASON_SOURCES]
+    reasons = {m[2] for source in sources for m in REASON.finditer(source)}
+    expected = {c.expected for c in CASES.values()}
+    missing = [
+        r for r in reasons if not any(as_pattern(r).fullmatch(e) for e in expected)
     ]
-    assert names
-    reasons = {c.expected for c in CASES.values()}
-    for name in names:
-        op = FALLBACK_OPS.get(name, name.strip("_"))
-        assert any(r.startswith(f"{op}(") for r in reasons), name
+    assert len(reasons) > 30
+    assert missing == []
 
 
 @pytest.mark.parametrize("dim", ["zzz", ["a", "zzz"]])

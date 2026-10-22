@@ -2133,7 +2133,7 @@ class LinearExpression(BaseExpression):
 
     @property
     def data(self) -> Dataset:
-        return self._dense_store("`.data` read").ds
+        return self._dense_store("data(read)").ds
 
     def _to_dataset(self) -> Dataset:
         return self._store.to_dataset()
@@ -2397,7 +2397,8 @@ class LinearExpression(BaseExpression):
                 "where",
             )
         if isinstance(store, str):
-            return self._fallback(store).where(cond, other, drop)
+            dense, other = _dense_copies([self, other], store)
+            return dense.where(cond, other, drop)
         if not absent:
             const = self.const.where(cond_da, other).transpose(*store.grid.dims)
             store = store.assign_const(const.to_numpy().reshape(-1))
@@ -2577,8 +2578,10 @@ class LinearExpression(BaseExpression):
             if isinstance(other, ScalarLinearExpression):
                 other = other.to_linexpr()
             if isinstance(other, LinearExpression):
-                left, right = _dense_copies([self, other], "quadratic product")
-                return left._multiply_by_linear_expression(right)
+                pair: list[LinearExpression] = [self, other]
+                if not (self.is_constant or other.is_constant):
+                    pair = _dense_copies(pair, "mul(quadratic product)")
+                return pair[0]._multiply_by_linear_expression(pair[1])
             return self._apply_constant_op(other, operator.mul)
         except TypeError:
             return NotImplemented

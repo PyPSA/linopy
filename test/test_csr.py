@@ -1599,7 +1599,7 @@ def set_blocks(e: LinearExpression, c: Case) -> None:
 
 
 DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
-    "data": (lambda e, c: e.data, "`.data` read"),
+    "data": (lambda e, c: e.data, r"data\(read\)"),
     "fillna-expr": (lambda e, c: e.fillna(2 * e), r"fillna\(non-scalar value\)"),
     "merge": (
         lambda e, c: linopy.merge([e, 1.0 * c.flow], dim="snapshot"),

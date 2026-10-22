@@ -99,6 +99,7 @@ SAME_GRID: dict[str, Callable[[Store], Store]] = {
     ).absorbed(),
     "combine": lambda s: combined(s, False),
     "take": taken,
+    "sum-no-dim": lambda s: s.sum([]),
 }
 
 OPS: dict[str, Callable[[Store], Store]] = SAME_GRID | {
@@ -110,7 +111,6 @@ OPS: dict[str, Callable[[Store], Store]] = SAME_GRID | {
     "sum": lambda s: s.sum(["b"]),
     "sum-all": lambda s: s.sum(s.grid.dims),
     "sum-none": lambda s: s.sum(),
-    "sum-no-dim": lambda s: s.sum([]),
     "combine-reindex": lambda s: combined(s, True),
     "aggregate": lambda s: s.aggregate(*collapsed(s, "b")),
     "concat": concatenated,
