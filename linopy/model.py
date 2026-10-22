@@ -31,13 +31,13 @@ from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     _as_renamed_index,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     assigned_labels,
     best_int,
     coords_reorder_set,
     maybe_replace_sign,
     maybe_replace_signs,
+    reassign_coords,
     replace_by_map,
     to_path,
 )
@@ -429,9 +429,9 @@ class Model:
         """
         Set the parameters of the model.
         """
-        self._parameters = (
-            value.copy() if isinstance(value, Dataset) else Dataset(value)
-        )
+        parameters = value.copy() if isinstance(value, Dataset) else Dataset(value)
+        enforce_no_multiindex(parameters, context="parameters")
+        self._parameters = parameters
 
     @property
     def solution(self) -> Dataset:
@@ -1331,7 +1331,7 @@ class Model:
 
         rhs_nan = data.rhs.isnull()
         if rhs_nan.any():
-            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
+            data = assign_fields(data, rhs=data.rhs.fillna(0))
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask
@@ -1342,7 +1342,7 @@ class Model:
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
         row_coords = data.labels.coords
-        data = assign_multiindex_safe(
+        data = assign_fields(
             data,
             scaling=validate_scaling(
                 broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
@@ -1439,7 +1439,7 @@ class Model:
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
         row_coords = data.labels.coords
-        data = assign_multiindex_safe(
+        data = assign_fields(
             data,
             scaling=validate_scaling(
                 broadcast_to_coords(
@@ -2358,9 +2358,7 @@ class Model:
             if "parameters" in indexes
         }
         if parameters_applicable:
-            self._parameters = assign_coords_multiindex_safe(
-                self.parameters, **parameters_applicable
-            )
+            self._parameters = reassign_coords(self.parameters, **parameters_applicable)
 
         return self
 

@@ -13,10 +13,6 @@ DataArrays conforming to a model's coordinates):
 - :func:`validate_alignment` — the validation primitive behind the strict mode.
 - :func:`align` — the symmetric counterpart, wrapping :func:`xarray.align`
   for any number of linopy objects.
-
-Terminology for stacked MultiIndex dimensions: a dim has *levels* (its
-component index names, e.g. ``period`` / ``timestep``) and *level
-combinations* (its elements — one tuple per position, e.g. ``(2030, 't1')``).
 """
 
 from __future__ import annotations
@@ -24,14 +20,14 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import scipy.sparse
 from numpy import arange
-from xarray import Coordinates, DataArray, Dataset, broadcast
+from xarray import Coordinates, DataArray, Dataset
 from xarray import align as xr_align
 from xarray.core import dtypes
 from xarray.core.types import JoinOptions, T_Alignable
@@ -45,10 +41,11 @@ except ImportError:
 
 from linopy.constants import HELPER_DIMS
 from linopy.semantics import (
+    _multiindex_message,
     _shared_dim_mismatch_message,
-    _v1_multiindex_message,
     check_user_nan,
     enforce_aux_conflict,
+    enforce_no_multiindex,
     first_mismatched_dim,
 )
 from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
@@ -92,8 +89,8 @@ def _coords_to_dict(
 
     Container forms:
 
-    - ``xarray.Coordinates``  → kept dim entries only (MultiIndex level
-      coords dropped).
+    - ``xarray.Coordinates``  → kept dim entries only (auxiliary coords
+      dropped).
     - ``Mapping``             → returned as a shallow ``dict`` copy.
     - sequence-of-entries     → each entry handled per the rules below.
 
@@ -123,44 +120,23 @@ def _coords_to_dict(
     +---------------------------------+-----------------------+-----------+
     | tuple of length < 2             | —                     | TypeError |
     +---------------------------------+-----------------------+-----------+
-    | ``pd.MultiIndex`` with ``.name``| ``.name``             | accepted  |
-    +---------------------------------+-----------------------+-----------+
-    | ``pd.MultiIndex`` w/o ``.name`` | ``dims[i]``           | accepted  |
-    |                                 |                       | (named on |
-    |                                 |                       | a copy)   |
-    +---------------------------------+-----------------------+-----------+
-    | ``pd.MultiIndex`` w/o ``.name`` | — (no ``dims[i]``)    | TypeError |
-    +---------------------------------+-----------------------+-----------+
     | anything else (e.g. DataArray)  | —                     | TypeError |
     +---------------------------------+-----------------------+-----------+
     """
     if isinstance(coords, Coordinates):
         # Coordinates iterates over every coord variable, including
-        # MultiIndex level coords. Keep only the entries that are dims.
-        return {d: coords[d] for d in coords.dims if d in coords}
+        # auxiliary coords. Keep only the entries that are dims.
+        return _reject_multiindex_coords(
+            {d: coords[d] for d in coords.dims if d in coords}
+        )
     if isinstance(coords, Mapping):
-        return dict(coords)
+        return _reject_multiindex_coords(dict(coords))
     dim_names: list[Any] | None = None
     if dims is not None:
         dim_names = list(dims) if isinstance(dims, list | tuple) else [dims]
     result: dict[Hashable, Any] = {}
     for i, c in enumerate(coords):
-        if isinstance(c, pd.MultiIndex):
-            name = c.name or (
-                dim_names[i] if dim_names and i < len(dim_names) else None
-            )
-            if name is None:
-                raise TypeError(
-                    "MultiIndex coords entries must have .name set so "
-                    "xarray can use it as the dimension name. Set it via "
-                    "`idx.name = 'my_dim'`, or pass `dims=[...]` to name "
-                    "entries by position."
-                )
-            if c.name is None:
-                c = c.copy()
-                c.name = name
-            result[name] = c
-        elif isinstance(c, pd.Index):
+        if isinstance(c, pd.Index):
             name = (
                 c.name
                 if c.name
@@ -198,7 +174,15 @@ def _coords_to_dict(
                 f"tuple; got {type(c).__name__}. For an xarray DataArray "
                 f"coord, pass `variable.indexes[<dim>]` (a pd.Index) instead."
             )
-    return result
+    return _reject_multiindex_coords(result)
+
+
+def _reject_multiindex_coords(coords: dict[Hashable, Any]) -> dict[Hashable, Any]:
+    for dim, values in coords.items():
+        index = values.to_index() if isinstance(values, DataArray) else values
+        if isinstance(index, pd.MultiIndex):
+            raise ValueError(_multiindex_message(str(dim), "coords"))
+    return coords
 
 
 def _as_index(coord_values: Any) -> pd.Index:
@@ -207,31 +191,6 @@ def _as_index(coord_values: Any) -> pd.Index:
     if isinstance(coord_values, pd.Index):
         return coord_values
     return pd.Index(coord_values)
-
-
-def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
-    """Return the backing ``pd.MultiIndex`` of a coords entry, or ``None``."""
-    if isinstance(coord_values, pd.MultiIndex):
-        return coord_values
-    if isinstance(coord_values, DataArray):
-        idx = coord_values.to_index()
-        if isinstance(idx, pd.MultiIndex):
-            return idx
-    return None
-
-
-def _reject_new_multiindex(
-    arr: Any, coords: CoordsLike | None, dims: DimsLike | None
-) -> None:
-    if not isinstance(arr, DataArray):
-        return
-    mi_dims = [d for d in arr.dims if isinstance(arr.indexes.get(d), pd.MultiIndex)]
-    if not mi_dims:
-        return
-    expected = {} if coords is None else _coords_to_dict(coords, dims=dims)
-    new = [d for d in mi_dims if _as_multiindex(expected.get(d)) is None]
-    if new:
-        raise ValueError(_v1_multiindex_message(str(new[0]), "The constant"))
 
 
 def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
@@ -336,7 +295,7 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
     """
     Convert a pandas Series or DataFrame with fully named axes to a DataArray.
 
-    Returns ``None`` if any axis (or MultiIndex level) is unnamed or
+    Returns ``None`` if any axis (or index level) is unnamed or
     non-string, so the caller can fall back to ``as_dataarray``.
     """
     names = list(arr.index.names)
@@ -346,9 +305,7 @@ def _named_pandas_to_dataarray(arr: pd.Series | pd.DataFrame) -> DataArray | Non
         return None
 
     if isinstance(arr, pd.DataFrame):
-        if isinstance(arr.index, pd.MultiIndex) or isinstance(
-            arr.columns, pd.MultiIndex
-        ):
+        if arr.index.nlevels > 1 or arr.columns.nlevels > 1:
             arr = arr.stack(list(range(arr.columns.nlevels)), future_stack=True)
             return arr.to_xarray()
         return DataArray(arr)
@@ -407,8 +364,7 @@ def as_dataarray(
     Picks the right constructor for each supported input type (pandas,
     polars, numpy, scalar, DataArray) and labels positional axes with
     ``dims`` / ``coords``. The result is not reshaped against ``coords``:
-    dims are neither expanded, reordered, nor projected onto MultiIndex
-    dims. Use :func:`broadcast_to_coords` when
+    dims are neither expanded nor reordered. Use :func:`broadcast_to_coords` when
     ``coords`` should govern the result's shape.
 
     Parameters
@@ -460,130 +416,8 @@ def as_dataarray(
             f"Unsupported type of arr: {type(arr)}. Supported types are: {supported_types_str}"
         )
 
-    arr = fill_missing_coords(arr)
-    return arr
-
-
-class _LevelProjection(NamedTuple):
-    """
-    Record of one MultiIndex-level projection performed by ``_broadcast_to_coords``.
-
-    Terminology: a stacked MultiIndex dim has *levels* (its component index
-    names, e.g. ``period`` / ``timestep``) and *level combinations* (its
-    elements — one tuple per position, e.g. ``(2030, 't1')``).
-    """
-
-    dim: Hashable
-    levels: list[Hashable]
-    is_partial: bool  # input carried only a subset of the MI's levels
-    has_gap: bool  # some level combinations of the MI dim got no value (NaN)
-    missing: list[Any]  # the level combinations that got no value
-
-
-def _project_onto_multiindex_levels(
-    arr: DataArray,
-    expected: dict[Hashable, Any],
-) -> tuple[DataArray, list[_LevelProjection]]:
-    """
-    Map ``arr`` dims that name levels of a stacked-MultiIndex coords dim onto it.
-
-    For every level combination of the MultiIndex dim, select the ``arr``
-    value at that combination's level values. A subset of levels broadcasts
-    across the remaining ones; the full set aligns element-wise. ``arr`` is
-    returned unchanged when it carries no level dims.
-
-    Raises ``ValueError`` only on structural errors: a level name owned by
-    two MI dims, or a level value missing from ``arr``. Partial projections
-    and coverage gaps are recorded in the returned ``_LevelProjection`` list;
-    the caller decides how to treat them.
-    """
-    level_owner: dict[Hashable, Hashable] = {}
-    owner_mi: dict[Hashable, pd.MultiIndex] = {}
-    for dim, coord_values in expected.items():
-        mi = _as_multiindex(coord_values)
-        if mi is None:
-            continue
-        owner_mi[dim] = mi
-        for level in mi.names:
-            if level is None:
-                continue
-            if level in level_owner:
-                raise ValueError(
-                    f"Level {level!r} is shared by MultiIndex dimensions "
-                    f"{level_owner[level]!r} and {dim!r}; cannot resolve which "
-                    f"to align to."
-                )
-            level_owner[level] = dim
-
-    groups: dict[Hashable, list[Hashable]] = {}
-    for d in arr.dims:
-        if d in expected:
-            continue
-        owner = level_owner.get(d)
-        if owner is not None:
-            groups.setdefault(owner, []).append(d)
-
-    projections: list[_LevelProjection] = []
-    for dim, levels in groups.items():
-        mi = owner_mi[dim]
-        selectors = {
-            level: DataArray(np.asarray(mi.get_level_values(level)), dims=[dim])
-            for level in levels
-        }
-        try:
-            arr = arr.sel(selectors)
-        except KeyError as err:
-            raise ValueError(
-                f"Cannot align level(s) {levels} onto MultiIndex dimension "
-                f"{dim!r}: value {err} is missing."
-            ) from err
-        arr = arr.assign_coords(Coordinates.from_pandas_multiindex(mi, dim))
-        # A level combination is "missing" when the projection gave it no
-        # value at any position of the other dims.
-        null_mask = arr.isnull()
-        other_dims = [d for d in arr.dims if d != dim]
-        if other_dims:
-            null_mask = null_mask.any(other_dims)
-        has_gap = bool(null_mask.any())
-        missing = list(arr.indexes[dim][null_mask.values]) if has_gap else []
-        projections.append(
-            _LevelProjection(
-                dim=dim,
-                levels=levels,
-                is_partial=len(levels) < sum(name is not None for name in mi.names),
-                has_gap=has_gap,
-                missing=missing,
-            )
-        )
-
-    return arr, projections
-
-
-def _enforce_implicit_projections(projections: list[_LevelProjection]) -> None:
-    """
-    Reject implicit MultiIndex-level projections.
-
-    A dim naming a level of a stacked MultiIndex dim is a shared-dim /
-    aux-coord concern (sections 8 and 11), so the projection must be written
-    explicitly by the caller.
-
-    The strict path raises on coverage gaps before reaching here, so only
-    partial levels arrive there; the non-strict path sees both.
-    """
-    for p in projections:
-        if p.is_partial or p.has_gap:
-            kind = (
-                f"broadcasting level subset {p.levels}"
-                if p.is_partial
-                else f"filling uncovered level combinations with NaN "
-                f"(from level(s) {p.levels})"
-            )
-            raise ValueError(
-                f"multiindex-projection: implicitly {kind} onto MultiIndex "
-                f"dimension {p.dim!r} is not supported (sections 8 and 11). "
-                f"Project the input onto the dimension explicitly, e.g. select "
-                f"with the dimension's level values."
-            )
+    enforce_no_multiindex(arr, context="The constant")
+    return fill_missing_coords(arr)
 
 
 def _pair_axes_by_size(
@@ -719,19 +553,11 @@ def _label_input(
     The converter is handed ``expected`` (the normalized name→values dict),
     not the raw sequence-form coords, so it selects coords by name — a
     sequence would zip dims to coords by position, which is wrong once
-    size-pairing has chosen a non-leading dim. A MultiIndex coord is not
-    re-assigned: the conversion already used it, and re-assigning emits a
-    FutureWarning.
+    size-pairing has chosen a non-leading dim.
     """
     dims = _dims_for_positional_input(arr, expected, dims)
     arr = as_dataarray(arr, expected, dims=dims, **kwargs)
-    return arr.assign_coords(
-        {
-            d: expected[d]
-            for d in arr.dims
-            if d in expected and not isinstance(arr.indexes.get(d), pd.MultiIndex)
-        }
-    )
+    return arr.assign_coords({d: expected[d] for d in arr.dims if d in expected})
 
 
 def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
@@ -742,7 +568,7 @@ def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> Da
     only a pure reordering of the same values is conformed here.
     """
     for dim, coord_values in expected.items():
-        if dim not in arr.dims or isinstance(arr.indexes.get(dim), pd.MultiIndex):
+        if dim not in arr.dims:
             continue
         expected_idx = _as_index(coord_values)
         actual_idx = arr.coords[dim].to_index()
@@ -756,34 +582,9 @@ def _reindex_reordered_dims(arr: DataArray, expected: dict[Hashable, Any]) -> Da
 
 
 def _expand_missing_dims(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
-    """
-    Broadcast ``arr`` over ``expected`` dims it does not yet carry.
-
-    A MultiIndex-backed dim is broadcast against a proper ``Coordinates``
-    template: plain ``expand_dims`` would drop its level coords and leave a
-    degenerate flat index that fails to align downstream. The exception is
-    when ``arr`` already carries one of the MultiIndex's level names —
-    broadcasting would then raise on the conflicting index, so fall back to
-    ``expand_dims``.
-    """
+    """Broadcast ``arr`` over ``expected`` dims it does not yet carry."""
     expand = {k: v for k, v in expected.items() if k not in arr.dims}
-    if not expand:
-        return arr
-    plain = {}
-    for dim, coord_values in expand.items():
-        mi = _as_multiindex(coord_values)
-        if mi is None or set(mi.names) & (set(arr.coords) | set(arr.dims)):
-            plain[dim] = coord_values
-            continue
-        template = DataArray(
-            np.zeros(len(mi)),
-            coords=Coordinates.from_pandas_multiindex(mi, dim),
-            dims=[dim],
-        )
-        arr, _ = broadcast(arr, template)
-    if plain:
-        arr = arr.expand_dims(plain)
-    return arr
+    return arr.expand_dims(expand) if expand else arr
 
 
 def _order_like_coords(arr: DataArray, expected: dict[Hashable, Any]) -> DataArray:
@@ -816,24 +617,21 @@ def _broadcast_to_coords(
     *,
     reindex_reordered: bool = True,
     **kwargs: Any,
-) -> tuple[DataArray, list[_LevelProjection]]:
+) -> DataArray:
     """
     Convert ``arr`` and broadcast it against ``coords`` (shared mechanics).
 
-    Returns the broadcast DataArray together with the MultiIndex-level
-    projections performed along the way, so the public entry points can
-    reject partial projections and coverage gaps. Unlabeled inputs pair
-    their axes with the coords dims by size (#736); see
-    :func:`_label_input`. ``reindex_reordered`` is False on the arithmetic
-    path, so a reorder reaches the §8 exact check instead of being
-    conformed here.
+    Unlabeled inputs pair their axes with the coords dims by size (#736);
+    see :func:`_label_input`. ``reindex_reordered`` is False on the
+    arithmetic path, so a reorder reaches the §8 exact check instead of
+    being conformed here.
     """
     if coords is None:
-        return as_dataarray(arr, coords, dims, **kwargs), []
+        return as_dataarray(arr, coords, dims, **kwargs)
 
     expected = _coords_to_dict(coords, dims=dims)
     if not expected:
-        return as_dataarray(arr, coords, dims, **kwargs), []
+        return as_dataarray(arr, coords, dims, **kwargs)
 
     if isinstance(arr, pd.Series | pd.DataFrame):
         converted = _named_pandas_to_dataarray(arr)
@@ -843,12 +641,10 @@ def _broadcast_to_coords(
     if not isinstance(arr, DataArray):
         arr = _label_input(arr, expected, dims, **kwargs)
 
-    arr, projections = _project_onto_multiindex_levels(arr, expected)
     if reindex_reordered:
         arr = _reindex_reordered_dims(arr, expected)
     arr = _expand_missing_dims(arr, expected)
-    arr = _order_like_coords(arr, expected)
-    return arr, projections
+    return _order_like_coords(arr, expected)
 
 
 @overload
@@ -890,27 +686,17 @@ def broadcast_to_coords(
     When ``coords`` carries named dimensions, the result is aligned with
     them: positional inputs are labeled by position, shared dims with equal
     values in a different order are reindexed (``strict=True`` only), dims
-    missing from ``arr`` are expanded, dims naming levels of a
-    stacked-MultiIndex coords dim are projected onto it, and the result is
-    transposed to ``coords`` order.
+    missing from ``arr`` are expanded, and the result is transposed to
+    ``coords`` order.
 
     ``strict`` decides what happens to anything broadcasting alone cannot
-    resolve — extra dims, disagreeing coord values, and MultiIndex coverage
-    gaps:
+    resolve — extra dims and disagreeing coord values:
 
     - ``strict=True`` (default): raise, naming ``label`` in the error.
     - ``strict=False``: pass through unchanged so downstream xarray
       alignment can handle them.
 
-    A stacked-MultiIndex dim of ``coords`` has *levels* (its component
-    index names, e.g. ``period`` / ``timestep``) and *level combinations*
-    (its elements — one tuple per position, e.g. ``(2030, 't1')``). Inputs
-    indexed by levels instead of the dim itself are implicitly projected
-    onto the dim's level combinations. Such projections raise:
-
-    - input misses a whole level → broadcasting across it raises.
-    - input gives some level combinations no value (a *coverage gap*) →
-      raises; under ``strict=True`` the error lists the missing combinations.
+    A pandas MultiIndex dimension on ``arr`` or ``coords`` is rejected.
 
     Parameters
     ----------
@@ -935,13 +721,11 @@ def broadcast_to_coords(
     DataArray
         Broadcast against ``coords``.
     """
+    enforce_no_multiindex(arr, context=label or "The constant")
     if not strict:
-        _reject_new_multiindex(arr, coords, dims)
-        da, projections = _broadcast_to_coords(
+        return _broadcast_to_coords(
             arr, coords, dims, reindex_reordered=False, **kwargs
         )
-        _enforce_implicit_projections(projections)
-        return da
 
     if label is None:
         raise TypeError(
@@ -952,23 +736,11 @@ def broadcast_to_coords(
     if coords is not None:
         _coords_to_dict(coords, dims=dims)
     try:
-        da, projections = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
+        da = _broadcast_to_coords(arr, coords, dims=dims, **kwargs)
     except TypeError as err:
         raise TypeError(f"{subject} could not be aligned to coords: {err}") from err
     except (ValueError, CoordinateValidationError) as err:
         raise ValueError(f"{subject} could not be aligned to coords: {err}") from err
-    for p in projections:
-        if p.has_gap:
-            preview = ", ".join(str(c) for c in p.missing[:5])
-            if len(p.missing) > 5:
-                preview += f", … ({len(p.missing)} in total)"
-            raise ValueError(
-                f"{subject} could not be aligned to coords: no value for "
-                f"{len(p.missing)} level combination(s) of MultiIndex dimension "
-                f"{p.dim!r}: {preview}. The input is indexed by level(s) "
-                f"{p.levels} and must cover every combination."
-            )
-    _enforce_implicit_projections(projections)
     validate_alignment(da, coords, dims=dims, label=label)
     return da
 
@@ -1014,19 +786,6 @@ def validate_alignment(
         )
     for dim, coord_values in expected.items():
         if dim not in arr.dims:
-            continue
-        expected_mi = _as_multiindex(coord_values)
-        actual_mi = _as_multiindex(arr.indexes.get(dim))
-        if expected_mi is not None or actual_mi is not None:
-            if (
-                expected_mi is None
-                or actual_mi is None
-                or not actual_mi.equals(expected_mi)
-            ):
-                raise ValueError(
-                    f"{subject}: MultiIndex for dimension {dim!r} does not "
-                    f"match coords."
-                )
             continue
         expected_idx = _as_index(coord_values)
         actual_idx = arr.coords[dim].to_index()

@@ -299,10 +299,9 @@ def shared_dim_mismatches(
 
     Returns ``(mismatch, reorder)``, each either ``None`` or
     ``(dim, first_labels, other_labels)`` for the first offending dim. A dim
-    carrying the first operand's labels in a different order (same set,
-    including a stacked MultiIndex's tuples) is a *reorder*; a differing label
-    set is a *mismatch*. Nothing is aligned — §8 treats both as
-    ``join="exact"`` failures. Helper dims (``_term``, ``_factor``) and the
+    carrying the first operand's labels in a different order (same set) is a
+    *reorder*; a differing label set is a *mismatch*. Nothing is aligned — §8
+    treats both as ``join="exact"`` failures. Helper dims (``_term``, ``_factor``) and the
     concat dim are excluded; bare dimension indexes are compared, so auxiliary
     coords stay §11's job.
 

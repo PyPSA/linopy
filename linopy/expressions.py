@@ -72,8 +72,7 @@ from linopy.alignment import (
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -90,6 +89,7 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
+    reassign_coords,
     save_join,
     to_dataframe,
     to_polars,
@@ -117,6 +117,7 @@ from linopy.semantics import (
     check_user_nan,
     enforce_aux_conflict,
     enforce_merge_dims,
+    enforce_no_multiindex,
     first_mismatched_dim,
     is_nan_scalar,
     join_fill,
@@ -339,11 +340,7 @@ def _restore_group_dim_position(
             order.extend(new_dims)
             new_dims = []
     result = result.transpose(*order, missing_dims="ignore")
-    reordered_coords = {
-        d: result[d]
-        for d in order
-        if d in result.coords and not isinstance(result.get_index(d), pd.MultiIndex)
-    }
+    reordered_coords = {d: result[d] for d in order if d in result.coords}
     result = result.assign_coords(reordered_coords)
     for name in ("coeffs", "vars"):
         term = result[name]
@@ -806,7 +803,7 @@ class LinearExpressionRolling:
             .rename({TERM_DIM: STACKED_TERM_DIM})
             .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
         )
-        ds = assign_multiindex_safe(ds, const=data.const.sum("_rolling_term"))
+        ds = assign_fields(ds, const=data.const.sum("_rolling_term"))
         return LinearExpression(ds, self.model)
 
 
@@ -857,7 +854,7 @@ class BaseExpression(ABC):
             )
 
         if np.issubdtype(data.vars, np.floating):
-            data = assign_multiindex_safe(
+            data = assign_fields(
                 data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
             )
         if not np.issubdtype(data.coeffs, np.floating):
@@ -871,13 +868,13 @@ class BaseExpression(ABC):
         if "const" not in data:
             data = data.assign(const=0.0)
         elif not np.issubdtype(data.const, np.floating):
-            data = assign_multiindex_safe(data, const=data.const.astype(float))
+            data = assign_fields(data, const=data.const.astype(float))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         data = cast(Dataset, data)
         (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
         coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
-        data = assign_multiindex_safe(data, **coeffs_vars_dict)
+        data = assign_fields(data, **coeffs_vars_dict)
 
         data = data.transpose(..., TERM_DIM)
 
@@ -999,7 +996,7 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
+        return self.assign(coeffs=-self.coeffs, const=-self.const)
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
@@ -1024,7 +1021,7 @@ class BaseExpression(ABC):
             joinable=False,
         )
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
-        ds = assign_multiindex_safe(ds, const=other.const)
+        ds = assign_fields(ds, const=other.const)
         join: JoinOptions = (
             "override" if _coord_sizes_agree([self.data, ds]) else "outer"
         )
@@ -1560,7 +1557,7 @@ class BaseExpression(ABC):
 
     @vars.setter
     def vars(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, vars=value)
+        self._data = assign_fields(self.data, vars=value)
 
     @property
     def coeffs(self) -> DataArray:
@@ -1569,7 +1566,7 @@ class BaseExpression(ABC):
 
     @coeffs.setter
     def coeffs(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, coeffs=value)
+        self._data = assign_fields(self.data, coeffs=value)
 
     @property
     def const(self) -> DataArray:
@@ -1578,7 +1575,7 @@ class BaseExpression(ABC):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, const=value)
+        self._data = assign_fields(self.data, const=value)
 
     def _assign_coords(self, **coords: Any) -> Self:
         """
@@ -1589,7 +1586,7 @@ class BaseExpression(ABC):
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -1774,7 +1771,7 @@ class BaseExpression(ABC):
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
-        data = assign_multiindex_safe(
+        data = assign_fields(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
@@ -1843,6 +1840,8 @@ class BaseExpression(ABC):
         -------
         linopy.LinearExpression or linopy.QuadraticExpression
         """
+        enforce_no_multiindex(cond, context="The condition")
+        enforce_no_multiindex(other, context="The constant")
         # Cannot set `other` if drop=True
         _other: dict[str, float] | dict[str, int | float | DataArray] | DataArray | None
         if other is None or other is np.nan:
@@ -1893,6 +1892,7 @@ class BaseExpression(ABC):
         -----
         This fills ``NaN`` entries only, which is how absence is carried.
         """
+        enforce_no_multiindex(value, context="The constant")
         value = _expr_unwrap(value)
         if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
@@ -2151,14 +2151,12 @@ class BaseExpression(ABC):
                 {TERM_DIM: STACKED_TERM_DIM}
             )
             ds = _stack_into_term_dim(ds, [STACKED_TERM_DIM] + dim)
-            ds = assign_multiindex_safe(ds, const=data.const.sum(dim))
+            ds = assign_fields(ds, const=data.const.sum(dim))
 
         return ds
 
     # Wrapped function which would convert variable to dataarray
-    assign = exprwrap(assign_multiindex_safe)
-
-    assign_multiindex_safe = exprwrap(assign_multiindex_safe)
+    assign = exprwrap(assign_fields)
 
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
@@ -2338,7 +2336,7 @@ class LinearExpression(BaseExpression):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_multiindex_safe(self.data, const=value)
+        self._data = assign_fields(self.data, const=value)
 
     @property
     def has_terms(self) -> DataArray:
@@ -2381,11 +2379,8 @@ class LinearExpression(BaseExpression):
             return super()._combined_with_constant(self_const, operand, op, **flags)
         dims = csr.grid.dims
         const = op(self_const, operand)
-        if set(const.dims) != set(dims) or _has_multiindex(const.indexes.values()):
-            self._densify(
-                "elementwise operation with a constant over new dimensions or "
-                "MultiIndex labels"
-            )
+        if set(const.dims) != set(dims):
+            self._densify("elementwise operation with a constant over new dimensions")
             return super()._combined_with_constant(self_const, operand, op, **flags)
         const = const.transpose(*dims)
         grid = Grid.from_dataset(const, dims)
@@ -2416,20 +2411,17 @@ class LinearExpression(BaseExpression):
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
         cell absent. None, after a densify notice, where the selection leaves
-        the grid: new or unlabelled dimensions, MultiIndex labels, or
-        coordinates that are no auxiliary coordinates of the grid.
+        the grid: new or unlabelled dimensions, or coordinates that are no
+        auxiliary coordinates of the grid.
         """
         csr = self._csr
         if csr is None:
             return None
-        reason = f"`{name}` over MultiIndex labels, or introducing dimensions"
-        if _has_multiindex(csr.grid.indexes.values()):
-            self._densify(reason)
-            return None
+        reason = f"`{name}` introducing dimensions or coordinates"
         rows = select(csr.grid.dataarray(np.arange(csr.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
         leaves_grid = not set(dims) <= set(csr.grid.dims) & set(rows.indexes)
-        if leaves_grid or _has_multiindex(rows.indexes.values()):
+        if leaves_grid:
             self._densify(reason)
             return None
         grid = Grid.from_dataset(rows, dims)
@@ -2496,6 +2488,7 @@ class LinearExpression(BaseExpression):
         | None = None,
         **kwargs: Any,
     ) -> Self:
+        enforce_no_multiindex(cond, context="The condition")
         cond_da = _expr_unwrap(cond)
         drop = kwargs.get("drop", False)
         absent = other is None or other is np.nan
@@ -2757,8 +2750,7 @@ class LinearExpression(BaseExpression):
         Contract against a constant as one sparse matrix product, skipping the
         dense broadcast intermediate of ``(self * other).sum(dim)``.
 
-        Returns None where the dense path owns the semantics: a MultiIndex on
-        the expression or on the operand, non-unique or MultiIndex grid
+        Returns None where the dense path owns the semantics: non-unique grid
         labels, a zero-size grid, an operand sharing no dimension with the
         grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRLinearExpression.contracted`, so its term
@@ -2767,23 +2759,18 @@ class LinearExpression(BaseExpression):
         """
         if is_nan_scalar(other):
             check_user_nan()
-        if self._csr is None and _has_multiindex(self.data.indexes.values()):
-            return None
         if not self.coord_dims:
             self._densify("`@` on a zero-dimensional expression")
             return None
         csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
-        if not csr.grid.is_unique or _has_multiindex(csr.grid.indexes.values()):
-            self._densify("`@` over non-unique or MultiIndex labels")
+        if not csr.grid.is_unique:
+            self._densify("`@` over non-unique labels")
             return None
         if csr.grid.size == 0:
             self._densify("`@` over a zero-size grid")
             return None
         coords = csr.grid.to_dataset().coords
         da = _matmul_operand_to_dataarray(other, coords, csr.grid.dims)
-        if _has_multiindex(da.indexes.values()):
-            self._densify("`@` with a MultiIndex operand")
-            return None
         contracted = [d for d in csr.grid.dims if d in da.dims]
         new_dims = [str(d) for d in da.dims if d not in csr.grid.dims]
         if not contracted or any(d not in da.indexes for d in new_dims):
@@ -3043,7 +3030,7 @@ class LinearExpression(BaseExpression):
 
         # Create new dataset with simplified data
         new_data = self.data.copy()
-        new_data = assign_multiindex_safe(new_data, vars=vars, coeffs=coeffs)
+        new_data = assign_fields(new_data, vars=vars, coeffs=coeffs)
 
         return LinearExpression(new_data, self.model)
 
@@ -3542,10 +3529,6 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
-def _has_multiindex(indexes: Iterable[pd.Index]) -> bool:
-    return any(isinstance(i, pd.MultiIndex) for i in indexes)
-
-
 def _densify_all(exprs: Iterable[Any], reason: str) -> None:
     """Convert the CSR-backed LinearExpressions among ``exprs`` to dense, with one notice."""
     sparse = [
@@ -3693,9 +3676,6 @@ def _try_csr_merge(
     if dim != TERM_DIM and dim not in dims:
         _densify_all(exprs, "merge along a new dimension")
         return None
-    if spread and _has_multiindex(i for e in exprs for i in e.indexes.values()):
-        _densify_all(exprs, "merge over different dimensions with a MultiIndex")
-        return None
     for e in exprs:
         own = set(map(str, e.coord_dims))
         if e._csr is None and set(e.data.coords) - own != set(_aux_coords(e.data, own)):
@@ -3839,6 +3819,9 @@ def merge(
     if has_quad_expression and not issubclass(cls, QuadraticExpression):
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
+    for e in exprs:
+        enforce_no_multiindex(e, context="merge input")
+
     linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
@@ -3886,7 +3869,7 @@ def merge(
         subkwargs = {**kwargs, "fill_value": {"const": join_fill(fill_value, 0)}}
         const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
         const = const.sum(TERM_DIM, skipna=False)
-        ds = assign_multiindex_safe(ds, const=const)
+        ds = assign_fields(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
         coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
@@ -3895,7 +3878,7 @@ def merge(
         const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
             FACTOR_DIM, skipna=False
         )
-        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
+        ds = assign_fields(ds, coeffs=coeffs, const=const)
     else:
         ds = xr.concat(data, dim, **kwargs)
 

@@ -36,8 +36,7 @@ from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -50,6 +49,7 @@ from linopy.common import (
     get_printout_labels,
     has_optimized_model,
     iterate_slices,
+    reassign_coords,
     save_join,
     to_dataframe,
     to_polars,
@@ -71,6 +71,7 @@ from linopy.semantics import (
     _shared_dim_mismatch_message,
     check_user_nan,
     enforce_aux_conflict,
+    enforce_no_multiindex,
     first_mismatched_dim,
     reindex_like_if_needed,
 )
@@ -337,7 +338,7 @@ class Variable:
         )
         value = value.reindex_like(self.labels, fill_value=1.0)
         value = validate_scaling(value, f"scaling for variable '{self.name}'")
-        self._data = assign_multiindex_safe(self.data, scaling=value)
+        self._data = assign_fields(self.data, scaling=value)
 
     @property
     def solver_scaling(self) -> DataArray:
@@ -1073,7 +1074,7 @@ class Variable:
             return self
 
         updates = self._validate_update(lower=lower, upper=upper)
-        self._data = assign_multiindex_safe(self.data, **updates)
+        self._data = assign_fields(self.data, **updates)
         return self
 
     def _validate_update(
@@ -1125,7 +1126,7 @@ class Variable:
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -1145,7 +1146,7 @@ class Variable:
         Set the optimal values of the variable.
         """
         value = DataArray(value).broadcast_like(self.labels)
-        self._data = assign_multiindex_safe(self.data, solution=value)
+        self._data = assign_fields(self.data, solution=value)
 
     @property
     @has_optimized_model
@@ -1328,6 +1329,7 @@ class Variable:
         -------
         linopy.Variable
         """
+        enforce_no_multiindex(cond, context="The condition")
         _other: dict[str, float | int | str] | dict[str, float] | Dataset
         if other is None:
             _other = self._fill_value
@@ -1346,7 +1348,7 @@ class Variable:
         elif isinstance(other, Dataset):
             _other = other
             if "scaling" not in _other:
-                _other = assign_multiindex_safe(
+                _other = assign_fields(
                     _other,
                     scaling=DataArray(self._fill_value["scaling"]).broadcast_like(
                         _other.labels
@@ -1414,9 +1416,7 @@ class Variable:
             .map(DataArray.ffill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign_multiindex_safe(
-            labels=data.labels.astype(self.model._dtypes["labels"])
-        )
+        return self.assign(labels=data.labels.astype(self.model._dtypes["labels"]))
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
         """
@@ -1480,9 +1480,7 @@ class Variable:
 
     assign_coords = varwrap(Dataset.assign_coords)
 
-    assign = varwrap(assign_multiindex_safe)
-
-    assign_multiindex_safe = varwrap(assign_multiindex_safe)
+    assign = varwrap(assign_fields)
 
     broadcast_like = varwrap(Dataset.broadcast_like)
 
@@ -1639,7 +1637,7 @@ class Variable:
             new value (the originally stashed bounds are kept). If False, raise
             an error if the variable is already fixed.
         """
-        self._data = assign_multiindex_safe(
+        self._data = assign_fields(
             self.data, **self._fix_updates(value, decimals, overwrite)
         )
 
@@ -2049,7 +2047,7 @@ class Variables:
             for name, var in self.data.items()
         }
         for name, var in self.data.items():
-            var._data = assign_multiindex_safe(var.data, **updates[name])
+            var._data = assign_fields(var.data, **updates[name])
 
     def unfix(self) -> None:
         """
@@ -2261,7 +2259,7 @@ class Variables:
 
         for name, variable in self.items():
             if dim in variable.dims:
-                variable._data = assign_multiindex_safe(
+                variable._data = assign_fields(
                     variable.data, blocks=blocks.broadcast_like(variable.labels)
                 )
 

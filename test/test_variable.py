@@ -298,14 +298,6 @@ def test_variable_swap_dims(x: linopy.Variable) -> None:
     assert x.dims == ("second",)
 
 
-def test_variable_set_index(x: linopy.Variable) -> None:
-    x = x.assign_coords({"second": ("first", x.indexes["first"] + 100)})
-    x = x.set_index({"multi": ["first", "second"]})
-    assert isinstance(x, linopy.variables.Variable)
-    assert x.dims == ("multi",)
-    assert isinstance(x.indexes["multi"], pd.MultiIndex)
-
-
 def test_isnull(x: linopy.Variable) -> None:
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x.isnull(), xr.DataArray)
@@ -889,7 +881,8 @@ def test_add_constraint_and_objective_multiindex_rejected() -> None:
     mi.name = "d"
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
-    with pytest.raises(ValueError, match=r"constraint .* convention does not"):
-        m.add_constraints((1 * x).assign_coords(d=mi) >= 0, name="c")
+    expr = (1 * x).assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "d"))
+    with pytest.raises(ValueError, match=r"`pd.MultiIndex`, which the convention"):
+        m.add_constraints(expr >= 0, name="c")
     with pytest.raises(ValueError, match=r"objective .* convention does not"):
-        m.add_objective((1 * x).assign_coords(d=mi))
+        m.add_objective(expr)

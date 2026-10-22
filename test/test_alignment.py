@@ -9,15 +9,12 @@ Organized by the module's public surface:
 - ``TestCoordsToDict``          — the coords-entry naming rules
 - ``TestAddVariablesCoords``    — coords/dims → variable dims (end-to-end)
 - ``TestBroadcastToCoords``     — ``broadcast_to_coords(strict=False)``
-- ``TestMultiIndexProjection``  — implicit MI-level projection (raises,
-  coverage gaps)
 - ``TestStrictMode``            — ``broadcast_to_coords(strict=True)``
 - ``TestValidateAlignment``     — the validation primitive
 - ``TestAlign``                 — symmetric :func:`align`
 """
 
 import warnings
-from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -38,32 +35,6 @@ from linopy.alignment import (
     validate_alignment,
 )
 from linopy.testing import assert_linequal, assert_varequal
-from linopy.types import CoordsLike
-
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def mi_index() -> pd.MultiIndex:
-    """Named (level1, level2) MultiIndex backing the stacked dim 'dim_3'."""
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    return idx
-
-
-@pytest.fixture
-def mi_coords(mi_index: pd.MultiIndex) -> xr.Coordinates:
-    """Coordinates of the stacked MultiIndex dim 'dim_3'."""
-    return xr.Coordinates.from_pandas_multiindex(mi_index, "dim_3")
-
-
-@pytest.fixture
-def by_level1() -> DataArray:
-    """A constant indexed by level1 only — a partial level set."""
-    return DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
-
 
 # ---------------------------------------------------------------------------
 # as_dataarray — convert only
@@ -369,90 +340,6 @@ class TestAsDataarrayFromDataArray:
         assert broadcast.dims == ("a", "b")
 
 
-class TestAsDataarrayMultiIndexCoords:
-    """MultiIndex coords inputs: level names must not become extra dims."""
-
-    station_mi = pd.MultiIndex.from_tuples(
-        [("a", 1), ("b", 2)], names=["letter", "num"]
-    )
-
-    @pytest.mark.parametrize(
-        ("arr", "expected_values"),
-        [
-            (np.float64(3.0), [3.0, 3.0]),
-            (3, [3, 3]),
-            (3.0, [3.0, 3.0]),
-            (np.array([10.0, 20.0]), [10.0, 20.0]),
-        ],
-        ids=["np_number", "python_int", "python_float", "numpy_array"],
-    )
-    def test_input_types(self, arr: object, expected_values: list[float]) -> None:
-        """Level names in multi-index coords must not be treated as extra dims."""
-        source = DataArray(
-            [1.0, 2.0], coords={"station": self.station_mi}, dims="station"
-        )
-
-        da = as_dataarray(arr, coords=source.coords)
-
-        assert da.dims == ("station",)
-        assert da.shape == (2,)
-        assert set(da.coords.keys()) == {"station", "letter", "num"}
-        assert list(da.coords["letter"].values) == ["a", "b"]
-        assert list(da.coords["num"].values) == [1, 2]
-        assert da.coords["letter"].dims == ("station",)
-        assert da.coords["num"].dims == ("station",)
-        assert list(da.values) == expected_values
-
-    @pytest.mark.parametrize(
-        "coords_factory",
-        [
-            lambda mi: xr.Coordinates.from_pandas_multiindex(mi, "station"),
-            lambda mi: {"station": mi},
-            lambda mi: (
-                DataArray([1.0, 2.0], coords={"station": mi}, dims="station").coords
-            ),
-        ],
-        ids=["xarray_Coordinates", "plain_dict", "dataarray_coords"],
-    )
-    def test_coord_input_forms(
-        self, coords_factory: Callable[[pd.MultiIndex], CoordsLike]
-    ) -> None:
-        """Users may pass a MultiIndex via Coordinates, a dict, or another DataArray's coords."""
-        coords = coords_factory(self.station_mi)
-
-        da = as_dataarray(3.0, coords=coords)
-
-        assert da.dims == ("station",)
-        assert da.shape == (2,)
-        assert set(da.coords.keys()) == {"station", "letter", "num"}
-        assert da.coords["letter"].dims == ("station",)
-        assert da.coords["num"].dims == ("station",)
-        assert (da.values == 3.0).all()
-
-    def test_explicit_dims_win_over_inference(self) -> None:
-        """Explicit dims must win over any inference from Coordinates."""
-        source = DataArray(
-            [1.0, 2.0], coords={"station": self.station_mi}, dims="station"
-        )
-
-        da = as_dataarray(3.0, coords=source.coords, dims=["station"])
-        assert da.dims == ("station",)
-        assert da.shape == (2,)
-        assert set(da.coords.keys()) == {"station", "letter", "num"}
-
-
-def _ij_multiindex() -> pd.MultiIndex:
-    """Unnamed (i, j) MultiIndex used across the coords-entry tests."""
-    return pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-
-
-def _named_multiindex(name: str = "multi") -> pd.MultiIndex:
-    """:func:`_ij_multiindex` carrying an overall index name."""
-    mi = _ij_multiindex()
-    mi.name = name
-    return mi
-
-
 # ---------------------------------------------------------------------------
 # _coords_to_dict — the coords-entry naming rules
 # ---------------------------------------------------------------------------
@@ -499,13 +386,12 @@ class TestCoordsToDict:
         "coords, expected",
         [
             (
-                xr.Coordinates.from_pandas_multiindex(_ij_multiindex(), "stacked"),
+                xr.Coordinates({"stacked": [0, 1], "aux": ("stacked", ["a", "b"])}),
                 {"stacked"},
             ),
-            ([_named_multiindex()], {"multi"}),
             ([("x", [0, 1, 2], {"units": "m"})], {"x"}),
         ],
-        ids=["xarray-coordinates", "named-multiindex", "tuple-with-attrs"],
+        ids=["xarray-coordinates", "tuple-with-attrs"],
     )
     def test_other_forms_parse_to_expected_names(
         self, coords: Any, expected: set
@@ -518,10 +404,8 @@ class TestCoordsToDict:
         assert result == src
         assert result is not src
 
-    @pytest.mark.parametrize(
-        "entry", [pd.Index([0, 1, 2]), _ij_multiindex()], ids=["index", "multiindex"]
-    )
-    def test_unnamed_index_named_from_dims_on_a_copy(self, entry: Any) -> None:
+    def test_unnamed_index_named_from_dims_on_a_copy(self) -> None:
+        entry = pd.Index([0, 1, 2])
         result = self._parse([entry], dims=["x"])
         assert result["x"].name == "x"
         assert entry.name is None  # caller not mutated
@@ -537,7 +421,6 @@ class TestCoordsToDict:
     @pytest.mark.parametrize(
         "coords, dims, match",
         [
-            ([_ij_multiindex()], None, r"MultiIndex.*must have \.name set"),
             ([("x",)], None, r"\(dim_name, values\) convention"),
             ([(0, 1, 2)], ["x"], r"\(dim_name, values\) convention"),
             ([("x", 5)], None, r"with array-like values"),
@@ -549,7 +432,6 @@ class TestCoordsToDict:
             ([object()], None, r"coords entries must be pd\.Index"),
         ],
         ids=[
-            "unnamed-multiindex",
             "tuple-too-short",
             "tuple-bare-values",
             "tuple-scalar-values",
@@ -562,6 +444,18 @@ class TestCoordsToDict:
     ) -> None:
         with pytest.raises(TypeError, match=match):
             self._parse(coords, dims=dims)
+
+    @pytest.mark.parametrize("form", ["sequence", "mapping", "coordinates"])
+    def test_multiindex_entry_rejected(self, form: str) -> None:
+        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["p", "q"])
+        mi.name = "d"
+        coords = {
+            "sequence": [mi],
+            "mapping": {"d": mi},
+            "coordinates": xr.Coordinates.from_pandas_multiindex(mi, "d"),
+        }[form]
+        with pytest.raises(ValueError, match=r"dimension 'd', a `pd.MultiIndex`"):
+            self._parse(coords)
 
 
 # ---------------------------------------------------------------------------
@@ -691,198 +585,14 @@ class TestBroadcastToCoords:
         assert set(da.dims) == {"a", "b"}
         assert (da.sel(b=4).values == np.arange(4)).all()
 
-
-# ---------------------------------------------------------------------------
-# Implicit MultiIndex-level projection
-# ---------------------------------------------------------------------------
-
-
-class TestBroadcastToCoordsMultiIndexProjection:
-    """
-    Inputs indexed by levels of a stacked MultiIndex dim are projected onto it.
-
-    Implicit projection raises (sections 8 and 11);
-    coverage gaps raise under strict mode.
-    """
-
-    def test_broadcasts_single_level_raises(
-        self, mi_coords: xr.Coordinates, by_level1: DataArray
-    ) -> None:
-        """The implicit level projection must be written explicitly."""
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(
-                by_level1, coords=mi_coords, dims=["dim_3"], strict=False
-            )
-
-    def test_stacks_full_levels_raises(self, mi_coords: xr.Coordinates) -> None:
-        """Implicit NaN-fill of uncovered combinations must be explicit."""
-        subset = pd.MultiIndex.from_tuples(
-            [(1, "a"), (2, "b")], names=["level1", "level2"]
-        )
-        weights = pd.Series([10.0, 20.0], index=subset)
-
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
-
-    def test_full_coverage_is_silent(
-        self, mi_coords: xr.Coordinates, mi_index: pd.MultiIndex
-    ) -> None:
-        """
-        Full-level, fully-covering alignment is convention-clean → no warning.
-
-        Aligning an input that reconstructs the whole MultiIndex onto its dim is
-        equivalent to the input already carrying that dim (future §11), so it must
-        not warn or raise the way partial/gap projections do.
-        """
-        full = pd.Series([1.0, 2.0, 3.0, 4.0], index=mi_index)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            da = broadcast_to_coords(
-                full, coords=mi_coords, dims=["dim_3"], strict=False
-            )
-
-        assert da.dims == ("dim_3",)
-        assert da.values.tolist() == [1.0, 2.0, 3.0, 4.0]
-
-    def test_expands_missing_mi_dim_keeps_levels(self) -> None:
-        """
-        Broadcasting a missing MultiIndex dim must keep its level coords intact.
-
-        expand_dims drops MultiIndex level coords, leaving a degenerate flat
-        index that fails to align downstream (PyPSA multi-investment regression).
-        """
-        midx = pd.MultiIndex.from_tuples(
-            [(2020, 0), (2020, 1), (2030, 0), (2030, 1)],
-            names=["period", "timestep"],
-        )
-        midx.name = "snapshot"
-        sc = xr.Coordinates.from_pandas_multiindex(midx, "snapshot")
-        labels = DataArray(
-            [[1], [2], [3], [4]],
-            coords={**sc, "name": ["1"]},
-            dims=["snapshot", "name"],
-        )
-        coeff = broadcast_to_coords(
-            DataArray([1.0], coords={"name": ["1"]}, dims=["name"]),
-            coords=labels.coords,
-            dims=labels.dims,
-            strict=False,
-        )
-        assert set(coeff.xindexes) == {"snapshot", "period", "timestep", "name"}
-        coeff.reindex_like(labels, fill_value=0)
-
-    def test_ambiguous_level_raises(self) -> None:
-        """A level name shared by two MI dims cannot be resolved."""
-        a = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("shared", "x"))
-        b = pd.MultiIndex.from_product([[1, 2], ["c", "d"]], names=("shared", "y"))
-        coords = {
-            **xr.Coordinates.from_pandas_multiindex(a, "dimA"),
-            **xr.Coordinates.from_pandas_multiindex(b, "dimB"),
-        }
-        arr = DataArray([1.0, 2.0], coords={"shared": [1, 2]}, dims=["shared"])
-
-        with pytest.raises(ValueError, match=r"shared.*shared by MultiIndex"):
-            broadcast_to_coords(arr, coords=coords, strict=False)
-
-    def test_missing_level_value_raises(self, mi_coords: xr.Coordinates) -> None:
-        """A level value absent from the input cannot be broadcast."""
-        by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 9]}, dims=["level1"])
-
-        with pytest.raises(ValueError, match=r"Cannot align level.*is missing"):
-            broadcast_to_coords(
-                by_level1, coords=mi_coords, dims=["dim_3"], strict=False
-            )
-
-    def test_unrelated_mi_series_still_unstacks(self) -> None:
-        """A MI Series whose levels match no coords MI dim keeps unstacking."""
+    def test_multiindex_series_unstacks(self) -> None:
+        """A MultiIndex Series unstacks into one dimension per level."""
         sub = pd.MultiIndex.from_product([["p", "q"], [1, 2]], names=["foo", "bar"])
         series = pd.Series([1.0, 2.0, 3.0, 4.0], index=sub)
 
         da = broadcast_to_coords(series, coords={"time": [0, 1, 2]}, strict=False)
 
         assert set(da.dims) == {"time", "foo", "bar"}
-
-    def test_partially_named_mi_levels_raises(self) -> None:
-        """Projection onto a partially named MultiIndex raises like any other."""
-        mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", None))
-        mi.name = "dim_3"
-        by_level1 = DataArray([10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"])
-
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(by_level1, coords={"dim_3": mi}, strict=False)
-
-    def test_gap_detection_with_extra_dims_raises(
-        self, mi_coords: xr.Coordinates
-    ) -> None:
-        """Gap-producing projections raise regardless of extra dims."""
-        arr = DataArray(
-            [[[1.0, np.nan], [2.0, 2.0]], [[3.0, 3.0], [4.0, 4.0]]],
-            dims=["level1", "level2", "extra"],
-            coords={"level1": [1, 2], "level2": ["a", "b"], "extra": [0, 1]},
-        )
-
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(arr, coords=mi_coords, dims=["dim_3"], strict=False)
-
-    def test_strict_gap_error_truncates_long_missing_list(self) -> None:
-        """More than 5 missing combinations are truncated in the error message."""
-        idx = pd.MultiIndex.from_product(
-            [[1, 2, 3], ["a", "b", "c"]], names=("l1", "l2")
-        )
-        idx.name = "dim_m"
-        coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_m")
-        # Diagonal subset: every level value present, 6 of 9 combinations missing.
-        diagonal = pd.MultiIndex.from_tuples(
-            [(1, "a"), (2, "b"), (3, "c")], names=["l1", "l2"]
-        )
-        weights = pd.Series([1.0, 2.0, 3.0], index=diagonal)
-
-        with pytest.raises(
-            ValueError, match=r"no value for 6 level combination.*in total"
-        ):
-            broadcast_to_coords(weights, coords, dims=["dim_m"], label="lower bound")
-
-    # --- strict-mode policy on MI projections (deprecation / gaps) ---
-
-    def test_strict_partial_level_raises(
-        self, mi_coords: xr.Coordinates, by_level1: DataArray
-    ) -> None:
-        """Per-level bounds must be projected onto the dim explicitly."""
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(
-                by_level1, mi_coords, dims=["dim_3"], label="lower bound"
-            )
-
-    def test_strict_rejects_coverage_gap(self, mi_coords: xr.Coordinates) -> None:
-        """A coverage gap raises on both rungs (different errors, same outcome)."""
-        subset = pd.MultiIndex.from_tuples(
-            [(1, "a"), (2, "b")], names=["level1", "level2"]
-        )
-        weights = pd.Series([10.0, 20.0], index=subset)
-
-        with pytest.raises(ValueError, match=r"not supported \(sections 8 and 11\)"):
-            broadcast_to_coords(weights, coords=mi_coords, dims=["dim_3"], strict=False)
-
-        with pytest.raises(ValueError, match=r"no value for .* level combination"):
-            broadcast_to_coords(weights, mi_coords, dims=["dim_3"], label="lower bound")
-
-    def test_strict_rejects_unnamed_mi_mismatch(self) -> None:
-        """
-        A MultiIndex input with unnamed levels cannot be projected by level name,
-        so it keeps its own index under the coords dim. The strict rung must still
-        reject it when its level combinations don't cover coords, just as the
-        named-level coverage-gap case does.
-        """
-        idx = pd.MultiIndex.from_product([[2020, 2030], ["t1", "t2"]], names=("p", "t"))
-        idx.name = "snapshot"
-        coords = xr.Coordinates.from_pandas_multiindex(idx, "snapshot")
-        sparse_unnamed = pd.Series({(2020, "t1"): 1.0, (2030, "t2"): 2.0})
-
-        with pytest.raises(ValueError, match=r"MultiIndex for dimension 'snapshot'"):
-            broadcast_to_coords(
-                sparse_unnamed, coords, dims=["snapshot"], label="lower bound"
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -922,9 +632,8 @@ class TestBroadcastToCoordsStrictMode:
 
     def test_does_not_relabel_coords_errors(self) -> None:
         """Coords-side TypeError carries its own message, not the value label."""
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=["i", "j"])
-        with pytest.raises(TypeError, match=r"MultiIndex.*must have \.name set"):
-            broadcast_to_coords(np.array([1, 2, 3, 4]), [mi], label="lower bound")
+        with pytest.raises(TypeError, match=r"^coords entries must be pd\.Index"):
+            broadcast_to_coords(np.array([1, 2]), [object()], label="lower bound")
 
 
 # ---------------------------------------------------------------------------

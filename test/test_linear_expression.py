@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -307,8 +308,9 @@ def test_multiply_expression_by_level_aux_coord(u: Variable) -> None:
     assert coeffs.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
 
-@pytest.mark.v1
-@pytest.mark.parametrize("levels", [["dim_0", "b"], ["p", "q"]])
+@pytest.mark.parametrize(
+    ("dim", "levels"), [("s", ["dim_0", "b"]), ("s", ["p", "q"]), ("dim_0", ["p", "q"])]
+)
 @pytest.mark.parametrize("as_expr", [False, True])
 @pytest.mark.parametrize(
     "op",
@@ -323,16 +325,39 @@ def test_multiply_expression_by_level_aux_coord(u: Variable) -> None:
         lambda o, c: c * o,
         lambda o, c: c <= o,
         lambda o, c: o.model.add_constraints(o, "<=", c),
+        lambda o, c: o.where(c > 1),
+        lambda o, c: (1 * o).fillna(c),
+        lambda o, c: merge([1 * o, (1 * o).assign_coords(c.coords)]),
     ],
-    ids=["add", "sub", "mul", "div", "le", "ge", "eq", "rmul", "rle", "add_cons"],
+    ids=[
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "le",
+        "ge",
+        "eq",
+        "rmul",
+        "rle",
+        "add_cons",
+        "where",
+        "fillna",
+        "merge",
+    ],
 )
-def test_multiindex_constant_operand_rejected_v1(
-    x: Variable, op: Callable[[Any, Any], Any], as_expr: bool, levels: list[str]
+def test_multiindex_constant_operand_rejected(
+    x: Variable,
+    op: Callable[[Any, Any], Any],
+    as_expr: bool,
+    dim: str,
+    levels: list[str],
 ) -> None:
-    mi = pd.MultiIndex.from_product([[0, 1], ["u", "v"]], names=levels)
-    const = xr.DataArray(np.arange(1, 5), coords={"s": mi}, dims="s")
+    mi = pd.MultiIndex.from_product([[0, 1], ["u"]], names=levels)
+    const = xr.DataArray(np.arange(1, 3), coords={dim: mi}, dims=dim)
     operand = 1 * x if as_expr else x
-    with pytest.raises(ValueError, match=r"dimension 's', a `pd.MultiIndex`"):
+    with pytest.raises(
+        ValueError, match=rf"dimension '{dim}', a `pd.MultiIndex`.*reset_index"
+    ):
         op(operand, const)
 
 
@@ -1034,15 +1059,6 @@ def test_linear_expression_swap_dims(v: Variable) -> None:
     assert expr.coord_dims == ("second",)
 
 
-def test_linear_expression_set_index(v: Variable) -> None:
-    expr = v.to_linexpr()
-    expr = expr.assign_coords({"second": ("dim_2", expr.indexes["dim_2"] + 100)})
-    expr = expr.set_index({"multi": ["dim_2", "second"]})
-    assert isinstance(expr, LinearExpression)
-    assert expr.coord_dims == ("multi",)
-    assert isinstance(expr.indexes["multi"], pd.MultiIndex)
-
-
 def test_linear_expression_fillna(v: Variable) -> None:
     expr = np.arange(20) * v + 10
     assert expr.const.sum() == 200
@@ -1183,7 +1199,7 @@ class TestMultiKeyFastPath:
             expr.groupby(["period", "season"]).sum()
 
     def test_observed_keeps_stacked(self) -> None:
-        # observed=True skips the unstack: compact stacked MultiIndex,
+        # observed=True skips the unstack: compact stacked group dim,
         # identical to the DataFrame grouper output
         expr = self._expr([2020, 2020, 2030, 2030], list("wwws"))
         df = expr.data[["period", "season"]].to_dataframe()[["period", "season"]]
@@ -1544,7 +1560,7 @@ def test_linear_expression_groupby_with_series_with_same_group_name(
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
-def test_linear_expression_groupby_with_series_on_multiindex(
+def test_linear_expression_groupby_with_series_on_aux_coords(
     u: Variable, use_fallback: bool
 ) -> None:
     expr = 1 * u
@@ -1596,7 +1612,7 @@ def test_linear_expression_groupby_multikey_is_sorted(v: Variable) -> None:
     assert keys == [(1, "x"), (1, "y"), (2, "y"), (3, "x")]
 
 
-def test_linear_expression_groupby_with_dataframe_on_multiindex(u: Variable) -> None:
+def test_linear_expression_groupby_with_dataframe_on_aux_coords(u: Variable) -> None:
     expr = 1 * u
     n = len(u.data["dim_3"])
     groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
@@ -1692,6 +1708,56 @@ def test_linear_expression_groupby_roll_with_const(v: Variable) -> None:
     assert grouped.const[0].item() == 9
 
 
+@pytest.mark.parametrize("boundary", ["cyclic", "non-cyclic", "ramp"])
+def test_groupby_roll_by_aux_coord_period_boundary(
+    tmp_path: Path, boundary: str
+) -> None:
+    """
+    A per-period roll over an auxiliary ``period`` coord builds the same LP as
+    an explicit per-period positional roll, for each period-start boundary:
+    ``cyclic`` wraps, ``non-cyclic`` drops the previous term, ``ramp`` drops
+    the row. A period-unaware global roll differs for ``cyclic``.
+    """
+    period_of = np.repeat([2020, 2030], 3)
+    s = pd.RangeIndex(6, name="snapshot")
+    period = xr.DataArray(period_of, dims="snapshot", coords={"snapshot": s})
+    demand = xr.DataArray(
+        [1.0, 3.0, 2.0, 2.0, 1.0, 3.0], dims="snapshot", coords={"snapshot": s}
+    )
+    is_start = xr.DataArray(
+        np.isin(np.arange(6), [0, 3]), dims="snapshot", coords={"snapshot": s}
+    )
+    prev_pos = np.array([2, 0, 1, 5, 3, 4])
+
+    def lp(kind: str, bnd: str) -> str:
+        m = Model()
+        soc = m.add_variables(lower=0, coords=[s], name="soc")
+        charge = m.add_variables(lower=0, coords=[s], name="charge")
+        if kind == "flat":
+            prev = (1.0 * soc).assign_coords(period=period).groupby("period")
+            prev = prev.roll(snapshot=1)
+            if "period" in prev.coords:
+                prev = prev.drop_vars("period")
+        elif kind == "oracle":
+            prev = (1.0 * soc).isel(snapshot=prev_pos).assign_coords(snapshot=s)
+        else:
+            prev = (1.0 * soc).roll(snapshot=1)
+        if bnd == "non-cyclic":
+            prev = prev.where(~is_start)
+        con = 1.0 * soc - prev - 1.0 * charge == -demand
+        mask = ~is_start if bnd == "ramp" else None
+        m.add_constraints(con, name="soc", mask=mask)
+        path = tmp_path / f"{kind}_{bnd}.lp"
+        m.to_file(path, io_api="lp")
+        return path.read_text()
+
+    contrast = {"cyclic": "non-cyclic", "non-cyclic": "cyclic", "ramp": "cyclic"}
+    assert lp("flat", boundary) == lp("oracle", boundary)
+    assert lp("flat", boundary) != lp("flat", contrast[boundary])
+    if boundary == "cyclic":
+        assert lp("global", "cyclic") != lp("oracle", "cyclic")
+
+
 def test_linear_expression_groupby_from_variable(v: Variable) -> None:
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.groupby(groups).sum()
@@ -1708,11 +1774,8 @@ def groupby_ctx() -> SimpleNamespace:
     idx = pd.RangeIndex(60, name="elem")
     other = pd.Index(list("abc"), name="other")
     p, q = pd.Index(list("pq"), name="p"), pd.Index([10, 20, 30], name="q")
-    a, b = pd.Index(range(12), name="a"), pd.Index(list("vwxyz"), name="b")
 
     const = xr.DataArray(rng.normal(size=(3, 60)), coords=[other, idx])
-    yab = m.add_variables(coords=[a, b], name="yab")
-    stacked = LinearExpression((2 * yab + 1 * yab).data.stack(elem=["a", "b"]), m)
     skewed = pd.Series(rng.choice(8, 60, p=[0.5] + [0.5 / 7] * 7), index=idx, name="g")
 
     return SimpleNamespace(
@@ -1725,11 +1788,9 @@ def groupby_ctx() -> SimpleNamespace:
         ),
         const=const,
         cond2d=xr.DataArray(rng.random((3, 60)) > 0.3, coords=[other, idx]),
-        stacked=stacked,
         skewed=skewed,
         one_group=pd.Series(1, index=idx, name="g"),
         identity=pd.Series(np.arange(60), index=idx, name="g"),
-        mi_groups=skewed.set_axis(stacked.data.indexes["elem"]),
     )
 
 
@@ -1749,7 +1810,6 @@ FALLBACK_SUM_CASES = {
     "single_group": lambda c: (1 * c.x, c.one_group),
     "identity_groups": lambda c: (1 * c.x, c.identity),
     "three_dims": lambda c: (4 * c.y3 + 1 * c.y3, c.skewed),
-    "multiindex_dim": lambda c: (c.stacked, c.mi_groups),
 }
 
 

@@ -1362,24 +1362,13 @@ def test_matmul_operand_errors_match_multiplication(kind: str) -> None:
     assert str(sparse.value) == str(dense.value)
 
 
-@pytest.mark.parametrize("kind", ["non-unique", "multiindex"])
-def test_matmul_falls_back_to_dense_on_unsupported_labels(kind: str) -> None:
+def test_matmul_falls_back_to_dense_on_non_unique_labels() -> None:
     m = Model()
-    labels = ["a", "a", "b"] if kind == "non-unique" else ["a", "b", "c"]
-    x = m.add_variables(coords=[pd.Index(labels, name="d")], name="x")
+    x = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
     expr = 1.0 * x
-    coords: Any = {"d": expr.indexes["d"]}
-    if kind == "multiindex":
-        keys = pd.MultiIndex.from_tuples(
-            [(0, "a"), (0, "b"), (1, "a")], names=["p", "q"]
-        )
-        coords = xr.Coordinates.from_pandas_multiindex(keys, "d")
-        expr = LinearExpression(expr.data.drop_vars("d").assign_coords(coords), m)
-    operand = (
-        xr.DataArray(np.ones((3, len(LOC))), dims=["d", "loc"])
-        .assign_coords(coords)
-        .assign_coords(loc=LOC)
-    )
+    operand = xr.DataArray(
+        np.ones((3, len(LOC))), dims=["d", "loc"], coords={"d": expr.indexes["d"]}
+    ).assign_coords(loc=LOC)
 
     res = expr @ operand
 
@@ -1631,11 +1620,11 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     ),
     "isel-pointwise": (
         lambda e, c: e.isel(bus=xr.DataArray([0, 1], dims="pt")),
-        "`isel` over MultiIndex labels, or introducing dimensions",
+        "`isel` introducing dimensions or coordinates",
     ),
     "where-new-dim": (
         lambda e, c: e.where(xr.DataArray([True, False], coords=[LOC])),
-        "`where` over MultiIndex labels, or introducing dimensions",
+        "`where` introducing dimensions or coordinates",
     ),
     "where-callable": (
         lambda e, c: e.where(lambda ds: ds.const > 0),
@@ -1983,33 +1972,17 @@ def test_variable_ops_without_sparse_path_build_dense_silently(op: str) -> None:
         assert_linequal(res, want)
 
 
-def unsupported_labels_expr(m: Model, kind: str) -> LinearExpression:
-    """An expression over ``d`` with non-unique or MultiIndex labels."""
-    labels = ["a", "a", "b"] if kind == "non-unique" else ["a", "b", "c"]
-    expr = 1.0 * m.add_variables(coords=[pd.Index(labels, name="d")], name="x")
-    if kind == "multiindex":
-        keys = pd.MultiIndex.from_tuples([(0, "a"), (0, "b"), (1, "a")])
-        coords = xr.Coordinates.from_pandas_multiindex(keys.set_names(["p", "q"]), "d")
-        expr = LinearExpression(expr.data.drop_vars("d").assign_coords(coords), m)
-    return expr
-
-
-@pytest.mark.parametrize(
-    ("kind", "reason"),
-    [("non-unique", "non-unique labels"), ("multiindex", "with a MultiIndex")],
-)
-def test_merge_over_different_dims_densifies_unsupported_labels_like_dense(
-    kind: str, reason: str
-) -> None:
+def test_merge_over_different_dims_densifies_non_unique_labels_like_dense() -> None:
     snaps = pd.Index(range(2), name="snapshot")
+    labels = pd.Index(["a", "a", "b"], name="d")
     results = []
     for m in (Model(), Model(sparse=True)):
-        expr = unsupported_labels_expr(m, kind)
+        expr = 1.0 * m.add_variables(coords=[labels], name="x")
         y = m.add_variables(coords=[snaps], name="y")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", linopy.PerformanceWarning)
             results.append(expr + 2 * y)
-    assert any(reason in str(w.message) for w in caught)
+    assert any("non-unique labels" in str(w.message) for w in caught)
     assert not results[1].is_sparse
     assert_linequal(results[1], results[0])
 

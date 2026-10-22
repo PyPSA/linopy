@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, TypeVar
 import numpy as np
 from xarray import DataArray, Dataset
 
-from linopy.common import assign_multiindex_safe
+from linopy.common import assign_fields
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -48,7 +48,7 @@ def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
     if "scaling" in data:
         return data
     scaling = validate_scaling(DataArray(1.0).broadcast_like(like), label)
-    return assign_multiindex_safe(data, scaling=scaling)
+    return assign_fields(data, scaling=scaling)
 
 
 def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:

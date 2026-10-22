@@ -7,6 +7,8 @@ Created on Tue Nov  2 22:38:48 2021.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -264,12 +266,37 @@ def test_constraint_inherited_properties(
     assert isinstance(con.dims, xr.core.utils.Frozen)
 
 
+def test_constraint_assign_replaces_term_fields(
+    x: linopy.Variable, y: linopy.Variable
+) -> None:
+    con = 10 * x + y <= 10
+    res = con.assign(
+        vars=con.vars.isel({TERM_DIM: [0]}), coeffs=con.coeffs.isel({TERM_DIM: [0]})
+    )
+    assert isinstance(res, Constraint)
+    assert res.sizes[TERM_DIM] == 1
+    assert_equal(res.vars, con.vars.isel({TERM_DIM: [0]}))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda x: x, lambda x: 1 * x, lambda x: x >= 0],
+    ids=["var", "expr", "con"],
+)
+def test_set_index_swaps_dim_coord(x: linopy.Variable, build: Callable) -> None:
+    obj = build(x)
+    alt = np.arange(10, 20)
+    res = obj.assign_coords(alt=("first", alt)).set_index(first="alt")
+    assert type(res) is type(obj)
+    assert res.indexes["first"].tolist() == alt.tolist()
+
+
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
     con = 10 * x + y <= 10
     assert isinstance(con, Constraint)
 
     # Test wrapped methods
-    con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
+    con.assign(new_var=xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)]))
     con.assign_attrs({"new_attr": "value"})
     con.assign_coords(
         {"new_coord": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])}
@@ -305,20 +332,6 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
     assert con.coord_dims == ("first", "third")
-
-
-def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
-    expr = 10 * x + y
-    con = expr <= 10
-    assert isinstance(con, Constraint)
-    con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
-    con = con.set_index({"multi": ["second", "third"]})
-    assert isinstance(con, ConstraintBase)
-    assert con.coord_dims == (
-        "first",
-        "multi",
-    )
-    assert isinstance(con.indexes["multi"], pd.MultiIndex)
 
 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:

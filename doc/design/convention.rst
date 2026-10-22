@@ -270,19 +270,19 @@ makes concatenating grouped expressions the natural next step. Every other
 aux coord — on a shared non-concat dimension, or scalar — is checked as
 above.
 
-**Stacked MultiIndex dimensions.** A stacked MultiIndex dim (e.g. PyPSA's
-``(period, timestep)`` ``snapshot``) stores its *levels* as auxiliary
-coordinates — ``period`` and ``timestep`` are non-dimension coords on
-``snapshot`` — and its elements are *level combinations* (one tuple per
-position). An operand whose *dimension* names one of those levels — a
-per-``period`` weighting meeting a ``snapshot``-indexed expression — is a
-same-name conflict between a dimension and an auxiliary coordinate, and it
-raises like any other conflict of this section. There is no implicit
-projection. ``snapshot`` is a flat dimension carrying ``period`` and ``timestep``
-as auxiliary coordinates (a first-class ``pd.MultiIndex`` dimension is rejected,
-so ``expr.indexes["snapshot"]`` is a flat index, not a ``MultiIndex``). Map the
-per-``period`` input onto ``snapshot`` through that coordinate — a plain array
-of one weight per position — then use it in the operation:
+**Stacked dimensions.** A stacked dim (e.g. PyPSA's ``(period, timestep)``
+``snapshot``) stores its *levels* as auxiliary coordinates — ``period`` and
+``timestep`` are non-dimension coords on ``snapshot`` — and its elements are
+*level combinations* (one per position). An operand whose *dimension* names
+one of those levels — a per-``period`` weighting meeting a
+``snapshot``-indexed expression — is a same-name conflict between a dimension
+and an auxiliary coordinate, and it raises like any other conflict of this
+section. There is no implicit projection. ``snapshot`` is a flat dimension
+carrying ``period`` and ``timestep`` as auxiliary coordinates (a first-class
+``pd.MultiIndex`` dimension is rejected, so ``expr.indexes["snapshot"]`` is a
+flat index, not a ``MultiIndex``). Map the per-``period`` input onto
+``snapshot`` through that coordinate — a plain array of one weight per
+position — then use it in the operation:
 
 ::
 
@@ -292,10 +292,8 @@ of one weight per position — then use it in the operation:
    )
    weighted = expr * w   # one constraint/term per snapshot, weighted by period
 
-An input that reconstructs the *entire* MultiIndex (all levels, every
-combination) is not a conflict — it is the same coordinate spelled
-differently, and aligns by tuple under §8: the tuples must match in the same
-order, a reorder raises (§10).
+An input on a first-class ``pd.MultiIndex`` dimension, a constant operand or
+``Model.parameters`` included, is rejected with the same ``reset_index`` hint.
 
 Constraints and reductions
 --------------------------

@@ -106,7 +106,9 @@ Every row is a legacy guess that is now an explicit rule.
        ``snapshot``)
      - Rejected; linopy uses a flat dimension with the levels as aux coords, and a
        per-level input must be mapped onto the flat dimension explicitly (no
-       implicit projection). Affects PyPSA multi-investment models.
+       implicit projection). Affects PyPSA multi-investment models. Netcdf
+       files written with such a dimension load flat: a positional index with
+       the levels as aux coords.
      - ``.reset_index(dim)`` to flatten, then project the per-level input by
        its level aux coord.
    * - A multi-key ``groupby(...).sum()`` result

@@ -115,7 +115,8 @@ class Grid:
             for k, da in ds.data_vars.items()
             if str(k).startswith(_AUX_PREFIX)
         }
-        return cls(cls.from_coords(coords_from_dataset(ds, list(dims))).indexes, aux)
+        indexes, levels = coords_from_dataset(ds, list(dims))
+        return cls(cls.from_coords(indexes).indexes, aux | levels)
 
     def to_netcdf_vars(self) -> dict[str, DataArray]:
         """

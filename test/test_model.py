@@ -477,3 +477,10 @@ class TestModelCopySolved:
             assert_conequal(c.constraints[con], m.constraints[con], strict=False)
         assert_linequal(c.objective.expression, m.objective.expression)
         assert c.objective.sense == m.objective.sense
+
+
+def test_parameters_reject_multiindex() -> None:
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    m = Model()
+    with pytest.raises(ValueError, match=r"parameters uses dimension 'd', a `pd"):
+        m.parameters = xr.Dataset(coords=xr.Coordinates.from_pandas_multiindex(mi, "d"))
