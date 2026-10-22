@@ -64,32 +64,9 @@ def assert_linequal(
     return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
 
 
-def _cell_terms(expr: LinearExpression) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Cell index, variable label and coefficient of each live term, read from
-    the CSR backing of a sparse expression without densifying it, or from
-    `vars` and `coeffs` of a dense one, skipping masked cells, missing
-    variables and zero coefficients.
-    """
-    csr = expr._csr
-    if csr is not None:
-        cells = np.repeat(np.arange(csr.n_cells), np.diff(csr.csr.indptr))
-        keep = csr.live_terms()
-        return cells[keep], csr.csr.indices[keep], csr.csr.data[keep]
-    dims = (*expr.coord_dims, TERM_DIM)
-    const = expr.const.to_numpy().reshape(-1, 1)
-    shape = (len(const), expr.nterm)
-    vars_ = expr.data.vars.transpose(*dims).to_numpy().reshape(shape)
-    coeffs = expr.data.coeffs.transpose(*dims).to_numpy().reshape(shape)
-    present = ~np.isnan(const)
-    cells = np.broadcast_to(np.arange(len(const))[:, None], shape)
-    keep = present & (vars_ != -1) & (coeffs != 0)
-    return cells[keep], vars_[keep], coeffs[keep]
-
-
 def _cell_matrix(expr: LinearExpression, n_vars: int) -> scipy.sparse.csr_array:
     """Per-cell term matrix with duplicate labels summed and zeros pruned."""
-    cells, vars_, coeffs = _cell_terms(expr)
+    cells, vars_, coeffs = expr._store.terms()
     shape = (int(expr.const.size), n_vars)
     matrix = scipy.sparse.coo_array((coeffs, (cells, vars_)), shape=shape).tocsr()
     matrix.eliminate_zeros()

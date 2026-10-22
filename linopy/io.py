@@ -1108,7 +1108,7 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_dataset().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1375,6 +1375,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         Constraints,
         CSRConstraint,
     )
+    from linopy.csr import CSRStore
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1407,7 +1408,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = type(expr)(expr.data.copy(deep=deep), new_model)
+        new_expr = type(expr)(expr._to_dataset().copy(deep=deep), new_model)
         new_expr.attrs["name"] = name  # __init__ resets the name to None
         return new_expr
 
@@ -1442,16 +1443,19 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     expr = m.objective.expression
-    csr = expr._csr if isinstance(expr, LinearExpression) else None
+    store = expr._store if isinstance(expr, LinearExpression) else None
     obj_expr = (
-        type(expr)(expr.data.copy(deep=deep), new_model)
-        if csr is None
-        else LinearExpression._from_csr(
+        LinearExpression._from_store(
             replace(
-                csr, csr=_buffer(csr.csr), const=_buffer(csr.const), model=new_model
+                store,
+                csr=_buffer(store.csr),
+                const=_buffer(store.const),
+                model=new_model,
             ),
             new_model,
         )
+        if isinstance(store, CSRStore)
+        else type(expr)(expr._to_dataset().copy(deep=deep), new_model)
     )
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling

@@ -106,7 +106,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRLinearExpression, Grid, _aux_coords, _densify_notice
+from linopy.csr import CSRStore, Grid, _aux_coords, _densify_notice
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -122,6 +122,7 @@ from linopy.semantics import (
     join_fill,
     reindex_like_if_needed,
 )
+from linopy.store import DenseStore, Store, expression_dataset
 from linopy.types import (
     CONSTANT_TYPES,
     ConstantLike,
@@ -464,14 +465,19 @@ class LinearExpressionGroupby:
         return self.obj if isinstance(self.obj, Dataset) else self.obj.data
 
     @property
-    def _csr(self) -> CSRLinearExpression | None:
-        return self.obj._csr if isinstance(self.obj, LinearExpression) else None
+    def _store(self) -> Store:
+        obj = self.obj
+        if isinstance(obj, LinearExpression):
+            return obj._store
+        return DenseStore(self.data, self.model)
 
     @property
     def _labels(self) -> Dataset:
         """The coordinates to resolve groupers against, without densifying."""
-        csr = self._csr
-        return self.data if csr is None else csr.grid.to_dataset()
+        store = self._store
+        if isinstance(store, CSRStore):
+            return store.grid.to_dataset()
+        return self.data
 
     @property
     def groupby(self) -> xarray.core.groupby.DatasetGroupBy:
@@ -570,8 +576,9 @@ class LinearExpressionGroupby:
 
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
-        csr = self._csr
-        sparse = self.model.sparse or csr is not None
+        store = self._store
+        is_csr = isinstance(store, CSRStore)
+        sparse = self.model.sparse or is_csr
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
@@ -580,13 +587,11 @@ class LinearExpressionGroupby:
             if grouper is None:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
                 grouper = group.to_pandas() if is_1d else group
-            if csr is None:
-                source: Dataset | CSRLinearExpression = self.data
-                coord_dims = tuple(
-                    str(d) for d in self.data.coeffs.dims if d != TERM_DIM
-                )
-            else:
-                source, coord_dims = csr, csr.grid.dims
+            coord_dims = (
+                store.grid.dims
+                if is_csr
+                else tuple(str(d) for d in self.data.coeffs.dims if d != TERM_DIM)
+            )
             supported = (
                 not use_fallback
                 and isinstance(grouper, (pd.Series, pd.DataFrame))
@@ -599,15 +604,15 @@ class LinearExpressionGroupby:
                     if isinstance(grouper, pd.DataFrame)
                     else str(grouper.name or "group")
                 )
-                res = CSRLinearExpression.from_grouper(
-                    source, self.model, grouper, group_name, stacked, coord_dims
+                res = CSRStore.from_grouper(
+                    store, self.model, grouper, group_name, stacked, coord_dims
                 )
-                return LinearExpression._from_csr(res, self.model)
+                return LinearExpression._from_store(res, self.model)
             reason = "groupby-sum with a grouper without a sparse path"
-            if csr is None:
-                _densify_notice(reason, self.model)
-            else:
+            if is_csr:
                 _densify_all([self.obj], reason)
+            else:
+                _densify_notice(reason, self.model)
 
         if multikey_frame is not None:
             group = multikey_frame
@@ -806,14 +811,25 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
+def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
+    """
+    ``grid`` carrying the auxiliary coordinates of ``const``, or None if
+    ``const`` does not lie on ``grid`` or its coordinates clash with it.
+    """
+    own = Grid.from_dataset(const, grid.dims)
+    merged = replace(grid, aux=grid.aux | own.aux)
+    held = set(const.coords) <= {*grid.dims, *own.aux}
+    fits = held and set(const.dims) == set(grid.dims) and own.same_layout(grid)
+    return merged if fits and merged == replace(grid, aux=own.aux | grid.aux) else None
+
+
 class BaseExpression(ABC):
-    __slots__ = ("_data", "_model")
+    __slots__ = ("_model",)
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
     _fill_value = FILL_VALUE
-    _data: Dataset
 
     @property
     @abstractmethod
@@ -831,59 +847,15 @@ class BaseExpression(ABC):
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
 
-        if data is None:
-            da = xr.DataArray([], dims=[TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, CONSTANT_TYPES):
-            const = as_dataarray(data)
-            da = xr.DataArray([], dims=[TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": const})
-        elif not isinstance(data, Dataset):
-            supported_types = ", ".join(
-                map(lambda s: s.__qualname__, (*CONSTANT_TYPES, Dataset))
-            )
-            raise ValueError(
-                f"data must be an instance of {supported_types}, got {type(data)}"
-            )
-
-        data = cast(Dataset, data)
-        if not set(data).issuperset({"coeffs", "vars"}):
-            raise ValueError(
-                "data must contain the fields 'coeffs' and 'vars' or 'const'"
-            )
-
-        if np.issubdtype(data.vars, np.floating):
-            data = assign_fields(
-                data, vars=data.vars.fillna(-1).astype(model._dtypes["labels"])
-            )
-        if not np.issubdtype(data.coeffs, np.floating):
-            data["coeffs"].values = data.coeffs.values.astype(float)
-
-        data = fill_missing_coords(data)
-
-        if TERM_DIM not in data.dims:
-            raise ValueError("data must contain one dimension ending with '_term'")
-
-        if "const" not in data:
-            data = data.assign(const=0.0)
-        elif not np.issubdtype(data.const, np.floating):
-            data = assign_fields(data, const=data.const.astype(float))
-
-        (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
-        (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
-        coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
-        data = assign_fields(data, **coeffs_vars_dict)
-
-        data = data.transpose(..., TERM_DIM)
-
-        # ensure helper dimensions are not set as coordinates
-        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
-            # TODO: add a warning here, routines should be safe against this
-            data = data.drop_vars(drop_dims)
-
-        data = data.assign_attrs(name=None)
         self._model = model
-        self._data = data
+        self._set_data(expression_dataset(data, model))
+
+    @abstractmethod
+    def _set_data(self, data: Dataset) -> None:
+        """Replace the expression's content by the normalized dataset ``data``."""
+
+    def _assign_fields(self, **fields: Any) -> None:
+        self._set_data(assign_fields(self.data, **fields))
 
     def __repr__(self) -> str:
         """
@@ -1489,8 +1461,12 @@ class BaseExpression(ABC):
         return str(self.attrs["name"])
 
     @property
-    def data(self) -> Dataset:
-        return self._data
+    @abstractmethod
+    def data(self) -> Dataset: ...
+
+    def _to_dataset(self) -> Dataset:
+        """The dense dataset, without converting a sparse expression."""
+        return self.data
 
     @property
     def model(self) -> Model:
@@ -1520,7 +1496,7 @@ class BaseExpression(ABC):
 
     @vars.setter
     def vars(self, value: DataArray) -> None:
-        self._data = assign_fields(self.data, vars=value)
+        self._assign_fields(vars=value)
 
     @property
     def coeffs(self) -> DataArray:
@@ -1529,7 +1505,7 @@ class BaseExpression(ABC):
 
     @coeffs.setter
     def coeffs(self, value: DataArray) -> None:
-        self._data = assign_fields(self.data, coeffs=value)
+        self._assign_fields(coeffs=value)
 
     @property
     def const(self) -> DataArray:
@@ -1538,7 +1514,7 @@ class BaseExpression(ABC):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_fields(self.data, const=value)
+        self._assign_fields(const=value)
 
     def _assign_coords(self, **coords: Any) -> Self:
         """
@@ -1549,7 +1525,7 @@ class BaseExpression(ABC):
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = reassign_coords(self.data, **coords)
+        self._set_data(reassign_coords(self.data, **coords))
         return self
 
     @property
@@ -2180,29 +2156,36 @@ class LinearExpression(BaseExpression):
     <class 'linopy.expressions.LinearExpression'>
     """
 
-    __slots__ = ("_csr",)
+    __slots__ = ("_store",)
 
-    def __init__(self, data: Dataset | Any | None, model: Model) -> None:
-        super().__init__(data, model)
-        self._csr: CSRLinearExpression | None = None
+    _store: Store
 
     @classmethod
-    def _from_csr(cls, csr: CSRLinearExpression, model: Model) -> Self:
-        """Construct an expression backed by a CSRLinearExpression."""
+    def _from_store(cls, store: Store, model: Model) -> Self:
+        """Construct an expression holding ``store``."""
         obj = cls.__new__(cls)
         obj._model = model
-        obj._data = None  # type: ignore[assignment]
-        obj._csr = csr
+        obj._store = store
         return obj
+
+    def _set_data(self, data: Dataset) -> None:
+        self._store = DenseStore(data, self._model)
 
     @property
     def data(self) -> Dataset:
         self._densify("`.data` read, e.g. by an operation without a sparse path")
-        return self._data
+        return self._store.to_dataset()
+
+    def _to_dataset(self) -> Dataset:
+        return self._store.to_dataset()
 
     def _densify(self, reason: str) -> None:
         """Convert the CSR backing to dense for good, with a notice naming ``reason``."""
         _densify_all([self], reason)
+
+    def _assign_fields(self, **fields: Any) -> None:
+        self._densify(f"assignment of `{next(iter(fields))}`")
+        super()._assign_fields(**fields)
 
     @property
     def is_sparse(self) -> bool:
@@ -2211,71 +2194,75 @@ class LinearExpression(BaseExpression):
         (:mod:`linopy.csr`) instead of a dense Dataset. Reading ``.data``, or
         an operation without a sparse path, converts it to dense for good.
         """
-        return self._csr is not None
+        return isinstance(self._store, CSRStore)
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
-        if self._csr is not None:
-            return self._csr.grid.dims
+        if self.is_sparse:
+            return self._store.grid.dims
         return super().coord_dims
 
     @property
     def dims(self) -> tuple[Hashable, ...]:
-        if self._csr is not None:
-            return (*self._csr.grid.dims, TERM_DIM)
+        if self.is_sparse:
+            return (*self._store.grid.dims, TERM_DIM)
         return super().dims
 
     @property
     def shape(self) -> tuple[int, ...]:
-        if self._csr is not None:
-            return (*self._csr.grid.shape, self._csr.nterm)
+        if self.is_sparse:
+            return (*self._store.grid.shape, self._store.nterm)
         return super().shape
 
     @property
     def size(self) -> int:
-        if self._csr is not None:
+        if self.is_sparse:
             return int(np.prod(self.shape, dtype=np.int64))
         return super().size
 
     @property
     def sizes(self) -> Frozen:
-        if self._csr is not None:
+        if self.is_sparse:
             return Frozen(dict(zip(self.dims, self.shape)))
         return super().sizes
 
     @property
     def coords(self) -> DatasetCoordinates:
-        if self._csr is not None:
-            return self._csr.grid.to_dataset().coords
+        if self.is_sparse:
+            return self._store.grid.to_dataset().coords
         return super().coords
 
     @property
     def indexes(self) -> Indexes:
-        if self._csr is not None:
-            return self._csr.grid.to_dataset().indexes
+        if self.is_sparse:
+            return self._store.grid.to_dataset().indexes
         return super().indexes
 
     @property
     def const(self) -> DataArray:
-        csr = self._csr
-        if csr is None:
+        store = self._store
+        if not isinstance(store, CSRStore):
             return super().const
-        return csr.grid.dataarray(csr.const, name="const")
+        return store.grid.dataarray(store.const, name="const")
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self._data = assign_fields(self.data, const=value)
+        store = self._store
+        if isinstance(store, CSRStore) and isinstance(value, DataArray):
+            const = value.broadcast_like(self.const)
+            if (grid := _const_grid(store.grid, const)) is not None:
+                flat = const.transpose(*grid.dims).to_numpy().reshape(-1)
+                self._store = store.with_grid(grid).assign_const(flat)
+                return
+        self._assign_fields(const=value)
 
     @property
     def has_terms(self) -> DataArray:
         """Check live variable terms directly from sparse rows."""
-        csr = self._csr
-        if csr is None:
+        store = self._store
+        if not isinstance(store, CSRStore):
             return super().has_terms
-        present = ~np.isnan(csr.const)
-        return csr.grid.dataarray(
-            present & (np.diff(csr.csr.indptr) > 0), name="has_terms"
-        )
+        return store.grid.dataarray(store.has_terms(), name="has_terms")
 
     @property
     def solution(self) -> DataArray:
@@ -2285,12 +2272,11 @@ class LinearExpression(BaseExpression):
         The function raises an error in case no model is set as a
         reference or the model is not optimized.
         """
-        csr = self._csr
-        if csr is None:
+        store = self._store
+        if not isinstance(store, CSRStore):
             return super().solution
-        sol = self._label_solution(csr.csr.indices)[: csr.csr.shape[1]]
-        sol = np.nan_to_num(sol)
-        return csr.grid.dataarray(csr.csr @ sol + csr.const, name="solution")
+        values = store.solution(self._label_solution)
+        return store.grid.dataarray(values, name="solution")
 
     def _combined_with_constant(
         self,
@@ -2301,9 +2287,9 @@ class LinearExpression(BaseExpression):
         needs_data_reindex: bool,
         scale: bool,
     ) -> Self:
-        csr = self._csr
+        csr = self._store
         flags = {"needs_data_reindex": needs_data_reindex, "scale": scale}
-        if csr is None:
+        if not isinstance(csr, CSRStore):
             return super()._combined_with_constant(self_const, operand, op, **flags)
         dims = csr.grid.dims
         const = op(self_const, operand)
@@ -2317,24 +2303,24 @@ class LinearExpression(BaseExpression):
         if scale:
             factor = operand.broadcast_like(const).transpose(*dims)
             csr = csr.scale(factor.to_numpy().reshape(-1), op)
-        csr = replace(csr.assign_const(const.to_numpy().reshape(-1)), grid=grid)
-        return type(self)._from_csr(csr, self._model)
+        csr = csr.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
+        return type(self)._from_store(csr, self._model)
 
     def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
-        if self._csr is not None:
+        if self.is_sparse:
             return self
         return super()._absorb_join_absence(fill_value)
 
     def _printout_cell(
         self, indices: tuple[Any, ...]
     ) -> tuple[np.ndarray, np.ndarray, Any]:
-        if self._csr is not None:
-            return self._csr.cell(indices)
+        if self.is_sparse:
+            return self._store.cell(indices)
         return super()._printout_cell(indices)
 
     def _selected(
         self, select: Callable[[DataArray], DataArray], name: str
-    ) -> CSRLinearExpression | None:
+    ) -> CSRStore | None:
         """
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
@@ -2342,8 +2328,8 @@ class LinearExpression(BaseExpression):
         the grid: new or unlabelled dimensions, or coordinates that are no
         auxiliary coordinates of the grid.
         """
-        csr = self._csr
-        if csr is None:
+        csr = self._store
+        if not isinstance(csr, CSRStore):
             return None
         reason = f"`{name}` introducing dimensions or coordinates"
         rows = select(csr.grid.dataarray(np.arange(csr.n_cells)))
@@ -2369,7 +2355,7 @@ class LinearExpression(BaseExpression):
         csr = self._selected(operator.methodcaller(name, *args, **kwargs), name)
         if csr is None:
             return dense(*args, **kwargs)
-        return type(self)._from_csr(csr, self._model)
+        return type(self)._from_store(csr, self._model)
 
     def sel(self, *args: Any, **kwargs: Any) -> Self:
         """
@@ -2442,7 +2428,7 @@ class LinearExpression(BaseExpression):
         if not absent:
             const = self.const.where(cond_da, other).transpose(*csr.grid.dims)
             csr = csr.assign_const(const.to_numpy().reshape(-1))
-        return type(self)._from_csr(csr, self._model)
+        return type(self)._from_store(csr, self._model)
 
     def sum(
         self,
@@ -2450,8 +2436,8 @@ class LinearExpression(BaseExpression):
         drop_zeros: bool = False,
         **kwargs: Any,
     ) -> Self:
-        csr = self._csr
-        if csr is None or kwargs:
+        csr = self._store
+        if not isinstance(csr, CSRStore) or kwargs:
             return super().sum(dim, drop_zeros, **kwargs)
         if dim is None or isinstance(dim, EllipsisType):
             dims: list[Hashable] = list(csr.grid.dims)
@@ -2461,23 +2447,23 @@ class LinearExpression(BaseExpression):
         if not set(summed) <= set(csr.grid.dims):
             return super().sum(dim, drop_zeros)
         res = csr.sum(summed) if summed else csr
-        return type(self)._from_csr(res.prune() if drop_zeros else res, self._model)
+        return type(self)._from_store(res.prune() if drop_zeros else res, self._model)
 
     @property
     def nterm(self) -> int:
         """
         Get the number of terms in the linear expression.
         """
-        if self._csr is not None:
-            return self._csr.nterm
+        if self.is_sparse:
+            return self._store.nterm
         return super().nterm
 
     def __neg__(self) -> Self:
         """
         Get the negative of the expression.
         """
-        if self._csr is not None:
-            return self._from_csr(self._csr.scale(-1.0), self._model)
+        if self.is_sparse:
+            return self._from_store(self._store.scale(-1.0), self._model)
         return super().__neg__()
 
     def fillna(
@@ -2489,26 +2475,27 @@ class LinearExpression(BaseExpression):
         | LinearExpression
         | dict[str, float | int | DataArray],
     ) -> Self:
-        csr = self._csr
+        csr = self._store
         if (
-            csr is not None
+            isinstance(csr, CSRStore)
             and isinstance(value, np.floating | np.integer | int | float)
             and not isinstance(value, bool)
         ):
-            return type(self)._from_csr(csr.fillna(float(value)), self._model)
+            return type(self)._from_store(csr.fillna(float(value)), self._model)
         _densify_all([self, value], "fillna with a non-scalar value")
         return super().fillna(value)
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> ConstraintBase:
-        if self._csr is not None and isinstance(sign, str):
+        csr = self._store
+        if isinstance(csr, CSRStore) and isinstance(sign, str):
             rhs = as_constant(rhs)
             if join is not None or not isinstance(rhs, CONSTANT_TYPES):
                 return self.sub(rhs, join=join).to_constraint(sign, 0)
-            rhs_da = constraints.csr_rhs(self._csr, rhs)
+            rhs_da = constraints.csr_rhs(csr, rhs)
             if isinstance(rhs_da, DataArray):
-                return constraints.CSRConstraint.from_csr(self._csr, sign, rhs_da)
+                return constraints.CSRConstraint.from_csr(csr, sign, rhs_da)
             self._densify(rhs_da)
         return super().to_constraint(sign, rhs, join)
 
@@ -2597,11 +2584,11 @@ class LinearExpression(BaseExpression):
         Multiply the expr by a factor.
         """
         if (
-            self._csr is not None
+            self.is_sparse
             and isinstance(other, int | float | np.number)
             and not is_nan_scalar(other)
         ):
-            return type(self)._from_csr(self._csr.scale(float(other)), self._model)
+            return type(self)._from_store(self._store.scale(float(other)), self._model)
         other = as_constant(other)
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
@@ -2681,7 +2668,7 @@ class LinearExpression(BaseExpression):
         Returns None where the dense path owns the semantics: non-unique grid
         labels, a zero-size grid, an operand sharing no dimension with the
         grid, and an unlabelled output dimension. The result is the compact
-        canonical form of :meth:`CSRLinearExpression.dot`, so its term
+        canonical form of :meth:`CSRStore.dot`, so its term
         count may differ from the dense path's while the values agree; the
         result is CSR-backed when the input was or the model is sparse.
         """
@@ -2690,7 +2677,7 @@ class LinearExpression(BaseExpression):
         if not self.coord_dims:
             self._densify("`@` on a zero-dimensional expression")
             return None
-        csr = self._csr or CSRLinearExpression.from_dense(self.data, self.model)
+        csr = self._store.to_sparse()
         if not csr.grid.is_unique:
             self._densify("`@` over non-unique labels")
             return None
@@ -2711,9 +2698,9 @@ class LinearExpression(BaseExpression):
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
         res = csr.dot(matrix, contracted, new_indexes)
-        if self._csr is not None or self.model.sparse:
-            return type(self)._from_csr(res, self.model)
-        return res.to_dense()
+        if self.is_sparse or self.model.sparse:
+            return type(self)._from_store(res, self.model)
+        return type(self)._from_store(res.to_dense(), self.model)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -2728,8 +2715,8 @@ class LinearExpression(BaseExpression):
         -------
         df : pandas.DataFrame
         """
-        if self._csr is not None:
-            df = pd.DataFrame(self._csr_terms(self._csr))
+        if self.is_sparse:
+            df = pd.DataFrame(self._store_terms())
         else:
 
             def mask_func(data: dict) -> pd.Series:
@@ -2757,9 +2744,9 @@ class LinearExpression(BaseExpression):
         and no other keyword argument is given.
         """
         indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "reindex")
-        csr = self._csr
+        csr = self._store
         if (
-            csr is not None
+            isinstance(csr, CSRStore)
             and set(indexers) <= set(csr.grid.dims)
             and method is None
             and tolerance is None
@@ -2767,7 +2754,7 @@ class LinearExpression(BaseExpression):
             and fill_value is self._fill_value
         ):
             grid = csr.grid.with_indexes(indexers)
-            return type(self)._from_csr(csr.reindex(grid), self._model)
+            return type(self)._from_store(csr.reindex(grid), self._model)
         return super().reindex(
             indexers,
             method=method,
@@ -2786,10 +2773,10 @@ class LinearExpression(BaseExpression):
         returns a CSR-backed result when only grid dims are relabelled.
         """
         name_dict = either_dict_or_kwargs(name_dict, names, "rename")
-        csr = self._csr
-        if csr is not None and set(name_dict) <= set(csr.grid.dims):
+        csr = self._store
+        if isinstance(csr, CSRStore) and set(name_dict) <= set(csr.grid.dims):
             relabel = {str(k): str(v) for k, v in name_dict.items()}
-            return type(self)._from_csr(csr.rename(relabel), self._model)
+            return type(self)._from_store(csr.rename(relabel), self._model)
         return super().rename(name_dict)
 
     def drop_vars(
@@ -2799,15 +2786,15 @@ class LinearExpression(BaseExpression):
         errors: Literal["raise", "ignore"] = "raise",
     ) -> Self:
         """Drop auxiliary coordinates without materializing sparse terms."""
-        csr = self._csr
-        if csr is None or callable(names):
+        csr = self._store
+        if not isinstance(csr, CSRStore) or callable(names):
             return super().drop_vars(names, errors=errors)
         names = [names] if isinstance(names, str) else list(names)
         if set(names) & (set(csr.grid.dims) | {"coeffs", "vars", "const"}):
             return super().drop_vars(names, errors=errors)
         coords = csr.grid.to_dataset().drop_vars(names, errors=errors)
         grid = Grid.from_dataset(coords, csr.grid.dims)
-        return type(self)._from_csr(replace(csr, grid=grid), self._model)
+        return type(self)._from_store(csr.with_grid(grid), self._model)
 
     def to_quadexpr(self) -> QuadraticExpression:
         """Convert LinearExpression to QuadraticExpression."""
@@ -2829,8 +2816,8 @@ class LinearExpression(BaseExpression):
         -------
         df : polars.DataFrame
         """
-        if self._csr is not None:
-            df = pl.DataFrame(self._csr_terms(self._csr))
+        if self.is_sparse:
+            df = pl.DataFrame(self._store_terms())
         elif self.is_constant:
             df = pl.DataFrame(
                 {"const": self.data["const"].values.reshape(-1)}
@@ -2842,18 +2829,17 @@ class LinearExpression(BaseExpression):
         check_has_nulls_polars(df, name=self.type)
         return df
 
-    def _csr_terms(self, csr: CSRLinearExpression) -> dict[str, np.ndarray]:
+    def _store_terms(self) -> dict[str, np.ndarray]:
         """
-        Stored terms of a CSR backing as ``const``, ``coeffs`` and ``vars``
+        Live terms of the store as ``const``, ``coeffs`` and ``vars``
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
-        keep = csr.live_terms()
-        const = np.repeat(csr.const, np.diff(csr.csr.indptr))
+        cells, vars_, coeffs = self._store.terms()
         return {
-            "const": const[keep],
-            "coeffs": csr.csr.data[keep].astype(float),
-            "vars": csr.csr.indices[keep].astype(self.model._dtypes["labels"]),
+            "const": self._store.const[cells],
+            "coeffs": coeffs.astype(float),
+            "vars": vars_.astype(self.model._dtypes["labels"]),
         }
 
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
@@ -2863,12 +2849,9 @@ class LinearExpression(BaseExpression):
         term arrays. Absent terms and zero coefficients are dropped, duplicate
         labels are not summed.
         """
-        if self._csr is not None:
-            csr = self._csr.csr
-            keep = self._csr.live_terms()
-            if keep.all():
-                return csr.indices, csr.data
-            return csr.indices[keep], csr.data[keep]
+        if self.is_sparse:
+            _, labels, coeffs = self._store.terms()
+            return labels, coeffs
         labels = self.data.vars.values.ravel()
         coeffs = self.data.coeffs.values.ravel()
         keep = (labels != -1) & (coeffs != 0)
@@ -3176,7 +3159,9 @@ class QuadraticExpression(BaseExpression):
     apply most xarray functions on it.
     """
 
-    __slots__ = ()
+    __slots__ = ("_data",)
+
+    _data: Dataset
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         if data is None:
@@ -3192,6 +3177,13 @@ class QuadraticExpression(BaseExpression):
         # transpose data to have _term as last dimension and _factor as second last
         data = data.transpose(..., FACTOR_DIM, TERM_DIM)
         self._data = data
+
+    def _set_data(self, data: Dataset) -> None:
+        self._data = data
+
+    @property
+    def data(self) -> Dataset:
+        return self._data
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -3439,16 +3431,9 @@ def as_expression(
 
 def _densify_all(exprs: Iterable[Any], reason: str) -> None:
     """Convert the CSR-backed LinearExpressions among ``exprs`` to dense, with one notice."""
-    sparse = [
-        (e, csr)
-        for e in exprs
-        if isinstance(e, LinearExpression) and (csr := e._csr) is not None
-    ]
-    if sparse:
-        _densify_notice(reason, sparse[0][0].model)
-    for e, csr in sparse:
-        e._data = csr.to_dense()._data
-        e._csr = None
+    sparse = [e for e in exprs if isinstance(e, LinearExpression) and e.is_sparse]
+    for i, e in enumerate(sparse):
+        e._store = e._store.to_dense(None if i else reason)
 
 
 def _coord_sizes_agree(objs: Sequence[Any]) -> bool:
@@ -3466,18 +3451,18 @@ def _merge_dims(e: LinearExpression, union: set[str]) -> list[str]:
     which xarray's broadcast sets.
     """
     coords = e.coords
-    if e._csr is not None:
-        coords = xr.broadcast(e._csr.grid.to_dataset())[0].coords
+    if e.is_sparse:
+        coords = xr.broadcast(e._store.grid.to_dataset())[0].coords
     dims = [str(d) for n, c in coords.items() for d in (c.dims or [n])]
     return [d for d in dims if d in union] + [str(d) for d in e.coord_dims]
 
 
 def _aligned(
-    csrs: list[CSRLinearExpression],
+    csrs: list[CSRStore],
     dims: tuple[str, ...],
     join: JoinOptions | None,
     fill: float,
-) -> list[CSRLinearExpression] | str:
+) -> list[CSRStore] | str:
     """
     Conform the CSR expressions to the grid on ``dims`` that ``join``
     produces, per dim among the operands carrying it, each spread over the
@@ -3505,7 +3490,7 @@ def _aligned(
     for p in csrs:
         target = grid.select(p.grid.dims)
         if join == "override":
-            p = replace(p, grid=p.grid.with_indexes(target.indexes))
+            p = p.with_grid(p.grid.with_indexes(target.indexes))
         elif not p.grid.same_layout(target):
             p = p.reindex(target, fill)
         aligned.append(p if p.grid.dims == grid.dims else p.broadcast(grid))
@@ -3513,8 +3498,8 @@ def _aligned(
 
 
 def _concatenated(
-    csrs: list[CSRLinearExpression], dim: str, join: JoinOptions | None
-) -> CSRLinearExpression | str:
+    csrs: list[CSRStore], dim: str, join: JoinOptions | None
+) -> CSRStore | str:
     """
     Stack CSR expressions sharing one dim order along the grid dim ``dim``,
     in order. The result's coordinates are what the dense path's
@@ -3538,7 +3523,7 @@ def _concatenated(
     for p in csrs:
         target = grid.with_indexes({dim: p.grid.indexes[dim]})
         if join == "override" or p.grid.same_layout(target):
-            aligned.append(replace(p, grid=target))
+            aligned.append(p.with_grid(target))
         elif p.grid.is_unique:
             aligned.append(p.reindex(target))
         else:
@@ -3567,7 +3552,7 @@ def _try_csr_merge(
     their rows onto the joined grid. Returns None to fall through to the
     dense path.
     """
-    if not any(type(e) is LinearExpression and e._csr is not None for e in exprs):
+    if not any(type(e) is LinearExpression and e.is_sparse for e in exprs):
         return None
     if kwargs:
         _densify_all(exprs, "merge with extra arguments")
@@ -3586,13 +3571,15 @@ def _try_csr_merge(
         return None
     for e in exprs:
         own = set(map(str, e.coord_dims))
-        if e._csr is None and set(e.data.coords) - own != set(_aux_coords(e.data, own)):
+        if not e.is_sparse and set(e.data.coords) - own != set(
+            _aux_coords(e.data, own)
+        ):
             _densify_all(
                 exprs, "merge with a dense operand carrying non-grid coordinates"
             )
             return None
 
-    csrs = [e._csr or CSRLinearExpression.from_dense(e.data, e.model) for e in exprs]
+    csrs = [e._store.to_sparse() for e in exprs]
     if dim != TERM_DIM:
         order = csrs[0].grid.dims
         csrs = [
@@ -3602,7 +3589,7 @@ def _try_csr_merge(
         if isinstance(stacked, str):
             _densify_all(exprs, stacked)
             return None
-        return LinearExpression._from_csr(stacked, exprs[0].model)
+        return LinearExpression._from_store(stacked, exprs[0].model)
     if not all(csrs[0].same_grid(p) for p in csrs[1:]):
         enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
         aligned = _aligned(csrs, dims, join, join_fill(fill_value, 0.0))
@@ -3612,7 +3599,7 @@ def _try_csr_merge(
         csrs = aligned
 
     combined = csrs[0].add(*csrs[1:])
-    return LinearExpression._from_csr(combined, exprs[0].model)
+    return LinearExpression._from_store(combined, exprs[0].model)
 
 
 Mergeable: TypeAlias = BaseExpression | Dataset

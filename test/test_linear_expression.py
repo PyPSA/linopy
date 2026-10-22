@@ -30,7 +30,7 @@ from linopy import (
     merge,
 )
 from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
-from linopy.csr import CSRLinearExpression
+from linopy.csr import CSRStore
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
@@ -666,8 +666,8 @@ def backed(expr: LinearExpression, backing: str) -> LinearExpression:
     """The same expression, dense or CSR-backed."""
     if backing == "dense":
         return expr
-    csr = CSRLinearExpression.from_dense(expr.data, expr.model)
-    return LinearExpression._from_csr(csr, expr.model)
+    csr = CSRStore.from_dense(expr.data, expr.model)
+    return LinearExpression._from_store(csr, expr.model)
 
 
 def assert_matmul_equal(res: LinearExpression, reference: LinearExpression) -> None:
@@ -685,7 +685,7 @@ def assert_matmul_equal(res: LinearExpression, reference: LinearExpression) -> N
 def matmul_backed(expr: LinearExpression, backing: str, other: Any) -> LinearExpression:
     """``@`` on the given backing, asserting the backing survives the product."""
     res = backed(expr, backing) @ other
-    assert (res._csr is not None) == (backing == "csr")
+    assert res.is_sparse == (backing == "csr")
     return res
 
 

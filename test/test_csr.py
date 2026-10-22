@@ -27,7 +27,7 @@ import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
-from linopy.csr import CSRLinearExpression, Grid, canonical, column_compacted_matmul
+from linopy.csr import CSRStore, Grid, canonical, column_compacted_matmul
 from linopy.testing import (
     assert_conequal,
     assert_linequal,
@@ -132,7 +132,7 @@ def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
     c1, c2 = twin_models()
     sparse = c2.gen_sum()
     assert type(sparse) is LinearExpression
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     assert_linequal(sparse, c1.gen_sum())
 
 
@@ -140,14 +140,14 @@ def test_csr_composition_materializes_equivalently() -> None:
     c1, c2 = twin_models()
     sparse = c2.balance_lhs()
     assert type(sparse) is LinearExpression
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     assert_linequal(sparse, c1.balance_lhs())
 
 
 def test_scalar_ops_stay_csr() -> None:
     c1, c2 = twin_models()
     sparse = -2.0 * c2.gen_sum()
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     assert_linequal(sparse, -2.0 * c1.gen_sum())
 
 
@@ -171,7 +171,7 @@ def test_merge_keeps_absent_cell_absent() -> None:
     )
 
     tot = linopy.merge([c2.gen_sum(), flow2], join="outer", cls=LinearExpression)
-    assert tot._csr is not None and flow2._csr is None
+    assert tot.is_sparse and not flow2.is_sparse
     assert_linequal(
         tot, linopy.merge([c1.gen_sum(), flow1], join="outer", cls=LinearExpression)
     )
@@ -213,8 +213,8 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
     keys = ["period", "season"]
     sparse = sparse_expr.groupby(keys).sum(observed=observed)
     dense = dense_expr.groupby(keys).sum(observed=observed)
-    csr = sparse._csr
-    assert csr is not None
+    csr = sparse._store
+    assert isinstance(csr, CSRStore)
     if observed:
         assert set(csr.grid.aux) == {"period", "season"}
     else:
@@ -232,7 +232,7 @@ def test_single_key_sparse_ignores_observed(as_namelist: bool) -> None:
     )
     grouper = ["bus"] if as_namelist else c1.gbus
     res = sparse.groupby(grouper).sum(observed=True)
-    assert res._csr is not None
+    assert res.is_sparse
     assert_linequal(res, dense.groupby(grouper).sum())
 
 
@@ -253,8 +253,8 @@ def test_dataframe_grouper_sparse_stays_compact() -> None:
     _, expr, _ = keyed_model(sparse=True)
     df = dense.data[["period", "season"]].to_dataframe()[["period", "season"]]
     sparse = expr.groupby(df).sum()
-    assert sparse._csr is not None
-    assert sparse._csr.shape == (4, 2)
+    assert sparse.is_sparse
+    assert sparse._store.shape == (4, 2)
     assert_linequal(sparse, dense.groupby(df).sum())
 
 
@@ -294,17 +294,17 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
     keys = ["period", "season"]
     sparse = sparse_expr.groupby(keys).sum(observed=True)
     dense = dense_expr.groupby(keys).sum(observed=True)
-    assert sparse._csr is not None
-    operand = sparse._csr.to_dense()
+    assert sparse.is_sparse
+    operand = densified(sparse)
     tot = sparse + operand
-    assert tot._csr is not None
-    assert set(tot._csr.grid.aux) == {"period", "season"}
+    assert tot.is_sparse
+    assert set(tot._store.grid.aux) == {"period", "season"}
     assert_linequal(tot, dense + dense)
 
     region = ("group", list("abcd"))
     tot = sparse + operand.assign_coords(region=region)
-    assert tot._csr is not None
-    assert set(tot._csr.grid.aux) == {"period", "season", "region"}
+    assert tot.is_sparse
+    assert set(tot._store.grid.aux) == {"period", "season", "region"}
     xr.testing.assert_equal(
         tot.data.coords.to_dataset(),
         (dense + dense.assign_coords(region=region)).data.coords.to_dataset(),
@@ -329,8 +329,8 @@ def test_namelist_sparse_grid_warns_and_observed_silences() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         res = expr.groupby(["period", "season"]).sum(observed=True)
-    assert res._csr is not None
-    assert res._csr.shape == (n,)
+    assert res.is_sparse
+    assert res._store.shape == (n,)
 
 
 def test_nan_multikey_grouper_raises_eagerly() -> None:
@@ -558,8 +558,8 @@ def test_freeze_copies_lhs_matrix_only_to_canonicalize(
 ) -> None:
     c = base_model(gens_per_bus=(400,) * 50, n_snap=20, sparse=True)
     lhs = build(c)
-    assert lhs._csr is not None
-    csr = lhs._csr.csr
+    assert lhs.is_sparse
+    csr = lhs._store.csr
     assert (canonical(csr) is csr) is (build is Case.gen_sum)
     csr_bytes = csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes
     mask = c.load.bus == "bus1" if masked else None
@@ -750,7 +750,7 @@ def test_csr_solution_matches_dense(
     nan_every_other: bool,
 ) -> None:
     dense, sparse = twins()
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     rng = np.random.default_rng(0)
     for name, var in dense.model.variables.items():
         values = rng.uniform(-1, 1, var.shape)
@@ -760,13 +760,13 @@ def test_csr_solution_matches_dense(
             m.variables[name].solution = xr.DataArray(values, coords=var.labels.coords)
             m._status = "ok"
     sol = sparse.solution
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     xr.testing.assert_allclose(sol, dense.solution)
 
 
 def test_csr_solution_raises_on_removed_variable() -> None:
     _, sparse = case_twins(lambda c: c.balance_lhs())()
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     m = sparse.model
     m._mock_solve()
     m.remove_variables(next(iter(m.variables)))
@@ -777,7 +777,7 @@ def test_csr_solution_raises_on_removed_variable() -> None:
 def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
     c1, c2 = twin_models()
     res = c2.gen_sum().reindex(bus=["bus3", "bus0"], copy=False)
-    assert res._csr is None
+    assert not res.is_sparse
     assert_linequal(res, c1.gen_sum().reindex(bus=["bus3", "bus0"]))
 
 
@@ -785,7 +785,7 @@ def test_reindex_merge_chain_freezes_csr() -> None:
     c1, c2 = twin_models()
     con1 = c1.m.add_constraints(reindexed_balance(c1) == c1.load, name="bal")
     tot = reindexed_balance(c2)
-    assert tot._csr is not None
+    assert tot.is_sparse
     con2 = c2.m.add_constraints(tot == c2.load, name="bal")
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)
@@ -810,7 +810,7 @@ def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
     c1, c2 = twin_models()
     wide = {"bus": [f"bus{i}" for i in range(7)]}
     filled = c2.gen_sum().reindex(wide).fillna(value)
-    assert filled._csr is not None
+    assert filled.is_sparse
     dense = c1.gen_sum().reindex(wide)
     assert_linequal(filled, dense.fillna(value))
 
@@ -819,14 +819,14 @@ def test_fillna_with_array_falls_back_to_dense() -> None:
     c1, c2 = twin_models()
     fill = xr.zeros_like(c1.load)
     res = c2.gen_sum().fillna(fill)
-    assert res._csr is None
+    assert not res.is_sparse
     assert_linequal(res, c1.gen_sum().fillna(fill))
 
 
 def test_rename_stays_csr_and_matches_dense() -> None:
     c1, c2 = twin_models()
     sparse = c2.gen_sum().rename(bus="node")
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     dense = c1.gen_sum().rename(bus="node")
     assert sparse.coord_dims == ("node", "snapshot")
     assert_linequal(sparse, dense)
@@ -845,7 +845,7 @@ def test_namelist_sparse_observed_keeps_aux_coords_through_op(
     keys = ["period", "season"]
     sparse = op(sparse_expr.groupby(keys).sum(observed=True))
     dense = op(dense_expr.groupby(keys).sum(observed=True))
-    assert sparse._csr is not None
+    assert sparse.is_sparse
     for name in keys:
         xr.testing.assert_equal(sparse.coords[name], dense.coords[name])
     assert_linequal(sparse, dense)
@@ -867,8 +867,8 @@ def twin_cross_grid_parts() -> tuple[list[LinearExpression], list[LinearExpressi
 
 def densified(e: LinearExpression) -> LinearExpression:
     """A dense operand in the model of the CSR-backed ``e``."""
-    assert e._csr is not None
-    return e._csr.to_dense()
+    assert e.is_sparse
+    return LinearExpression._from_store(e._store.to_dense(), e.model)
 
 
 def assert_terms_equal(a: LinearExpression, b: LinearExpression) -> None:
@@ -891,7 +891,7 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(
     if order == "flow-gen":
         sparse, dense = sparse[::-1], dense[::-1]
     res = linopy.merge(sparse, join=join, cls=LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     assert res.coord_dims == dense[0].coord_dims
     assert_terms_equal(res, linopy.merge(dense, join=join, cls=LinearExpression))
 
@@ -903,7 +903,7 @@ def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
     b = (1.0 * c2.flow_t).groupby(c2.bus0).sum()
     assert a.coord_dims == b.coord_dims[::-1] != b.coord_dims
     res = linopy.merge([a, b], cls=LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     dense = [
         (1.0 * c1.flow).groupby(c1.bus0).sum(),
         (1.0 * c1.flow_t).groupby(c1.bus0).sum(),
@@ -922,7 +922,7 @@ def test_three_operand_cross_grid_merge_matches_dense(
     dense = cross_grid_parts(c1) + cross_grid_parts(c1, third_lines)[1:]
     kwargs: dict[str, Any] = {"join": join, "fill_value": fill_value}
     res = linopy.merge(sparse, **kwargs, cls=LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     assert_terms_equal(res, linopy.merge(dense, **kwargs, cls=LinearExpression))
 
 
@@ -934,9 +934,9 @@ def test_cross_grid_merge_absent_fill_matches_dense() -> None:
     expected = linopy.merge(
         dense, join="outer", fill_value=linopy.ABSENT, cls=LinearExpression
     )
-    assert res._csr is not None
+    assert res.is_sparse
     filled = res.fillna(0)
-    assert filled._csr is not None
+    assert filled.is_sparse
     assert_terms_equal(filled, expected.fillna(0))
     assert_terms_equal(res, expected)
     assert res.const.isnull().sum() == 3 * res.sizes["snapshot"]
@@ -948,7 +948,7 @@ def test_cross_grid_merge_keeps_absent_cell_absent() -> None:
     dense[1] = dense[1].where(mask)
     flow = densified(sparse[1]).where(mask)
     res = linopy.merge([sparse[0], flow], join="outer", cls=LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     assert_terms_equal(res, linopy.merge(dense, join="outer", cls=LinearExpression))
 
 
@@ -956,7 +956,7 @@ def test_cross_grid_merge_mixed_dense_operand_stays_csr() -> None:
     sparse, dense = twin_cross_grid_parts()
     res = sparse[0].add(densified(sparse[1]), join="outer")
     assert isinstance(res, LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     expected = dense[0].add(dense[1], join="outer")
     assert isinstance(expected, LinearExpression)
     assert_terms_equal(res, expected)
@@ -1023,7 +1023,7 @@ def test_override_merge_same_shape_stays_csr() -> None:
         for c in twin_models()
     )
     res = linopy.merge(sparse, join="override", cls=LinearExpression)
-    assert res._csr is not None
+    assert res.is_sparse
     assert_terms_equal(res, linopy.merge(dense, join="override", cls=LinearExpression))
 
 
@@ -1032,7 +1032,7 @@ def test_cross_grid_balance_freezes_csr() -> None:
     lhs1 = linopy.merge(cross_grid_parts(c1), join="outer")
     con1 = c1.m.add_constraints(lhs1 == c1.load, name="bal")
     lhs2 = linopy.merge(cross_grid_parts(c2), join="outer", cls=LinearExpression)
-    assert lhs2._csr is not None
+    assert lhs2.is_sparse
     con2 = c2.m.add_constraints(lhs2 == c2.load, name="bal")
     assert isinstance(con2, CSRConstraint)
     assert_frozen_equal(con1, con2)
@@ -1080,11 +1080,13 @@ def assert_cells_equal(
 
 
 def assert_contracted_equal(
-    res: CSRLinearExpression, reference: LinearExpression, dims: tuple[str, ...]
+    res: CSRStore, reference: LinearExpression, dims: tuple[str, ...]
 ) -> None:
     """Compare a contraction with a dense reference independently of term layout."""
     assert res.grid.dims == dims
-    assert_cells_equal(res.to_dense(), reference, dims)
+    assert_cells_equal(
+        LinearExpression._from_store(res.to_dense(), res.model), reference, dims
+    )
 
 
 def flat_operand(
@@ -1096,8 +1098,8 @@ def flat_operand(
     return scipy.sparse.csr_array(values.reshape(n_contracted, -1))
 
 
-def gen_csr(c: Case) -> CSRLinearExpression:
-    return CSRLinearExpression.from_dense((c.eff * c.gen_p).data, c.m)
+def gen_csr(c: Case) -> CSRStore:
+    return CSRStore.from_dense((c.eff * c.gen_p).data, c.m)
 
 
 BIG = 2**31
@@ -1217,14 +1219,14 @@ def test_dot_zero_operand_leaves_empty_rows() -> None:
     )
     assert res.csr.nnz == 0
     assert (res.const == 0).all()
-    assert (res.to_dense().data.vars == -1).all()
+    assert (res.to_dense().ds.vars == -1).all()
 
 
 def test_dot_reorders_non_trailing_contracted_dim() -> None:
     """``flow_t`` is stored as (snapshot, line); contracting ``line`` needs a reorder."""
     c = base_model()
     expr = 1.0 * c.flow_t
-    csr = CSRLinearExpression.from_dense(expr.data, c.m)
+    csr = CSRStore.from_dense(expr.data, c.m)
     assert csr.grid.dims == ("snapshot", "line")
     operand = xr.DataArray(
         np.arange(expr.data.sizes["line"] * 2, dtype=float).reshape(-1, 2),
@@ -1252,8 +1254,8 @@ def tagged_group(c: Case) -> LinearExpression:
 
 
 def test_dot_keeps_aux_coords_on_kept_dims_only() -> None:
-    csr = tagged_group(base_model(sparse=True))._csr
-    assert csr is not None
+    csr = tagged_group(base_model(sparse=True))._store
+    assert isinstance(csr, CSRStore)
     assert set(csr.grid.aux) == {"bus", "tag"}
     kept = csr.dot(
         flat_operand(
@@ -1290,14 +1292,14 @@ def test_dot_keeps_aux_coords_on_kept_dims_only() -> None:
 def test_grid_ops_carry_aux_coords(
     op: Callable[[Grid], Grid], aux_dims: dict[str, str]
 ) -> None:
-    csr = tagged_group(base_model(sparse=True))._csr
-    assert csr is not None
+    csr = tagged_group(base_model(sparse=True))._store
+    assert isinstance(csr, CSRStore)
     assert {n: d for n, (d, _) in op(csr.grid).aux.items()} == aux_dims
 
 
 def test_grid_conform_reindexes_aux_coords_and_equality_sees_them() -> None:
-    csr = tagged_group(base_model(sparse=True))._csr
-    assert csr is not None
+    csr = tagged_group(base_model(sparse=True))._store
+    assert isinstance(csr, CSRStore)
     grid = csr.grid
     labels = grid.indexes["group"][::-1]
     conformed = grid.conform(grid.with_indexes({"group": labels}))
@@ -1372,7 +1374,7 @@ def test_matmul_falls_back_to_dense_on_non_unique_labels() -> None:
 
     res = expr @ operand
 
-    assert res._csr is None
+    assert not res.is_sparse
     assert_linequal(res, (expr * operand).sum("d"))
 
 
@@ -1404,14 +1406,14 @@ def test_matmul_dimensionless_expression_matches_dense() -> None:
 
     res = expr @ operand
 
-    assert res._csr is None
+    assert not res.is_sparse
     assert_linequal(res, (expr * operand).sum([]))
 
 
 def test_matmul_keeps_aux_coords_on_kept_dims_only() -> None:
     grouped = tagged_group(base_model(sparse=True))
-    assert grouped._csr is not None
-    indexes = grouped._csr.grid.indexes
+    assert grouped.is_sparse
+    indexes = grouped._store.grid.indexes
 
     kept = grouped @ loc_operand(indexes["snapshot"])
     dropped = grouped @ loc_operand(indexes["group"])
@@ -1438,12 +1440,12 @@ def test_matmul_keeps_csr_backing_through_chain() -> None:
     flow = (1.0 * c2.flow).groupby(c2.bus0).sum()
 
     res = gen @ operand
-    assert res._csr is not None
+    assert res.is_sparse
     assert_linequal(res, gen.dot(operand))
     assert_cells_equal(res, c1.gen_sum() @ operand, ("bus", "loc"))
 
     total = res + (flow @ operand)
-    assert total._csr is not None
+    assert total.is_sparse
     con = c2.m.add_constraints(total <= 0, name="matmul")
     assert isinstance(con, CSRConstraint)
 
@@ -1502,9 +1504,7 @@ def sparse_and_dense(
 ) -> tuple[LinearExpression, LinearExpression]:
     """A sparse build and its dense conversion, the sparse one left sparse."""
     sparse = SPARSE_BUILDS[build](base_model(sparse=True) if c is None else c)
-    csr = sparse._csr
-    assert sparse.is_sparse and csr is not None
-    return sparse, csr.to_dense()
+    return sparse, densified(sparse)
 
 
 def dense_build(build: str) -> LinearExpression:
@@ -1682,8 +1682,8 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool | None) -> None
 def test_flat_and_to_polars_served_without_densifying(build: str, scale: float) -> None:
     sparse, _ = sparse_and_dense(build)
     sparse = scale * sparse
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    assert sparse.is_sparse
+    dense = densified(sparse)
     with no_densify():
         got_pl, got_flat = sparse.to_polars(), sparse.flat
     assert sparse.is_sparse
@@ -1697,9 +1697,9 @@ def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
     m = sparse.model
     con = m.add_constraints(sparse >= 1, name="con")
     A = m.matrices.A
-    assert isinstance(con, CSRConstraint) and sparse._csr is not None
+    assert isinstance(con, CSRConstraint) and sparse.is_sparse
     assert A is not None
-    dtypes = {sparse._csr.csr.indices.dtype, con._csr.indices.dtype}
+    dtypes = {sparse._store.csr.indices.dtype, con._csr.indices.dtype}
     assert dtypes == {np.dtype(m.dtypes["labels"]), A.indices.dtype}
 
 
@@ -1709,8 +1709,8 @@ def test_sparse_group_sum_indices_widen_with_model(label_dtype: type) -> None:
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     group = xr.DataArray([0, 0, 1, 1], coords=[x.indexes["i"]], name="g")
     expr = x.groupby(group).sum()
-    assert expr._csr is not None
-    assert expr._csr.csr.indices.dtype == expr._csr.csr.indptr.dtype == label_dtype
+    assert expr.is_sparse
+    assert expr._store.csr.indices.dtype == expr._store.csr.indptr.dtype == label_dtype
 
 
 def objective_twins(build: str, scale: float) -> tuple[Model, Model]:
@@ -2105,11 +2105,11 @@ def test_sum_stays_csr_and_matches_dense(build: str, dims: str) -> None:
 def test_sum_keeps_explicit_zeros_unless_dropped(drop_zeros: bool) -> None:
     c = base_model(sparse=True)
     sparse = (0.0 * c.gen_p).groupby(c.gbus).sum()
-    assert sparse._csr is not None
-    dense = sparse._csr.to_dense()
+    assert sparse.is_sparse
+    dense = densified(sparse)
     res = sparse.sum("snapshot", drop_zeros=drop_zeros)
-    assert res._csr is not None
-    assert (res._csr.csr.nnz == 0) == drop_zeros
+    assert res.is_sparse
+    assert (res._store.csr.nnz == 0) == drop_zeros
     assert_sparse_matches(res, dense.sum("snapshot", drop_zeros=drop_zeros))
 
 
@@ -2238,8 +2238,8 @@ def test_reindex_matches_dense(build: str, reindexer: str, scale: float) -> None
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
 def test_reindex_onto_transposed_dims_matches_dense(build: str) -> None:
     sparse, dense = sparse_and_dense(build)
-    csr = sparse._csr
-    assert csr is not None
+    csr = sparse._store
+    assert isinstance(csr, CSRStore)
     dims = csr.grid.dims[::-1]
     assert_contracted_equal(csr.reindex(csr.grid.select(dims)), dense, dims)
 
@@ -2256,8 +2256,8 @@ def test_n_ary_merge_keeps_absent_cells_and_explicit_zeros(build: str, n: int) -
     sparse, dense = sparse_and_dense(build)
     with no_densify():
         res = linopy.merge(merge_operands(sparse, n), cls=LinearExpression)
-    csr = res._csr
-    assert csr is not None
+    csr = res._store
+    assert isinstance(csr, CSRStore)
     assert (np.diff(csr.csr.indptr)[np.isnan(csr.const)] == 0).all()
     want = linopy.merge(merge_operands(dense, n), cls=LinearExpression)
     xr.testing.assert_identical(res.has_terms, want.has_terms)
@@ -2290,8 +2290,8 @@ ABSENT_KEEPING_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = 
 @pytest.mark.parametrize("op", list(ABSENT_KEEPING_OPS))
 def test_absent_cells_stay_termless(op: str) -> None:
     sparse = SPARSE_BUILDS["absent"](base_model(sparse=True))
-    csr = ABSENT_KEEPING_OPS[op](sparse)._csr
-    assert csr is not None
+    csr = ABSENT_KEEPING_OPS[op](sparse)._store
+    assert isinstance(csr, CSRStore)
     absent = np.isnan(csr.const)
     assert absent.any()
     assert (np.diff(csr.csr.indptr)[absent] == 0).all()
@@ -2396,8 +2396,8 @@ def test_frozen_constraint_keeps_aux_coords_like_dense(
 ) -> None:
     sparse = AUX_BUILDS[build]()
     m = sparse.model
-    assert sparse._csr is not None
-    ref = m.add_constraints(sparse._csr.to_dense() >= 1, name="dense", freeze=False)
+    assert sparse.is_sparse
+    ref = m.add_constraints(densified(sparse) >= 1, name="dense", freeze=False)
     with no_densify():
         con = m.add_constraints(sparse >= 1, name="sparse")
     assert isinstance(con, CSRConstraint)
@@ -2876,9 +2876,9 @@ def duplicated_lhs(c: Case) -> LinearExpression:
 
 
 def stored_arrays(e: LinearExpression) -> list[np.ndarray]:
-    assert e._csr is not None
-    csr = e._csr.csr
-    return [csr.data, csr.indices, csr.indptr, e._csr.const]
+    assert e.is_sparse
+    csr = e._store.csr
+    return [csr.data, csr.indices, csr.indptr, e._store.const]
 
 
 OPERAND_OPS: dict[str, Callable[[LinearExpression, Case], Any]] = {
@@ -2907,9 +2907,9 @@ def test_ops_leave_operand_arrays_untouched(op: str) -> None:
 
 def test_stored_matrix_rejects_in_place_canonicalization() -> None:
     e = duplicated_lhs(base_model(sparse=True))
-    assert e._csr is not None
+    assert e.is_sparse
     with pytest.raises(ValueError, match="read-only"):
-        e._csr.csr.sum_duplicates()
+        e._store.csr.sum_duplicates()
 
 
 def test_to_dense_keeps_repeated_terms_in_stored_order() -> None:

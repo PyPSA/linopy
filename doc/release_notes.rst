@@ -32,6 +32,8 @@ Version 1.0.0
   * ``Variables.print_labels``, ``Constraints.print_labels``, ``Model.print_infeasibilities`` and ``Model.compute_set_of_infeasible_constraints`` are removed; use ``format_labels``, ``Model.compute_infeasibilities`` and ``Model.format_infeasibilities``.
   * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
 
+* ``linopy.csr.CSRLinearExpression`` is renamed to ``CSRStore`` without an alias. A ``LinearExpression`` now always holds a store from the new ``linopy.store`` module, a ``DenseStore`` or a ``CSRStore``, in place of the private ``_csr`` attribute. ``CSRStore.to_dense()`` returns a ``DenseStore`` instead of a ``LinearExpression``. Writing a model with a sparse expression to netcdf or copying the model no longer converts the expression to dense, and emits no densify notice. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+
 **Deprecations**
 
 * The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
