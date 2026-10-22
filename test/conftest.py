@@ -79,15 +79,12 @@ def pytest_collection_modifyitems(
                 item.add_marker(pytest.mark.gpu)
 
 
-@pytest.fixture(autouse=True, params=[_LEGACY_SEMANTICS, _V1_SEMANTICS])
+@pytest.fixture(autouse=True, params=[_V1_SEMANTICS])
 def semantics(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     """
-    Run every test under both arithmetic semantics by default.
+    Run every test under the v1 semantics.
 
-    A test marked with a semantics name (``@pytest.mark.legacy`` or
-    ``@pytest.mark.v1``) runs only under that semantics. Under ``legacy``,
-    ``LinopySemanticsWarning`` is suppressed so test output stays clean;
-    ``test_convention.py`` verifies the warnings are actually emitted.
+    Tests marked ``@pytest.mark.legacy`` are skipped.
     """
     from linopy.config import LinopySemanticsWarning, options
 

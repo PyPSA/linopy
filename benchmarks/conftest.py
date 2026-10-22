@@ -21,9 +21,9 @@ def _bench_semantics() -> Iterator[None]:
     Force the arithmetic semantics for the whole run from
     ``LINOPY_BENCH_SEMANTICS`` (``legacy`` / ``v1``), restoring after.
 
-    The memory-report job runs the build twice — once at the default (legacy),
-    once with this set to ``v1`` — to A/B the v1 cost. Leaving it unset keeps the
-    default, so the node ids the legacy run and the CodSpeed run produce are
+    The memory-report job runs the build under both semantics to A/B their cost.
+    Leaving it unset keeps the default (v1), so the node ids the default run and
+    the CodSpeed run produce are
     identical (``test_build[…]``, no suffix): CodSpeed keeps its per-id history
     against master, and the two report JSONs line up under ``benchmem compare``.
     """

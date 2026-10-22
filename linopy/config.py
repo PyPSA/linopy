@@ -94,7 +94,7 @@ class OptionSettings:
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
-    semantics=LEGACY_SEMANTICS,
+    semantics=V1_SEMANTICS,
     sparse_groupby=False,
     warn_on_densify=None,
 )
