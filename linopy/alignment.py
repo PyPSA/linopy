@@ -46,6 +46,7 @@ except ImportError:
 from linopy.constants import HELPER_DIMS
 from linopy.semantics import (
     _shared_dim_mismatch_message,
+    _v1_multiindex_message,
     check_user_nan,
     enforce_aux_conflict,
     first_mismatched_dim,
@@ -217,6 +218,20 @@ def _as_multiindex(coord_values: Any) -> pd.MultiIndex | None:
         if isinstance(idx, pd.MultiIndex):
             return idx
     return None
+
+
+def _reject_new_multiindex(
+    arr: Any, coords: CoordsLike | None, dims: DimsLike | None
+) -> None:
+    if not isinstance(arr, DataArray):
+        return
+    mi_dims = [d for d in arr.dims if isinstance(arr.indexes.get(d), pd.MultiIndex)]
+    if not mi_dims:
+        return
+    expected = {} if coords is None else _coords_to_dict(coords, dims=dims)
+    new = [d for d in mi_dims if _as_multiindex(expected.get(d)) is None]
+    if new:
+        raise ValueError(_v1_multiindex_message(str(new[0]), "The constant"))
 
 
 def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
@@ -984,6 +999,8 @@ def broadcast_to_coords(
     if not strict:
         from linopy.semantics import is_v1
 
+        if is_v1():
+            _reject_new_multiindex(arr, coords, dims)
         da, projections = _broadcast_to_coords(
             arr,
             coords,

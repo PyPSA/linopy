@@ -11,6 +11,10 @@ Upcoming Version
 * Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
 * ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
 
+**Bug fixes**
+
+* Under v1, arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+
 Version 0.10.1
 --------------
 
