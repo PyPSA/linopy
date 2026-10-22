@@ -333,6 +333,35 @@ def test_multiply_expression_by_level_aux_coord_v1(u: Variable) -> None:
     assert coeffs.values.tolist() == [10.0, 10.0, 20.0, 20.0]
 
 
+@pytest.mark.v1
+@pytest.mark.parametrize("levels", [["dim_0", "b"], ["p", "q"]])
+@pytest.mark.parametrize("as_expr", [False, True])
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda o, c: o + c,
+        lambda o, c: c - o,
+        lambda o, c: o * c,
+        lambda o, c: o / c,
+        lambda o, c: o <= c,
+        lambda o, c: o >= c,
+        lambda o, c: o == c,
+        lambda o, c: c * o,
+        lambda o, c: c <= o,
+        lambda o, c: o.model.add_constraints(o, "<=", c),
+    ],
+    ids=["add", "sub", "mul", "div", "le", "ge", "eq", "rmul", "rle", "add_cons"],
+)
+def test_multiindex_constant_operand_rejected_v1(
+    x: Variable, op: Callable[[Any, Any], Any], as_expr: bool, levels: list[str]
+) -> None:
+    mi = pd.MultiIndex.from_product([[0, 1], ["u", "v"]], names=levels)
+    const = xr.DataArray(np.arange(1, 5), coords={"s": mi}, dims="s")
+    operand = 1 * x if as_expr else x
+    with pytest.raises(ValueError, match=r"dimension 's', a `pd.MultiIndex`"):
+        op(operand, const)
+
+
 def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
     with pytest.raises(TypeError):
         x / x
