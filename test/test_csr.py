@@ -1090,7 +1090,7 @@ def assert_contracted_equal(
 def flat_operand(
     da: xr.DataArray, contracted_dims: tuple[str, ...], new_dims: tuple[str, ...]
 ) -> scipy.sparse.csr_array:
-    """The C-order flattening ``contracted`` expects, as a sparse matrix."""
+    """The C-order flattening ``dot`` expects, as a sparse matrix."""
     values = da.transpose(*contracted_dims, *new_dims).to_numpy()
     n_contracted = int(np.prod([da.sizes[d] for d in contracted_dims], dtype=int))
     return scipy.sparse.csr_array(values.reshape(n_contracted, -1))
@@ -1149,7 +1149,7 @@ def test_column_compacted_matmul(
 
 @pytest.mark.parametrize("n_snap", [3, 70], ids=["one-chunk", "chunk-boundary"])
 @pytest.mark.parametrize("zeros", [False, True], ids=["dense-C", "sparse-C"])
-def test_contracted_partial_matches_dense(n_snap: int, zeros: bool) -> None:
+def test_dot_partial_matches_dense(n_snap: int, zeros: bool) -> None:
     c = base_model(n_snap=n_snap)
     expr = c.eff * c.gen_p
     values = np.arange(1.0, expr.data.sizes["gen"] * 2 + 1).reshape(-1, 2)
@@ -1158,7 +1158,7 @@ def test_contracted_partial_matches_dense(n_snap: int, zeros: bool) -> None:
     operand = xr.DataArray(
         values, coords={"gen": expr.indexes["gen"], "loc": ["L1", "L2"]}
     )
-    res = gen_csr(c).contracted(
+    res = gen_csr(c).dot(
         flat_operand(operand, ("gen",), ("loc",)),
         ["gen"],
         [pd.Index(["L1", "L2"], name="loc")],
@@ -1166,7 +1166,7 @@ def test_contracted_partial_matches_dense(n_snap: int, zeros: bool) -> None:
     assert_contracted_equal(res, (expr * operand).sum("gen"), ("snapshot", "loc"))
 
 
-def test_contracted_full_yields_zero_dim_grid() -> None:
+def test_dot_full_yields_zero_dim_grid() -> None:
     c = base_model()
     expr = c.eff * c.gen_p
     operand = xr.DataArray(
@@ -1175,14 +1175,14 @@ def test_contracted_full_yields_zero_dim_grid() -> None:
         ).reshape(expr.data.sizes["gen"], -1),
         coords={"gen": expr.indexes["gen"], "snapshot": expr.indexes["snapshot"]},
     )
-    res = gen_csr(c).contracted(
+    res = gen_csr(c).dot(
         flat_operand(operand, ("gen", "snapshot"), ()), ["gen", "snapshot"], []
     )
     assert res.grid.size == 1
     assert_contracted_equal(res, (expr * operand).sum(["gen", "snapshot"]), ())
 
 
-def test_contracted_with_two_new_dims() -> None:
+def test_dot_with_two_new_dims() -> None:
     c = base_model()
     expr = c.eff * c.gen_p
     operand = xr.DataArray(
@@ -1193,7 +1193,7 @@ def test_contracted_with_two_new_dims() -> None:
             "scen": [0, 1],
         },
     )
-    res = gen_csr(c).contracted(
+    res = gen_csr(c).dot(
         flat_operand(operand, ("gen",), ("loc", "scen")),
         ["gen"],
         [pd.Index(["L1", "L2", "L3"], name="loc"), pd.Index([0, 1], name="scen")],
@@ -1203,14 +1203,14 @@ def test_contracted_with_two_new_dims() -> None:
     )
 
 
-def test_contracted_zero_operand_leaves_empty_rows() -> None:
+def test_dot_zero_operand_leaves_empty_rows() -> None:
     c = base_model()
     expr = c.eff * c.gen_p
     operand = xr.DataArray(
         np.zeros((expr.data.sizes["gen"], 2)),
         coords={"gen": expr.indexes["gen"], "loc": ["L1", "L2"]},
     )
-    res = gen_csr(c).contracted(
+    res = gen_csr(c).dot(
         flat_operand(operand, ("gen",), ("loc",)),
         ["gen"],
         [pd.Index(["L1", "L2"], name="loc")],
@@ -1220,7 +1220,7 @@ def test_contracted_zero_operand_leaves_empty_rows() -> None:
     assert (res.to_dense().data.vars == -1).all()
 
 
-def test_contracted_reorders_non_trailing_contracted_dim() -> None:
+def test_dot_reorders_non_trailing_contracted_dim() -> None:
     """``flow_t`` is stored as (snapshot, line); contracting ``line`` needs a reorder."""
     c = base_model()
     expr = 1.0 * c.flow_t
@@ -1230,7 +1230,7 @@ def test_contracted_reorders_non_trailing_contracted_dim() -> None:
         np.arange(expr.data.sizes["line"] * 2, dtype=float).reshape(-1, 2),
         coords={"line": expr.indexes["line"], "loc": ["L1", "L2"]},
     )
-    res = csr.contracted(
+    res = csr.dot(
         flat_operand(operand, ("line",), ("loc",)),
         ["line"],
         [pd.Index(["L1", "L2"], name="loc")],
@@ -1251,11 +1251,11 @@ def tagged_group(c: Case) -> LinearExpression:
     return (1.0 * c.gen_p).groupby(grouper).sum(observed=True)
 
 
-def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
+def test_dot_keeps_aux_coords_on_kept_dims_only() -> None:
     csr = tagged_group(base_model(sparse=True))._csr
     assert csr is not None
     assert set(csr.grid.aux) == {"bus", "tag"}
-    kept = csr.contracted(
+    kept = csr.dot(
         flat_operand(
             loc_operand(csr.grid.indexes["snapshot"]), ("snapshot",), ("loc",)
         ),
@@ -1263,7 +1263,7 @@ def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
         [LOC],
     )
     assert set(kept.grid.aux) == {"bus", "tag"}
-    dropped = csr.contracted(
+    dropped = csr.dot(
         flat_operand(loc_operand(csr.grid.indexes["group"]), ("group",), ("loc",)),
         ["group"],
         [LOC],
@@ -1274,12 +1274,12 @@ def test_contracted_keeps_aux_coords_on_kept_dims_only() -> None:
 @pytest.mark.parametrize(
     ("op", "aux_dims"),
     [
-        (lambda g: g.renamed({"group": "g"}), {"bus": "g", "tag": "g"}),
+        (lambda g: g.rename({"group": "g"}), {"bus": "g", "tag": "g"}),
         (
-            lambda g: g.reordered(["snapshot", "group"]),
+            lambda g: g.select(["snapshot", "group"]),
             {"bus": "group", "tag": "group"},
         ),
-        (lambda g: g.reordered(["snapshot"]), {}),
+        (lambda g: g.select(["snapshot"]), {}),
         (
             lambda g: g.with_indexes({"snapshot": [5, 6, 7]}),
             {"bus": "group", "tag": "group"},
@@ -1295,12 +1295,12 @@ def test_grid_ops_carry_aux_coords(
     assert {n: d for n, (d, _) in op(csr.grid).aux.items()} == aux_dims
 
 
-def test_grid_conformed_reindexes_aux_coords_and_equality_sees_them() -> None:
+def test_grid_conform_reindexes_aux_coords_and_equality_sees_them() -> None:
     csr = tagged_group(base_model(sparse=True))._csr
     assert csr is not None
     grid = csr.grid
     labels = grid.indexes["group"][::-1]
-    conformed = grid.conformed(grid.with_indexes({"group": labels}))
+    conformed = grid.conform(grid.with_indexes({"group": labels}))
     tags = pd.Series(grid.aux["tag"][1], index=grid.indexes["group"])
     assert np.array_equal(conformed.aux["tag"][1], tags.loc[labels].to_numpy())
     assert grid == replace(grid)
@@ -1324,7 +1324,7 @@ def test_matmul_absent_cells_have_const_zero_and_no_terms() -> None:
 
 
 def test_matmul_prunes_explicit_zero_coefficients() -> None:
-    """Unlike ``added``, ``@`` drops zero terms; the cell stays active via ``const``."""
+    """Unlike ``add``, ``@`` drops zero terms; the cell stays active via ``const``."""
     c = base_model()
     expr = 0.0 * c.gen_p + 1.0
     operand = loc_operand(expr.indexes["gen"])
@@ -2245,12 +2245,12 @@ def test_reindex_matches_dense(build: str, reindexer: str, scale: float) -> None
 
 
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
-def test_reindexed_onto_transposed_dims_matches_dense(build: str) -> None:
+def test_reindex_onto_transposed_dims_matches_dense(build: str) -> None:
     sparse, dense = sparse_and_dense(build)
     csr = sparse._csr
     assert csr is not None
     dims = csr.grid.dims[::-1]
-    assert_contracted_equal(csr.reindexed(csr.grid.reordered(dims)), dense, dims)
+    assert_contracted_equal(csr.reindex(csr.grid.select(dims)), dense, dims)
 
 
 def merge_operands(e: LinearExpression, n: int) -> list[LinearExpression]:

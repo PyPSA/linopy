@@ -53,6 +53,7 @@ Version 1.0.0
 **Internal**
 
 * The core modules are compacted after the legacy removal: ``Variables`` and ``Constraints`` share a ``LabelContainer`` base, the piecewise formulations share one link builder, and uncalled helpers are removed. ``merge`` no longer accepts bare ``Variable`` operands (pass ``var.to_linexpr()``), ``SolverReport.barrier_iterations`` (never populated) is removed, and ``linopy.common.set_int_index``, ``infer_schema_polars`` and ``require_constant`` are removed.
+* The methods of ``CSRLinearExpression`` and ``Grid`` in ``linopy.csr`` use pandas/xarray-style verbs instead of past participles, e.g. ``summed`` is ``sum``, ``reindexed`` is ``reindex``, ``filled`` is ``fillna``, ``contracted`` is ``dot``, ``with_const`` is ``assign_const`` and ``Grid.reordered`` is ``Grid.select``. (`#1018 <https://github.com/PyPSA/linopy/issues/1018>`__)
 
 Version 0.10.1
 --------------
