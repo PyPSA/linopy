@@ -86,7 +86,6 @@ def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     assert c.ncons == 10
 
 
-@pytest.mark.v1
 def test_add_constraints_uses_model_freeze_default() -> None:
     m = Model(sparse=True)
     x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
@@ -621,32 +620,6 @@ def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
 
     assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
     assert (con.rhs.sel(i=1) == 2.0).all()
-
-
-@pytest.mark.legacy
-def test_constraint_rhs_setter_projects_multiindex_level() -> None:
-    """
-    Rhs indexed by one MultiIndex level is projected onto the stacked dim.
-
-    Regression: as_expression must convert constants with the broadcast rung
-    (broadcast_to_coords), not plain conversion — otherwise the level dim
-    collides with the MI level coord downstream (xarray AlignmentError).
-    """
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
-    m = Model()
-    x = m.add_variables(coords=coords, name="x")
-    con = m.add_constraints(1 * x >= 0, name="con")
-
-    rhs_by_level = xr.DataArray(
-        [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
-    )
-    with pytest.warns(linopy.LinopySemanticsWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level
-
-    assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
-    assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
 
 
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:

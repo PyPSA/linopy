@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, Variable, licensed_solvers
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
 from linopy.testing import assert_conequal
 
 # Test model functions
@@ -167,21 +167,7 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     assert c.shape == (10, 10)
 
 
-@pytest.mark.legacy
-def test_constraint_rhs_unlabeled_lower_dim_legacy() -> None:
-    """An unlabeled rhs pairs with the leading dim; both dims are size 10."""
-    m = Model()
-    naxis = np.arange(10, dtype=float)
-    maxis = np.arange(10).astype(str)
-    x = m.add_variables(coords=[naxis, maxis])
-    y = m.add_variables(coords=[naxis, maxis])
-
-    c = m.add_constraints(x - y >= naxis)
-    assert c.shape == (10, 10)
-
-
-@pytest.mark.v1
-def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises_v1() -> None:
+def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises() -> None:
     """Both dims are size 10, so a length-10 rhs cannot be paired by size."""
     m = Model()
     naxis = np.arange(10, dtype=float)
@@ -210,19 +196,7 @@ def test_constraint_rhs_higher_dim_constant_warns(
     assert "dimensions" in caplog.text
 
 
-@pytest.mark.legacy
-def test_constraint_rhs_unlabeled_higher_dim_warns_legacy(caplog: Any) -> None:
-    """An unlabeled (5, 3) rhs pairs axis 0 with dim_0 and broadcasts axis 1."""
-    m = Model()
-    x = m.add_variables(coords=[range(5)], name="x")
-
-    with caplog.at_level("WARNING", logger="linopy.expressions"):
-        m.add_constraints(x >= np.ones((5, 3)))
-    assert "dimensions" in caplog.text
-
-
-@pytest.mark.v1
-def test_constraint_rhs_unlabeled_higher_dim_raises_v1() -> None:
+def test_constraint_rhs_unlabeled_higher_dim_raises() -> None:
     """The (5, 3) rhs has an axis of length 3 matching no dim of x."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
@@ -398,111 +372,3 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
-
-
-@pytest.mark.legacy
-class TestConstraintCoordinateAlignment:
-    """
-    Constraint-side counterpart of TestCoordinateAlignment — legacy-only;
-    v1 raises on subset/superset/NaN-RHS (see convention.md §5/§8/§12).
-    """
-
-    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
-    def subset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "xarray":
-            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
-
-    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
-    def superset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "xarray":
-            return xr.DataArray(
-                np.arange(25, dtype=float),
-                dims=["dim_2"],
-                coords={"dim_2": range(25)},
-            )
-        return pd.Series(
-            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
-        )
-
-    def test_var_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
-        con = v <= subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == 10.0
-        assert con.rhs.sel(dim_2=3).item() == 30.0
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-
-    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
-    def test_var_comparison_subset(
-        self, v: Variable, subset: xr.DataArray, sign: str
-    ) -> None:
-        if sign == LESS_EQUAL:
-            con = v <= subset
-        elif sign == GREATER_EQUAL:
-            con = v >= subset
-        else:
-            con = v == subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == 10.0
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-
-    def test_expr_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
-        expr = v + 5
-        con = expr <= subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
-        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-
-    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
-    def test_subset_comparison_var(
-        self, v: Variable, subset: xr.DataArray, sign: str
-    ) -> None:
-        if sign == LESS_EQUAL:
-            con = subset <= v
-        elif sign == GREATER_EQUAL:
-            con = subset >= v
-        else:
-            con = subset == v
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-        assert con.rhs.sel(dim_2=1).item() == pytest.approx(10.0)
-
-    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL])
-    def test_superset_comparison_var(
-        self, v: Variable, superset: xr.DataArray, sign: str
-    ) -> None:
-        if sign == LESS_EQUAL:
-            con = superset <= v
-        else:
-            con = superset >= v
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(con.lhs.coeffs.values).any()
-        assert not np.isnan(con.rhs.values).any()
-
-    def test_constraint_rhs_extra_dims_broadcasts(self, v: Variable) -> None:
-        rhs = xr.DataArray(
-            [[1.0, 2.0]],
-            dims=["extra", "dim_2"],
-            coords={"dim_2": [0, 1]},
-        )
-        c = v <= rhs
-        assert "extra" in c.dims
-
-    def test_subset_constraint_solve_integration(self) -> None:
-        if not licensed_solvers:
-            pytest.skip("No solver available")
-        solver = "highs" if "highs" in licensed_solvers else licensed_solvers[0]
-        m = Model()
-        coords = pd.RangeIndex(5, name="i")
-        x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
-        subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
-        m.add_constraints(x <= subset_ub, name="subset_ub")
-        m.add_objective(x.sum(), sense="max")
-        m.solve(solver_name=solver)
-        sol = m.solution["x"]
-        assert sol.sel(i=1).item() == pytest.approx(10.0)
-        assert sol.sel(i=3).item() == pytest.approx(20.0)
-        assert sol.sel(i=0).item() == pytest.approx(100.0)
-        assert sol.sel(i=2).item() == pytest.approx(100.0)
-        assert sol.sel(i=4).item() == pytest.approx(100.0)

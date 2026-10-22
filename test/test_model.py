@@ -44,9 +44,7 @@ def test_model_solver_dir() -> None:
     assert m.solver_dir == Path(d)
 
 
-SPARSE_CONFIG = pytest.mark.parametrize(
-    "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
-)
+SPARSE_CONFIG = pytest.mark.parametrize("sparse", [False, True])
 
 
 @SPARSE_CONFIG

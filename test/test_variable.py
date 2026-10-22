@@ -875,90 +875,16 @@ class TestAddVariablesBoundsWithCoords:
             )
 
 
-@pytest.mark.legacy
-class TestAddVariablesMultiIndexCoords:
-    """MultiIndex-specific coord handling in add_variables (legacy; v1 rejects MI)."""
-
-    @pytest.fixture
-    def model(self) -> "Model":
-        return Model()
-
-    @pytest.fixture
-    def midx(self) -> pd.MultiIndex:
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-        mi.name = "multi"
-        return mi
-
-    def test_scalar_bounds(self, model: "Model", midx: pd.MultiIndex) -> None:
-        var = model.add_variables(lower=0, upper=1, coords=[midx], name="x")
-        assert var.shape == (4,)
-        assert var.dims == ("multi",)
-
-    def test_dataarray_bound(self, model: "Model", midx: pd.MultiIndex) -> None:
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
-        var = model.add_variables(upper=bound, coords=[midx], name="x")
-        assert var.shape == (4,)
-        assert (var.data.upper == [1, 2, 3, 4]).all()
-
-    def test_dataarray_bound_broadcast(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        time = pd.Index([10, 20, 30], name="time")
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
-        var = model.add_variables(
-            lower=-bound, upper=bound, coords=[midx, time], name="x"
-        )
-        assert var.dims == ("multi", "time")
-        assert var.shape == (4, 3)
-        assert (var.data.upper.sel(time=10) == [1, 2, 3, 4]).all()
-
-    def test_without_name_raises(self, model: "Model") -> None:
-        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-        with pytest.raises(TypeError, match="MultiIndex.*must have .name set"):
-            model.add_variables(lower=0, upper=1, coords=[midx], name="x")
-
-    def test_mismatched_multiindex_raises(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        other = pd.MultiIndex.from_product([[0, 1], ["x", "y"]], names=("l1", "l2"))
-        other.name = "multi"
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": other})
-        with pytest.raises(ValueError, match="MultiIndex.*does not match"):
-            model.add_variables(upper=bound, coords=[midx], name="x")
-
-    @pytest.mark.legacy
-    def test_single_level_bound_broadcasts(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        with pytest.warns(
-            linopy.LinopySemanticsWarning, match=r"broadcasting level subset"
-        ):
-            var = model.add_variables(upper=bound, coords=[midx], name="x")
-        assert var.dims == ("multi",)
-        assert (var.data.upper == [5, 5, 6, 6]).all()
-
-    def test_incomplete_level_bound_raises(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        subset = pd.MultiIndex.from_tuples([(0, "a"), (1, "b")], names=("l1", "l2"))
-        bound = pd.Series([1, 2], index=subset)
-        with pytest.raises(ValueError, match="no value for .* level combination"):
-            model.add_variables(upper=bound, coords=[midx], name="x")
-
-
-@pytest.mark.v1
-def test_add_variables_multiindex_rejected_v1() -> None:
-    """v1: an MI dim-coord is rejected at construction with a reset_index hint."""
+def test_add_variables_multiindex_rejected() -> None:
+    """An MI dim-coord is rejected at construction with a reset_index hint."""
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
     mi.name = "multi"
     with pytest.raises(ValueError, match=r"v1 convention does not support"):
         Model().add_variables(lower=0, upper=1, coords=[mi], name="x")
 
 
-@pytest.mark.v1
-def test_add_constraint_and_objective_multiindex_rejected_v1() -> None:
-    """v1: an MI forced onto an expression is rejected at the constraint/objective."""
+def test_add_constraint_and_objective_multiindex_rejected() -> None:
+    """An MI forced onto an expression is rejected at the constraint/objective."""
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
     mi.name = "d"
     m = Model()
