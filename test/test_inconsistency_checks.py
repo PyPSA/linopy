@@ -5,6 +5,8 @@ Created on Mon Feb 28 15:47:32 2022.
 @author: fabian
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,8 +24,9 @@ COORDS = [pd.RangeIndex(3, name="i")]
 )
 def test_nan_in_variable_bound_raises(bound: str, value: float | xr.DataArray) -> None:
     m = Model()
+    kwargs: dict[str, Any] = {bound: value}
     with pytest.raises(ValueError, match=NAN_BOUND):
-        m.add_variables(coords=COORDS, name="x", **{bound: value})
+        m.add_variables(coords=COORDS, name="x", **kwargs)
     assert "x" not in m.variables
 
 
@@ -33,9 +36,8 @@ def test_nan_in_variable_bound_under_mask(bound: str, binary: bool) -> None:
     m = Model()
     value = xr.DataArray([0.0, np.nan, 1.0], coords=COORDS)
     mask = xr.DataArray([True, False, True], coords=COORDS)
-    x = m.add_variables(
-        coords=COORDS, name="x", mask=mask, binary=binary, **{bound: value}
-    )
+    kwargs: dict[str, Any] = {bound: value}
+    x = m.add_variables(coords=COORDS, name="x", mask=mask, binary=binary, **kwargs)
     assert x.mask.values.tolist() == [True, False, True]
 
 

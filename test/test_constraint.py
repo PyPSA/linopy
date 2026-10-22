@@ -270,6 +270,7 @@ def test_constraint_assign_replaces_term_fields(
     x: linopy.Variable, y: linopy.Variable
 ) -> None:
     con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
     res = con.assign(
         vars=con.vars.isel({TERM_DIM: [0]}), coeffs=con.coeffs.isel({TERM_DIM: [0]})
     )

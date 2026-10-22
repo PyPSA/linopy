@@ -118,7 +118,10 @@ class TestVariableFix:
         m = Model()
         mask = DataArray([True, False, True], dims="i")
         v = m.add_variables(
-            coords=[pd.RangeIndex(3, name="i")], mask=mask, **{kind: True}
+            coords=[pd.RangeIndex(3, name="i")],
+            mask=mask,
+            binary=kind == "binary",
+            integer=kind == "integer",
         )
         v.fix([1, masked_value, 0])
         assert v.fixed
