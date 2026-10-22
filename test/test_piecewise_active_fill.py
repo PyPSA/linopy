@@ -1,11 +1,11 @@
 """
-Tests for the ``active_fill`` parameter of ``add_piecewise_formulation`` (#796).
+Tests for the deprecated ``active_fill`` parameter of
+``add_piecewise_formulation`` (#796).
 
-``active_fill`` is a transitional convenience: it pads a partial ``active``
-gate (a subset of the indexed dimension, or a masked gate) to full coverage.
-It is slated for removal once the v1 arithmetic semantics (#717) make
-``active.reindex(coords).fillna(value)`` correct on its own, so these tests
-live in a dedicated module that can be dropped with the parameter.
+``active_fill`` pads a partial ``active`` gate (a subset of the indexed
+dimension, or a masked gate) to full coverage. It is deprecated in favour of
+``active.reindex(coords).fillna(value)`` and removed in linopy 1.1, so these
+tests live in a dedicated module that can be dropped with the parameter.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
 )
+from linopy.testing import assert_model_equal
 
 Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
 GateBuilder: TypeAlias = Callable[[Model], Any]
@@ -33,6 +34,10 @@ _any_solvers = [
 ]
 _sos2_solvers = get_available_solvers_with_feature(
     SolverFeature.SOS_CONSTRAINTS, licensed_solvers
+)
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:`active_fill` is deprecated:FutureWarning"
 )
 
 
@@ -79,6 +84,39 @@ _COVERAGE_CASES = [
 ]
 
 
+def _build_partial_gate(
+    make_active: GateBuilder,
+    *,
+    method: Method,
+    disjunctive: bool = False,
+    fill: int = 1,
+    explicit: bool = False,
+) -> Model:
+    """Gate a partial ``active`` via ``active_fill`` or explicit padding."""
+    m = Model()
+    x = m.add_variables(lower=0, upper=100, coords=[_PWL_GENS], name="x")
+    y = m.add_variables(lower=0, coords=[_PWL_GENS], name="y")
+    u = make_active(m)
+    gate: dict[str, Any] = (
+        {"active": u.reindex(gen=_PWL_GENS).fillna(fill)}
+        if explicit
+        else {"active": u, "active_fill": fill}
+    )
+    if disjunctive:
+        m.add_piecewise_formulation(
+            (x, segments([[0.0, 50.0], [50.0, 100.0]])),
+            (y, segments([[0.0, 10.0], [10.0, 50.0]])),
+            **gate,
+        )
+    else:
+        m.add_piecewise_formulation(
+            (x, [0, 50, 100]), (y, [0, 10, 50]), method=method, **gate
+        )
+    m.add_constraints(u <= 0, name="force_off")
+    m.add_objective(y.sum(), sense="min")
+    return m
+
+
 def _solve_partial_gate(
     solver_name: str,
     make_active: GateBuilder,
@@ -87,34 +125,47 @@ def _solve_partial_gate(
     disjunctive: bool = False,
 ) -> None:
     """Fill a partial gate, force the committable units off, demand "b" runs."""
-    m = Model()
-    x = m.add_variables(lower=0, upper=100, coords=[_PWL_GENS], name="x")
-    y = m.add_variables(lower=0, coords=[_PWL_GENS], name="y")
-    u = make_active(m)
-    if disjunctive:
-        m.add_piecewise_formulation(
-            (x, segments([[0.0, 50.0], [50.0, 100.0]])),
-            (y, segments([[0.0, 10.0], [10.0, 50.0]])),
-            active=u,
-            active_fill=1,
-        )
-    else:
-        m.add_piecewise_formulation(
-            (x, [0, 50, 100]),
-            (y, [0, 10, 50]),
-            active=u,
-            active_fill=1,
-            method=method,
-        )
-    m.add_constraints(u <= 0, name="force_off")
+    m = _build_partial_gate(make_active, method=method, disjunctive=disjunctive)
+    x, y = m.variables["x"], m.variables["y"]
     m.add_constraints(x.sel(gen="b") >= 50, name="demand")
-    m.add_objective(y.sum(), sense="min")
     status, _ = m.solve(solver_name=solver_name)
     assert status == "ok"
     np.testing.assert_allclose(float(x.solution.sel(gen="a")), 0, atol=1e-4)
     np.testing.assert_allclose(float(x.solution.sel(gen="c")), 0, atol=1e-4)
     np.testing.assert_allclose(float(x.solution.sel(gen="b")), 50, atol=1e-4)
     np.testing.assert_allclose(float(y.solution.sel(gen="b")), 10, atol=1e-4)
+
+
+class TestActiveFillDeprecation:
+    def test_warns(self) -> None:
+        with pytest.warns(FutureWarning, match="`active_fill` is deprecated") as rec:
+            _build_partial_gate(_subset_gate, method="incremental")
+        assert [r.filename for r in rec if "active_fill" in str(r.message)] == [
+            __file__
+        ]
+
+    @pytest.mark.parametrize("fill", [1, 0])
+    @pytest.mark.parametrize("make_active", _PARTIAL_GATES)
+    @pytest.mark.parametrize(
+        "method, disjunctive",
+        [
+            pytest.param("incremental", False, id="incremental"),
+            pytest.param("sos2", False, id="sos2"),
+            pytest.param("auto", True, id="disjunctive"),
+        ],
+    )
+    def test_explicit_padding_matches(
+        self, make_active: GateBuilder, fill: int, method: Method, disjunctive: bool
+    ) -> None:
+        kwargs: dict[str, Any] = {
+            "method": method,
+            "disjunctive": disjunctive,
+            "fill": fill,
+        }
+        assert_model_equal(
+            _build_partial_gate(make_active, **kwargs),
+            _build_partial_gate(make_active, explicit=True, **kwargs),
+        )
 
 
 class TestResolveActiveFill:
@@ -154,7 +205,7 @@ class TestActiveFillValidation:
             )
 
         if should_raise:
-            with pytest.raises(ValueError, match="active_fill"):
+            with pytest.raises(ValueError, match="full coordinate"):
                 build()
         else:
             build()

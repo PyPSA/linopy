@@ -50,7 +50,7 @@ from linopy.constants import (
     EvolvingAPIWarning,
     sign_replace_dict,
 )
-from linopy.semantics import check_user_nan_breakpoints
+from linopy.semantics import check_user_nan_breakpoints, warn_outside_linopy
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint, Constraints
@@ -880,8 +880,9 @@ def _resolve_active(
             "`active` is not defined over the full coordinate of the "
             "piecewise formulation: it is missing labels (a subset of the "
             "coordinate) or has masked entries, which would be gated to "
-            "zero. Pass `active_fill=1` to treat those entries as always "
-            "active (or `0` as always off), or pass a fully-defined `active`."
+            "zero. Pad `active` explicitly, e.g. "
+            "`active=active.reindex(coords).fillna(1)` to treat those entries "
+            "as always active (or `fillna(0)` as always off)."
         )
     return active
 
@@ -1220,8 +1221,8 @@ def add_piecewise_formulation(
 
         ``active`` must cover the formulation's full coordinate.  A
         *partial* gate — one defined over only a subset of the coordinate's
-        labels, or carrying masked entries — is rejected unless
-        ``active_fill`` is set (see below).
+        labels, or carrying masked entries — is rejected.  Pad it
+        explicitly, e.g. ``active=active.reindex(coords).fillna(1)``.
 
         With all-equality tuples (the default), the output is then pinned
         to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
@@ -1241,9 +1242,11 @@ def add_piecewise_formulation(
         When ``None`` (the default) a partial ``active`` is rejected instead.
         Useful when one formulation mixes gated and ungated entities (e.g.
         committable and non-committable units sharing a ``status``).
-        Transitional convenience: under v1 semantics, pad ``active``
-        explicitly with ``active.reindex(coords).fillna(value)`` instead —
-        this parameter is slated for removal then.
+
+        .. deprecated:: 1.0
+            ``active_fill`` is removed in linopy 1.1.  Pad ``active``
+            explicitly instead, e.g.
+            ``active=active.reindex(coords).fillna(value)``.
     mask : MaskLike, optional
         Which breakpoint slots hold a real breakpoint — ``True`` where one
         exists, ``False`` where it is absent.  Shaped like the breakpoint
@@ -1269,6 +1272,8 @@ def add_piecewise_formulation(
         sign semantics may be refined based on user feedback.  Silence
         with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
+    FutureWarning
+        If ``active_fill`` is passed; it is deprecated and removed in 1.1.
     """
     _warn_evolving_api(
         "add_piecewise_formulation",
@@ -1406,6 +1411,14 @@ def add_piecewise_formulation(
             # Internal-prefixed fallback so a user variable named e.g. "1"
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
+
+    if active_fill is not None:
+        warn_outside_linopy(
+            "`active_fill` is deprecated and will be removed in linopy 1.1. "
+            "Pad `active` explicitly instead, e.g. "
+            "`active=active.reindex(coords).fillna(value)`.",
+            FutureWarning,
+        )
 
     if active is None:
         if active_fill is not None:
