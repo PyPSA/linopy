@@ -9,13 +9,7 @@ import linopy as lp
 
 # pypsa is an optional benchmark dep. Skip the whole module if it's missing
 # so the rest of the suite stays collectable without it.
-pypsa = pytest.importorskip("pypsa")
-
-
-@pytest.fixture(autouse=True)
-def _skip_under_v1(_bench_semantics: None) -> None:
-    if lp.options["semantics"] == "v1":
-        pytest.skip("PyPSA emits NaN-valued constants that v1 rejects by design.")
+pypsa = pytest.importorskip("pypsa", minversion="1.4")
 
 
 @pytest.fixture(scope="module")
