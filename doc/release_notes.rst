@@ -1,8 +1,8 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+Version 1.0.0
+-------------
 
 **Breaking Changes**
 

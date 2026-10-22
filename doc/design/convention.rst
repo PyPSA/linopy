@@ -1,8 +1,7 @@
-The v1 convention
-=================
+The arithmetic convention
+=========================
 
-The strict ("v1") convention for linopy. Goals and rollout plan:
-:doc:`goals`. The bugs it fixes are catalogued in `#714 <https://github.com/PyPSA/linopy/issues/714>`__.
+The strict arithmetic convention for linopy. Goals: :doc:`goals`. The bugs it fixes are catalogued in `#714 <https://github.com/PyPSA/linopy/issues/714>`__.
 
 An object-scope statement, then thirteen sections in three groups: absence
 (§1–§7), coordinate alignment (§8–§11), then constraints and reductions
@@ -174,9 +173,8 @@ resolve it. Several primitives bring operands into agreement:
    clearest fix.
 -  The named methods — ``.add`` ``.sub`` ``.mul`` ``.div`` ``.le`` ``.ge`` ``.eq`` — take a
    ``join=`` argument: ``exact``, ``inner``, ``outer``, ``left``, ``right``, or ``override``.
-   The default (calling the operator, or ``join=None``) follows the global
-   ``options["semantics"]`` setting — under v1 that is ``exact``, so passing
-   ``join="exact"`` is the explicit spelling of the v1 default, not a stricter
+   The default (calling the operator, or ``join=None``) is ``exact``, so passing
+   ``join="exact"`` is the explicit spelling of the default, not a stricter
    mode. ``override`` is the old positional behavior — still available, but now
    opt-in and named rather than triggered by a size coincidence. It still
    requires the shared dimensions to match in size: a genuine size mismatch raises rather
@@ -226,8 +224,7 @@ missing there, so §6 absorbs it and §12 drops the row from a constraint. Unlik
 a numeric fill it is accepted for expression operands too — including
 ``linopy.merge(..., join=…, fill_value=linopy.ABSENT)`` — because absence is
 something both kinds of operand can carry. It cannot be spelled ``np.nan``
-(§5 raises on a user NaN) or ``None`` (already "the operator's default"), and it
-is a v1 concept: under legacy it raises.
+(§5 raises on a user NaN) or ``None`` (already "the operator's default").
 
 Absence an operand carries in — from ``mask=``, ``.where()``, ``.shift()``,
 ``.reindex()`` — is untouched by the join and keeps propagating under §6. So
@@ -282,7 +279,7 @@ per-``period`` weighting meeting a ``snapshot``-indexed expression — is a
 same-name conflict between a dimension and an auxiliary coordinate, and it
 raises like any other conflict of this section. There is no implicit
 projection. ``snapshot`` is a flat dimension carrying ``period`` and ``timestep``
-as auxiliary coordinates (v1 rejects a first-class ``pd.MultiIndex`` dimension,
+as auxiliary coordinates (a first-class ``pd.MultiIndex`` dimension is rejected,
 so ``expr.indexes["snapshot"]`` is a flat index, not a ``MultiIndex``). Map the
 per-``period`` input onto ``snapshot`` through that coordinate — a plain array
 of one weight per position — then use it in the operation:
@@ -299,9 +296,6 @@ An input that reconstructs the *entire* MultiIndex (all levels, every
 combination) is not a conflict — it is the same coordinate spelled
 differently, and aligns by tuple under §8: the tuples must match in the same
 order, a reorder raises (§10).
-
-(Legacy projects implicitly and warns — scenario B of the `#732 <https://github.com/PyPSA/linopy/pull/732>`__/`#737 <https://github.com/PyPSA/linopy/pull/737>`__
-discussion; the implicit projection is removed at 1.0.)
 
 Constraints and reductions
 --------------------------
@@ -332,17 +326,15 @@ NaN propagation of §6 does not apply: they *skip* absent slots instead. ``sum``
 the zero expression. The objective totals its terms the way ``sum`` does.
 
 Further reductions (``mean``, ``resample``, ``coarsen``) are not in linopy yet; they
-are added under v1 only (`#703 <https://github.com/PyPSA/linopy/issues/703>`__) — as new operations with no legacy behaviour —
-and follow this same skip-absent rule.
+are added as new operations (`#703 <https://github.com/PyPSA/linopy/issues/703>`__) and follow this same skip-absent rule.
 
 **Groupers.** A ``groupby`` grouper — a Series, DataArray, DataFrame, or the name
 of an attached coordinate — labels each position of the grouped dimension. It
 aligns to that dimension by §8: the grouper's index must carry the grouped
 dimension's labels, and a differing label *set* or the same labels in a
 different *order* raises. The grouper is never matched by position and never
-silently reindexed (`#827 <https://github.com/PyPSA/linopy/issues/827>`__). Under legacy the fast path matches positionally; v1
-validates and raises, whichever grouper type is used.
+silently reindexed (`#827 <https://github.com/PyPSA/linopy/issues/827>`__). Validation and the raise apply whichever grouper type is used.
 
 A multi-key grouper (a list of coordinate names, or a DataFrame) groups by the
 tuple of keys. The result is a flat ``group`` dimension carrying the keys as
-auxiliary coordinates; the stacked ``group`` MultiIndex is legacy-only (§11).
+auxiliary coordinates.
