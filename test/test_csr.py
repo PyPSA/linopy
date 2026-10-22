@@ -2529,9 +2529,9 @@ def softened(
     mask_kind: str,
     route: str,
     max_violation: float | None,
-    freeze: bool,
+    sparse: bool,
 ) -> tuple[Case, ConstraintBase]:
-    c = base_model(sparse=freeze)
+    c = base_model(sparse=sparse)
     c.m.add_objective(1.0 * c.gen_p.sum())
     mask = MASK_KINDS[mask_kind](c)
     args = (c.balance_lhs(), sign, c.load)
@@ -2540,7 +2540,7 @@ def softened(
         con = c.m.add_constraints(*args, **kwargs)
         con.soften(penalty=2.0, max_violation=max_violation)
     else:
-        kwargs["freeze"] = None if route == "penalty-default" else freeze
+        kwargs["freeze"] = None if route == "penalty-default" else sparse
         con = c.m.add_constraints(*args, **kwargs, penalty=2.0)
     return c, con
 
@@ -2559,9 +2559,9 @@ SOFTEN_ROUTES = [
 def test_frozen_soften_matches_dense(
     sign: str, mask_kind: str, route: str, max_violation: float | None, tmp_path: Path
 ) -> None:
-    dense_case, dense = softened(sign, mask_kind, route, max_violation, freeze=False)
+    dense_case, dense = softened(sign, mask_kind, route, max_violation, sparse=False)
     with no_densify():
-        case, con = softened(sign, mask_kind, route, max_violation, freeze=True)
+        case, con = softened(sign, mask_kind, route, max_violation, sparse=True)
         case.m.to_netcdf(tmp_path / "m.nc")
     assert isinstance(con, CSRConstraint)
     assert case.m.constraints["c"] is con
@@ -2608,8 +2608,8 @@ def test_frozen_soften_max_sense_with_array_penalty() -> None:
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
 def test_frozen_soften_solves_like_dense(sign: str) -> None:
     values = []
-    for freeze in (False, True):
-        c, _ = softened(sign, "masked", "soften", 20.0, freeze)
+    for sparse in (False, True):
+        c, _ = softened(sign, "masked", "soften", 20.0, sparse)
         for var in (c.gen_p, c.flow):
             var.update(lower=0, upper=1)
         c.m.solve("highs")

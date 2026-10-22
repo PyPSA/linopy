@@ -9,7 +9,7 @@ skew; the build's peak memory is expected to climb steeply with it on the
 current (dense) kernel.
 
 ``nodal_balance_sparse`` builds the identical constraint through the
-CSR-backed path (``Model(sparse=True)`` under v1): the
+CSR-backed path (``Model(sparse=True)``): the
 grouped sum never materializes the padded rectangle and is realized directly
 as a CSRConstraint, so its peak memory should stay flat across the severity
 sweep — the pair makes the padding cost visible.

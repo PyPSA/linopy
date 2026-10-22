@@ -1639,6 +1639,13 @@ class Variable:
             new value (the originally stashed bounds are kept). If False, raise
             an error if the variable is already fixed.
         """
+        self._data = assign_multiindex_safe(
+            self.data, **self._fix_updates(value, decimals, overwrite)
+        )
+
+    def _fix_updates(
+        self, value: ConstantLike | None, decimals: int, overwrite: bool
+    ) -> dict[str, DataArray]:
         if value is None:
             try:
                 value = self.solution
@@ -1665,7 +1672,8 @@ class Variable:
             value, self.coords, label=f"fix() for variable '{self.name}'"
         )
 
-        if is_binary and not (np.isclose(value, 0) | np.isclose(value, 1)).all():
+        off_domain = ~(np.isclose(value, 0) | np.isclose(value, 1))
+        if is_binary and (off_domain & value.notnull() & (self.labels != -1)).any():
             msg = (
                 f"Cannot fix binary variable '{self.name}' to a value "
                 "other than 0 or 1."
@@ -1687,16 +1695,13 @@ class Variable:
                 f"Fix values for variable '{self.name}' lie outside its current "
                 "bounds; the bounds are overridden by the fix value.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         updates = self._validate_update(lower=value, upper=value)
-        if not is_fixed:
-            self._data = assign_multiindex_safe(
-                self.data,
-                **{STASHED_LOWER: lower, STASHED_UPPER: upper},
-            )
-        self._data = assign_multiindex_safe(self.data, **updates)
+        if is_fixed:
+            return updates
+        return {STASHED_LOWER: lower, STASHED_UPPER: upper, **updates}
 
     def unfix(self) -> None:
         """
@@ -2025,8 +2030,8 @@ class Variables:
         """
         Fix all variables in this container to their solution or a scalar value.
 
-        Delegates to each variable's ``fix()`` method. See
-        :meth:`Variable.fix` for details.
+        All variables are validated before any is fixed, so a failing variable
+        leaves the container unchanged. See :meth:`Variable.fix` for details.
 
         Parameters
         ----------
@@ -2039,8 +2044,12 @@ class Variables:
         overwrite : bool, optional
             If True, re-fix variables that are already fixed.
         """
-        for var in self.data.values():
-            var.fix(value=value, decimals=decimals, overwrite=overwrite)
+        updates = {
+            name: var._fix_updates(value, decimals, overwrite)
+            for name, var in self.data.items()
+        }
+        for name, var in self.data.items():
+            var._data = assign_multiindex_safe(var.data, **updates[name])
 
     def unfix(self) -> None:
         """

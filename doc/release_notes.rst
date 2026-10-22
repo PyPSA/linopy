@@ -10,6 +10,8 @@ Version 1.0.0
 * ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
 * ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
 * ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
+* ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``. Netcdf files written with a ``freeze_constraints`` attribute still load; the attribute is ignored.
 * ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead. Netcdf files written with an ``auto_mask`` attribute still load; the attribute is ignored.
 * NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
@@ -27,7 +29,9 @@ Version 1.0.0
 
 **Bug fixes**
 
-* Under v1, arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
+* ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 
 Version 0.10.1
 --------------

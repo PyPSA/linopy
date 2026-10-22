@@ -112,6 +112,19 @@ class TestVariableFix:
         np.testing.assert_array_equal(y.lower.values, [-5, -5])
         np.testing.assert_array_equal(y.upper.values, [5, 5])
 
+    @pytest.mark.parametrize("masked_value", [np.nan, 0.5])
+    @pytest.mark.parametrize("kind", ["binary", "integer"])
+    def test_fix_ignores_masked_positions(self, kind: str, masked_value: float) -> None:
+        m = Model()
+        mask = DataArray([True, False, True], dims="i")
+        v = m.add_variables(
+            coords=[pd.RangeIndex(3, name="i")], mask=mask, **{kind: True}
+        )
+        v.fix([1, masked_value, 0])
+        assert v.fixed
+        np.testing.assert_array_equal(v.lower.values[[0, 2]], [1, 0])
+        np.testing.assert_array_equal(v.upper.values[[0, 2]], [1, 0])
+
     def test_fix_rounds_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["w"].fix()
@@ -306,6 +319,13 @@ class TestVariablesContainerFixUnfix:
         m.variables.fix()
         for name in m.variables:
             assert m.variables[name].fixed
+
+    def test_fix_all_is_atomic(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["y"].solution = DataArray([1.0, np.nan], dims="dim_0")
+        with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+            m.variables.fix()
+        assert not any(m.variables[name].fixed for name in m.variables)
 
     def test_unfix_all(self, model_with_solution: Model) -> None:
         m = model_with_solution
