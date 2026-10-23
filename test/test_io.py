@@ -1151,7 +1151,9 @@ def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     expected = _lp_constraint_section(m, tmp_path / "sorted.lp")
 
     con = m.constraints["a"]
-    m.constraints.data["a"] = Constraint(con.data.isel(i=slice(None, None, -1)), m, "a")
+    m.constraints.data["a"] = Constraint.from_dataset(
+        con.data.isel(i=slice(None, None, -1)), m, "a"
+    )
     assert not m.constraints["a"].to_polars()["labels"].is_sorted()
     assert _lp_constraint_section(m, tmp_path / "unsorted.lp") == expected
 

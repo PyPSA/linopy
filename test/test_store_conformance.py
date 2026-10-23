@@ -612,3 +612,48 @@ def test_named_expression_keeps_name_through_assignment(
         assert named.data.attrs["name"] == "named"
         assign(named)
     assert named.name == backend.expressions["named"].name == "named"
+
+
+def positional_model() -> tuple[Model, LinearExpression]:
+    m = Model()
+    x = m.add_variables(coords=[A], name="x")
+    y = m.add_variables(coords=[A], name="y")
+    return m, 2 * dense_linexpr(x) + dense_linexpr(y) - dense_linexpr(x)
+
+
+ROWS = {"all": [True, True, True], "masked": [True, False, True]}
+
+
+@pytest.mark.parametrize("rows", list(ROWS))
+def test_positional_csr_agrees(rows: str) -> None:
+    m, expr = positional_model()
+    active = np.array(ROWS[rows])
+    label_index = m.variables.label_index
+    dense = expr._store.positional_csr(label_index, active, "c")
+    sparse = (
+        expr._store.to_sparse().canonical().positional_csr(label_index, active, "c")
+    )
+    assert dense.shape == sparse.shape == (active.sum(), 6)
+    assert (dense != sparse).nnz == 0
+
+
+@pytest.mark.parametrize("rows", list(ROWS))
+def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
+    m, expr = positional_model()
+    store = expr._store.to_sparse().canonical()
+    active = np.array(ROWS[rows])
+    first = store.positional_csr(m.variables.label_index, active, "c")
+    again = store.positional_csr(m.variables.label_index, active, "c")
+    assert all(
+        a is b
+        for a, b in zip(
+            (first.data, first.indices, first.indptr),
+            (again.data, again.indices, again.indptr),
+        )
+    )
+    other_rows = store.positional_csr(m.variables.label_index, ~active, "c")
+    assert other_rows.indices is not first.indices
+    m.add_variables(name="z")
+    rebuilt = store.positional_csr(m.variables.label_index, active, "c")
+    assert rebuilt.indices is not first.indices
+    np.testing.assert_array_equal(rebuilt.indices, first.indices)

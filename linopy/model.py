@@ -30,7 +30,6 @@ from linopy import solvers
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     _as_renamed_index,
-    assign_fields,
     assigned_labels,
     best_int,
     coords_reorder_set,
@@ -43,7 +42,6 @@ from linopy.common import (
 from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
-    HELPER_DIMS,
     LESS_EQUAL,
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
@@ -1157,18 +1155,19 @@ class Model:
             )
 
     def _allocate_constraint_labels(
-        self, data: Dataset, name: str, mask: DataArray | None = None
-    ) -> Dataset:
-        """Assign label ranges from the constraint counter and apply an optional mask."""
+        self, like: DataArray, mask: DataArray | None = None
+    ) -> tuple[DataArray, tuple[int, int]]:
+        """
+        Labels shaped like ``like`` from the constraint counter, ``-1`` where
+        the optional ``mask`` is False, and their label range.
+        """
         start = self._cCounter
-        end = start + data.labels.size
-        data.labels.values = self._allocate_labels(start, end).reshape(
-            data.labels.shape
-        )
-        self._cCounter += data.labels.size
+        end = start + like.size
+        labels = like.copy(data=self._allocate_labels(start, end).reshape(like.shape))
+        self._cCounter = end
         if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
-        return data.assign_attrs(label_range=(start, end), name=name)
+            labels = labels.where(mask, -1)
+        return labels, (start, end)
 
     @overload
     def add_constraints(
@@ -1335,18 +1334,18 @@ class Model:
             _densify_notice(
                 "constraint added unfrozen, `freeze=False`", self, explicit=True
             )
-        data = con.data
+        dense = (
+            con
+            if isinstance(con, Constraint)
+            else Constraint.from_dataset(con.data, self)
+        )
 
-        _check_infinities(data.sign, data.rhs, name)
+        _check_infinities(dense.sign, dense.rhs, name)
 
-        # ensure helper dimensions are not set as coordinates
-        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
-            # TODO: add a warning here, routines should be safe against this
-            data = data.drop_vars(drop_dims)
-
-        rhs_nan = data.rhs.isnull()
+        rhs = dense.rhs
+        rhs_nan = rhs.isnull()
         if rhs_nan.any():
-            data = assign_fields(data, rhs=data.rhs.fillna(0))
+            rhs = rhs.fillna(0)
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask
@@ -1354,30 +1353,34 @@ class Model:
                 else (as_dataarray(mask).astype(bool) & rhs_mask)
             )
 
-        data["labels"] = -1
-        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        row_coords = data.labels.coords
-        data = assign_fields(
-            data,
-            scaling=validate_scaling(
-                broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
-                "constraint scaling",
-            ),
+        row_scaling = validate_scaling(
+            broadcast_to_coords(scaling, rhs.coords, label="constraint scaling"),
+            "constraint scaling",
         )
 
         if mask is not None:
-            mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
+            mask = broadcast_to_coords(mask, dense.coords, label="mask").astype(bool)
 
-        self.check_force_dim_names(data)
-        self._check_valid_dim_names(data)
+        lhs = dense.lhs
+        self.check_force_dim_names(lhs)
+        self._check_valid_dim_names(lhs)
 
-        data = self._allocate_constraint_labels(data, name, mask)
+        labels, label_range = self._allocate_constraint_labels(rhs, mask)
+        constraint = Constraint(
+            lhs,
+            dense.sign,
+            rhs,
+            self,
+            name,
+            labels=labels,
+            scaling=row_scaling,
+            attrs={**dense.attrs, "label_range": label_range},
+        )
+        enforce_no_multiindex(constraint, context=f"constraint {name!r}")
 
         if self.chunk:
-            data = data.chunk(self.chunk)
+            constraint = constraint.chunk(self.chunk)
 
-        enforce_no_multiindex(data, context=f"constraint {name!r}")
-        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         return self._soften_added(self.constraints.add(constraint, freeze), penalty)
 
     @staticmethod
@@ -1447,28 +1450,28 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
-        data = self._constraint_from_lhs(lhs, sign, rhs).data
-
-        data["binary_var"] = binary_var.labels
-        data["binary_val"] = binary_val
-
-        data["labels"] = -1
-        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        row_coords = data.labels.coords
-        data = assign_fields(
-            data,
-            scaling=validate_scaling(
-                broadcast_to_coords(
-                    scaling, row_coords, label="indicator constraint scaling"
-                ),
-                "indicator constraint scaling",
+        base = self._constraint_from_lhs(lhs, sign, rhs)
+        rhs_da = base.rhs
+        row_scaling = validate_scaling(
+            broadcast_to_coords(
+                scaling, rhs_da.coords, label="indicator constraint scaling"
             ),
+            "indicator constraint scaling",
         )
-
-        data = self._allocate_constraint_labels(data, name)
-
-        enforce_no_multiindex(data, context=f"constraint {name!r}")
-        con = Constraint(data, name=name, model=self, skip_broadcast=True)
+        labels, label_range = self._allocate_constraint_labels(rhs_da)
+        con = Constraint(
+            base.lhs,
+            base.sign,
+            rhs_da,
+            self,
+            name,
+            labels=labels,
+            scaling=row_scaling,
+            binary_var=binary_var.labels,
+            binary_val=binary_val,
+            attrs={**base.attrs, "label_range": label_range},
+        )
+        enforce_no_multiindex(con, context=f"constraint {name!r}")
         return self.constraints.add(con, freeze=self._sparse)
 
     def remove_indicator_constraints(self, name: str) -> None:

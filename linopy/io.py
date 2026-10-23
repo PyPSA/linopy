@@ -1289,7 +1289,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         if con_ds.attrs.get("_linopy_format") == "csr":
             constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
         else:
-            constraints[name] = Constraint(con_ds, m, name)
+            constraints[name] = Constraint.from_dataset(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1427,25 +1427,22 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
-        if isinstance(con, CSRConstraint):
-            buffer_types = (np.ndarray, scipy.sparse.sparray)
-            changes: dict[str, Any] = {"model": new_model}
-            if deep:
-                kwargs = con._init_kwargs().items()
-                changes |= {
-                    k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)
-                }
-            if not include_solution:
-                changes["dual"] = None
-            return con._replace(**changes)
-        d = con.data
+    def _copy_con(con: ConstraintBase) -> ConstraintBase:
+        if isinstance(con, Constraint):
+            return con._copy(new_model, deep, include_solution)
+        if not isinstance(con, CSRConstraint):
+            raise TypeError(f"Cannot copy constraint of type {type(con)}")
+        buffer_types = (np.ndarray, scipy.sparse.sparray)
+        changes: dict[str, Any] = {"model": new_model}
+        if deep:
+            kwargs = con._init_kwargs().items()
+            changes |= {k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)}
         if not include_solution:
-            d = d[con.data_attrs]
-        return Constraint(d.copy(deep=deep), new_model, name)
+            changes["dual"] = None
+        return con._replace(**changes)
 
     new_model._constraints = Constraints(
-        {name: _copy_con(name, con) for name, con in m.constraints.items()},
+        {name: _copy_con(con) for name, con in m.constraints.items()},
         new_model,
     )
 

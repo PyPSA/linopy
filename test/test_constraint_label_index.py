@@ -4,7 +4,7 @@ import pytest
 
 import linopy
 import linopy.constants
-from linopy.constraints import Constraint
+from linopy.store import DenseStore
 
 
 @pytest.fixture
@@ -30,13 +30,13 @@ def test_assign_result_does_not_build_matrix(
     monkeypatch: pytest.MonkeyPatch, model_with_mask: linopy.Model
 ) -> None:
     calls = {"n": 0}
-    original = Constraint._matrix_export_data
+    original = DenseStore.positional_csr
 
-    def counting(self, label_index):  # type: ignore[no-untyped-def]
+    def counting(self, label_index, active_rows, name):  # type: ignore[no-untyped-def]
         calls["n"] += 1
-        return original(self, label_index)
+        return original(self, label_index, active_rows, name)
 
-    monkeypatch.setattr(Constraint, "_matrix_export_data", counting)
+    monkeypatch.setattr(DenseStore, "positional_csr", counting)
 
     model_with_mask.solve("highs")
 

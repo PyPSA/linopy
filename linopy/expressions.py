@@ -1672,12 +1672,12 @@ class BaseExpression(ABC):
             if rhs.isnull().any():
                 check_user_nan()
 
-        all_to_lhs = self.sub(rhs, join=join).data
-        computed_rhs = -all_to_lhs.const
-        data = assign_fields(
-            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
+        all_to_lhs = self.sub(rhs, join=join)
+        if not isinstance(all_to_lhs, LinearExpression):
+            raise TypeError("The lhs of a constraint must be a linear expression.")
+        return constraints.Constraint(
+            all_to_lhs.reset_const(), sign, -all_to_lhs.const, self.model
         )
-        return constraints.Constraint(data, model=self.model)
 
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
         """Broadcast a constant RHS onto the expression's coordinates."""

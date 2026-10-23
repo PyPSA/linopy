@@ -42,6 +42,7 @@ from linopy.types import CONSTANT_TYPES, DimsLike
 if TYPE_CHECKING:
     from xarray.core.types import JoinOptions
 
+    from linopy.common import VariableLabelIndex
     from linopy.csr import AuxCoords, CSRStore, Grid
     from linopy.model import Model
 
@@ -205,6 +206,16 @@ class Store(ABC):
     @abstractmethod
     def canonical(self) -> Self:
         """The canonical form a constraint is built from."""
+
+    @abstractmethod
+    def positional_csr(
+        self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
+    ) -> scipy.sparse.csr_array:
+        """
+        The cells selected by the boolean ``active_rows`` as CSR rows over the
+        dense variable positions of ``label_index``, raising for labels of
+        removed variables with the constraint ``name``.
+        """
 
     @abstractmethod
     def with_grid(self, grid: Grid) -> Self:
@@ -550,6 +561,44 @@ class DenseStore(Store):
     def canonical(self) -> DenseStore:
         return self
 
+    def active_terms(
+        self, active_rows: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Coefficients, raw variable labels and row pointers of the live terms
+        of the cells selected by the boolean ``active_rows``, in CSR layout.
+        """
+        from linopy.csr import index_dtype
+
+        dims = (*self.dims, TERM_DIM)
+        vars_ = self.ds.vars.transpose(*dims).values
+        coeffs = self.ds.coeffs.transpose(*dims).values
+        valid = (vars_ != -1) & (coeffs != 0)
+        valid &= active_rows.reshape(valid.shape[:-1])[..., None]
+        flat = np.flatnonzero(valid)
+        labels = _take_flat(vars_, flat)
+        data = _take_flat(coeffs, flat)
+        counts = np.bincount(flat // max(self.nterm, 1), minlength=self.n_cells)
+        counts = counts[active_rows]
+        indptr = np.empty(
+            len(counts) + 1, index_dtype(len(data), counts.shape, self.model)
+        )
+        indptr[0] = 0
+        np.cumsum(counts, out=indptr[1:])
+        return data, labels, indptr
+
+    def positional_csr(
+        self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
+    ) -> scipy.sparse.csr_array:
+        from linopy.csr import _csr_from_label_columns
+
+        data, labels, indptr = self.active_terms(active_rows)
+        csr = _csr_from_label_columns(
+            data, labels, indptr, len(indptr) - 1, label_index, name
+        )
+        csr.sum_duplicates()
+        return csr
+
     def with_grid(self, grid: Grid) -> DenseStore:
         coeffs, vars_ = self._term_arrays()
         return self.from_arrays(grid, coeffs, vars_, self.const, self.model)
@@ -582,6 +631,13 @@ class DenseStore(Store):
 
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
         return self.merged((self, *others), dim, "override", np.nan, {})
+
+
+def _take_flat(values: np.ndarray, flat: np.ndarray) -> np.ndarray:
+    """Gather C-order flat positions, copying a non-contiguous array only if dense."""
+    if values.flags.c_contiguous or 4 * flat.size > values.size:
+        return values.ravel()[flat]
+    return values.flat[flat]
 
 
 def as_sparse(store: Store) -> CSRStore:
