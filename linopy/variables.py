@@ -391,10 +391,7 @@ class Variable:
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         if coefficient.isnull().any():
             check_user_nan()
-        absent = self.labels == -1
         coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
-        if absent.any():
-            coefficient = coefficient.where(~absent)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
         store = store_cls.from_labels(ds, self.model)
         return expressions.LinearExpression._from_store(store, self.model)

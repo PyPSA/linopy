@@ -525,8 +525,12 @@ class Model:
     @property
     def store_cls(self) -> type[Store]:
         """
-        The store class new expressions are built on: :class:`~linopy.csr.CSRStore`
-        in a sparse model, :class:`~linopy.store.DenseStore` otherwise.
+        The store class the construction seam builds on: ``to_linexpr``,
+        ``groupby(...).sum()``, ``@`` and the netcdf reader yield a
+        :class:`~linopy.csr.CSRStore` in a sparse model and a
+        :class:`~linopy.store.DenseStore` otherwise. Quadratic products,
+        ``rolling``, ``cumsum`` and the ``LinearExpression`` constructor
+        build dense.
         """
         return CSRStore if self._sparse else DenseStore
 

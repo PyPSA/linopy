@@ -2647,9 +2647,10 @@ class LinearExpression(BaseExpression):
         Contract against a constant as one sparse matrix product, skipping the
         dense broadcast intermediate of ``(self * other).sum(dim)``.
 
-        Returns the reason where the dense path owns the semantics: non-unique
-        grid labels, a zero-size grid, an operand sharing no dimension with
-        the grid, and an unlabelled output dimension. The result is the compact
+        Returns the reason where the dense path owns the semantics: a dense
+        expression with coordinates the grid cannot hold, non-unique grid
+        labels, a zero-size grid, an operand sharing no dimension with the
+        grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRStore.dot`, so its term
         count may differ from the dense path's while the values agree; the
         result is CSR-backed when the input was or the model is sparse.

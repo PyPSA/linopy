@@ -1010,9 +1010,9 @@ def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
     _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model, explicit)
 
 
-def _sparsify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+def _sparsify_notice(reason: str, model: Model) -> None:
     """The conversion notice naming why a dense backing is converted to sparse."""
-    _conversion_notice(f"Dense backing sparsified: {reason}.", model, explicit)
+    _conversion_notice(f"Dense backing sparsified: {reason}.", model, False)
 
 
 def _readonly(values: np.ndarray, copy: bool = True) -> np.ndarray:
