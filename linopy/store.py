@@ -693,16 +693,15 @@ def merge_datasets(
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **concat_kwargs)
         subkwargs = {**concat_kwargs, "fill_value": {"const": fill}}
         const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
-        ds = assign_fields(ds, const=const.sum(TERM_DIM, skipna=False))
+        const = const.sum(TERM_DIM, skipna=False)
+        ds = assign_fields(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **concat_kwargs)
         coeffs = xr.concat([d["coeffs"] for d in data], dim, **concat_kwargs)
+        coeffs = coeffs.prod(FACTOR_DIM, skipna=False)
         const = xr.concat([d["const"] for d in data], dim, **concat_kwargs)
-        ds = assign_fields(
-            ds,
-            coeffs=coeffs.prod(FACTOR_DIM, skipna=False),
-            const=const.prod(FACTOR_DIM, skipna=False),
-        )
+        const = const.prod(FACTOR_DIM, skipna=False)
+        ds = assign_fields(ds, coeffs=coeffs, const=const)
     else:
         ds = xr.concat(data, dim, **concat_kwargs)
 
