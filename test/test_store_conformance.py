@@ -6,6 +6,7 @@ backends agree on the result.
 
 from __future__ import annotations
 
+import inspect
 import re
 import warnings
 from collections.abc import Callable, Iterator
@@ -25,12 +26,12 @@ from linopy.testing import assert_equivalent
 
 KEPT = "kept"
 ELLIPSIS: Any = ...
-DATA_READ = "`.data` read, e.g. by an operation without a sparse path"
-WHERE = (
-    "`where` with a condition that is no DataArray, an `other` that is no "
-    "scalar, or extra arguments"
-)
-NEW_DIMS = "elementwise operation with a constant over new dimensions"
+DATA_READ = "data(read)"
+QUADRATIC = "mul(quadratic product)"
+RENAME = "rename(non-dimension names)"
+DROP_VARS = "drop_vars(dimension or data variable)"
+ASSIGNMENT = "assignment(const)"
+ASSIGN_COEFFS = "assignment(coeffs)"
 
 A = pd.Index([0, 1, 2], name="a")
 B = pd.Index(["p", "q"], name="b")
@@ -43,6 +44,7 @@ OVER_B = xr.DataArray([1.0, 2.0], coords=[B])
 OVER_BC = xr.DataArray(np.arange(4.0).reshape(2, 2), coords=[B, C])
 OVER_C = xr.DataArray([1.0, 2.0], coords=[C])
 SHIFTED_A = xr.DataArray([1.0, 2.0], coords=[pd.Index([1, 5], name="a")])
+COEFFS = OVER_AB.expand_dims({TERM_DIM: 2}, axis=-1)
 SERIES = pd.Series([0, 1, 0], index=A, name="g")
 FRAME = pd.DataFrame({"k1": [0, 1, 0], "k2": [1, 1, 2]}, index=A)
 
@@ -71,6 +73,21 @@ def zero_size(m: Model) -> LinearExpression:
     return 1 * m.add_variables(coords=[pd.Index([], dtype=int, name="a")], name="n")
 
 
+def without_tag(e: LinearExpression) -> LinearExpression:
+    return e.drop_vars("tag")
+
+
+def with_2d_coord(e: LinearExpression) -> LinearExpression:
+    return e.assign_coords(two=(("a", "b"), np.arange(6).reshape(3, 2)))
+
+
+def coords_reassigned(e: LinearExpression) -> LinearExpression:
+    named = e.model.add_expressions(e, name="named")
+    e.model.assign_coords(a=[7, 8, 9])
+    assert isinstance(named, LinearExpression)
+    return named
+
+
 def frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(list(df.columns), ignore_index=True)
 
@@ -81,6 +98,25 @@ def const_assigned(value: xr.DataArray) -> Callable[[LinearExpression], Any]:
         return e.fillna(0.0)
 
     return op
+
+
+def coeffs_assigned(e: LinearExpression) -> LinearExpression:
+    e.coeffs = COEFFS
+    return e
+
+
+def merged_along_a(e: LinearExpression) -> LinearExpression:
+    other = 1 * var(e, "y")
+    res = linopy.merge([e.drop_vars("tag"), other], dim="a")
+    assert other.is_sparse == e.is_sparse
+    assert isinstance(res, LinearExpression)
+    return res
+
+
+def override_merge_raises(e: LinearExpression) -> LinearExpression:
+    with pytest.raises(xr.AlignmentError):
+        linopy.merge([e, e.sel(a=[0, 1])], join="override")
+    return e
 
 
 class Case(NamedTuple):
@@ -102,33 +138,48 @@ CASES: dict[str, Case] = {
     "sel-scalar": Case(grid, lambda e: e.sel(a=1), KEPT),
     "sel-2d-aux-densifies": Case(
         grid,
-        lambda e: e.assign_coords(two=(("a", "b"), np.arange(6).reshape(3, 2))).sel(
-            a=[0, 2]
-        ),
+        lambda e: with_2d_coord(e).sel(a=[0, 2]),
         DATA_READ,
     ),
     "sel-pointwise": Case(
         grid,
         lambda e: e.sel(a=xr.DataArray([0, 1], dims="c")),
-        "`sel` introducing dimensions or coordinates",
+        "sel(new dimensions or coordinates)",
     ),
     "isel-pointwise": Case(
         grid,
         lambda e: e.isel(a=xr.DataArray([0, 1], dims="c")),
-        "`isel` introducing dimensions or coordinates",
+        "isel(new dimensions or coordinates)",
+    ),
+    "getitem-new-dim": Case(
+        grid,
+        lambda e: e[xr.DataArray([0, 1], coords=[C])],
+        "getitem(new dimensions or coordinates)",
     ),
     "shift": Case(grid, lambda e: e.shift(a=1), KEPT),
     "shift-negative": Case(grid, lambda e: e.shift(a=-1), KEPT),
     "shift-fill-value": Case(
-        grid, lambda e: e.shift(a=1, fill_value=0), "`shift` with a fill_value"
+        grid, lambda e: e.shift(a=1, fill_value=0), "shift(fill_value)"
     ),
     "where": Case(grid, lambda e: e.where(COND), KEPT),
     "where-scalar-other": Case(grid, lambda e: e.where(COND, 1.0), KEPT),
     "where-drop": Case(grid, lambda e: e.where(COND, drop=True), KEPT),
-    "where-callable": Case(grid, lambda e: e.where(lambda _: COND), WHERE),
-    "where-array-other": Case(grid, lambda e: e.where(COND, OVER_AB), WHERE),
+    "where-callable": Case(
+        grid, lambda e: e.where(lambda _: COND), "where(condition no DataArray)"
+    ),
+    "where-array-other": Case(
+        grid, lambda e: e.where(COND, OVER_AB), "where(non-scalar other)"
+    ),
+    "where-expression-other": Case(
+        grid, lambda e: e.where(COND, 3 * e), "where(non-scalar other)"
+    ),
+    "where-new-dim": Case(
+        grid,
+        lambda e: e.where(xr.DataArray([True, False], coords=[C])),
+        "where(new dimensions or coordinates)",
+    ),
     "where-drop-scalar-other": Case(
-        grid, lambda e: e.where(COND, 1.0, drop=True), WHERE
+        grid, lambda e: e.where(COND, 1.0, drop=True), "where(other with drop)"
     ),
     "sum-dim": Case(grid, lambda e: e.sum("a"), KEPT),
     "sum-dims": Case(grid, lambda e: e.sum(["b", "a"]), KEPT),
@@ -138,30 +189,40 @@ CASES: dict[str, Case] = {
     "sum-drop-zeros": Case(grid, lambda e: (0 * e).sum("b", drop_zeros=True), KEPT),
     "fillna-scalar": Case(grid, lambda e: e.where(COND).fillna(1.0), KEPT),
     "fillna-array": Case(
-        grid, lambda e: e.where(COND).fillna(OVER_AB), "fillna with a non-scalar value"
+        grid, lambda e: e.where(COND).fillna(OVER_AB), "fillna(non-scalar value)"
     ),
     "fillna-expression": Case(
-        grid, lambda e: e.where(COND).fillna(3 * e), "fillna with a non-scalar value"
+        grid, lambda e: e.where(COND).fillna(3 * e), "fillna(non-scalar value)"
     ),
     "reindex": Case(grid, lambda e: e.reindex(a=[0, 1, 5]), KEPT),
     "reindex-method": Case(
-        grid, lambda e: e.reindex(a=[0, 1, 3], method="nearest"), DATA_READ
+        grid, lambda e: e.reindex(a=[0, 1, 3], method="nearest"), "reindex(method=...)"
     ),
     "reindex-tolerance": Case(
-        grid, lambda e: e.reindex(a=[0, 1, 3], method="nearest", tolerance=1), DATA_READ
+        grid,
+        lambda e: e.reindex(a=[0, 1, 3], method="nearest", tolerance=1),
+        "reindex(method=...)",
     ),
     "reindex-fill-value": Case(
         grid,
         lambda e: e.reindex(a=[0, 5], fill_value={"vars": -1, "coeffs": 0, "const": 0}),
-        DATA_READ,
+        "reindex(fill_value=...)",
     ),
-    "reindex-copy": Case(grid, lambda e: e.reindex(a=[0, 1, 5], copy=False), DATA_READ),
+    "reindex-copy": Case(
+        grid, lambda e: e.reindex(a=[0, 1, 5], copy=False), "reindex(copy=False)"
+    ),
+    "reindex-off-grid": Case(
+        grid, lambda e: e.reindex(c=C), "reindex(indexers off the grid)"
+    ),
     "rename-dim": Case(grid, lambda e: e.rename(a="d"), KEPT),
-    "rename-aux": Case(grid, lambda e: e.rename(tag="label"), DATA_READ),
-    "rename-const": Case(grid, lambda e: e.rename(const="k"), DATA_READ),
+    "rename-aux": Case(grid, lambda e: e.rename(tag="label"), RENAME),
+    "rename-const": Case(grid, lambda e: e.rename(const="k"), RENAME),
     "drop-vars-aux": Case(grid, lambda e: e.drop_vars("tag"), KEPT),
-    "drop-vars-dim": Case(grid, lambda e: e.drop_vars("b"), DATA_READ),
-    "drop-vars-const": Case(grid, lambda e: e.drop_vars("const"), DATA_READ),
+    "drop-vars-dim": Case(grid, lambda e: e.drop_vars("b"), DROP_VARS),
+    "drop-vars-callable": Case(
+        grid, lambda e: e.drop_vars(lambda ds: "tag"), "drop_vars(callable)"
+    ),
+    "drop-vars-const": Case(grid, lambda e: e.drop_vars("const"), DROP_VARS),
     "add-scalar": Case(grid, lambda e: e + 1.5, KEPT),
     "rsub-scalar": Case(grid, lambda e: 3 - e, KEPT),
     "div-scalar": Case(grid, lambda e: e / 2, KEPT),
@@ -171,29 +232,42 @@ CASES: dict[str, Case] = {
     "sub-join-outer": Case(grid, lambda e: e.sub(SHIFTED_A, join="outer"), KEPT),
     "mul-join-inner": Case(grid, lambda e: e.mul(SHIFTED_A, join="inner"), KEPT),
     "add-join-left": Case(grid, lambda e: e.add(SHIFTED_A, join="left"), KEPT),
-    "add-array-new-dim": Case(grid, lambda e: e + OVER_C, NEW_DIMS),
-    "mul-array-new-dim": Case(grid, lambda e: e * OVER_C, NEW_DIMS),
+    "add-array-new-dim": Case(
+        grid, lambda e: e + OVER_C, "add(constant over new dimensions)"
+    ),
+    "mul-array-new-dim": Case(
+        grid, lambda e: e * OVER_C, "mul(constant over new dimensions)"
+    ),
+    "div-array-new-dim": Case(
+        grid, lambda e: e / OVER_C, "truediv(constant over new dimensions)"
+    ),
     "neg": Case(grid, lambda e: -e, KEPT),
     "mul-scalar": Case(grid, lambda e: e * 3, KEPT),
+    "mul-constant-expression": Case(
+        grid, lambda e: e * LinearExpression(OVER_A, e.model), KEPT
+    ),
+    "rmul-constant-expression": Case(
+        single, lambda e: LinearExpression(OVER_A, e.model) * e, KEPT
+    ),
     "matmul-shared-dim": Case(grid, lambda e: e @ OVER_B, KEPT),
     "matmul-new-dim": Case(grid, lambda e: e @ OVER_BC, KEPT),
     "matmul-zero-dim": Case(
-        grid, lambda e: e.sum() @ 2, "`@` on a zero-dimensional expression"
+        grid, lambda e: e.sum() @ 2, "matmul(zero-dimensional expression)"
     ),
     "matmul-non-unique": Case(
         non_unique,
         lambda e: e @ xr.DataArray([1.0, 2.0, 3.0], coords=[e.indexes["a"]]),
-        "`@` over non-unique labels",
+        "matmul(non-unique labels)",
     ),
     "matmul-zero-size": Case(
         zero_size,
         lambda e: e @ xr.DataArray([], coords=[e.indexes["a"]]),
-        "`@` over a zero-size grid",
+        "matmul(zero-size grid)",
     ),
     "matmul-no-shared-dim": Case(
         grid,
         lambda e: e @ OVER_C,
-        "`@` with an operand sharing no dimension or with an unlabelled one",
+        "matmul(operand sharing no dimension or with an unlabelled one)",
     ),
     "add-expr-same-grid": Case(grid, lambda e: e + 2 * e, KEPT),
     "add-expr-cross-grid": Case(grid, lambda e: e + 1 * var(e, "y"), KEPT),
@@ -211,23 +285,43 @@ CASES: dict[str, Case] = {
     "merge-kwargs": Case(
         grid,
         lambda e: linopy.merge([e, e], combine_attrs="drop"),
-        "merge with extra arguments",
+        "merge(extra arguments)",
     ),
     "merge-dataset-operand": Case(
         grid,
         lambda e: linopy.merge([e, var(e, "y").to_linexpr(_dense=True).data]),
-        "merge with an operand that is not a LinearExpression",
+        "merge(operand not a LinearExpression)",
     ),
     "merge-spread-along-dim": Case(
         grid,
-        lambda e: linopy.merge([e.drop_vars("tag"), 1 * var(e, "y")], dim="a"),
-        "merge of operands over different dimensions",
+        merged_along_a,
+        "merge(operands over different dimensions)",
     ),
     "merge-new-dim": Case(
-        grid, lambda e: linopy.merge([e, e], dim="c"), "merge along a new dimension"
+        grid, lambda e: linopy.merge([e, e], dim="c"), "merge(new dimension)"
     ),
     "merge-non-unique": Case(
-        non_unique, lambda e: e + 1 * var(e, "w"), "merge over non-unique labels"
+        non_unique, lambda e: e + 1 * var(e, "w"), "merge(non-unique labels)"
+    ),
+    "merge-differing-grids": Case(
+        lambda m: without_tag(grid(m)),
+        lambda e: linopy.merge([e.sum("a"), e.sel(a=[0, 1]), e.sel(a=[1, 2])]),
+        "merge(differing grids with join=None)",
+    ),
+    "merge-override-differing-shapes": Case(
+        lambda m: without_tag(grid(m)),
+        override_merge_raises,
+        'merge(join="override" with differently shaped grids)',
+    ),
+    "merge-dense-2d-coord": Case(
+        grid,
+        lambda e: e + with_2d_coord(var(e, "x").to_linexpr(_dense=True)),
+        "merge(dense operand with non-grid coordinates)",
+    ),
+    "merge-factor-dim": Case(
+        grid,
+        lambda e: linopy.merge([e, e], dim="_factor", cls=QuadraticExpression),
+        "merge(into a QuadraticExpression)",
     ),
     "to-constraint-scalar": Case(grid, lambda e: e.to_constraint("<=", 1), KEPT),
     "to-constraint-array": Case(grid, lambda e: e.to_constraint(">=", OVER_A), KEPT),
@@ -237,10 +331,15 @@ CASES: dict[str, Case] = {
     "to-constraint-expression-eq": Case(
         grid, lambda e: e.to_constraint("==", 1 * var(e, "y")), KEPT, SIGN_EQ
     ),
+    "to-constraint-array-sign": Case(
+        grid,
+        lambda e: e.to_constraint(xr.DataArray(["<=", ">=", "<="], coords=[A]), 1),
+        "to_constraint(non-scalar sign)",
+    ),
     "to-constraint-rhs-off-grid": Case(
         grid,
         lambda e: e.to_constraint("<=", OVER_C),
-        "constraint with an rhs over dimensions outside the grid",
+        "to_constraint(rhs over dimensions outside the grid)",
     ),
     "groupby-series": Case(grid, lambda e: e.groupby(SERIES).sum(), KEPT),
     "groupby-dataframe": Case(grid, lambda e: e.groupby(FRAME).sum(), KEPT),
@@ -253,24 +352,28 @@ CASES: dict[str, Case] = {
     "groupby-use-fallback": Case(
         grid,
         lambda e: e.groupby(SERIES).sum(use_fallback=True),
-        "groupby-sum with a grouper without a sparse path",
+        "groupby.sum(grouper without a sparse path)",
     ),
     "groupby-2d-grouper": Case(
         grid,
         lambda e: e.groupby(xr.DataArray(OVER_AB % 2, name="g")).sum(),
-        "groupby-sum with a grouper without a sparse path",
+        "groupby.sum(grouper without a sparse path)",
     ),
     "coeffs": Case(grid, lambda e: e.coeffs.sum(TERM_DIM), DATA_READ),
     "vars": Case(grid, lambda e: e.vars.max(TERM_DIM), DATA_READ),
     "to-quadexpr": Case(grid, lambda e: e.to_quadexpr(), DATA_READ),
     "simplify": Case(grid, lambda e: e.simplify(), DATA_READ),
-    "densify-terms": Case(grid, lambda e: e.densify_terms(), DATA_READ),
+    "densify-terms": Case(grid, lambda e: (e + 0 * e).densify_terms(), KEPT),
+    "reset-const": Case(grid, lambda e: (e + 1).where(COND).reset_const(), KEPT),
+    "equals": Case(grid, lambda e: e.equals(e), "equals(dense comparison)"),
+    "iter": Case(grid, lambda e: list(e), KEPT),
+    "assign-coords": Case(grid, coords_reassigned, KEPT),
     "loc": Case(grid, lambda e: e.loc[[0, 1]], KEPT),
     "cumsum": Case(grid, lambda e: e.cumsum("a"), DATA_READ),
     "rolling": Case(grid, lambda e: e.rolling(a=2).sum(), DATA_READ),
     "diff": Case(grid, lambda e: e.diff("a"), KEPT),
-    "mul-variable": Case(grid, lambda e: e * var(e, "y"), DATA_READ),
-    "pow": Case(single, lambda e: e**2, DATA_READ),
+    "mul-variable": Case(grid, lambda e: e * var(e, "y"), QUADRATIC),
+    "pow": Case(single, lambda e: e**2, QUADRATIC),
     "to-polars": Case(
         grid, lambda e: frame(pd.DataFrame(e.to_polars().to_dict())), KEPT
     ),
@@ -281,7 +384,8 @@ CASES: dict[str, Case] = {
     "has-terms": Case(grid, lambda e: e.where(COND).has_terms, KEPT),
     "isnull": Case(grid, lambda e: e.where(COND).isnull(), KEPT),
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
-    "const-assign-new-dim": Case(grid, const_assigned(OVER_C), "assignment of `const`"),
+    "const-assign-new-dim": Case(grid, const_assigned(OVER_C), ASSIGNMENT),
+    "coeffs-assign": Case(grid, coeffs_assigned, ASSIGN_COEFFS),
 }
 
 CONST_REJECTED: dict[str, tuple[Any, str]] = {
@@ -312,6 +416,8 @@ def assert_same(res: Any, want: Any) -> None:
         xr.testing.assert_allclose(res.rhs, want.rhs)
     elif isinstance(res, pd.DataFrame):
         pd.testing.assert_frame_equal(res, want)
+    elif isinstance(res, bool | list):
+        assert res == want
     else:
         xr.testing.assert_allclose(res, want)
 
@@ -335,8 +441,9 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
         notices = [w for w in rec if issubclass(w.category, linopy.PerformanceWarning)]
         assert len(notices) == 1
     assert_same(res, want)
-    if backend.sparse and expected == KEPT:
+    if backend.sparse and expected not in (ASSIGNMENT, ASSIGN_COEFFS):
         assert expr.is_sparse
+    if backend.sparse and expected == KEPT:
         if isinstance(res, LinearExpression):
             assert res.is_sparse
         elif isinstance(res, ConstraintBase):
@@ -356,6 +463,13 @@ def test_const_assign_rejects(backend: Model, value: str, assigner: str) -> None
     expr = grid(backend)
     with no_densify(), pytest.raises(ValueError, match=match):
         CONST_ASSIGNERS[assigner](expr, const)
+    assert expr.is_sparse == backend.sparse
+
+
+def test_nan_constant_operand_rejects(backend: Model) -> None:
+    expr = grid(backend)
+    with no_densify(), pytest.raises(ValueError, match="NaN found"):
+        expr + CONST_REJECTED["nan"][0]
     assert expr.is_sparse == backend.sparse
 
 
@@ -380,6 +494,37 @@ def test_nonfinite_constant_op_drops_cell(
     np.testing.assert_array_equal(np.sort(summed[summed != -1]), np.sort(live, None))
 
 
+REASON_SOURCES = [linopy.expressions, linopy.store, linopy.csr, linopy.constraints]
+REASON = re.compile(
+    r"""(?<!\w)f?(["'])((?:[a-z_.]+|\{[^{}]+\})\((?:[^"'{}\n]|\{[^{}]+\}|(?!\1)["'])+\))\1"""
+)
+
+
+def as_pattern(reason: str) -> re.Pattern[str]:
+    return re.compile(".+".join(map(re.escape, re.split(r"\{[^{}]+\}", reason))))
+
+
+def test_every_fallback_case_is_listed() -> None:
+    sources = [inspect.getsource(module) for module in REASON_SOURCES]
+    reasons = {m[2] for source in sources for m in REASON.finditer(source)}
+    expected = {c.expected for c in CASES.values()}
+    missing = [
+        r for r in reasons if not any(as_pattern(r).fullmatch(e) for e in expected)
+    ]
+    assert len(reasons) > 30
+    assert missing == []
+
+
+@pytest.mark.parametrize("dim", ["zzz", ["a", "zzz"]])
+def test_sum_over_missing_dim_raises_without_densifying(
+    backend: Model, dim: str | list[str]
+) -> None:
+    expr = grid(backend)
+    with no_densify(), pytest.raises(KeyError, match="zzz"):
+        expr.sum(dim)
+    assert expr.is_sparse == backend.sparse
+
+
 DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {
     "coeffs": lambda e: e * 2,
     "const": lambda e: e + 1,
@@ -396,3 +541,28 @@ def test_assert_equivalent_detects_difference(backend: Model, diff: str) -> None
         assert expr.is_sparse == other.is_sparse == backend.sparse
         with pytest.raises(AssertionError):
             assert_equivalent(expr, other)
+
+
+def assign_coeffs(e: LinearExpression) -> None:
+    e.coeffs = 2 * e.coeffs
+
+
+def assign_vars(e: LinearExpression) -> None:
+    e.vars = e.vars
+
+
+def assign_const_off_grid(e: LinearExpression) -> None:
+    e.const = OVER_C
+
+
+@pytest.mark.parametrize("assign", [assign_coeffs, assign_vars, assign_const_off_grid])
+def test_named_expression_keeps_name_through_assignment(
+    backend: Model, assign: Callable[[LinearExpression], None]
+) -> None:
+    named = backend.add_expressions(grid(backend), name="named")
+    assert isinstance(named, LinearExpression)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", linopy.PerformanceWarning)
+        assert named.data.attrs["name"] == "named"
+        assign(named)
+    assert named.name == backend.expressions["named"].name == "named"

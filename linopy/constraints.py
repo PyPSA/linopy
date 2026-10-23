@@ -1671,17 +1671,13 @@ class CSRConstraint(ConstraintBase):
 def csr_rhs(expr: CSRStore, rhs: Any) -> DataArray | str:
     """
     Return the constant ``rhs`` as a DataArray on the expression grid, or the
-    reason the sparse path cannot take it: an rhs that is no DataArray-like,
-    or one with helper dims or dims outside the grid falls back to the dense
-    path. An expression rhs is moved to the lhs before, see
-    :meth:`LinearExpression.to_constraint`.
+    reason the sparse path cannot take it: an rhs with helper dims or dims
+    outside the grid falls back to the dense path. An expression rhs is moved
+    to the lhs before, see :meth:`LinearExpression.to_constraint`.
     """
-    try:
-        da = as_dataarray(rhs)
-    except (TypeError, ValueError):
-        return "constraint with an rhs that is not array-like"
+    da = as_dataarray(rhs)
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
-        return "constraint with an rhs over dimensions outside the grid"
+        return "to_constraint(rhs over dimensions outside the grid)"
     return da
 
 

@@ -232,8 +232,7 @@ class Objective:
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
-        if not expr.is_sparse:
-            expr.attrs["name"] = self.name
+        expr.attrs["name"] = self.name
         self._expression = expr
 
     @property

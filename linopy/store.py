@@ -17,28 +17,34 @@ import functools
 import math
 import operator
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any, Self, TypeAlias, cast, final
 
 import numpy as np
 import pandas as pd
 import scipy.sparse
 import xarray as xr
-from xarray import Dataset
+from xarray import DataArray, Dataset
 
 from linopy.alignment import as_dataarray, fill_missing_coords
-from linopy.common import assign_fields
-from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
-from linopy.semantics import absorb_absence, enforce_aux_conflict
-from linopy.types import CONSTANT_TYPES
+from linopy.common import assign_fields, check_common_keys_values
+from linopy.constants import FACTOR_DIM, HELPER_DIMS, STACKED_TERM_DIM, TERM_DIM
+from linopy.semantics import absorb_absence, enforce_aux_conflict, enforce_merge_dims
+from linopy.types import CONSTANT_TYPES, DimsLike
 
 if TYPE_CHECKING:
+    from xarray.core.types import JoinOptions
+
     from linopy.csr import AuxCoords, CSRStore, Grid
     from linopy.model import Model
 
 Reason: TypeAlias = str
 """Why a store refuses an operation, e.g. ``"reindex(method=...)"``."""
+
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+"""What a dense expression dataset holds at a cell or term it lacks."""
 
 
 class Store(ABC):
@@ -98,6 +104,10 @@ class Store(ABC):
     def to_dataset(self) -> Dataset:
         """The dense layout as a dataset, without a notice."""
 
+    @abstractmethod
+    def copy(self, model: Model, deep: bool = True) -> Self:
+        """The same store on ``model``, its arrays copied if ``deep``."""
+
     @property
     @abstractmethod
     def nterm(self) -> int:
@@ -107,6 +117,10 @@ class Store(ABC):
     @abstractmethod
     def n_cells(self) -> int:
         """Number of grid cells."""
+
+    @abstractmethod
+    def dataarray(self, values: np.ndarray, name: str) -> DataArray:
+        """Wrap one value per cell as a DataArray on the store's coordinates."""
 
     @abstractmethod
     def has_terms(self) -> np.ndarray:
@@ -147,6 +161,25 @@ class Store(ABC):
         return self.assign_const(np.where(np.isnan(const), value, const))
 
     @abstractmethod
+    def combine(
+        self,
+        const: DataArray,
+        op: Callable[[Any, Any], Any],
+        factor: DataArray | None = None,
+        reindex: bool = False,
+    ) -> Self | Reason:
+        """
+        Set the constant to ``const``, an aligned constant whose labels the
+        cells are first remapped onto if ``reindex``, the new cells without
+        terms; with a ``factor`` on those labels, apply ``op`` with it to the
+        coefficients too.
+        """
+
+    @abstractmethod
+    def absorbed(self) -> Self:
+        """Drop the terms of absent cells."""
+
+    @abstractmethod
     def prune(self) -> Self:
         """Drop the terms with a zero coefficient."""
 
@@ -179,8 +212,11 @@ class Store(ABC):
         """Relabel grid dims."""
 
     @abstractmethod
-    def sum(self, dims: Iterable[str]) -> Self:
-        """Sum over grid dims, every kept cell present."""
+    def sum(self, dims: Iterable[str] | None = None) -> Self:
+        """
+        Sum over grid dims, all if None; every kept cell present unless no
+        dim is summed.
+        """
 
     @abstractmethod
     def aggregate(self, grid: Grid, rows: np.ndarray) -> Self:
@@ -275,8 +311,10 @@ def merged_grid(stores: Sequence[Store]) -> Grid:
 class DenseStore(Store):
     """
     A dense expression dataset: ``coeffs`` and ``vars`` on the grid dims
-    followed by ``_term``, ``const`` on the grid dims. The grid is read off
-    the dataset.
+    followed by ``_term``, ``const`` on the grid dims. The operations run on
+    the dataset with xarray, so coordinates the grid cannot hold, e.g.
+    two-dimensional auxiliary ones, survive them; the grid is read off the
+    dataset where a caller asks for it.
     """
 
     ds: Dataset
@@ -333,29 +371,36 @@ class DenseStore(Store):
         )
         return cls(expression_dataset(ds, model), model)
 
+    @classmethod
+    def merged(
+        cls,
+        stores: Sequence[DenseStore],
+        dim: str,
+        join: JoinOptions | None,
+        fill: float,
+        kwargs: Mapping[str, Any],
+    ) -> DenseStore:
+        """The dense merge of ``stores`` along ``dim``, see :func:`merge_datasets`."""
+        model = stores[0].model
+        ds = merge_datasets([s.ds for s in stores], dim, join, fill, kwargs, True)
+        return cls(expression_dataset(ds, model), model)
+
+    def _derived(self, ds: Dataset) -> DenseStore:
+        """A store on this model holding ``ds``, normalized."""
+        return DenseStore(expression_dataset(ds, self.model), self.model)
+
+    def _on_cells(self, values: float | np.ndarray) -> float | DataArray:
+        """A flat per-cell array as a DataArray over the dims; a scalar as is."""
+        if isinstance(values, np.ndarray) and values.ndim:
+            return DataArray(values.reshape(self.shape), dims=self.dims)
+        return float(values)
+
     def _term_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """Coefficients and variable labels as ``(n_cells, nterm)`` arrays."""
         dims = (*self.dims, TERM_DIM)
         shape = (self.n_cells, self.nterm)
         coeffs = self.ds.coeffs.transpose(*dims).to_numpy().reshape(shape)
         return coeffs, self.ds.vars.transpose(*dims).to_numpy().reshape(shape)
-
-    def _with(
-        self,
-        grid: Grid,
-        coeffs: np.ndarray | None = None,
-        vars_: np.ndarray | None = None,
-        const: np.ndarray | None = None,
-    ) -> DenseStore:
-        """This store on ``grid`` with the given arrays replaced."""
-        own_coeffs, own_vars = self._term_arrays()
-        return self.from_arrays(
-            grid,
-            own_coeffs if coeffs is None else coeffs,
-            own_vars if vars_ is None else vars_,
-            self.const if const is None else const,
-            self.model,
-        )
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> DenseStore:
@@ -395,6 +440,13 @@ class DenseStore(Store):
     def to_dataset(self) -> Dataset:
         return self.ds
 
+    def copy(self, model: Model, deep: bool = True) -> DenseStore:
+        return DenseStore(self.ds.copy(deep=deep), model)
+
+    def dataarray(self, values: np.ndarray, name: str) -> DataArray:
+        const = self.ds.const.transpose(*self.dims)
+        return const.copy(data=values.reshape(const.shape)).rename(name)
+
     def has_terms(self) -> np.ndarray:
         return (self._term_arrays()[1] != -1).any(axis=1)
 
@@ -413,38 +465,55 @@ class DenseStore(Store):
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
-        coeffs, vars_ = self._term_arrays()
-        values = label_solution(vars_)[vars_]
-        return np.nansum(coeffs * values, axis=1) + self.const
+        labels = self.ds.vars
+        values = labels.copy(data=label_solution(labels.values)[labels.values])
+        sol = (self.ds.coeffs * values).sum(TERM_DIM) + self.ds.const
+        return sol.transpose(*self.dims).to_numpy().reshape(-1)
 
     def scale(
         self,
         factor: float | np.ndarray,
         op: Callable[[Any, Any], Any] = operator.mul,
     ) -> DenseStore:
-        factor = np.broadcast_to(factor, (self.n_cells,))
-        coeffs = op(self._term_arrays()[0], factor[:, None])
-        const = op(self.const, factor)
-        return self._with(self.grid, coeffs=coeffs, const=const).absorbed()
+        ds, per_cell = self.ds, self._on_cells(factor)
+        coeffs, const = op(ds.coeffs, per_cell), op(ds.const, per_cell)
+        return self._derived(
+            absorb_absence(assign_fields(ds, coeffs=coeffs, const=const))
+        )
 
     def assign_const(self, const: np.ndarray) -> DenseStore:
-        return self._with(self.grid, const=const).absorbed()
+        per_cell = self._on_cells(const)
+        return self._derived(absorb_absence(assign_fields(self.ds, const=per_cell)))
+
+    def fillna(self, value: float) -> DenseStore:
+        return self._derived(self.ds.fillna({"const": value}))
+
+    def combine(
+        self,
+        const: DataArray,
+        op: Callable[[Any, Any], Any],
+        factor: DataArray | None = None,
+        reindex: bool = False,
+    ) -> DenseStore:
+        ds = self.ds.reindex_like(const, fill_value=FILL_VALUE) if reindex else self.ds
+        fields = {"const": const}
+        if factor is not None:
+            fields["coeffs"] = op(ds.coeffs, factor)
+        return self._derived(absorb_absence(assign_fields(ds, **fields)))
 
     def absorbed(self) -> DenseStore:
-        """Drop the terms of absent cells."""
-        return DenseStore(absorb_absence(self.ds), self.model)
+        return self._derived(absorb_absence(self.ds))
 
     def prune(self) -> DenseStore:
-        coeffs, vars_ = self._term_arrays()
-        zero = coeffs == 0
-        pruned = np.where(zero, np.nan, coeffs)
-        return self._with(self.grid, pruned, np.where(zero, -1, vars_))
+        pruned = pruned_terms(self.ds)
+        return self if pruned is self.ds else self._derived(pruned)
 
     def canonical(self) -> DenseStore:
         return self
 
     def with_grid(self, grid: Grid) -> DenseStore:
-        return self._with(grid)
+        coeffs, vars_ = self._term_arrays()
+        return self.from_arrays(grid, coeffs, vars_, self.const, self.model)
 
     def take(self, rows: np.ndarray, grid: Grid) -> DenseStore:
         present = rows >= 0
@@ -456,62 +525,24 @@ class DenseStore(Store):
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
-        row_map, valid = grid.indexer(self.grid)
-        source = np.full(grid.size, -1, dtype=np.int64)
-        source[row_map[valid]] = np.flatnonzero(valid)
-        taken = self.take(source, self.grid.conform(grid))
-        return taken.assign_const(np.where(source < 0, fill, taken.const))
+        fill_value = FILL_VALUE | {"const": fill}
+        ds = self.ds.reindex(grid.indexes, fill_value=fill_value)
+        return self._derived(ds.transpose(*grid.dims, TERM_DIM))
 
     def rename(self, names: Mapping[str, str]) -> DenseStore:
-        return DenseStore(self.ds.rename(names), self.model)
+        return self._derived(self.ds.rename(names))
 
-    def sum(self, dims: Iterable[str]) -> DenseStore:
-        dims = set(dims)
-        kept = [d for d in self.dims if d not in dims]
-        order = (*kept, *(d for d in self.dims if d in dims), TERM_DIM)
-        grid = self.grid.select(kept)
-        members = self.n_cells // max(grid.size, 1)
-        shape = (grid.size, members * self.nterm)
-        coeffs = self.ds.coeffs.transpose(*order).to_numpy().reshape(shape)
-        vars_ = self.ds.vars.transpose(*order).to_numpy().reshape(shape)
-        const = self.ds.const.transpose(*order[:-1]).to_numpy()
-        const = np.nansum(const.reshape(grid.size, members), axis=1)
-        return self.from_arrays(grid, coeffs, vars_, const, self.model)
+    def sum(self, dims: Iterable[str] | None = None) -> DenseStore:
+        return self._derived(summed(self.ds, None if dims is None else list(dims)))
 
     def aggregate(self, grid: Grid, rows: np.ndarray) -> DenseStore:
         return self.to_sparse().aggregate(grid, rows).to_dense()
 
     def add(self, *others: DenseStore) -> DenseStore:
-        parts = (self, *others)
-        terms = [p._term_arrays() for p in parts]
-        coeffs = np.hstack([c for c, _ in terms])
-        vars_ = np.hstack([v for _, v in terms])
-        const = functools.reduce(np.add, (p.const for p in parts))
-        merged = self.from_arrays(merged_grid(parts), coeffs, vars_, const, self.model)
-        return merged.absorbed()
+        return self.merged((self, *others), TERM_DIM, "override", 0.0, {})
 
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
-        parts = (self, *others)
-        nterm = max(p.nterm for p in parts)
-        axis = self.dims.index(dim)
-        padded = [p._padded(nterm) for p in parts]
-        coeffs, vars_, const = (
-            np.concatenate([a[i] for a in padded], axis=axis) for i in range(3)
-        )
-        shape = (grid.size, nterm)
-        coeffs, vars_ = coeffs.reshape(shape), vars_.reshape(shape)
-        return self.from_arrays(grid, coeffs, vars_, const.reshape(-1), self.model)
-
-    def _padded(self, nterm: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Coefficients, labels and constant on the grid shape, padded to ``nterm``."""
-        coeffs, vars_ = self._term_arrays()
-        pad = ((0, 0), (0, nterm - self.nterm))
-        shape = (*self.shape, nterm)
-        return (
-            np.pad(coeffs, pad, constant_values=np.nan).reshape(shape),
-            np.pad(vars_, pad, constant_values=-1).reshape(shape),
-            self.const.reshape(self.shape),
-        )
+        return self.merged((self, *others), dim, "override", np.nan, {})
 
     def dot(
         self,
@@ -520,3 +551,317 @@ class DenseStore(Store):
         new_indexes: Iterable[pd.Index],
     ) -> DenseStore:
         return self.to_sparse().dot(matrix, contracted_dims, new_indexes).to_dense()
+
+
+def _stack_into_term_dim(ds: Dataset, dims: list[Hashable]) -> Dataset:
+    """
+    Stack ``dims`` into the term dimension.
+
+    ``Dataset.stack`` reshapes with an inferred ``-1`` that numpy cannot
+    resolve on zero-element data (https://github.com/PyPSA/linopy/issues/906),
+    so an empty dataset is stacked onto a term dimension of size 0 instead.
+    """
+    if ds.vars.size:
+        return ds.stack({TERM_DIM: dims}, create_index=False)
+
+    for name, da in ds.data_vars.items():
+        kept = [d for d in da.dims if d not in dims]
+        shape = [da.sizes[d] for d in kept] + [0]
+        ds[name] = DataArray(da.values.reshape(shape), dims=kept + [TERM_DIM])
+    return ds
+
+
+def _drop_coords_on_dims(ds: Dataset, dims: Iterable[Hashable]) -> Dataset:
+    """
+    Drop every coordinate touching the given dimensions.
+
+    A coordinate on a dimension that is being reduced away must not survive
+    the reduction: an auxiliary coordinate left in place would ride a
+    subsequent stack onto the helper term dimension and break later
+    alignment (https://github.com/PyPSA/linopy/issues/295).
+    """
+    dims = set(dims)
+    return ds.drop_vars(k for k, c in ds.coords.items() if dims & set(c.dims))
+
+
+def summed(data: Dataset, dim: DimsLike | None = None) -> Dataset:
+    """
+    Sum an expression dataset over ``dim``, all dims if None or ``...``: the
+    terms of the summed cells stacked into the term dimension, the constant
+    the NaN-skipping sum.
+    """
+    if isinstance(dim, str):
+        dim = [dim]
+    elif isinstance(dim, EllipsisType):
+        dim = None
+
+    if dim is None:
+        vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
+        coeffs = DataArray(data.coeffs.data.ravel(), dims=TERM_DIM)
+        const = data.const.sum()
+        return Dataset({"vars": vars, "coeffs": coeffs, "const": const})
+
+    dim = [d for d in dim if d != TERM_DIM]
+    ds = _drop_coords_on_dims(data[["coeffs", "vars"]], dim).rename(
+        {TERM_DIM: STACKED_TERM_DIM}
+    )
+    ds = _stack_into_term_dim(ds, [STACKED_TERM_DIM] + dim)
+    return assign_fields(ds, const=data.const.sum(dim))
+
+
+def pruned_terms(ds: Dataset) -> Dataset:
+    """
+    ``ds`` with the nonzero terms moved to the front of the term dimension
+    and the all-zero tail cut off; ``ds`` itself if no coefficient is zero.
+    """
+    coeffs = ds.coeffs.transpose(..., TERM_DIM)
+    vars = ds.vars.transpose(*coeffs.dims, ...)
+    cdata = coeffs.data
+    mask = cdata != 0
+    if mask.all():
+        return ds
+
+    lead = cdata.shape[:-1]
+    old_nterm = cdata.shape[-1]
+    trailing = vars.shape[cdata.ndim :]
+    mask = mask.reshape(-1, old_nterm)
+    nrows = mask.shape[0]
+    counts = mask.sum(1)
+    nterm = int(counts.max()) if nrows else 0
+    rows = np.repeat(np.arange(nrows), counts)
+    pos = np.arange(rows.size) - np.repeat(np.cumsum(counts) - counts, counts)
+
+    new_coeffs = np.zeros((nrows, nterm), dtype=cdata.dtype)
+    new_coeffs[rows, pos] = cdata.reshape(nrows, old_nterm)[mask]
+    new_vars = np.full((nrows, nterm, *trailing), -1, dtype=vars.dtype)
+    new_vars[rows, pos] = vars.data.reshape(nrows, old_nterm, *trailing)[mask]
+
+    new: dict[Hashable, Any] = {
+        "coeffs": (coeffs.dims, new_coeffs.reshape(*lead, nterm)),
+        "vars": (vars.dims, new_vars.reshape(*lead, nterm, *trailing)),
+    }
+    data_vars = {k: new.get(k, ds[k]) for k in ds.data_vars}
+    return Dataset(data_vars, coords=ds.coords, attrs=ds.attrs)
+
+
+def coord_sizes_agree(objs: Sequence[Any]) -> bool:
+    """Whether all ``objs`` carry the same non-helper dimension sizes."""
+    sizes = [{k: v for k, v in o.sizes.items() if k not in HELPER_DIMS} for o in objs]
+    return check_common_keys_values(sizes)
+
+
+def merge_datasets(
+    data: Sequence[Dataset],
+    dim: str,
+    join: JoinOptions | None,
+    fill: float,
+    kwargs: Mapping[str, Any],
+    linear: bool,
+) -> Dataset:
+    """
+    The dense merge of expression datasets with ``xr.concat`` along ``dim``:
+    along the term dimension the constants add up, along the factor
+    dimension coefficients and constants multiply, along any other dimension
+    the cells stack. The cells the join creates carry ``fill`` as constant;
+    ``kwargs`` replace the default ``xr.concat`` arguments. An absent cell of
+    any operand stays absent (§6).
+    """
+    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
+
+    if join is None:
+        enforce_merge_dims(data, concat_dim=dim)
+    enforce_aux_conflict(data, concat_dim=dim)
+
+    if join is not None:
+        override = join == "override"
+    elif dim in HELPER_DIMS:
+        override = coord_sizes_agree(data)
+    else:
+        override = False
+
+    concat_kwargs = dict(kwargs)
+    if not concat_kwargs:
+        concat_kwargs = {"coords": "minimal", "compat": "override"}
+        if linear:
+            concat_kwargs["fill_value"] = FILL_VALUE
+        if join is not None:
+            concat_kwargs["join"] = join
+        else:
+            concat_kwargs["join"] = "override" if override else "outer"
+
+    if dim == TERM_DIM:
+        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **concat_kwargs)
+        subkwargs = {**concat_kwargs, "fill_value": {"const": fill}}
+        const = xr.concat([d[["const"]] for d in data], dim, **subkwargs)["const"]
+        const = const.sum(TERM_DIM, skipna=False)
+        ds = assign_fields(ds, const=const)
+    elif dim == FACTOR_DIM:
+        ds = xr.concat([d[["vars"]] for d in data], dim, **concat_kwargs)
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **concat_kwargs)
+        coeffs = coeffs.prod(FACTOR_DIM, skipna=False)
+        const = xr.concat([d["const"] for d in data], dim, **concat_kwargs)
+        const = const.prod(FACTOR_DIM, skipna=False)
+        ds = assign_fields(ds, coeffs=coeffs, const=const)
+    else:
+        ds = xr.concat(data, dim, **concat_kwargs)
+
+    for d in set(HELPER_DIMS) & set(ds.coords):
+        ds = ds.reset_index(d, drop=True)
+
+    return absorb_absence(ds)
+
+
+def _merge_dims(store: Store, union: set[str]) -> list[str]:
+    """
+    The dims ``store`` brings to a merge over ``union``, in the order the
+    dense merge lays them out: first appearance over its coordinates, a
+    scalar one named after a dim of another operand standing for that dim.
+    A sparse store's coordinates are taken in the order of its dense
+    equivalent, which xarray's broadcast sets.
+    """
+    if isinstance(store, DenseStore):
+        coords = store.ds.coords
+    else:
+        coords = xr.broadcast(store.grid.to_dataset())[0].coords
+    dims = [str(d) for n, c in coords.items() for d in (c.dims or [n])]
+    return [d for d in dims if d in union] + list(store.dims)
+
+
+def _off_grid(store: Store) -> bool:
+    """Whether a dense store carries coordinates its grid cannot hold."""
+    from linopy.csr import _aux_coords
+
+    if not isinstance(store, DenseStore):
+        return False
+    own = set(store.dims)
+    return set(store.ds.coords) - own != set(_aux_coords(store.ds, own))
+
+
+def merge_stores(
+    stores: Sequence[Store],
+    dim: str,
+    join: JoinOptions | None,
+    fill: float,
+    kwargs: Mapping[str, Any],
+) -> Store | Reason:
+    """
+    Merge the stores along ``dim``, the cells the join creates carrying
+    ``fill`` as constant. Dense stores merge densely
+    (:func:`merge_datasets`, ``kwargs`` passed to ``xr.concat``). Once one
+    store is sparse, all are merged as sparse stores: along the term
+    dimension as sparse matrix addition on the joined grid
+    (:func:`align_stores`), along a grid dimension as a row stack
+    (:func:`concat_stores`). Returns the reason where the dense merge owns
+    the semantics instead.
+    """
+    dense = [s for s in stores if isinstance(s, DenseStore)]
+    if len(dense) == len(stores):
+        return DenseStore.merged(dense, dim, join, fill, kwargs)
+    if kwargs:
+        return "merge(extra arguments)"
+    union = {d for s in stores for d in s.dims}
+    grid_dims = tuple(dict.fromkeys(d for s in stores for d in _merge_dims(s, union)))
+    if dim != TERM_DIM and any(len(s.dims) != len(grid_dims) for s in stores):
+        return "merge(operands over different dimensions)"
+    if dim != TERM_DIM and dim not in grid_dims:
+        return "merge(new dimension)"
+    if any(_off_grid(s) for s in stores):
+        return "merge(dense operand with non-grid coordinates)"
+    csrs = [s.to_sparse() for s in stores]
+    if dim != TERM_DIM:
+        order = csrs[0].grid.dims
+        reordered = [
+            p if p.grid.dims == order else p.reindex(p.grid.select(order)) for p in csrs
+        ]
+        return concat_stores(reordered, dim, join)
+    if not all(csrs[0].same_grid(p) for p in csrs[1:]):
+        enforce_aux_conflict([Dataset(coords=p.grid.aux) for p in csrs])
+        aligned = align_stores(csrs, grid_dims, join, fill)
+        if isinstance(aligned, str):
+            return aligned
+        csrs = aligned
+    return csrs[0].add(*csrs[1:])
+
+
+def align_stores(
+    stores: Sequence[CSRStore],
+    dims: tuple[str, ...],
+    join: JoinOptions | None,
+    fill: float,
+) -> list[CSRStore] | Reason:
+    """
+    Conform the stores to the grid on ``dims`` that ``join`` produces, per
+    dim among the stores carrying it, each spread over the dims it lacks.
+    The cells the join creates carry ``fill`` as constant. Returns the reason
+    where the dense path owns the semantics instead: the auto-detected join
+    on labels differing among operands that not all carry the dim,
+    ``override`` on differing sizes, any join on non-unique labels. Labels
+    differing where the dense path raises, ``exact`` or the auto-detected
+    join on a dim all operands carry, raise here too.
+    """
+    from linopy.csr import Grid
+
+    metadata = [p.grid.to_dataset() for p in stores]
+    if join is None:
+        enforce_merge_dims(metadata, concat_dim=TERM_DIM)
+    if join == "exact":
+        xr.align(*metadata, join="exact")
+    if any(not p.grid.is_unique for p in stores):
+        return "merge(non-unique labels)"
+    indexes: dict[str, pd.Index] = {}
+    for d in dims:
+        own = [p.grid.indexes[d] for p in stores if d in p.grid.indexes]
+        if join is None and not all(own[0].equals(i) for i in own):
+            return "merge(differing grids with join=None)"
+        if join == "override" and len({len(i) for i in own}) > 1:
+            return 'merge(join="override" with differently shaped grids)'
+        if join in ("outer", "inner"):
+            combine = pd.Index.union if join == "outer" else pd.Index.intersection
+            indexes[d] = pd.Index(functools.reduce(combine, own), name=d)
+        else:
+            indexes[d] = own[-1] if join == "right" else own[0]
+    grid = Grid(indexes)
+    aligned = []
+    for p in stores:
+        target = grid.select(p.grid.dims)
+        if join == "override":
+            p = p.with_grid(p.grid.with_indexes(target.indexes))
+        elif not p.grid.same_layout(target):
+            p = p.reindex(target, fill)
+        aligned.append(p if p.grid.dims == grid.dims else p.broadcast(grid))
+    return aligned
+
+
+def concat_stores(
+    stores: Sequence[CSRStore], dim: str, join: JoinOptions | None
+) -> CSRStore | Reason:
+    """
+    Stack stores sharing one dim order along the grid dim ``dim``, in order.
+    The result's coordinates are what the dense ``xr.concat`` yields on the
+    grids alone: labels and auxiliary coordinates concatenated along
+    ``dim``, the other dims joined as ``join`` says (``outer`` by default,
+    after the §8 label check for the auto-detected join), with the cells the
+    join creates absent. Returns the reason where the dense path owns the
+    semantics instead: a join over non-unique labels.
+    """
+    from linopy.csr import Grid
+
+    dims = stores[0].grid.dims
+    metadata = [p.grid.to_dataset() for p in stores]
+    if join is None:
+        enforce_merge_dims(metadata, concat_dim=dim)
+    enforce_aux_conflict(metadata, concat_dim=dim)
+    combined = xr.concat(
+        metadata, dim, join=join or "outer", coords="minimal", compat="override"
+    )
+    grid = Grid.from_dataset(combined, dims)
+    aligned = []
+    for p in stores:
+        target = grid.with_indexes({dim: p.grid.indexes[dim]})
+        if join == "override" or p.grid.same_layout(target):
+            aligned.append(p.with_grid(target))
+        elif p.grid.is_unique:
+            aligned.append(p.reindex(target))
+        else:
+            return "merge(non-unique labels)"
+    return aligned[0].concat(aligned[1:], dim, grid)

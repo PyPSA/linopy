@@ -59,6 +59,19 @@ def solution(s: Store) -> np.ndarray:
     return s.solution(lambda labels: values)
 
 
+def cell_values(s: Store, values: np.ndarray) -> xr.DataArray:
+    return s.dataarray(values, "values")
+
+
+def combined(s: Store, reindex: bool) -> Store:
+    target = s.reindex(s.grid.with_indexes({"b": ["q", "r"]})) if reindex else s
+    const = cell_values(target, np.arange(target.n_cells, dtype=float))
+    factor = cell_values(target, np.arange(target.n_cells, dtype=float) % 3)
+    res = s.combine(const, operator.mul, factor, reindex)
+    assert not isinstance(res, str)
+    return res
+
+
 def taken(s: Store) -> Store:
     rows = np.arange(s.n_cells)[::-1].copy()
     rows[0] = -1
@@ -81,7 +94,12 @@ SAME_GRID: dict[str, Callable[[Store], Store]] = {
     "prune": lambda s: s.scale(np.arange(s.n_cells, dtype=float) % 2).prune(),
     "canonical": lambda s: s.add(s).canonical(),
     "add": lambda s: s.add(s.scale(-2.0), s),
+    "absorbed": lambda s: s.assign_const(
+        np.where(np.arange(s.n_cells) % 2, np.nan, 1.0)
+    ).absorbed(),
+    "combine": lambda s: combined(s, False),
     "take": taken,
+    "sum-no-dim": lambda s: s.sum([]),
 }
 
 OPS: dict[str, Callable[[Store], Store]] = SAME_GRID | {
@@ -92,6 +110,8 @@ OPS: dict[str, Callable[[Store], Store]] = SAME_GRID | {
     "rename": lambda s: s.rename({"b": "bb"}),
     "sum": lambda s: s.sum(["b"]),
     "sum-all": lambda s: s.sum(s.grid.dims),
+    "sum-none": lambda s: s.sum(),
+    "combine-reindex": lambda s: combined(s, True),
     "aggregate": lambda s: s.aggregate(*collapsed(s, "b")),
     "concat": concatenated,
     "dot": lambda s: s.dot(
@@ -157,6 +177,25 @@ def test_queries_agree(build: str, query: str) -> None:
     np.testing.assert_array_equal(dense, sparse)
 
 
+def buffers(s: Store) -> list[np.ndarray]:
+    if isinstance(s, CSRStore):
+        return [s.csr.data, s.const]
+    assert isinstance(s, DenseStore)
+    return [s.ds.coeffs.values, s.ds.const.values]
+
+
+@pytest.mark.parametrize("deep", [True, False])
+@pytest.mark.parametrize("cls", STORE_CLASSES)
+@pytest.mark.parametrize("build", list(BUILDS))
+def test_copy_moves_to_model(build: str, cls: type[Store], deep: bool) -> None:
+    store, model = build_store(build, cls), Model()
+    copied = store.copy(model, deep)
+    assert type(copied) is cls and copied.model is model
+    assert_equivalent(as_expr(copied), as_expr(store))
+    shared = [np.shares_memory(a, b) for a, b in zip(buffers(copied), buffers(store))]
+    assert shared == [not deep] * len(shared)
+
+
 @pytest.mark.parametrize("build", list(BUILDS))
 def test_cells_agree(build: str) -> None:
     dense, sparse = (build_store(build, cls) for cls in STORE_CLASSES)
@@ -199,7 +238,7 @@ def test_const_setter_swaps_the_store(backend: Model, const: str) -> None:
 def test_const_setter_densifies_2d_coords() -> None:
     const = OVER_AB.assign_coords(two=(("a", "b"), np.arange(6).reshape(3, 2)))
     expr, want = grid(Model(sparse=True)), grid(Model())
-    with pytest.warns(PerformanceWarning, match="assignment of `const`"):
+    with pytest.warns(PerformanceWarning, match=r"assignment\(const\)"):
         expr.const = const
     want.const = const
     assert not expr.is_sparse
@@ -221,7 +260,7 @@ def test_dense_store_grid_rejects_2d_coords() -> None:
 
 def test_vars_setter_densifies_with_reason() -> None:
     expr, dense = grid(Model(sparse=True)), grid(Model())
-    with pytest.warns(PerformanceWarning, match="assignment of `vars`"):
+    with pytest.warns(PerformanceWarning, match=r"assignment\(vars\)"):
         expr.vars = dense.vars
     assert not expr.is_sparse
     assert_equivalent(expr, dense)

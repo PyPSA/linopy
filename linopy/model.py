@@ -624,7 +624,9 @@ class Model:
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds: DataArray | Dataset) -> None:
+    def check_force_dim_names(
+        self, ds: DataArray | Dataset | LinearExpression | QuadraticExpression
+    ) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -652,7 +654,9 @@ class Model:
                 "allowed when setting `force_dim_names` to True."
             )
 
-    def _check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
+    def _check_valid_dim_names(
+        self, ds: DataArray | Dataset | LinearExpression | QuadraticExpression
+    ) -> None:
         """
         Ensure that the added data does not lead to a naming conflict.
 
@@ -1004,8 +1008,8 @@ class Model:
             expr = self.linexpr(*data)
         else:
             expr = data
-        self.check_force_dim_names(expr.data)
-        self._check_valid_dim_names(expr.data)
+        self.check_force_dim_names(expr)
+        self._check_valid_dim_names(expr)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=expr.coords, dims=expr.dims).astype(bool)
