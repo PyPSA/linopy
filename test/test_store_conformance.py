@@ -22,6 +22,7 @@ import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import ConstraintBase, CSRConstraint
+from linopy.store import DenseStore
 from linopy.testing import assert_equivalent
 
 KEPT = "kept"
@@ -32,6 +33,7 @@ RENAME = "rename(non-dimension names)"
 DROP_VARS = "drop_vars(dimension or data variable)"
 ASSIGNMENT = "assignment(const)"
 ASSIGN_COEFFS = "assignment(coeffs)"
+SPARSIFIED = "sparsified: merge with a sparse operand"
 
 A = pd.Index([0, 1, 2], name="a")
 B = pd.Index(["p", "q"], name="b")
@@ -51,6 +53,16 @@ FRAME = pd.DataFrame({"k1": [0, 1, 0], "k2": [1, 1, 2]}, index=A)
 
 def var(e: LinearExpression, name: str) -> Variable:
     return e.model.variables[name]
+
+
+def dense_linexpr(v: Variable) -> LinearExpression:
+    return v._linexpr(DenseStore)
+
+
+def dense_merged(e: LinearExpression) -> pd.DataFrame:
+    res = dense_linexpr(var(e, "x")) + dense_linexpr(var(e, "y"))
+    assert not res.is_sparse
+    return frame(res.flat)
 
 
 def grid(m: Model) -> LinearExpression:
@@ -277,8 +289,9 @@ CASES: dict[str, Case] = {
         KEPT,
     ),
     "add-dense-operand": Case(
-        grid, lambda e: e + var(e, "y").to_linexpr(_dense=True), KEPT
+        grid, lambda e: e + dense_linexpr(var(e, "y")), SPARSIFIED
     ),
+    "add-dense-operands": Case(grid, dense_merged, KEPT),
     "merge-along-grid-dim": Case(
         grid, lambda e: linopy.merge([e.sel(a=[0]), e.sel(a=[1, 2])], dim="a"), KEPT
     ),
@@ -289,7 +302,7 @@ CASES: dict[str, Case] = {
     ),
     "merge-dataset-operand": Case(
         grid,
-        lambda e: linopy.merge([e, var(e, "y").to_linexpr(_dense=True).data]),
+        lambda e: linopy.merge([e, dense_linexpr(var(e, "y")).data]),
         "merge(operand not a LinearExpression)",
     ),
     "merge-spread-along-dim": Case(
@@ -303,6 +316,18 @@ CASES: dict[str, Case] = {
     "merge-non-unique": Case(
         non_unique, lambda e: e + 1 * var(e, "w"), "merge(non-unique labels)"
     ),
+    "merge-non-unique-dense-operand": Case(
+        non_unique,
+        lambda e: e + dense_linexpr(var(e, "w")),
+        "merge(non-unique labels)",
+    ),
+    "merge-dense-operands-around-sparse": Case(
+        grid,
+        lambda e: linopy.merge(
+            [dense_linexpr(var(e, "y")), e, dense_linexpr(var(e, "x"))]
+        ),
+        SPARSIFIED,
+    ),
     "merge-differing-grids": Case(
         lambda m: without_tag(grid(m)),
         lambda e: linopy.merge([e.sum("a"), e.sel(a=[0, 1]), e.sel(a=[1, 2])]),
@@ -315,8 +340,8 @@ CASES: dict[str, Case] = {
     ),
     "merge-dense-2d-coord": Case(
         grid,
-        lambda e: e + with_2d_coord(var(e, "x").to_linexpr(_dense=True)),
-        "merge(dense operand with non-grid coordinates)",
+        lambda e: e + with_2d_coord(dense_linexpr(var(e, "x"))),
+        "merge(coordinates the Grid cannot hold: two)",
     ),
     "merge-factor-dim": Case(
         grid,
@@ -398,11 +423,22 @@ CONST_REJECTED: dict[str, tuple[Any, str]] = {
 
 @contextmanager
 def no_densify() -> Iterator[None]:
-    """Fail on any densify notice inside the block."""
+    """Fail on any conversion notice, densify or sparsify, inside the block."""
     with linopy.options as opts, warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
         opts.set_value(warn_on_densify=True)
         yield
+
+
+@contextmanager
+def sparsified() -> Iterator[None]:
+    """Expect exactly one conversion notice inside the block, the sparsify one."""
+    with linopy.options as opts, warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        opts.set_value(warn_on_densify=True)
+        yield
+    notices = [str(w.message) for w in rec if w.category is linopy.PerformanceWarning]
+    assert notices == [f"Dense backing {SPARSIFIED}."]
 
 
 def assert_same(res: Any, want: Any) -> None:
@@ -443,7 +479,7 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
     assert_same(res, want)
     if backend.sparse and expected not in (ASSIGNMENT, ASSIGN_COEFFS):
         assert expr.is_sparse
-    if backend.sparse and expected == KEPT:
+    if backend.sparse and expected in (KEPT, SPARSIFIED):
         if isinstance(res, LinearExpression):
             assert res.is_sparse
         elif isinstance(res, ConstraintBase):
@@ -473,25 +509,35 @@ def test_nan_constant_operand_rejects(backend: Model) -> None:
     assert expr.is_sparse == backend.sparse
 
 
-@pytest.mark.parametrize(
-    "op",
-    [
-        lambda e: e * OVER_A.where(OVER_A != 2.0, np.inf),
-        lambda e: e / OVER_A.where(OVER_A != 2.0, 0.0),
-    ],
-    ids=["mul-inf", "div-zero"],
-)
-def test_nonfinite_constant_op_drops_cell(
-    backend: Model, op: Callable[[LinearExpression], LinearExpression]
-) -> None:
+NONFINITE_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "mul-inf": lambda e: e * OVER_A.where(OVER_A != 2.0, np.inf),
+    "div-zero": lambda e: e / OVER_A.where(OVER_A != 2.0, 0.0),
+    "add-inf-then-sub-inf": lambda e: (e + np.inf) - np.inf,
+    "mul-inf-zero-coeff": lambda e: (0 * e + 1) * np.inf,
+    "mul-array-inf-zero-coeff": lambda e: (
+        (0 * e + 1) * OVER_A.where(OVER_A != 2.0, np.inf)
+    ),
+}
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+@pytest.mark.parametrize("op", list(NONFINITE_OPS))
+def test_nonfinite_constant_op_raises(backend: Model, op: str) -> None:
     expr = grid(backend)
-    res = op(expr)
-    absent = np.repeat([[False], [True], [False]], 2, axis=1)
+    with no_densify(), pytest.raises(ValueError, match="produced NaN"):
+        NONFINITE_OPS[op](expr)
+    assert expr.is_sparse == backend.sparse
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_nonfinite_constant_op_keeps_absent_cell(backend: Model) -> None:
+    expr = (grid(backend) + 1).where(COND)
+    with no_densify():
+        res = expr * np.inf
+    assert res.is_sparse == backend.sparse
+    absent = ~COND.broadcast_like(res.const)
     np.testing.assert_array_equal(res.const.isnull(), absent)
     np.testing.assert_array_equal(res.has_terms, ~absent)
-    summed = res.sum().vars.values
-    live = expr.vars.sel(a=[0, 2]).values
-    np.testing.assert_array_equal(np.sort(summed[summed != -1]), np.sort(live, None))
 
 
 REASON_SOURCES = [linopy.expressions, linopy.store, linopy.csr, linopy.constraints]

@@ -53,7 +53,7 @@ from xarray import DataArray, Dataset, broadcast
 from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
-from linopy.semantics import warn_outside_linopy
+from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
 from linopy.store import DenseStore, Reason, Store, merged_grid
 
 if TYPE_CHECKING:
@@ -576,15 +576,27 @@ class CSRStore(Store):
         """
         Apply ``op`` with ``factor`` -- a scalar or one value per cell -- to
         every coefficient and to the constant. Explicit zeros are kept, as by
-        :meth:`add`; a cell made absent drops its terms.
+        :meth:`add`; a NaN it produces in a live cell raises.
         """
-        factor = np.broadcast_to(factor, (self.n_cells,))
-        per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            const = op(self.const, factor)
+        check_arithmetic_nan(const, op, factor, self.const)
+        return self._scaled_terms(factor, op).assign_const(const)
+
+    def _scaled_terms(
+        self, factor: float | np.ndarray, op: Callable[[Any, Any], Any]
+    ) -> CSRStore:
+        """Apply ``op`` with a scalar or per-cell ``factor`` to every coefficient."""
+        per_term = factor
+        if np.ndim(factor):
+            per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            data = op(self.csr.data, per_term)
+        check_arithmetic_nan(data, op, per_term)
         csr = scipy.sparse.csr_array(
-            (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
-            shape=self.csr.shape,
+            (data, self.csr.indices, self.csr.indptr), shape=self.csr.shape
         )
-        return replace(self, csr=csr, const=op(self.const, factor)).absorbed()
+        return replace(self, csr=csr)
 
     def assign_const(self, const: np.ndarray) -> CSRStore:
         """
@@ -612,7 +624,7 @@ class CSRStore(Store):
         store = self.reindex(grid) if reindex else self
         if factor is not None:
             factor = factor.broadcast_like(const).transpose(*dims)
-            store = store.scale(factor.to_numpy().reshape(-1), op)
+            store = store._scaled_terms(factor.to_numpy().reshape(-1), op)
         return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
 
     def absorbed(self) -> CSRStore:
@@ -734,6 +746,16 @@ class CSRStore(Store):
         shape = (self.n_cells, max(p.csr.shape[1] for p in parts))
         csr = _interleaved([p.csr for p in parts], shape, self.model)
         return replace(self, csr=csr, const=const, grid=merged_grid(parts)).absorbed()
+
+    @classmethod
+    def from_matmul(
+        cls,
+        source: CSRStore,
+        matrix: scipy.sparse.csr_array,
+        contracted_dims: Iterable[str],
+        new_indexes: Iterable[pd.Index],
+    ) -> CSRStore:
+        return source.dot(matrix, contracted_dims, new_indexes)
 
     def dot(
         self,
@@ -983,18 +1005,26 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+def _conversion_notice(message: str, model: Model, explicit: bool) -> None:
     """
-    Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
-    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set, or
-    left at its default ``None``, ``model`` is sparse and the conversion is
-    an implicit fallback rather than an ``explicit`` user request.
+    Emit ``message`` as a :class:`~linopy.constants.PerformanceWarning` if
+    ``options["warn_on_densify"]`` is set, or left at its default ``None``,
+    ``model`` is sparse and the conversion is an implicit fallback rather
+    than an ``explicit`` user request.
     """
     enabled = options["warn_on_densify"]
     if model.sparse and not explicit if enabled is None else enabled:
-        warn_outside_linopy(
-            f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
-        )
+        warn_outside_linopy(message, PerformanceWarning)
+
+
+def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+    """The conversion notice naming why a sparse (CSR) backing is dropped."""
+    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model, explicit)
+
+
+def _sparsify_notice(reason: str, model: Model) -> None:
+    """The conversion notice naming why a dense backing is converted to sparse."""
+    _conversion_notice(f"Dense backing sparsified: {reason}.", model, False)
 
 
 def _readonly(values: np.ndarray, copy: bool = True) -> np.ndarray:

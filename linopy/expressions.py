@@ -111,6 +111,7 @@ from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
     absorb_absence,
+    check_arithmetic_nan,
     check_join_fill_value,
     check_user_nan,
     enforce_aux_conflict,
@@ -556,11 +557,11 @@ class LinearExpressionGroupby:
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
         store = self._store
-        sparse = self.model.sparse or isinstance(store, CSRStore)
+        store_cls = result_store_cls(store, self.model)
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
-        if sparse:
+        if store_cls is CSRStore:
             grouper = multikey_frame
             if grouper is None:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
@@ -578,7 +579,7 @@ class LinearExpressionGroupby:
                     if isinstance(grouper, pd.DataFrame)
                     else str(grouper.name or "group")
                 )
-                res = CSRStore.from_grouper(
+                res = store_cls.from_grouper(
                     store, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_store(res, self.model)
@@ -1100,10 +1101,11 @@ class BaseExpression(ABC):
         """
         expr = self._reindexed_to(self_const, needs_data_reindex)
         fields = {"const": op(self_const, operand)}
+        check_arithmetic_nan(fields["const"], op, operand, self_const)
         if scale:
             fields["coeffs"] = op(expr.coeffs, operand)
-        data = absorb_absence(assign_fields(expr.data, **fields))
-        return self.__class__(data, self.model)
+            check_arithmetic_nan(fields["coeffs"], op, operand, labels=expr.vars)
+        return self.__class__(assign_fields(expr.data, **fields), self.model)
 
     def _apply_constant_op(
         self,
@@ -2118,7 +2120,7 @@ class LinearExpression(BaseExpression):
         return obj
 
     def _set_data(self, data: Dataset) -> None:
-        self._store = DenseStore(data, self._model)
+        self._store = DenseStore(absorb_absence(data), self._model)
 
     def _dense_store(self, reason: Reason | None) -> DenseStore:
         """
@@ -2279,6 +2281,7 @@ class LinearExpression(BaseExpression):
         scale: bool,
     ) -> Self:
         const = op(self_const, operand)
+        check_arithmetic_nan(const, op, operand, self_const)
         factor = operand if scale else None
         store = self._store.combine(const, op, factor, needs_data_reindex)
         if isinstance(store, str):
@@ -2571,7 +2574,7 @@ class LinearExpression(BaseExpression):
 
         try:
             if isinstance(other, variables.Variable):
-                other = other.to_linexpr(_dense=True)
+                other = other._linexpr(DenseStore)
             elif isinstance(other, variables.ScalarVariable):
                 other = other.to_linexpr()
 
@@ -2647,9 +2650,10 @@ class LinearExpression(BaseExpression):
         Contract against a constant as one sparse matrix product, skipping the
         dense broadcast intermediate of ``(self * other).sum(dim)``.
 
-        Returns the reason where the dense path owns the semantics: non-unique
-        grid labels, a zero-size grid, an operand sharing no dimension with
-        the grid, and an unlabelled output dimension. The result is the compact
+        Returns the reason where the dense path owns the semantics: a dense
+        expression with coordinates the grid cannot hold, non-unique grid
+        labels, a zero-size grid, an operand sharing no dimension with the
+        grid, and an unlabelled output dimension. The result is the compact
         canonical form of :meth:`CSRStore.dot`, so its term
         count may differ from the dense path's while the values agree; the
         result is CSR-backed when the input was or the model is sparse.
@@ -2659,6 +2663,8 @@ class LinearExpression(BaseExpression):
         if not self.coord_dims:
             return "matmul(zero-dimensional expression)"
         csr = self._store.to_sparse()
+        if isinstance(csr, str):
+            return f"matmul({csr})"
         if not csr.grid.is_unique:
             return "matmul(non-unique labels)"
         if csr.grid.size == 0:
@@ -2673,10 +2679,9 @@ class LinearExpression(BaseExpression):
             da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
-        res = csr.dot(matrix, contracted, new_indexes)
-        if self.is_sparse or self.model.sparse:
-            return type(self)._from_store(res, self.model)
-        return type(self)._from_store(res.to_dense(), self.model)
+        store_cls = result_store_cls(self._store, self.model)
+        res = store_cls.from_matmul(csr, matrix, contracted, new_indexes)
+        return type(self)._from_store(res, self.model)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -3157,7 +3162,7 @@ class QuadraticExpression(BaseExpression):
         self._data = data
 
     def _set_data(self, data: Dataset) -> None:
-        self._data = data
+        self._data = absorb_absence(data)
 
     @property
     def data(self) -> Dataset:
@@ -3405,6 +3410,11 @@ def as_expression(
         except ValueError as e:
             raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
+
+
+def result_store_cls(store: Store, model: Model) -> type[Store]:
+    """The store class an operation on ``store`` builds its result on."""
+    return CSRStore if isinstance(store, CSRStore) else model.store_cls
 
 
 def _dense_copies(exprs: Sequence[Any], reason: Reason) -> list[Any]:

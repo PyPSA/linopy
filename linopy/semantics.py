@@ -11,9 +11,10 @@ implement and ``doc/design/goals.rst`` for the design intent.
 
 from __future__ import annotations
 
+import operator
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, NoReturn, TypeAlias
 from warnings import warn
 
@@ -171,6 +172,50 @@ def is_nan_scalar(value: Any) -> bool:
 def check_user_nan(context: str = "constant") -> NoReturn:
     """Enforce §5 for a user-supplied constant (scalar or array): raise."""
     raise ValueError(_user_nan_message(context))
+
+
+def _arithmetic_nan_message() -> str:
+    """Arithmetic-NaN error text — a live cell turned NaN by an operation."""
+    return (
+        "A constant operation produced NaN (0*inf, 0/0 or inf-inf) in a live "
+        "cell. linopy trusts NaN only as absence, so it does not silently drop "
+        "the cell; to drop cells on purpose, mark them with .where(cond) or "
+        "mask= instead."
+    )
+
+
+def may_produce_nan(op: Callable[[Any, Any], Any], operand: Any) -> bool:
+    """
+    Whether ``op`` with ``operand`` can turn a non-NaN value into NaN: only
+    with a non-finite operand, or a zero one for a product or quotient.
+    """
+    values = np.asarray(operand)
+    if not np.isfinite(values.sum()):
+        return True
+    return op not in (operator.add, operator.sub) and not values.all()
+
+
+def check_arithmetic_nan(
+    result: Any,
+    op: Callable[[Any, Any], Any],
+    operand: Any,
+    *inputs: Any,
+    labels: Any = None,
+) -> None:
+    """
+    Enforce §5 for ``result``, ``op`` applied with ``operand``: raise where it
+    is NaN at a live term, one whose ``labels`` are not ``-1``, although
+    neither ``operand`` nor any of the ``inputs`` is NaN there.
+    """
+    if not may_produce_nan(op, operand):
+        return
+    produced = np.isnan(result)
+    if labels is not None:
+        produced = produced & (labels != -1)
+    for value in (operand, *inputs):
+        produced = produced & ~np.isnan(value)
+    if produced.any():
+        raise ValueError(_arithmetic_nan_message())
 
 
 class AbsentType:
@@ -365,6 +410,17 @@ def _aux_values_equal(a: np.ndarray, b: np.ndarray) -> bool:
     return bool(pd.Series(a.ravel()).equals(pd.Series(b.ravel())))
 
 
+def _reduced_at(
+    values: DataArray, cells: DataArray, reduce: Callable[..., Any], initial: float
+) -> Any:
+    """Reduce ``values`` at the ``cells`` to a scalar, ``initial`` if none."""
+    extra = [d for d in cells.dims if d not in values.dims]
+    if extra:
+        cells = cells.any(extra)
+    where = cells.broadcast_like(values).transpose(*values.dims).values
+    return reduce(values.values, axis=None, initial=initial, where=where)
+
+
 def absorb_absence(ds: Dataset) -> Dataset:
     """
     Enforce the dead-term invariant on a merged dataset.
@@ -380,6 +436,10 @@ def absorb_absence(ds: Dataset) -> Dataset:
     if not np.isnan(ds["const"].values.sum()):
         return ds
     mask = ds["const"].isnull()
+    labels = _reduced_at(ds["vars"], mask, np.max, -1)
+    coeffs = _reduced_at(ds["coeffs"], mask, np.fmax.reduce, np.nan)
+    if labels == -1 and np.isnan(coeffs):
+        return ds
     coeffs = ds["coeffs"].where(~mask, np.nan)
     vars_ = ds["vars"].where(~mask, -1)
     return ds.assign(coeffs=coeffs, vars=vars_)

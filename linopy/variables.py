@@ -59,10 +59,8 @@ from linopy.constants import (
     STASHED_ATTRS,
     STASHED_LOWER,
     STASHED_UPPER,
-    TERM_DIM,
 )
 from linopy.containers import LabelContainer
-from linopy.csr import CSRStore
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
@@ -73,6 +71,7 @@ from linopy.semantics import (
     first_mismatched_dim,
     reindex_like_if_needed,
 )
+from linopy.store import DenseStore, Store
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -353,8 +352,6 @@ class Variable:
     def to_linexpr(
         self,
         coefficient: ConstantLike = 1,
-        *,
-        _dense: bool = False,
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
@@ -376,10 +373,15 @@ class Variable:
         broadcast aligns it away — the reindex below only fills absence and
         broadcasts non-shared dims. A NaN coefficient is user data, so it
         raises (§5). The expression carries the variable's absence as NaN so
-        that §6 propagates it through downstream arithmetic. In a sparse
-        model the expression is CSR-backed; ``_dense`` builds it dense for
-        callers that continue on a path without a sparse branch.
+        that §6 propagates it through downstream arithmetic. The expression
+        is built on the model's :attr:`~linopy.model.Model.store_cls`.
         """
+        return self._linexpr(self.model.store_cls, coefficient)
+
+    def _linexpr(
+        self, store_cls: type[Store], coefficient: ConstantLike = 1
+    ) -> expressions.LinearExpression:
+        """:meth:`to_linexpr` built on ``store_cls``."""
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
@@ -389,20 +391,10 @@ class Variable:
         coefficient = broadcast_to_coords(coefficient, coords=self.coords, strict=False)
         if coefficient.isnull().any():
             check_user_nan()
-        absent = self.labels == -1
-        has_absence = bool(absent.any())
         coefficient = reindex_like_if_needed(coefficient, self.labels, np.nan)
-        if has_absence:
-            coefficient = coefficient.where(~absent)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
-        if self.model.sparse and not _dense:
-            csr = CSRStore.from_labels(ds, self.model)
-            return expressions.LinearExpression._from_store(csr, self.model)
-        ds = ds.expand_dims(TERM_DIM, -1)
-        if has_absence:
-            const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)
-            ds = ds.assign(const=const)
-        return expressions.LinearExpression(ds, self.model)
+        store = store_cls.from_labels(ds, self.model)
+        return expressions.LinearExpression._from_store(store, self.model)
 
     def __repr__(self) -> str:
         """
@@ -481,7 +473,7 @@ class Variable:
         """
         try:
             if isinstance(other, Variable | ScalarVariable):
-                return self.to_linexpr(_dense=True) * other
+                return self._linexpr(DenseStore) * other
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
@@ -502,7 +494,7 @@ class Variable:
         if not isinstance(other, int):
             return NotImplemented
         if other == 2:
-            expr = self.to_linexpr(_dense=True)
+            expr = self._linexpr(DenseStore)
             return cast(
                 "QuadraticExpression", expr._multiply_by_linear_expression(expr)
             )
@@ -831,7 +823,7 @@ class Variable:
         -------
         linopy.expression.LinearExpressionRolling
         """
-        return self.to_linexpr(_dense=True).rolling(
+        return self._linexpr(DenseStore).rolling(
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
 
@@ -871,7 +863,7 @@ class Variable:
         -------
         linopy.expression.LinearExpression
         """
-        return self.to_linexpr(_dense=True).cumsum(
+        return self._linexpr(DenseStore).cumsum(
             dim=dim, skipna=skipna, keep_attrs=keep_attrs, **kwargs
         )
 

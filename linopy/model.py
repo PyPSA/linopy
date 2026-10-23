@@ -60,7 +60,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
-from linopy.csr import _densify_notice
+from linopy.csr import CSRStore, _densify_notice
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -107,6 +107,7 @@ from linopy.sos_reformulation import (
     sos_reformulation_context,
     undo_sos_reformulation,
 )
+from linopy.store import DenseStore, Store
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -520,6 +521,18 @@ class Model:
         ``Model(sparse=True)``.
         """
         return self._sparse
+
+    @property
+    def store_cls(self) -> type[Store]:
+        """
+        The store class the construction seam builds on: ``to_linexpr``,
+        ``groupby(...).sum()``, ``@`` and the netcdf reader yield a
+        :class:`~linopy.csr.CSRStore` in a sparse model and a
+        :class:`~linopy.store.DenseStore` otherwise. Quadratic products,
+        ``rolling``, ``cumsum`` and the ``LinearExpression`` constructor
+        build dense.
+        """
+        return CSRStore if self._sparse else DenseStore
 
     @property
     def set_names_in_solver_io(self) -> bool:

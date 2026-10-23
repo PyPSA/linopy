@@ -917,6 +917,22 @@ class TestHasTerms:
         assert not filled.isnull().any()
         assert_equal(filled.has_terms, filter.rename("has_terms"))
 
+    @pytest.mark.parametrize("build", ["linear", "quadratic"])
+    @pytest.mark.parametrize("revive", ["construct", "vars-setter"])
+    def test_absent_cell_drops_terms(
+        self, x: Variable, build: str, revive: str
+    ) -> None:
+        keep = xr.DataArray([True, False], coords=[x.indexes["dim_0"]])
+        expr = 2 * x if build == "linear" else x * x
+        if revive == "construct":
+            data = expr.data.assign(const=expr.const.where(keep))
+            res = type(expr)(data, expr.model)
+        else:
+            res = expr.where(keep)
+            res.vars = expr.vars
+        assert res.has_terms.values.tolist() == [True, False]
+        assert (res.vars.sel(dim_0=1) == -1).all()
+
     def test_merge_reindex(self, x: Variable, y: Variable) -> None:
         # the nodal-balance pattern: outer merge, then reindex to a superset of
         # coordinates; slots beyond the original coordinates carry no terms

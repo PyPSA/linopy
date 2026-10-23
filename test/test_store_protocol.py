@@ -6,6 +6,7 @@ The store protocol: :class:`~linopy.store.DenseStore` and
 from __future__ import annotations
 
 import operator
+import warnings
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -14,11 +15,21 @@ import pandas as pd
 import pytest
 import scipy.sparse
 import xarray as xr
-from test_store_conformance import COND, OVER_AB, SERIES, B, C, grid, no_densify
+from test_store_conformance import (
+    COND,
+    OVER_AB,
+    SERIES,
+    B,
+    C,
+    grid,
+    no_densify,
+    with_2d_coord,
+)
 
+import linopy
 from linopy import LinearExpression, Model, PerformanceWarning
 from linopy.csr import CSRStore, Grid
-from linopy.store import DenseStore, Store
+from linopy.store import DenseStore, Store, as_sparse
 from linopy.testing import assert_equivalent
 
 BUILDS: dict[str, Callable[[Model], LinearExpression]] = {
@@ -82,7 +93,7 @@ SAME_GRID: dict[str, Callable[[Store], Store]] = {
     "scale": lambda s: s.scale(2.0),
     "scale-cells": lambda s: s.scale(np.arange(s.n_cells, dtype=float) % 3),
     "scale-div": lambda s: s.scale(
-        np.arange(s.n_cells, dtype=float) % 3, operator.truediv
+        np.arange(s.n_cells, dtype=float) % 3 + 1, operator.truediv
     ),
     "assign-const": lambda s: s.assign_const(
         np.where(np.arange(s.n_cells) % 2, np.nan, 1.0)
@@ -114,7 +125,8 @@ OPS: dict[str, Callable[[Store], Store]] = SAME_GRID | {
     "combine-reindex": lambda s: combined(s, True),
     "aggregate": lambda s: s.aggregate(*collapsed(s, "b")),
     "concat": concatenated,
-    "dot": lambda s: s.dot(
+    "from-matmul": lambda s: type(s).from_matmul(
+        as_sparse(s),
         scipy.sparse.csr_array(np.ones((len(B), 1))),
         ["b"],
         [pd.Index(["z"], name="z")],
@@ -139,10 +151,34 @@ def test_round_trip_through_dataset(build: str, cls: type[Store]) -> None:
 def test_conversions_agree(build: str) -> None:
     dense, sparse = (build_store(build, cls) for cls in STORE_CLASSES)
     assert isinstance(sparse.to_dense(), DenseStore)
-    assert isinstance(dense.to_sparse(), CSRStore)
+    converted = dense.to_sparse()
+    assert isinstance(converted, CSRStore)
     assert dense.to_dense() is dense and sparse.to_sparse() is sparse
     assert_equivalent(as_expr(sparse.to_dense()), as_expr(dense))
-    assert_equivalent(as_expr(dense.to_sparse()), as_expr(sparse))
+    assert_equivalent(as_expr(converted), as_expr(sparse))
+
+
+def test_model_store_cls(backend: Model) -> None:
+    assert backend.store_cls is (CSRStore if backend.sparse else DenseStore)
+
+
+def test_dense_to_sparse_names_off_grid_coords() -> None:
+    expr = with_2d_coord(as_expr(build_store("aux", DenseStore)))
+    with no_densify():
+        assert expr._store.to_sparse("why") == "coordinates the Grid cannot hold: two"
+
+
+@pytest.mark.parametrize("reason", [None, "why"])
+def test_dense_to_sparse_notice(reason: str | None) -> None:
+    dense = build_store("aux", DenseStore)
+    with linopy.options as opts, warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        opts.set_value(warn_on_densify=True)
+        assert isinstance(dense.to_sparse(reason), CSRStore)
+    notices = [str(w.message) for w in rec]
+    assert notices == (
+        [] if reason is None else [f"Dense backing sparsified: {reason}."]
+    )
 
 
 @pytest.mark.parametrize("op", list(OPS))
