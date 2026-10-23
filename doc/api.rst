@@ -691,10 +691,11 @@ Utilities
 ``options`` holds these keys:
 
 - ``display_max_rows``, ``display_max_terms``: size of the printed repr.
-- ``warn_on_densify``: emit a ``PerformanceWarning`` when a sparse (CSR)
-  backing is converted to dense. ``None`` (default) warns in a sparse model
-  on implicit conversions only, ``True`` always warns, ``False`` never
-  warns. See :doc:`sparse-models`.
+- ``warn_on_densify``: the conversion notice, a ``PerformanceWarning`` when
+  a sparse (CSR) backing is converted to dense or a dense operand is
+  converted to sparse for a merge with a sparse one. ``None`` (default)
+  warns in a sparse model on implicit conversions only, ``True`` always
+  warns, ``False`` never warns. See :doc:`sparse-models`.
 
 
 Warnings
