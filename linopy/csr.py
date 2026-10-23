@@ -11,7 +11,7 @@ may hold its terms in any order and the same variable more than once, the
 coefficients of a repeated variable adding up. Operations stack, interleave
 and gather the stored terms as they are; :func:`canonical` (duplicate
 variables summed, terms label-ordered) runs once where a consumer needs it,
-when a constraint is added (:meth:`linopy.constraints.CSRConstraint.from_csr`),
+when a constraint is built on it (:class:`linopy.constraints.Constraint`),
 which also covers matrix assembly and export. ``nterm`` is the widest stored
 row, as for the dense term layout of the same operation. The stored arrays
 (``data``, ``indices``, ``indptr`` and ``const``) are read-only views, so
@@ -32,8 +32,7 @@ layout; this is valid because the convention does not fix the term layout.
 This module documents the CSR structure only, working on plain datasets. The
 one bridge back to the dense store is :meth:`CSRStore.to_dense`, which wraps
 the expanded dataset in a :class:`~linopy.store.DenseStore`. The reverse
-bridges are :meth:`CSRStore.from_dense` and
-:meth:`linopy.constraints.CSRConstraint.from_csr`.
+bridge is :meth:`CSRStore.from_dense`.
 """
 
 from __future__ import annotations
@@ -286,6 +285,9 @@ class CSRStore(Store):
         csr = scipy.sparse.csr_array(arrays, shape=csr.shape)
         object.__setattr__(self, "csr", csr)
         object.__setattr__(self, "const", _readonly(self.const, copy=False))
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {**self.__dict__, "_positional_cache": None}
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -547,6 +549,9 @@ class CSRStore(Store):
         keep = self.live_terms()
         return cells[keep], self.csr.indices[keep], self.csr.data[keep]
 
+    def variable_labels(self) -> np.ndarray:
+        return self.csr.indices
+
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
@@ -607,9 +612,13 @@ class CSRStore(Store):
         present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
         return present & (self.csr.data != 0)
 
-    def prune(self) -> CSRStore:
-        """Drop explicit zero coefficients; cell activeness stays with ``const``."""
+    def prune(self, tol: float = 0.0) -> CSRStore:
+        """
+        Drop the coefficients of at most ``tol`` in magnitude; cell activeness
+        stays with ``const``.
+        """
         csr = self.csr.copy()
+        csr.data[np.abs(csr.data) <= tol] = 0
         csr.eliminate_zeros()
         return replace(self, csr=csr)
 
@@ -1096,26 +1105,26 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _conversion_notice(message: str, model: Model, explicit: bool) -> None:
+def _conversion_notice(message: str, model: Model) -> None:
     """
     Emit ``message`` as a :class:`~linopy.constants.PerformanceWarning` if
-    ``options["warn_on_densify"]`` is set, or left at its default ``None``,
-    ``model`` is sparse and the conversion is an implicit fallback rather
-    than an ``explicit`` user request.
+    ``options["warn_on_densify"]`` is set, or left at its default ``None``
+    and ``model`` is sparse. Only implicit fallbacks emit it; an explicit
+    conversion, e.g. :meth:`linopy.constraints.Constraint.to_dense`, does not.
     """
     enabled = options["warn_on_densify"]
-    if model.sparse and not explicit if enabled is None else enabled:
+    if model.sparse if enabled is None else enabled:
         warn_outside_linopy(message, PerformanceWarning)
 
 
-def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+def _densify_notice(reason: str, model: Model) -> None:
     """The conversion notice naming why a sparse (CSR) backing is dropped."""
-    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model, explicit)
+    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model)
 
 
 def _sparsify_notice(reason: str, model: Model) -> None:
     """The conversion notice naming why a dense backing is converted to sparse."""
-    _conversion_notice(f"Dense backing sparsified: {reason}.", model, False)
+    _conversion_notice(f"Dense backing sparsified: {reason}.", model)
 
 
 def _readonly(values: np.ndarray, copy: bool = True) -> np.ndarray:

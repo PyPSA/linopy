@@ -155,6 +155,13 @@ class Store(ABC):
         """Cell, variable label and coefficient of the live terms."""
 
     @abstractmethod
+    def variable_labels(self) -> np.ndarray:
+        """
+        Variable labels of all stored terms, zero coefficients included, as
+        :meth:`positional_csr` reads them; ``-1`` may mark an empty slot.
+        """
+
+    @abstractmethod
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
@@ -200,8 +207,8 @@ class Store(ABC):
         """Drop the terms of absent cells."""
 
     @abstractmethod
-    def prune(self) -> Self:
-        """Drop the terms with a zero coefficient."""
+    def prune(self, tol: float = 0.0) -> Self:
+        """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
 
     @abstractmethod
     def canonical(self) -> Self:
@@ -509,6 +516,9 @@ class DenseStore(Store):
         cells = np.broadcast_to(np.arange(self.n_cells)[:, None], keep.shape)
         return cells[keep], vars_[keep], coeffs[keep]
 
+    def variable_labels(self) -> np.ndarray:
+        return self.ds.vars.values.ravel()
+
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
@@ -554,8 +564,8 @@ class DenseStore(Store):
     def absorbed(self) -> DenseStore:
         return self._derived(absorb_absence(self.ds))
 
-    def prune(self) -> DenseStore:
-        pruned = pruned_terms(self.ds)
+    def prune(self, tol: float = 0.0) -> DenseStore:
+        pruned = pruned_terms(self.ds, tol)
         return self if pruned is self.ds else self._derived(pruned)
 
     def canonical(self) -> DenseStore:
@@ -704,15 +714,16 @@ def summed(data: Dataset, dim: DimsLike | None = None) -> Dataset:
     return assign_fields(ds, const=data.const.sum(dim))
 
 
-def pruned_terms(ds: Dataset) -> Dataset:
+def pruned_terms(ds: Dataset, tol: float = 0.0) -> Dataset:
     """
-    ``ds`` with the nonzero terms moved to the front of the term dimension
-    and the all-zero tail cut off; ``ds`` itself if no coefficient is zero.
+    ``ds`` with the terms of a coefficient above ``tol`` in magnitude moved
+    to the front of the term dimension and the tail cut off; ``ds`` itself
+    if there is none to drop.
     """
     coeffs = ds.coeffs.transpose(..., TERM_DIM)
     vars = ds.vars.transpose(*coeffs.dims, ...)
     cdata = coeffs.data
-    mask = cdata != 0
+    mask = ~(np.abs(cdata) <= tol)
     if mask.all():
         return ds
 

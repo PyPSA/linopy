@@ -21,12 +21,7 @@ from linopy.constants import (
     EvolvingAPIWarning,
     PerformanceWarning,
 )
-from linopy.constraints import (
-    Constraint,
-    ConstraintBase,
-    Constraints,
-    CSRConstraint,
-)
+from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables
@@ -49,8 +44,6 @@ except ImportError:
 
 __all__ = (
     "ABSENT",
-    "CSRConstraint",
-    "ConstraintBase",
     "Constraints",
     "Constraint",
     "EQUAL",

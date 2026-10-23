@@ -147,7 +147,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import (
         AnonymousScalarConstraint,
-        ConstraintBase,
+        Constraint,
     )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
@@ -1151,13 +1151,13 @@ class BaseExpression(ABC):
         except TypeError:
             return NotImplemented
 
-    def __le__(self, rhs: SideLike) -> ConstraintBase:
+    def __le__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> ConstraintBase:
+    def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> ConstraintBase:  # type: ignore[override]
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1319,7 +1319,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -1339,7 +1339,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -1359,7 +1359,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Equality constraint.
 
@@ -1630,7 +1630,7 @@ class BaseExpression(ABC):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -2467,7 +2467,7 @@ class LinearExpression(BaseExpression):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> ConstraintBase:
+    ) -> Constraint:
         store = self._store
         if not isinstance(store, CSRStore):
             return super().to_constraint(sign, rhs, join)
@@ -2477,10 +2477,12 @@ class LinearExpression(BaseExpression):
         rhs = as_constant(rhs)
         if join is not None or not isinstance(rhs, CONSTANT_TYPES):
             return self.sub(rhs, join=join).to_constraint(sign, 0)
-        rhs_da = constraints.csr_rhs(store, rhs)
+        rhs_da = constraints.rhs_on_grid(store, rhs)
         if isinstance(rhs_da, str):
             return self._fallback(rhs_da).to_constraint(sign, rhs, join)
-        return constraints.CSRConstraint.from_csr(store, sign, rhs_da)
+        return constraints.Constraint(
+            self.reset_const(), sign, rhs_da - self.const, self.model
+        )
 
     @overload
     def __add__(

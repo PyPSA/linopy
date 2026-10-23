@@ -14,7 +14,7 @@ from test_io import model  # noqa: F401
 
 from linopy import GREATER_EQUAL, Model, solvers
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
+from linopy.constraints import Constraint
 from linopy.solver_capabilities import (
     SOLVER_REGISTRY,
     SolverFeature,
@@ -167,14 +167,14 @@ def test_assign_result_explicit(simple_model: Model) -> None:
     assert float(simple_model.variables["y"].solution) == 2.0
 
 
-def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
+def test_assign_result_with_sparse_constraints_avoids_data_reconstruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    m = Model()
+    m = Model(sparse=True)
     x = m.add_variables(coords=[range(3)], name="x")
-    m.add_constraints(x >= 0, name="c", freeze=True)
+    m.add_constraints(x >= 0, name="c")
     con = m.constraints["c"]
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
 
     primal = np.arange(m._xCounter, dtype=float)
     dual = np.arange(m._cCounter, dtype=float) + 10
@@ -184,10 +184,10 @@ def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
         solver_name="mock",
     )
 
-    def fail_data(self: CSRConstraint) -> None:
-        raise AssertionError("CSRConstraint.data was accessed")
+    def fail_data(self: Constraint) -> None:
+        raise AssertionError("Constraint.data was accessed")
 
-    monkeypatch.setattr(CSRConstraint, "data", property(fail_data))
+    monkeypatch.setattr(Constraint, "data", property(fail_data))
     m.assign_result(result)
 
     np.testing.assert_array_equal(m.variables["x"].solution.values, primal)

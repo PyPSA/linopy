@@ -81,7 +81,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, ConstraintBase
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         GenericExpression,
         LinearExpression,
@@ -579,13 +579,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __le__(self, other: SideLike) -> ConstraintBase:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other: SideLike) -> ConstraintBase:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> ConstraintBase:  # type: ignore[override]
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -701,7 +701,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
-    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -717,7 +717,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -733,7 +733,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> ConstraintBase:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 

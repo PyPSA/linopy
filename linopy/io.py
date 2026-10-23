@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import polars as pl
-import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
@@ -584,7 +583,7 @@ def indicator_constraints_to_file(
     )
 
     for con in m.constraints.indicator.data.values():
-        ic_data = con.data
+        ic_data = con._dataset()
         labels_flat = ic_data.labels.values.flatten()
         binary_var_flat = ic_data.binary_var.values.flatten()
         binary_val_flat = np.broadcast_to(
@@ -1187,12 +1186,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     the deserialized Model is too, but
     :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.constraints import (
-        Constraint,
-        ConstraintBase,
-        Constraints,
-        CSRConstraint,
-    )
+    from linopy.constraints import Constraint, Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable, Variables
@@ -1282,14 +1276,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._expressions = Expressions(expressions, m)
 
-    constraints: dict[str, ConstraintBase] = {}
+    constraints: dict[str, Constraint] = {}
     for k in containers["constraints"]:
         name = remove_prefix(k, "constraints")
-        con_ds = get_prefix(ds, k)
-        if con_ds.attrs.get("_linopy_format") == "csr":
-            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
-        else:
-            constraints[name] = Constraint.from_dataset(con_ds, m, name)
+        constraints[name] = Constraint.from_netcdf_ds(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1372,12 +1362,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import (
-        Constraint,
-        ConstraintBase,
-        Constraints,
-        CSRConstraint,
-    )
+    from linopy.constraints import Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1427,22 +1412,11 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con(con: ConstraintBase) -> ConstraintBase:
-        if isinstance(con, Constraint):
-            return con._copy(new_model, deep, include_solution)
-        if not isinstance(con, CSRConstraint):
-            raise TypeError(f"Cannot copy constraint of type {type(con)}")
-        buffer_types = (np.ndarray, scipy.sparse.sparray)
-        changes: dict[str, Any] = {"model": new_model}
-        if deep:
-            kwargs = con._init_kwargs().items()
-            changes |= {k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)}
-        if not include_solution:
-            changes["dual"] = None
-        return con._replace(**changes)
-
     new_model._constraints = Constraints(
-        {name: _copy_con(con) for name, con in m.constraints.items()},
+        {
+            name: con._copy(new_model, deep, include_solution)
+            for name, con in m.constraints.items()
+        },
         new_model,
     )
 

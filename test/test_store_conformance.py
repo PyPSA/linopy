@@ -21,7 +21,7 @@ import xarray as xr
 import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
-from linopy.constraints import ConstraintBase, CSRConstraint
+from linopy.constraints import Constraint
 from linopy.store import DenseStore
 from linopy.testing import assert_equivalent
 
@@ -135,10 +135,7 @@ class Case(NamedTuple):
     build: Callable[[Model], LinearExpression]
     op: Callable[[LinearExpression], Any]
     expected: str
-    sparse_xfail: str | None = None
 
-
-SIGN_EQ = "CSRConstraint normalizes the sign '==' to '=' while Constraint keeps it"
 
 CASES: dict[str, Case] = {
     "sel": Case(grid, lambda e: e.sel(a=[0, 2]), KEPT),
@@ -354,7 +351,26 @@ CASES: dict[str, Case] = {
         grid, lambda e: e.to_constraint("<=", 1 * var(e, "y")), KEPT
     ),
     "to-constraint-expression-eq": Case(
-        grid, lambda e: e.to_constraint("==", 1 * var(e, "y")), KEPT, SIGN_EQ
+        grid, lambda e: e.to_constraint("==", 1 * var(e, "y")), KEPT
+    ),
+    "to-constraint-update-coeffs": Case(
+        grid,
+        lambda e: e.to_constraint("<=", 1).update(coeffs=2.0),
+        "update(coeffs=, variables=)",
+    ),
+    "to-constraint-update-lhs-off-grid": Case(
+        grid,
+        lambda e: e.to_constraint("<=", 1).update(
+            lhs=with_2d_coord(dense_linexpr(var(e, "x")))
+        ),
+        "update(lhs=)",
+    ),
+    "constraint-data": Case(grid, lambda e: e.to_constraint("<=", 1).data, DATA_READ),
+    "constraint-sel": Case(
+        grid, lambda e: e.to_constraint("<=", 1).sel(a=[0, 1]), DATA_READ
+    ),
+    "constraint-getitem": Case(
+        grid, lambda e: e.to_constraint("<=", 1)[{"a": [0, 1]}], "__getitem__"
     ),
     "to-constraint-array-sign": Case(
         grid,
@@ -446,7 +462,7 @@ def assert_same(res: Any, want: Any) -> None:
         pd.testing.assert_frame_equal(res.flat, want.flat)
     elif isinstance(res, LinearExpression):
         assert_equivalent(res, want)
-    elif isinstance(res, ConstraintBase):
+    elif isinstance(res, Constraint):
         assert_equivalent(res.lhs, want.lhs)
         xr.testing.assert_equal(res.sign, want.sign)
         xr.testing.assert_allclose(res.rhs, want.rhs)
@@ -459,12 +475,8 @@ def assert_same(res: Any, want: Any) -> None:
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) -> None:
-    build, op, expected, sparse_xfail = CASES[case]
-    if backend.sparse and sparse_xfail is not None:
-        request.applymarker(
-            pytest.mark.xfail(strict=True, raises=AssertionError, reason=sparse_xfail)
-        )
+def test_operation(backend: Model, case: str) -> None:
+    build, op, expected = CASES[case]
     want = op(build(Model()))
     expr = build(backend)
     assert expr.is_sparse == backend.sparse
@@ -482,8 +494,8 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
     if backend.sparse and expected in (KEPT, SPARSIFIED):
         if isinstance(res, LinearExpression):
             assert res.is_sparse
-        elif isinstance(res, ConstraintBase):
-            assert isinstance(res, CSRConstraint)
+        elif isinstance(res, Constraint):
+            assert res.lhs.is_sparse
 
 
 CONST_ASSIGNERS: dict[str, Callable[[LinearExpression, Any], Any]] = {

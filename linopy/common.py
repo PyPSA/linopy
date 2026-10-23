@@ -39,7 +39,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
@@ -312,7 +312,7 @@ def validate_coords_reassignment(
 
     Single-sourced per-item invariants for coordinate reassignment, used by
     the Dataset-backed (:func:`reassign_coords`) and the
-    CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
+    CSR-backed (``CSRStore``) paths alike, so every entry point is safe
     on its own. Model-level aggregate checks (dimension exists somewhere in
     the model, consistent lengths across containers) live on top of this.
 
@@ -390,7 +390,7 @@ def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
     return Dataset(data_vars, coords=ordered, attrs=new.attrs)
 
 
-T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
+T = TypeVar("T", Dataset, DataArray, "Variable", "LinearExpression", "Constraint")
 
 
 def iterate_slices(
@@ -459,7 +459,7 @@ def iterate_slices(
         start = i * chunk_size
         end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)  # type: ignore[attr-defined]
+        yield ds.isel(slice_dict)
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
@@ -1079,7 +1079,7 @@ LocT = TypeVar(
     "Variable",
     "LinearExpression",
     "QuadraticExpression",
-    "ConstraintBase",
+    "Constraint",
 )
 
 
@@ -1097,7 +1097,7 @@ class LocIndexer(Generic[LocT]):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
-        return self.object.sel(key)  # type: ignore[attr-defined]
+        return self.object.sel(key)
 
 
 def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:

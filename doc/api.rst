@@ -358,8 +358,10 @@ Post-solve access
 Constraint
 ==========
 
-Subclass of ``xarray.DataArray`` carrying labels for a multi-dimensional
-constraint.
+A multi-dimensional constraint ``lhs sign rhs`` with labels. Its lhs holds a
+dense store, or in a sparse model (``Model(sparse=True)``) a memory-efficient
+CSR store; ``to_sparse`` and ``to_dense`` convert it. See the
+:doc:`creating-constraints` and :doc:`sparse-models` guides for usage.
 
 .. autosummary::
    :toctree: generated/
@@ -378,6 +380,8 @@ Structure
    constraints.Constraint.scaling
    constraints.Constraint.coeffs
    constraints.Constraint.vars
+   constraints.Constraint.ncons
+   constraints.Constraint.nterm
 
 Modification
 ------------
@@ -407,52 +411,8 @@ Conversion
    :toctree: generated/
 
    constraints.Constraint.to_polars
-
-
-CSRConstraint
-=============
-
-Memory-efficient, immutable constraint representation backed by a scipy
-CSR sparse matrix. Opt in via ``Model(sparse=True)`` or
-``Model.add_constraints(..., freeze=True)``. See the
-:doc:`creating-constraints` and :doc:`sparse-models` guides for usage.
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint
-
-Structure
----------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.coeffs
-   constraints.CSRConstraint.vars
-   constraints.CSRConstraint.sign
-   constraints.CSRConstraint.rhs
-   constraints.CSRConstraint.scaling
-   constraints.CSRConstraint.ncons
-   constraints.CSRConstraint.nterm
-
-Post-solve access
------------------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.dual
-
-Conversion
-----------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.to_polars
-   constraints.CSRConstraint.to_dense
-   constraints.CSRConstraint.mutable
+   constraints.Constraint.to_sparse
+   constraints.Constraint.to_dense
 
 
 Constraints
@@ -694,8 +654,9 @@ Utilities
 - ``warn_on_densify``: the conversion notice, a ``PerformanceWarning`` when
   a sparse (CSR) backing is converted to dense or a dense operand is
   converted to sparse for a merge with a sparse one. ``None`` (default)
-  warns in a sparse model on implicit conversions only, ``True`` always
-  warns, ``False`` never warns. See :doc:`sparse-models`.
+  warns in a sparse model, ``True`` always warns, ``False`` never warns.
+  Only implicit conversions warn; ``Constraint.to_dense()`` and
+  ``Constraint.to_sparse()`` never do. See :doc:`sparse-models`.
 
 
 Warnings

@@ -67,13 +67,8 @@ def variable_scaling_lookup(model: Model) -> np.ndarray:
 
 def constraint_scaling_lookup(model: Model) -> np.ndarray:
     """Return constraint scaling indexed by raw constraint label."""
-    from linopy.constraints import CSRConstraint
-
     scaling = np.ones(model._cCounter, dtype=float)
     for con in model.constraints.data.values():
-        if isinstance(con, CSRConstraint):
-            scaling[con.active_labels()] = con._scaling
-            continue
         labels = con.labels.values.ravel()
         _scatter_active(scaling, labels, con.scaling.values.ravel())
     return scaling

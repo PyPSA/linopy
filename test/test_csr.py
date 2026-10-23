@@ -1,6 +1,6 @@
 """
 Tests for sparse groupby-sum (linopy.csr): type stability, transparent
-materialization, and direct CSR realization under freeze.
+materialization, and constraints on a sparse lhs.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
@@ -34,7 +33,7 @@ from xarray.core.types import JoinOptions
 import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
-from linopy.constraints import Constraint, ConstraintBase, CSRConstraint
+from linopy.constraints import Constraint
 from linopy.csr import CSRStore, Grid, canonical, column_compacted_matmul
 from linopy.testing import (
     assert_conequal,
@@ -103,31 +102,6 @@ def base_model(
     return Case(m, gen_p, flow, flow_t, eff, gbus, bus0, bus1, load)
 
 
-def twin_models(**kwargs: Any) -> tuple[Case, Case]:
-    """A dense model and its sparse twin, built identically."""
-    return base_model(**kwargs), base_model(sparse=True, **kwargs)
-
-
-def canon(df: pl.DataFrame) -> pl.DataFrame:
-    return (
-        df.group_by(["labels", "vars"])
-        .agg(pl.col("coeffs").sum(), pl.col("sign").first(), pl.col("rhs").first())
-        .filter(pl.col("coeffs") != 0)
-        .sort(["labels", "vars"])
-    )
-
-
-def assert_frozen_equal(con1: ConstraintBase, con2: ConstraintBase) -> None:
-    d1, d2 = canon(con1.to_polars()), canon(con2.to_polars())
-    assert d1["labels"].equals(d2["labels"])
-    assert d1["vars"].equals(d2["vars"])
-    assert np.allclose(d1["coeffs"], d2["coeffs"])
-    assert (d1["sign"] == d2["sign"]).all()
-    assert np.allclose(d1["rhs"], d2["rhs"])
-    labels = con1.labels.values.ravel()
-    assert np.array_equal(np.sort(labels[labels != -1]), np.sort(con2.active_labels()))
-
-
 def sparse_store(e: LinearExpression) -> CSRStore:
     assert isinstance(e._store, CSRStore)
     return e._store
@@ -143,7 +117,7 @@ def reindexed_balance(c: Case) -> LinearExpression:
 
 
 def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     sparse = c2.gen_sum()
     assert type(sparse) is LinearExpression
     assert sparse.is_sparse
@@ -151,7 +125,7 @@ def test_csr_is_plain_linear_expression_and_materializes_equivalently() -> None:
 
 
 def test_csr_composition_materializes_equivalently() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     sparse = c2.balance_lhs()
     assert type(sparse) is LinearExpression
     assert sparse.is_sparse
@@ -159,7 +133,7 @@ def test_csr_composition_materializes_equivalently() -> None:
 
 
 def test_scalar_ops_stay_csr() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     sparse = -2.0 * c2.gen_sum()
     assert sparse.is_sparse
     assert_linequal(sparse, -2.0 * c1.gen_sum())
@@ -171,13 +145,13 @@ def test_zero_coefficient_rows_stay_active(sparse: bool) -> None:
     lhs = (0.0 * c.gen_p).groupby(c.gbus).sum()
     lhs = lhs + (0.0 * c.flow).groupby(c.bus0).sum()
     nterm = lhs.nterm
-    con = c.m.add_constraints(lhs == c.load, name="bal", freeze=True)
+    con = c.m.add_constraints(lhs == c.load, name="bal")
     assert len(con.active_labels()) == c.load.size
     assert lhs.nterm == nterm
 
 
 def test_merge_keeps_absent_cell_absent() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     mask = xr.DataArray(np.arange(len(c1.load.bus)) % 2 == 0, coords=[c1.load.bus])
     flow1, flow2 = (
         (1.0 * c.flow).groupby(c.bus0).sum(use_fallback=True).where(mask)
@@ -191,7 +165,7 @@ def test_merge_keeps_absent_cell_absent() -> None:
     )
 
     con = c2.m.add_constraints(tot >= c2.load, name="bal")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
     assert con.ncons == int(mask.sum()) * c2.load.sizes["snapshot"]
 
 
@@ -238,7 +212,7 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
 
 @pytest.mark.parametrize("as_namelist", [False, True])
 def test_single_key_sparse_ignores_observed(as_namelist: bool) -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     dense, sparse = (
         (c.eff * c.gen_p).assign_coords(bus=("gen", c.gbus.to_numpy()))
         for c in (c1, c2)
@@ -271,18 +245,16 @@ def test_dataframe_grouper_sparse_stays_compact() -> None:
     assert_linequal(sparse, dense.groupby(df).sum())
 
 
-def test_namelist_sparse_observed_freezes_compact() -> None:
+def test_namelist_sparse_observed_constraint_compact() -> None:
     m1, e1, rhs = keyed_model()
     m2, e2, _ = keyed_model(sparse=True)
     dense = m1.add_constraints(
-        e1.groupby(["period", "season"]).sum(observed=True) == rhs,
-        name="c",
-        freeze=True,
+        e1.groupby(["period", "season"]).sum(observed=True) == rhs, name="c"
     )
     sparse = m2.add_constraints(
         e2.groupby(["period", "season"]).sum(observed=True) == rhs, name="c"
     )
-    assert isinstance(sparse, CSRConstraint)
+    assert sparse.lhs.is_sparse
     assert sparse.ncons == rhs.size
     assert_conequal(dense, sparse, strict=False)
 
@@ -291,14 +263,12 @@ def test_namelist_sparse_grid_absent_cells_inactive() -> None:
     m1, e1, _ = keyed_model()
     m2, e2, _ = keyed_model(sparse=True)
     keys = ["period", "season"]
-    dense = m1.add_constraints(e1.groupby(keys).sum() == 0, name="c", freeze=True)
+    dense = m1.add_constraints(e1.groupby(keys).sum() == 0, name="c")
     sparse = m2.add_constraints(e2.groupby(keys).sum() == 0, name="c")
-    assert isinstance(sparse, CSRConstraint)
+    assert sparse.lhs.is_sparse
     assert sparse.ncons == 4 * 2
     assert_conequal(dense, sparse, strict=False)
-    assert np.array_equal(
-        np.sort(dense.active_labels()), np.sort(sparse.active_labels())
-    )
+    np.testing.assert_array_equal(dense.active_labels(), sparse.active_labels())
 
 
 def test_namelist_sparse_observed_keeps_aux_coords_through_merge() -> None:
@@ -354,23 +324,16 @@ def test_nan_multikey_grouper_raises_eagerly() -> None:
         expr.groupby(["period", "season"]).sum()
 
 
-def test_freeze_realizes_csr_without_dense_rectangle() -> None:
-    c1, c2 = twin_models()
+@pytest.mark.parametrize("to_dense", [False, True], ids=["sparse", "to-dense"])
+def test_sparse_constraint_matches_dense(to_dense: bool) -> None:
+    c1, c2 = base_model(), base_model(sparse=True)
     con1 = c1.m.add_constraints(c1.balance_lhs() == c1.load, name="bal")
     con2 = c2.m.add_constraints(c2.balance_lhs() == c2.load, name="bal")
-
-    assert isinstance(con2, CSRConstraint)
-    assert_frozen_equal(con1, con2)
-
-
-def test_freeze_false_falls_back_to_identical_dense_constraint() -> None:
-    """The fallback is canonical-form, so compare mathematically (strict=False)."""
-    c1, c2 = twin_models()
-    con1 = c1.m.add_constraints(c1.balance_lhs() == c1.load, name="bal")
-    con2 = c2.m.add_constraints(c2.balance_lhs() == c2.load, name="bal", freeze=False)
-    assert isinstance(con2, Constraint)
+    assert con2.lhs.is_sparse
+    if to_dense:
+        assert not con2.to_dense().lhs.is_sparse
     assert_conequal(con1, con2, strict=False)
-    assert np.array_equal(con1.labels.values, con2.labels.values)
+    xr.testing.assert_equal(con1.labels, con2.labels)
 
 
 def gen_mask(c: Case) -> xr.DataArray:
@@ -391,74 +354,66 @@ def mixed_signs(c: Case) -> xr.DataArray:
     return xr.DataArray(signs, coords=[c.gbus.index])
 
 
-DENSE_FREEZES: dict[str, Callable[[Case], Constraint]] = {
-    "one-term": lambda c: c.m.add_constraints(c.gen_p <= 1, freeze=False),
-    "one-term-masked": lambda c: c.m.add_constraints(
-        c.gen_p <= 1, mask=gen_mask(c), freeze=False
-    ),
+CONSTRAINT_BUILDS: dict[str, Callable[[Case], Constraint]] = {
+    "one-term": lambda c: c.m.add_constraints(c.gen_p <= 1),
+    "one-term-masked": lambda c: c.m.add_constraints(c.gen_p <= 1, mask=gen_mask(c)),
     "one-term-all-masked": lambda c: c.m.add_constraints(
-        c.gen_p <= 1, mask=xr.zeros_like(gen_mask(c)), freeze=False
+        c.gen_p <= 1, mask=xr.zeros_like(gen_mask(c))
     ),
-    "one-term-absent": lambda c: c.m.add_constraints(
-        c.gen_p.shift(snapshot=1) <= 1, freeze=False
-    ),
+    "one-term-absent": lambda c: c.m.add_constraints(c.gen_p.shift(snapshot=1) <= 1),
     "one-term-zeros": lambda c: c.m.add_constraints(
-        c.eff.where(gen_mask(c), 0) * c.gen_p <= 1, freeze=False
+        c.eff.where(gen_mask(c), 0) * c.gen_p <= 1
     ),
     "terms-absent": lambda c: c.m.add_constraints(
-        c.gen_p - c.gen_p.shift(snapshot=1) <= 1, freeze=False
+        c.gen_p - c.gen_p.shift(snapshot=1) <= 1
     ),
     "terms-duplicates": lambda c: c.m.add_constraints(
         c.gen_p.shift(snapshot=1) + 2 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0,
-        freeze=False,
     ),
     "terms-zeros-masked": lambda c: c.m.add_constraints(
-        0 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0, mask=gen_mask(c), freeze=False
+        0 * c.gen_p + c.gen_p.shift(snapshot=1) >= 0, mask=gen_mask(c)
     ),
     "terms-cancelling": lambda c: c.m.add_constraints(
-        c.gen_p - c.gen_p + c.gen_p.shift(snapshot=1) >= 0, freeze=False
+        c.gen_p - c.gen_p + c.gen_p.shift(snapshot=1) >= 0
     ),
     "terms-empty-trailing-rows": lambda c: c.m.add_constraints(
         all_but_last_gen(c) * (c.gen_p + c.gen_p.shift(snapshot=1)) >= 0,
-        freeze=False,
     ),
     "terms-sparse-strided": lambda c: c.m.add_constraints(
-        (c.gen_p * gen_line_eye(c)).sum("gen") >= 0, freeze=False
+        (c.gen_p * gen_line_eye(c)).sum("gen") >= 0
     ),
     "terms-dense-strided": lambda c: c.m.add_constraints(
-        (c.gen_p * xr.ones_like(gen_line_eye(c))).sum("gen") >= 0, freeze=False
+        (c.gen_p * xr.ones_like(gen_line_eye(c))).sum("gen") >= 0
     ),
     "terms-mixed-signs": lambda c: c.m.add_constraints(
-        c.gen_p - c.gen_p.shift(snapshot=1), mixed_signs(c), 1, freeze=False
+        c.gen_p - c.gen_p.shift(snapshot=1), mixed_signs(c), 1
     ),
-    "grouped": lambda c: c.m.add_constraints(c.balance_lhs() == c.load, freeze=False),
+    "grouped": lambda c: c.m.add_constraints(c.balance_lhs() == c.load),
 }
 
 
-@pytest.mark.parametrize("build", list(DENSE_FREEZES))
-def test_freeze_of_dense_constraint_is_canonical_and_equal(build: str) -> None:
-    con = DENSE_FREEZES[build](base_model())
-    frozen = con.freeze()
-    assert_frozen_equal(con, frozen)
-    np.testing.assert_array_equal(frozen.active_labels(), con.active_labels())
-    csr = frozen._csr
-    ref = scipy.sparse.csr_array(
-        (csr.data.copy(), csr.indices.copy(), csr.indptr.copy()), shape=csr.shape
-    )
-    ref.sum_duplicates()
-    ref.eliminate_zeros()
-    assert csr.has_canonical_format
-    for got, want in zip(
-        (csr.indptr, csr.indices, csr.data), (ref.indptr, ref.indices, ref.data)
-    ):
-        np.testing.assert_array_equal(got, want)
+@pytest.mark.parametrize("convert", [False, True], ids=["sparse-model", "to-sparse"])
+@pytest.mark.parametrize("build", list(CONSTRAINT_BUILDS))
+def test_sparse_constraint_is_canonical_and_matches_dense(
+    build: str, convert: bool
+) -> None:
+    dense = CONSTRAINT_BUILDS[build](base_model())
+    if convert:
+        sparse = CONSTRAINT_BUILDS[build](base_model()).to_sparse()
+    else:
+        sparse = CONSTRAINT_BUILDS[build](base_model(sparse=True))
+    assert sparse.lhs.is_sparse
+    assert_conequal(dense, sparse, strict=False)
+    np.testing.assert_array_equal(sparse.active_labels(), dense.active_labels())
+    csr = sparse_store(sparse.lhs).csr
+    assert canonical(csr) is csr
 
 
-def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
-    c1, c2 = twin_models()
+def test_to_constraint_on_csr_lhs_is_unassigned_sparse_constraint() -> None:
+    c1, c2 = base_model(), base_model(sparse=True)
     dense = c1.balance_lhs() == c1.load
     con = c2.balance_lhs() == c2.load
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
     assert not con.is_assigned
     assert con.type == "Constraint (unassigned)"
     assert "None" not in repr(con)
@@ -472,42 +427,35 @@ def test_to_constraint_on_csr_lhs_is_unassigned_csr_constraint() -> None:
 
     con1 = c1.m.add_constraints(dense, name="bal")
     con2 = c2.m.add_constraints(con, name="bal")
-    assert isinstance(con2, CSRConstraint)
+    assert con2.lhs.is_sparse
     assert con2.is_assigned
-    assert np.array_equal(
-        np.sort(con1.labels.values.ravel()), np.sort(con2.active_labels())
-    )
     assert_conequal(con1, con2, strict=False)
+    xr.testing.assert_equal(con1.labels, con2.labels)
 
 
-@pytest.mark.parametrize("freeze", [False, True])
-def test_group_without_terms_matches_dense_labels(freeze: bool) -> None:
+def test_group_without_terms_matches_dense_labels() -> None:
 
-    def build(sparse: bool) -> ConstraintBase:
+    def build(sparse: bool) -> Constraint:
         c = base_model(sparse=sparse)
         gens = c.gen_p.indexes["gen"]
         gen_p = c.gen_p.where(xr.DataArray(gens != "gen7", coords=[gens]))
         lhs = (c.eff * gen_p).groupby(c.gbus).sum()
-        return c.m.add_constraints(lhs == c.load, name="bal", freeze=freeze)
+        return c.m.add_constraints(lhs == c.load, name="bal")
 
     dense, sparse = build(False), build(True)
-    assert isinstance(sparse, CSRConstraint if freeze else Constraint)
+    assert sparse.lhs.is_sparse
     assert_conequal(dense, sparse, strict=False)
-    np.testing.assert_array_equal(dense.labels.values, sparse.labels.values)
+    xr.testing.assert_equal(dense.labels, sparse.labels)
 
 
 @pytest.mark.parametrize("masked", [False, True], ids=["unmasked", "masked"])
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_invalid_infinite_rhs_raises(sparse: bool, masked: bool) -> None:
+def test_invalid_infinite_rhs_raises(sparse: bool, masked: bool) -> None:
     c = base_model(sparse=sparse)
     valid = c.load.bus != "bus0"
     rhs = c.load.where(valid, -np.inf)
     mask = valid if masked else None
-    add = partial(c.m.add_constraints, name="bal", freeze=True, mask=mask)
-    if masked and sparse:
-        con = add(c.balance_lhs() <= rhs)
-        assert con.ncons == int(valid.sum()) * c.load.sizes["snapshot"]
-        return
+    add = partial(c.m.add_constraints, name="bal", mask=mask)
     with pytest.raises(ValueError, match="incorrect infinite values"):
         add(c.balance_lhs() <= rhs)
 
@@ -524,7 +472,7 @@ ROW_SCALINGS: dict[str, Callable[[xr.DataArray], Any]] = {
 @pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
 @pytest.mark.parametrize("scaling", list(ROW_SCALINGS))
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_constraint_applies_row_scaling(
+def test_constraint_applies_row_scaling(
     sparse: bool, scaling: str, masked: bool
 ) -> None:
     c = base_model(n_snap=6, sparse=sparse)
@@ -533,11 +481,10 @@ def test_frozen_constraint_applies_row_scaling(
     con = c.m.add_constraints(
         c.balance_lhs() == c.load,
         name="bal",
-        freeze=True,
         scaling=row_scaling,
         mask=mask,
     )
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse == sparse
     active = con.labels != -1
     expected = xr.DataArray(row_scaling).broadcast_like(c.load).astype(float)
     xr.testing.assert_equal(
@@ -548,16 +495,14 @@ def test_frozen_constraint_applies_row_scaling(
 @pytest.mark.parametrize("grid", [False, True], ids=["scalar", "grid"])
 @pytest.mark.parametrize("invalid", [-1.0, np.nan])
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
-def test_frozen_constraint_rejects_invalid_row_scaling_on_masked_rows(
+def test_constraint_rejects_invalid_row_scaling_on_masked_rows(
     sparse: bool, invalid: float, grid: bool
 ) -> None:
     c = base_model(sparse=sparse)
     mask = c.load.bus == "bus1"
     scaling = c.load.where(mask, invalid) if grid else invalid
     with pytest.raises(ValueError, match="finite positive"):
-        c.m.add_constraints(
-            c.balance_lhs() == c.load, freeze=True, scaling=scaling, mask=mask
-        )
+        c.m.add_constraints(c.balance_lhs() == c.load, scaling=scaling, mask=mask)
 
 
 @pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
@@ -566,7 +511,7 @@ def test_frozen_constraint_rejects_invalid_row_scaling_on_masked_rows(
     [(Case.gen_sum, 0.25), (Case.balance_lhs, 1.5)],
     ids=["canonical", "unsorted"],
 )
-def test_freeze_copies_lhs_matrix_only_to_canonicalize(
+def test_sparse_constraint_copies_lhs_matrix_only_to_canonicalize(
     masked: bool, build: Callable[[Case], LinearExpression], copies: float
 ) -> None:
     c = base_model(gens_per_bus=(400,) * 50, n_snap=20, sparse=True)
@@ -578,7 +523,7 @@ def test_freeze_copies_lhs_matrix_only_to_canonicalize(
     mask = c.load.bus == "bus1" if masked else None
     tracemalloc.start()
     try:
-        c.m.add_constraints(lhs == c.load, name="bal", freeze=True, mask=mask)
+        c.m.add_constraints(lhs == c.load, name="bal", mask=mask)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -597,7 +542,6 @@ def sparse_model_results(c: Case) -> dict[str, Any]:
         "expression @": (1.0 * c.gen_p) @ weights,
         "variable @": c.gen_p @ weights,
         "constraint": c.m.add_constraints(lhs == c.load, name="bal"),
-        "unfrozen": c.m.add_constraints(lhs >= 0, name="free", freeze=False),
         "copy": c.m.copy().constraints["bal"],
     }
 
@@ -605,13 +549,9 @@ def sparse_model_results(c: Case) -> dict[str, Any]:
 @pytest.mark.parametrize("sparse", [False, True])
 def test_model_sparse_switches_the_whole_build(sparse: bool) -> None:
     res = sparse_model_results(base_model(sparse=sparse))
-    unfrozen = res.pop("unfrozen")
-    assert isinstance(unfrozen, Constraint)
     for key, obj in res.items():
-        if isinstance(obj, LinearExpression):
-            assert obj.is_sparse is sparse, key
-        else:
-            assert isinstance(obj, CSRConstraint) is sparse, key
+        expr = obj if isinstance(obj, LinearExpression) else obj.lhs
+        assert expr.is_sparse is sparse, key
 
 
 def test_model_sparse_persists_through_netcdf(tmp_path: Path) -> None:
@@ -620,24 +560,6 @@ def test_model_sparse_persists_through_netcdf(tmp_path: Path) -> None:
     read = linopy.read_netcdf(tmp_path / "m.nc")
     assert read.sparse
     assert read.copy().sparse
-
-
-@pytest.mark.parametrize("sparse", [False, True])
-@pytest.mark.parametrize("freeze", [0, 1])
-def test_file_with_freeze_constraints_attr_loads(
-    tmp_path: Path, sparse: bool, freeze: int
-) -> None:
-    c = base_model(sparse=sparse)
-    c.m.add_constraints(c.balance_lhs() == c.load, name="bal")
-    c.m.to_netcdf(tmp_path / "m.nc")
-    ds = xr.load_dataset(tmp_path / "m.nc")
-    ds.attrs["freeze_constraints"] = freeze
-    ds.to_netcdf(tmp_path / "old.nc")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        read = linopy.read_netcdf(tmp_path / "old.nc")
-    assert read.sparse is sparse
-    assert_conequal(read.constraints["bal"], c.m.constraints["bal"])
 
 
 @pytest.mark.parametrize(
@@ -659,12 +581,12 @@ def test_sparse_model_notices_groupby_without_sparse_path() -> None:
         (1.0 * c.gen_p).groupby(c.gbus).sum(use_fallback=True)
 
 
-def test_materialized_csr_still_freezes_via_dense_path() -> None:
+def test_materialized_csr_constraint_stays_sparse() -> None:
     c = base_model(sparse=True)
     lhs = c.balance_lhs()
     _ = lhs.nterm
     con = c.m.add_constraints(lhs == c.load, name="bal")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
 
 
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
@@ -673,7 +595,7 @@ def test_nan_rhs_raises(sparse: bool) -> None:
     load = c.load.copy()
     load[0, 0] = np.nan
     with pytest.raises(ValueError, match="NaN"):
-        c.m.add_constraints(c.balance_lhs() == load, name="bal", freeze=True)
+        c.m.add_constraints(c.balance_lhs() == load, name="bal")
 
 
 @pytest.mark.parametrize("sparse", [True, False], ids=["sparse", "dense"])
@@ -681,7 +603,7 @@ def test_reordered_rhs_raises(sparse: bool) -> None:
     c = base_model(sparse=sparse)
     load = c.load.isel(bus=slice(None, None, -1))
     with pytest.raises(ValueError, match="[Cc]oordinate"):
-        c.m.add_constraints(c.balance_lhs() == load, name="bal", freeze=True)
+        c.m.add_constraints(c.balance_lhs() == load, name="bal")
 
 
 def test_nan_grouper_raises_eagerly() -> None:
@@ -710,7 +632,7 @@ def canon_lp(text: str) -> list[str]:
 
 def test_lp_files_identical(tmp_path: Path) -> None:
     sizes = (7, 1, 3, 1, 2, 1, 1, 4, 1, 2, 1, 1)
-    c1, c2 = twin_models(gens_per_bus=sizes)
+    c1, c2 = base_model(gens_per_bus=sizes), base_model(gens_per_bus=sizes, sparse=True)
     c1.m.add_constraints(c1.balance_lhs() == c1.load, name="bal")
     c1.m.add_objective((1.0 * c1.gen_p).sum())
     c2.m.add_constraints(c2.balance_lhs() == c2.load, name="bal")
@@ -726,7 +648,7 @@ def case_twins(
     build: Callable[[Case], LinearExpression],
 ) -> Callable[[], tuple[LinearExpression, LinearExpression]]:
     def twins() -> tuple[LinearExpression, LinearExpression]:
-        c1, c2 = twin_models()
+        c1, c2 = base_model(), base_model(sparse=True)
         return build(c1), build(c2)
 
     return twins
@@ -788,20 +710,20 @@ def test_csr_solution_raises_on_removed_variable() -> None:
 
 
 def test_reindex_falls_back_to_dense_for_unsupported_kwargs() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     res = c2.gen_sum().reindex(bus=["bus3", "bus0"], copy=False)
     assert not res.is_sparse
     assert_linequal(res, c1.gen_sum().reindex(bus=["bus3", "bus0"]))
 
 
-def test_reindex_merge_chain_freezes_csr() -> None:
-    c1, c2 = twin_models()
+def test_reindex_merge_chain_constraint_stays_sparse() -> None:
+    c1, c2 = base_model(), base_model(sparse=True)
     con1 = c1.m.add_constraints(reindexed_balance(c1) == c1.load, name="bal")
     tot = reindexed_balance(c2)
     assert tot.is_sparse
     con2 = c2.m.add_constraints(tot == c2.load, name="bal")
-    assert isinstance(con2, CSRConstraint)
-    assert_frozen_equal(con1, con2)
+    assert con2.lhs.is_sparse
+    assert_conequal(con1, con2, strict=False)
 
 
 def test_reindex_merge_chain_peak_memory() -> None:
@@ -820,7 +742,7 @@ def test_reindex_merge_chain_peak_memory() -> None:
 
 @pytest.mark.parametrize("value", [0.0, 3.5])
 def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     wide = {"bus": [f"bus{i}" for i in range(7)]}
     filled = c2.gen_sum().reindex(wide).fillna(value)
     assert filled.is_sparse
@@ -829,7 +751,7 @@ def test_fillna_stays_csr_and_matches_dense(value: float) -> None:
 
 
 def test_fillna_with_array_falls_back_to_dense() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     fill = xr.zeros_like(c1.load)
     res = c2.gen_sum().fillna(fill)
     assert not res.is_sparse
@@ -837,7 +759,7 @@ def test_fillna_with_array_falls_back_to_dense() -> None:
 
 
 def test_rename_stays_csr_and_matches_dense() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     sparse = c2.gen_sum().rename(bus="node")
     assert sparse.is_sparse
     dense = c1.gen_sum().rename(bus="node")
@@ -874,7 +796,7 @@ def cross_grid_parts(
 
 def twin_cross_grid_parts() -> tuple[list[LinearExpression], list[LinearExpression]]:
     """``cross_grid_parts`` of a sparse model and of its dense twin."""
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     return cross_grid_parts(c2), cross_grid_parts(c1)
 
 
@@ -911,7 +833,7 @@ def test_cross_grid_merge_stays_csr_and_matches_dense(
 
 def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
     """Same labels in a transposed dim order stay sparse under the default join."""
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     a = (1.0 * c2.flow).groupby(c2.bus0).sum()
     b = (1.0 * c2.flow_t).groupby(c2.bus0).sum()
     assert a.coord_dims == b.coord_dims[::-1] != b.coord_dims
@@ -929,7 +851,7 @@ def test_transposed_grid_exact_merge_stays_csr_and_matches_dense() -> None:
 def test_three_operand_cross_grid_merge_matches_dense(
     join: JoinOptions, fill_value: Any
 ) -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     third_lines = ("line3", "line4")
     sparse = cross_grid_parts(c2) + cross_grid_parts(c2, third_lines)[1:]
     dense = cross_grid_parts(c1) + cross_grid_parts(c1, third_lines)[1:]
@@ -1007,7 +929,8 @@ def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) ->
     want_expr = linopy.merge(
         [dense[0], dense[1].assign_coords(tag=tag)], join=join, cls=LinearExpression
     )
-    assert_sparse_matches(res, want_expr)
+    assert res.is_sparse
+    assert_equivalent(res, want_expr)
 
 
 def test_cross_grid_merge_aux_coord_conflict_raises_like_dense() -> None:
@@ -1022,7 +945,7 @@ def test_cross_grid_merge_aux_coord_conflict_raises_like_dense() -> None:
 
 def test_cross_grid_merge_with_duplicate_labels_raises_like_dense() -> None:
     dup = pd.Index(["bus1", "bus1", "bus2"], name="bus")
-    for c in twin_models():
+    for c in (base_model(), base_model(sparse=True)):
         shed = 1.0 * c.m.add_variables(
             coords=[dup, c.load.indexes["snapshot"]], name="shed"
         )
@@ -1033,22 +956,22 @@ def test_cross_grid_merge_with_duplicate_labels_raises_like_dense() -> None:
 def test_override_merge_same_shape_stays_csr() -> None:
     dense, sparse = (
         [c.gen_sum(), (1.0 * c.flow).groupby(c.bus1.str.upper()).sum()]
-        for c in twin_models()
+        for c in (base_model(), base_model(sparse=True))
     )
     res = linopy.merge(sparse, join="override", cls=LinearExpression)
     assert res.is_sparse
     assert_terms_equal(res, linopy.merge(dense, join="override", cls=LinearExpression))
 
 
-def test_cross_grid_balance_freezes_csr() -> None:
-    c1, c2 = twin_models()
+def test_cross_grid_balance_constraint_stays_sparse() -> None:
+    c1, c2 = base_model(), base_model(sparse=True)
     lhs1 = linopy.merge(cross_grid_parts(c1), join="outer")
     con1 = c1.m.add_constraints(lhs1 == c1.load, name="bal")
     lhs2 = linopy.merge(cross_grid_parts(c2), join="outer", cls=LinearExpression)
     assert lhs2.is_sparse
     con2 = c2.m.add_constraints(lhs2 == c2.load, name="bal")
-    assert isinstance(con2, CSRConstraint)
-    assert_frozen_equal(con1, con2)
+    assert con2.lhs.is_sparse
+    assert_conequal(con1, con2, strict=False)
 
 
 def test_cross_grid_merge_peak_memory() -> None:
@@ -1458,7 +1381,7 @@ def test_matmul_output_dim_order_matches_dense() -> None:
 
 
 def test_matmul_keeps_csr_backing_through_chain() -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     operand = loc_operand(c2.gen_p.indexes["snapshot"])
     gen = c2.gen_sum()
     flow = (1.0 * c2.flow).groupby(c2.bus0).sum()
@@ -1471,7 +1394,7 @@ def test_matmul_keeps_csr_backing_through_chain() -> None:
     total = res + (flow @ operand)
     assert total.is_sparse
     con = c2.m.add_constraints(total <= 0, name="matmul")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
 
 
 def test_quadratic_matmul_stays_on_dense_path() -> None:
@@ -1632,12 +1555,11 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
         r"to_constraint\(rhs over dimensions outside the grid\)",
     ),
-    "mutable": (lambda e, c: (e == c.load).mutable(), r"`mutable\(\)`"),
-    "add-unfrozen": (
-        lambda e, c: c.m.add_constraints(e >= 1, freeze=False),
-        "constraint added unfrozen, `freeze=False`",
+    "set-blocks": (set_blocks, "`set_blocks`"),
+    "update-coeffs": (
+        lambda e, c: c.m.add_constraints(e >= 1).update(coeffs=2.0),
+        r"update\(coeffs=, variables=\)",
     ),
-    "set-blocks": (set_blocks, "frozen constraint converted by `set_blocks`"),
     "new-dim": (
         lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]),
         r"mul\(constant over new dimensions\)",
@@ -1697,8 +1619,7 @@ def test_warn_on_densify_names_the_reason(op: str, enabled: bool | None) -> None
         opts.set_value(warn_on_densify=enabled)
         func(sparse, c)
     notices = [w for w in caught if issubclass(w.category, linopy.PerformanceWarning)]
-    implicit_in_sparse_model = op not in {"mutable", "add-unfrozen"}
-    if enabled is False or (enabled is None and not implicit_in_sparse_model):
+    if enabled is False:
         assert notices == []
         return
     assert len(notices) == 1
@@ -1726,9 +1647,12 @@ def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
     m = sparse.model
     con = m.add_constraints(sparse >= 1, name="con")
     A = m.matrices.A
-    assert isinstance(con, CSRConstraint) and sparse.is_sparse
+    assert con.lhs.is_sparse and sparse.is_sparse
     assert A is not None
-    dtypes = {sparse_store(sparse).csr.indices.dtype, con._csr.indices.dtype}
+    dtypes = {
+        sparse_store(sparse).csr.indices.dtype,
+        sparse_store(con.lhs).csr.indices.dtype,
+    }
     assert dtypes == {np.dtype(m.dtypes["labels"]), A.indices.dtype}
 
 
@@ -1917,7 +1841,8 @@ def test_merge_with_dense_expression_stays_csr_and_matches_dense(
     other = DENSE_ADDENDS[addend](c, dense)
     with sparsified():
         res = other + sparse if swap else sparse + other
-    assert_sparse_matches(res, other + dense if swap else dense + other)
+    assert res.is_sparse
+    assert_equivalent(res, other + dense if swap else dense + other)
 
 
 def unaligned(e: LinearExpression) -> LinearExpression:
@@ -1943,7 +1868,8 @@ def test_merge_over_different_dims_joins_like_dense(
     want = want_first.add(want_second, join=join, fill_value=fill_value)
     assert isinstance(res, LinearExpression)
     assert isinstance(want, LinearExpression)
-    assert_sparse_matches(res, want)
+    assert res.is_sparse
+    assert_equivalent(res, want)
 
 
 @pytest.mark.parametrize(
@@ -1995,10 +1921,11 @@ def sum_then_reuse(e: LinearExpression) -> LinearExpression:
 def test_variable_arithmetic_is_csr_in_sparse_model_and_matches_dense(
     op: str,
 ) -> None:
-    dense_case, sparse_case = twin_models()
+    dense_case, sparse_case = base_model(), base_model(sparse=True)
     with no_densify():
         res = VARIABLE_OPS[op](sparse_case)
-    assert_sparse_matches(res, VARIABLE_OPS[op](dense_case))
+    assert res.is_sparse
+    assert_equivalent(res, VARIABLE_OPS[op](dense_case))
 
 
 DENSE_VARIABLE_OPS: dict[str, Callable[[Case], Any]] = {
@@ -2012,7 +1939,7 @@ DENSE_VARIABLE_OPS: dict[str, Callable[[Case], Any]] = {
 
 @pytest.mark.parametrize("op", list(DENSE_VARIABLE_OPS))
 def test_variable_ops_without_sparse_path_build_dense_silently(op: str) -> None:
-    dense_case, sparse_case = twin_models()
+    dense_case, sparse_case = base_model(), base_model(sparse=True)
     with no_densify():
         res = DENSE_VARIABLE_OPS[op](sparse_case)
     want = DENSE_VARIABLE_OPS[op](dense_case)
@@ -2100,34 +2027,24 @@ def test_join_with_constant_keeps_aux_coords_like_dense(
     )
     with no_densify():
         res = getattr(sparse, op)(x, join=join)
-    assert_sparse_matches(res, getattr(dense, op)(x, join=join))
+    assert res.is_sparse
+    assert_equivalent(res, getattr(dense, op)(x, join=join))
 
 
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 def test_to_constraint_join_with_constant_matches_dense(join: JoinOptions) -> None:
     cons = []
-    for c in twin_models():
+    for c in (base_model(), base_model(sparse=True)):
         lhs = c.gen_sum()
         with no_densify():
             con = lhs.to_constraint("<=", c.load.isel(bus=[0, 2]), join=join)
             cons.append(c.m.add_constraints(con, name="c"))
-    dense, frozen = cons
-    assert isinstance(frozen, CSRConstraint)
+    dense, sparse = cons
+    assert sparse.lhs.is_sparse
     xr.testing.assert_identical(
-        xr.Dataset(coords=frozen.coords), xr.Dataset(coords=dense.coords)
+        xr.Dataset(coords=sparse.coords), xr.Dataset(coords=dense.coords)
     )
-    assert_frozen_equal(dense, frozen)
-
-
-def assert_sparse_matches(res: LinearExpression, want: LinearExpression) -> None:
-    """CSR backing kept, and equal to the dense reference up to term layout."""
-    assert res.is_sparse
-    assert res.coord_dims == want.coord_dims
-    xr.testing.assert_identical(
-        xr.Dataset(coords=res.coords), xr.Dataset(coords=want.coords)
-    )
-    xr.testing.assert_identical(res.isnull(), want.isnull())
-    assert_cells_equal(res, want, tuple(map(str, want.coord_dims)))
+    assert_conequal(dense, sparse, strict=False)
 
 
 SUM_DIMS: dict[str, Callable[[tuple[str, ...]], Any]] = {
@@ -2149,7 +2066,8 @@ def test_sum_stays_csr_and_matches_dense(build: str, dims: str) -> None:
     dim = SUM_DIMS[dims](tuple(map(str, sparse.coord_dims)))
     with no_densify():
         res = sparse.sum(dim)
-    assert_sparse_matches(res, dense.sum(dim))
+    assert res.is_sparse
+    assert_equivalent(res, dense.sum(dim))
 
 
 @pytest.mark.parametrize("drop_zeros", [False, True])
@@ -2161,7 +2079,8 @@ def test_sum_keeps_explicit_zeros_unless_dropped(drop_zeros: bool) -> None:
     res = sparse.sum("snapshot", drop_zeros=drop_zeros)
     assert res.is_sparse
     assert (sparse_store(res).csr.nnz == 0) == drop_zeros
-    assert_sparse_matches(res, dense.sum("snapshot", drop_zeros=drop_zeros))
+    assert res.is_sparse
+    assert_equivalent(res, dense.sum("snapshot", drop_zeros=drop_zeros))
 
 
 def test_sum_unknown_dim_raises_like_dense() -> None:
@@ -2191,7 +2110,8 @@ def test_chained_groupby_stays_csr_and_matches_dense(build: str, chain: str) -> 
     func = CHAINS[chain]
     with no_densify():
         res = func(sparse)
-    assert_sparse_matches(res, func(dense_build(build)))
+    assert res.is_sparse
+    assert_equivalent(res, func(dense_build(build)))
 
 
 @pytest.mark.parametrize("observed", [False, True])
@@ -2199,7 +2119,8 @@ def test_chained_namelist_groupby_on_aux_coords_matches_dense(observed: bool) ->
     sparse, _ = sparse_and_dense("aux")
     dense = dense_build("aux")
     res = sparse.groupby(["bus", "tag"]).sum(observed=observed)
-    assert_sparse_matches(res, dense.groupby(["bus", "tag"]).sum(observed=observed))
+    assert res.is_sparse
+    assert_equivalent(res, dense.groupby(["bus", "tag"]).sum(observed=observed))
 
 
 def dim0(e: LinearExpression) -> str:
@@ -2247,7 +2168,8 @@ def test_selection_stays_csr_and_matches_dense(build: str, select: str) -> None:
     func = SELECTIONS[select]
     with no_densify():
         res = func(sparse)
-    assert_sparse_matches(res, func(dense))
+    assert res.is_sparse
+    assert_equivalent(res, func(dense))
 
 
 def dim_last(e: LinearExpression) -> str:
@@ -2283,7 +2205,8 @@ def test_reindex_matches_dense(build: str, reindexer: str, scale: float) -> None
         res = (scale * sparse).reindex(indexers)
     want = (scale * dense).reindex(indexers)
     xr.testing.assert_identical(res.has_terms, want.has_terms)
-    assert_sparse_matches(res, want)
+    assert res.is_sparse
+    assert_equivalent(res, want)
 
 
 @pytest.mark.parametrize("build", ["grouped", "aux", "absent"])
@@ -2312,7 +2235,8 @@ def test_n_ary_merge_keeps_absent_cells_and_explicit_zeros(build: str, n: int) -
     assert (np.diff(csr.csr.indptr)[np.isnan(csr.const)] == 0).all()
     want = linopy.merge(merge_operands(dense, n), cls=LinearExpression)
     xr.testing.assert_identical(res.has_terms, want.has_terms)
-    assert_sparse_matches(res, want)
+    assert res.is_sparse
+    assert_equivalent(res, want)
 
 
 def tagged_by(c: Case, **aux: pd.Series) -> LinearExpression:
@@ -2327,7 +2251,8 @@ def test_n_ary_merge_unites_aux_coords_and_raises_on_conflict() -> None:
     with no_densify():
         res = linopy.merge(parts, cls=LinearExpression)
     want = linopy.merge([densified(p) for p in parts], cls=LinearExpression)
-    assert_sparse_matches(res, want)
+    assert res.is_sparse
+    assert_equivalent(res, want)
     with pytest.raises(ValueError, match="conflicting values"):
         linopy.merge([*parts, tagged_by(c, tag=c.gbus + "z")], cls=LinearExpression)
 
@@ -2354,7 +2279,8 @@ def test_scalar_selection_coords_merge_like_dense() -> None:
     flow = densified((1.0 * c.flow).groupby(c.bus0).sum())
     with sparsified():
         res = sparse.sel(snapshot=1) + flow.sel(snapshot=1)
-    assert_sparse_matches(res, dense.sel(snapshot=1) + flow.sel(snapshot=1))
+    assert res.is_sparse
+    assert_equivalent(res, dense.sel(snapshot=1) + flow.sel(snapshot=1))
     with pytest.raises(ValueError) as want:
         dense.sel(snapshot=1) + flow.sel(snapshot=2)
     with pytest.raises(ValueError) as got:
@@ -2395,10 +2321,10 @@ MASKS: dict[str, Callable[[LinearExpression], Any]] = {
 
 @pytest.mark.parametrize("prebuilt", [False, True], ids=["lhs", "constraint"])
 @pytest.mark.parametrize("mask", list(MASKS))
-def test_add_constraints_mask_freezes_sparse_and_matches_dense(
+def test_add_constraints_mask_keeps_sparse_and_matches_dense(
     mask: str, prebuilt: bool
 ) -> None:
-    c1, c2 = twin_models()
+    c1, c2 = base_model(), base_model(sparse=True)
     lhs = c2.balance_lhs()
     m = MASKS[mask](lhs)
     con1 = c1.m.add_constraints(c1.balance_lhs(), ">=", c1.load, "bal", mask=m)
@@ -2407,8 +2333,8 @@ def test_add_constraints_mask_freezes_sparse_and_matches_dense(
             con2 = c2.m.add_constraints(lhs >= c2.load, name="bal", mask=m)
         else:
             con2 = c2.m.add_constraints(lhs, ">=", c2.load, "bal", mask=m)
-    assert isinstance(con2, CSRConstraint)
-    assert_frozen_equal(con1, con2)
+    assert con2.lhs.is_sparse
+    assert_conequal(con1, con2, strict=False)
 
 
 def observed_keys_group() -> LinearExpression:
@@ -2442,65 +2368,68 @@ AUX_BUILDS: dict[str, Callable[[], LinearExpression]] = {
 
 
 @pytest.mark.parametrize("build", list(AUX_BUILDS))
-def test_frozen_constraint_keeps_aux_coords_like_dense(
+def test_sparse_constraint_keeps_aux_coords_like_dense(
     build: str, tmp_path: Path
 ) -> None:
     sparse = AUX_BUILDS[build]()
     m = sparse.model
     assert sparse.is_sparse
-    ref = m.add_constraints(densified(sparse) >= 1, name="dense", freeze=False)
+    ref = densified(sparse) >= 1
     with no_densify():
         con = m.add_constraints(sparse >= 1, name="sparse")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse and not ref.lhs.is_sparse
     want = xr.Dataset(coords=ref.coords)
-    assert set(want.coords) > set(con.coord_names)
-    for got in (con, con.mutable(), ref.freeze()):
-        xr.testing.assert_identical(xr.Dataset(coords=got.coords), want)
+    assert set(want.coords) > set(map(str, con.coord_dims))
+    xr.testing.assert_identical(xr.Dataset(coords=con.coords), want)
     m.to_netcdf(tmp_path / "m.nc")
     read = linopy.read_netcdf(tmp_path / "m.nc").constraints["sparse"]
-    assert isinstance(read, CSRConstraint)
+    assert read.lhs.is_sparse
     xr.testing.assert_identical(xr.Dataset(coords=read.coords), want)
 
 
-def setter(attr: str) -> Callable[[CSRConstraint], None]:
-    return lambda con: setattr(con, attr, 1.0)
-
-
-FROZEN_MUTATIONS: dict[str, Callable[[CSRConstraint], Any]] = {
-    "loc": lambda con: con.loc[{"bus": "bus0"}],
-    "update": lambda con: con.update(rhs=2.0),
-    **{
-        attr: setter(attr)
-        for attr in ["coeffs", "vars", "sign", "rhs", "lhs", "scaling"]
-    },
-}
-
-
-@pytest.mark.parametrize("op", list(FROZEN_MUTATIONS))
-def test_frozen_constraint_mutation_names_mutable(op: str) -> None:
-    c = base_model(sparse=True)
-    con = c.m.add_constraints(c.balance_lhs() >= c.load)
-    assert isinstance(con, CSRConstraint)
-    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*\.mutable\(\)"):
-        FROZEN_MUTATIONS[op](con)
-
-
-FROZEN_UNSUPPORTED: dict[str, tuple[Callable[[CSRConstraint], Any], str]] = {
-    "from_rule": (
-        lambda con: CSRConstraint.from_rule(con.model, lambda m, i: None, [[0]]),
-        r"Constraint\.from_rule .*\.freeze\(\)",
+SPARSE_UPDATES: dict[str, Callable[[Constraint, Case], Any]] = {
+    "lhs": lambda con, c: con.update(lhs=2 * c.balance_lhs()),
+    "lhs-dense": lambda con, c: con.update(
+        lhs=(1.0 * c.flow).groupby(c.bus0).sum(use_fallback=True)
     ),
+    "rhs": lambda con, c: con.update(rhs=2 * c.load),
+    "rhs-expr": lambda con, c: con.update(rhs=(1.0 * c.flow).groupby(c.bus1).sum()),
+    "sign": lambda con, c: con.update(sign="<="),
+    "constraint": lambda con, c: con.update(c.gen_sum() <= c.load),
+    "coeffs": lambda con, c: con.update(coeffs=2.0),
+    "scaling": lambda con, c: setattr(con, "scaling", 2.0),
 }
 
 
-@pytest.mark.parametrize("op", list(FROZEN_UNSUPPORTED))
-def test_frozen_unsupported_names_the_working_route(op: str) -> None:
-    c = base_model(sparse=True)
-    con = c.m.add_constraints(c.balance_lhs() >= c.load)
-    assert isinstance(con, CSRConstraint)
-    call, remedy = FROZEN_UNSUPPORTED[op]
-    with pytest.raises(AttributeError, match=rf"CSRConstraint\.{op} .*{remedy}"):
-        call(con)
+@pytest.mark.parametrize("op", list(SPARSE_UPDATES))
+def test_update_keeps_sparse_lhs_and_matches_dense(op: str) -> None:
+    cons = []
+    for sparse in (False, True):
+        c = base_model(sparse=sparse)
+        con = c.m.add_constraints(c.balance_lhs() >= c.load, name="c")
+        SPARSE_UPDATES[op](con, c)
+        assert con.lhs.is_sparse == sparse
+        assert c.m.constraints["c"] is con
+        cons.append(con)
+    dense, sparse_con = cons
+    assert_conequal(dense, sparse_con, strict=False)
+    xr.testing.assert_equal(dense.scaling, sparse_con.scaling)
+
+
+def test_set_blocks_on_sparse_model_matches_dense(tmp_path: Path) -> None:
+    blocks = []
+    for sparse in (False, True):
+        c = base_model(sparse=sparse)
+        con = c.m.add_constraints(c.balance_lhs() >= c.load, name="c")
+        c.m.constraints.set_blocks(np.arange(c.m._xCounter) % 3)
+        assert con.lhs.is_sparse == sparse
+        path = tmp_path / f"{sparse}.nc"
+        c.m.to_netcdf(path)
+        read = linopy.read_netcdf(path).constraints["c"]
+        assert read.lhs.is_sparse == sparse
+        xr.testing.assert_equal(read.data["blocks"], con.data["blocks"])
+        blocks.append(con.data["blocks"])
+    xr.testing.assert_equal(*blocks)
 
 
 EXPR_RHS: dict[str, Callable[[Case], LinearExpression]] = {
@@ -2515,11 +2444,9 @@ EXPR_RHS: dict[str, Callable[[Case], LinearExpression]] = {
 
 @pytest.mark.parametrize("form", ["operator", "add_constraints"])
 @pytest.mark.parametrize("rhs", list(EXPR_RHS))
-def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) -> None:
-    c1, c2 = twin_models()
-    con1 = c1.m.add_constraints(
-        c1.gen_sum() <= EXPR_RHS[rhs](c1), name="c", freeze=True
-    )
+def test_expression_rhs_keeps_sparse_and_matches_dense(rhs: str, form: str) -> None:
+    c1, c2 = base_model(), base_model(sparse=True)
+    con1 = c1.m.add_constraints(c1.gen_sum() <= EXPR_RHS[rhs](c1), name="c")
     lhs2 = c2.gen_sum()
     rhs2 = EXPR_RHS[rhs](c2)
     with sparsified() if rhs == "dense-expr-const" else no_densify():
@@ -2527,8 +2454,8 @@ def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) ->
             con2 = c2.m.add_constraints(lhs2 <= rhs2, name="c")
         else:
             con2 = c2.m.add_constraints(lhs2, "<=", rhs2, name="c")
-    assert isinstance(con2, CSRConstraint)
-    assert_frozen_equal(con1, con2)
+    assert con2.lhs.is_sparse
+    assert_conequal(con1, con2, strict=False)
 
 
 MASK_KINDS: dict[str, Callable[[Case], xr.DataArray | None]] = {
@@ -2544,7 +2471,7 @@ def softened(
     route: str,
     max_violation: float | None,
     sparse: bool,
-) -> tuple[Case, ConstraintBase]:
+) -> tuple[Case, Constraint]:
     c = base_model(sparse=sparse)
     c.m.add_objective(1.0 * c.gen_p.sum())
     mask = MASK_KINDS[mask_kind](c)
@@ -2554,7 +2481,6 @@ def softened(
         con = c.m.add_constraints(*args, **kwargs)
         con.soften(penalty=2.0, max_violation=max_violation)
     else:
-        kwargs["freeze"] = None if route == "penalty-default" else sparse
         con = c.m.add_constraints(*args, **kwargs, penalty=2.0)
     return c, con
 
@@ -2563,32 +2489,31 @@ SOFTEN_ROUTES = [
     ("soften", None),
     ("soften", 5.0),
     ("penalty", None),
-    ("penalty-default", None),
 ]
 
 
 @pytest.mark.parametrize(("route", "max_violation"), SOFTEN_ROUTES)
 @pytest.mark.parametrize("mask_kind", list(MASK_KINDS))
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
-def test_frozen_soften_matches_dense(
+def test_sparse_soften_matches_dense(
     sign: str, mask_kind: str, route: str, max_violation: float | None, tmp_path: Path
 ) -> None:
     dense_case, dense = softened(sign, mask_kind, route, max_violation, sparse=False)
     with no_densify():
         case, con = softened(sign, mask_kind, route, max_violation, sparse=True)
         case.m.to_netcdf(tmp_path / "m.nc")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
     assert case.m.constraints["c"] is con
-    assert_frozen_equal(dense, con)
+    assert_conequal(dense, con, strict=False)
     obj, want_obj = case.m.objective.expression, dense_case.m.objective.expression
     assert isinstance(obj, LinearExpression) and isinstance(want_obj, LinearExpression)
     assert_cells_equal(obj, want_obj, ())
     assert dense.slack is not None
     read = linopy.read_netcdf(tmp_path / "m.nc").constraints["c"]
-    assert isinstance(read, CSRConstraint)
-    assert_frozen_equal(dense, read)
-    for frozen_con in (con, read, con.mutable(), dense.freeze()):
-        slack = frozen_con.slack
+    assert read.lhs.is_sparse
+    assert_conequal(dense, read, strict=False)
+    for sparse_con in (con, read):
+        slack = sparse_con.slack
         assert slack is not None
         assert_varequal(slack.positive, dense.slack.positive)
         assert (slack.negative is None) == (dense.slack.negative is None)
@@ -2596,7 +2521,7 @@ def test_frozen_soften_matches_dense(
             assert_varequal(slack.negative, dense.slack.negative)
 
 
-def test_frozen_soften_keeps_sparse_objective() -> None:
+def test_sparse_soften_keeps_sparse_objective() -> None:
     c = base_model(sparse=True)
     with no_densify():
         c.m.add_objective((1.0 * c.gen_p).groupby(c.gbus).sum().sum())
@@ -2604,12 +2529,12 @@ def test_frozen_soften_keeps_sparse_objective() -> None:
     assert c.m.objective.expression.is_sparse
 
 
-def test_frozen_soften_max_sense_with_array_penalty() -> None:
+def test_sparse_soften_max_sense_with_array_penalty() -> None:
     c = base_model(sparse=True)
     c.m.add_objective(1.0 * c.gen_p.sum(), sense="max")
     with no_densify():
         con = c.m.add_constraints(c.balance_lhs(), ">=", c.load, name="c")
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
     penalty = xr.full_like(c.load, 2.0)
     slack = con.soften(penalty=penalty)
     expected_objective = 1.0 * c.gen_p.sum() - (penalty * slack.positive).sum()
@@ -2620,7 +2545,7 @@ def test_frozen_soften_max_sense_with_array_penalty() -> None:
 
 @pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")
 @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
-def test_frozen_soften_solves_like_dense(sign: str) -> None:
+def test_sparse_soften_solves_like_dense(sign: str) -> None:
     values = []
     for sparse in (False, True):
         c, _ = softened(sign, "masked", "soften", 20.0, sparse)
@@ -2631,12 +2556,12 @@ def test_frozen_soften_solves_like_dense(sign: str) -> None:
     assert values[0] == pytest.approx(values[1])
 
 
-def soften_twice(con: ConstraintBase) -> Any:
+def soften_twice(con: Constraint) -> Any:
     con.soften(penalty=1.0)
     return con.soften(penalty=1.0)
 
 
-SOFTEN_ERRORS: dict[str, tuple[Callable[[ConstraintBase], Any], type, str]] = {
+SOFTEN_ERRORS: dict[str, tuple[Callable[[Constraint], Any], type, str]] = {
     "twice": (soften_twice, ValueError, "already softened"),
     "zero-penalty": (lambda con: con.soften(penalty=0.0), ValueError, "not positive"),
     "no-objective": (
@@ -2652,32 +2577,32 @@ SOFTEN_ERRORS: dict[str, tuple[Callable[[ConstraintBase], Any], type, str]] = {
 }
 
 # "twice", "zero-penalty" and "no-objective" are already covered for dense
-# constraints in test/test_constraint.py; only the frozen path needs them here.
-FROZEN_ONLY_ERRORS = {"twice", "zero-penalty", "no-objective"}
+# constraints in test/test_constraint.py; only the sparse path needs them here.
+SPARSE_ONLY_ERRORS = {"twice", "zero-penalty", "no-objective"}
 
 SOFTEN_REJECT_CASES = [
-    pytest.param(error, freeze, id=f"{error}-{'frozen' if freeze else 'dense'}")
+    pytest.param(error, sparse, id=f"{error}-{'sparse' if sparse else 'dense'}")
     for error in SOFTEN_ERRORS
-    for freeze in ((True,) if error in FROZEN_ONLY_ERRORS else (False, True))
+    for sparse in ((True,) if error in SPARSE_ONLY_ERRORS else (False, True))
 ]
 
 
-@pytest.mark.parametrize(("error", "freeze"), SOFTEN_REJECT_CASES)
-def test_soften_rejects(error: str, freeze: bool) -> None:
-    c = base_model()
+@pytest.mark.parametrize(("error", "sparse"), SOFTEN_REJECT_CASES)
+def test_soften_rejects(error: str, sparse: bool) -> None:
+    c = base_model(sparse=sparse)
     if error != "no-objective":
         c.m.add_objective(1.0 * c.gen_p.sum())
     sign: Any = ">="
     if error == "mixed-signs":
         sign = xr.DataArray(np.where(c.load > 4, ">=", "<="), coords=c.load.coords)
-    con = c.m.add_constraints(c.balance_lhs(), sign, c.load, name="c", freeze=freeze)
-    assert isinstance(con, CSRConstraint) == freeze
+    con = c.m.add_constraints(c.balance_lhs(), sign, c.load, name="c")
+    assert con.lhs.is_sparse == sparse
     call, exc, match = SOFTEN_ERRORS[error]
     with pytest.raises(exc, match=match):
         call(con)
 
 
-def frozen_model(soften: bool) -> tuple[Model, CSRConstraint]:
+def sparse_case_model(soften: bool) -> tuple[Model, Constraint]:
     c = base_model(sparse=True)
     for var in (c.gen_p, c.flow):
         var.update(lower=0, upper=1)
@@ -2686,30 +2611,31 @@ def frozen_model(soften: bool) -> tuple[Model, CSRConstraint]:
         con = c.m.add_constraints(c.balance_lhs(), ">=", c.load, name="c")
         if soften:
             con.soften(penalty=2.0, max_violation=20.0)
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
     return c.m, con
 
 
 @pytest.mark.skipif("highs" not in linopy.licensed_solvers, reason="needs highs")
 @pytest.mark.parametrize("include_solution", [True, False])
 @pytest.mark.parametrize("deep", [True, False])
-def test_copy_keeps_frozen_constraints(deep: bool, include_solution: bool) -> None:
-    m, con = frozen_model(soften=True)
+def test_copy_keeps_sparse_constraints(deep: bool, include_solution: bool) -> None:
+    m, con = sparse_case_model(soften=True)
     m.solve("highs")
     with no_densify():
         c = m.copy(deep=deep, include_solution=include_solution)
     copied = c.constraints["c"]
     assert copied.model is c and copied.name == "c"
+    assert copied.lhs.is_sparse
     assert c.objective.expression.is_sparse
     assert con.slack is not None and copied.slack is not None
     assert copied.slack.positive.labels.equals(con.slack.positive.labels)
     assert copied.slack.positive.model is c
-    assert ("dual" in copied.mutable().data) == include_solution
+    assert ("dual" in copied) == include_solution
 
 
 @pytest.mark.parametrize("deep", [True, False])
-def test_softening_frozen_copy_leaves_original(deep: bool) -> None:
-    m, con = frozen_model(soften=False)
+def test_softening_sparse_copy_leaves_original(deep: bool) -> None:
+    m, con = sparse_case_model(soften=False)
     with no_densify():
         copied = m.copy(deep=deep)
         copied.constraints["c"].soften(penalty=2.0)
@@ -2719,7 +2645,7 @@ def test_softening_frozen_copy_leaves_original(deep: bool) -> None:
 
 
 @pytest.mark.parametrize("deep", [True, False])
-def test_copy_frozen_matrices(deep: bool) -> None:
+def test_copy_sparse_matrices(deep: bool) -> None:
     m = Model(sparse=True)
     i = pd.RangeIndex(4, name="i")
     x = m.add_variables(lower=0, coords=[i], name="x")
@@ -2732,8 +2658,9 @@ def test_copy_frozen_matrices(deep: bool) -> None:
     c = m.copy(deep=deep)
     for name, con in m.constraints.items():
         copied = c.constraints[name]
-        assert isinstance(con, CSRConstraint) and isinstance(copied, CSRConstraint)
-        assert np.shares_memory(con._csr.data, copied._csr.data) != deep
+        assert con.lhs.is_sparse and copied.lhs.is_sparse
+        stored, copied_csr = sparse_store(con.lhs).csr, sparse_store(copied.lhs).csr
+        assert np.shares_memory(stored.data, copied_csr.data) != deep
     got, want = c.matrices, m.matrices
     assert got.A is not None and want.A is not None
     assert got.indicator_A is not None and want.indicator_A is not None
@@ -2748,8 +2675,11 @@ def test_copy_frozen_matrices(deep: bool) -> None:
     ]
     for g, w in pairs:
         assert np.array_equal(g, w)
-    with pytest.raises(ValueError, match="read-only"):
-        c.constraints["c"].coords["aux"].values[0] = -1
+    copied_aux = c.constraints["c"].coords["aux"].values
+    original_aux = m.constraints["c"].coords["aux"].values
+    assert not (
+        copied_aux.flags.writeable and np.shares_memory(copied_aux, original_aux)
+    )
     assert c.constraints["c"].coords["aux"].equals(m.constraints["c"].coords["aux"])
 
 
@@ -2774,7 +2704,8 @@ def test_shift_roll_diff_stay_csr_and_match_dense(
     sparse, dense = scale * sparse, scale * dense
     with no_densify():
         res = SHIFT_OPS[op](sparse)
-    assert_sparse_matches(res, SHIFT_OPS[op](dense))
+    assert res.is_sparse
+    assert_equivalent(res, SHIFT_OPS[op](dense))
 
 
 @pytest.mark.parametrize(
@@ -2827,7 +2758,8 @@ def test_concat_stays_csr_and_matches_dense(
     with no_densify():
         res = concat(operands, dim=dim)
     assert all(e.is_sparse for e in operands)
-    assert_sparse_matches(res, concat(split(dense, dim, *positions), dim=dim))
+    assert res.is_sparse
+    assert_equivalent(res, concat(split(dense, dim, *positions), dim=dim))
 
 
 @pytest.mark.parametrize("transposed", [False, True], ids=["same-order", "transposed"])
@@ -2842,7 +2774,8 @@ def test_concat_with_dense_operand_stays_csr_and_matches_dense(
         )
     with sparsified():
         res = concat([sparse.isel(snapshot=[0]), tail])
-    assert_sparse_matches(res, concat([dense.isel(snapshot=[0]), tail]))
+    assert res.is_sparse
+    assert_equivalent(res, concat([dense.isel(snapshot=[0]), tail]))
 
 
 def joined_parts(e: LinearExpression) -> list[LinearExpression]:
@@ -2855,7 +2788,8 @@ def test_concat_join_stays_csr_and_matches_dense(join: JoinOptions) -> None:
     sparse, dense = sparse_and_dense("grouped")
     with no_densify():
         res = concat(joined_parts(sparse), join)
-    assert_sparse_matches(res, concat(joined_parts(dense), join))
+    assert res.is_sparse
+    assert_equivalent(res, concat(joined_parts(dense), join))
 
 
 def override_parts(e: LinearExpression) -> list[LinearExpression]:
@@ -2883,20 +2817,22 @@ def test_concat_coords_follow_dense(
     sparse, dense = sparse_and_dense(build)
     with no_densify():
         res = concat(parts(sparse), join)
-    assert_sparse_matches(res, concat(parts(dense), join))
+    assert res.is_sparse
+    assert_equivalent(res, concat(parts(dense), join))
 
 
-def test_concat_freezes_like_dense() -> None:
-    dense_c, sparse_c = twin_models()
+def test_concat_constraint_matches_dense() -> None:
+    dense_c, sparse_c = base_model(), base_model(sparse=True)
 
     def lhs(c: Case) -> LinearExpression:
         parts = split(c.gen_sum(), "bus", [0, 1], [2, 3, 4])
         return linopy.merge(parts, dim="bus", cls=LinearExpression)
 
     with no_densify():
-        frozen = sparse_c.m.add_constraints(lhs(sparse_c) >= 1, name="c")
-    assert isinstance(frozen, CSRConstraint)
-    assert_frozen_equal(dense_c.m.add_constraints(lhs(dense_c) >= 1, name="c"), frozen)
+        sparse = sparse_c.m.add_constraints(lhs(sparse_c) >= 1, name="c")
+    assert sparse.lhs.is_sparse
+    dense = dense_c.m.add_constraints(lhs(dense_c) >= 1, name="c")
+    assert_conequal(dense, sparse, strict=False)
 
 
 @pytest.mark.parametrize(
@@ -2940,7 +2876,7 @@ OPERAND_OPS: dict[str, Callable[[LinearExpression, Case], Any]] = {
     "groupby": lambda e, c: e.groupby(halves(e)).sum(),
     "reindex": lambda e, c: e.reindex(bus=["bus3", "bus0", "bus9"]),
     "repr": lambda e, c: repr(e),
-    "freeze": lambda e, c: c.m.add_constraints(e >= 1, name="c", freeze=True),
+    "constraint": lambda e, c: c.m.add_constraints(e >= 1, name="c"),
     "matrices": lambda e, c: (c.m.add_constraints(e >= 1, name="c"), c.m.matrices.A),
 }
 
@@ -2980,15 +2916,16 @@ def test_to_dense_keeps_repeated_terms_in_stored_order() -> None:
     assert_linequal(sparse, dense_repeated + dense_y)
 
 
-def test_duplicate_terms_kept_like_dense_and_summed_at_freeze() -> None:
-    dense_c, sparse_c = twin_models()
+def test_duplicate_terms_kept_like_dense_and_summed_in_constraint() -> None:
+    dense_c, sparse_c = base_model(), base_model(sparse=True)
     dense, sparse = duplicated_lhs(dense_c), duplicated_lhs(sparse_c)
     assert sparse.nterm == dense.nterm
-    assert_sparse_matches(sparse, dense)
-    frozen = sparse_c.m.add_constraints(sparse == sparse_c.load, name="bal")
+    assert sparse.is_sparse
+    assert_equivalent(sparse, dense)
+    con = sparse_c.m.add_constraints(sparse == sparse_c.load, name="bal")
     dense_c.m.add_constraints(dense == dense_c.load, name="bal")
-    assert isinstance(frozen, CSRConstraint)
-    assert frozen.nterm == max(dense_c.gbus.value_counts()) + 2
+    assert con.lhs.is_sparse
+    assert con.nterm == max(dense_c.gbus.value_counts()) + 2
     got, want = sparse_c.m.matrices.A, dense_c.m.matrices.A
     assert got is not None and want is not None
     assert got.nnz == want.nnz

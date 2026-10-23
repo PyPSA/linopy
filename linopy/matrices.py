@@ -9,67 +9,46 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import cached_property, partial
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
-from linopy.constraints import CSRConstraint
 from linopy.csr import index_dtype
 
 if TYPE_CHECKING:
     from linopy.common import VariableLabelIndex
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.model import Model
 
 
 class _RowBlock(NamedTuple):
     """
-    Rows of one constraint. ``positional`` returns its positional CSR; for a
-    frozen constraint it is built only while the rows are gathered.
+    Active rows of one constraint. ``positional`` returns their positional
+    CSR, built only while the rows are gathered; ``nnz`` bounds its nonzeros.
     """
 
     positional: Callable[[], scipy.sparse.csr_array]
     n_rows: int
     nnz: int
     rhs: ndarray
-    sign: str | ndarray
+    sign: ndarray
     row_scaling: ndarray | None
 
 
-def _unit_or(scaling: ndarray) -> ndarray | None:
-    return None if (scaling == 1).all() else scaling
-
-
-def _row_scaling(c: ConstraintBase) -> ndarray:
-    """Scaling of the active rows of a constraint, in row order."""
-    if isinstance(c, CSRConstraint):
-        return c._scaling
-    return c.scaling.values.ravel()[c.active_row_mask()]
-
-
-def _row_block(con: ConstraintBase, label_index: VariableLabelIndex) -> _RowBlock:
-    row_scaling = _unit_or(_row_scaling(con))
-    if isinstance(con, CSRConstraint):
-        stored = con._csr
-        return _RowBlock(
-            partial(con._to_positional_csr, label_index),
-            stored.shape[0],
-            int(np.count_nonzero(stored.data)),
-            con._rhs,
-            con._sign,
-            row_scaling,
-        )
-    csr, _, rhs, sense = con.to_matrix_with_rhs(label_index)
+def _row_block(con: Constraint, label_index: VariableLabelIndex) -> _RowBlock:
+    active = con.active_row_mask()
+    store = con.lhs._store
+    scaling = con.scaling.values.ravel()[active]
     return _RowBlock(
-        lambda: csr,
-        csr.shape[0],
-        int(np.count_nonzero(csr.data)),
-        rhs,
-        sense,
-        row_scaling,
+        partial(store.positional_csr, label_index, active, con.name),
+        int(active.sum()),
+        store.variable_labels().size,
+        con.rhs.values.ravel()[active],
+        con.sign.values.ravel()[active].astype("U1"),
+        None if (scaling == 1).all() else scaling,
     )
 
 
@@ -106,7 +85,7 @@ def _stack(
     pos = row = 0
     for block in blocks:
         source = block.positional()
-        count = block.nnz
+        count = int(np.count_nonzero(source.data))
         block_data, block_indices, block_indptr = (
             source.data,
             source.indices,
@@ -135,15 +114,18 @@ def _stack(
         block_offsets += pos
         sense[rows] = block.sign
         pos, row = entries.stop, rows.stop
-    A = scipy.sparse.csr_array((data, indices, indptr), shape=(n_rows, n_cols))
+    A = scipy.sparse.csr_array(
+        (data[:pos], indices[:pos], indptr), shape=(n_rows, n_cols)
+    )
     return A, b, sense
 
 
-def _binval_per_row(binval: int | np.ndarray, n: int) -> ndarray:
-    """Broadcast an indicator triggering value to one entry per active row."""
-    if np.ndim(binval) == 0:
-        return np.full(n, int(binval), dtype=np.intp)
-    return np.asarray(binval, dtype=np.intp).ravel()
+def _indicator_rows(con: Constraint, active: ndarray) -> tuple[ndarray, ndarray]:
+    """Binary variable labels and triggering values of the active indicator rows."""
+    if con.binary_var is None or con.binary_val is None:
+        raise ValueError(f"Constraint {con.name!r} is not an indicator constraint.")
+    var_labels = con.binary_var.values.ravel()[active]
+    return var_labels, np.ravel(con.binary_val)[active].astype(np.intp)
 
 
 class MatrixAccessor:
@@ -208,11 +190,11 @@ class MatrixAccessor:
             if not c.is_indicator:
                 regular.append(_row_block(c, label_index))
                 continue
-            cc = c if isinstance(c, CSRConstraint) else c.freeze()
-            indicator.append(_row_block(cc, label_index))
-            binvar.append(label_to_pos[cc._binvar_labels])
-            cc_binval = cast("int | np.ndarray", cc._binval)
-            binval.append(_binval_per_row(cc_binval, len(cc._rhs)))
+            active = c.active_row_mask()
+            indicator.append(_row_block(c, label_index))
+            var_labels, val = _indicator_rows(c, active)
+            binvar.append(label_to_pos[var_labels])
+            binval.append(val)
 
         self.clabels: ndarray = m.constraints.label_index.clabels
         self.A: scipy.sparse.csr_array | None
@@ -286,20 +268,12 @@ class MatrixAccessor:
         for c in m.constraints.data.values():
             if c.is_indicator:
                 continue
-            if isinstance(c, CSRConstraint):
-                # _dual is active-only
-                if c._dual is not None:
-                    dual_list.append(c._dual)
-                    has_dual = True
-                else:
-                    dual_list.append(np.full(c.ncons, np.nan))
+            active = c.active_row_mask()
+            if "dual" in c:
+                dual_list.append(c.dual.values.ravel()[active])
+                has_dual = True
             else:
-                active_rows = np.flatnonzero(c.active_row_mask())
-                if "dual" in c.data:
-                    dual_list.append(c.dual.values.ravel()[active_rows])
-                    has_dual = True
-                else:
-                    dual_list.append(np.full(len(active_rows), np.nan))
+                dual_list.append(np.full(int(active.sum()), np.nan))
         if not has_dual:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."

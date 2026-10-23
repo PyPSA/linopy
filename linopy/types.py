@@ -10,10 +10,7 @@ from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 if TYPE_CHECKING:
-    from linopy.constraints import (
-        AnonymousScalarConstraint,
-        ConstraintBase,
-    )
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         LinearExpression,
         QuadraticExpression,
@@ -50,6 +47,6 @@ VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
 ExpressionLike: TypeAlias = Union[
     "ScalarLinearExpression", "LinearExpression", "QuadraticExpression"
 ]
-ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
+ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
 LinExprLike = Union["Variable", "LinearExpression"]
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007

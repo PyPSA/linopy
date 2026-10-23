@@ -103,7 +103,7 @@ def test_coords_from_dataset_reads_name_keyed_format() -> None:
     ],
 )
 def test_coords_from_dataset_loads_multiindex_flat(ds: xr.Dataset) -> None:
-    """A frozen constraint over a MultiIndex from linopy < 1.0 loads flat."""
+    """A sparse (CSR) constraint over a MultiIndex from linopy < 1.0 loads flat."""
     (index,), levels = coords_from_dataset(ds, ["d"])
     assert index.equals(pd.RangeIndex(3)) and index.name == "d"
     assert {n: (d, v.tolist()) for n, (d, v) in levels.items()} == {

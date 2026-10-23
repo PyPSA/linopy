@@ -54,11 +54,10 @@ from linopy.constants import (
 from linopy.constraints import (
     AnonymousScalarConstraint,
     Constraint,
-    ConstraintBase,
     Constraints,
-    CSRConstraint,
+    model_store,
 )
-from linopy.csr import CSRStore, _densify_notice
+from linopy.csr import CSRStore
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -268,8 +267,7 @@ class Model:
             Build the model on the sparse (CSR) path, exposed read-only as
             ``Model.sparse``. ``groupby(...).sum()`` and ``@``/``dot`` against
             a constant return CSR-backed expressions, and ``add_constraints``
-            freezes constraints to a CSRConstraint unless ``freeze=False`` is
-            passed. Requires no ``chunk``. See
+            holds the constraint lhs on a CSR store. Requires no ``chunk``. See
             :mod:`linopy.csr`. The default is False.
 
         Returns
@@ -1115,7 +1113,7 @@ class Model:
         sign: SignLike | None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """Build the anonymous constraint from an ``lhs`` and optional ``sign``/``rhs``."""
         msg_required = (
             f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
@@ -1140,7 +1138,7 @@ class Model:
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
             return lhs.to_constraint()
-        elif isinstance(lhs, ConstraintBase):
+        elif isinstance(lhs, Constraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
             return lhs
@@ -1169,60 +1167,6 @@ class Model:
             labels = labels.where(mask, -1)
         return labels, (start, end)
 
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: Literal[False] = ...,
-        scaling: ConstantLike = ...,
-        penalty: ConstantLike | None = ...,
-    ) -> Constraint: ...
-
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: Literal[True] = ...,
-        scaling: ConstantLike = ...,
-        penalty: None = ...,
-    ) -> CSRConstraint: ...
-
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: bool | None = ...,
-        scaling: ConstantLike = ...,
-        penalty: ConstantLike | None = ...,
-    ) -> ConstraintBase: ...
-
     def add_constraints(
         self,
         lhs: VariableLike
@@ -1235,10 +1179,9 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
-        freeze: bool | None = None,
         scaling: ConstantLike = 1,
         penalty: ConstantLike | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -1250,7 +1193,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.ConstraintBase/callable
+        lhs : linopy.LinearExpression/linopy.Constraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -1272,10 +1215,6 @@ class Model:
             Boolean mask with False values for constraints which are skipped.
             The shape of the mask has to match the shape the added constraints.
             Default is None.
-        freeze : bool, optional
-            If True, convert the constraint to an immutable CSR-backed CSRConstraint
-            for better memory efficiency. If None, freezes if the model is
-            sparse (``Model(sparse=True)``).
         scaling : float/array_like, optional
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
@@ -1283,8 +1222,8 @@ class Model:
         penalty : constant-like, optional
             If given, soften the constraint right away by calling
             :meth:`Constraint.soften` with this penalty, adding a slack variable
-            and a penalty term to the objective. A frozen constraint is
-            softened natively on its sparse rows. The resulting Slack is not
+            and a penalty term to the objective. A sparse lhs is softened
+            on its sparse rows. The resulting Slack is not
             returned by this shortcut; retrieve the slack variable(s) from
             model.variables using the derived
             name f"{name}_slack_pos" (and f"{name}_slack_neg" for
@@ -1292,14 +1231,12 @@ class Model:
 
         Returns
         -------
-        constraint : linopy.ConstraintBase
-            The added constraint (Constraint by default, or CSRConstraint if freeze=True).
+        constraint : linopy.Constraint
+            The added constraint, its lhs on the model's store class
+            (:attr:`store_cls`) where it converts.
         """
 
         name = self._resolve_constraint_name(name)
-        if freeze is None:
-            freeze = self._sparse
-        freeze = freeze and not self.chunk
 
         if isinstance(sign, str):
             sign = maybe_replace_sign(sign)
@@ -1307,42 +1244,9 @@ class Model:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        if isinstance(con, CSRConstraint) and freeze:
-            row_mask = (
-                None
-                if mask is None
-                else con.active_values(
-                    broadcast_to_coords(mask, con.coords, label="mask")
-                ).astype(bool)
-            )
-            _check_infinities(con._sign, con._rhs, name, row_mask)
-            self.check_force_dim_names(con.coords.to_dataset())
-            self._check_valid_dim_names(con.coords.to_dataset())
-            enforce_no_multiindex(con, context=f"constraint {name!r}")
-            row_scaling = (
-                float(scaling)
-                if isinstance(scaling, int | float | np.number)
-                else broadcast_to_coords(
-                    scaling, con.coords, label="constraint scaling"
-                )
-            )
-            cindex = self._cCounter
-            self._cCounter += con.full_size
-            con = con.assign_labels(cindex, name, row_scaling, row_mask)
-            return self._soften_added(self.constraints.add(con), penalty)
-        if isinstance(con, CSRConstraint):
-            _densify_notice(
-                "constraint added unfrozen, `freeze=False`", self, explicit=True
-            )
-        dense = (
-            con
-            if isinstance(con, Constraint)
-            else Constraint.from_dataset(con.data, self)
-        )
+        _check_infinities(con.sign, con.rhs, name)
 
-        _check_infinities(dense.sign, dense.rhs, name)
-
-        rhs = dense.rhs
+        rhs = con.rhs
         rhs_nan = rhs.isnull()
         if rhs_nan.any():
             rhs = rhs.fillna(0)
@@ -1359,34 +1263,34 @@ class Model:
         )
 
         if mask is not None:
-            mask = broadcast_to_coords(mask, dense.coords, label="mask").astype(bool)
+            mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
 
-        lhs = dense.lhs
+        lhs = con.lhs
         self.check_force_dim_names(lhs)
         self._check_valid_dim_names(lhs)
 
         labels, label_range = self._allocate_constraint_labels(rhs, mask)
         constraint = Constraint(
-            lhs,
-            dense.sign,
+            LinearExpression._from_store(model_store(lhs._store, self), self),
+            con.sign,
             rhs,
             self,
             name,
             labels=labels,
             scaling=row_scaling,
-            attrs={**dense.attrs, "label_range": label_range},
+            attrs={**con.attrs, "label_range": label_range},
         )
         enforce_no_multiindex(constraint, context=f"constraint {name!r}")
 
         if self.chunk:
             constraint = constraint.chunk(self.chunk)
 
-        return self._soften_added(self.constraints.add(constraint, freeze), penalty)
+        return self._soften_added(self.constraints.add(constraint), penalty)
 
     @staticmethod
     def _soften_added(
-        constraint: ConstraintBase, penalty: ConstantLike | None
-    ) -> ConstraintBase:
+        constraint: Constraint, penalty: ConstantLike | None
+    ) -> Constraint:
         if penalty is not None:
             constraint.soften(penalty=penalty)
         return constraint
@@ -1400,7 +1304,7 @@ class Model:
         rhs: ConstantLike | None = None,
         name: str | None = None,
         scaling: ConstantLike = 1,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Add indicator constraints to the model.
 
@@ -1434,7 +1338,7 @@ class Model:
 
         Returns
         -------
-        linopy.constraints.ConstraintBase
+        linopy.constraints.Constraint
             The added indicator constraint.
         """
         if not binary_var.attrs.get("binary", False):
@@ -1460,7 +1364,7 @@ class Model:
         )
         labels, label_range = self._allocate_constraint_labels(rhs_da)
         con = Constraint(
-            base.lhs,
+            LinearExpression._from_store(model_store(base.lhs._store, self), self),
             base.sign,
             rhs_da,
             self,
@@ -1472,7 +1376,7 @@ class Model:
             attrs={**base.attrs, "label_range": label_range},
         )
         enforce_no_multiindex(con, context=f"constraint {name!r}")
-        return self.constraints.add(con, freeze=self._sparse)
+        return self.constraints.add(con)
 
     def remove_indicator_constraints(self, name: str) -> None:
         """
@@ -2445,10 +2349,6 @@ class Model:
                 if con.is_indicator:
                     continue
                 start, end = con.range
-                if isinstance(con, CSRConstraint):
-                    active = dual[start:end][con.active_positions]
-                    con._dual = active * con._scaling / self.objective.scaling
-                    continue
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 values = (
                     dual[start:end].reshape(con.shape)
