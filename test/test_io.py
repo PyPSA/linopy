@@ -24,7 +24,7 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
-from linopy.testing import assert_exprequal, assert_model_equal
+from linopy.testing import assert_equivalent, assert_exprequal, assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -1154,3 +1154,18 @@ def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     m.constraints.data["a"] = Constraint(con.data.isel(i=slice(None, None, -1)), m, "a")
     assert not m.constraints["a"].to_polars()["labels"].is_sorted()
     assert _lp_constraint_section(m, tmp_path / "unsorted.lp") == expected
+
+
+def test_named_linear_expression_reads_back_on_the_model_store(
+    backend: Model, tmp_path: Path
+) -> None:
+    x = backend.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    want = backend.add_expressions(2 * x + 1, name="e")
+    fn = tmp_path / "e.nc"
+    backend.to_netcdf(fn)
+    e = read_netcdf(fn).expressions["e"]
+    assert isinstance(e, LinearExpression)
+    assert e.is_sparse == backend.sparse
+    assert e.attrs["name"] == "e"
+    assert isinstance(want, LinearExpression)
+    assert_equivalent(e, want)

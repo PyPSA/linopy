@@ -735,6 +735,16 @@ class CSRStore(Store):
         csr = _interleaved([p.csr for p in parts], shape, self.model)
         return replace(self, csr=csr, const=const, grid=merged_grid(parts)).absorbed()
 
+    @classmethod
+    def from_matmul(
+        cls,
+        source: CSRStore,
+        matrix: scipy.sparse.csr_array,
+        contracted_dims: Iterable[str],
+        new_indexes: Iterable[pd.Index],
+    ) -> CSRStore:
+        return source.dot(matrix, contracted_dims, new_indexes)
+
     def dot(
         self,
         matrix: scipy.sparse.csr_array,
@@ -983,18 +993,26 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+def _conversion_notice(message: str, model: Model, explicit: bool) -> None:
     """
-    Emit a :class:`~linopy.constants.PerformanceWarning` naming why a sparse
-    (CSR) backing is dropped, if ``options["warn_on_densify"]`` is set, or
-    left at its default ``None``, ``model`` is sparse and the conversion is
-    an implicit fallback rather than an ``explicit`` user request.
+    Emit ``message`` as a :class:`~linopy.constants.PerformanceWarning` if
+    ``options["warn_on_densify"]`` is set, or left at its default ``None``,
+    ``model`` is sparse and the conversion is an implicit fallback rather
+    than an ``explicit`` user request.
     """
     enabled = options["warn_on_densify"]
     if model.sparse and not explicit if enabled is None else enabled:
-        warn_outside_linopy(
-            f"Sparse (CSR) backing densified: {reason}.", PerformanceWarning
-        )
+        warn_outside_linopy(message, PerformanceWarning)
+
+
+def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+    """The conversion notice naming why a sparse (CSR) backing is dropped."""
+    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model, explicit)
+
+
+def _sparsify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+    """The conversion notice naming why a dense backing is converted to sparse."""
+    _conversion_notice(f"Dense backing sparsified: {reason}.", model, explicit)
 
 
 def _readonly(values: np.ndarray, copy: bool = True) -> np.ndarray:

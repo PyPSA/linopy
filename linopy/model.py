@@ -60,7 +60,7 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
-from linopy.csr import _densify_notice
+from linopy.csr import CSRStore, _densify_notice
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
@@ -107,6 +107,7 @@ from linopy.sos_reformulation import (
     sos_reformulation_context,
     undo_sos_reformulation,
 )
+from linopy.store import DenseStore, Store
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -520,6 +521,14 @@ class Model:
         ``Model(sparse=True)``.
         """
         return self._sparse
+
+    @property
+    def store_cls(self) -> type[Store]:
+        """
+        The store class new expressions are built on: :class:`~linopy.csr.CSRStore`
+        in a sparse model, :class:`~linopy.store.DenseStore` otherwise.
+        """
+        return CSRStore if self._sparse else DenseStore
 
     @property
     def set_names_in_solver_io(self) -> bool:

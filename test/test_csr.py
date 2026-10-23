@@ -20,7 +20,7 @@ import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
-from test_store_conformance import no_densify
+from test_store_conformance import no_densify, sparsified
 from xarray.core.types import JoinOptions
 
 import linopy
@@ -990,7 +990,7 @@ def test_cross_grid_merge_with_aux_coord_operand_stays_csr(join: JoinOptions) ->
     sparse, dense = twin_cross_grid_parts()
     tag = xr.DataArray(["x", "y"], coords=[dense[1].indexes["bus"]])
     tagged = densified(sparse[1]).assign_coords(tag=tag)
-    with no_densify():
+    with sparsified():
         res = linopy.merge([sparse[0], tagged], join=join, cls=LinearExpression)
     assert res.is_sparse
     labels = res.indexes["bus"]
@@ -1896,7 +1896,7 @@ def test_merge_with_dense_expression_stays_csr_and_matches_dense(
     c = base_model(sparse=True)
     sparse, dense = sparse_and_dense(build, c)
     other = DENSE_ADDENDS[addend](c, dense)
-    with no_densify():
+    with sparsified():
         res = other + sparse if swap else sparse + other
     assert_sparse_matches(res, other + dense if swap else dense + other)
 
@@ -1918,7 +1918,7 @@ def test_merge_over_different_dims_joins_like_dense(
     sparse, dense = sparse_and_dense("grouped", c)
     other = unaligned(DENSE_ADDENDS[addend](c, dense))
     first, second = (other, sparse) if swap else (sparse, other)
-    with no_densify():
+    with sparsified():
         res = first.add(second, join=join, fill_value=fill_value)
     want_first, want_second = (other, dense) if swap else (dense, other)
     want = want_first.add(want_second, join=join, fill_value=fill_value)
@@ -2333,7 +2333,7 @@ def test_scalar_selection_coords_merge_like_dense() -> None:
     c = base_model(sparse=True)
     sparse, dense = sparse_and_dense("grouped", c)
     flow = densified((1.0 * c.flow).groupby(c.bus0).sum())
-    with no_densify():
+    with sparsified():
         res = sparse.sel(snapshot=1) + flow.sel(snapshot=1)
     assert_sparse_matches(res, dense.sel(snapshot=1) + flow.sel(snapshot=1))
     with pytest.raises(ValueError) as want:
@@ -2503,7 +2503,7 @@ def test_expression_rhs_freezes_sparse_and_matches_dense(rhs: str, form: str) ->
     )
     lhs2 = c2.gen_sum()
     rhs2 = EXPR_RHS[rhs](c2)
-    with no_densify():
+    with sparsified() if rhs == "dense-expr-const" else no_densify():
         if form == "operator":
             con2 = c2.m.add_constraints(lhs2 <= rhs2, name="c")
         else:
@@ -2821,7 +2821,7 @@ def test_concat_with_dense_operand_stays_csr_and_matches_dense(
         tail = LinearExpression(
             tail.data.transpose(*reversed(tail.coord_dims), ...), tail.model
         )
-    with no_densify():
+    with sparsified():
         res = concat([sparse.isel(snapshot=[0]), tail])
     assert_sparse_matches(res, concat([dense.isel(snapshot=[0]), tail]))
 

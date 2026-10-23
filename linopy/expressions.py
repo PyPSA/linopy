@@ -556,11 +556,11 @@ class LinearExpressionGroupby:
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
         store = self._store
-        sparse = self.model.sparse or isinstance(store, CSRStore)
+        store_cls = result_store_cls(store, self.model)
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
 
-        if sparse:
+        if store_cls is CSRStore:
             grouper = multikey_frame
             if grouper is None:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
@@ -578,7 +578,7 @@ class LinearExpressionGroupby:
                     if isinstance(grouper, pd.DataFrame)
                     else str(grouper.name or "group")
                 )
-                res = CSRStore.from_grouper(
+                res = store_cls.from_grouper(
                     store, self.model, grouper, group_name, stacked, coord_dims
                 )
                 return LinearExpression._from_store(res, self.model)
@@ -2571,7 +2571,7 @@ class LinearExpression(BaseExpression):
 
         try:
             if isinstance(other, variables.Variable):
-                other = other.to_linexpr(_dense=True)
+                other = other._linexpr(DenseStore)
             elif isinstance(other, variables.ScalarVariable):
                 other = other.to_linexpr()
 
@@ -2659,6 +2659,8 @@ class LinearExpression(BaseExpression):
         if not self.coord_dims:
             return "matmul(zero-dimensional expression)"
         csr = self._store.to_sparse()
+        if isinstance(csr, str):
+            return f"matmul({csr})"
         if not csr.grid.is_unique:
             return "matmul(non-unique labels)"
         if csr.grid.size == 0:
@@ -2673,10 +2675,9 @@ class LinearExpression(BaseExpression):
             da, contracted, new_dims, csr.grid.indexes, csr.grid.aux
         )
         new_indexes = [da.indexes[d].rename(d) for d in new_dims]
-        res = csr.dot(matrix, contracted, new_indexes)
-        if self.is_sparse or self.model.sparse:
-            return type(self)._from_store(res, self.model)
-        return type(self)._from_store(res.to_dense(), self.model)
+        store_cls = result_store_cls(self._store, self.model)
+        res = store_cls.from_matmul(csr, matrix, contracted, new_indexes)
+        return type(self)._from_store(res, self.model)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -3405,6 +3406,11 @@ def as_expression(
         except ValueError as e:
             raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
+
+
+def result_store_cls(store: Store, model: Model) -> type[Store]:
+    """The store class an operation on ``store`` builds its result on."""
+    return CSRStore if isinstance(store, CSRStore) else model.store_cls
 
 
 def _dense_copies(exprs: Sequence[Any], reason: Reason) -> list[Any]:

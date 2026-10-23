@@ -33,6 +33,7 @@ from linopy.common import (
 from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+from linopy.store import expression_dataset
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -1270,7 +1271,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         ):
             expr = QuadraticExpression(expr_ds, m)
         else:
-            expr = LinearExpression(expr_ds, m)
+            store = m.store_cls.from_dense(expression_dataset(expr_ds, m), m)
+            if isinstance(store, str):
+                raise ValueError(f"Cannot read expression {name!r}: {store}.")
+            expr = LinearExpression._from_store(store, m)
         expr.attrs["name"] = name
         expressions[name] = expr
 

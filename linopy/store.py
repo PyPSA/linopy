@@ -92,13 +92,27 @@ class Store(ABC):
     ) -> Self:
         """The grouped sum of ``source``, see :meth:`linopy.csr.CSRStore.from_grouper`."""
 
+    @classmethod
+    @abstractmethod
+    def from_matmul(
+        cls,
+        source: CSRStore,
+        matrix: scipy.sparse.csr_array,
+        contracted_dims: Iterable[str],
+        new_indexes: Iterable[pd.Index],
+    ) -> Self:
+        """The contraction ``source @ matrix``, see :meth:`linopy.csr.CSRStore.dot`."""
+
     @abstractmethod
     def to_dense(self, reason: Reason | None = None) -> DenseStore:
         """The dense equivalent, with a densify notice naming ``reason`` if given."""
 
     @abstractmethod
-    def to_sparse(self, reason: Reason | None = None) -> CSRStore:
-        """The sparse equivalent."""
+    def to_sparse(self, reason: Reason | None = None) -> CSRStore | Reason:
+        """
+        The sparse equivalent, with a sparsify notice naming ``reason`` if
+        given; the reason a dense store cannot convert instead.
+        """
 
     @abstractmethod
     def to_dataset(self) -> Dataset:
@@ -233,15 +247,6 @@ class Store(ABC):
     def concat(self, others: Iterable[Self], dim: str, grid: Grid) -> Self | Reason:
         """Stack along the grid dim ``dim`` into the cells of ``grid``."""
 
-    @abstractmethod
-    def dot(
-        self,
-        matrix: scipy.sparse.csr_array,
-        contracted_dims: Iterable[str],
-        new_indexes: Iterable[pd.Index],
-    ) -> Self:
-        """Contract grid dims against a sparse constant, see :meth:`linopy.csr.CSRStore.dot`."""
-
 
 def expression_dataset(data: Dataset | Any | None, model: Model) -> Dataset:
     """Normalize ``data`` to the dataset layout of an expression."""
@@ -324,10 +329,18 @@ class DenseStore(Store):
     def grid(self) -> Grid:
         from linopy.csr import Grid
 
-        grid = Grid.from_dataset(self.ds, self.dims)
-        if lost := set(map(str, self.ds.coords)) - {*grid.dims, *grid.aux}:
-            raise ValueError(f"The grid cannot hold the coordinates {sorted(lost)}.")
-        return grid
+        if lost := self._off_grid():
+            raise ValueError(f"The grid cannot hold the coordinates {lost}.")
+        return Grid.from_dataset(self.ds, self.dims)
+
+    def _off_grid(self) -> list[str]:
+        """The coordinates the grid cannot hold, e.g. two-dimensional ones."""
+        from linopy.csr import _aux_coords
+
+        own = set(self.dims)
+        return sorted(
+            set(map(str, self.ds.coords)) - own - set(_aux_coords(self.ds, own))
+        )
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -410,7 +423,7 @@ class DenseStore(Store):
     def from_labels(cls, ds: Dataset, model: Model) -> DenseStore:
         labels, coeffs = xr.broadcast(ds.vars, ds.coeffs)
         const = xr.where(labels == -1, np.nan, 0.0)
-        terms = Dataset({"vars": labels, "coeffs": coeffs.astype(float)})
+        terms = Dataset({"vars": labels, "coeffs": coeffs})
         dense = terms.expand_dims(TERM_DIM, -1).assign(const=const)
         return cls(expression_dataset(absorb_absence(dense), model), model)
 
@@ -429,12 +442,29 @@ class DenseStore(Store):
         args = (grouper, group_dim, stacked, coord_dims)
         return CSRStore.from_grouper(source, model, *args).to_dense()
 
+    @classmethod
+    def from_matmul(
+        cls,
+        source: CSRStore,
+        matrix: scipy.sparse.csr_array,
+        contracted_dims: Iterable[str],
+        new_indexes: Iterable[pd.Index],
+    ) -> DenseStore:
+        from linopy.csr import CSRStore
+
+        args = (matrix, contracted_dims, new_indexes)
+        return CSRStore.from_matmul(source, *args).to_dense()
+
     def to_dense(self, reason: Reason | None = None) -> DenseStore:
         return self
 
-    def to_sparse(self, reason: Reason | None = None) -> CSRStore:
-        from linopy.csr import CSRStore
+    def to_sparse(self, reason: Reason | None = None) -> CSRStore | Reason:
+        from linopy.csr import CSRStore, _sparsify_notice
 
+        if lost := self._off_grid():
+            return f"coordinates the Grid cannot hold: {', '.join(lost)}"
+        if reason is not None:
+            _sparsify_notice(reason, self.model)
         return CSRStore.from_dense(self.ds, self.model)
 
     def to_dataset(self) -> Dataset:
@@ -536,7 +566,7 @@ class DenseStore(Store):
         return self._derived(summed(self.ds, None if dims is None else list(dims)))
 
     def aggregate(self, grid: Grid, rows: np.ndarray) -> DenseStore:
-        return self.to_sparse().aggregate(grid, rows).to_dense()
+        return as_sparse(self).aggregate(grid, rows).to_dense()
 
     def add(self, *others: DenseStore) -> DenseStore:
         return self.merged((self, *others), TERM_DIM, "override", 0.0, {})
@@ -544,13 +574,13 @@ class DenseStore(Store):
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
         return self.merged((self, *others), dim, "override", np.nan, {})
 
-    def dot(
-        self,
-        matrix: scipy.sparse.csr_array,
-        contracted_dims: Iterable[str],
-        new_indexes: Iterable[pd.Index],
-    ) -> DenseStore:
-        return self.to_sparse().dot(matrix, contracted_dims, new_indexes).to_dense()
+
+def as_sparse(store: Store) -> CSRStore:
+    """``store`` as a sparse store, raising where it cannot convert."""
+    res = store.to_sparse()
+    if isinstance(res, str):
+        raise ValueError(f"Cannot convert to a sparse store: {res}.")
+    return res
 
 
 def _stack_into_term_dim(ds: Dataset, dims: list[Hashable]) -> Dataset:
@@ -727,16 +757,6 @@ def _merge_dims(store: Store, union: set[str]) -> list[str]:
     return [d for d in dims if d in union] + list(store.dims)
 
 
-def _off_grid(store: Store) -> bool:
-    """Whether a dense store carries coordinates its grid cannot hold."""
-    from linopy.csr import _aux_coords
-
-    if not isinstance(store, DenseStore):
-        return False
-    own = set(store.dims)
-    return set(store.ds.coords) - own != set(_aux_coords(store.ds, own))
-
-
 def merge_stores(
     stores: Sequence[Store],
     dim: str,
@@ -751,8 +771,9 @@ def merge_stores(
     store is sparse, all are merged as sparse stores: along the term
     dimension as sparse matrix addition on the joined grid
     (:func:`align_stores`), along a grid dimension as a row stack
-    (:func:`concat_stores`). Returns the reason where the dense merge owns
-    the semantics instead.
+    (:func:`concat_stores`); the dense stores convert up through
+    :meth:`Store.to_sparse`, with one sparsify notice for all. Returns the
+    reason where the dense merge owns the semantics instead.
     """
     dense = [s for s in stores if isinstance(s, DenseStore)]
     if len(dense) == len(stores):
@@ -765,9 +786,15 @@ def merge_stores(
         return "merge(operands over different dimensions)"
     if dim != TERM_DIM and dim not in grid_dims:
         return "merge(new dimension)"
-    if any(_off_grid(s) for s in stores):
-        return "merge(dense operand with non-grid coordinates)"
-    csrs = [s.to_sparse() for s in stores]
+    last = max(
+        (i for i, s in enumerate(stores) if isinstance(s, DenseStore)), default=-1
+    )
+    csrs: list[CSRStore] = []
+    for i, s in enumerate(stores):
+        csr = s.to_sparse("merge with a sparse operand" if i == last else None)
+        if isinstance(csr, str):
+            return f"merge({csr})"
+        csrs.append(csr)
     if dim != TERM_DIM:
         order = csrs[0].grid.dims
         reordered = [
