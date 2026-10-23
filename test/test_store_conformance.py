@@ -466,6 +466,13 @@ def test_const_assign_rejects(backend: Model, value: str, assigner: str) -> None
     assert expr.is_sparse == backend.sparse
 
 
+def test_nan_constant_operand_rejects(backend: Model) -> None:
+    expr = grid(backend)
+    with no_densify(), pytest.raises(ValueError, match="NaN found"):
+        expr + CONST_REJECTED["nan"][0]
+    assert expr.is_sparse == backend.sparse
+
+
 @pytest.mark.parametrize(
     "op",
     [
