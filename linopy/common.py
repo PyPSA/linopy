@@ -424,41 +424,34 @@ def iterate_slices(
     if slice_dims is None:
         slice_dims = list(getattr(ds, "coord_dims", ds.dims))
 
-    if not set(slice_dims).issubset(ds.dims):
+    for indexers in slice_indexers(dict(ds.sizes), slice_size, slice_dims):
+        yield ds.isel(indexers) if indexers else ds
+
+
+def slice_indexers(
+    sizes: Mapping[Hashable, int], slice_size: int | None, slice_dims: list
+) -> Generator[dict[Hashable, slice], None, None]:
+    """
+    Positional slices along the largest of ``slice_dims`` cutting an object
+    of ``sizes`` into parts of about ``slice_size`` elements; a single empty
+    indexer where no cut is needed.
+    """
+    if not set(slice_dims).issubset(sizes):
         raise ValueError(
             "Invalid slice dimensions. Must be a subset of the dataset dimensions."
         )
-
-    # Calculate the total number of elements in the dataset
-    size = np.prod([ds.sizes[dim] for dim in ds.dims], dtype=int)
-
-    if slice_size is None or size <= slice_size:
-        yield ds
+    size = np.prod(list(sizes.values()), dtype=int)
+    dims = {dim: sizes[dim] for dim in slice_dims}
+    if slice_size is None or size <= slice_size or not dims:
+        yield {}
         return
 
-    # number of slices
-    n_slices = max((size + slice_size - 1) // slice_size, 1)
-
-    # leading dimension (the dimension with the largest size)
-    sizes = {dim: ds.sizes[dim] for dim in slice_dims}
-    if not sizes:
-        yield ds
-        return
-
-    leading_dim = max(sizes, key=sizes.get)  # type: ignore
-    size_of_leading_dim = ds.sizes[leading_dim]
-
-    if size_of_leading_dim < n_slices:
-        n_slices = size_of_leading_dim
-
-    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
-
-    # Iterate over the Cartesian product of slice indices
+    leading_dim = max(dims, key=dims.get)  # type: ignore
+    n_slices = min(max((size + slice_size - 1) // slice_size, 1), dims[leading_dim])
+    chunk_size = (dims[leading_dim] + n_slices - 1) // n_slices
     for i in range(n_slices):
         start = i * chunk_size
-        end = min(start + chunk_size, size_of_leading_dim)
-        slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)
+        yield {leading_dim: slice(start, min(start + chunk_size, dims[leading_dim]))}
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:

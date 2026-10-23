@@ -276,6 +276,16 @@ class Store(ABC):
         absent without terms.
         """
 
+    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
+        """The cells at the positional slices ``indexers`` of grid dims."""
+        from linopy.csr import Grid
+
+        grid = self.grid
+        positions = grid.dataarray(np.arange(grid.size)).isel(indexers)
+        return self.take(
+            positions.values.ravel(), Grid.from_dataset(positions, grid.dims)
+        )
+
     def broadcast(self, grid: Grid) -> Self:
         """Spread the cells over ``grid``, whose dims include this grid's."""
         rows, valid = self.grid.indexer(grid)
@@ -573,8 +583,9 @@ class DenseStore(Store):
 
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         coeffs, vars_, keep = self._active_mask(~np.isnan(self.const))
-        counts = keep.sum(axis=-1).reshape(-1)
-        return np.repeat(np.arange(self.n_cells), counts), vars_[keep], coeffs[keep]
+        cells = np.flatnonzero(keep)
+        cells //= self.nterm
+        return cells, vars_[keep], coeffs[keep]
 
     def variable_labels(self) -> np.ndarray:
         return self.ds.vars.values.ravel()
@@ -688,6 +699,9 @@ class DenseStore(Store):
         coeffs[~present] = np.nan
         vars_[~present] = -1
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
+
+    def isel(self, indexers: Mapping[Hashable, slice]) -> DenseStore:
+        return DenseStore(self.ds.isel(indexers), self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
         fill_value = FILL_VALUE | {"const": fill}

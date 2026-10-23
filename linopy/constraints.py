@@ -54,12 +54,12 @@ from linopy.common import (
     get_dims_with_index_levels,
     get_printout_labels,
     has_optimized_model,
-    iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_signs,
     reassign_coords,
     replace_by_map,
     save_join,
+    slice_indexers,
     to_dataframe,
 )
 from linopy.config import options
@@ -72,7 +72,7 @@ from linopy.constants import (
     SIGNS_pretty,
 )
 from linopy.containers import LabelContainer
-from linopy.csr import CSRStore, Grid, _densify_notice
+from linopy.csr import CSRStore, _densify_notice
 from linopy.scaling import validate_scaling
 from linopy.semantics import check_user_nan
 from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
@@ -419,17 +419,10 @@ class Constraint:
         fields = {k: v.copy(deep=deep) for k, v in self._fields().items() if k in keep}
         return self._on_store(self._lhs._store.copy(model, deep), model, fields)
 
-    def _take(self, positions: DataArray) -> Constraint:
-        """The cells at the flat ``positions``, laid out on their grid."""
-        rows = positions.values.ravel()
-        grid = Grid.from_dataset(positions, map(str, positions.dims))
-        fields = {
-            k: positions.copy(
-                deep=False, data=v.values.ravel()[rows].reshape(positions.shape)
-            )
-            for k, v in self._fields().items()
-        }
-        return self._on_store(self._lhs._store.take(rows, grid), self._model, fields)
+    def _isel(self, indexers: Mapping[Hashable, slice]) -> Constraint:
+        """The cells at the positional slices ``indexers`` of grid dims."""
+        fields = {k: v.isel(indexers) for k, v in self._fields().items()}
+        return self._on_store(self._lhs._store.isel(indexers), self._model, fields)
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
@@ -1225,6 +1218,7 @@ class Constraint:
         long = pl.DataFrame(
             {"labels": labels_flat[cells], "coeffs": coeffs, "vars": vars_}
         )
+        del cells, vars_, coeffs
         long = filter_nulls_polars(long)
         if self.nterm > 1:
             long = maybe_group_terms_polars(long)
@@ -1260,20 +1254,13 @@ class Constraint:
         """
         Yield sub-constraints along the largest of ``slice_dims``, each with at
         most about ``slice_size`` term slots, see
-        :func:`linopy.common.iterate_slices`. The lhs store is gathered by
-        :meth:`~linopy.store.Store.take` and keeps its backing.
+        :func:`linopy.common.slice_indexers`. The lhs store is sliced by
+        :meth:`~linopy.store.Store.isel` and keeps its backing.
         """
-        template = self._grid_template()
-        positions = template.copy(
-            deep=False, data=np.arange(template.size).reshape(template.shape)
-        )
-        slots = positions.expand_dims({TERM_DIM: self.nterm}, axis=-1)
+        sizes = {**self._grid_template().sizes, TERM_DIM: self.nterm}
         dims = list(self.coord_dims) if slice_dims is None else slice_dims
-        for block in iterate_slices(slots, slice_size, dims):
-            if block.sizes == slots.sizes:
-                yield self
-            else:
-                yield self._take(block.isel({TERM_DIM: 0}))
+        for indexers in slice_indexers(sizes, slice_size, dims):
+            yield self._isel(indexers) if indexers else self
 
     assign = conwrap(assign_fields)
     assign_attrs = conwrap(Dataset.assign_attrs)

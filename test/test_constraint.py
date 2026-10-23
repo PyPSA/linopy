@@ -640,15 +640,21 @@ def test_constraint_flat_removed(c: linopy.constraints.Constraint) -> None:
         c.flat  # type: ignore[attr-defined]
 
 
-@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
-def test_iterate_slices(mc: linopy.constraints.Constraint, sparse: bool) -> None:
-    con = mc.to_sparse() if sparse else mc
-    slices = list(con.iterate_slices(slice_size=2))
+@pytest.mark.parametrize("slice_size", [7, 100, 500])
+def test_iterate_slices(backend: Model, slice_size: int) -> None:
+    s, t = pd.RangeIndex(60, name="s"), pd.RangeIndex(40, name="t")
+    x = backend.add_variables(coords=[s, t], name="x")
+    x = x.assign_coords(lvl=("s", np.arange(60) % 3))
+    y = backend.add_variables(coords=[t], name="y")
+    rng = np.random.default_rng(0)
+    mask = x.labels.copy(data=rng.random(x.labels.shape) > 0.3)
+    con = backend.add_constraints(2 * x + x.shift(t=1) - y <= 3, name="c", mask=mask)
+    slices = list(con.iterate_slices(slice_size=slice_size))
     assert len(slices) > 1
     for i in slices:
         assert isinstance(i, Constraint)
         assert con.coord_dims == i.coord_dims
-        assert i.lhs.is_sparse == sparse
+        assert i.lhs.is_sparse == con.lhs.is_sparse
     sliced = pl.concat([i.to_polars() for i in slices])
     assert sliced.equals(con.to_polars())
 
