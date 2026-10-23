@@ -20,7 +20,15 @@ import polars as pl
 import pytest
 import scipy.sparse
 import xarray as xr
-from test_store_conformance import no_densify, sparsified
+from test_store_conformance import (
+    OVER_B,
+    A,
+    B,
+    C,
+    dense_linexpr,
+    no_densify,
+    sparsified,
+)
 from xarray.core.types import JoinOptions
 
 import linopy
@@ -1425,6 +1433,17 @@ def test_matmul_keeps_aux_coords_on_kept_dims_only() -> None:
 
     assert {"bus", "tag"} <= set(kept.coords)
     assert not {"bus", "tag"} & set(dropped.coords)
+
+
+def test_matmul_keeps_2d_coord_on_kept_dims(backend: Model) -> None:
+    x = backend.add_variables(coords=[A, B, C], name="x")
+    two = (("a", "c"), np.arange(6).reshape(3, 2))
+    expr = dense_linexpr(x).assign_coords(two=two)
+    with no_densify():
+        res = expr @ OVER_B
+    assert not res.is_sparse
+    assert "two" in res.coords
+    assert_equivalent(res, (expr * OVER_B).sum("b"))
 
 
 def test_matmul_output_dim_order_matches_dense() -> None:
