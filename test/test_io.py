@@ -199,18 +199,18 @@ def test_model_to_netcdf_round_trip_keeps_stores(
         assert_conequal(con, got, strict=True)
         xr.testing.assert_equal(got.labels, con.labels)
         xr.testing.assert_equal(got.data["blocks"], con.data["blocks"])
-    got, want = p.constraints["masked"].data, m.constraints["masked"].data
-    xr.testing.assert_equal(got["dual"], want["dual"])
+    got_data, want_data = p.constraints["masked"].data, m.constraints["masked"].data
+    xr.testing.assert_equal(got_data["dual"], want_data["dual"])
     pairs = [
         (p.expressions["e"], m.expressions["e"]),
         (p.expressions["flipped"], m.expressions["flipped"]),
         (p.objective.expression, m.objective.expression),
     ]
-    for got_expr, want in pairs:
+    for got_expr, want_expr in pairs:
         assert isinstance(got_expr, LinearExpression)
-        assert isinstance(want, LinearExpression)
-        assert got_expr.is_sparse == want.is_sparse
-        assert_equivalent(got_expr, want)
+        assert isinstance(want_expr, LinearExpression)
+        assert got_expr.is_sparse == want_expr.is_sparse
+        assert_equivalent(got_expr, want_expr)
     assert_model_equal(m, p)
 
 

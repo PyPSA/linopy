@@ -32,7 +32,7 @@ from linopy.constraints import (
     Constraint,
     Constraints,
 )
-from linopy.csr import canonical
+from linopy.csr import CSRStore, canonical
 from linopy.testing import assert_linequal, assert_varequal
 
 
@@ -1358,10 +1358,12 @@ def test_constraint_canonicalizes_sparse_lhs() -> None:
     assert lhs.is_sparse and lhs.nterm == 2
     con = Constraint(lhs, "<=", 1, m)
     store = con.lhs._store
+    assert isinstance(store, CSRStore)
     assert canonical(store.csr) is store.csr
     assert store.nterm == 1
     con.update(lhs=x - 3 * x)
     updated = con.lhs._store
+    assert isinstance(updated, CSRStore)
     assert updated.nterm == 1
     assert (updated.csr.data == -2).all()
 

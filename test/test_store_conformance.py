@@ -22,6 +22,7 @@ import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint
+from linopy.csr import CSRStore
 from linopy.store import DenseStore
 from linopy.testing import assert_equivalent
 
@@ -642,9 +643,9 @@ def test_positional_csr_agrees(rows: str) -> None:
     active = np.array(ROWS[rows])
     label_index = m.variables.label_index
     dense = expr._store.positional_csr(label_index, active, "c")
-    sparse = (
-        expr._store.to_sparse().canonical().positional_csr(label_index, active, "c")
-    )
+    sparse_store = expr._store.to_sparse()
+    assert isinstance(sparse_store, CSRStore)
+    sparse = sparse_store.canonical().positional_csr(label_index, active, "c")
     assert dense.shape == sparse.shape == (active.sum(), 6)
     assert (dense != sparse).nnz == 0
 
@@ -652,7 +653,9 @@ def test_positional_csr_agrees(rows: str) -> None:
 @pytest.mark.parametrize("rows", list(ROWS))
 def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
     m, expr = positional_model()
-    store = expr._store.to_sparse().canonical()
+    sparse_store = expr._store.to_sparse()
+    assert isinstance(sparse_store, CSRStore)
+    store = sparse_store.canonical()
     active = np.array(ROWS[rows])
     first = store.positional_csr(m.variables.label_index, active, "c")
     again = store.positional_csr(m.variables.label_index, active, "c")
