@@ -316,6 +316,18 @@ CASES: dict[str, Case] = {
     "merge-non-unique": Case(
         non_unique, lambda e: e + 1 * var(e, "w"), "merge(non-unique labels)"
     ),
+    "merge-non-unique-dense-operand": Case(
+        non_unique,
+        lambda e: e + dense_linexpr(var(e, "w")),
+        "merge(non-unique labels)",
+    ),
+    "merge-dense-operands-around-sparse": Case(
+        grid,
+        lambda e: linopy.merge(
+            [dense_linexpr(var(e, "y")), e, dense_linexpr(var(e, "x"))]
+        ),
+        SPARSIFIED,
+    ),
     "merge-differing-grids": Case(
         lambda m: without_tag(grid(m)),
         lambda e: linopy.merge([e.sum("a"), e.sel(a=[0, 1]), e.sel(a=[1, 2])]),

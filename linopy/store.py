@@ -52,7 +52,7 @@ class Store(ABC):
     Terms and constant of a linear expression on a fixed coordinate grid.
 
     A method returning ``Self | Reason`` may refuse a case with the reason;
-    :class:`DenseStore` never does.
+    :class:`DenseStore` does so only in :meth:`to_sparse`.
     """
 
     model: Model
@@ -772,8 +772,9 @@ def merge_stores(
     dimension as sparse matrix addition on the joined grid
     (:func:`align_stores`), along a grid dimension as a row stack
     (:func:`concat_stores`); the dense stores convert up through
-    :meth:`Store.to_sparse`, with one sparsify notice for all. Returns the
-    reason where the dense merge owns the semantics instead.
+    :meth:`Store.to_sparse`, with one sparsify notice once the sparse merge
+    succeeds. Returns the reason where the dense merge owns the semantics
+    instead.
     """
     dense = [s for s in stores if isinstance(s, DenseStore)]
     if len(dense) == len(stores):
@@ -786,15 +787,28 @@ def merge_stores(
         return "merge(operands over different dimensions)"
     if dim != TERM_DIM and dim not in grid_dims:
         return "merge(new dimension)"
-    last = max(
-        (i for i, s in enumerate(stores) if isinstance(s, DenseStore)), default=-1
-    )
     csrs: list[CSRStore] = []
-    for i, s in enumerate(stores):
-        csr = s.to_sparse("merge with a sparse operand" if i == last else None)
+    for s in stores:
+        csr = s.to_sparse()
         if isinstance(csr, str):
             return f"merge({csr})"
         csrs.append(csr)
+    res = _merged_sparse(csrs, dim, join, fill, grid_dims)
+    if dense and not isinstance(res, str):
+        from linopy.csr import _sparsify_notice
+
+        _sparsify_notice("merge with a sparse operand", stores[0].model)
+    return res
+
+
+def _merged_sparse(
+    csrs: list[CSRStore],
+    dim: str,
+    join: JoinOptions | None,
+    fill: float,
+    grid_dims: tuple[str, ...],
+) -> CSRStore | Reason:
+    """The sparse merge of :func:`merge_stores` on the converted stores."""
     if dim != TERM_DIM:
         order = csrs[0].grid.dims
         reordered = [
