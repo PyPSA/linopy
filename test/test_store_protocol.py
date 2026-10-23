@@ -225,3 +225,16 @@ def test_vars_setter_densifies_with_reason() -> None:
         expr.vars = dense.vars
     assert not expr.is_sparse
     assert_equivalent(expr, dense)
+
+
+@pytest.mark.parametrize("cls", STORE_CLASSES)
+def test_absent_cell_drops_its_terms(cls: type[Store]) -> None:
+    store = build_store("aux", cls)
+    cells, labels, _ = store.terms()
+    absent = np.arange(store.n_cells) % 2 == 1
+    expr = as_expr(store.assign_const(np.where(absent, np.nan, 1.0)))
+    live = np.sort(labels[~absent[cells]])
+    np.testing.assert_array_equal(expr.has_terms.values.ravel(), ~absent)
+    np.testing.assert_array_equal(np.sort(expr.flat["vars"]), live)
+    summed = expr.sum().vars.values
+    np.testing.assert_array_equal(np.sort(summed[summed != -1]), live)

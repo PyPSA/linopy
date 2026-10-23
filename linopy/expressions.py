@@ -819,6 +819,22 @@ def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
     return merged if fits and merged == replace(grid, aux=own.aux | grid.aux) else None
 
 
+def _check_full_const(value: Any, like: DataArray) -> None:
+    """
+    Raise if the constant ``value`` holds a NaN (§5) or, aligned to ``like``,
+    leaves a cell of ``like`` uncovered.
+    """
+    value = DataArray(value)
+    if value.isnull().any():
+        check_user_nan("`const`")
+    if value.broadcast_like(like).isnull().any():
+        raise ValueError(
+            "The assigned `const` does not cover every coordinate of the "
+            "expression. Reindex it to the expression's coordinates first, "
+            "e.g. with .reindex_like(expr.const, fill_value=0)."
+        )
+
+
 class BaseExpression(ABC):
     __slots__ = ("_model",)
     __array_ufunc__ = None
@@ -955,7 +971,8 @@ class BaseExpression(ABC):
         """
         Get the negative of the expression.
         """
-        return self.assign(coeffs=-self.coeffs, const=-self.const)
+        data = assign_fields(self.data, coeffs=-self.coeffs, const=-self.const)
+        return self.__class__(data, self.model)
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
@@ -994,12 +1011,6 @@ class BaseExpression(ABC):
         if other.has_constant:
             res = res + self.reset_const() * other.const.fillna(0)
         return cast(QuadraticExpression, res)
-
-    def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
-        """A position the join left absent (§10 ``ABSENT``) carries no term."""
-        if not isinstance(fill_value, AbsentType):
-            return self
-        return self.__class__(absorb_absence(self.data), self.model)
 
     def _align_constant(
         self,
@@ -1106,10 +1117,11 @@ class BaseExpression(ABC):
         and into the coefficients too if ``scale``.
         """
         expr = self._reindexed_to(self_const, needs_data_reindex)
-        const = op(self_const, operand)
-        if not scale:
-            return expr.assign(const=const)
-        return expr.assign(coeffs=op(expr.coeffs, operand), const=const)
+        fields = {"const": op(self_const, operand)}
+        if scale:
+            fields["coeffs"] = op(expr.coeffs, operand)
+        data = absorb_absence(assign_fields(expr.data, **fields))
+        return self.__class__(data, self.model)
 
     def _apply_constant_op(
         self,
@@ -1138,10 +1150,9 @@ class BaseExpression(ABC):
         self_const, da, needs_reindex = self._broadcast_and_align(
             other, fill_value, join
         )
-        expr = self._combined_with_constant(
+        return self._combined_with_constant(
             self_const, da, op, needs_data_reindex=needs_reindex, scale=scale
         )
-        return expr._absorb_join_absence(fill_value)
 
     def __truediv__(self, other: SideLike) -> Self:
         other = as_constant(other)
@@ -1510,6 +1521,7 @@ class BaseExpression(ABC):
 
     @const.setter
     def const(self, value: DataArray) -> None:
+        _check_full_const(value, self.const)
         self._assign_fields(const=value)
 
     def _assign_coords(self, **coords: Any) -> Self:
@@ -2055,8 +2067,18 @@ class BaseExpression(ABC):
 
         return ds
 
+    def assign(self, **fields: Any) -> Self:
+        """
+        Assign the data variables ``fields``, replacing existing ones wholesale.
+
+        An assigned ``const`` must be NaN-free and cover every coordinate of
+        the expression, as for the ``const`` setter.
+        """
+        if "const" in fields:
+            _check_full_const(fields["const"], self.const)
+        return self.__class__(assign_fields(self.data, **fields), self.model)
+
     # Wrapped function which would convert variable to dataarray
-    assign = exprwrap(assign_fields)
 
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
@@ -2243,6 +2265,7 @@ class LinearExpression(BaseExpression):
 
     @const.setter
     def const(self, value: DataArray) -> None:
+        _check_full_const(value, self.const)
         store = self._store
         if isinstance(store, CSRStore) and isinstance(value, DataArray):
             const = value.broadcast_like(self.const)
@@ -2301,14 +2324,6 @@ class LinearExpression(BaseExpression):
             store = store.scale(factor.to_numpy().reshape(-1), op)
         store = store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
         return type(self)._from_store(store, self._model)
-
-    def _absorb_join_absence(self, fill_value: FillValueLike) -> Self:
-        store = self._store
-        if not isinstance(store, CSRStore):
-            return super()._absorb_join_absence(fill_value)
-        if not isinstance(fill_value, AbsentType):
-            return self
-        return type(self)._from_store(store.absorbed(), self._model)
 
     def _printout_cell(
         self, indices: tuple[Any, ...]

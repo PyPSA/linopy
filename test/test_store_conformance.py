@@ -75,13 +75,10 @@ def frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(list(df.columns), ignore_index=True)
 
 
-def const_assigned(
-    value: xr.DataArray,
-    then: Callable[[LinearExpression], LinearExpression] = lambda e: e,
-) -> Callable[[LinearExpression], Any]:
+def const_assigned(value: xr.DataArray) -> Callable[[LinearExpression], Any]:
     def op(e: LinearExpression) -> LinearExpression:
         e.const = value
-        return then(e).fillna(0.0)
+        return e.fillna(0.0)
 
     return op
 
@@ -93,21 +90,6 @@ class Case(NamedTuple):
     sparse_xfail: str | None = None
 
 
-NAN_A = OVER_A.where(OVER_A != 2.0)
-AFTER_NAN_CONST: dict[
-    str, tuple[Callable[[LinearExpression], LinearExpression], str]
-] = {
-    "isel": (lambda e: e.isel(a=[0, 1, 2]), KEPT),
-    "roll": (lambda e: e.roll(a=1), KEPT),
-    "mul": (lambda e: e * 2, KEPT),
-    "reindex": (lambda e: e.reindex(b=["q", "p"]), KEPT),
-    "add-absent": (
-        lambda e: e.add(SHIFTED_A, join="outer", fill_value=linopy.ABSENT),
-        KEPT,
-    ),
-    "data": (lambda e: LinearExpression(e.data, e.model), DATA_READ),
-}
-
 SIGN_EQ = "CSRConstraint normalizes the sign '==' to '=' while Constraint keeps it"
 
 CASES: dict[str, Case] = {
@@ -116,6 +98,15 @@ CASES: dict[str, Case] = {
     "isel-scalar": Case(grid, lambda e: e.isel(b=0), KEPT),
     "getitem": Case(grid, lambda e: e[0:2], KEPT),
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
+    "roll-coords": Case(grid, lambda e: e.roll(a=1, roll_coords=True), KEPT),
+    "sel-scalar": Case(grid, lambda e: e.sel(a=1), KEPT),
+    "sel-2d-aux-densifies": Case(
+        grid,
+        lambda e: e.assign_coords(two=(("a", "b"), np.arange(6).reshape(3, 2))).sel(
+            a=[0, 2]
+        ),
+        DATA_READ,
+    ),
     "sel-pointwise": Case(
         grid,
         lambda e: e.sel(a=xr.DataArray([0, 1], dims="c")),
@@ -127,6 +118,7 @@ CASES: dict[str, Case] = {
         "`isel` introducing dimensions or coordinates",
     ),
     "shift": Case(grid, lambda e: e.shift(a=1), KEPT),
+    "shift-negative": Case(grid, lambda e: e.shift(a=-1), KEPT),
     "shift-fill-value": Case(
         grid, lambda e: e.shift(a=1, fill_value=0), "`shift` with a fill_value"
     ),
@@ -289,13 +281,14 @@ CASES: dict[str, Case] = {
     "has-terms": Case(grid, lambda e: e.where(COND).has_terms, KEPT),
     "isnull": Case(grid, lambda e: e.where(COND).isnull(), KEPT),
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
-    "const-assign-nan": Case(grid, const_assigned(NAN_A), KEPT),
-    "const-assign-partial": Case(grid, const_assigned(OVER_A.sel(a=[0, 1])), KEPT),
     "const-assign-new-dim": Case(grid, const_assigned(OVER_C), "assignment of `const`"),
-    **{
-        f"const-assign-nan-{name}": Case(grid, const_assigned(NAN_A, then), expected)
-        for name, (then, expected) in AFTER_NAN_CONST.items()
-    },
+}
+
+CONST_REJECTED: dict[str, tuple[Any, str]] = {
+    "nan": (OVER_A.where(OVER_A != 2.0), "NaN found"),
+    "nan-scalar": (np.nan, "NaN found"),
+    "partial": (OVER_A.sel(a=[0, 1]), "does not cover"),
+    "partial-off-grid": (SHIFTED_A, "does not cover"),
 }
 
 
@@ -348,6 +341,43 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
             assert res.is_sparse
         elif isinstance(res, ConstraintBase):
             assert isinstance(res, CSRConstraint)
+
+
+CONST_ASSIGNERS: dict[str, Callable[[LinearExpression, Any], Any]] = {
+    "setter": lambda e, c: setattr(e, "const", c),
+    "assign": lambda e, c: e.assign(const=c),
+}
+
+
+@pytest.mark.parametrize("assigner", list(CONST_ASSIGNERS))
+@pytest.mark.parametrize("value", list(CONST_REJECTED))
+def test_const_assign_rejects(backend: Model, value: str, assigner: str) -> None:
+    const, match = CONST_REJECTED[value]
+    expr = grid(backend)
+    with no_densify(), pytest.raises(ValueError, match=match):
+        CONST_ASSIGNERS[assigner](expr, const)
+    assert expr.is_sparse == backend.sparse
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda e: e * OVER_A.where(OVER_A != 2.0, np.inf),
+        lambda e: e / OVER_A.where(OVER_A != 2.0, 0.0),
+    ],
+    ids=["mul-inf", "div-zero"],
+)
+def test_nonfinite_constant_op_drops_cell(
+    backend: Model, op: Callable[[LinearExpression], LinearExpression]
+) -> None:
+    expr = grid(backend)
+    res = op(expr)
+    absent = np.repeat([[False], [True], [False]], 2, axis=1)
+    np.testing.assert_array_equal(res.const.isnull(), absent)
+    np.testing.assert_array_equal(res.has_terms, ~absent)
+    summed = res.sum().vars.values
+    live = expr.vars.sel(a=[0, 2]).values
+    np.testing.assert_array_equal(np.sort(summed[summed != -1]), np.sort(live, None))
 
 
 DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {

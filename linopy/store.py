@@ -132,11 +132,14 @@ class Store(ABC):
         factor: float | np.ndarray,
         op: Callable[[Any, Any], Any] = operator.mul,
     ) -> Self:
-        """Apply ``op`` with a scalar or per-cell ``factor`` to coefficients and constant."""
+        """
+        Apply ``op`` with a scalar or per-cell ``factor`` to coefficients and
+        constant; a cell made absent drops its terms.
+        """
 
     @abstractmethod
     def assign_const(self, const: np.ndarray) -> Self:
-        """Replace the per-cell constant; an absent cell keeps its terms masked."""
+        """Replace the per-cell constant; a cell made absent drops its terms."""
 
     def fillna(self, value: float) -> Self:
         """Resolve absent cells (NaN const) to the constant ``value``."""
@@ -421,10 +424,15 @@ class DenseStore(Store):
     ) -> DenseStore:
         factor = np.broadcast_to(factor, (self.n_cells,))
         coeffs = op(self._term_arrays()[0], factor[:, None])
-        return self._with(self.grid, coeffs=coeffs, const=op(self.const, factor))
+        const = op(self.const, factor)
+        return self._with(self.grid, coeffs=coeffs, const=const).absorbed()
 
     def assign_const(self, const: np.ndarray) -> DenseStore:
-        return self._with(self.grid, const=const)
+        return self._with(self.grid, const=const).absorbed()
+
+    def absorbed(self) -> DenseStore:
+        """Drop the terms of absent cells."""
+        return DenseStore(absorb_absence(self.ds), self.model)
 
     def prune(self) -> DenseStore:
         coeffs, vars_ = self._term_arrays()
@@ -480,7 +488,7 @@ class DenseStore(Store):
         vars_ = np.hstack([v for _, v in terms])
         const = functools.reduce(np.add, (p.const for p in parts))
         merged = self.from_arrays(merged_grid(parts), coeffs, vars_, const, self.model)
-        return DenseStore(absorb_absence(merged.ds), self.model)
+        return merged.absorbed()
 
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
         parts = (self, *others)
