@@ -30,6 +30,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constraints import Constraint
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
 from linopy.store import Store
@@ -652,8 +653,7 @@ def constraints_to_file(
 
     for name in names:
         con = regular[name]
-        for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.to_polars()
+        for df in map(Constraint.to_polars, con.iterate_slices(slice_size)):
             if df.height == 0:
                 continue
             if scaled:
@@ -1188,7 +1188,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     the deserialized Model is too, but
     :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.constraints import Constraint, Constraints
+    from linopy.constraints import Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable, Variables

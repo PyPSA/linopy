@@ -2438,7 +2438,7 @@ class LinearExpression(BaseExpression):
     def reset_const(self) -> Self:
         store = self._store
         return type(self)._from_store(
-            store.assign_const(np.zeros(store.n_cells)), self._model
+            store.assign_const(np.broadcast_to(0.0, store.n_cells)), self._model
         )
 
     @property

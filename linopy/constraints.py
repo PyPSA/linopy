@@ -206,7 +206,7 @@ _DATASET_FIELDS = frozenset(("coeffs", "vars", *_FIELDS))
 
 def _on_grid(value: Any, template: DataArray, label: str) -> DataArray:
     """``value`` broadcast onto the dims of ``template`` and in their order."""
-    da = DataArray(value)
+    da = value if isinstance(value, DataArray) else DataArray(value)
     if extra := set(da.dims) - set(template.dims):
         raise ValueError(
             f"Constraint {label} has dimensions {sorted(map(str, extra))} outside "
@@ -357,7 +357,7 @@ class Constraint:
         """
         store = lhs._store.canonical()
         const = store.const
-        if np.any(const[~np.isnan(const)]):
+        if np.any((const != 0) & ~np.isnan(const)):
             raise ValueError(
                 "The lhs of a constraint must have a zero constant; move it to the rhs."
             )
@@ -424,7 +424,9 @@ class Constraint:
         rows = positions.values.ravel()
         grid = Grid.from_dataset(positions, map(str, positions.dims))
         fields = {
-            k: positions.copy(data=v.values.ravel()[rows].reshape(positions.shape))
+            k: positions.copy(
+                deep=False, data=v.values.ravel()[rows].reshape(positions.shape)
+            )
             for k, v in self._fields().items()
         }
         return self._on_store(self._lhs._store.take(rows, grid), self._model, fields)
@@ -1262,7 +1264,9 @@ class Constraint:
         :meth:`~linopy.store.Store.take` and keeps its backing.
         """
         template = self._grid_template()
-        positions = template.copy(data=np.arange(template.size).reshape(template.shape))
+        positions = template.copy(
+            deep=False, data=np.arange(template.size).reshape(template.shape)
+        )
         slots = positions.expand_dims({TERM_DIM: self.nterm}, axis=-1)
         dims = list(self.coord_dims) if slice_dims is None else slice_dims
         for block in iterate_slices(slots, slice_size, dims):

@@ -249,6 +249,13 @@ class Store(ABC):
         """The canonical form a constraint is built from."""
 
     @abstractmethod
+    def nnz(self, active_rows: np.ndarray) -> int:
+        """
+        Upper bound on the nonzeros :meth:`positional_csr` returns for the
+        cells selected by the boolean ``active_rows``.
+        """
+
+    @abstractmethod
     def positional_csr(
         self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
     ) -> scipy.sparse.csr_array:
@@ -465,12 +472,25 @@ class DenseStore(Store):
             return DataArray(values.reshape(self.shape), dims=self.dims)
         return float(values)
 
+    def _term_views(self) -> tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variable labels on ``(*dims, _term)``, uncopied."""
+        dims = (*self.dims, TERM_DIM)
+        return (
+            self.ds.coeffs.transpose(*dims).values,
+            self.ds.vars.transpose(*dims).values,
+        )
+
+    def _term_rows(self, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variable labels of the cells ``rows``, ``(len(rows), nterm)``."""
+        index = np.unravel_index(rows, (1, *self.shape))
+        coeffs, vars_ = self._term_views()
+        return coeffs[None][index], vars_[None][index]
+
     def _term_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """Coefficients and variable labels as ``(n_cells, nterm)`` arrays."""
-        dims = (*self.dims, TERM_DIM)
         shape = (self.n_cells, self.nterm)
-        coeffs = self.ds.coeffs.transpose(*dims).to_numpy().reshape(shape)
-        return coeffs, self.ds.vars.transpose(*dims).to_numpy().reshape(shape)
+        coeffs, vars_ = self._term_views()
+        return coeffs.reshape(shape), vars_.reshape(shape)
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> DenseStore:
@@ -541,10 +561,10 @@ class DenseStore(Store):
 
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         const = self.ds.const.transpose(*self.dims)
-        return const.copy(data=values.reshape(const.shape)).rename(name)
+        return const.copy(deep=False, data=values.reshape(const.shape)).rename(name)
 
     def has_terms(self) -> np.ndarray:
-        return (self._term_arrays()[1] != -1).any(axis=1)
+        return (self._term_views()[1] != -1).any(axis=-1).reshape(-1)
 
     def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
         ds = self.ds
@@ -552,11 +572,9 @@ class DenseStore(Store):
         return coeffs, vars_, float(ds.const.values[indices])
 
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        coeffs, vars_ = self._term_arrays()
-        present = ~np.isnan(self.const)[:, None]
-        keep = present & (vars_ != -1) & (coeffs != 0)
-        cells = np.broadcast_to(np.arange(self.n_cells)[:, None], keep.shape)
-        return cells[keep], vars_[keep], coeffs[keep]
+        coeffs, vars_, keep = self._active_mask(~np.isnan(self.const))
+        counts = keep.sum(axis=-1).reshape(-1)
+        return np.repeat(np.arange(self.n_cells), counts), vars_[keep], coeffs[keep]
 
     def variable_labels(self) -> np.ndarray:
         return self.ds.vars.values.ravel()
@@ -565,7 +583,9 @@ class DenseStore(Store):
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
         labels = self.ds.vars
-        values = labels.copy(data=label_solution(labels.values)[labels.values])
+        values = labels.copy(
+            deep=False, data=label_solution(labels.values)[labels.values]
+        )
         sol = (self.ds.coeffs * values).sum(TERM_DIM) + self.ds.const
         return sol.transpose(*self.dims).to_numpy().reshape(-1)
 
@@ -613,6 +633,18 @@ class DenseStore(Store):
     def canonical(self) -> DenseStore:
         return self
 
+    def _active_mask(
+        self, active_rows: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        coeffs, vars_ = self._term_views()
+        valid = vars_ != -1
+        valid &= coeffs != 0
+        valid &= active_rows.reshape(valid.shape[:-1])[..., None]
+        return coeffs, vars_, valid
+
+    def nnz(self, active_rows: np.ndarray) -> int:
+        return int(np.count_nonzero(self._active_mask(active_rows)[2]))
+
     def active_terms(
         self, active_rows: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -622,16 +654,9 @@ class DenseStore(Store):
         """
         from linopy.csr import index_dtype
 
-        dims = (*self.dims, TERM_DIM)
-        vars_ = self.ds.vars.transpose(*dims).values
-        coeffs = self.ds.coeffs.transpose(*dims).values
-        valid = (vars_ != -1) & (coeffs != 0)
-        valid &= active_rows.reshape(valid.shape[:-1])[..., None]
-        flat = np.flatnonzero(valid)
-        labels = _take_flat(vars_, flat)
-        data = _take_flat(coeffs, flat)
-        counts = np.bincount(flat // max(self.nterm, 1), minlength=self.n_cells)
-        counts = counts[active_rows]
+        coeffs, vars_, valid = self._active_mask(active_rows)
+        labels, data = vars_[valid], coeffs[valid]
+        counts = valid.sum(axis=-1).reshape(-1)[active_rows]
         indptr = np.empty(
             len(counts) + 1, index_dtype(len(data), counts.shape, self.model)
         )
@@ -658,10 +683,10 @@ class DenseStore(Store):
     def take(self, rows: np.ndarray, grid: Grid) -> DenseStore:
         present = rows >= 0
         safe = np.where(present, rows, 0)
-        coeffs, vars_ = self._term_arrays()
+        coeffs, vars_ = self._term_rows(safe)
         const = np.where(present, self.const[safe], np.nan)
-        coeffs = np.where(present[:, None], coeffs[safe], np.nan)
-        vars_ = np.where(present[:, None], vars_[safe], -1)
+        coeffs[~present] = np.nan
+        vars_[~present] = -1
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
@@ -683,13 +708,6 @@ class DenseStore(Store):
 
     def concat(self, others: Iterable[DenseStore], dim: str, grid: Grid) -> DenseStore:
         return self.merged((self, *others), dim, "override", np.nan, {})
-
-
-def _take_flat(values: np.ndarray, flat: np.ndarray) -> np.ndarray:
-    """Gather C-order flat positions, copying a non-contiguous array only if dense."""
-    if values.flags.c_contiguous or 4 * flat.size > values.size:
-        return values.ravel()[flat]
-    return values.flat[flat]
 
 
 def as_sparse(store: Store) -> CSRStore:

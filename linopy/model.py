@@ -1161,7 +1161,9 @@ class Model:
         """
         start = self._cCounter
         end = start + like.size
-        labels = like.copy(data=self._allocate_labels(start, end).reshape(like.shape))
+        labels = like.copy(
+            deep=False, data=self._allocate_labels(start, end).reshape(like.shape)
+        )
         self._cCounter = end
         if mask is not None:
             labels = labels.where(mask, -1)

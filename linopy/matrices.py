@@ -45,7 +45,7 @@ def _row_block(con: Constraint, label_index: VariableLabelIndex) -> _RowBlock:
     return _RowBlock(
         partial(store.positional_csr, label_index, active, con.name),
         int(active.sum()),
-        store.variable_labels().size,
+        store.nnz(active),
         con.rhs.values.ravel()[active],
         con.sign.values.ravel()[active].astype("U1"),
         None if (scaling == 1).all() else scaling,

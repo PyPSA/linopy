@@ -555,6 +555,9 @@ class CSRStore(Store):
     def canonical(self) -> CSRStore:
         return replace(self, csr=canonical(self.csr))
 
+    def nnz(self, active_rows: np.ndarray) -> int:
+        return int(np.diff(self.csr.indptr)[active_rows].sum())
+
     def positional_csr(
         self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
     ) -> scipy.sparse.csr_array:

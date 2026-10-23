@@ -645,9 +645,12 @@ def test_positional_csr_agrees(rows: str) -> None:
     dense = expr._store.positional_csr(label_index, active, "c")
     sparse_store = expr._store.to_sparse()
     assert isinstance(sparse_store, CSRStore)
-    sparse = sparse_store.canonical().positional_csr(label_index, active, "c")
+    canonical = sparse_store.canonical()
+    sparse = canonical.positional_csr(label_index, active, "c")
     assert dense.shape == sparse.shape == (active.sum(), 6)
     assert (dense != sparse).nnz == 0
+    assert expr._store.nnz(active) == 3 * active.sum()
+    assert canonical.nnz(active) >= sparse.nnz
 
 
 @pytest.mark.parametrize("rows", list(ROWS))
