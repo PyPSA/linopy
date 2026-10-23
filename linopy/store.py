@@ -52,8 +52,8 @@ Reason: TypeAlias = str
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 """What a dense expression dataset holds at a cell or term it lacks."""
 
-STORE_KIND_ATTR = "_store_kind"
-CSR_COLUMNS_ATTR = "_n_columns"
+STORE_KIND_ATTR = "_linopy_store_kind"
+CSR_COLUMNS_ATTR = "_linopy_n_columns"
 NETCDF_STORE_ATTRS = frozenset((STORE_KIND_ATTR, CSR_COLUMNS_ATTR))
 """The netcdf attributes a store writes next to its arrays."""
 
@@ -137,7 +137,7 @@ class Store(ABC):
     def to_netcdf_vars(self) -> Dataset:
         """
         The arrays for netcdf with ``const`` on the grid dims and the store
-        kind in the ``_store_kind`` attribute, read by :meth:`from_netcdf_vars`.
+        kind in the ``_linopy_store_kind`` attribute, read by :meth:`from_netcdf_vars`.
         """
 
     @classmethod
@@ -147,14 +147,20 @@ class Store(ABC):
 
     @staticmethod
     def from_netcdf_vars(ds: Dataset, model: Model) -> Store:
-        """The store written by :meth:`to_netcdf_vars`, by its ``_store_kind``."""
+        """The store written by :meth:`to_netcdf_vars`, by its ``_linopy_store_kind``."""
         from linopy.csr import CSRStore
 
         kinds: dict[str, type[Store]] = {
             "dense": DenseStore,
             "csr": CSRStore,
         }
-        return kinds[ds.attrs[STORE_KIND_ATTR]].read_netcdf_vars(ds, model)
+        kind = ds.attrs.get(STORE_KIND_ATTR)
+        if kind not in kinds:
+            raise ValueError(
+                f"Unknown or missing {STORE_KIND_ATTR!r} attribute {kind!r} in "
+                f"dataset with variables {list(ds.data_vars)}; expected one of {sorted(kinds)}."
+            )
+        return kinds[kind].read_netcdf_vars(ds, model)
 
     @property
     @abstractmethod

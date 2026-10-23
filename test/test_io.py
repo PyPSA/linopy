@@ -24,6 +24,7 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
+from linopy.store import STORE_KIND_ATTR
 from linopy.testing import (
     assert_conequal,
     assert_equivalent,
@@ -147,22 +148,6 @@ def test_model_to_netcdf_keeps_insertion_order(
     np.testing.assert_array_equal(A.toarray(), A_read.toarray())
 
 
-def test_read_netcdf_without_order_attrs_falls_back_to_sorted(
-    unsorted_model: Model, tmp_path: Path
-) -> None:
-    fn = tmp_path / "test.nc"
-    unsorted_model.to_netcdf(fn)
-    ds = xr.load_dataset(fn)
-    for kind in ("variables", "expressions", "constraints"):
-        del ds.attrs[CONTAINER_ORDER_ATTR.format(kind)]
-    ds.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert list(p.variables) == ["a", "z"]
-    assert list(p.expressions) == ["b", "y"]
-    assert list(p.constraints) == ["con1", "con2"]
-
-
 def test_read_netcdf_inconsistent_order_attr_raises(
     unsorted_model: Model, tmp_path: Path
 ) -> None:
@@ -232,6 +217,23 @@ def test_model_to_netcdf_round_trip_keeps_stores(
 def test_read_netcdf_pre_1_0_file_raises() -> None:
     with pytest.raises(ValueError, match="linopy <1.0"):
         read_netcdf(Path(__file__).parent / "data" / "pre-1.0-model.nc")
+
+
+def test_read_netcdf_foreign_file_raises(tmp_path: Path) -> None:
+    fn = tmp_path / "foreign.nc"
+    xr.Dataset({"x": ("i", [1.0, 2.0])}).to_netcdf(fn)
+    with pytest.raises(ValueError, match="not a linopy netcdf"):
+        read_netcdf(fn)
+
+
+def test_read_netcdf_missing_store_kind_raises(model: Model, tmp_path: Path) -> None:
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    ds.attrs = {k: v for k, v in ds.attrs.items() if not k.endswith(STORE_KIND_ATTR)}
+    ds.to_netcdf(fn)
+    with pytest.raises(ValueError, match=STORE_KIND_ATTR):
+        read_netcdf(fn)
 
 
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")

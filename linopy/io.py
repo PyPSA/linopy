@@ -1197,8 +1197,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         path = Path(path)
 
     ds = xr.load_dataset(path, **kwargs)
+    if NETCDF_VERSION_ATTR not in ds.attrs:
+        raise ValueError(
+            f"{path} is not a linopy netcdf: it has no {NETCDF_VERSION_ATTR!r} "
+            "attribute."
+        )
     if ds.attrs.get(NETCDF_LAYOUT_ATTR) != NETCDF_LAYOUT:
-        written_by = ds.attrs.get(NETCDF_VERSION_ATTR, "unknown")
+        written_by = ds.attrs[NETCDF_VERSION_ATTR]
         raise ValueError(
             f"netcdf written by linopy <1.0 (version {written_by}) cannot be read; "
             "rebuild the model and write it with linopy >=1.0."
@@ -1229,10 +1234,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
-        order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
-        if order_attr is None:
-            return sorted(found)
-        ordered = [f"{kind}-{name}" for name in json.loads(order_attr)]
+        order = json.loads(ds.attrs[CONTAINER_ORDER_ATTR.format(kind)])
+        ordered = [f"{kind}-{name}" for name in order]
         if len(ordered) != len(found) or set(ordered) != found:
             mismatch = sorted(set(ordered) ^ found)
             raise ValueError(
