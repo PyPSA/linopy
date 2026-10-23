@@ -84,6 +84,7 @@ def with_2d_coord(e: LinearExpression) -> LinearExpression:
 def coords_reassigned(e: LinearExpression) -> LinearExpression:
     named = e.model.add_expressions(e, name="named")
     e.model.assign_coords(a=[7, 8, 9])
+    assert isinstance(named, LinearExpression)
     return named
 
 
@@ -108,6 +109,7 @@ def merged_along_a(e: LinearExpression) -> LinearExpression:
     other = 1 * var(e, "y")
     res = linopy.merge([e.drop_vars("tag"), other], dim="a")
     assert other.is_sparse == e.is_sparse
+    assert isinstance(res, LinearExpression)
     return res
 
 
@@ -551,6 +553,7 @@ def test_named_expression_keeps_name_through_assignment(
     backend: Model, assign: Callable[[LinearExpression], None]
 ) -> None:
     named = backend.add_expressions(grid(backend), name="named")
+    assert isinstance(named, LinearExpression)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", linopy.PerformanceWarning)
         assert named.data.attrs["name"] == "named"

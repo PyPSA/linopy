@@ -1781,10 +1781,12 @@ def test_named_expression_stays_sparse(build: str, tmp_path: Path) -> None:
         named = m.add_expressions(sparse, name="named")
         copied = m.copy().expressions["named"]
         m.to_netcdf(tmp_path / "sparse.nc")
+    assert isinstance(copied, LinearExpression)
     assert named.is_sparse and copied.is_sparse
     assert named.name == copied.name == "named"
     assert_equivalent(copied, dense)
     read = linopy.read_netcdf(tmp_path / "sparse.nc").expressions["named"]
+    assert isinstance(read, LinearExpression)
     assert read.name == "named"
     assert_equivalent(read, dense)
 

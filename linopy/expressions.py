@@ -1390,7 +1390,7 @@ class BaseExpression(ABC):
         """
         return self.__matmul__(other)
 
-    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
+    def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         """
         Get selection from the expression.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -2346,7 +2346,7 @@ class LinearExpression(BaseExpression):
         """
         return self._gathered("isel", super().isel, *args, **kwargs)
 
-    def __getitem__(self, selector: int | tuple[slice, list[int]] | slice) -> Self:
+    def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         return self._gathered("__getitem__", super().__getitem__, selector)
 
     def shift(self, *args: Any, **kwargs: Any) -> Self:
