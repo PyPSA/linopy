@@ -62,7 +62,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.containers import LabelContainer
-from linopy.csr import CSRLinearExpression
+from linopy.csr import CSRStore
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
@@ -396,8 +396,8 @@ class Variable:
             coefficient = coefficient.where(~absent)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
         if self.model.sparse and not _dense:
-            csr = CSRLinearExpression.from_labels(ds, self.model)
-            return expressions.LinearExpression._from_csr(csr, self.model)
+            csr = CSRStore.from_labels(ds, self.model)
+            return expressions.LinearExpression._from_store(csr, self.model)
         ds = ds.expand_dims(TERM_DIM, -1)
         if has_absence:
             const = DataArray(np.where(absent, np.nan, 0.0), coords=self.labels.coords)

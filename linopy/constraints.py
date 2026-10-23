@@ -100,7 +100,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.csr import CSRLinearExpression
+    from linopy.csr import CSRStore
     from linopy.model import Model
 
 
@@ -1643,13 +1643,11 @@ class CSRConstraint(ConstraintBase):
         )
 
     @classmethod
-    def from_csr(
-        cls, expr: CSRLinearExpression, sign: str, rhs: DataArray
-    ) -> CSRConstraint:
+    def from_csr(cls, expr: CSRStore, sign: str, rhs: DataArray) -> CSRConstraint:
         """
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
-        Builds directly from a :class:`~linopy.csr.CSRLinearExpression`. The
+        Builds directly from a :class:`~linopy.csr.CSRStore`. The
         expression's label columns are kept as they are, its rows brought to
         canonical form (:func:`~linopy.csr.canonical`), its constant moves to
         the rhs, and rows with a NaN rhs are inactive. ``rhs`` must come from
@@ -1670,7 +1668,7 @@ class CSRConstraint(ConstraintBase):
         )
 
 
-def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
+def csr_rhs(expr: CSRStore, rhs: Any) -> DataArray | str:
     """
     Return the constant ``rhs`` as a DataArray on the expression grid, or the
     reason the sparse path cannot take it: an rhs that is no DataArray-like,
@@ -1687,7 +1685,7 @@ def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
     return da
 
 
-def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
+def _rhs_grid_values(expr: CSRStore, rhs: DataArray) -> np.ndarray:
     """
     Broadcast the rhs onto the expression grid and flatten it, with dense parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a

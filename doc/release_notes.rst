@@ -32,6 +32,8 @@ Version 1.0.0
   * ``Variables.print_labels``, ``Constraints.print_labels``, ``Model.print_infeasibilities`` and ``Model.compute_set_of_infeasible_constraints`` are removed; use ``format_labels``, ``Model.compute_infeasibilities`` and ``Model.format_infeasibilities``.
   * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
 
+* ``linopy.csr.CSRLinearExpression`` is renamed to ``CSRStore`` without an alias. A ``LinearExpression`` now always holds a store from the new ``linopy.store`` module, a ``DenseStore`` or a ``CSRStore``, in place of the private ``_csr`` attribute. ``CSRStore.to_dense()`` returns a ``DenseStore`` instead of a ``LinearExpression``. Writing a model with a sparse objective to netcdf or copying the model no longer converts the objective to dense, and emits no densify notice. On both backends, a cell whose constant becomes NaN, e.g. by ``where``, ``reindex``, a join with ``fill_value=linopy.ABSENT`` or a constant operation yielding NaN such as ``0 / 0``, drops its terms, so its variables no longer reach ``sum()``, a constraint or the objective. The ``const`` setter and ``assign(const=...)`` of ``LinearExpression`` and ``QuadraticExpression`` raise ``ValueError`` when the assigned value holds a NaN or does not cover every coordinate of the expression. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+
 **Deprecations**
 
 * The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.

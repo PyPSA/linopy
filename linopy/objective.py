@@ -166,10 +166,7 @@ class Objective:
         CSR-backed expression is densified into that one cell here, without
         mutating the stored CSR data.
         """
-        expr = self.expression
-        csr = expr._csr if isinstance(expr, expressions.LinearExpression) else None
-        ds = expr.data if csr is None else csr.to_dense().data
-        return ds.assign_attrs(name=self.name)
+        return self.expression._to_dataset().assign_attrs(name=self.name)
 
     @property
     def coeffs(self) -> DataArray:
