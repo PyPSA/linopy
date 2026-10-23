@@ -69,6 +69,13 @@ def pytest_collection_modifyitems(
                 item.add_marker(pytest.mark.gpu)
 
 
+@pytest.fixture(params=[False, True], ids=["dense", "sparse"])
+def backend(request: pytest.FixtureRequest) -> Model:
+    from linopy import Model
+
+    return Model(sparse=request.param)
+
+
 @pytest.fixture
 def m() -> Model:
     from linopy import Model
