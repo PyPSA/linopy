@@ -421,11 +421,12 @@ class DenseStore(Store):
 
     @classmethod
     def from_labels(cls, ds: Dataset, model: Model) -> DenseStore:
-        labels, coeffs = xr.broadcast(ds.vars, ds.coeffs)
-        const = xr.where(labels == -1, np.nan, 0.0)
-        terms = Dataset({"vars": labels, "coeffs": coeffs})
-        dense = terms.expand_dims(TERM_DIM, -1).assign(const=const)
-        return cls(expression_dataset(absorb_absence(dense), model), model)
+        terms = ds[["vars", "coeffs"]].expand_dims(TERM_DIM, -1)
+        absent = ds.vars == -1
+        if absent.any():
+            const = xr.where(absent, np.nan, 0.0)
+            terms = terms.assign(coeffs=terms.coeffs.where(~absent), const=const)
+        return cls(expression_dataset(terms, model), model)
 
     @classmethod
     def from_grouper(
