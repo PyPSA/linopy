@@ -119,6 +119,11 @@ def assert_frozen_equal(con1: ConstraintBase, con2: ConstraintBase) -> None:
     assert np.array_equal(np.sort(labels[labels != -1]), np.sort(con2.active_labels()))
 
 
+def sparse_store(e: LinearExpression) -> CSRStore:
+    assert isinstance(e._store, CSRStore)
+    return e._store
+
+
 def reindexed_balance(c: Case) -> LinearExpression:
     """Generation on all buses plus flow on two lines, both reindexed onto the load grid."""
     lines = ["line0", "line1"]
@@ -213,8 +218,7 @@ def test_namelist_sparse_matches_dense(observed: bool, member_first: bool) -> No
     keys = ["period", "season"]
     sparse = sparse_expr.groupby(keys).sum(observed=observed)
     dense = dense_expr.groupby(keys).sum(observed=observed)
-    csr = sparse._store
-    assert isinstance(csr, CSRStore)
+    csr = sparse_store(sparse)
     if observed:
         assert set(csr.grid.aux) == {"period", "season"}
     else:
@@ -254,7 +258,7 @@ def test_dataframe_grouper_sparse_stays_compact() -> None:
     df = dense.data[["period", "season"]].to_dataframe()[["period", "season"]]
     sparse = expr.groupby(df).sum()
     assert sparse.is_sparse
-    assert sparse._store.shape == (4, 2)
+    assert sparse_store(sparse).shape == (4, 2)
     assert_linequal(sparse, dense.groupby(df).sum())
 
 
@@ -330,7 +334,7 @@ def test_namelist_sparse_grid_warns_and_observed_silences() -> None:
         warnings.simplefilter("error")
         res = expr.groupby(["period", "season"]).sum(observed=True)
     assert res.is_sparse
-    assert res._store.shape == (n,)
+    assert sparse_store(res).shape == (n,)
 
 
 def test_nan_multikey_grouper_raises_eagerly() -> None:
@@ -559,7 +563,7 @@ def test_freeze_copies_lhs_matrix_only_to_canonicalize(
     c = base_model(gens_per_bus=(400,) * 50, n_snap=20, sparse=True)
     lhs = build(c)
     assert lhs.is_sparse
-    csr = lhs._store.csr
+    csr = sparse_store(lhs).csr
     assert (canonical(csr) is csr) is (build is Case.gen_sum)
     csr_bytes = csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes
     mask = c.load.bus == "bus1" if masked else None
@@ -1699,7 +1703,7 @@ def test_sparse_store_indices_follow_model_label_dtype(build: str) -> None:
     A = m.matrices.A
     assert isinstance(con, CSRConstraint) and sparse.is_sparse
     assert A is not None
-    dtypes = {sparse._store.csr.indices.dtype, con._csr.indices.dtype}
+    dtypes = {sparse_store(sparse).csr.indices.dtype, con._csr.indices.dtype}
     assert dtypes == {np.dtype(m.dtypes["labels"]), A.indices.dtype}
 
 
@@ -1710,7 +1714,11 @@ def test_sparse_group_sum_indices_widen_with_model(label_dtype: type) -> None:
     group = xr.DataArray([0, 0, 1, 1], coords=[x.indexes["i"]], name="g")
     expr = x.groupby(group).sum()
     assert expr.is_sparse
-    assert expr._store.csr.indices.dtype == expr._store.csr.indptr.dtype == label_dtype
+    assert (
+        sparse_store(expr).csr.indices.dtype
+        == sparse_store(expr).csr.indptr.dtype
+        == label_dtype
+    )
 
 
 def objective_twins(build: str, scale: float) -> tuple[Model, Model]:
@@ -2109,7 +2117,7 @@ def test_sum_keeps_explicit_zeros_unless_dropped(drop_zeros: bool) -> None:
     dense = densified(sparse)
     res = sparse.sum("snapshot", drop_zeros=drop_zeros)
     assert res.is_sparse
-    assert (res._store.csr.nnz == 0) == drop_zeros
+    assert (sparse_store(res).csr.nnz == 0) == drop_zeros
     assert_sparse_matches(res, dense.sum("snapshot", drop_zeros=drop_zeros))
 
 
@@ -2877,7 +2885,7 @@ def duplicated_lhs(c: Case) -> LinearExpression:
 
 def stored_arrays(e: LinearExpression) -> list[np.ndarray]:
     assert e.is_sparse
-    csr = e._store.csr
+    csr = sparse_store(e).csr
     return [csr.data, csr.indices, csr.indptr, e._store.const]
 
 
@@ -2909,7 +2917,7 @@ def test_stored_matrix_rejects_in_place_canonicalization() -> None:
     e = duplicated_lhs(base_model(sparse=True))
     assert e.is_sparse
     with pytest.raises(ValueError, match="read-only"):
-        e._store.csr.sum_duplicates()
+        sparse_store(e).csr.sum_duplicates()
 
 
 def test_to_dense_keeps_repeated_terms_in_stored_order() -> None:
