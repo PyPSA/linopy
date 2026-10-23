@@ -53,7 +53,7 @@ from xarray import DataArray, Dataset, broadcast
 from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
-from linopy.semantics import warn_outside_linopy
+from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
 from linopy.store import DenseStore, Reason, Store, merged_grid
 
 if TYPE_CHECKING:
@@ -576,15 +576,27 @@ class CSRStore(Store):
         """
         Apply ``op`` with ``factor`` -- a scalar or one value per cell -- to
         every coefficient and to the constant. Explicit zeros are kept, as by
-        :meth:`add`; a cell made absent drops its terms.
+        :meth:`add`; a NaN it produces in a live cell raises.
         """
-        factor = np.broadcast_to(factor, (self.n_cells,))
-        per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            const = op(self.const, factor)
+        check_arithmetic_nan(const, op, factor, self.const)
+        return self._scaled_terms(factor, op).assign_const(const)
+
+    def _scaled_terms(
+        self, factor: float | np.ndarray, op: Callable[[Any, Any], Any]
+    ) -> CSRStore:
+        """Apply ``op`` with a scalar or per-cell ``factor`` to every coefficient."""
+        per_term = factor
+        if np.ndim(factor):
+            per_term = np.repeat(factor, np.diff(self.csr.indptr))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            data = op(self.csr.data, per_term)
+        check_arithmetic_nan(data, op, per_term)
         csr = scipy.sparse.csr_array(
-            (op(self.csr.data, per_term), self.csr.indices, self.csr.indptr),
-            shape=self.csr.shape,
+            (data, self.csr.indices, self.csr.indptr), shape=self.csr.shape
         )
-        return replace(self, csr=csr, const=op(self.const, factor)).absorbed()
+        return replace(self, csr=csr)
 
     def assign_const(self, const: np.ndarray) -> CSRStore:
         """
@@ -612,7 +624,7 @@ class CSRStore(Store):
         store = self.reindex(grid) if reindex else self
         if factor is not None:
             factor = factor.broadcast_like(const).transpose(*dims)
-            store = store.scale(factor.to_numpy().reshape(-1), op)
+            store = store._scaled_terms(factor.to_numpy().reshape(-1), op)
         return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
 
     def absorbed(self) -> CSRStore:

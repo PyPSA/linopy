@@ -93,7 +93,7 @@ SAME_GRID: dict[str, Callable[[Store], Store]] = {
     "scale": lambda s: s.scale(2.0),
     "scale-cells": lambda s: s.scale(np.arange(s.n_cells, dtype=float) % 3),
     "scale-div": lambda s: s.scale(
-        np.arange(s.n_cells, dtype=float) % 3, operator.truediv
+        np.arange(s.n_cells, dtype=float) % 3 + 1, operator.truediv
     ),
     "assign-const": lambda s: s.assign_const(
         np.where(np.arange(s.n_cells) % 2, np.nan, 1.0)

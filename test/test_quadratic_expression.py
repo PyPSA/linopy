@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -369,3 +371,18 @@ def test_variable_names(x: Variable, y: Variable) -> None:
 
     expr = 2 * (x * x) + 1
     assert expr.variable_names == {"x"}
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+@pytest.mark.parametrize(
+    "op",
+    [lambda q: q / 0, lambda q: (0 * q + 1) * np.inf],
+    ids=["div-zero", "mul-inf-zero-coeff"],
+)
+def test_nonfinite_constant_op_raises(
+    x: Variable, op: Callable[[QuadraticExpression], QuadraticExpression]
+) -> None:
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+    with pytest.raises(ValueError, match="produced NaN"):
+        op(quad)

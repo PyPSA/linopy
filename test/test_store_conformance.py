@@ -509,25 +509,35 @@ def test_nan_constant_operand_rejects(backend: Model) -> None:
     assert expr.is_sparse == backend.sparse
 
 
-@pytest.mark.parametrize(
-    "op",
-    [
-        lambda e: e * OVER_A.where(OVER_A != 2.0, np.inf),
-        lambda e: e / OVER_A.where(OVER_A != 2.0, 0.0),
-    ],
-    ids=["mul-inf", "div-zero"],
-)
-def test_nonfinite_constant_op_drops_cell(
-    backend: Model, op: Callable[[LinearExpression], LinearExpression]
-) -> None:
+NONFINITE_OPS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
+    "mul-inf": lambda e: e * OVER_A.where(OVER_A != 2.0, np.inf),
+    "div-zero": lambda e: e / OVER_A.where(OVER_A != 2.0, 0.0),
+    "add-inf-then-sub-inf": lambda e: (e + np.inf) - np.inf,
+    "mul-inf-zero-coeff": lambda e: (0 * e + 1) * np.inf,
+    "mul-array-inf-zero-coeff": lambda e: (
+        (0 * e + 1) * OVER_A.where(OVER_A != 2.0, np.inf)
+    ),
+}
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+@pytest.mark.parametrize("op", list(NONFINITE_OPS))
+def test_nonfinite_constant_op_raises(backend: Model, op: str) -> None:
     expr = grid(backend)
-    res = op(expr)
-    absent = np.repeat([[False], [True], [False]], 2, axis=1)
+    with no_densify(), pytest.raises(ValueError, match="produced NaN"):
+        NONFINITE_OPS[op](expr)
+    assert expr.is_sparse == backend.sparse
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_nonfinite_constant_op_keeps_absent_cell(backend: Model) -> None:
+    expr = (grid(backend) + 1).where(COND)
+    with no_densify():
+        res = expr * np.inf
+    assert res.is_sparse == backend.sparse
+    absent = ~COND.broadcast_like(res.const)
     np.testing.assert_array_equal(res.const.isnull(), absent)
     np.testing.assert_array_equal(res.has_terms, ~absent)
-    summed = res.sum().vars.values
-    live = expr.vars.sel(a=[0, 2]).values
-    np.testing.assert_array_equal(np.sort(summed[summed != -1]), np.sort(live, None))
 
 
 REASON_SOURCES = [linopy.expressions, linopy.store, linopy.csr, linopy.constraints]

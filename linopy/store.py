@@ -31,7 +31,12 @@ from xarray import DataArray, Dataset
 from linopy.alignment import as_dataarray, fill_missing_coords
 from linopy.common import assign_fields, check_common_keys_values
 from linopy.constants import FACTOR_DIM, HELPER_DIMS, STACKED_TERM_DIM, TERM_DIM
-from linopy.semantics import absorb_absence, enforce_aux_conflict, enforce_merge_dims
+from linopy.semantics import (
+    absorb_absence,
+    check_arithmetic_nan,
+    enforce_aux_conflict,
+    enforce_merge_dims,
+)
 from linopy.types import CONSTANT_TYPES, DimsLike
 
 if TYPE_CHECKING:
@@ -162,7 +167,7 @@ class Store(ABC):
     ) -> Self:
         """
         Apply ``op`` with a scalar or per-cell ``factor`` to coefficients and
-        constant; a cell made absent drops its terms.
+        constant; a NaN it produces in a live cell raises.
         """
 
     @abstractmethod
@@ -186,7 +191,7 @@ class Store(ABC):
         Set the constant to ``const``, an aligned constant whose labels the
         cells are first remapped onto if ``reindex``, the new cells without
         terms; with a ``factor`` on those labels, apply ``op`` with it to the
-        coefficients too.
+        coefficients too, a NaN it produces at a live term raising.
         """
 
     @abstractmethod
@@ -508,6 +513,8 @@ class DenseStore(Store):
     ) -> DenseStore:
         ds, per_cell = self.ds, self._on_cells(factor)
         coeffs, const = op(ds.coeffs, per_cell), op(ds.const, per_cell)
+        check_arithmetic_nan(const, op, per_cell, ds.const)
+        check_arithmetic_nan(coeffs, op, per_cell, labels=ds.vars)
         return self._derived(
             absorb_absence(assign_fields(ds, coeffs=coeffs, const=const))
         )
@@ -530,6 +537,7 @@ class DenseStore(Store):
         fields = {"const": const}
         if factor is not None:
             fields["coeffs"] = op(ds.coeffs, factor)
+            check_arithmetic_nan(fields["coeffs"], op, factor, labels=ds.vars)
         return self._derived(absorb_absence(assign_fields(ds, **fields)))
 
     def absorbed(self) -> DenseStore:

@@ -111,6 +111,7 @@ from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
     absorb_absence,
+    check_arithmetic_nan,
     check_join_fill_value,
     check_user_nan,
     enforce_aux_conflict,
@@ -1100,10 +1101,11 @@ class BaseExpression(ABC):
         """
         expr = self._reindexed_to(self_const, needs_data_reindex)
         fields = {"const": op(self_const, operand)}
+        check_arithmetic_nan(fields["const"], op, operand, self_const)
         if scale:
             fields["coeffs"] = op(expr.coeffs, operand)
-        data = absorb_absence(assign_fields(expr.data, **fields))
-        return self.__class__(data, self.model)
+            check_arithmetic_nan(fields["coeffs"], op, operand, labels=expr.vars)
+        return self.__class__(assign_fields(expr.data, **fields), self.model)
 
     def _apply_constant_op(
         self,
@@ -2118,7 +2120,7 @@ class LinearExpression(BaseExpression):
         return obj
 
     def _set_data(self, data: Dataset) -> None:
-        self._store = DenseStore(data, self._model)
+        self._store = DenseStore(absorb_absence(data), self._model)
 
     def _dense_store(self, reason: Reason | None) -> DenseStore:
         """
@@ -2279,6 +2281,7 @@ class LinearExpression(BaseExpression):
         scale: bool,
     ) -> Self:
         const = op(self_const, operand)
+        check_arithmetic_nan(const, op, operand, self_const)
         factor = operand if scale else None
         store = self._store.combine(const, op, factor, needs_data_reindex)
         if isinstance(store, str):
@@ -3159,7 +3162,7 @@ class QuadraticExpression(BaseExpression):
         self._data = data
 
     def _set_data(self, data: Dataset) -> None:
-        self._data = data
+        self._data = absorb_absence(data)
 
     @property
     def data(self) -> Dataset:
