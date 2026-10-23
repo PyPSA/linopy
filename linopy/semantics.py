@@ -377,9 +377,9 @@ def absorb_absence(ds: Dataset) -> Dataset:
     """
     if "const" not in ds or "coeffs" not in ds or "vars" not in ds:
         return ds
-    mask = ds["const"].isnull()
-    if not bool(mask.any()):
+    if not np.isnan(ds["const"].values.sum()):
         return ds
+    mask = ds["const"].isnull()
     coeffs = ds["coeffs"].where(~mask, np.nan)
     vars_ = ds["vars"].where(~mask, -1)
     return ds.assign(coeffs=coeffs, vars=vars_)
