@@ -75,7 +75,7 @@ from linopy.containers import LabelContainer
 from linopy.csr import CSRStore, Grid, _densify_notice
 from linopy.scaling import validate_scaling
 from linopy.semantics import check_user_nan
-from linopy.store import DenseStore, Reason, Store, as_sparse
+from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -177,15 +177,6 @@ def rhs_on_grid(store: CSRStore, rhs: Any) -> DataArray | Reason:
         da = da.expand_dims(missing)
     values = da.transpose(*grid.dims).to_numpy().reshape(-1)
     return grid.dataarray(values.astype(float), name="rhs")
-
-
-def _rows_on_grid(
-    grid: Grid, positions: np.ndarray, values: np.ndarray, fill: Any
-) -> DataArray:
-    """``values`` at the flat ``positions`` of ``grid``, ``fill`` elsewhere."""
-    full = np.full(grid.size, fill, dtype=np.result_type(values, np.asarray(fill)))
-    full[positions] = values
-    return grid.dataarray(full)
 
 
 class Slack(NamedTuple):
@@ -342,123 +333,20 @@ class Constraint:
 
     @classmethod
     def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> Constraint:
-        """
-        Read a constraint written by :meth:`to_netcdf_ds`: the dense layout,
-        or the CSR layout (``_linopy_format="csr"``) into a sparse lhs.
-
-        CSR files without the ``_csr_columns`` attribute hold dense variable
-        positions instead of labels.
-        """
-        if ds.attrs.get("_linopy_format") != "csr":
-            return cls.from_dataset(ds, model, name)
-        attrs = ds.attrs
-        shape = tuple(attrs["shape"])
-        indices = ds["indices"].values
-        columns = attrs.get("_csr_columns", "positions")
-        if columns == "positions":
-            vlabels = model.variables.label_index.vlabels
-            indices = vlabels[indices]
-            shape = (shape[0], int(vlabels[-1]) + 1 if len(vlabels) else 1)
-        elif columns != "labels":
-            raise ValueError(
-                f"Unknown CSR column format '{columns}' for constraint '{name}'."
-            )
-        coord_dims = attrs["coord_dims"]
-        if isinstance(coord_dims, str):
-            coord_dims = [coord_dims]
-        grid = Grid.from_netcdf_vars(ds, coord_dims)
-        cindex_raw = int(attrs["cindex"])
-        cindex = cindex_raw if cindex_raw >= 0 else None
-        rhs = ds["rhs"].values
-        if "_active_positions" in ds:
-            positions = ds["_active_positions"].values
-        elif "_con_labels" in ds:
-            positions = ds["_con_labels"].values - (cindex or 0)
-        else:
-            positions = np.arange(len(rhs), dtype=np.intp)
-
-        counts = np.zeros(grid.size, dtype=np.int64)
-        counts[positions] = np.diff(ds["indptr"].values)
-        indptr = np.concatenate([[0], np.cumsum(counts)])
-        csr = scipy.sparse.csr_array(
-            (ds["data"].values, indices, indptr), shape=(grid.size, shape[1])
-        )
-        store = CSRStore(csr, np.zeros(grid.size), grid, model)
-
-        def on_grid(values: np.ndarray, fill: Any) -> DataArray:
-            return _rows_on_grid(grid, positions, values, fill)
-
-        sign = ds["_sign"].values if "_sign" in ds else np.full(len(rhs), attrs["sign"])
-        fields: dict[str, Any] = {
-            "sign": on_grid(sign, EQUAL),
-            "rhs": on_grid(rhs, np.nan),
-        }
-        if "scaling" in ds:
-            fields["scaling"] = on_grid(ds["scaling"].values, 1.0)
-        if cindex is not None:
-            labels = ds["labels"].values if "labels" in ds else positions + cindex
-            fields["labels"] = on_grid(labels, -1).astype(model._dtypes["labels"])
-        if "dual" in ds:
-            fields["dual"] = on_grid(ds["dual"].values, np.nan)
-        if "_binvar_labels" in ds:
-            fields["binary_var"] = on_grid(ds["_binvar_labels"].values, -1)
-            binval = ds["_binval"].values if "_binval" in ds else attrs["binval"]
-            fields["binary_val"] = on_grid(np.broadcast_to(binval, len(rhs)), -1)
-        if "blocks" in ds:
-            fields["blocks"] = on_grid(ds["blocks"].values, -1)
-        con_attrs: dict[str, Any] = {}
-        if cindex is not None:
-            con_attrs["label_range"] = (cindex, cindex + grid.size)
-        if (slack := _slack_names(attrs)) is not None:
-            con_attrs["slack_positive"], con_attrs["slack_negative"] = slack
+        """Read a constraint written by :meth:`to_netcdf_ds`."""
+        store = Store.from_netcdf_vars(ds, model)
         lhs = expressions.LinearExpression._from_store(store, model)
-        return cls(lhs, model=model, name=name, attrs=con_attrs, **fields)
+        fields = {k: ds[k] for k in _FIELDS if k in ds}
+        attrs = {k: v for k, v in ds.attrs.items() if k not in NETCDF_STORE_ATTRS}
+        return cls(lhs, model=model, name=name, attrs=attrs, **fields)
 
     def to_netcdf_ds(self) -> Dataset:
         """
-        A Dataset for netcdf serialization: :attr:`data`, or for a sparse lhs
-        its raw CSR rows next to the flat fields, read by :meth:`from_netcdf_ds`.
+        A Dataset for netcdf serialization: the lhs store arrays, see
+        :meth:`Store.to_netcdf_vars`, next to the fields on the grid dims.
         """
-        store = self._lhs._store
-        if not isinstance(store, CSRStore):
-            return self.data
-        csr = store.csr
-
-        def flat(da: DataArray) -> DataArray:
-            return DataArray(da.values.ravel(), dims=["_flat"])
-
-        sign = self._sign.values.ravel()
-        data_vars: dict[str, DataArray] = {
-            "indptr": DataArray(csr.indptr, dims=["_indptr"]),
-            "indices": DataArray(csr.indices, dims=["_nnz"]),
-            "data": DataArray(csr.data, dims=["_nnz"]),
-            "rhs": flat(self._rhs),
-            "scaling": flat(self._scaling),
-            **store.grid.to_netcdf_vars(),
-        }
-        attrs: dict[str, Any] = {
-            "_linopy_format": "csr",
-            "_csr_columns": "labels",
-            "cindex": self.range[0] if self.is_assigned else -1,
-            "shape": list(csr.shape),
-            "coord_dims": list(store.grid.dims),
-            "name": self.name,
-        }
-        if sign.size and (sign == sign[0]).all():
-            attrs["sign"] = str(sign[0])
-        else:
-            data_vars["_sign"] = flat(self._sign)
-        optional = {
-            "labels": self._labels,
-            "dual": self._dual,
-            "_binvar_labels": self._binary_var,
-            "_binval": self._binary_val,
-            "blocks": self._blocks,
-        }
-        data_vars |= {k: flat(v) for k, v in optional.items() if v is not None}
-        if (slack := _slack_names(self._attrs)) is not None:
-            attrs["slack_positive"], attrs["slack_negative"] = slack
-        return Dataset(data_vars, attrs=attrs)
+        ds = self._lhs._store.to_netcdf_vars().assign(self._fields())
+        return ds.assign_attrs(self._attrs)
 
     def _bind(
         self, lhs: expressions.LinearExpression, fields: Mapping[Any, Any]
@@ -720,7 +608,7 @@ class Constraint:
         return self._binary_var
 
     @property
-    def binary_val(self) -> int | np.ndarray | None:
+    def binary_val(self) -> np.ndarray | None:
         return None if self._binary_val is None else self._binary_val.values
 
     @property

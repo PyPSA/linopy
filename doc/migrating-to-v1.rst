@@ -124,3 +124,11 @@ Every row is a legacy guess that is now an explicit rule.
 
 The full, normative rule list lives in the
 :doc:`arithmetic convention <design/convention>`.
+
+Saved models (netcdf)
+---------------------
+
+The netcdf file layout changed: dense and sparse stores now share one layout.
+:func:`~linopy.io.read_netcdf` refuses files written by linopy < 1.0 and raises a
+``ValueError``. Rebuild the model with linopy 1.0 and save it again with
+:meth:`~linopy.model.Model.to_netcdf`.

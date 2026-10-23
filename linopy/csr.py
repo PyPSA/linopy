@@ -50,11 +50,17 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset, broadcast
 
-from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
-from linopy.store import DenseStore, Reason, Store, merged_grid
+from linopy.store import (
+    CSR_COLUMNS_ATTR,
+    STORE_KIND_ATTR,
+    DenseStore,
+    Reason,
+    Store,
+    merged_grid,
+)
 
 if TYPE_CHECKING:
     from linopy.common import VariableLabelIndex
@@ -66,7 +72,6 @@ CONTRACTION_CHUNK = 64
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
 
-_AUX_PREFIX = "_aux"
 _SCALAR_DIM = "_scalar"
 
 
@@ -92,42 +97,11 @@ class Grid:
         )
 
     @classmethod
-    def from_coords(cls, coords: Iterable[pd.Index]) -> Grid:
-        """Build from one index per dimension, each named after its dim."""
-        return cls({str(c.name): c for c in coords})
-
-    @classmethod
     def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
         """Build from the indexes and auxiliary coordinates ``ds`` carries on ``dims``."""
         dims = tuple(dims)
         indexes = {d: ds.get_index(d).rename(d) for d in dims}
         return cls(indexes, _aux_coords(ds, set(dims)))
-
-    @classmethod
-    def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
-        """Read back a grid written by :meth:`to_netcdf_vars`."""
-        aux: AuxCoords = {
-            da.attrs["name"]: (da.attrs.get("dim", ()), da.to_numpy())
-            for k, da in ds.data_vars.items()
-            if str(k).startswith(_AUX_PREFIX)
-        }
-        indexes, levels = coords_from_dataset(ds, list(dims))
-        return cls(cls.from_coords(indexes).indexes, aux | levels)
-
-    def to_netcdf_vars(self) -> dict[str, DataArray]:
-        """
-        The indexes and auxiliary coordinates as plain data variables for
-        netcdf, named by position with the coordinate names as attributes.
-        """
-        aux = {
-            f"{_AUX_PREFIX}{j}": DataArray(
-                v,
-                dims=[f"{_AUX_PREFIX}dim{j}"] if isinstance(d, str) else [],
-                attrs={"name": n} | ({"dim": d} if isinstance(d, str) else {}),
-            )
-            for j, (n, (d, v)) in enumerate(self.aux.items())
-        }
-        return coords_to_dataset_vars(self.coords) | aux
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -537,6 +511,26 @@ class CSRStore(Store):
         if not deep:
             return replace(self, model=model)
         return replace(self, csr=self.csr.copy(), const=self.const.copy(), model=model)
+
+    def to_netcdf_vars(self) -> Dataset:
+        csr = self.csr
+        data_vars = {
+            "data": DataArray(csr.data, dims=["_nnz"]),
+            "indices": DataArray(csr.indices, dims=["_nnz"]),
+            "indptr": DataArray(csr.indptr, dims=["_indptr"]),
+            "const": self.grid.dataarray(self.const),
+        }
+        attrs = {STORE_KIND_ATTR: "csr", CSR_COLUMNS_ATTR: csr.shape[1]}
+        return Dataset(data_vars, attrs=attrs)
+
+    @classmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> CSRStore:
+        const = ds["const"]
+        grid = Grid.from_dataset(const, map(str, const.dims))
+        arrays = (ds["data"].values, ds["indices"].values, ds["indptr"].values)
+        shape = (grid.size, int(ds.attrs[CSR_COLUMNS_ATTR]))
+        csr = scipy.sparse.csr_array(arrays, shape=shape)
+        return cls(csr, const.values.reshape(-1), grid, model)
 
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         return self.grid.dataarray(values, name=name)

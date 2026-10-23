@@ -24,7 +24,12 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
-from linopy.testing import assert_equivalent, assert_exprequal, assert_model_equal
+from linopy.testing import (
+    assert_conequal,
+    assert_equivalent,
+    assert_exprequal,
+    assert_model_equal,
+)
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -171,19 +176,62 @@ def test_read_netcdf_inconsistent_order_attr_raises(
         read_netcdf(fn)
 
 
-def test_model_to_netcdf_keeps_constraint_store(tmp_path: Path, backend: Model) -> None:
+@pytest.fixture
+def mixed_store_model(backend: Model) -> Model:
     m = backend
-    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
-    m.add_constraints(x >= 1, name="c")
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(0, 10, coords=[i], name="x")
+    b = m.add_variables(binary=True, coords=[i], name="b")
+    m.add_expressions(3 * x + 1, name="e")
+    flipped = m.add_constraints(x - b >= 0, name="flipped")
+    (flipped.to_dense if m.sparse else flipped.to_sparse)()
+    m.add_expressions(flipped.lhs, name="flipped")
+    m.add_objective(2 * x.sum() + b.sum())
+    mask = xr.DataArray([True, False, True, True], coords=[i])
+    m.add_constraints(2 * x >= 1, name="masked", mask=mask)
+    sign = xr.DataArray(["<=", ">=", "=", "<="], coords=[i])
+    m.add_constraints(x + b, sign, 3, name="mixed")
+    m.add_indicator_constraints(b, 1, x <= 5, name="indicator")
+    m.add_constraints(x.sum() <= 20, name="soft").soften(10)
+    m.constraints["masked"].dual = xr.DataArray(np.arange(4.0), coords=[i])
+    m.constraints.set_blocks(np.arange(m._xCounter) % 2)
+    return m
 
-    assert m.constraints["c"].lhs.is_sparse == m.sparse
 
-    fn = tmp_path / "test_store.nc"
+def test_model_to_netcdf_round_trip_keeps_stores(
+    mixed_store_model: Model, tmp_path: Path
+) -> None:
+    m = mixed_store_model
+    fn = tmp_path / "stores.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert p.constraints["c"].lhs.is_sparse == m.sparse
+    assert p.constraints["flipped"].lhs.is_sparse != m.sparse
+    assert p.expressions["flipped"].is_sparse != m.sparse
+    for name, con in m.constraints.items():
+        got = p.constraints[name]
+        assert got.lhs.is_sparse == con.lhs.is_sparse
+        assert_conequal(con, got, strict=True)
+        xr.testing.assert_equal(got.labels, con.labels)
+        xr.testing.assert_equal(got.data["blocks"], con.data["blocks"])
+    got, want = p.constraints["masked"].data, m.constraints["masked"].data
+    xr.testing.assert_equal(got["dual"], want["dual"])
+    pairs = [
+        (p.expressions["e"], m.expressions["e"]),
+        (p.expressions["flipped"], m.expressions["flipped"]),
+        (p.objective.expression, m.objective.expression),
+    ]
+    for got_expr, want in pairs:
+        assert isinstance(got_expr, LinearExpression)
+        assert isinstance(want, LinearExpression)
+        assert got_expr.is_sparse == want.is_sparse
+        assert_equivalent(got_expr, want)
     assert_model_equal(m, p)
+
+
+def test_read_netcdf_pre_1_0_file_raises() -> None:
+    with pytest.raises(ValueError, match="linopy <1.0"):
+        read_netcdf(Path(__file__).parent / "data" / "pre-1.0-model.nc")
 
 
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")
@@ -224,7 +272,7 @@ def test_model_to_netcdf_compression_non_numeric_coords(tmp_path: Path) -> None:
     m.to_netcdf(fn, engine="netcdf4", compression={"zlib": True})
 
     with xr.open_dataset(fn, engine="netcdf4") as ds:
-        for k in ["variables-x-t", "variables-x-d", "constraints-c-_index0"]:
+        for k in ["variables-x-t", "variables-x-d", "constraints-c-t"]:
             assert ds[k].encoding["zlib"], k
     assert_model_equal(m, read_netcdf(fn))
 
@@ -270,37 +318,6 @@ def test_model_to_netcdf_compression_scipy(
     assert_model_equal(model, read_netcdf(fn))
 
 
-def test_model_from_netcdf_sparse_constraint_legacy_positions(tmp_path: Path) -> None:
-    """Files written before #926 stored dense positions as CSR columns."""
-    m = Model(sparse=True)
-    i = pd.RangeIndex(3, name="i")
-    mask = xr.DataArray([True, False, False], dims=["i"])
-    m.add_variables(coords=[i], name="a", mask=mask)
-    b = m.add_variables(coords=[i], name="b")
-    m.add_constraints(2 * b >= 1, name="c")
-
-    fn = tmp_path / "test_sparse_legacy.nc"
-    m.to_netcdf(fn)
-
-    ds = xr.load_dataset(fn)
-    label_to_pos = m.variables.label_index.label_to_pos
-    labels = ds["constraints-c-indices"].values
-    positions = label_to_pos[labels]
-    assert not np.array_equal(labels, positions)
-    ds["constraints-c-indices"] = xr.DataArray(positions, dims=["constraints-c-_nnz"])
-    del ds.attrs["constraints-c-_csr_columns"]
-    ds = ds.rename({"constraints-c-labels": "constraints-c-_con_labels"})
-    legacy_fn = tmp_path / "legacy.nc"
-    ds.to_netcdf(legacy_fn)
-
-    p = read_netcdf(legacy_fn)
-    assert p.constraints["c"].lhs.is_sparse
-    A, A_read = m.matrices.A, p.matrices.A
-    assert A is not None and A_read is not None
-    np.testing.assert_array_equal(A.toarray(), A_read.toarray())
-    assert_model_equal(m, p)
-
-
 def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")
@@ -315,27 +332,6 @@ def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
 
     assert_model_equal(m, p)
     assert_model_equal(m, p.copy())
-
-
-def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path, backend: Model) -> None:
-    m = backend
-    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
-
-    def bound(m: Model, i: int) -> object:
-        if i % 2:
-            return x.at[i] >= i
-        return x.at[i] == 0.0
-
-    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c")
-    assert m.constraints["c"].lhs.is_sparse == m.sparse
-
-    fn = tmp_path / "test_mixed_sign.nc"
-    m.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert p.constraints["c"].lhs.is_sparse == m.sparse
-    xr.testing.assert_equal(m.constraints["c"].sign, p.constraints["c"].sign)
-    assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_with_sense(model: Model, tmp_path: Path) -> None:
@@ -403,8 +399,8 @@ def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
-    m = Model()
+def test_model_to_netcdf_aux_coords(tmp_path: Path, backend: Model) -> None:
+    m = backend
     coords = xr.Coordinates(
         {
             "snapshot": np.arange(4),
@@ -423,37 +419,6 @@ def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
     fn = tmp_path / "test_aux_coords.nc"
     m.to_netcdf(fn)
     assert_model_equal(m, read_netcdf(fn))
-
-
-def test_read_netcdf_old_multiindex_format_loads_flat(tmp_path: Path) -> None:
-    m = Model()
-    coords = xr.Coordinates(
-        {
-            "d": pd.RangeIndex(4),
-            "first": ("d", [1, 1, 2, 2]),
-            "second": ("d", ["a", "b", "a", "b"]),
-        }
-    )
-    x = m.add_variables(lower=0, coords=coords, name="x")
-    m.add_constraints(x >= 1, name="c")
-    m.add_expressions(2 * x, name="e")
-    m.add_objective(x.sum())
-
-    fn = tmp_path / "flat.nc"
-    m.to_netcdf(fn)
-    ds = xr.load_dataset(fn)
-    mi_dims = [d for d in ds.dims if str(d).endswith("-d")]
-    ds = ds.drop_vars(mi_dims)
-    ds.attrs.update(
-        {f"{d}_multiindex": json.dumps(["first", "second"]) for d in mi_dims}
-    )
-    old = tmp_path / "old_multiindex.nc"
-    ds.to_netcdf(old)
-
-    p = read_netcdf(old)
-    for obj in (p.variables["x"], p.constraints["c"], p.expressions["e"]):
-        assert isinstance(obj.indexes["d"], pd.RangeIndex)
-    assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_with_expressions(
@@ -599,20 +564,6 @@ def test_pickle_model_with_expressions(
 
     assert_model_equal(m, p)
     assert p.expressions["lin"].model is p
-
-
-def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
-    from linopy.io import NETCDF_VERSION_ATTR
-
-    fn = tmp_path / "test.nc"
-    model.to_netcdf(fn)
-
-    ds = xr.load_dataset(fn).load()
-    del ds.attrs[NETCDF_VERSION_ATTR]
-    fn_legacy = tmp_path / "legacy.nc"
-    ds.to_netcdf(fn_legacy)
-
-    assert_model_equal(model, read_netcdf(fn_legacy))
 
 
 @pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")

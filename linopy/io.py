@@ -29,11 +29,10 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.csr import CSRStore
+from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
-from linopy.store import DenseStore, expression_dataset
+from linopy.store import Store
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -47,6 +46,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+NETCDF_LAYOUT_ATTR = "_linopy_netcdf_layout"
+NETCDF_LAYOUT = 1
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
@@ -1106,7 +1107,7 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr._to_dataset().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_netcdf_ds().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1126,6 +1127,7 @@ def to_netcdf(
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
+    ds.attrs[NETCDF_LAYOUT_ATTR] = NETCDF_LAYOUT
     for kind, container in (
         ("variables", m.variables),
         ("expressions", m.expressions),
@@ -1178,8 +1180,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Notes
     -----
     Variables, expressions and constraints are restored in the insertion
-    order stored by :func:`to_netcdf`. Files written by earlier versions
-    carry no order and are loaded in sorted name order.
+    order stored by :func:`to_netcdf`. Files written by linopy <1.0 raise
+    ``ValueError``.
 
     The SOS reformulation lifecycle token is not persisted by
     :func:`to_netcdf`. If the saved model was in reformulated form,
@@ -1195,7 +1197,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         path = Path(path)
 
     ds = xr.load_dataset(path, **kwargs)
-    m = Model(sparse=bool(ds.attrs.get("sparse", False)))
+    if ds.attrs.get(NETCDF_LAYOUT_ATTR) != NETCDF_LAYOUT:
+        written_by = ds.attrs.get(NETCDF_VERSION_ATTR, "unknown")
+        raise ValueError(
+            f"netcdf written by linopy <1.0 (version {written_by}) cannot be read; "
+            "rebuild the model and write it with linopy >=1.0."
+        )
+    m = Model(sparse=bool(ds.attrs["sparse"]))
 
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
@@ -1212,11 +1220,12 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             for k, v in ds.attrs.items()
             if owners[k] == prefix
         }
-
-        for dim in list(ds.dims):
-            if ds.attrs.pop(f"{dim}_multiindex", None) is not None:
-                ds = ds.assign_coords({dim: pd.RangeIndex(ds.sizes[dim], name=dim)})
         return ds
+
+    def read_expression(ds: xr.Dataset) -> LinearExpression | QuadraticExpression:
+        if ds.attrs[EXPR_TYPE_ATTR] == QuadraticExpression.__name__:
+            return QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
+        return LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
@@ -1257,20 +1266,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
     for k in containers["expressions"]:
         name = remove_prefix(k, "expressions")
-        expr_ds = get_prefix(ds, k)
-        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
-        expr_ds.attrs.pop("name", None)  # re-attached below, after construction
-        expr: LinearExpression | QuadraticExpression
-        if expr_type == "QuadraticExpression" or (
-            expr_type is None and FACTOR_DIM in expr_ds.dims
-        ):
-            expr = QuadraticExpression(expr_ds, m)
-        else:
-            dense = DenseStore(expression_dataset(expr_ds, m), m)
-            store = dense.to_sparse() if m.store_cls is CSRStore else dense
-            expr = LinearExpression._from_store(
-                dense if isinstance(store, str) else store, m
-            )
+        expr = read_expression(get_prefix(ds, k))
         expr.attrs["name"] = name
         expressions[name] = expr
 
@@ -1283,20 +1279,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
-    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
-        QuadraticExpression
-        if obj_type == "QuadraticExpression"
-        or (obj_type is None and FACTOR_DIM in objective.dims)
-        else LinearExpression
-    )
     m.objective = Objective(
-        obj_cls(objective, m),
+        read_expression(objective),
         m,
-        objective.attrs.pop("sense"),
-        objective.attrs.pop("scaling", 1),
+        objective.attrs["sense"],
+        objective.attrs["scaling"],
     )
-    m.objective._value = objective.attrs.pop("value", None)
+    m.objective._value = objective.attrs.get("value")
 
     m.parameters = get_prefix(ds, "parameters")
 

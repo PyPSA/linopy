@@ -52,6 +52,11 @@ Reason: TypeAlias = str
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 """What a dense expression dataset holds at a cell or term it lacks."""
 
+STORE_KIND_ATTR = "_store_kind"
+CSR_COLUMNS_ATTR = "_n_columns"
+NETCDF_STORE_ATTRS = frozenset((STORE_KIND_ATTR, CSR_COLUMNS_ATTR))
+"""The netcdf attributes a store writes next to its arrays."""
+
 
 class Store(ABC):
     """
@@ -127,6 +132,29 @@ class Store(ABC):
     @abstractmethod
     def copy(self, model: Model, deep: bool = True) -> Self:
         """The same store on ``model``, its arrays copied if ``deep``."""
+
+    @abstractmethod
+    def to_netcdf_vars(self) -> Dataset:
+        """
+        The arrays for netcdf with ``const`` on the grid dims and the store
+        kind in the ``_store_kind`` attribute, read by :meth:`from_netcdf_vars`.
+        """
+
+    @classmethod
+    @abstractmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> Self:
+        """Rebuild this store kind from the arrays of :meth:`to_netcdf_vars`."""
+
+    @staticmethod
+    def from_netcdf_vars(ds: Dataset, model: Model) -> Store:
+        """The store written by :meth:`to_netcdf_vars`, by its ``_store_kind``."""
+        from linopy.csr import CSRStore
+
+        kinds: dict[str, type[Store]] = {
+            "dense": DenseStore,
+            "csr": CSRStore,
+        }
+        return kinds[ds.attrs[STORE_KIND_ATTR]].read_netcdf_vars(ds, model)
 
     @property
     @abstractmethod
@@ -496,6 +524,14 @@ class DenseStore(Store):
 
     def copy(self, model: Model, deep: bool = True) -> DenseStore:
         return DenseStore(self.ds.copy(deep=deep), model)
+
+    def to_netcdf_vars(self) -> Dataset:
+        ds = Dataset({k: self.ds[k] for k in ("coeffs", "vars", "const")})
+        return ds.assign_attrs({STORE_KIND_ATTR: "dense"})
+
+    @classmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> DenseStore:
+        return cls(Dataset({k: ds[k] for k in ("coeffs", "vars", "const")}), model)
 
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         const = self.ds.const.transpose(*self.dims)

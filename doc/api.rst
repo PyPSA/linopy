@@ -386,10 +386,7 @@ Structure
 Modification
 ------------
 
-``Constraint.update`` is the canonical mutation API. The legacy ``lhs`` /
-``sign`` / ``rhs`` / ``coeffs`` / ``vars`` setters still forward to
-``update`` but emit a ``DeprecationWarning`` and will be removed in a
-future release.
+``Constraint.update`` is the canonical mutation API.
 
 .. autosummary::
    :toctree: generated/

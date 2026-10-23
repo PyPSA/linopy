@@ -1459,6 +1459,10 @@ class BaseExpression(ABC):
         """The dense dataset, without converting a sparse expression."""
         return self.data
 
+    def _to_netcdf_ds(self) -> Dataset:
+        """The dataset written to netcdf by :func:`linopy.io.to_netcdf`."""
+        return self._to_dataset()
+
     @property
     def model(self) -> Model:
         return self._model
@@ -2139,6 +2143,9 @@ class LinearExpression(BaseExpression):
 
     def _to_dataset(self) -> Dataset:
         return self._store.to_dataset()
+
+    def _to_netcdf_ds(self) -> Dataset:
+        return self._store.to_netcdf_vars()
 
     def _fallback(self, reason: Reason | None) -> Self:
         """

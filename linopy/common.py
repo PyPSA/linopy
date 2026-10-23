@@ -7,7 +7,6 @@ This module contains commonly used functions.
 
 from __future__ import annotations
 
-import json
 import operator
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
@@ -1098,62 +1097,6 @@ class LocIndexer(Generic[LocT]):
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
         return self.object.sel(key)
-
-
-def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
-    """
-    Serialize a list of pd.Index to a DataArray dict.
-
-    Suitable for embedding coordinate metadata as plain data variables in a
-    Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
-    The variables are named by position, never by the (possibly dashed)
-    dimension names, since the netcdf reader splits variable names on ``-``.
-    Reconstruct with :func:`coords_from_dataset`.
-    """
-    return {
-        f"_index{i}": DataArray(np.array(c), dims=[f"_indexdim{i}"])
-        for i, c in enumerate(coords)
-    }
-
-
-def coords_from_dataset(
-    ds: Dataset, coord_dims: list[str]
-) -> tuple[list[pd.Index], dict[str, tuple[str, np.ndarray]]]:
-    """
-    Deserialize a list of pd.Index from a Dataset.
-
-    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
-    or by its earlier name-keyed format (``_coord_<dim>``). A MultiIndex
-    written by linopy < 1.0 in either format loads flat: a positional index,
-    with its levels returned as auxiliary coords on the dim.
-    """
-    coords: list[pd.Index] = []
-    levels: dict[str, tuple[str, np.ndarray]] = {}
-    for i, d in enumerate(coord_dims):
-        mi_levels = _multiindex_levels(ds, i, d)
-        if mi_levels is None:
-            key = f"_index{i}" if f"_index{i}" in ds else f"_coord_{d}"
-            coords.append(pd.Index(ds[key].values, name=d))
-            continue
-        size = len(next(iter(mi_levels.values())))
-        coords.append(pd.RangeIndex(size, name=d))
-        levels |= {name: (d, values) for name, values in mi_levels.items()}
-    return coords, levels
-
-
-def _multiindex_levels(ds: Dataset, i: int, d: str) -> dict[str, np.ndarray] | None:
-    if f"_index{i}_codes" in ds:
-        codes = ds[f"_index{i}_codes"]
-        names = [str(n) for n in json.loads(codes.attrs["level_names"])]
-        keys = [f"_index{i}_level{j}" for j in range(len(names))]
-    elif f"_coord_{d}_codes" in ds:
-        codes = ds[f"_coord_{d}_codes"]
-        prefix = f"_coord_{d}_level_"
-        names = [str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)]
-        keys = [prefix + n for n in names]
-    else:
-        return None
-    return {n: ds[k].values[c] for n, k, c in zip(names, keys, codes.values.T)}
 
 
 def is_constant(x: SideLike) -> bool:
