@@ -1156,16 +1156,21 @@ def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     assert _lp_constraint_section(m, tmp_path / "unsorted.lp") == expected
 
 
+@pytest.mark.parametrize("two_d", [False, True], ids=["grid", "2d-coord"])
 def test_named_linear_expression_reads_back_on_the_model_store(
-    backend: Model, tmp_path: Path
+    backend: Model, tmp_path: Path, two_d: bool
 ) -> None:
-    x = backend.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
-    want = backend.add_expressions(2 * x + 1, name="e")
+    i, j = pd.RangeIndex(3, name="i"), pd.RangeIndex(2, name="j")
+    expr = 2 * backend.add_variables(coords=[i, j], name="x") + 1
+    if two_d:
+        expr = expr.assign_coords(two=(("i", "j"), np.arange(6).reshape(3, 2)))
+    want = backend.add_expressions(expr, name="e")
     fn = tmp_path / "e.nc"
     backend.to_netcdf(fn)
     e = read_netcdf(fn).expressions["e"]
     assert isinstance(e, LinearExpression)
-    assert e.is_sparse == backend.sparse
+    assert e.is_sparse == (backend.sparse and not two_d)
+    assert ("two" in e.coords) == two_d
     assert e.attrs["name"] == "e"
     assert isinstance(want, LinearExpression)
     assert_equivalent(e, want)
