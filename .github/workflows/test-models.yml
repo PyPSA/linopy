@@ -79,6 +79,9 @@ jobs:
           pixi remove linopy
           pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.sha }}
           pixi add --pypi pypsa
+          # linopy[polars] is not requestable from the git ref above; the default
+          # solve() writes an LP file and needs polars installed alongside it.
+          pixi add --pypi polars
 
       - name: Run snakemake test workflows
         if: env.pinned == 'false'
