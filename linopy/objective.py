@@ -159,14 +159,8 @@ class Objective:
         return self.expression.linear_terms()
 
     def to_netcdf_ds(self) -> Dataset:
-        """
-        Returns the objective in the dense layout for netcdf serialization.
-
-        The expression setter reduces the objective to a single cell, so a
-        CSR-backed expression is densified into that one cell here, without
-        mutating the stored CSR data.
-        """
-        return self.expression._to_dataset().assign_attrs(name=self.name)
+        """Returns the objective expression in its netcdf layout, see :func:`linopy.io.to_netcdf`."""
+        return self.expression._to_netcdf_ds().assign_attrs(name=self.name)
 
     @property
     def coeffs(self) -> DataArray:

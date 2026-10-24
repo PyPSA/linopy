@@ -15,8 +15,6 @@ from linopy import Model
 from linopy.common import (
     assign_fields,
     best_int,
-    coords_from_dataset,
-    coords_to_dataset_vars,
     get_dims_with_index_levels,
     get_printout_labels,
     is_constant,
@@ -52,64 +50,6 @@ def test_assign_fields_replaces_without_aligning() -> None:
     assert list(result) == ["const", "vars", "scaling"]
     assert result.sizes["_term"] == 1
     assert result.attrs == {"a": 1}
-
-
-def test_coords_dataset_vars_roundtrip() -> None:
-    """Dash-named coords survive serialization to Dataset vars and back."""
-    coords = [pd.Index([1, 2, 3], name="my-simple"), pd.Index(["a"], name="b-c")]
-    ds = xr.Dataset(coords_to_dataset_vars(coords))
-    assert not any("-" in str(k) for k in ds)
-    restored, levels = coords_from_dataset(ds, ["my-simple", "b-c"])
-    assert levels == {}
-    for got, want in zip(restored, coords):
-        assert got.equals(want)
-        assert got.name == want.name
-
-
-def test_coords_from_dataset_reads_name_keyed_format() -> None:
-    """Files written before the positional format keyed the variables by name."""
-    ds = xr.Dataset({"_coord_simple": ("e", [1, 2, 3])})
-    (plain,), _ = coords_from_dataset(ds, ["simple"])
-    assert plain.equals(pd.Index([1, 2, 3])) and plain.name == "simple"
-
-
-@pytest.mark.parametrize(
-    "ds",
-    [
-        pytest.param(
-            xr.Dataset(
-                {
-                    "_coord_d_level_p": ("l0", [1, 2]),
-                    "_coord_d_level_q": ("l1", ["a", "b"]),
-                    "_coord_d_codes": (("n", "k"), [[0, 0], [0, 1], [1, 0]]),
-                }
-            ),
-            id="name-keyed-0.9",
-        ),
-        pytest.param(
-            xr.Dataset(
-                {
-                    "_index0_level0": ("l0", [1, 2]),
-                    "_index0_level1": ("l1", ["a", "b"]),
-                    "_index0_codes": (
-                        ("n", "k"),
-                        [[0, 0], [0, 1], [1, 0]],
-                        {"level_names": '["p", "q"]'},
-                    ),
-                }
-            ),
-            id="positional-0.10",
-        ),
-    ],
-)
-def test_coords_from_dataset_loads_multiindex_flat(ds: xr.Dataset) -> None:
-    """A frozen constraint over a MultiIndex from linopy < 1.0 loads flat."""
-    (index,), levels = coords_from_dataset(ds, ["d"])
-    assert index.equals(pd.RangeIndex(3)) and index.name == "d"
-    assert {n: (d, v.tolist()) for n, (d, v) in levels.items()} == {
-        "p": ("d", [1, 1, 2]),
-        "q": ("d", ["a", "b", "a"]),
-    }
 
 
 def test_iterate_slices_basic() -> None:

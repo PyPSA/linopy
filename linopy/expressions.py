@@ -147,7 +147,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import (
         AnonymousScalarConstraint,
-        ConstraintBase,
+        Constraint,
     )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
@@ -1151,13 +1151,13 @@ class BaseExpression(ABC):
         except TypeError:
             return NotImplemented
 
-    def __le__(self, rhs: SideLike) -> ConstraintBase:
+    def __le__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> ConstraintBase:
+    def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> ConstraintBase:  # type: ignore[override]
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1319,7 +1319,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -1339,7 +1339,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -1359,7 +1359,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Equality constraint.
 
@@ -1458,6 +1458,10 @@ class BaseExpression(ABC):
     def _to_dataset(self) -> Dataset:
         """The dense dataset, without converting a sparse expression."""
         return self.data
+
+    def _to_netcdf_ds(self) -> Dataset:
+        """The dataset written to netcdf by :func:`linopy.io.to_netcdf`."""
+        return self._to_dataset()
 
     @property
     def model(self) -> Model:
@@ -1630,7 +1634,7 @@ class BaseExpression(ABC):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -1672,12 +1676,12 @@ class BaseExpression(ABC):
             if rhs.isnull().any():
                 check_user_nan()
 
-        all_to_lhs = self.sub(rhs, join=join).data
-        computed_rhs = -all_to_lhs.const
-        data = assign_fields(
-            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
+        all_to_lhs = self.sub(rhs, join=join)
+        if not isinstance(all_to_lhs, LinearExpression):
+            raise TypeError("The lhs of a constraint must be a linear expression.")
+        return constraints.Constraint(
+            all_to_lhs.reset_const(), sign, -all_to_lhs.const, self.model
         )
-        return constraints.Constraint(data, model=self.model)
 
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
         """Broadcast a constant RHS onto the expression's coordinates."""
@@ -2140,6 +2144,9 @@ class LinearExpression(BaseExpression):
     def _to_dataset(self) -> Dataset:
         return self._store.to_dataset()
 
+    def _to_netcdf_ds(self) -> Dataset:
+        return self._store.to_netcdf_vars()
+
     def _fallback(self, reason: Reason | None) -> Self:
         """
         A dense copy for an operation without a sparse path, with a densify
@@ -2431,7 +2438,7 @@ class LinearExpression(BaseExpression):
     def reset_const(self) -> Self:
         store = self._store
         return type(self)._from_store(
-            store.assign_const(np.zeros(store.n_cells)), self._model
+            store.assign_const(np.broadcast_to(0.0, store.n_cells)), self._model
         )
 
     @property
@@ -2467,7 +2474,7 @@ class LinearExpression(BaseExpression):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> ConstraintBase:
+    ) -> Constraint:
         store = self._store
         if not isinstance(store, CSRStore):
             return super().to_constraint(sign, rhs, join)
@@ -2477,10 +2484,12 @@ class LinearExpression(BaseExpression):
         rhs = as_constant(rhs)
         if join is not None or not isinstance(rhs, CONSTANT_TYPES):
             return self.sub(rhs, join=join).to_constraint(sign, 0)
-        rhs_da = constraints.csr_rhs(store, rhs)
+        rhs_da = constraints.rhs_on_grid(store, rhs)
         if isinstance(rhs_da, str):
             return self._fallback(rhs_da).to_constraint(sign, rhs, join)
-        return constraints.CSRConstraint.from_csr(store, sign, rhs_da)
+        return constraints.Constraint(
+            self.reset_const(), sign, rhs_da - self.const, self.model
+        )
 
     @overload
     def __add__(

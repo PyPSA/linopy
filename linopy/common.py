@@ -7,7 +7,6 @@ This module contains commonly used functions.
 
 from __future__ import annotations
 
-import json
 import operator
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
@@ -39,7 +38,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
@@ -312,7 +311,7 @@ def validate_coords_reassignment(
 
     Single-sourced per-item invariants for coordinate reassignment, used by
     the Dataset-backed (:func:`reassign_coords`) and the
-    CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
+    CSR-backed (``CSRStore``) paths alike, so every entry point is safe
     on its own. Model-level aggregate checks (dimension exists somewhere in
     the model, consistent lengths across containers) live on top of this.
 
@@ -390,7 +389,7 @@ def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
     return Dataset(data_vars, coords=ordered, attrs=new.attrs)
 
 
-T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
+T = TypeVar("T", Dataset, DataArray, "Variable", "LinearExpression", "Constraint")
 
 
 def iterate_slices(
@@ -425,41 +424,36 @@ def iterate_slices(
     if slice_dims is None:
         slice_dims = list(getattr(ds, "coord_dims", ds.dims))
 
-    if not set(slice_dims).issubset(ds.dims):
+    for indexers in slice_indexers(dict(ds.sizes), slice_size, slice_dims):
+        yield ds.isel(indexers) if indexers else ds
+
+
+def slice_indexers(
+    sizes: Mapping[Hashable, int],
+    slice_size: int | None,
+    slice_dims: Sequence[Hashable],
+) -> Generator[dict[Hashable, slice], None, None]:
+    """
+    Positional slices along the largest of ``slice_dims`` cutting an object
+    of ``sizes`` into parts of about ``slice_size`` elements; a single empty
+    indexer where no cut is needed.
+    """
+    if not set(slice_dims).issubset(sizes):
         raise ValueError(
             "Invalid slice dimensions. Must be a subset of the dataset dimensions."
         )
-
-    # Calculate the total number of elements in the dataset
-    size = np.prod([ds.sizes[dim] for dim in ds.dims], dtype=int)
-
-    if slice_size is None or size <= slice_size:
-        yield ds
+    size = np.prod(list(sizes.values()), dtype=int)
+    dims = {dim: sizes[dim] for dim in slice_dims}
+    if slice_size is None or size <= slice_size or not dims:
+        yield {}
         return
 
-    # number of slices
-    n_slices = max((size + slice_size - 1) // slice_size, 1)
-
-    # leading dimension (the dimension with the largest size)
-    sizes = {dim: ds.sizes[dim] for dim in slice_dims}
-    if not sizes:
-        yield ds
-        return
-
-    leading_dim = max(sizes, key=sizes.get)  # type: ignore
-    size_of_leading_dim = ds.sizes[leading_dim]
-
-    if size_of_leading_dim < n_slices:
-        n_slices = size_of_leading_dim
-
-    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
-
-    # Iterate over the Cartesian product of slice indices
+    leading_dim = max(dims, key=dims.get)  # type: ignore
+    n_slices = min(max((size + slice_size - 1) // slice_size, 1), dims[leading_dim])
+    chunk_size = (dims[leading_dim] + n_slices - 1) // n_slices
     for i in range(n_slices):
         start = i * chunk_size
-        end = min(start + chunk_size, size_of_leading_dim)
-        slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)  # type: ignore[attr-defined]
+        yield {leading_dim: slice(start, min(start + chunk_size, dims[leading_dim]))}
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
@@ -1079,7 +1073,7 @@ LocT = TypeVar(
     "Variable",
     "LinearExpression",
     "QuadraticExpression",
-    "ConstraintBase",
+    "Constraint",
 )
 
 
@@ -1097,63 +1091,7 @@ class LocIndexer(Generic[LocT]):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
-        return self.object.sel(key)  # type: ignore[attr-defined]
-
-
-def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
-    """
-    Serialize a list of pd.Index to a DataArray dict.
-
-    Suitable for embedding coordinate metadata as plain data variables in a
-    Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
-    The variables are named by position, never by the (possibly dashed)
-    dimension names, since the netcdf reader splits variable names on ``-``.
-    Reconstruct with :func:`coords_from_dataset`.
-    """
-    return {
-        f"_index{i}": DataArray(np.array(c), dims=[f"_indexdim{i}"])
-        for i, c in enumerate(coords)
-    }
-
-
-def coords_from_dataset(
-    ds: Dataset, coord_dims: list[str]
-) -> tuple[list[pd.Index], dict[str, tuple[str, np.ndarray]]]:
-    """
-    Deserialize a list of pd.Index from a Dataset.
-
-    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
-    or by its earlier name-keyed format (``_coord_<dim>``). A MultiIndex
-    written by linopy < 1.0 in either format loads flat: a positional index,
-    with its levels returned as auxiliary coords on the dim.
-    """
-    coords: list[pd.Index] = []
-    levels: dict[str, tuple[str, np.ndarray]] = {}
-    for i, d in enumerate(coord_dims):
-        mi_levels = _multiindex_levels(ds, i, d)
-        if mi_levels is None:
-            key = f"_index{i}" if f"_index{i}" in ds else f"_coord_{d}"
-            coords.append(pd.Index(ds[key].values, name=d))
-            continue
-        size = len(next(iter(mi_levels.values())))
-        coords.append(pd.RangeIndex(size, name=d))
-        levels |= {name: (d, values) for name, values in mi_levels.items()}
-    return coords, levels
-
-
-def _multiindex_levels(ds: Dataset, i: int, d: str) -> dict[str, np.ndarray] | None:
-    if f"_index{i}_codes" in ds:
-        codes = ds[f"_index{i}_codes"]
-        names = [str(n) for n in json.loads(codes.attrs["level_names"])]
-        keys = [f"_index{i}_level{j}" for j in range(len(names))]
-    elif f"_coord_{d}_codes" in ds:
-        codes = ds[f"_coord_{d}_codes"]
-        prefix = f"_coord_{d}_level_"
-        names = [str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)]
-        keys = [prefix + n for n in names]
-    else:
-        return None
-    return {n: ds[k].values[c] for n, k, c in zip(names, keys, codes.values.T)}
+        return self.object.sel(key)
 
 
 def is_constant(x: SideLike) -> bool:

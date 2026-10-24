@@ -6,7 +6,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
-from linopy.constraints import ConstraintBase, _con_unwrap
+from linopy.constraints import Constraint, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
@@ -125,7 +125,7 @@ def assert_exprequal(
         assert_linequal(a, b)
 
 
-def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -> None:
+def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
     """
     Assert that two constraints are equal.
 
@@ -136,12 +136,14 @@ def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -
         b: Constraint
             The second constraint.
         strict: bool
-            Whether to compare the constraints strictly. If not, only compare mathematically relevant parts.
+            Whether to compare the constraints strictly. If not, only compare
+            mathematically relevant parts: the lhs by :func:`assert_equivalent`,
+            independently of its store, and the sign and rhs.
     """
     if strict:
         assert_equal(_con_unwrap(a), _con_unwrap(b))
     else:
-        assert_linequal(a.lhs, b.lhs)
+        assert_equivalent(a.lhs, b.lhs)
         assert_equal(a.sign, b.sign)
         assert_equal(a.rhs, b.rhs)
 

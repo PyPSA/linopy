@@ -178,13 +178,12 @@ def test_remove_variable() -> None:
     assert not m.objective.vars.isin(x.labels).any()
 
 
-@pytest.mark.parametrize("freeze", [False, True])
 @pytest.mark.parametrize("quadratic", [False, True])
 def test_remove_masked_variable_keeps_unrelated_constraints(
-    freeze: bool, quadratic: bool
+    backend: Model, quadratic: bool
 ) -> None:
     # https://github.com/PyPSA/linopy/issues/883
-    m: Model = Model()
+    m = backend
 
     i = pd.Index(range(3), name="i")
     mask = [True, False, True]
@@ -194,12 +193,10 @@ def test_remove_masked_variable_keeps_unrelated_constraints(
 
     # `b` is masked, so the constraint carries empty term slots (-1), but it
     # never references `a`
-    without_a = m.add_constraints(
-        b.sum() + c, EQUAL, 0, name="without_a", freeze=freeze
-    )
+    without_a = m.add_constraints(b.sum() + c, EQUAL, 0, name="without_a")
     assert not without_a.has_variable(a)
 
-    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a", freeze=freeze)
+    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
     assert with_a.has_variable(a)
 
     if quadratic:

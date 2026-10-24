@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import polars as pl
-import scipy.sparse
 import xarray as xr
 from tqdm import tqdm
 
@@ -30,11 +29,11 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.csr import CSRStore
+from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constraints import Constraint
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
-from linopy.store import DenseStore, expression_dataset
+from linopy.store import Store
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -48,6 +47,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+NETCDF_LAYOUT_ATTR = "_linopy_netcdf_layout"
+NETCDF_LAYOUT = 1
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
@@ -584,7 +585,7 @@ def indicator_constraints_to_file(
     )
 
     for con in m.constraints.indicator.data.values():
-        ic_data = con.data
+        ic_data = con._dataset()
         labels_flat = ic_data.labels.values.flatten()
         binary_var_flat = ic_data.binary_var.values.flatten()
         binary_val_flat = np.broadcast_to(
@@ -652,8 +653,7 @@ def constraints_to_file(
 
     for name in names:
         con = regular[name]
-        for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.to_polars()
+        for df in map(Constraint.to_polars, con.iterate_slices(slice_size)):
             if df.height == 0:
                 continue
             if scaled:
@@ -1107,7 +1107,7 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr._to_dataset().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_netcdf_ds().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1127,6 +1127,7 @@ def to_netcdf(
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
+    ds.attrs[NETCDF_LAYOUT_ATTR] = NETCDF_LAYOUT
     for kind, container in (
         ("variables", m.variables),
         ("expressions", m.expressions),
@@ -1179,20 +1180,15 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Notes
     -----
     Variables, expressions and constraints are restored in the insertion
-    order stored by :func:`to_netcdf`. Files written by earlier versions
-    carry no order and are loaded in sorted name order.
+    order stored by :func:`to_netcdf`. Files written by linopy <1.0 raise
+    ``ValueError``.
 
     The SOS reformulation lifecycle token is not persisted by
     :func:`to_netcdf`. If the saved model was in reformulated form,
     the deserialized Model is too, but
     :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.constraints import (
-        Constraint,
-        ConstraintBase,
-        Constraints,
-        CSRConstraint,
-    )
+    from linopy.constraints import Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable, Variables
@@ -1201,7 +1197,18 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         path = Path(path)
 
     ds = xr.load_dataset(path, **kwargs)
-    m = Model(sparse=bool(ds.attrs.get("sparse", False)))
+    if NETCDF_VERSION_ATTR not in ds.attrs:
+        raise ValueError(
+            f"{path} is not a linopy netcdf: it has no {NETCDF_VERSION_ATTR!r} "
+            "attribute."
+        )
+    if ds.attrs.get(NETCDF_LAYOUT_ATTR) != NETCDF_LAYOUT:
+        written_by = ds.attrs[NETCDF_VERSION_ATTR]
+        raise ValueError(
+            f"netcdf written by linopy <1.0 (version {written_by}) cannot be read; "
+            "rebuild the model and write it with linopy >=1.0."
+        )
+    m = Model(sparse=bool(ds.attrs["sparse"]))
 
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
@@ -1218,18 +1225,17 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             for k, v in ds.attrs.items()
             if owners[k] == prefix
         }
-
-        for dim in list(ds.dims):
-            if ds.attrs.pop(f"{dim}_multiindex", None) is not None:
-                ds = ds.assign_coords({dim: pd.RangeIndex(ds.sizes[dim], name=dim)})
         return ds
+
+    def read_expression(ds: xr.Dataset) -> LinearExpression | QuadraticExpression:
+        if ds.attrs[EXPR_TYPE_ATTR] == QuadraticExpression.__name__:
+            return QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
+        return LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
-        order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
-        if order_attr is None:
-            return sorted(found)
-        ordered = [f"{kind}-{name}" for name in json.loads(order_attr)]
+        order = json.loads(ds.attrs[CONTAINER_ORDER_ATTR.format(kind)])
+        ordered = [f"{kind}-{name}" for name in order]
         if len(ordered) != len(found) or set(ordered) != found:
             mismatch = sorted(set(ordered) ^ found)
             raise ValueError(
@@ -1263,50 +1269,26 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
     for k in containers["expressions"]:
         name = remove_prefix(k, "expressions")
-        expr_ds = get_prefix(ds, k)
-        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
-        expr_ds.attrs.pop("name", None)  # re-attached below, after construction
-        expr: LinearExpression | QuadraticExpression
-        if expr_type == "QuadraticExpression" or (
-            expr_type is None and FACTOR_DIM in expr_ds.dims
-        ):
-            expr = QuadraticExpression(expr_ds, m)
-        else:
-            dense = DenseStore(expression_dataset(expr_ds, m), m)
-            store = dense.to_sparse() if m.store_cls is CSRStore else dense
-            expr = LinearExpression._from_store(
-                dense if isinstance(store, str) else store, m
-            )
+        expr = read_expression(get_prefix(ds, k))
         expr.attrs["name"] = name
         expressions[name] = expr
 
     m._expressions = Expressions(expressions, m)
 
-    constraints: dict[str, ConstraintBase] = {}
+    constraints: dict[str, Constraint] = {}
     for k in containers["constraints"]:
         name = remove_prefix(k, "constraints")
-        con_ds = get_prefix(ds, k)
-        if con_ds.attrs.get("_linopy_format") == "csr":
-            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
-        else:
-            constraints[name] = Constraint(con_ds, m, name)
+        constraints[name] = Constraint.from_netcdf_ds(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
-    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
-        QuadraticExpression
-        if obj_type == "QuadraticExpression"
-        or (obj_type is None and FACTOR_DIM in objective.dims)
-        else LinearExpression
-    )
     m.objective = Objective(
-        obj_cls(objective, m),
+        read_expression(objective),
         m,
-        objective.attrs.pop("sense"),
-        objective.attrs.pop("scaling", 1),
+        objective.attrs["sense"],
+        objective.attrs["scaling"],
     )
-    m.objective._value = objective.attrs.pop("value", None)
+    m.objective._value = objective.attrs.get("value")
 
     m.parameters = get_prefix(ds, "parameters")
 
@@ -1372,12 +1354,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import (
-        Constraint,
-        ConstraintBase,
-        Constraints,
-        CSRConstraint,
-    )
+    from linopy.constraints import Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1427,25 +1404,11 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
-        if isinstance(con, CSRConstraint):
-            buffer_types = (np.ndarray, scipy.sparse.sparray)
-            changes: dict[str, Any] = {"model": new_model}
-            if deep:
-                kwargs = con._init_kwargs().items()
-                changes |= {
-                    k: v.copy() for k, v in kwargs if isinstance(v, buffer_types)
-                }
-            if not include_solution:
-                changes["dual"] = None
-            return con._replace(**changes)
-        d = con.data
-        if not include_solution:
-            d = d[con.data_attrs]
-        return Constraint(d.copy(deep=deep), new_model, name)
-
     new_model._constraints = Constraints(
-        {name: _copy_con(name, con) for name, con in m.constraints.items()},
+        {
+            name: con._copy(new_model, deep, include_solution)
+            for name, con in m.constraints.items()
+        },
         new_model,
     )
 

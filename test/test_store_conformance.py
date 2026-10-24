@@ -21,7 +21,8 @@ import xarray as xr
 import linopy
 from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import TERM_DIM
-from linopy.constraints import ConstraintBase, CSRConstraint
+from linopy.constraints import Constraint
+from linopy.csr import CSRStore
 from linopy.store import DenseStore
 from linopy.testing import assert_equivalent
 
@@ -135,10 +136,7 @@ class Case(NamedTuple):
     build: Callable[[Model], LinearExpression]
     op: Callable[[LinearExpression], Any]
     expected: str
-    sparse_xfail: str | None = None
 
-
-SIGN_EQ = "CSRConstraint normalizes the sign '==' to '=' while Constraint keeps it"
 
 CASES: dict[str, Case] = {
     "sel": Case(grid, lambda e: e.sel(a=[0, 2]), KEPT),
@@ -354,7 +352,26 @@ CASES: dict[str, Case] = {
         grid, lambda e: e.to_constraint("<=", 1 * var(e, "y")), KEPT
     ),
     "to-constraint-expression-eq": Case(
-        grid, lambda e: e.to_constraint("==", 1 * var(e, "y")), KEPT, SIGN_EQ
+        grid, lambda e: e.to_constraint("==", 1 * var(e, "y")), KEPT
+    ),
+    "to-constraint-update-coeffs": Case(
+        grid,
+        lambda e: e.to_constraint("<=", 1).update(coeffs=2.0),
+        "update(coeffs=, variables=)",
+    ),
+    "to-constraint-update-lhs-off-grid": Case(
+        grid,
+        lambda e: e.to_constraint("<=", 1).update(
+            lhs=with_2d_coord(dense_linexpr(var(e, "x")))
+        ),
+        "update(lhs=)",
+    ),
+    "constraint-data": Case(grid, lambda e: e.to_constraint("<=", 1).data, DATA_READ),
+    "constraint-sel": Case(
+        grid, lambda e: e.to_constraint("<=", 1).sel(a=[0, 1]), DATA_READ
+    ),
+    "constraint-getitem": Case(
+        grid, lambda e: e.to_constraint("<=", 1)[{"a": [0, 1]}], "__getitem__"
     ),
     "to-constraint-array-sign": Case(
         grid,
@@ -446,7 +463,7 @@ def assert_same(res: Any, want: Any) -> None:
         pd.testing.assert_frame_equal(res.flat, want.flat)
     elif isinstance(res, LinearExpression):
         assert_equivalent(res, want)
-    elif isinstance(res, ConstraintBase):
+    elif isinstance(res, Constraint):
         assert_equivalent(res.lhs, want.lhs)
         xr.testing.assert_equal(res.sign, want.sign)
         xr.testing.assert_allclose(res.rhs, want.rhs)
@@ -459,12 +476,8 @@ def assert_same(res: Any, want: Any) -> None:
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) -> None:
-    build, op, expected, sparse_xfail = CASES[case]
-    if backend.sparse and sparse_xfail is not None:
-        request.applymarker(
-            pytest.mark.xfail(strict=True, raises=AssertionError, reason=sparse_xfail)
-        )
+def test_operation(backend: Model, case: str) -> None:
+    build, op, expected = CASES[case]
     want = op(build(Model()))
     expr = build(backend)
     assert expr.is_sparse == backend.sparse
@@ -482,8 +495,8 @@ def test_operation(backend: Model, case: str, request: pytest.FixtureRequest) ->
     if backend.sparse and expected in (KEPT, SPARSIFIED):
         if isinstance(res, LinearExpression):
             assert res.is_sparse
-        elif isinstance(res, ConstraintBase):
-            assert isinstance(res, CSRConstraint)
+        elif isinstance(res, Constraint):
+            assert res.lhs.is_sparse
 
 
 CONST_ASSIGNERS: dict[str, Callable[[LinearExpression, Any], Any]] = {
@@ -612,3 +625,53 @@ def test_named_expression_keeps_name_through_assignment(
         assert named.data.attrs["name"] == "named"
         assign(named)
     assert named.name == backend.expressions["named"].name == "named"
+
+
+def positional_model() -> tuple[Model, LinearExpression]:
+    m = Model()
+    x = m.add_variables(coords=[A], name="x")
+    y = m.add_variables(coords=[A], name="y")
+    return m, 2 * dense_linexpr(x) + dense_linexpr(y) - dense_linexpr(x)
+
+
+ROWS = {"all": [True, True, True], "masked": [True, False, True]}
+
+
+@pytest.mark.parametrize("rows", list(ROWS))
+def test_positional_csr_agrees(rows: str) -> None:
+    m, expr = positional_model()
+    active = np.array(ROWS[rows])
+    label_index = m.variables.label_index
+    dense = expr._store.positional_csr(label_index, active, "c")
+    sparse_store = expr._store.to_sparse()
+    assert isinstance(sparse_store, CSRStore)
+    canonical = sparse_store.canonical()
+    sparse = canonical.positional_csr(label_index, active, "c")
+    assert dense.shape == sparse.shape == (active.sum(), 6)
+    assert (dense != sparse).nnz == 0
+    assert expr._store.nnz(active) == 3 * active.sum()
+    assert canonical.nnz(active) >= sparse.nnz
+
+
+@pytest.mark.parametrize("rows", list(ROWS))
+def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
+    m, expr = positional_model()
+    sparse_store = expr._store.to_sparse()
+    assert isinstance(sparse_store, CSRStore)
+    store = sparse_store.canonical()
+    active = np.array(ROWS[rows])
+    first = store.positional_csr(m.variables.label_index, active, "c")
+    again = store.positional_csr(m.variables.label_index, active, "c")
+    assert all(
+        a is b
+        for a, b in zip(
+            (first.data, first.indices, first.indptr),
+            (again.data, again.indices, again.indptr),
+        )
+    )
+    other_rows = store.positional_csr(m.variables.label_index, ~active, "c")
+    assert other_rows.indices is not first.indices
+    m.add_variables(name="z")
+    rebuilt = store.positional_csr(m.variables.label_index, active, "c")
+    assert rebuilt.indices is not first.indices
+    np.testing.assert_array_equal(rebuilt.indices, first.indices)

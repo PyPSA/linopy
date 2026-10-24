@@ -25,8 +25,7 @@ you're unsure what a particular operator or argument does.
   quadratic) expressions; arithmetic, broadcasting, ``sum``,
   ``groupby``, ``rolling``, ``where``.
 - :doc:`creating-constraints` — turning expressions into ``≤`` / ``≥``
-  / ``==`` constraints, and the ``CSRConstraint`` memory-efficient
-  alternative.
+  / ``==`` constraints, and their memory-efficient sparse (CSR) storage.
 - :doc:`coordinate-alignment` — how linopy lines up operands that live
   on different coordinates, and how to control it with ``join``.
 
@@ -78,8 +77,9 @@ Sparse models
 Models that aggregate many entities into few rows, such as generators
 into buses, can store their expressions as sparse matrices instead of
 padded dense arrays. Opt in with ``Model(sparse=True)``. ``groupby(...).sum()`` and ``@`` then return sparse-backed
-expressions, and by default every constraint is stored as a frozen
-``CSRConstraint``. Operations without a sparse path convert an
+expressions, and every constraint holds its left-hand side in CSR form
+whenever the grid can hold its coordinates.
+Operations without a sparse path convert an
 expression to dense and emit a ``PerformanceWarning``.
 
 .. code-block:: python

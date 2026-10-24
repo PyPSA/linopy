@@ -11,7 +11,7 @@ may hold its terms in any order and the same variable more than once, the
 coefficients of a repeated variable adding up. Operations stack, interleave
 and gather the stored terms as they are; :func:`canonical` (duplicate
 variables summed, terms label-ordered) runs once where a consumer needs it,
-when a constraint is added (:meth:`linopy.constraints.CSRConstraint.from_csr`),
+when a constraint is built on it (:class:`linopy.constraints.Constraint`),
 which also covers matrix assembly and export. ``nterm`` is the widest stored
 row, as for the dense term layout of the same operation. The stored arrays
 (``data``, ``indices``, ``indptr`` and ``const``) are read-only views, so
@@ -32,8 +32,7 @@ layout; this is valid because the convention does not fix the term layout.
 This module documents the CSR structure only, working on plain datasets. The
 one bridge back to the dense store is :meth:`CSRStore.to_dense`, which wraps
 the expanded dataset in a :class:`~linopy.store.DenseStore`. The reverse
-bridges are :meth:`CSRStore.from_dense` and
-:meth:`linopy.constraints.CSRConstraint.from_csr`.
+bridge is :meth:`CSRStore.from_dense`.
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ from __future__ import annotations
 import functools
 import math
 import operator
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, TypeAlias, final
@@ -50,13 +50,20 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset, broadcast
 
-from linopy.common import coords_from_dataset, coords_to_dataset_vars
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
-from linopy.store import DenseStore, Reason, Store, merged_grid
+from linopy.store import (
+    CSR_COLUMNS_ATTR,
+    STORE_KIND_ATTR,
+    DenseStore,
+    Reason,
+    Store,
+    merged_grid,
+)
 
 if TYPE_CHECKING:
+    from linopy.common import VariableLabelIndex
     from linopy.model import Model
 
 CONTRACTION_CHUNK = 64
@@ -65,7 +72,6 @@ CONTRACTION_CHUNK = 64
 AuxCoords: TypeAlias = dict[str, tuple[str | tuple[()], np.ndarray]]
 """Auxiliary coordinates as ``name -> (grid dim, values)``, dim ``()`` for a scalar."""
 
-_AUX_PREFIX = "_aux"
 _SCALAR_DIM = "_scalar"
 
 
@@ -91,42 +97,11 @@ class Grid:
         )
 
     @classmethod
-    def from_coords(cls, coords: Iterable[pd.Index]) -> Grid:
-        """Build from one index per dimension, each named after its dim."""
-        return cls({str(c.name): c for c in coords})
-
-    @classmethod
     def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
         """Build from the indexes and auxiliary coordinates ``ds`` carries on ``dims``."""
         dims = tuple(dims)
         indexes = {d: ds.get_index(d).rename(d) for d in dims}
         return cls(indexes, _aux_coords(ds, set(dims)))
-
-    @classmethod
-    def from_netcdf_vars(cls, ds: Dataset, dims: Iterable[str]) -> Grid:
-        """Read back a grid written by :meth:`to_netcdf_vars`."""
-        aux: AuxCoords = {
-            da.attrs["name"]: (da.attrs.get("dim", ()), da.to_numpy())
-            for k, da in ds.data_vars.items()
-            if str(k).startswith(_AUX_PREFIX)
-        }
-        indexes, levels = coords_from_dataset(ds, list(dims))
-        return cls(cls.from_coords(indexes).indexes, aux | levels)
-
-    def to_netcdf_vars(self) -> dict[str, DataArray]:
-        """
-        The indexes and auxiliary coordinates as plain data variables for
-        netcdf, named by position with the coordinate names as attributes.
-        """
-        aux = {
-            f"{_AUX_PREFIX}{j}": DataArray(
-                v,
-                dims=[f"{_AUX_PREFIX}dim{j}"] if isinstance(d, str) else [],
-                attrs={"name": n} | ({"dim": d} if isinstance(d, str) else {}),
-            )
-            for j, (n, (d, v)) in enumerate(self.aux.items())
-        }
-        return coords_to_dataset_vars(self.coords) | aux
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -271,6 +246,9 @@ class CSRStore(Store):
     const: np.ndarray
     grid: Grid
     model: Model
+    _positional_cache: _PositionalCache | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         csr = self.csr
@@ -281,6 +259,9 @@ class CSRStore(Store):
         csr = scipy.sparse.csr_array(arrays, shape=csr.shape)
         object.__setattr__(self, "csr", csr)
         object.__setattr__(self, "const", _readonly(self.const, copy=False))
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {**self.__dict__, "_positional_cache": None}
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -531,6 +512,26 @@ class CSRStore(Store):
             return replace(self, model=model)
         return replace(self, csr=self.csr.copy(), const=self.const.copy(), model=model)
 
+    def to_netcdf_vars(self) -> Dataset:
+        csr = self.csr
+        data_vars = {
+            "data": DataArray(csr.data, dims=["_nnz"]),
+            "indices": DataArray(csr.indices, dims=["_nnz"]),
+            "indptr": DataArray(csr.indptr, dims=["_indptr"]),
+            "const": self.grid.dataarray(self.const),
+        }
+        attrs = {STORE_KIND_ATTR: "csr", CSR_COLUMNS_ATTR: csr.shape[1]}
+        return Dataset(data_vars, attrs=attrs)
+
+    @classmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> CSRStore:
+        const = ds["const"]
+        grid = Grid.from_dataset(const, map(str, const.dims))
+        arrays = (ds["data"].values, ds["indices"].values, ds["indptr"].values)
+        shape = (grid.size, int(ds.attrs[CSR_COLUMNS_ATTR]))
+        csr = scipy.sparse.csr_array(arrays, shape=shape)
+        return cls(csr, const.values.reshape(-1), grid, model)
+
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         return self.grid.dataarray(values, name=name)
 
@@ -542,6 +543,9 @@ class CSRStore(Store):
         keep = self.live_terms()
         return cells[keep], self.csr.indices[keep], self.csr.data[keep]
 
+    def variable_labels(self) -> np.ndarray:
+        return self.csr.indices
+
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
@@ -550,6 +554,49 @@ class CSRStore(Store):
 
     def canonical(self) -> CSRStore:
         return replace(self, csr=canonical(self.csr))
+
+    def nnz(self, active_rows: np.ndarray) -> int:
+        return int(np.diff(self.csr.indptr)[active_rows].sum())
+
+    def positional_csr(
+        self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
+    ) -> scipy.sparse.csr_array:
+        """
+        The stored rows at ``active_rows`` with label columns replaced by
+        dense positions, ``data`` and ``indptr`` the stored arrays where all
+        rows are active. The result arrays are cached by weak reference,
+        keyed on ``label_index.label_to_pos``, which is rebuilt whenever
+        variables are added or removed, and on ``active_rows``: while a
+        caller such as a ``ModelSnapshot`` holds them, repeated calls return
+        the same arrays. The store is immutable, so a new store starts
+        without a cache.
+        """
+        label_to_pos = label_index.label_to_pos
+        n_cols = label_index.n_active_vars
+        if self._positional_cache is not None:
+            cached_label_to_pos, cached_rows, refs = self._positional_cache
+            arrays = [ref() for ref in refs]
+            data, cols, indptr = arrays
+            if (
+                cached_label_to_pos is label_to_pos
+                and data is not None
+                and cols is not None
+                and indptr is not None
+                and np.array_equal(cached_rows, active_rows)
+            ):
+                return _positional_csr(data, cols, indptr, len(indptr) - 1, n_cols)
+        rows = self.csr if active_rows.all() else self.csr[active_rows]
+        positional = _csr_from_label_columns(
+            rows.data, rows.indices, rows.indptr, rows.shape[0], label_index, name
+        )
+        refs = (
+            weakref.ref(positional.data),
+            weakref.ref(positional.indices),
+            weakref.ref(positional.indptr),
+        )
+        cache = (label_to_pos, active_rows.copy(), refs)
+        object.__setattr__(self, "_positional_cache", cache)
+        return positional
 
     def with_grid(self, grid: Grid) -> CSRStore:
         return replace(self, grid=grid)
@@ -562,9 +609,13 @@ class CSRStore(Store):
         present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
         return present & (self.csr.data != 0)
 
-    def prune(self) -> CSRStore:
-        """Drop explicit zero coefficients; cell activeness stays with ``const``."""
+    def prune(self, tol: float = 0.0) -> CSRStore:
+        """
+        Drop the coefficients of at most ``tol`` in magnitude; cell activeness
+        stays with ``const``.
+        """
         csr = self.csr.copy()
+        csr.data[np.abs(csr.data) <= tol] = 0
         csr.eliminate_zeros()
         return replace(self, csr=csr)
 
@@ -836,6 +887,52 @@ class CSRStore(Store):
         return DenseStore.from_arrays(self.grid, coeffs, vars_, self.const, self.model)
 
 
+_PositionalCache: TypeAlias = tuple[
+    np.ndarray, np.ndarray, tuple["weakref.ref[np.ndarray]", ...]
+]
+
+
+def _csr_from_label_columns(
+    data: np.ndarray,
+    vlabel_cols: np.ndarray,
+    indptr: np.ndarray,
+    n_rows: int,
+    label_index: VariableLabelIndex,
+    name: str,
+) -> scipy.sparse.csr_array:
+    """
+    Build a CSR matrix from raw variable labels as column indices.
+
+    Labels are mapped to dense positions in the active variable array, so the
+    result is ``(n_rows, label_index.n_active_vars)`` wide regardless of when
+    the label columns were assembled. ``data`` and, where its dtype is wide
+    enough, ``indptr`` are the very arrays passed in, so callers can compare
+    buffers by identity.
+    """
+    n_cols = label_index.n_active_vars
+    cols = label_index.label_to_pos[vlabel_cols]
+    if cols.size and min(cols.min(), vlabel_cols.min()) < 0:
+        missing = vlabel_cols[(cols < 0) | (vlabel_cols < 0)]
+        raise ValueError(
+            f"Constraint '{name}' references variable labels that are no longer "
+            f"part of the model, e.g. {missing[:5].tolist()}."
+        )
+    dtype = indptr.dtype if n_cols <= np.iinfo(indptr.dtype).max else np.int64
+    return _positional_csr(data, cols.astype(dtype, copy=False), indptr, n_rows, n_cols)
+
+
+def _positional_csr(
+    data: np.ndarray, cols: np.ndarray, indptr: np.ndarray, n_rows: int, n_cols: int
+) -> scipy.sparse.csr_array:
+    """Wrap positional CSR components without copying ``data`` or ``cols``."""
+    csr = scipy.sparse.csr_array(
+        (data, cols, indptr.astype(cols.dtype, copy=False)), shape=(n_rows, n_cols)
+    )
+    csr.data = data
+    csr.indices = cols
+    return csr
+
+
 def index_dtype(nnz: int, shape: tuple[int, ...], model: Model) -> np.dtype:
     """
     Index dtype of a CSR store: the model's label dtype, widened to int64
@@ -1005,26 +1102,26 @@ def csr_to_term_arrays(
     return vars_, coeffs
 
 
-def _conversion_notice(message: str, model: Model, explicit: bool) -> None:
+def _conversion_notice(message: str, model: Model) -> None:
     """
     Emit ``message`` as a :class:`~linopy.constants.PerformanceWarning` if
-    ``options["warn_on_densify"]`` is set, or left at its default ``None``,
-    ``model`` is sparse and the conversion is an implicit fallback rather
-    than an ``explicit`` user request.
+    ``options["warn_on_densify"]`` is set, or left at its default ``None``
+    and ``model`` is sparse. Only implicit fallbacks emit it; an explicit
+    conversion, e.g. :meth:`linopy.constraints.Constraint.to_dense`, does not.
     """
     enabled = options["warn_on_densify"]
-    if model.sparse and not explicit if enabled is None else enabled:
+    if model.sparse if enabled is None else enabled:
         warn_outside_linopy(message, PerformanceWarning)
 
 
-def _densify_notice(reason: str, model: Model, explicit: bool = False) -> None:
+def _densify_notice(reason: str, model: Model) -> None:
     """The conversion notice naming why a sparse (CSR) backing is dropped."""
-    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model, explicit)
+    _conversion_notice(f"Sparse (CSR) backing densified: {reason}.", model)
 
 
 def _sparsify_notice(reason: str, model: Model) -> None:
     """The conversion notice naming why a dense backing is converted to sparse."""
-    _conversion_notice(f"Dense backing sparsified: {reason}.", model, False)
+    _conversion_notice(f"Dense backing sparsified: {reason}.", model)
 
 
 def _readonly(values: np.ndarray, copy: bool = True) -> np.ndarray:

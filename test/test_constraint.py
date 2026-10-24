@@ -30,9 +30,9 @@ from linopy.constants import (
 from linopy.constraints import (
     AnonymousScalarConstraint,
     Constraint,
-    ConstraintBase,
     Constraints,
 )
+from linopy.csr import CSRStore, canonical
 from linopy.testing import assert_linequal, assert_varequal
 
 
@@ -42,7 +42,7 @@ def m() -> Model:
     x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
     m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
     m.add_variables(0, 10, name="z")
-    m.add_constraints(x >= 0, name="c", freeze=True)
+    m.add_constraints(x >= 0, name="c")
     return m
 
 
@@ -57,35 +57,42 @@ def y(m: Model) -> linopy.Variable:
 
 
 @pytest.fixture
-def c(m: Model) -> linopy.constraints.ConstraintBase:
+def z(m: Model) -> linopy.Variable:
+    return m.variables["z"]
+
+
+@pytest.fixture
+def c(m: Model) -> linopy.constraints.Constraint:
     return m.constraints["c"]
 
 
 @pytest.fixture
 def mc(m: Model) -> linopy.constraints.Constraint:
-    return m.constraints["c"].mutable()
+    return m.constraints["c"]
 
 
-def test_constraint_repr(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_repr(c: linopy.constraints.Constraint) -> None:
     c.__repr__()
 
 
-def test_constraint_repr_equivalent_to_mutable(
-    c: linopy.constraints.CSRConstraint,
+def test_constraint_repr_equivalent_across_stores(
+    c: linopy.constraints.Constraint,
 ) -> None:
-    """Constraint (CSR-backed) and Constraint repr must be identical."""
-    frozen = c.freeze()
-    assert repr(frozen) == repr(c)
+    """The repr is the same for a dense and a sparse lhs."""
+    dense = repr(c)
+    assert repr(c.to_sparse()) == dense
 
 
 def test_constraints_repr(m: Model) -> None:
     m.constraints.__repr__()
 
 
-def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
-    c = m.add_constraints(x >= 1, name="frozen_c", freeze=True)
-    assert isinstance(c, linopy.constraints.CSRConstraint)
-    assert isinstance(m.constraints["frozen_c"], linopy.constraints.CSRConstraint)
+def test_add_constraints_holds_lhs_on_model_store(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    c = backend.add_constraints(1 * x >= 1, name="c")
+    assert type(c) is Constraint
+    assert c.lhs.is_sparse == backend.sparse
+    assert backend.constraints["c"] is c
     assert c.ncons == 10
 
 
@@ -106,7 +113,7 @@ def test_add_constraints_penalty_softens_constraint(
     assert_linequal(m.objective.expression, expected_objective)
 
 
-def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_name(c: linopy.constraints.Constraint) -> None:
     assert c.name == "c"
 
 
@@ -115,11 +122,10 @@ def test_empty_constraints_repr() -> None:
     Model().constraints.__repr__()
 
 
-@pytest.mark.parametrize("freeze", [True, False])
-def test_constraint_handles_empty_rows(freeze: bool) -> None:
+def test_constraint_handles_empty_rows(backend: Model) -> None:
     """An empty constraint group must be accepted and solve cleanly."""
 
-    m = Model()
+    m = backend
     x = m.add_variables(
         lower=0.0,
         coords=[range(3), range(2)],
@@ -127,8 +133,8 @@ def test_constraint_handles_empty_rows(freeze: bool) -> None:
         name="x",
     )
     empty = x.isel(time=range(1, 1))
-    c = m.add_constraints(empty == 0, name="empty", freeze=freeze)
-    assert isinstance(c, linopy.constraints.ConstraintBase)
+    c = m.add_constraints(empty == 0, name="empty")
+    assert isinstance(c, linopy.constraints.Constraint)
     assert c.size == 0
     # Solving a model with only an empty constraint group is also fine.
     m.add_objective(x.sum())
@@ -142,7 +148,7 @@ def test_cannot_create_constraint_without_variable() -> None:
         _ = linopy.LinearExpression(12, model) == linopy.LinearExpression(13, model)
 
 
-def test_constraints_getter(m: Model, c: linopy.constraints.CSRConstraint) -> None:
+def test_constraints_getter(m: Model, c: linopy.constraints.Constraint) -> None:
     assert c.shape == (10,)
     assert isinstance(m.constraints[["c"]], Constraints)
 
@@ -298,7 +304,7 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
     assert isinstance(con, Constraint)
 
     # Test wrapped methods
-    con.assign(new_var=xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)]))
+    con.assign(rhs=xr.zeros_like(con.rhs))
     con.assign_attrs({"new_attr": "value"})
     con.assign_coords(
         {"new_coord": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])}
@@ -323,7 +329,7 @@ def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> Non
     expr = 10 * x + y
     con = expr <= 10
     assert isinstance(con, Constraint)
-    assert isinstance(con.sel(first=[1, 2]), ConstraintBase)
+    assert isinstance(con.sel(first=[1, 2]), Constraint)
 
 
 def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) -> None:
@@ -332,7 +338,7 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
     assert isinstance(con, Constraint)
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.swap_dims({"second": "third"})
-    assert isinstance(con, ConstraintBase)
+    assert isinstance(con, Constraint)
     assert con.coord_dims == ("first", "third")
 
 
@@ -340,13 +346,13 @@ def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> Non
     expr = 10 * x + y
     con = expr <= 10
     assert isinstance(con, Constraint)
-    assert isinstance(con.loc[[1, 2]], ConstraintBase)
+    assert isinstance(con.loc[[1, 2]], Constraint)
 
 
 def test_anonymous_constraint_getitem(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
-    assert isinstance(con[1], ConstraintBase)
+    assert isinstance(con[1], Constraint)
 
 
 def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
@@ -355,7 +361,7 @@ def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) 
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
-    assert isinstance(con, ConstraintBase)
+    assert isinstance(con, Constraint)
     assert con.lhs.nterm == 2
     repr(con)  # test repr
 
@@ -370,7 +376,7 @@ def test_constraint_from_rule_with_none_return(
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
-    assert isinstance(con, ConstraintBase)
+    assert isinstance(con, Constraint)
     assert isinstance(con.lhs.vars, xr.DataArray)
     assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
@@ -388,11 +394,11 @@ def test_constraint_coeffs_getter(mc: linopy.constraints.Constraint) -> None:
     assert (mc.coeffs == 1).all()
 
 
-def test_constraint_sign_getter(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_sign_getter(c: linopy.constraints.Constraint) -> None:
     assert (c.sign == GREATER_EQUAL).all()
 
 
-def test_constraint_rhs_getter(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_rhs_getter(c: linopy.constraints.Constraint) -> None:
     assert (c.rhs == 0).all()
 
 
@@ -400,7 +406,7 @@ def test_constraint_update_variables(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
     mc.update(variables=x)
-    assert_equal(mc.vars, x.labels)
+    assert_equal(mc.vars.isel({TERM_DIM: 0}), x.labels)
 
 
 @pytest.mark.parametrize("as_type", [lambda v: v, pd.DataFrame])
@@ -429,9 +435,9 @@ def test_constraint_update_coeffs(mc: linopy.constraints.Constraint) -> None:
 
 
 def test_constraint_update_lhs(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
-    mc.update(lhs=x + y)
+    mc.update(lhs=x + z)
     assert mc.lhs.nterm == 2
     assert mc.vars.notnull().all().item()
     assert mc.coeffs.notnull().all().item()
@@ -510,10 +516,10 @@ def test_constraint_update_returns_self(
 
 
 def test_constraint_update_positional_constraint_expression(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
     """``c.update(x + 5 <= 3)`` replaces lhs / sign / rhs in one call."""
-    mc.update(x + y <= 7)
+    mc.update(x + z <= 7)
     assert (mc.rhs == 7).all()
     assert (mc.sign == LESS_EQUAL).all()
     assert mc.lhs.nterm == 2
@@ -536,12 +542,12 @@ def test_constraint_update_positional_rejects_non_constraint(
 
 
 def test_constraint_update_lhs_only(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
     """lhs= alone replaces the expression; rhs and sign untouched."""
     old_rhs = mc.rhs.copy()
     old_sign = mc.sign.copy()
-    mc.update(lhs=5 * x + 7 * y)
+    mc.update(lhs=5 * x + 7 * z)
     assert (mc.rhs == old_rhs).all()
     assert (mc.sign == old_sign).all()
     assert mc.lhs.nterm == 2
@@ -593,9 +599,9 @@ def test_constraint_update_rhs_with_variable(
 
 
 def test_constraint_update_rhs_with_expression(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
-    mc.update(rhs=x + y)
+    mc.update(rhs=x + z)
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 3
@@ -624,40 +630,52 @@ def test_constraint_update_rhs_broadcasts_missing_dim() -> None:
     assert (con.rhs.sel(i=1) == 2.0).all()
 
 
-def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:
-    # Test that assigning labels raises AttributeError (Constraint is frozen)
+def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
     with pytest.raises(AttributeError):
         c.labels = c.labels  # type: ignore
 
 
-def test_constraint_sel(c: linopy.constraints.CSRConstraint) -> None:
-    assert isinstance(c.mutable().sel(first=[1, 2]), ConstraintBase)
-    assert isinstance(c.mutable().isel(first=[1, 2]), ConstraintBase)
+def test_constraint_sel(c: linopy.constraints.Constraint) -> None:
+    assert isinstance(c.sel(first=[1, 2]), Constraint)
+    assert isinstance(c.isel(first=[1, 2]), Constraint)
 
 
-def test_constraint_flat_removed(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_flat_removed(c: linopy.constraints.Constraint) -> None:
     with pytest.raises(AttributeError):
         c.flat  # type: ignore[attr-defined]
 
 
-def test_iterate_slices(mc: linopy.constraints.Constraint) -> None:
-    for i in mc.iterate_slices(slice_size=2):
-        assert isinstance(i, ConstraintBase)
-        assert mc.coord_dims == i.coord_dims
+@pytest.mark.parametrize("slice_size", [7, 100, 500])
+def test_iterate_slices(backend: Model, slice_size: int) -> None:
+    s, t = pd.RangeIndex(60, name="s"), pd.RangeIndex(40, name="t")
+    x = backend.add_variables(coords=[s, t], name="x")
+    x = x.assign_coords(lvl=("s", np.arange(60) % 3))
+    y = backend.add_variables(coords=[t], name="y")
+    rng = np.random.default_rng(0)
+    mask = x.labels.copy(data=rng.random(x.labels.shape) > 0.3)
+    con = backend.add_constraints(2 * x + x.shift(t=1) - y <= 3, name="c", mask=mask)
+    slices = list(con.iterate_slices(slice_size=slice_size))
+    assert len(slices) > 1
+    for i in slices:
+        assert isinstance(i, Constraint)
+        assert con.coord_dims == i.coord_dims
+        assert i.lhs.is_sparse == con.lhs.is_sparse
+    sliced = pl.concat([i.to_polars() for i in slices])
+    assert sliced.equals(con.to_polars())
 
 
-def test_constraint_to_polars(c: linopy.constraints.CSRConstraint) -> None:
+def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
 def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     """Test to_polars when a constraint has mixed sign values across dims."""
     # Use Constraint so sign data can be patched
-    con = m.add_constraints(x >= 0, name="mixed", freeze=False)
+    con = m.add_constraints(x >= 0, name="mixed")
     # Replace sign data with mixed signs across the first dimension
     n = con.sizes["first"]
     signs = np.array(["<=" if i % 2 == 0 else ">=" for i in range(n)])
-    con.data["sign"] = xr.DataArray(signs, dims=con.data["sign"].dims)
+    con.update(sign=xr.DataArray(signs, dims=con.sign.dims))
     df = con.to_polars()
     assert isinstance(df, pl.DataFrame)
     assert set(df["sign"].to_list()) == {"<=", ">="}
@@ -666,15 +684,19 @@ def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
 def test_constraint_assignment_with_anonymous_constraints(
     m: Model, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    m.add_constraints(x + y == 0, name="c2", freeze=False)
+    m.add_constraints(x + y == 0, name="c2")
     assert m.constraints["c2"].vars.notnull().all()
     assert m.constraints["c2"].coeffs.notnull().all()
 
 
+@pytest.mark.parametrize("coeff", [0.0, 1e-12])
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
 def test_constraint_assignment_sanitize_zeros(
-    m: Model, x: linopy.Variable, y: linopy.Variable
+    m: Model, x: linopy.Variable, y: linopy.Variable, sparse: bool, coeff: float
 ) -> None:
-    m.add_constraints(0 * x + y == 0, name="c2", freeze=True)
+    con = m.add_constraints(coeff * x + y == 0, name="c2")
+    if sparse:
+        con.to_sparse()
     m.constraints.sanitize_zeros()
     c2 = m.constraints["c2"]
     assert c2.nterm == 1
@@ -797,7 +819,7 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
 
     data = xr.Dataset({"coeffs": coeffs, "vars": vars, "sign": sign, "rhs": rhs})
     assert set(HELPER_DIMS).intersection(set(data.coords))
-    con = Constraint(data, m, "c")
+    con = Constraint.from_dataset(data, m, "c")
 
     expr = m.add_constraints(con)
     assert not set(HELPER_DIMS).intersection(set(expr.coords))
@@ -889,99 +911,90 @@ def test_constraints_equalities(m: Model) -> None:
     assert isinstance(m.constraints.equalities, Constraints)
 
 
-def test_freeze_mutable_roundtrip(m: Model) -> None:
-    frozen = m.constraints["c"]
-    assert isinstance(frozen, linopy.constraints.CSRConstraint)
-    mc = frozen.mutable()
-    assert isinstance(mc, Constraint)
-    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
-    assert_equal(frozen.labels, refrozen.labels)
-    assert_equal(frozen.rhs, refrozen.rhs)
-    assert_equal(frozen.sign, refrozen.sign)
-    np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
-    np.testing.assert_array_equal(frozen.active_labels(), refrozen.active_labels())
+@pytest.mark.parametrize("masked", [False, True], ids=["all", "masked"])
+def test_to_sparse_to_dense_roundtrip(masked: bool) -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
+    mask = xr.DataArray([True, False, True, False, True], dims=["i"])
+    con = m.add_constraints((x.where(mask) if masked else 1 * x) >= 0, name="c")
+    before = con.data
+    assert con.to_sparse() is con
+    assert con.lhs.is_sparse
+    assert con.ncons == (3 if masked else 5)
+    assert_equal(con.labels, before.labels)
+    assert_equal(con.rhs, before.rhs)
+    assert_equal(con.sign, before.sign)
+    assert not con.to_dense().lhs.is_sparse
+    assert_equal(con.data, before)
 
 
-def test_frozen_coeff_dtype_preserved() -> None:
+def test_coeff_dtype_preserved() -> None:
     m = Model()
     i = pd.RangeIndex(4, name="i")
     x = m.add_variables(coords=[i], name="x")
     coeff = xr.DataArray(np.arange(1, 5, dtype=np.float32), coords=[i])
-    frozen = m.add_constraints(coeff * x >= 1, name="c", freeze=True)
-    assert frozen._csr.dtype == np.float32
-    assert frozen.coeffs.dtype == np.float32
-    assert frozen.mutable().coeffs.dtype == np.float32
+    con = m.add_constraints(coeff * x >= 1, name="c")
+    assert con.coeffs.dtype == np.float32
 
 
-def test_frozen_csr_stores_variable_labels(m: Model, x: linopy.Variable) -> None:
-    frozen = m.constraints["c"]
-    assert isinstance(frozen, linopy.constraints.CSRConstraint)
-    csr, _ = frozen.to_matrix(m.variables.label_index)
+def test_sparse_to_matrix_has_active_variable_columns(
+    m: Model, c: linopy.constraints.Constraint
+) -> None:
+    csr, _ = c.to_sparse().to_matrix(m.variables.label_index)
     assert csr.shape[1] == m.variables.label_index.n_active_vars
 
 
-def _model_with_frozen_and_mutation(freeze: bool, mutation: str) -> Model:
-    m = Model()
+def _model_with_mutation(sparse: bool, mutation: str) -> Model:
+    m = Model(sparse=sparse)
     i = pd.RangeIndex(3, name="i")
     m.add_variables(coords=[i], name="a")
     b = m.add_variables(coords=[i], name="b")
-    m.add_constraints(2 * b >= 1, name="c1", freeze=freeze)
+    m.add_constraints(2 * b >= 1, name="c1")
     d = m.add_variables(coords=[pd.RangeIndex(2, name="i")], name="d")
-    m.add_constraints(d <= 5, name="c2", freeze=freeze)
+    m.add_constraints(d <= 5, name="c2")
     if mutation == "remove":
         m.remove_variables("a")
     return m
 
 
 @pytest.mark.parametrize("mutation", ["add", "remove"])
-def test_frozen_matrices_after_variable_mutation(mutation: str) -> None:
-    frozen = _model_with_frozen_and_mutation(True, mutation)
-    mutable = _model_with_frozen_and_mutation(False, mutation)
-    a_frozen, a_mutable = frozen.matrices.A, mutable.matrices.A
-    assert a_frozen is not None and a_mutable is not None
-    np.testing.assert_array_equal(a_frozen.toarray(), a_mutable.toarray())
-    np.testing.assert_array_equal(frozen.matrices.b, mutable.matrices.b)
-    np.testing.assert_array_equal(frozen.matrices.clabels, mutable.matrices.clabels)
-    np.testing.assert_array_equal(frozen.matrices.vlabels, mutable.matrices.vlabels)
+def test_sparse_matrices_after_variable_mutation(mutation: str) -> None:
+    sparse = _model_with_mutation(True, mutation)
+    dense = _model_with_mutation(False, mutation)
+    a_sparse, a_dense = sparse.matrices.A, dense.matrices.A
+    assert a_sparse is not None and a_dense is not None
+    np.testing.assert_array_equal(a_sparse.toarray(), a_dense.toarray())
+    np.testing.assert_array_equal(sparse.matrices.b, dense.matrices.b)
+    np.testing.assert_array_equal(sparse.matrices.clabels, dense.matrices.clabels)
+    np.testing.assert_array_equal(sparse.matrices.vlabels, dense.matrices.vlabels)
 
 
-@pytest.mark.parametrize("freeze", [True, False])
-def test_constraint_removed_with_referenced_variable(freeze: bool) -> None:
-    m = Model()
+@pytest.mark.parametrize("coeff", [1.0, 0.0], ids=["term", "zero-term"])
+def test_constraint_removed_with_referenced_variable(
+    backend: Model, coeff: float
+) -> None:
+    m = backend
     i = pd.RangeIndex(3, name="i")
     a = m.add_variables(coords=[i], name="a")
     b = m.add_variables(coords=[i], name="b")
-    m.add_constraints(a + b >= 1, name="c", freeze=freeze)
+    m.add_constraints(coeff * a + b >= 1, name="c")
+    m.add_constraints(1 * b >= 0, name="d")
     with pytest.warns(UserWarning, match="also removes constraints"):
         m.remove_variables("a")
     assert "c" not in m.constraints
+    assert m.matrices.A is not None
 
 
-def test_freeze_mutable_roundtrip_with_masking() -> None:
-    m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
-    mask = xr.DataArray([True, False, True, False, True], dims=["i"])
-    m.add_constraints(x.where(mask) >= 0, name="c", freeze=True)
-    frozen = m.constraints["c"]
-    assert isinstance(frozen, linopy.constraints.CSRConstraint)
-    mc = frozen.mutable()
-    refrozen = linopy.constraints.CSRConstraint.from_dense(mc, frozen._cindex)
-    assert_equal(frozen.labels, refrozen.labels)
-    assert_equal(frozen.rhs, refrozen.rhs)
-    assert frozen.ncons == refrozen.ncons == 3
-
-
-def test_from_dense_mixed_signs() -> None:
+def test_to_sparse_keeps_mixed_signs() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
-    m.add_constraints(x >= 0, name="mixed", freeze=False)
-    mc = m.constraints["mixed"]
-    assert isinstance(mc, Constraint)
-    mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    frozen = linopy.constraints.CSRConstraint.from_dense(mc)
-    assert isinstance(frozen._sign, np.ndarray)
-    assert list(frozen._sign) == ["<=", ">=", "<="]
-    assert_equal(frozen.sign, mc.sign)
+    con = m.add_constraints(x >= 0, name="mixed")
+    con.update(sign=xr.DataArray(["<=", ">=", "<="], dims=["i"]))
+    sign = con.sign
+    con.to_sparse()
+    assert_equal(con.sign, sign)
+    _, _, _, sense = con.to_matrix_with_rhs(m.variables.label_index)
+    assert list(sense) == ["<", ">", "<"]
 
 
 def test_variable_label_index(m: Model) -> None:
@@ -1002,25 +1015,18 @@ def test_variable_label_index_invalidation(m: Model) -> None:
     assert len(li.vlabels) > len(old_vlabels)
 
 
-def test_to_matrix_with_rhs(m: Model) -> None:
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_to_matrix_with_rhs(m: Model, sparse: bool) -> None:
     c = m.constraints["c"]
-    assert isinstance(c, linopy.constraints.CSRConstraint)
+    if sparse:
+        c.to_sparse()
     li = m.variables.label_index
     csr, con_labels, b, sense = c.to_matrix_with_rhs(li)
     assert csr.shape[0] == len(con_labels)
     assert csr.shape[0] == len(b)
     assert csr.shape[0] == len(sense)
     assert all(s in ("<", ">", "=") for s in sense)
-    np.testing.assert_array_equal(b, c._rhs)
-
-
-def test_to_matrix_with_rhs_mutable(m: Model) -> None:
-    mc = m.constraints["c"].mutable()
-    li = m.variables.label_index
-    csr, con_labels, b, sense = mc.to_matrix_with_rhs(li)
-    assert csr.shape[0] == len(con_labels)
-    assert csr.shape[0] == len(b)
-    assert csr.shape[0] == len(sense)
+    np.testing.assert_array_equal(b, c.rhs.values.ravel()[c.active_row_mask()])
 
 
 def test_constraint_repr_shows_variable_names(m: Model) -> None:
@@ -1029,8 +1035,8 @@ def test_constraint_repr_shows_variable_names(m: Model) -> None:
     assert "x" in r
 
 
-def test_freeze_mixed_signs_from_rule() -> None:
-    m = Model()
+def test_sparse_mixed_signs_from_rule() -> None:
+    m = Model(sparse=True)
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     coords = [pd.RangeIndex(4, name="i")]
 
@@ -1039,34 +1045,10 @@ def test_freeze_mixed_signs_from_rule() -> None:
             return x.at[i] >= i
         return x.at[i] == 0.0
 
-    con = m.add_constraints(bound, coords=coords, name="mixed_rule", freeze=True)
-    assert isinstance(con, linopy.constraints.CSRConstraint)
-    assert isinstance(con._sign, np.ndarray)
+    con = m.add_constraints(bound, coords=coords, name="mixed_rule")
+    assert con.lhs.is_sparse
     assert con.ncons == 4
-    expected_signs = ["=", ">=", "=", ">="]
-    assert list(con._sign) == expected_signs
-    np.testing.assert_array_equal(con.sign.values, expected_signs)
-
-
-def test_frozen_lhs_setter_raises() -> None:
-    m = Model()
-    time = pd.RangeIndex(5, name="t")
-    x = m.add_variables(lower=0, coords=[time], name="x")
-    y = m.add_variables(lower=0, coords=[time], name="y")
-    con = m.add_constraints(x >= 0, name="c", freeze=True)
-    assert isinstance(con, linopy.constraints.CSRConstraint)
-    with pytest.raises(AttributeError, match="read-only"):
-        con.lhs = 3 * x + 2 * y
-
-
-def test_frozen_rhs_setter_raises() -> None:
-    m = Model()
-    time = pd.RangeIndex(5, name="t")
-    x = m.add_variables(lower=0, coords=[time], name="x")
-    con = m.add_constraints(x >= 0, name="c", freeze=True)
-    assert isinstance(con, linopy.constraints.CSRConstraint)
-    with pytest.raises(AttributeError, match="read-only"):
-        con.rhs = 10
+    np.testing.assert_array_equal(con.sign.values, ["=", ">=", "=", ">="])
 
 
 def test_mixed_sign_to_matrix_with_rhs() -> None:
@@ -1086,18 +1068,19 @@ def test_mixed_sign_to_matrix_with_rhs() -> None:
     assert list(sense) == ["=", ">", "=", ">"]
 
 
-def test_mixed_sign_sanitize_infinities() -> None:
-    m = Model()
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_mixed_sign_sanitize_infinities(sparse: bool) -> None:
+    m = Model(sparse=sparse)
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
-    m.add_constraints(x >= 0, name="c", freeze=False)
-    mc = m.constraints["c"]
-    assert isinstance(mc, Constraint)
-    mc._data["sign"] = xr.DataArray(["<=", ">=", "<=", ">="], dims=["i"])
-    mc._data["rhs"] = xr.DataArray([np.inf, -np.inf, 1.0, 2.0], dims=["i"])
-    frozen = mc.freeze()
-    frozen.sanitize_infinities()
-    assert frozen.ncons == 2
-    np.testing.assert_array_equal(frozen._rhs, [1.0, 2.0])
+    mc = m.add_constraints(x >= 0, name="c")
+    mc.update(
+        sign=xr.DataArray(["<=", ">=", "<=", ">="], dims=["i"]),
+        rhs=xr.DataArray([np.inf, -np.inf, 1.0, 2.0], dims=["i"]),
+    )
+    mc.sanitize_infinities()
+    assert mc.lhs.is_sparse == sparse
+    assert mc.ncons == 2
+    np.testing.assert_array_equal(mc.rhs.values[mc.active_row_mask()], [1.0, 2.0])
 
 
 def test_mixed_sign_repr() -> None:
@@ -1152,19 +1135,18 @@ def test_constraint_soften_returns_slack_for_eq(m: Model, y: linopy.Variable) ->
     assert isinstance(y_slack.negative, linopy.Variable)
 
 
-def test_constraint_soften_raises_on_detached_mutable_constraint(
-    m: Model, x: linopy.Variable, mc: linopy.Constraint
+def test_constraint_soften_raises_on_detached_constraint(
+    m: Model, x: linopy.Variable, c: linopy.Constraint
 ) -> None:
     """
-    `.mutable()` on a frozen constraint returns a detached copy that is not
-    registered in `model.constraints`; softening it would silently fail to
-    affect the actual model, so `soften` must raise instead.
+    A selection returns a detached copy that is not registered in
+    `model.constraints`; softening it would silently fail to affect the
+    actual model, so `soften` must raise instead.
     """
     m.add_objective(x.sum(), sense="min")
 
     with pytest.raises(ValueError, match="not the constraint registered"):
-        # mc := m.constraints["c"].mutable(), detached from the model
-        mc.soften(penalty=10)
+        c.isel(first=slice(None)).soften(penalty=10)
 
 
 def test_constraint_soften_twice_raises(m: Model, y: linopy.Variable) -> None:
@@ -1371,3 +1353,87 @@ def test_constraint_slack_matches_returned_slack_for_eq(
     assert slack.negative is not None
     assert resolved.negative is not None
     assert_varequal(resolved.negative, slack.negative)
+
+
+def test_constraint_lhs_is_new_wrapper_on_held_store(
+    m: Model, x: linopy.Variable
+) -> None:
+    con = m.add_constraints(x >= 0, name="d")
+    assert con.lhs is not con.lhs
+    assert con.lhs._store is con.lhs._store
+
+
+def test_constraint_canonicalizes_sparse_lhs() -> None:
+    m = Model(sparse=True)
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    lhs = x + 2 * x
+    assert lhs.is_sparse and lhs.nterm == 2
+    con = Constraint(lhs, "<=", 1, m)
+    store = con.lhs._store
+    assert isinstance(store, CSRStore)
+    assert canonical(store.csr) is store.csr
+    assert store.nterm == 1
+    con.update(lhs=x - 3 * x)
+    updated = con.lhs._store
+    assert isinstance(updated, CSRStore)
+    assert updated.nterm == 1
+    assert (updated.csr.data == -2).all()
+
+
+def test_constraint_data_roundtrips_through_from_dataset(
+    m: Model, x: linopy.Variable
+) -> None:
+    con = m.add_constraints(2 * x >= 1, name="d")
+    con.dual = xr.zeros_like(con.rhs)
+    restored = Constraint.from_dataset(con.data, m, con.name)
+    xr.testing.assert_identical(restored.data, con.data)
+    assert restored.attrs == con.attrs
+
+
+def test_from_dataset_rejects_unknown_field(m: Model, x: linopy.Variable) -> None:
+    con = m.add_constraints(x >= 1, name="d")
+    with pytest.raises(ValueError, match="unknown constraint fields"):
+        Constraint.from_dataset(con.data.assign(foo=con.rhs), m)
+
+
+def test_constraint_rejects_lhs_with_constant(m: Model, x: linopy.Variable) -> None:
+    with pytest.raises(ValueError, match="zero constant"):
+        Constraint(x + 1, "<=", 0, m)
+
+
+def test_set_blocks_writes_blocks_field() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    y = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="y")
+    m.add_constraints(x >= 0, name="cx")
+    m.add_constraints(x + y >= 0, name="cxy")
+    m.constraints.set_blocks(np.array([1, 1, 1, 2, 2, 2]))
+    assert m.constraints["cx"].data.blocks.values.tolist() == [1, 1, 1]
+    assert m.constraints["cxy"].data.blocks.values.tolist() == [3, 3, 3]
+
+
+@pytest.mark.parametrize(
+    "rhs",
+    [
+        xr.DataArray(np.ones((10, 2)), dims=["first", "extra"]),
+        xr.DataArray([5.0, 6.0], coords={"first": [0, 1]}),
+        xr.DataArray(np.ones(10), coords={"first": np.arange(1, 11)}),
+    ],
+    ids=["extra-dim", "subset-coords", "shifted-coords"],
+)
+def test_constraint_rejects_field_off_lhs_grid(
+    m: Model, x: linopy.Variable, rhs: xr.DataArray
+) -> None:
+    with pytest.raises(ValueError, match="Constraint rhs"):
+        Constraint(1 * x, "<=", rhs, m)
+
+
+def test_to_matrix_names_constraint_with_removed_variable(backend: Model) -> None:
+    m = backend
+    i = pd.RangeIndex(3, name="i")
+    a = m.add_variables(coords=[i], name="a")
+    b = m.add_variables(coords=[i], name="b")
+    con = m.add_constraints(a + b >= 1, name="c")
+    m.variables.remove("a")
+    with pytest.raises(ValueError, match="Constraint 'c' references variable"):
+        con.to_matrix(m.variables.label_index)

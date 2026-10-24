@@ -126,9 +126,9 @@ def test_csr_capture_deterministic(baseline_model: Model) -> None:
         np.testing.assert_array_equal(b1.data, b2.data)
 
 
-def test_frozen_positional_indices_freed_without_holder(frozen_model: Model) -> None:
-    con = frozen_model.constraints["c2"]
-    label_index = frozen_model.variables.label_index
+def test_sparse_positional_indices_freed_without_holder(sparse_model: Model) -> None:
+    con = sparse_model.constraints["c2"]
+    label_index = sparse_model.variables.label_index
     csr, _ = con.to_matrix(label_index)
     ref = weakref.ref(csr.indices)
     del csr
@@ -137,17 +137,17 @@ def test_frozen_positional_indices_freed_without_holder(frozen_model: Model) -> 
     np.testing.assert_array_equal(csr.indices, [0, 1, 2, 3, 4])
 
 
-def test_frozen_model_pickles_after_matrix_assembly(frozen_model: Model) -> None:
-    frozen_model.constraints.to_matrix()
-    restored = pickle.loads(pickle.dumps(frozen_model))
+def test_sparse_model_pickles_after_matrix_assembly(sparse_model: Model) -> None:
+    sparse_model.constraints.to_matrix()
+    restored = pickle.loads(pickle.dumps(sparse_model))
     csr, _ = restored.constraints["c2"].to_matrix(restored.variables.label_index)
     np.testing.assert_array_equal(csr.indices, [0, 1, 2, 3, 4])
 
 
-def test_frozen_capture_keeps_buffer_identity(frozen_model: Model) -> None:
-    s1 = ModelSnapshot.capture(frozen_model)
-    frozen_model.reset_solution()
-    s2 = ModelSnapshot.capture(frozen_model)
+def test_sparse_capture_keeps_buffer_identity(sparse_model: Model) -> None:
+    s1 = ModelSnapshot.capture(sparse_model)
+    sparse_model.reset_solution()
+    s2 = ModelSnapshot.capture(sparse_model)
     for name in s1.con_buffers:
         b1, b2 = s1.con_buffers[name], s2.con_buffers[name]
         assert b1.indptr is b2.indptr, name
@@ -156,19 +156,19 @@ def test_frozen_capture_keeps_buffer_identity(frozen_model: Model) -> None:
 
 
 @pytest.fixture
-def frozen_model() -> Model:
-    m = Model()
+def sparse_model() -> Model:
+    m = Model(sparse=True)
     x = m.add_variables(0, 10, coords=[range(3)], name="x")
     y = m.add_variables(0, 5, coords=[range(2)], name="y")
-    m.add_constraints(2 * x >= 4, name="c1", freeze=True)
-    m.add_constraints(x.sum() + y.sum() <= 20, name="c2", freeze=True)
+    m.add_constraints(2 * x >= 4, name="c1")
+    m.add_constraints(x.sum() + y.sum() <= 20, name="c2")
     m.add_objective(x.sum())
     return m
 
 
-def test_frozen_con_buffers_keep_data_identity(frozen_model: Model) -> None:
-    label_index = frozen_model.variables.label_index
-    for name, con in frozen_model.constraints.items():
+def test_sparse_con_buffers_keep_data_identity(sparse_model: Model) -> None:
+    label_index = sparse_model.variables.label_index
+    for name, con in sparse_model.constraints.items():
         b1 = _extract_con_buffers(con, label_index)
         b2 = _extract_con_buffers(con, label_index)
         assert b1.data is b2.data, name
@@ -176,11 +176,11 @@ def test_frozen_con_buffers_keep_data_identity(frozen_model: Model) -> None:
         assert b1.indices is b2.indices, name
 
 
-def test_frozen_con_positional_csr_follows_variable_changes() -> None:
-    m = Model()
+def test_sparse_con_positional_csr_follows_variable_changes() -> None:
+    m = Model(sparse=True)
     m.add_variables(0, 10, coords=[range(3)], name="x")
     y = m.add_variables(0, 5, coords=[range(2)], name="y")
-    m.add_constraints(y >= 1, name="c", freeze=True)
+    m.add_constraints(y >= 1, name="c")
     con = m.constraints["c"]
     label_index = m.variables.label_index
     before = _extract_con_buffers(con, label_index).indices
@@ -191,11 +191,11 @@ def test_frozen_con_positional_csr_follows_variable_changes() -> None:
     assert _extract_con_buffers(con, label_index).indices is after
 
 
-def test_frozen_con_positional_csr_follows_csr_rebind() -> None:
-    m = Model()
+def test_sparse_con_positional_csr_follows_csr_rebind() -> None:
+    m = Model(sparse=True)
     x = m.add_variables(0, 10, coords=[range(3)], name="x")
     z = m.add_variables(0, 1, name="z")
-    m.add_constraints(x + 1e-12 * z >= 1, name="c", freeze=True)
+    m.add_constraints(x + 1e-12 * z >= 1, name="c")
     con = m.constraints["c"]
     label_index = m.variables.label_index
     before = _extract_con_buffers(con, label_index)
@@ -205,9 +205,9 @@ def test_frozen_con_positional_csr_follows_csr_rebind() -> None:
     np.testing.assert_array_equal(after.indices, [0, 1, 2])
 
 
-def test_untouched_frozen_constraint_needs_no_rebuild(frozen_model: Model) -> None:
-    snap = ModelSnapshot.capture(frozen_model)
-    diff = ModelDiff.from_snapshot(snap, frozen_model)
+def test_untouched_sparse_constraint_needs_no_rebuild(sparse_model: Model) -> None:
+    snap = ModelSnapshot.capture(sparse_model)
+    diff = ModelDiff.from_snapshot(snap, sparse_model)
     assert isinstance(diff, ModelDiff)
     assert diff.is_empty
 

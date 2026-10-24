@@ -24,7 +24,13 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
-from linopy.testing import assert_equivalent, assert_exprequal, assert_model_equal
+from linopy.store import STORE_KIND_ATTR
+from linopy.testing import (
+    assert_conequal,
+    assert_equivalent,
+    assert_exprequal,
+    assert_model_equal,
+)
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -142,22 +148,6 @@ def test_model_to_netcdf_keeps_insertion_order(
     np.testing.assert_array_equal(A.toarray(), A_read.toarray())
 
 
-def test_read_netcdf_without_order_attrs_falls_back_to_sorted(
-    unsorted_model: Model, tmp_path: Path
-) -> None:
-    fn = tmp_path / "test.nc"
-    unsorted_model.to_netcdf(fn)
-    ds = xr.load_dataset(fn)
-    for kind in ("variables", "expressions", "constraints"):
-        del ds.attrs[CONTAINER_ORDER_ATTR.format(kind)]
-    ds.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert list(p.variables) == ["a", "z"]
-    assert list(p.expressions) == ["b", "y"]
-    assert list(p.constraints) == ["con1", "con2"]
-
-
 def test_read_netcdf_inconsistent_order_attr_raises(
     unsorted_model: Model, tmp_path: Path
 ) -> None:
@@ -171,28 +161,86 @@ def test_read_netcdf_inconsistent_order_attr_raises(
         read_netcdf(fn)
 
 
-def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import CSRConstraint
+@pytest.fixture
+def mixed_store_model(backend: Model) -> Model:
+    m = backend
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(0, 10, coords=[i], name="x")
+    b = m.add_variables(binary=True, coords=[i], name="b")
+    m.add_expressions(3 * x + 1, name="e")
+    flipped = m.add_constraints(x - b >= 0, name="flipped")
+    (flipped.to_dense if m.sparse else flipped.to_sparse)()
+    m.add_expressions(flipped.lhs, name="flipped")
+    m.add_objective(2 * x.sum() + b.sum())
+    mask = xr.DataArray([True, False, True, True], coords=[i])
+    m.add_constraints(2 * x >= 1, name="masked", mask=mask)
+    sign = xr.DataArray(["<=", ">=", "=", "<="], coords=[i])
+    m.add_constraints(x + b, sign, 3, name="mixed")
+    m.add_indicator_constraints(b, 1, x <= 5, name="indicator")
+    m.add_constraints(x.sum() <= 20, name="soft").soften(10)
+    m.constraints["masked"].dual = xr.DataArray(np.arange(4.0), coords=[i])
+    m.constraints.set_blocks(np.arange(m._xCounter) % 2)
+    return m
 
-    m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
-    m.add_constraints(x >= 1, name="c", freeze=True)
 
-    assert isinstance(m.constraints["c"], CSRConstraint)
-
-    fn = tmp_path / "test_frozen.nc"
+def test_model_to_netcdf_round_trip_keeps_stores(
+    mixed_store_model: Model, tmp_path: Path
+) -> None:
+    m = mixed_store_model
+    fn = tmp_path / "stores.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert isinstance(p.constraints["c"], CSRConstraint)
+    assert p.constraints["flipped"].lhs.is_sparse != m.sparse
+    assert p.expressions["flipped"].is_sparse != m.sparse
+    for name, con in m.constraints.items():
+        got = p.constraints[name]
+        assert got.lhs.is_sparse == con.lhs.is_sparse
+        assert_conequal(con, got, strict=True)
+        xr.testing.assert_equal(got.labels, con.labels)
+        xr.testing.assert_equal(got.data["blocks"], con.data["blocks"])
+    got_data, want_data = p.constraints["masked"].data, m.constraints["masked"].data
+    xr.testing.assert_equal(got_data["dual"], want_data["dual"])
+    pairs = [
+        (p.expressions["e"], m.expressions["e"]),
+        (p.expressions["flipped"], m.expressions["flipped"]),
+        (p.objective.expression, m.objective.expression),
+    ]
+    for got_expr, want_expr in pairs:
+        assert isinstance(got_expr, LinearExpression)
+        assert isinstance(want_expr, LinearExpression)
+        assert got_expr.is_sparse == want_expr.is_sparse
+        assert_equivalent(got_expr, want_expr)
     assert_model_equal(m, p)
+
+
+def test_read_netcdf_pre_1_0_file_raises() -> None:
+    with pytest.raises(ValueError, match="linopy <1.0"):
+        read_netcdf(Path(__file__).parent / "data" / "pre-1.0-model.nc")
+
+
+def test_read_netcdf_foreign_file_raises(tmp_path: Path) -> None:
+    fn = tmp_path / "foreign.nc"
+    xr.Dataset({"x": ("i", [1.0, 2.0])}).to_netcdf(fn)
+    with pytest.raises(ValueError, match="not a linopy netcdf"):
+        read_netcdf(fn)
+
+
+def test_read_netcdf_missing_store_kind_raises(model: Model, tmp_path: Path) -> None:
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    ds.attrs = {k: v for k, v in ds.attrs.items() if not k.endswith(STORE_KIND_ATTR)}
+    ds.to_netcdf(fn)
+    with pytest.raises(ValueError, match=STORE_KIND_ATTR):
+        read_netcdf(fn)
 
 
 @pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed")
 def test_model_to_netcdf_compression(tmp_path: Path) -> None:
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(2000, name="i")], name="x")
-    m.add_constraints(x + x.shift(i=1) >= 1, name="c", freeze=True)
+    m.add_constraints(x + x.shift(i=1) >= 1, name="c").to_sparse()
     m.add_constraints(x <= 10, name="d")
     m.add_objective(x.sum())
 
@@ -219,14 +267,14 @@ def test_model_to_netcdf_compression_non_numeric_coords(tmp_path: Path) -> None:
     d = pd.timedelta_range("1h", periods=3, freq="h", name="d")
     n = pd.Index(["north", "south"], name="n")
     x = m.add_variables(lower=0, coords=[t, d, n], name="x")
-    m.add_constraints(x >= 1, name="c", freeze=True)
+    m.add_constraints(x >= 1, name="c").to_sparse()
     m.add_objective(x.sum())
 
     fn = tmp_path / "packed.nc"
     m.to_netcdf(fn, engine="netcdf4", compression={"zlib": True})
 
     with xr.open_dataset(fn, engine="netcdf4") as ds:
-        for k in ["variables-x-t", "variables-x-d", "constraints-c-_index0"]:
+        for k in ["variables-x-t", "variables-x-d", "constraints-c-t"]:
             assert ds[k].encoding["zlib"], k
     assert_model_equal(m, read_netcdf(fn))
 
@@ -272,41 +320,6 @@ def test_model_to_netcdf_compression_scipy(
     assert_model_equal(model, read_netcdf(fn))
 
 
-def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) -> None:
-    """Files written before #926 stored dense positions as CSR columns."""
-    from linopy.constraints import CSRConstraint
-
-    m = Model()
-    i = pd.RangeIndex(3, name="i")
-    mask = xr.DataArray([True, False, False], dims=["i"])
-    m.add_variables(coords=[i], name="a", mask=mask)
-    b = m.add_variables(coords=[i], name="b")
-    m.add_constraints(2 * b >= 1, name="c", freeze=True)
-
-    fn = tmp_path / "test_frozen_legacy.nc"
-    m.to_netcdf(fn)
-
-    ds = xr.load_dataset(fn)
-    label_to_pos = m.variables.label_index.label_to_pos
-    labels = ds["constraints-c-indices"].values
-    positions = label_to_pos[labels]
-    assert not np.array_equal(labels, positions)
-    ds["constraints-c-indices"] = xr.DataArray(positions, dims=["constraints-c-_nnz"])
-    del ds.attrs["constraints-c-_csr_columns"]
-    cindex = ds.attrs["constraints-c-cindex"]
-    ds = ds.rename({"constraints-c-_active_positions": "constraints-c-_con_labels"})
-    ds["constraints-c-_con_labels"] = ds["constraints-c-_con_labels"] + cindex
-    legacy_fn = tmp_path / "legacy.nc"
-    ds.to_netcdf(legacy_fn)
-
-    p = read_netcdf(legacy_fn)
-    assert isinstance(p.constraints["c"], CSRConstraint)
-    A, A_read = m.matrices.A, p.matrices.A
-    assert A is not None and A_read is not None
-    np.testing.assert_array_equal(A.toarray(), A_read.toarray())
-    assert_model_equal(m, p)
-
-
 def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")
@@ -321,31 +334,6 @@ def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
 
     assert_model_equal(m, p)
     assert_model_equal(m, p.copy())
-
-
-def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import CSRConstraint
-
-    m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
-
-    def bound(m: Model, i: int) -> object:
-        if i % 2:
-            return x.at[i] >= i
-        return x.at[i] == 0.0
-
-    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c", freeze=True)
-    assert isinstance(m.constraints["c"], CSRConstraint)
-
-    fn = tmp_path / "test_mixed_sign.nc"
-    m.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert isinstance(p.constraints["c"], CSRConstraint)
-    import numpy as np
-
-    np.testing.assert_array_equal(m.constraints["c"]._sign, p.constraints["c"]._sign)
-    assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_with_sense(model: Model, tmp_path: Path) -> None:
@@ -413,8 +401,8 @@ def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
-    m = Model()
+def test_model_to_netcdf_aux_coords(tmp_path: Path, backend: Model) -> None:
+    m = backend
     coords = xr.Coordinates(
         {
             "snapshot": np.arange(4),
@@ -433,37 +421,6 @@ def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
     fn = tmp_path / "test_aux_coords.nc"
     m.to_netcdf(fn)
     assert_model_equal(m, read_netcdf(fn))
-
-
-def test_read_netcdf_old_multiindex_format_loads_flat(tmp_path: Path) -> None:
-    m = Model()
-    coords = xr.Coordinates(
-        {
-            "d": pd.RangeIndex(4),
-            "first": ("d", [1, 1, 2, 2]),
-            "second": ("d", ["a", "b", "a", "b"]),
-        }
-    )
-    x = m.add_variables(lower=0, coords=coords, name="x")
-    m.add_constraints(x >= 1, name="c")
-    m.add_expressions(2 * x, name="e")
-    m.add_objective(x.sum())
-
-    fn = tmp_path / "flat.nc"
-    m.to_netcdf(fn)
-    ds = xr.load_dataset(fn)
-    mi_dims = [d for d in ds.dims if str(d).endswith("-d")]
-    ds = ds.drop_vars(mi_dims)
-    ds.attrs.update(
-        {f"{d}_multiindex": json.dumps(["first", "second"]) for d in mi_dims}
-    )
-    old = tmp_path / "old_multiindex.nc"
-    ds.to_netcdf(old)
-
-    p = read_netcdf(old)
-    for obj in (p.variables["x"], p.constraints["c"], p.expressions["e"]):
-        assert isinstance(obj.indexes["d"], pd.RangeIndex)
-    assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_with_expressions(
@@ -609,20 +566,6 @@ def test_pickle_model_with_expressions(
 
     assert_model_equal(m, p)
     assert p.expressions["lin"].model is p
-
-
-def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
-    from linopy.io import NETCDF_VERSION_ATTR
-
-    fn = tmp_path / "test.nc"
-    model.to_netcdf(fn)
-
-    ds = xr.load_dataset(fn).load()
-    del ds.attrs[NETCDF_VERSION_ATTR]
-    fn_legacy = tmp_path / "legacy.nc"
-    ds.to_netcdf(fn_legacy)
-
-    assert_model_equal(model, read_netcdf(fn_legacy))
 
 
 @pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
@@ -1029,64 +972,44 @@ class TestLPBinaryBounds:
         assert m_direct.objective.value == m_lp.objective.value == -2
 
 
-def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
-    """Test that frozen and mutable constraints produce identical LP output."""
-    m_frozen = Model()
+def test_to_file_lp_sparse_vs_dense(tmp_path: Path) -> None:
+    """Sparse and dense models produce identical LP output."""
     N = np.arange(5)
-    x = m_frozen.add_variables(coords=[N], name="x")
-    y = m_frozen.add_variables(coords=[N], name="y")
-    m_frozen.add_constraints(x + y <= 10, name="upper")
-    m_frozen.add_constraints(x >= 1, name="lower")
-    m_frozen.add_constraints(2 * x + y == 8, name="eq")
-    m_frozen.add_objective(x.sum() + 2 * y.sum())
-
-    m_mutable = Model()
-    x2 = m_mutable.add_variables(coords=[N], name="x")
-    y2 = m_mutable.add_variables(coords=[N], name="y")
-    m_mutable.add_constraints(x2 + y2 <= 10, name="upper", freeze=False)
-    m_mutable.add_constraints(x2 >= 1, name="lower", freeze=False)
-    m_mutable.add_constraints(2 * x2 + y2 == 8, name="eq", freeze=False)
-    m_mutable.add_objective(x2.sum() + 2 * y2.sum())
-
-    fn_frozen = tmp_path / "frozen.lp"
-    fn_mutable = tmp_path / "mutable.lp"
-    m_frozen.to_file(fn_frozen)
-    m_mutable.to_file(fn_mutable)
-
-    assert fn_frozen.read_text() == fn_mutable.read_text()
+    texts = []
+    for sparse in (True, False):
+        m = Model(sparse=sparse)
+        x = m.add_variables(coords=[N], name="x")
+        y = m.add_variables(coords=[N], name="y")
+        m.add_constraints(x + y <= 10, name="upper")
+        m.add_constraints(x >= 1, name="lower")
+        m.add_constraints(2 * x + y == 8, name="eq")
+        m.add_objective(x.sum() + 2 * y.sum())
+        fn = tmp_path / f"{sparse}.lp"
+        m.to_file(fn)
+        texts.append(fn.read_text())
+    assert texts[0] == texts[1]
 
 
-def test_to_file_lp_frozen_mixed_sign(tmp_path: Path) -> None:
-    """Test LP writing for frozen constraint with per-row signs."""
-    m_frozen = Model()
+def test_to_file_lp_sparse_mixed_sign(tmp_path: Path) -> None:
+    """LP writing for a mixed-sign constraint matches between backends."""
     N = pd.RangeIndex(4, name="i")
-    x = m_frozen.add_variables(coords=[N], name="x")
+    texts = []
+    for sparse in (True, False):
+        m = Model(sparse=sparse)
+        x = m.add_variables(coords=[N], name="x")
 
-    def bound(m: Model, i: int) -> object:
-        if i % 2:
-            return x.at[i] >= i
-        return x.at[i] <= 10
+        def bound(m: Model, i: int) -> object:
+            if i % 2:
+                return x.at[i] >= i
+            return x.at[i] <= 10
 
-    m_frozen.add_constraints(bound, coords=[N], name="mixed", freeze=True)
-    m_frozen.add_objective(x.sum())
-
-    m_mutable = Model()
-    x2 = m_mutable.add_variables(coords=[N], name="x")
-
-    def bound2(m: Model, i: int) -> object:
-        if i % 2:
-            return x2.at[i] >= i
-        return x2.at[i] <= 10
-
-    m_mutable.add_constraints(bound2, coords=[N], name="mixed", freeze=False)
-    m_mutable.add_objective(x2.sum())
-
-    fn_frozen = tmp_path / "frozen_mixed.lp"
-    fn_mutable = tmp_path / "mutable_mixed.lp"
-    m_frozen.to_file(fn_frozen)
-    m_mutable.to_file(fn_mutable)
-
-    assert fn_frozen.read_text() == fn_mutable.read_text()
+        m.add_constraints(bound, coords=[N], name="mixed")
+        assert m.constraints["mixed"].lhs.is_sparse == sparse
+        m.add_objective(x.sum())
+        fn = tmp_path / f"mixed_{sparse}.lp"
+        m.to_file(fn)
+        texts.append(fn.read_text())
+    assert texts[0] == texts[1]
 
 
 def _lp_constraint_section(m: Model, path: Path, slice_size: int = 2_000_000) -> str:
@@ -1094,7 +1017,6 @@ def _lp_constraint_section(m: Model, path: Path, slice_size: int = 2_000_000) ->
     return path.read_text().split("s.t.\n\n")[1].split("\n\nbounds")[0]
 
 
-@pytest.mark.parametrize("freeze", [True, False])
 @pytest.mark.parametrize(
     "slice_size",
     [
@@ -1123,18 +1045,18 @@ def _lp_constraint_section(m: Model, path: Path, slice_size: int = 2_000_000) ->
 )
 def test_to_file_lp_constraint_section(
     tmp_path: Path,
-    freeze: bool,
+    backend: Model,
     slice_size: int,
     scaled: bool,
     expected: str,
 ) -> None:
-    m = Model()
+    m = backend
     i = pd.RangeIndex(2, name="i")
     row_scaling = 2.0 if scaled else 1.0
     x = m.add_variables(coords=[i], name="x", scaling=[1.0, 2.0] if scaled else 1.0)
     y = m.add_variables(coords=[i], name="y")
-    m.add_constraints(x - 2 * y <= 1.5, name="a", freeze=freeze, scaling=row_scaling)
-    m.add_constraints(x.sum() >= -0.0, name="b", freeze=freeze, scaling=row_scaling)
+    m.add_constraints(x - 2 * y <= 1.5, name="a", scaling=row_scaling)
+    m.add_constraints(x.sum() >= -0.0, name="b", scaling=row_scaling)
     m.add_objective(x.sum())
 
     fn = tmp_path / "constraints.lp"
@@ -1146,12 +1068,14 @@ def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     i = pd.RangeIndex(3, name="i")
     x = m.add_variables(coords=[i], name="x")
     y = m.add_variables(coords=[i], name="y")
-    m.add_constraints(x + 2 * y <= 1, name="a", freeze=False)
+    m.add_constraints(x + 2 * y <= 1, name="a")
     m.add_objective(x.sum())
     expected = _lp_constraint_section(m, tmp_path / "sorted.lp")
 
     con = m.constraints["a"]
-    m.constraints.data["a"] = Constraint(con.data.isel(i=slice(None, None, -1)), m, "a")
+    m.constraints.data["a"] = Constraint.from_dataset(
+        con.data.isel(i=slice(None, None, -1)), m, "a"
+    )
     assert not m.constraints["a"].to_polars()["labels"].is_sorted()
     assert _lp_constraint_section(m, tmp_path / "unsorted.lp") == expected
 

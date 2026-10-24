@@ -42,6 +42,7 @@ from linopy.types import CONSTANT_TYPES, DimsLike
 if TYPE_CHECKING:
     from xarray.core.types import JoinOptions
 
+    from linopy.common import VariableLabelIndex
     from linopy.csr import AuxCoords, CSRStore, Grid
     from linopy.model import Model
 
@@ -50,6 +51,11 @@ Reason: TypeAlias = str
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 """What a dense expression dataset holds at a cell or term it lacks."""
+
+STORE_KIND_ATTR = "_linopy_store_kind"
+CSR_COLUMNS_ATTR = "_linopy_n_columns"
+NETCDF_STORE_ATTRS = frozenset((STORE_KIND_ATTR, CSR_COLUMNS_ATTR))
+"""The netcdf attributes a store writes next to its arrays."""
 
 
 class Store(ABC):
@@ -127,6 +133,35 @@ class Store(ABC):
     def copy(self, model: Model, deep: bool = True) -> Self:
         """The same store on ``model``, its arrays copied if ``deep``."""
 
+    @abstractmethod
+    def to_netcdf_vars(self) -> Dataset:
+        """
+        The arrays for netcdf with ``const`` on the grid dims and the store
+        kind in the ``_linopy_store_kind`` attribute, read by :meth:`from_netcdf_vars`.
+        """
+
+    @classmethod
+    @abstractmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> Self:
+        """Rebuild this store kind from the arrays of :meth:`to_netcdf_vars`."""
+
+    @staticmethod
+    def from_netcdf_vars(ds: Dataset, model: Model) -> Store:
+        """The store written by :meth:`to_netcdf_vars`, by its ``_linopy_store_kind``."""
+        from linopy.csr import CSRStore
+
+        kinds: dict[str, type[Store]] = {
+            "dense": DenseStore,
+            "csr": CSRStore,
+        }
+        kind = ds.attrs.get(STORE_KIND_ATTR)
+        if kind not in kinds:
+            raise ValueError(
+                f"Unknown or missing {STORE_KIND_ATTR!r} attribute {kind!r} in "
+                f"dataset with variables {list(ds.data_vars)}; expected one of {sorted(kinds)}."
+            )
+        return kinds[kind].read_netcdf_vars(ds, model)
+
     @property
     @abstractmethod
     def nterm(self) -> int:
@@ -152,6 +187,13 @@ class Store(ABC):
     @abstractmethod
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Cell, variable label and coefficient of the live terms."""
+
+    @abstractmethod
+    def variable_labels(self) -> np.ndarray:
+        """
+        Variable labels of all stored terms, zero coefficients included, as
+        :meth:`positional_csr` reads them; ``-1`` may mark an empty slot.
+        """
 
     @abstractmethod
     def solution(
@@ -199,12 +241,29 @@ class Store(ABC):
         """Drop the terms of absent cells."""
 
     @abstractmethod
-    def prune(self) -> Self:
-        """Drop the terms with a zero coefficient."""
+    def prune(self, tol: float = 0.0) -> Self:
+        """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
 
     @abstractmethod
     def canonical(self) -> Self:
         """The canonical form a constraint is built from."""
+
+    @abstractmethod
+    def nnz(self, active_rows: np.ndarray) -> int:
+        """
+        Upper bound on the nonzeros :meth:`positional_csr` returns for the
+        cells selected by the boolean ``active_rows``.
+        """
+
+    @abstractmethod
+    def positional_csr(
+        self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
+    ) -> scipy.sparse.csr_array:
+        """
+        The cells selected by the boolean ``active_rows`` as CSR rows over the
+        dense variable positions of ``label_index``, raising for labels of
+        removed variables with the constraint ``name``.
+        """
 
     @abstractmethod
     def with_grid(self, grid: Grid) -> Self:
@@ -216,6 +275,26 @@ class Store(ABC):
         Gather cell ``rows[i]`` into cell ``i`` of ``grid``, ``-1`` leaving it
         absent without terms.
         """
+
+    def _take_positions(self, positions: DataArray) -> Self:
+        from linopy.csr import Grid
+
+        dims = tuple(map(str, positions.dims))
+        return self.take(positions.values.ravel(), Grid.from_dataset(positions, dims))
+
+    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
+        """The cells at the positional slices ``indexers`` of grid dims."""
+        grid = self.grid
+        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+
+    def transpose(self, dims: Sequence[str]) -> Self:
+        """The cells on the grid dims reordered to ``dims``."""
+        if tuple(dims) == self.dims:
+            return self
+        grid = self.grid
+        return self._take_positions(
+            grid.dataarray(np.arange(grid.size)).transpose(*dims)
+        )
 
     def broadcast(self, grid: Grid) -> Self:
         """Spread the cells over ``grid``, whose dims include this grid's."""
@@ -413,12 +492,25 @@ class DenseStore(Store):
             return DataArray(values.reshape(self.shape), dims=self.dims)
         return float(values)
 
+    def _term_views(self) -> tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variable labels on ``(*dims, _term)``, uncopied."""
+        dims = (*self.dims, TERM_DIM)
+        return (
+            self.ds.coeffs.transpose(*dims).values,
+            self.ds.vars.transpose(*dims).values,
+        )
+
+    def _term_rows(self, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variable labels of the cells ``rows``, ``(len(rows), nterm)``."""
+        index = np.unravel_index(rows, (1, *self.shape))
+        coeffs, vars_ = self._term_views()
+        return coeffs[None][index], vars_[None][index]
+
     def _term_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """Coefficients and variable labels as ``(n_cells, nterm)`` arrays."""
-        dims = (*self.dims, TERM_DIM)
         shape = (self.n_cells, self.nterm)
-        coeffs = self.ds.coeffs.transpose(*dims).to_numpy().reshape(shape)
-        return coeffs, self.ds.vars.transpose(*dims).to_numpy().reshape(shape)
+        coeffs, vars_ = self._term_views()
+        return coeffs.reshape(shape), vars_.reshape(shape)
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> DenseStore:
@@ -479,12 +571,20 @@ class DenseStore(Store):
     def copy(self, model: Model, deep: bool = True) -> DenseStore:
         return DenseStore(self.ds.copy(deep=deep), model)
 
+    def to_netcdf_vars(self) -> Dataset:
+        ds = Dataset({k: self.ds[k] for k in ("coeffs", "vars", "const")})
+        return ds.assign_attrs({STORE_KIND_ATTR: "dense"})
+
+    @classmethod
+    def read_netcdf_vars(cls, ds: Dataset, model: Model) -> DenseStore:
+        return cls(Dataset({k: ds[k] for k in ("coeffs", "vars", "const")}), model)
+
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         const = self.ds.const.transpose(*self.dims)
-        return const.copy(data=values.reshape(const.shape)).rename(name)
+        return const.copy(deep=False, data=values.reshape(const.shape)).rename(name)
 
     def has_terms(self) -> np.ndarray:
-        return (self._term_arrays()[1] != -1).any(axis=1)
+        return (self._term_views()[1] != -1).any(axis=-1).reshape(-1)
 
     def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
         ds = self.ds
@@ -492,17 +592,21 @@ class DenseStore(Store):
         return coeffs, vars_, float(ds.const.values[indices])
 
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        coeffs, vars_ = self._term_arrays()
-        present = ~np.isnan(self.const)[:, None]
-        keep = present & (vars_ != -1) & (coeffs != 0)
-        cells = np.broadcast_to(np.arange(self.n_cells)[:, None], keep.shape)
-        return cells[keep], vars_[keep], coeffs[keep]
+        coeffs, vars_, keep = self._active_mask(~np.isnan(self.const))
+        cells = np.flatnonzero(keep)
+        cells //= self.nterm
+        return cells, vars_[keep], coeffs[keep]
+
+    def variable_labels(self) -> np.ndarray:
+        return self.ds.vars.values.ravel()
 
     def solution(
         self, label_solution: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
         labels = self.ds.vars
-        values = labels.copy(data=label_solution(labels.values)[labels.values])
+        values = labels.copy(
+            deep=False, data=label_solution(labels.values)[labels.values]
+        )
         sol = (self.ds.coeffs * values).sum(TERM_DIM) + self.ds.const
         return sol.transpose(*self.dims).to_numpy().reshape(-1)
 
@@ -543,12 +647,55 @@ class DenseStore(Store):
     def absorbed(self) -> DenseStore:
         return self._derived(absorb_absence(self.ds))
 
-    def prune(self) -> DenseStore:
-        pruned = pruned_terms(self.ds)
+    def prune(self, tol: float = 0.0) -> DenseStore:
+        pruned = pruned_terms(self.ds, tol)
         return self if pruned is self.ds else self._derived(pruned)
 
     def canonical(self) -> DenseStore:
         return self
+
+    def _active_mask(
+        self, active_rows: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        coeffs, vars_ = self._term_views()
+        valid = vars_ != -1
+        valid &= coeffs != 0
+        valid &= active_rows.reshape(valid.shape[:-1])[..., None]
+        return coeffs, vars_, valid
+
+    def nnz(self, active_rows: np.ndarray) -> int:
+        return int(np.count_nonzero(self._active_mask(active_rows)[2]))
+
+    def active_terms(
+        self, active_rows: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Coefficients, raw variable labels and row pointers of the live terms
+        of the cells selected by the boolean ``active_rows``, in CSR layout.
+        """
+        from linopy.csr import index_dtype
+
+        coeffs, vars_, valid = self._active_mask(active_rows)
+        labels, data = vars_[valid], coeffs[valid]
+        counts = valid.sum(axis=-1).reshape(-1)[active_rows]
+        indptr = np.empty(
+            len(counts) + 1, index_dtype(len(data), counts.shape, self.model)
+        )
+        indptr[0] = 0
+        np.cumsum(counts, out=indptr[1:])
+        return data, labels, indptr
+
+    def positional_csr(
+        self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
+    ) -> scipy.sparse.csr_array:
+        from linopy.csr import _csr_from_label_columns
+
+        data, labels, indptr = self.active_terms(active_rows)
+        csr = _csr_from_label_columns(
+            data, labels, indptr, len(indptr) - 1, label_index, name
+        )
+        csr.sum_duplicates()
+        return csr
 
     def with_grid(self, grid: Grid) -> DenseStore:
         coeffs, vars_ = self._term_arrays()
@@ -557,11 +704,17 @@ class DenseStore(Store):
     def take(self, rows: np.ndarray, grid: Grid) -> DenseStore:
         present = rows >= 0
         safe = np.where(present, rows, 0)
-        coeffs, vars_ = self._term_arrays()
+        coeffs, vars_ = self._term_rows(safe)
         const = np.where(present, self.const[safe], np.nan)
-        coeffs = np.where(present[:, None], coeffs[safe], np.nan)
-        vars_ = np.where(present[:, None], vars_[safe], -1)
+        coeffs[~present] = np.nan
+        vars_[~present] = -1
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
+
+    def isel(self, indexers: Mapping[Hashable, slice]) -> DenseStore:
+        return DenseStore(self.ds.isel(indexers), self.model)
+
+    def transpose(self, dims: Sequence[str]) -> DenseStore:
+        return DenseStore(self.ds.transpose(*dims, TERM_DIM), self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
         fill_value = FILL_VALUE | {"const": fill}
@@ -648,15 +801,16 @@ def summed(data: Dataset, dim: DimsLike | None = None) -> Dataset:
     return assign_fields(ds, const=data.const.sum(dim))
 
 
-def pruned_terms(ds: Dataset) -> Dataset:
+def pruned_terms(ds: Dataset, tol: float = 0.0) -> Dataset:
     """
-    ``ds`` with the nonzero terms moved to the front of the term dimension
-    and the all-zero tail cut off; ``ds`` itself if no coefficient is zero.
+    ``ds`` with the terms of a coefficient above ``tol`` in magnitude moved
+    to the front of the term dimension and the tail cut off; ``ds`` itself
+    if there is none to drop.
     """
     coeffs = ds.coeffs.transpose(..., TERM_DIM)
     vars = ds.vars.transpose(*coeffs.dims, ...)
     cdata = coeffs.data
-    mask = cdata != 0
+    mask = ~(np.abs(cdata) <= tol)
     if mask.all():
         return ds
 
