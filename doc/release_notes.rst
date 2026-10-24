@@ -91,6 +91,10 @@ Version 0.10.1
 * ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
 * ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
 
+**Bug fixes**
+
+* The repr of an expression with more terms than ``linopy.options["display_max_terms"]`` now shows the last terms of a ``QuadraticExpression`` after the ``...`` instead of repeating the first ones, and prints the constant once at the end instead of also before the ``...``. (`#1023 <https://github.com/PyPSA/linopy/pull/1023>`__)
+
 Version 0.10.0
 --------------
 
