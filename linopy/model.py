@@ -2434,25 +2434,26 @@ class Model:
         for _, var in self.variables.items():
             start, end = var.range
             values = primal[start:end].reshape(var.shape) / var.solver_scaling.values
-            var.solution = xr.DataArray(values, var.coords, dims=var.dims)
+            var._assign_solution(values)
 
         if len(result.solution.dual):
             dual = result.solution.dual
+            objective_scaling = self.objective.scaling
             for _, con in self.constraints.items():
                 if con.is_indicator:
                     continue
                 start, end = con.range
                 if isinstance(con, CSRConstraint):
                     active = dual[start:end][con.active_positions]
-                    con._dual = active * con._scaling / self.objective.scaling
+                    con._dual = active * con._scaling / objective_scaling
                     continue
-                coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 values = (
                     dual[start:end].reshape(con.shape)
                     * con.scaling.values
-                    / self.objective.scaling
+                    / objective_scaling
                 )
-                con.dual = xr.DataArray(values, coords, dims=con.coord_dims)
+                assert isinstance(con, Constraint)
+                con._assign_dual(values)
 
         return status_value, termination_condition
 
