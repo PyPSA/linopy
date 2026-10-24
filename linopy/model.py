@@ -716,10 +716,10 @@ class Model:
 
         Parameters
         ----------
-        lower : float/array_like/linopy.Table, optional
+        lower : float/array_like, optional
             Lower bound of the variable(s). For binary variables it
             defaults to 0 and, if given, must be 0 or 1. The default is -inf.
-        upper : float/array_like/linopy.Table, optional
+        upper : TYPE, optional
             Upper bound of the variable(s). For binary variables it
             defaults to 1 and, if given, must be 0 or 1. The default is inf.
         coords : list/dict/xarray.Coordinates, optional
@@ -1205,7 +1205,7 @@ class Model:
             coordinates.
         sign : str/array_like
             Relation between the lhs and rhs, valid values are {'=', '>=', '<='}.
-        rhs : int/float/array_like/linopy.Table
+        rhs : int/float/array_like
             Right hand side of the constraint(s).
         name : str, optional
             Reference name of the added constraints. The default None results

@@ -13,7 +13,6 @@ import operator
 from abc import ABC, abstractmethod
 from collections.abc import (
     Callable,
-    Collection,
     Hashable,
     ItemsView,
     Iterable,
@@ -107,6 +106,7 @@ from linopy.constants import (
     TERM_DIM,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
+from linopy.long import Relation
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -135,7 +135,6 @@ from linopy.store import (
     pruned_terms,
     summed,
 )
-from linopy.table import to_pandas
 from linopy.types import (
     CONSTANT_TYPES,
     ConstantLike,
@@ -220,6 +219,13 @@ def _resolve_group(group: Any, data: Dataset) -> Any:
     like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
     DataFrame, DataArray, multi-key lists) are returned unchanged.
     """
+    if isinstance(group, pl.DataFrame) or (
+        isinstance(group, pd.DataFrame) and group.index.name is None
+    ):
+        raise TypeError(
+            "Grouping by a frame needs a pandas index named after a dimension, "
+            "use `linopy.Relation(frame, member, group)` for member-group pairs."
+        )
     if isinstance(group, (list, tuple)) and len(group) == 1:
         group = group[0]
     if isinstance(group, str) and group in data.coords:
@@ -247,23 +253,6 @@ def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
         return None
     names = list(group)
     return data[names].to_dataframe()[names]
-
-
-def _relation_series(group: Any, dims: Collection[Hashable]) -> pd.Series | None:
-    """
-    A relation grouper as a Series of groups indexed by member, or None.
-
-    A relation is a two-column frame, member dim then group, whose rows
-    may repeat a member; a pandas frame indexed by a dim is a multi-key
-    grouper instead.
-    """
-    if not isinstance(group, pd.DataFrame | pl.DataFrame) or group.shape[1] != 2:
-        return None
-    frame = to_pandas(group)
-    member, target = frame.columns
-    if member not in dims or frame.index.name in dims:
-        return None
-    return frame.set_index(member)[target]
 
 
 def _flatten_multidim_group(
@@ -452,9 +441,7 @@ class LinearExpressionGroupby:
     """
 
     obj: xr.Dataset | BaseExpression
-    group: (
-        Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame | pl.DataFrame
-    )
+    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame | Relation
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -571,8 +558,7 @@ class LinearExpressionGroupby:
                 "`observed=True` is not supported with `use_fallback=True`."
             )
 
-        relation = _relation_series(self.group, self.obj.dims)
-        if relation is not None:
+        if isinstance(self.group, Relation):
             if isinstance(self.obj, QuadraticExpression):
                 raise NotImplementedError(
                     "Grouping a quadratic expression by a relation is not supported."
@@ -582,7 +568,7 @@ class LinearExpressionGroupby:
                     "`use_fallback` and `observed` are not supported when "
                     "grouping by a relation."
                 )
-            return self._relation_sum(self._store, relation)
+            return self._relation_sum(self._store, self.group)
 
         store = self._store
 
@@ -684,7 +670,7 @@ class LinearExpressionGroupby:
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
 
-    def _relation_sum(self, store: Store, relation: pd.Series) -> LinearExpression:
+    def _relation_sum(self, store: Store, relation: Relation) -> LinearExpression:
         """
         Sum over a relation: every row adds its member's terms to its group,
         so a member listed in several rows lands in several groups and one
@@ -692,26 +678,26 @@ class LinearExpressionGroupby:
         positional member dim, then scattered by
         :meth:`~linopy.store.Store.from_grouper`.
         """
-        member = str(relation.index.name)
-        if relation.name in store.dims:
+        member, group = relation.member, relation.group
+        if group in store.dims:
             raise ValueError(
-                f"relation group column {relation.name!r} must not name an "
+                f"relation group column {group!r} must not name an "
                 f"existing dimension {list(store.dims)}."
             )
-        positions = store.grid.indexes[member].get_indexer(relation.index)
-        if (positions == -1).any():
-            missing = relation.index[positions == -1].unique().tolist()
+        if member not in store.dims:
             raise ValueError(
-                f"relation members {missing} are not in dimension {member!r}"
+                f"relation member column {member!r} must name a dimension "
+                f"of {list(store.dims)}."
             )
-        rows = pd.RangeIndex(len(relation), name=member)
+        positions = relation.positions(store.grid.indexes[member])
+        rows = pd.RangeIndex(len(positions), name=member)
         cells = store.grid.dataarray(np.arange(store.grid.size))
         cells = cells.isel({member: positions}).assign_coords({member: rows})
         gathered = store.take_positions(cells)
-        grouper = pd.Series(relation.to_numpy(), index=rows, name=relation.name)
+        grouper = pd.Series(relation.groups(), index=rows, name=group)
         store_cls = result_store_cls(store, self.model)
         res = store_cls.from_grouper(
-            gathered, self.model, grouper, str(relation.name), True, store.dims
+            gathered, self.model, grouper, group, True, store.dims
         )
         return LinearExpression._from_store(res, self.model)
 
@@ -1896,7 +1882,7 @@ class BaseExpression(ABC):
 
     def groupby(
         self,
-        group: DataFrame | pl.DataFrame | Series | DataArray,
+        group: DataFrame | Series | DataArray | Relation,
         restore_coord_dims: bool | None = None,
         **kwargs: Any,
     ) -> LinearExpressionGroupby:
@@ -1908,12 +1894,12 @@ class BaseExpression(ABC):
 
         Parameters
         ----------
-        group : str, DataArray, IndexVariable, pandas.Series or pandas/polars DataFrame
+        group : str, DataArray, IndexVariable, pandas.Series, pandas.DataFrame or linopy.Relation
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
-            A two-column pandas or polars frame (member dimension, group) is a
-            relation whose rows may repeat a member: ``sum`` adds each row's
-            member to its group.
+            A :class:`~linopy.long.Relation` maps members to groups, possibly
+            several groups per member: ``sum`` adds each member to each of
+            its groups.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.

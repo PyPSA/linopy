@@ -35,7 +35,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
-from linopy.alignment import as_dataarray, broadcast_to_coords, pivot_table
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
     LocIndexer,
@@ -159,8 +159,8 @@ def rhs_on_grid(store: CSRStore, rhs: Any) -> DataArray | Reason:
     grid returns the reason to fall back to the dense path. An expression
     rhs is moved to the lhs before, see :meth:`LinearExpression.to_constraint`.
     """
+    da = as_dataarray(rhs)
     grid = store.grid
-    da = as_dataarray(pivot_table(rhs, grid.indexes))
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(grid.dims):
         return "to_constraint(rhs over dimensions outside the grid)"
     if bool(da.isnull().any()):
@@ -1081,7 +1081,6 @@ class Constraint:
         >>> budget_constraint = m.add_constraints(w.sum() == 1, name="budget")
         >>> slack = budget_constraint.soften(penalty=budget_penalty)
         """
-        penalty = pivot_table(penalty, self.coords)
         if not bool(np.all(np.asarray(penalty) > 0)):
             raise ValueError("Penalty is not positive.")
 

@@ -24,6 +24,7 @@ from linopy.constants import (
 from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
+from linopy.long import Relation, from_long
 from linopy.model import Model, Variable, Variables
 from linopy.objective import Objective
 from linopy.piecewise import (
@@ -36,7 +37,6 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.semantics import ABSENT
 from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
-from linopy.table import Table
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
@@ -61,14 +61,15 @@ __all__ = (
     "QuadraticExpression",
     "RemoteHandler",
     "Slopes",
+    "Relation",
     "SolverFeature",
-    "Table",
     "Variable",
     "Variables",
     "align",
     "available_solvers",
     "licensed_solvers",
     "breakpoints",
+    "from_long",
     "merge",
     "options",
     "read_netcdf",

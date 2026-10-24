@@ -48,7 +48,6 @@ from linopy.semantics import (
     enforce_no_multiindex,
     first_mismatched_dim,
 )
-from linopy.table import Table
 from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
 
 
@@ -361,9 +360,8 @@ def as_dataarray(
 
     Picks the right constructor for each supported input type (pandas,
     polars, numpy, scalar, DataArray) and labels positional axes with
-    ``dims`` / ``coords``. A :class:`~linopy.table.Table` is pivoted onto
-    ``coords`` for its key columns. The result is not reshaped against
-    ``coords``: dims are neither expanded nor reordered. Use :func:`broadcast_to_coords` when
+    ``dims`` / ``coords``. The result is not reshaped against ``coords``:
+    dims are neither expanded nor reordered. Use :func:`broadcast_to_coords` when
     ``coords`` should govern the result's shape.
 
     Parameters
@@ -382,12 +380,7 @@ def as_dataarray(
     DataArray
         The converted input, dims and entries as ``arr`` provides them.
     """
-    if isinstance(arr, Table):
-        if coords is None:
-            raise ValueError("A Table needs target coordinates to pivot onto.")
-        target = _coords_to_dict(coords, dims=dims)
-        arr = arr.to_dataarray({d: _as_index(v) for d, v in target.items()})
-    elif isinstance(arr, pd.Series | pd.DataFrame):
+    if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -414,7 +407,6 @@ def as_dataarray(
             np.ndarray,
             DataArray,
             pl.Series,
-            Table,
         ]
         supported_types_str = ", ".join([t.__name__ for t in supported_types])
         raise TypeError(
@@ -423,11 +415,6 @@ def as_dataarray(
 
     enforce_no_multiindex(arr, context="The constant")
     return fill_missing_coords(arr)
-
-
-def pivot_table(arr: Any, coords: CoordsLike) -> Any:
-    """``arr`` pivoted onto ``coords`` if it is a :class:`~linopy.table.Table`, else ``arr``."""
-    return as_dataarray(arr, coords=coords) if isinstance(arr, Table) else arr
 
 
 def _pair_axes_by_size(

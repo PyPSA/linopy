@@ -31,7 +31,7 @@ from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
-from linopy.alignment import as_dataarray, broadcast_to_coords, pivot_table
+from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
@@ -61,6 +61,7 @@ from linopy.constants import (
     STASHED_UPPER,
 )
 from linopy.containers import LabelContainer
+from linopy.long import Relation
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
@@ -382,7 +383,6 @@ class Variable:
         self, store_cls: type[Store], coefficient: ConstantLike = 1
     ) -> expressions.LinearExpression:
         """:meth:`to_linexpr` built on ``store_cls``."""
-        coefficient = pivot_table(coefficient, self.coords)
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
@@ -765,7 +765,7 @@ class Variable:
 
     def groupby(
         self,
-        group: pd.DataFrame | pl.DataFrame | pd.Series | DataArray,
+        group: DataFrame | pd.Series | DataArray | Relation,
         restore_coord_dims: bool | None = None,
     ) -> LinearExpressionGroupby:
         """
@@ -776,12 +776,12 @@ class Variable:
 
         Parameters
         ----------
-        group : str, DataArray, IndexVariable, pandas.Series or pandas/polars DataFrame
+        group : str, DataArray, IndexVariable, pandas.Series, pandas.DataFrame or linopy.Relation
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
-            A two-column pandas or polars frame (member dimension, group) is a
-            relation whose rows may repeat a member: ``sum`` adds each row's
-            member to its group.
+            A :class:`~linopy.long.Relation` maps members to groups, possibly
+            several groups per member: ``sum`` adds each member to each of
+            its groups.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.

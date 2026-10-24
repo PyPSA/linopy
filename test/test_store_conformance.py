@@ -50,13 +50,8 @@ SHIFTED_A = xr.DataArray([1.0, 2.0], coords=[pd.Index([1, 5], name="a")])
 COEFFS = OVER_AB.expand_dims({TERM_DIM: 2}, axis=-1)
 SERIES = pd.Series([0, 1, 0], index=A, name="g")
 FRAME = pd.DataFrame({"k1": [0, 1, 0], "k2": [1, 1, 2]}, index=A)
-TABLE_AB = linopy.Table(
-    pd.DataFrame({"a": [0, 2, 1, 0], "b": ["p", "p", "q", "q"], "v": [1.0, 2, 3, 4]}),
-    "v",
-    default=5.0,
-)
-TABLE_A = linopy.Table(pd.DataFrame({"a": [2, 0, 1], "v": [1.0, 2, 3]}), "v")
-RELATION = pd.DataFrame({"a": [0, 0, 1, 2, 2], "g": ["u", "v", "v", "u", "w"]})
+RELATION_FRAME = pd.DataFrame({"a": [0, 0, 1, 2, 2], "g": ["u", "v", "v", "u", "w"]})
+RELATION = linopy.Relation(RELATION_FRAME, "a", "g")
 
 
 def var(e: LinearExpression, name: str) -> Variable:
@@ -435,9 +430,6 @@ CASES: dict[str, Case] = {
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
     "const-assign-new-dim": Case(grid, const_assigned(OVER_C), ASSIGNMENT),
     "coeffs-assign": Case(grid, coeffs_assigned, ASSIGN_COEFFS),
-    "mul-table": Case(grid, lambda e: e * TABLE_AB, KEPT),
-    "add-table-broadcast": Case(grid, lambda e: e + TABLE_A, KEPT),
-    "to-constraint-table": Case(grid, lambda e: e <= TABLE_AB, KEPT),
     "groupby-relation": Case(grid, lambda e: e.groupby(RELATION).sum(), KEPT),
 }
 
