@@ -276,7 +276,11 @@ class Store(ABC):
         absent without terms.
         """
 
-    def _take_positions(self, positions: DataArray) -> Self:
+    def take_positions(self, positions: DataArray) -> Self:
+        """
+        Gather cell ``positions[...]`` (flat positions into this grid) into
+        each cell of a grid over the dims and coords of ``positions``.
+        """
         from linopy.csr import Grid
 
         dims = tuple(map(str, positions.dims))
@@ -285,14 +289,14 @@ class Store(ABC):
     def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
         """The cells at the positional slices ``indexers`` of grid dims."""
         grid = self.grid
-        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+        return self.take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
 
     def transpose(self, dims: Sequence[str]) -> Self:
         """The cells on the grid dims reordered to ``dims``."""
         if tuple(dims) == self.dims:
             return self
         grid = self.grid
-        return self._take_positions(
+        return self.take_positions(
             grid.dataarray(np.arange(grid.size)).transpose(*dims)
         )
 

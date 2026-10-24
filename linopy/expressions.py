@@ -13,6 +13,7 @@ import operator
 from abc import ABC, abstractmethod
 from collections.abc import (
     Callable,
+    Collection,
     Hashable,
     ItemsView,
     Iterable,
@@ -134,6 +135,7 @@ from linopy.store import (
     pruned_terms,
     summed,
 )
+from linopy.table import to_pandas
 from linopy.types import (
     CONSTANT_TYPES,
     ConstantLike,
@@ -245,6 +247,23 @@ def _multikey_value_frame(group: Any, data: Dataset) -> pd.DataFrame | None:
         return None
     names = list(group)
     return data[names].to_dataframe()[names]
+
+
+def _relation_series(group: Any, dims: Collection[Hashable]) -> pd.Series | None:
+    """
+    A relation grouper as a Series of groups indexed by member, or None.
+
+    A relation is a two-column frame, member dim then group, whose rows
+    may repeat a member; a pandas frame indexed by a dim is a multi-key
+    grouper instead.
+    """
+    if not isinstance(group, pd.DataFrame | pl.DataFrame) or group.shape[1] != 2:
+        return None
+    frame = to_pandas(group)
+    member, target = frame.columns
+    if member not in dims or frame.index.name in dims:
+        return None
+    return frame.set_index(member)[target]
 
 
 def _flatten_multidim_group(
@@ -433,7 +452,9 @@ class LinearExpressionGroupby:
     """
 
     obj: xr.Dataset | BaseExpression
-    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame
+    group: (
+        Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame | pl.DataFrame
+    )
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -550,13 +571,27 @@ class LinearExpressionGroupby:
                 "`observed=True` is not supported with `use_fallback=True`."
             )
 
+        relation = _relation_series(self.group, self.obj.dims)
+        if relation is not None:
+            if isinstance(self.obj, QuadraticExpression):
+                raise NotImplementedError(
+                    "Grouping a quadratic expression by a relation is not supported."
+                )
+            if use_fallback or observed:
+                raise ValueError(
+                    "`use_fallback` and `observed` are not supported when "
+                    "grouping by a relation."
+                )
+            return self._relation_sum(self._store, relation)
+
+        store = self._store
+
         labels = self._labels
         group = _resolve_group(self.group, labels)
         _check_grouper_alignment(group, labels)
 
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
-        store = self._store
         store_cls = result_store_cls(store, self.model)
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
@@ -648,6 +683,37 @@ class LinearExpressionGroupby:
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
+
+    def _relation_sum(self, store: Store, relation: pd.Series) -> LinearExpression:
+        """
+        Sum over a relation: every row adds its member's terms to its group,
+        so a member listed in several rows lands in several groups and one
+        not listed in none. The member cells are gathered once per row onto a
+        positional member dim, then scattered by
+        :meth:`~linopy.store.Store.from_grouper`.
+        """
+        member = str(relation.index.name)
+        if relation.name in store.dims:
+            raise ValueError(
+                f"relation group column {relation.name!r} must not name an "
+                f"existing dimension {list(store.dims)}."
+            )
+        positions = store.grid.indexes[member].get_indexer(relation.index)
+        if (positions == -1).any():
+            missing = relation.index[positions == -1].unique().tolist()
+            raise ValueError(
+                f"relation members {missing} are not in dimension {member!r}"
+            )
+        rows = pd.RangeIndex(len(relation), name=member)
+        cells = store.grid.dataarray(np.arange(store.grid.size))
+        cells = cells.isel({member: positions}).assign_coords({member: rows})
+        gathered = store.take_positions(cells)
+        grouper = pd.Series(relation.to_numpy(), index=rows, name=relation.name)
+        store_cls = result_store_cls(store, self.model)
+        res = store_cls.from_grouper(
+            gathered, self.model, grouper, str(relation.name), True, store.dims
+        )
+        return LinearExpression._from_store(res, self.model)
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """
@@ -1830,7 +1896,7 @@ class BaseExpression(ABC):
 
     def groupby(
         self,
-        group: DataFrame | Series | DataArray,
+        group: DataFrame | pl.DataFrame | Series | DataArray,
         restore_coord_dims: bool | None = None,
         **kwargs: Any,
     ) -> LinearExpressionGroupby:
@@ -1842,9 +1908,12 @@ class BaseExpression(ABC):
 
         Parameters
         ----------
-        group : str, DataArray or IndexVariable
+        group : str, DataArray, IndexVariable, pandas.Series or pandas/polars DataFrame
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
+            A two-column pandas or polars frame (member dimension, group) is a
+            relation whose rows may repeat a member: ``sum`` adds each row's
+            member to its group.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.

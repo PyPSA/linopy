@@ -36,6 +36,7 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.semantics import ABSENT
 from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
+from linopy.table import Table
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
@@ -61,6 +62,7 @@ __all__ = (
     "RemoteHandler",
     "Slopes",
     "SolverFeature",
+    "Table",
     "Variable",
     "Variables",
     "align",
