@@ -5,9 +5,7 @@ Auto-executed windowing-equivalence integration tests.
 Each case registers a pre-existing linopy model — from the test suite, the
 examples module or the benchmark suite — via the :func:`windowed` decorator.
 A single parametrized driver then runs every case under both pattern modes
-(strict and union), with the suite's ``semantics`` fixture automatically
-multiplying everything by legacy and v1 arithmetic, and assesses equivalence
-against the monolithic solve:
+(strict and union), and assesses equivalence against the monolithic solve:
 
 * **decomposable** cases (no cross-tile terms): the chunked objectives sum to
   the monolithic objective, and primal and dual values match per position;
@@ -258,7 +256,7 @@ def _assert_replay_equals_fresh(
 
 @needs_highs
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_windowed_equivalence(case: WindowCase, semantics: str) -> None:
+def test_windowed_equivalence(case: WindowCase) -> None:
     """Every registered model is solved equivalently through the windows."""
     full = case.build()
     full.solve(solver_name="highs", output_flag=False)
