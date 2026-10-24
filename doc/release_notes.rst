@@ -1,10 +1,76 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+Version 1.0.0
+-------------
+
+**Breaking Changes**
+
+* The legacy arithmetic semantics are removed: the v1 convention (:doc:`the arithmetic convention <design/convention>`) is the only behaviour. Code that relied on legacy behaviour now raises or, where absence propagates, gives different results; see :doc:`migrating-to-v1`.
+* ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
+* ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
+* ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
+* ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
+* The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``. Netcdf files written with a ``freeze_constraints`` attribute still load; the attribute is ignored.
+* ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead. Netcdf files written with an ``auto_mask`` attribute still load; the attribute is ignored.
+* NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
+* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters`` and constant operands reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
+* Netcdf files written with ``MultiIndex`` dimensions load in flat form: the dimension gets a positional index and the former levels become auxiliary coordinates. This includes frozen (CSR) constraints.
+* The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
+* Long-deprecated shims are removed:
+
+  * ``LinearExpression.sum`` and ``Variable.sum`` no longer accept the deprecated ``dims`` keyword; use ``dim``. Unknown keywords raise a ``TypeError``.
+  * ``linopy.merge`` takes a single list of expressions; the ``merge(a, b)`` positional form is removed and ``dim``, ``cls``, ``join`` and ``fill_value`` are keyword-only.
+  * ``LinearExpression.from_tuples`` no longer accepts one-element tuples ``(const,)`` as constants; pass the constant directly.
+  * ``LinearExpression.empty`` and ``QuadraticExpression.empty`` are plain ``bool`` properties; the ``.empty()`` call form is removed.
+  * ``Variable.sol`` is removed; use ``Variable.solution``.
+  * The ``Variable.lower`` and ``Variable.upper`` setters are removed; use ``Variable.update(lower=..., upper=...)``.
+  * The ``Constraint.coeffs``, ``.vars``, ``.sign``, ``.rhs`` and ``.lhs`` setters are removed; use ``Constraint.update(...)``.
+  * ``Constraint.update(variables=...)`` only accepts a ``Variable``; a ``DataArray`` of labels raises a ``TypeError``.
+  * ``Constraint.flat`` is removed; use ``Constraint.to_polars()``. ``Constraints.flat`` is unchanged.
+  * ``Variables.print_labels``, ``Constraints.print_labels``, ``Model.print_infeasibilities`` and ``Model.compute_set_of_infeasible_constraints`` are removed; use ``format_labels``, ``Model.compute_infeasibilities`` and ``Model.format_infeasibilities``.
+  * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
+
+* ``linopy.csr.CSRLinearExpression`` is renamed to ``CSRStore`` without an alias. A ``LinearExpression`` now always holds a store from the new ``linopy.store`` module, a ``DenseStore`` or a ``CSRStore``, in place of the private ``_csr`` attribute. ``CSRStore.to_dense()`` returns a ``DenseStore`` instead of a ``LinearExpression``. Writing a model with a sparse objective to netcdf or copying the model no longer converts the objective to dense, and emits no densify notice. On both backends, a cell whose constant becomes NaN, e.g. by ``where``, ``reindex`` or a join with ``fill_value=linopy.ABSENT``, drops its terms, so its variables no longer reach ``sum()``, a constraint or the objective. The ``const`` setter and ``assign(const=...)`` of ``LinearExpression`` and ``QuadraticExpression`` raise ``ValueError`` when the assigned value holds a NaN or does not cover every coordinate of the expression. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+* An operation without a sparse path on a CSR-backed ``LinearExpression``, including reading ``.data``, now works on a dense copy and no longer converts the expression itself, which stays sparse; only assigning ``vars``, ``coeffs`` or an off-grid ``const`` replaces its store. The densify notice names the operation and the case as ``op(case)``, e.g. ``Sparse (CSR) backing densified: reindex(method=...)``, so filters matching the former reason texts need updating. A named sparse expression stays sparse through ``Model.add_expressions`` and ``Model.copy`` and keeps its name through assignments. ``densify_terms``, ``reset_const`` (so also ``Constraint.update(rhs=...)``) and ``Model.assign_coords`` keep a sparse expression sparse. ``LinearExpression.where`` and ``QuadraticExpression.where`` take ``drop`` as their only keyword argument instead of forwarding ``**kwargs`` to ``xarray.Dataset.where``, which accepts no other. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+* ``Model.store_cls`` names the store class a model builds expressions on, ``CSRStore`` in a sparse model and ``DenseStore`` otherwise. ``Variable.to_linexpr`` always returns an expression on it; the private ``_dense`` keyword is removed. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* A dense operand in a merge with a CSR-backed one is converted up through the new ``Store.to_sparse(reason)``; a merge that stays sparse emits one ``Dense backing sparsified: merge with a sparse operand`` notice, under the same ``warn_on_densify`` option as the densify notice. A dense operand with coordinates the sparse grid cannot hold, e.g. two-dimensional auxiliary ones, now falls the whole merge back to dense with the reason ``merge(coordinates the Grid cannot hold: <names>)``. A merge of dense operands stays dense, also in a sparse model. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* A named linear expression of a sparse model reads back from netcdf as a CSR-backed expression, unless it carries coordinates the sparse grid cannot hold, e.g. two-dimensional auxiliary ones; then it reads back dense with those coordinates. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* A constant operation that produces NaN in a live cell, e.g. ``0 * inf``, ``0 / 0`` or ``inf - inf`` from multiplying, dividing, adding or subtracting a constant, now raises ``ValueError`` on both backends. Before, the cell kept its terms under a NaN constant. linopy trusts NaN only as absence, so mark cells to drop with ``.where(...)`` or ``mask=`` instead. Cells that were absent before stay absent. A sparse division by zero no longer emits numpy ``RuntimeWarning``\ s. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* Cells with a NaN constant now drop their terms when a ``LinearExpression`` or ``QuadraticExpression`` is built from a dataset or its ``vars`` or ``coeffs`` are assigned, so neither a dataset with terms under a NaN constant nor a ``vars`` assignment can revive an absent cell. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+
+**Deprecations**
+
+* The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
+
+**Sparse models**
+
+* A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. Non-unique labels still densify.
+* Variables enter arithmetic as CSR-backed expressions in a sparse model: ``2 * x``, ``x + y`` and ``1 * x + 2 * y`` are sparse. Variable operations without a sparse path, such as quadratic products, ``rolling`` and ``cumsum``, build the dense expression directly, without a ``PerformanceWarning``.
+* Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
+* ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
+* ``linopy.testing.assert_equivalent`` compares two linear expressions independently of their backing (dense or sparse) and term layout: coordinates including auxiliary ones, dimension order, absent cells, constants and the per-cell terms after summing duplicate variables and dropping zero coefficients. It never densifies a sparse operand. A conformance suite checks that every operation on a sparse expression either stays sparse or names its densify fallback, and that both backends agree. (`#1044 <https://github.com/PyPSA/linopy/issues/1044>`__)
+
+**Bug fixes**
+
+* Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
+* ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
+* ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
+
+**Internal**
+
+* The core modules are compacted after the legacy removal: ``Variables`` and ``Constraints`` share a ``LabelContainer`` base, the piecewise formulations share one link builder, and uncalled helpers are removed. ``merge`` no longer accepts bare ``Variable`` operands (pass ``var.to_linexpr()``), ``SolverReport.barrier_iterations`` (never populated) is removed, and ``linopy.common.set_int_index``, ``infer_schema_polars`` and ``require_constant`` are removed.
+* The methods of ``CSRLinearExpression`` and ``Grid`` in ``linopy.csr`` use pandas/xarray-style verbs instead of past participles, e.g. ``summed`` is ``sum``, ``reindexed`` is ``reindex``, ``filled`` is ``fillna``, ``contracted`` is ``dot``, ``with_const`` is ``assign_const`` and ``Grid.reordered`` is ``Grid.select``. (`#1018 <https://github.com/PyPSA/linopy/issues/1018>`__)
+
+Version 0.10.1
+--------------
+
+**Bug fixes**
 
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
+* ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
 * ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
 * :meth:`linopy.Model.restrict` turns rolling-horizon optimization into a pure linopy pattern. ``m.restrict(snapshot=window, fix=...)`` returns a :class:`~linopy.restrict.WindowModel` built from a slice of the parent's matrices: constraint terms referencing variables outside the window are folded into the right-hand side at their actual matrix coefficient, ``rhs -= coeff * fixed_value``, and rows that lose every term are checked for feasibility and dropped. Because the window is a row slice and a column range of the parent's ``A``, ``b``, ``c``, ``lb`` and ``ub``, a step costs a slice rather than a rebuild of every variable and constraint. ``window.solve()`` hands those arrays to the solver and updates the existing solver model in place when consecutive windows share a shape, through the same :class:`~linopy.persistent.diff.ModelDiff` delta and per-backend apply hooks as the persistent interface. ``window.advance(snapshot=next, fix=...)`` moves the window. Solutions and duals are built per container only when read. See the new :doc:`rolling-horizon` guide. (https://github.com/PyPSA/linopy/issues/768)
 

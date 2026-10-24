@@ -76,8 +76,6 @@ class Objective:
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value: dict[str, float | int] = {"vars": -1, "coeffs": np.nan, "const": 0}
-
     def __init__(
         self,
         expression: expressions.LinearExpression | expressions.QuadraticExpression,
@@ -168,10 +166,7 @@ class Objective:
         CSR-backed expression is densified into that one cell here, without
         mutating the stored CSR data.
         """
-        expr = self.expression
-        csr = expr._csr if isinstance(expr, expressions.LinearExpression) else None
-        ds = expr.data if csr is None else csr.to_dense().data
-        return ds.assign_attrs(name=self.name)
+        return self.expression._to_dataset().assign_attrs(name=self.name)
 
     @property
     def coeffs(self) -> DataArray:
@@ -237,8 +232,7 @@ class Objective:
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
-        if not expr.is_sparse:
-            expr.attrs["name"] = self.name
+        expr.attrs["name"] = self.name
         self._expression = expr
 
     @property

@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021.
 import importlib.util
 import json
 import pickle
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.io import CONTAINER_ORDER_ATTR, signed_number
-from linopy.testing import assert_exprequal, assert_model_equal
+from linopy.testing import assert_equivalent, assert_exprequal, assert_model_equal
 
 HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
@@ -51,29 +52,6 @@ def model_with_dash_names() -> Model:
     x = m.add_variables(4, pd.Series([8, 10]), name="x-var")
     x = m.add_variables(4, pd.Series([8, 10]), name="x-var-2")
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y-var")
-
-    m.add_constraints(x + y, LESS_EQUAL, 10, name="constraint-1")
-
-    m.add_objective(2 * x + 3 * y)
-
-    return m
-
-
-@pytest.fixture
-def model_with_multiindex() -> Model:
-    from linopy.semantics import is_v1
-
-    if is_v1():
-        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
-    m = Model()
-
-    index = pd.MultiIndex.from_tuples(
-        [(1, "a"), (1, "b"), (2, "a"), (2, "b")], names=["first", "second"]
-    )
-    x = m.add_variables(4, pd.Series([8, 10, 12, 14], index=index), name="x-var")
-    y = m.add_variables(
-        0, pd.DataFrame([[1, 2], [3, 4], [5, 6], [7, 8]], index=index), name="y-var"
-    )
 
     m.add_constraints(x + y, LESS_EQUAL, 10, name="constraint-1")
 
@@ -120,6 +98,19 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     p = read_netcdf(fn)
 
     assert_model_equal(m, p)
+
+
+def test_read_netcdf_ignores_auto_mask_attr(model: Model, tmp_path: Path) -> None:
+    fn = tmp_path / "test.nc"
+    model.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    ds.attrs["auto_mask"] = 1
+    ds.to_netcdf(fn)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        read = read_netcdf(fn)
+
+    assert_model_equal(model, read)
 
 
 @pytest.fixture
@@ -310,8 +301,26 @@ def test_model_from_netcdf_frozen_constraint_legacy_positions(tmp_path: Path) ->
 
     p = read_netcdf(legacy_fn)
     assert isinstance(p.constraints["c"], CSRConstraint)
-    np.testing.assert_array_equal(p.matrices.A.toarray(), m.matrices.A.toarray())
+    A, A_read = m.matrices.A, p.matrices.A
+    assert A is not None and A_read is not None
+    np.testing.assert_array_equal(A.toarray(), A_read.toarray())
     assert_model_equal(m, p)
+
+
+def test_model_to_netcdf_masked_variable_nan_bounds(tmp_path: Path) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    lower = xr.DataArray([0.0, np.nan, 2.0], coords=[i])
+    mask = xr.DataArray([True, False, True], coords=[i])
+    x = m.add_variables(lower, 5, coords=[i], name="x", mask=mask)
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "masked_nan_bounds.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+    assert_model_equal(m, p.copy())
 
 
 def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
@@ -376,28 +385,6 @@ def test_model_to_netcdf_with_dash_named_parameters(
     assert p.parameters.attrs == m.parameters.attrs
 
 
-def test_model_to_netcdf_with_dash_named_multiindex_dim(tmp_path: Path) -> None:
-    from linopy.semantics import is_v1
-
-    if is_v1():
-        pytest.skip("v1 rejects MultiIndex; this model only builds under legacy")
-    index = pd.MultiIndex.from_tuples(
-        [(1, "a"), (1, "b"), (2, "a")], names=["first", "second"]
-    )
-    coords = xr.Coordinates.from_pandas_multiindex(index, "multi-dim")
-    m = Model()
-    x = m.add_variables(coords=coords, name="x")
-    m.add_objective(x.sum())
-    m.parameters["param"] = xr.DataArray([1, 2, 3], coords=coords)
-    fn = tmp_path / "test.nc"
-    m.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert_model_equal(m, p)
-    for index in (p.variables["x"].indexes, p.parameters.indexes):
-        assert isinstance(index["multi-dim"], pd.MultiIndex)
-
-
 def test_model_to_netcdf_with_status_and_condition(
     model_with_dash_names: Model, tmp_path: Path
 ) -> None:
@@ -426,32 +413,57 @@ def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_with_multiindex(
-    model_with_multiindex: Model, tmp_path: Path
-) -> None:
-    m = model_with_multiindex
-    fn = tmp_path / "test.nc"
+def test_model_to_netcdf_aux_coords(tmp_path: Path) -> None:
+    m = Model()
+    coords = xr.Coordinates(
+        {
+            "snapshot": np.arange(4),
+            "time": ("snapshot", pd.date_range("2020-01-01", periods=4, freq="h")),
+            "period": ("snapshot", [2020, 2020, 2030, 2030]),
+        }
+    )
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_expressions(2 * x, name="e")
+    m.add_constraints(x.sel(snapshot=0) >= 2, name="c-first")
+    m.add_objective(x.sum())
+    m.parameters["demand"] = xr.DataArray(np.ones(4), coords=coords)
+    m.parameters["my-param"] = m.parameters["demand"].sel(snapshot=1)
+
+    fn = tmp_path / "test_aux_coords.nc"
     m.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert_model_equal(m, p)
-
-
-# Regression for https://github.com/PyPSA/linopy/issues/525.
-def test_model_to_netcdf_with_multiindex_scipy_engine(
-    model_with_multiindex: Model, tmp_path: Path
-) -> None:
-    m = model_with_multiindex
-    fn = tmp_path / "test.nc"
-    m.to_netcdf(fn, engine="scipy")
-
-    raw_attrs = xr.load_dataset(fn).attrs
-    multiindex_attrs = {k: v for k, v in raw_attrs.items() if k.endswith("_multiindex")}
-    assert multiindex_attrs
-    for k, v in multiindex_attrs.items():
-        assert isinstance(v, str), f"{k!r}: {v!r}"
-
     assert_model_equal(m, read_netcdf(fn))
+
+
+def test_read_netcdf_old_multiindex_format_loads_flat(tmp_path: Path) -> None:
+    m = Model()
+    coords = xr.Coordinates(
+        {
+            "d": pd.RangeIndex(4),
+            "first": ("d", [1, 1, 2, 2]),
+            "second": ("d", ["a", "b", "a", "b"]),
+        }
+    )
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_expressions(2 * x, name="e")
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "flat.nc"
+    m.to_netcdf(fn)
+    ds = xr.load_dataset(fn)
+    mi_dims = [d for d in ds.dims if str(d).endswith("-d")]
+    ds = ds.drop_vars(mi_dims)
+    ds.attrs.update(
+        {f"{d}_multiindex": json.dumps(["first", "second"]) for d in mi_dims}
+    )
+    old = tmp_path / "old_multiindex.nc"
+    ds.to_netcdf(old)
+
+    p = read_netcdf(old)
+    for obj in (p.variables["x"], p.constraints["c"], p.expressions["e"]):
+        assert isinstance(obj.indexes["d"], pd.RangeIndex)
+    assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_with_expressions(
@@ -535,48 +547,6 @@ def test_model_to_netcdf_masked_expression(
     assert np.isnan(masked.coeffs.values[3:]).all()
 
 
-def test_model_to_netcdf_expression_with_multiindex(
-    model_with_multiindex: Model, tmp_path: Path
-) -> None:
-    m = model_with_multiindex
-    x = m.variables["x-var"]
-    y = m.variables["y-var"]
-    m.add_expressions(x + y, name="mi-expr")
-
-    fn = tmp_path / "test.nc"
-    m.to_netcdf(fn)
-    p = read_netcdf(fn)
-
-    assert_model_equal(m, p)
-    index = p.expressions["mi-expr"].indexes["dim_0"]
-    assert isinstance(index, pd.MultiIndex)
-    assert list(index.names) == ["first", "second"]
-
-
-def test_model_to_netcdf_expression_with_multiindex_scipy_engine(
-    model_with_multiindex: Model, tmp_path: Path
-) -> None:
-    m = model_with_multiindex
-    x = m.variables["x-var"]
-    y = m.variables["y-var"]
-    m.add_expressions(x + y, name="mi-expr")
-
-    fn = tmp_path / "test.nc"
-    m.to_netcdf(fn, engine="scipy")
-
-    raw_attrs = xr.load_dataset(fn).attrs
-    expr_multiindex_attrs = {
-        k: v
-        for k, v in raw_attrs.items()
-        if k.startswith("expressions-mi-expr") and k.endswith("_multiindex")
-    }
-    assert expr_multiindex_attrs
-    for k, v in expr_multiindex_attrs.items():
-        assert isinstance(v, str), f"{k!r}: {v!r}"
-
-    assert_model_equal(m, read_netcdf(fn))
-
-
 def test_model_to_netcdf_expression_labels_stay_valid(
     model_with_expressions: Model, tmp_path: Path
 ) -> None:
@@ -639,26 +609,6 @@ def test_pickle_model_with_expressions(
 
     assert_model_equal(m, p)
     assert p.expressions["lin"].model is p
-
-
-@pytest.mark.skipif(not HAS_NETCDF4, reason="legacy format requires netCDF4 backend")
-def test_read_netcdf_with_multiindex_legacy_list_attr(
-    model_with_multiindex: Model, tmp_path: Path
-) -> None:
-    # Older linopy stored multiindex names as a Python list (netCDF4-only).
-    m = model_with_multiindex
-    fn = tmp_path / "test.nc"
-    m.to_netcdf(fn, engine="netcdf4")
-
-    ds = xr.load_dataset(fn, engine="netcdf4").load()
-    ds.attrs = {
-        k: (json.loads(v) if k.endswith("_multiindex") and isinstance(v, str) else v)
-        for k, v in ds.attrs.items()
-    }
-    fn_legacy = tmp_path / "legacy.nc"
-    ds.to_netcdf(fn_legacy, engine="netcdf4")
-
-    assert_model_equal(m, read_netcdf(fn_legacy))
 
 
 def test_read_netcdf_without_version_stamp(model: Model, tmp_path: Path) -> None:
@@ -1033,7 +983,7 @@ class TestLPBinaryBounds:
             x = m.add_variables(
                 binary=True, coords=[pd.RangeIndex(4, name="t")], name="x"
             )
-            x.upper = pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t"))
+            x.update(upper=pd.Series([1, 1, 0, 0], index=pd.RangeIndex(4, name="t")))
             m.add_constraints(x.sum() >= 2, name="atleast2")
             m.add_objective(-1 * x.sum())
             return m
@@ -1204,3 +1154,23 @@ def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     m.constraints.data["a"] = Constraint(con.data.isel(i=slice(None, None, -1)), m, "a")
     assert not m.constraints["a"].to_polars()["labels"].is_sorted()
     assert _lp_constraint_section(m, tmp_path / "unsorted.lp") == expected
+
+
+@pytest.mark.parametrize("two_d", [False, True], ids=["grid", "2d-coord"])
+def test_named_linear_expression_reads_back_on_the_model_store(
+    backend: Model, tmp_path: Path, two_d: bool
+) -> None:
+    i, j = pd.RangeIndex(3, name="i"), pd.RangeIndex(2, name="j")
+    expr = 2 * backend.add_variables(coords=[i, j], name="x") + 1
+    if two_d:
+        expr = expr.assign_coords(two=(("i", "j"), np.arange(6).reshape(3, 2)))
+    want = backend.add_expressions(expr, name="e")
+    fn = tmp_path / "e.nc"
+    backend.to_netcdf(fn)
+    e = read_netcdf(fn).expressions["e"]
+    assert isinstance(e, LinearExpression)
+    assert e.is_sparse == (backend.sparse and not two_d)
+    assert ("two" in e.coords) == two_d
+    assert e.attrs["name"] == "e"
+    assert isinstance(want, LinearExpression)
+    assert_equivalent(e, want)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import scipy.sparse
 import xarray as xr
 from xarray.testing import assert_equal
 
@@ -61,6 +62,40 @@ def assert_linequal(
     a_ds = _expr_unwrap(_sort_by_vars_along_term(a))
     b_ds = _expr_unwrap(_sort_by_vars_along_term(b))
     return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
+
+
+def _cell_matrix(expr: LinearExpression, n_vars: int) -> scipy.sparse.csr_array:
+    """Per-cell term matrix with duplicate labels summed and zeros pruned."""
+    cells, vars_, coeffs = expr._store.terms()
+    shape = (int(expr.const.size), n_vars)
+    matrix = scipy.sparse.coo_array((coeffs, (cells, vars_)), shape=shape).tocsr()
+    matrix.eliminate_zeros()
+    return matrix
+
+
+def assert_equivalent(a: LinearExpression, b: LinearExpression) -> None:
+    """
+    Assert that two linear expressions are equivalent independently of their
+    backing (dense or sparse) and term layout.
+
+    Compares the coordinates including auxiliary ones, the dimension order,
+    the absence mask, the constants and the per-cell term matrix after
+    summing duplicate variables and dropping zero coefficients. ``nterm``
+    and the term order are ignored. Never densifies a sparse operand.
+    """
+    assert isinstance(a, LinearExpression)
+    assert isinstance(b, LinearExpression)
+    xr.testing.assert_identical(
+        xr.Dataset(coords=a.coords), xr.Dataset(coords=b.coords)
+    )
+    assert a.coord_dims == b.coord_dims
+    xr.testing.assert_identical(a.isnull(), b.isnull())
+    xr.testing.assert_allclose(a.const, b.const)
+    n_vars = max(a.model._xCounter, b.model._xCounter)
+    got, want = _cell_matrix(a, n_vars), _cell_matrix(b, n_vars)
+    np.testing.assert_array_equal(got.indptr, want.indptr)
+    np.testing.assert_array_equal(got.indices, want.indices)
+    np.testing.assert_allclose(got.data, want.data)
 
 
 def assert_quadequal(

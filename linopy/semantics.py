@@ -1,10 +1,9 @@
 """
-v1 semantics helpers.
+Arithmetic convention helpers.
 
 Single home for the predicates, validators, and storage-invariant
-enforcement that the v1 arithmetic convention requires. Importing from
-here keeps ``expressions.py`` focused on the operator dispatch and lets a
-future legacy removal be a single-file delete.
+enforcement that the arithmetic convention requires. Importing from
+here keeps ``expressions.py`` focused on the operator dispatch.
 
 See ``doc/design/convention.rst`` for the rules these helpers
 implement and ``doc/design/goals.rst`` for the design intent.
@@ -12,30 +11,24 @@ implement and ``doc/design/goals.rst`` for the design intent.
 
 from __future__ import annotations
 
+import operator
 import os
 import sys
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, TypeAlias
+from collections.abc import Callable, Sequence
+from typing import Any, NoReturn, TypeAlias
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 from xarray import DataArray, Dataset
 
-from linopy.config import (
-    V1_SEMANTICS,
-    LinopySemanticsWarning,
-    options,
-)
 from linopy.constants import HELPER_DIMS
 
 
-def _user_nan_message() -> str:
+def _user_nan_message(context: str = "constant") -> str:
     """User-NaN error text — distinguishes the two intents a user might have."""
     return (
-        "NaN found in a user-supplied constant. linopy treats this as "
+        f"NaN found in a user-supplied {context}. linopy treats this as "
         "ambiguous: if you meant a *data error*, fix it with .fillna(value); "
         "if you meant *absent at this slot*, mark it on the variable "
         "instead (mask=, .where(cond), .reindex(...), .shift(...))."
@@ -91,39 +84,6 @@ def _aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
     )
 
 
-_OPT_IN_HINT = (
-    "\n  Opt in:    linopy.options['semantics'] = 'v1'"
-    "\n  Silence:   warnings.filterwarnings('ignore', "
-    "category=LinopySemanticsWarning)"
-)
-
-
-_LEGACY_NAN_FILL_CLAUSE = {
-    "add": (
-        "NaN in the constant operand was silently treated as 0 by legacy"
-        " (additive identity)."
-    ),
-    "mul": (
-        "NaN in the multiplicative factor was silently treated as 0 by"
-        " legacy (so the variable was zeroed out at that slot)."
-    ),
-    "div": (
-        "NaN in the divisor was silently treated as 1 by legacy (a"
-        " different fill from `+`/`*` which use 0)."
-    ),
-}
-
-
-def _legacy_nan_constant_message(op_kind: str) -> str:
-    """Legacy NaN-fill warning for `+`/`*`/`/`, keyed by ``op_kind``."""
-    return (
-        _LEGACY_NAN_FILL_CLAUSE[op_kind] + " Under v1 this raises ValueError."
-        "\n  Resolve:   `.fillna(value)` (data error)"
-        "\n             or `mask=` / `.where(cond)` / `.reindex(...)` "
-        "on the variable (intended absence)." + _OPT_IN_HINT
-    )
-
-
 _RAGGED_RESOLVE_HINT = (
     "\n  Ragged:    declare which slots hold a breakpoint —"
     "\n             `add_piecewise_formulation(..., mask=x_pts.notnull())`"
@@ -147,213 +107,17 @@ def _user_nan_breakpoint_message(context: str) -> str:
     )
 
 
-def _legacy_nan_breakpoint_message(context: str) -> str:
-    """Legacy inferred padding from NaN placement; v1 wants it declared."""
+def check_user_nan_breakpoints(*, context: str = "breakpoints") -> NoReturn:
+    """Enforce §5 for a breakpoint table whose padding was not declared."""
+    raise ValueError(_user_nan_breakpoint_message(context))
+
+
+def _multiindex_message(dim: str, context: str) -> str:
+    """A pandas MultiIndex dim-coord, rejected."""
     return (
-        f"NaN in user-supplied {context} was silently read as a padded slot "
-        "(an absent breakpoint) by legacy. Under v1 this raises ValueError — "
-        "the raggedness has to be declared rather than inferred."
-        + _RAGGED_RESOLVE_HINT
-        + _OPT_IN_HINT
-    )
-
-
-def check_user_nan_breakpoints(*, context: str = "breakpoints") -> None:
-    """
-    Enforce §5 for a breakpoint table whose padding was not declared.
-
-    v1 raises; legacy warns and lets the caller infer the padding from NaN
-    placement, preserving pre-v1 behaviour.
-    """
-    if is_v1():
-        raise ValueError(_user_nan_breakpoint_message(context))
-    warn_legacy(_legacy_nan_breakpoint_message(context))
-
-
-_LEGACY_POSITIONAL_ALIGNMENT = "positional when sizes match, otherwise left-join"
-_LEGACY_MERGE_ALIGNMENT = "positional when sizes match, otherwise outer join by label"
-_V1_RAISES = "Under v1 this raises ValueError."
-_JOIN_HINT = "\n             or pass an explicit `join=` argument."
-
-
-def _join_hint(joinable: bool) -> str:
-    """The trailing ``join=`` resolve line, omitted where ``join=`` is rejected."""
-    return _JOIN_HINT if joinable else ""
-
-
-def _legacy_coord_mismatch_message(
-    context: str,
-    dim: str | None = None,
-    left: Any = None,
-    right: Any = None,
-    *,
-    alignment: str = _LEGACY_POSITIONAL_ALIGNMENT,
-    v1: str = _V1_RAISES,
-    joinable: bool = True,
-) -> str:
-    """
-    Mismatched dim coords silently aligned the way ``alignment`` describes.
-
-    When ``dim`` / ``left`` / ``right`` are given, the message names the
-    offending dim and shows the diff — same shape as the v1-raise text
-    so the user sees the same information at warn time as at raise time.
-    """
-    diff = (
-        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
-        if dim is not None
-        else ""
-    )
-    return (
-        f"Coordinate mismatch in {context} silently aligned by legacy"
-        f" ({alignment}). {v1}"
-        + diff
-        + "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
-        "\n             `.assign_coords(...)` to relabel one side"
-        "\n             `linopy.align(...)` to pre-align several operands"
-        + _join_hint(joinable)
-        + _OPT_IN_HINT
-    )
-
-
-def _legacy_coord_reorder_message(
-    context: str,
-    dim: str,
-    left: Any,
-    right: Any,
-    *,
-    alignment: str = _LEGACY_MERGE_ALIGNMENT,
-    joinable: bool = True,
-) -> str:
-    """Same labels, different order — aligned the way ``alignment`` describes."""
-    return (
-        f"Coordinate order mismatch in {context} aligned by legacy ({alignment})."
-        " Under v1 the same labels in a different order raise ValueError (§8);"
-        " reindex or sort one side to align by label."
-        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
-        "\n  Resolve:   `.sel(...)` / `.reindex(...)` to align"
-        "\n             `.assign_coords(...)` to relabel one side"
-        + _join_hint(joinable)
-        + _OPT_IN_HINT
-    )
-
-
-def _legacy_const_reorder_message(dim: str, left: Any, right: Any) -> str:
-    """Same labels, different order — reindexed by label by legacy; v1 raises."""
-    return (
-        "Coordinate order mismatch in this operator's constant operand: the same"
-        " labels in a different order were reindexed by label by legacy. Under v1"
-        " this raises ValueError (§8)."
-        f"\n  Dim:       {dim!r}: left={_short_repr(left)}, right={_short_repr(right)}"
-        "\n  Resolve:   `.sel(...)` / `.reindex(...)` / `.sortby(...)` to align"
-        "\n             or pass an explicit `join=` argument." + _OPT_IN_HINT
-    )
-
-
-def _legacy_aux_conflict_message(name: str, left: Any, right: Any, kind: str) -> str:
-    """
-    Conflicting aux coord silently dropped by xarray under legacy.
-
-    The diff line names the failure mode (shape vs value) — same shape
-    as the v1-raise text so the user sees the same information at warn
-    time as at raise time.
-    """
-    if kind == "shape":
-        diff = f"\n  Shapes:    left={np.shape(left)}, right={np.shape(right)}"
-    else:
-        diff = f"\n  Values:    left={_short_repr(left)}, right={_short_repr(right)}"
-    return (
-        f"Auxiliary coordinate {name!r} was conflicting across operands"
-        " and silently dropped by legacy (xarray's default)."
-        " Under v1 this raises ValueError."
-        + diff
-        + f"\n  Resolve:   `.drop_vars({name!r})`"
-        f"\n             `.assign_coords({name}=...)` to relabel one side"
-        "\n             or `.isel(..., drop=True)` if a scalar isel "
-        "introduced it." + _OPT_IN_HINT
-    )
-
-
-def _legacy_nan_rhs_constraint_message() -> str:
-    """Constraint RHS NaN silently kept as 'no constraint at this row'."""
-    return (
-        "NaN in the constraint RHS was silently kept as 'no constraint"
-        " at this row' by legacy auto-mask. Under v1 this raises"
-        " ValueError."
-        "\n  Resolve:   `mask=` on the variable for explicit per-row "
-        "masking"
-        "\n             or `.fillna(value)` if the NaN was a data error." + _OPT_IN_HINT
-    )
-
-
-def _legacy_masked_variable_message(name: str) -> str:
-    """A masked/shifted/reindexed variable used in arithmetic under legacy."""
-    return (
-        f"Variable {name!r} has absent slots (from `mask=` / `.where()`"
-        " / `.shift()` / `.reindex()`). Under legacy each absent slot"
-        " contributes 0 to the resulting expression's terms (so `x + y"
-        " >= 10` reduces to `x >= 10` there). Under v1 the absence"
-        " propagates through arithmetic instead (`x + y` becomes absent"
-        " at the slot and the constraint drops)."
-        f"\n  Resolve:   wrap with `{name}.fillna(0)` for the legacy"
-        " behaviour under v1." + _OPT_IN_HINT
-    )
-
-
-def _legacy_absent_operand_message() -> str:
-    """An expression's absent slots silently filled by legacy arithmetic."""
-    return (
-        "An operand has absent slots (from `.where()` / `.shift()` / `.diff()`"
-        " / `.reindex()`) that legacy silently filled with 0 (so `expr + y`"
-        " keeps `y` there). Under v1 the absence propagates through arithmetic"
-        " instead (the result is absent at the slot and a constraint built from"
-        " it drops the row)."
-        "\n  Resolve:   `.fillna(0)` on the operand for the legacy behaviour under"
-        " v1." + _OPT_IN_HINT
-    )
-
-
-def _legacy_join_divisor_fill_message() -> str:
-    """A reindexing join created divisor positions, filled with 1 by legacy."""
-    return (
-        "The explicit `join=` created divisor positions, which legacy silently"
-        " filled with 1 (leaving the term unscaled). Under v1 they take"
-        " `fill_value=inf`, so the term is zeroed there."
-        "\n  Resolve:   pass `fill_value=` explicitly." + _OPT_IN_HINT
-    )
-
-
-def _legacy_group_multiindex_message(level_names: list[str]) -> str:
-    """A multi-key groupby returns a stacked ``group`` MultiIndex under legacy."""
-    levels = ", ".join(repr(n) for n in level_names)
-    return (
-        f"A multi-key groupby returned a stacked `group` MultiIndex over"
-        f" ({levels})."
-        " Under legacy the `group` dim is that MultiIndex, so `.sel(group=(...))` by"
-        " tuple works. Under v1 the `group` dim is flat with those keys as ordinary"
-        f" aux coords instead — select via `.groupby`/`.where` on {levels}, not a"
-        " level tuple."
-        f"\n  Convert:   `.reset_index('group')` turns this result into the v1"
-        f" flat `group` dim + {levels} aux coords."
-        f"\n  Resolve:   then replace `.sel(group=(...))` with selection on the"
-        f" {levels} aux coord(s)." + _OPT_IN_HINT
-    )
-
-
-def _v1_multiindex_message(dim: str, context: str) -> str:
-    """A pandas MultiIndex dim-coord, rejected under v1."""
-    return (
-        f"{context} uses dimension {dim!r}, a `pd.MultiIndex`, which the v1 convention"
+        f"{context} uses dimension {dim!r}, a `pd.MultiIndex`, which the convention"
         f" does not support. Decompose it to a flat dim with the levels as auxiliary"
         f" coords first — e.g. `reset_index({dim!r})`."
-    )
-
-
-def _legacy_multiindex_message(dim: str, context: str) -> str:
-    """A pandas MultiIndex dim-coord, kept under legacy and rejected under v1."""
-    return (
-        f"{context} uses dimension {dim!r}, a `pd.MultiIndex`. Legacy keeps it as a"
-        f" first-class index; v1 rejects it — decompose it to a flat dim + level aux"
-        f" coords with `reset_index({dim!r})`." + _OPT_IN_HINT
     )
 
 
@@ -380,31 +144,6 @@ def warn_outside_linopy(message: str, category: type[Warning]) -> None:
     warn(message, category, stacklevel=stacklevel)
 
 
-_LEGACY_WARNINGS_MUTED: ContextVar[bool] = ContextVar(
-    "_LEGACY_WARNINGS_MUTED", default=False
-)
-
-
-@contextmanager
-def legacy_warnings_muted() -> Iterator[None]:
-    """Silence legacy warnings for an operation that already emitted its own."""
-    token = _LEGACY_WARNINGS_MUTED.set(True)
-    try:
-        yield
-    finally:
-        _LEGACY_WARNINGS_MUTED.reset(token)
-
-
-def warn_legacy(message: str) -> None:
-    """
-    Emit a `LinopySemanticsWarning` pointing at the first call-stack frame
-    outside the linopy package (see :func:`warn_outside_linopy`). Nothing is
-    emitted inside :func:`legacy_warnings_muted`.
-    """
-    if not _LEGACY_WARNINGS_MUTED.get():
-        warn_outside_linopy(message, LinopySemanticsWarning)
-
-
 def _short_repr(values: Any, limit: int = 6) -> str:
     """Render an array-like as a short, readable string for error messages."""
     arr = np.asarray(values)
@@ -415,11 +154,6 @@ def _short_repr(values: Any, limit: int = 6) -> str:
         return repr(flat.tolist())
     head = ", ".join(repr(v) for v in flat[:limit].tolist())
     return f"[{head}, ... ({flat.size} total)]"
-
-
-def is_v1() -> bool:
-    """True iff the current semantics is v1."""
-    return options["semantics"] == V1_SEMANTICS
 
 
 def is_nan_scalar(value: Any) -> bool:
@@ -435,28 +169,53 @@ def is_nan_scalar(value: Any) -> bool:
     return isinstance(value, (float, np.floating)) and bool(np.isnan(value))
 
 
-def warn_legacy_absence(*consts: DataArray) -> None:
+def check_user_nan(context: str = "constant") -> NoReturn:
+    """Enforce §5 for a user-supplied constant (scalar or array): raise."""
+    raise ValueError(_user_nan_message(context))
+
+
+def _arithmetic_nan_message() -> str:
+    """Arithmetic-NaN error text — a live cell turned NaN by an operation."""
+    return (
+        "A constant operation produced NaN (0*inf, 0/0 or inf-inf) in a live "
+        "cell. linopy trusts NaN only as absence, so it does not silently drop "
+        "the cell; to drop cells on purpose, mark them with .where(cond) or "
+        "mask= instead."
+    )
+
+
+def may_produce_nan(op: Callable[[Any, Any], Any], operand: Any) -> bool:
     """
-    Warn when legacy arithmetic is about to fill an operand's absent slots
-    (NaN ``const``) with 0, which v1 propagates instead (§6).
+    Whether ``op`` with ``operand`` can turn a non-NaN value into NaN: only
+    with a non-finite operand, or a zero one for a product or quotient.
     """
-    if is_v1():
+    values = np.asarray(operand)
+    if not np.isfinite(values.sum()):
+        return True
+    return op not in (operator.add, operator.sub) and not values.all()
+
+
+def check_arithmetic_nan(
+    result: Any,
+    op: Callable[[Any, Any], Any],
+    operand: Any,
+    *inputs: Any,
+    labels: Any = None,
+) -> None:
+    """
+    Enforce §5 for ``result``, ``op`` applied with ``operand``: raise where it
+    is NaN at a live term, one whose ``labels`` are not ``-1``, although
+    neither ``operand`` nor any of the ``inputs`` is NaN there.
+    """
+    if not may_produce_nan(op, operand):
         return
-    if any(bool(c.isnull().any()) for c in consts):
-        warn_legacy(_legacy_absent_operand_message())
-
-
-def check_user_nan(*, op_kind: str = "add") -> None:
-    """
-    Enforce §5 for a user-supplied constant (scalar or array).
-
-    v1 raises ``ValueError`` with the generic user-NaN message; legacy
-    warns with operator-specific text (``"add"`` covers +/-, ``"mul"``,
-    ``"div"`` — they differ in which fill value legacy applied).
-    """
-    if is_v1():
-        raise ValueError(_user_nan_message())
-    warn_legacy(_legacy_nan_constant_message(op_kind))
+    produced = np.isnan(result)
+    if labels is not None:
+        produced = produced & (labels != -1)
+    for value in (operand, *inputs):
+        produced = produced & ~np.isnan(value)
+    if produced.any():
+        raise ValueError(_arithmetic_nan_message())
 
 
 class AbsentType:
@@ -496,10 +255,8 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
     """
     ``fill_value=`` fills what a join creates, so it requires an explicit join.
 
-    ``ABSENT`` additionally requires v1 — legacy fills absent slots with the
-    operator's identity, so there is nothing for it to mean there. A NaN fill
-    is rejected under v1 for the §5 reason a NaN constant is: absence has a
-    name of its own.
+    A NaN fill is rejected for the §5 reason a NaN constant is: absence has a
+    name of its own (``ABSENT``).
     """
     if fill_value is None:
         return
@@ -509,43 +266,19 @@ def check_join_fill_value(fill_value: FillValueLike, join: str | None) -> None:
             "explicit join= (e.g. join='outer'). To fill absent slots of an "
             "operand, call `.fillna(...)` on it before the operation."
         )
-    if isinstance(fill_value, AbsentType) and not is_v1():
-        raise ValueError(
-            "fill_value=ABSENT expresses absence, which only the v1 "
-            "convention carries. Set linopy.options['semantics'] = 'v1' "
-            "to use it."
-        )
-    if is_v1() and is_nan_scalar(fill_value):
+    if is_nan_scalar(fill_value):
         raise ValueError(
             "fill_value=NaN is ambiguous: pass linopy.ABSENT to leave the "
             "positions the join creates absent, or a number to fill them."
         )
 
 
-def enforce_aux_conflict(
-    datasets: Sequence[Any], *, concat_dim: str | None = None
-) -> None:
-    """
-    Enforce §11 across the given operands: v1 raises on aux-coord
-    conflict, legacy warns (xarray would silently drop it).
-    """
-    conflict = conflicting_aux_coord(datasets, concat_dim=concat_dim)
-    if conflict is None:
-        return
-    if is_v1():
-        raise ValueError(_aux_conflict_message(*conflict))
-    warn_legacy(_legacy_aux_conflict_message(*conflict))
-
-
 def enforce_no_multiindex(obj: Any, *, context: str = "input") -> None:
-    """Reject (v1) / deprecate (legacy) any MultiIndex dimension on ``obj``."""
+    """Reject any MultiIndex dimension on ``obj``."""
     indexes = getattr(obj, "indexes", None) or {}
     dim = next((d for d, i in indexes.items() if isinstance(i, pd.MultiIndex)), None)
-    if dim is None:
-        return
-    if is_v1():
-        raise ValueError(_v1_multiindex_message(str(dim), context))
-    warn_legacy(_legacy_multiindex_message(str(dim), context))
+    if dim is not None:
+        raise ValueError(_multiindex_message(str(dim), context))
 
 
 def first_mismatched_dim(
@@ -591,110 +324,55 @@ def reindex_like_if_needed(
     return arr.reindex_like(ref, fill_value={arr.name: fill_value})
 
 
-def shared_dim_mismatches(
-    datasets: Sequence[Dataset], concat_dim: str
-) -> tuple[tuple[str, Any, Any] | None, tuple[str, Any, Any] | None]:
+def enforce_merge_dims(
+    datasets: Sequence[Dataset],
+    *,
+    concat_dim: str,
+    joinable: bool = True,
+) -> None:
     """
-    Report the shared user dims that disagree, in a single pass over the operands.
-
-    Returns ``(mismatch, reorder)``, each either ``None`` or
-    ``(dim, first_labels, other_labels)`` for the first offending dim. A dim
-    carrying the first operand's labels in a different order (same set,
-    including a stacked MultiIndex's tuples) is a *reorder*; a differing label
-    set is a *mismatch*. Nothing is aligned — §8 treats both as
-    ``join="exact"`` failures. Helper dims (``_term``, ``_factor``) and the
-    concat dim are excluded; bare dimension indexes are compared, so auxiliary
-    coords stay §11's job.
-
-    A non-unique shared index cannot be resolved to a permutation
-    (``get_indexer`` requires uniqueness) and so counts as a mismatch —
-    harmless, since both raise under v1 and warn under legacy.
+    Enforce §8 across the operands of a merge: raise on the first shared user
+    dim whose labels differ from the first operand's, in set or in order.
+    Helper dims and the concat dim are excluded; bare dimension indexes are
+    compared, so auxiliary coords stay §11's job. ``joinable`` says whether
+    the operation accepts ``join=``.
     """
     if len(datasets) < 2:
-        return None, None
+        return
     skip = set(HELPER_DIMS) | {concat_dim}
     indexed = [
         {k: d.indexes[k] for k in d.dims if k not in skip and k in d.indexes}
         for d in datasets
     ]
     shared = set.intersection(*(set(p) for p in indexed))
-    mismatch: tuple[str, Any, Any] | None = None
-    reorder: tuple[str, Any, Any] | None = None
     for other in indexed[1:]:
         for d in shared:
             ref, idx = indexed[0][d], other[d]
-            if ref.equals(idx):
-                continue
-            permutable = len(idx) == len(ref) and idx.is_unique
-            positions = idx.get_indexer(ref) if permutable else None
-            if positions is not None and (positions >= 0).all():
-                reorder = reorder or (str(d), ref.values, idx.values)
-            else:
-                mismatch = mismatch or (str(d), ref.values, idx.values)
-    return mismatch, reorder
+            if not ref.equals(idx):
+                raise ValueError(
+                    _shared_dim_mismatch_message(
+                        str(d), ref.values, idx.values, joinable=joinable
+                    )
+                )
 
 
-def enforce_merge_dims(
-    datasets: Sequence[Dataset],
-    *,
-    concat_dim: str,
-    context: str,
-    alignment: str = _LEGACY_MERGE_ALIGNMENT,
-    joinable: bool = True,
+def enforce_aux_conflict(
+    datasets: Sequence[Any], *, concat_dim: str | None = None
 ) -> None:
     """
-    Enforce §8 across the operands of a merge: v1 raises on a differing label
-    set or a pure reorder, legacy warns and leaves the alignment to the merge.
-    ``alignment`` describes how legacy aligns them, ``joinable`` whether the
-    operation accepts ``join=``.
-    """
-    mismatch, reorder = shared_dim_mismatches(datasets, concat_dim)
-    if is_v1():
-        problem = mismatch or reorder
-        if problem is not None:
-            raise ValueError(_shared_dim_mismatch_message(*problem, joinable=joinable))
-    elif mismatch is not None:
-        warn_legacy(
-            _legacy_coord_mismatch_message(
-                context, *mismatch, alignment=alignment, joinable=joinable
-            )
-        )
-    elif reorder is not None:
-        warn_legacy(
-            _legacy_coord_reorder_message(
-                context, *reorder, alignment=alignment, joinable=joinable
-            )
-        )
+    Enforce §11 across the operands: raise on an auxiliary (non-dim) coord
+    that two or more operands carry with disagreeing values, which xarray
+    would silently drop.
 
-
-def conflicting_aux_coord(
-    datasets: Sequence[Any],
-    *,
-    concat_dim: str | None = None,
-) -> tuple[str, Any, Any, str] | None:
-    """
-    Find an auxiliary (non-dim) coord that two or more operands carry with
-    disagreeing values.
-
-    Returns ``(name, left_values, right_values, kind)`` for the first
-    conflict found, or ``None`` if every shared aux coord agrees. ``kind``
-    is ``"shape"`` if the two operands carry differently-shaped values for
-    the coord (e.g. one is a vector, the other a scalar), or ``"value"``
-    if shapes agree but the values themselves disagree. The two failure
-    modes get different error text downstream.
-
-    Per §11, an aux coord either propagates (values agree across operands)
-    or surfaces as an error; xarray's default silently drops the conflict
-    and is what this check intercepts under v1. When only one operand
-    carries the coord (``len(present) < 2``), it propagates from that
-    operand unchanged.
+    A coord shared with differently-shaped values (e.g. a vector and a
+    scalar) and one with equal shapes but differing values get different
+    error text. When only one operand carries the coord it propagates from
+    that operand unchanged.
 
     ``concat_dim`` names the dimension a merge concatenates along. A coord
     that lies solely along that dim is concatenated with it rather than
     reconciled, so differing values are no conflict.
     """
-    if not datasets:
-        return None
     all_names: set[str] = set()
     for d in datasets:
         all_names.update(d.coords)
@@ -710,10 +388,9 @@ def conflicting_aux_coord(
         ref = present[0]
         for vals in present[1:]:
             if ref.shape != vals.shape:
-                return str(name), ref, vals, "shape"
+                raise ValueError(_aux_conflict_message(str(name), ref, vals, "shape"))
             if not _aux_values_equal(ref, vals):
-                return str(name), ref, vals, "value"
-    return None
+                raise ValueError(_aux_conflict_message(str(name), ref, vals, "value"))
 
 
 def _aux_values_equal(a: np.ndarray, b: np.ndarray) -> bool:
@@ -733,9 +410,20 @@ def _aux_values_equal(a: np.ndarray, b: np.ndarray) -> bool:
     return bool(pd.Series(a.ravel()).equals(pd.Series(b.ravel())))
 
 
+def _reduced_at(
+    values: DataArray, cells: DataArray, reduce: Callable[..., Any], initial: float
+) -> Any:
+    """Reduce ``values`` at the ``cells`` to a scalar, ``initial`` if none."""
+    extra = [d for d in cells.dims if d not in values.dims]
+    if extra:
+        cells = cells.any(extra)
+    where = cells.broadcast_like(values).transpose(*values.dims).values
+    return reduce(values.values, axis=None, initial=initial, where=where)
+
+
 def absorb_absence(ds: Dataset) -> Dataset:
     """
-    Enforce the v1 dead-term invariant on a merged dataset.
+    Enforce the dead-term invariant on a merged dataset.
 
     ``const.isnull()`` at a slot ⇒ every term at that slot must have
     ``coeffs = NaN`` and ``vars = -1``. After ``merge`` concatenates two
@@ -745,8 +433,12 @@ def absorb_absence(ds: Dataset) -> Dataset:
     """
     if "const" not in ds or "coeffs" not in ds or "vars" not in ds:
         return ds
+    if not np.isnan(ds["const"].values.sum()):
+        return ds
     mask = ds["const"].isnull()
-    if not bool(mask.any()):
+    labels = _reduced_at(ds["vars"], mask, np.max, -1)
+    coeffs = _reduced_at(ds["coeffs"], mask, np.fmax.reduce, np.nan)
+    if labels == -1 and np.isnan(coeffs):
         return ds
     coeffs = ds["coeffs"].where(~mask, np.nan)
     vars_ = ds["vars"].where(~mask, -1)

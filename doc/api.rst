@@ -692,13 +692,11 @@ Utilities
 ``options`` holds these keys:
 
 - ``display_max_rows``, ``display_max_terms``: size of the printed repr.
-- ``semantics``: ``"legacy"`` (default) or ``"v1"``, see
-  :doc:`migrating-to-v1`.
-- ``warn_on_densify``: emit a ``PerformanceWarning`` when a sparse (CSR)
-  backing is converted to dense. ``None`` (default) warns in a sparse model
-  on implicit conversions only, ``True`` always warns, ``False`` never
-  warns. See :doc:`sparse-models`.
-- ``sparse_groupby``: deprecated, use ``Model(sparse=True)``.
+- ``warn_on_densify``: the conversion notice, a ``PerformanceWarning`` when
+  a sparse (CSR) backing is converted to dense or a dense operand is
+  converted to sparse for a merge with a sparse one. ``None`` (default)
+  warns in a sparse model on implicit conversions only, ``True`` always
+  warns, ``False`` never warns. See :doc:`sparse-models`.
 
 
 Warnings

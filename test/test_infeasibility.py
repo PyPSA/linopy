@@ -221,32 +221,6 @@ class TestInfeasibility:
                 m.compute_infeasibilities()
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
-    def test_deprecated_method(
-        self, simple_infeasible_model: Model, solver: str
-    ) -> None:
-        """Test that deprecated method still works."""
-        if solver not in licensed_solvers:
-            pytest.skip(f"{solver} not available")
-
-        m = simple_infeasible_model
-        status, condition = m.solve(solver_name=solver)
-
-        assert status == "warning"
-        assert "infeasible" in condition
-
-        # Test deprecated method
-        with pytest.warns(DeprecationWarning):
-            subset = m.compute_set_of_infeasible_constraints()
-
-        # Check that it returns a Dataset
-        from xarray import Dataset
-
-        assert isinstance(subset, Dataset)
-
-        # Check that it contains constraint labels
-        assert len(subset) > 0
-
-    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     @pytest.mark.parametrize("io_api,set_names", [("lp", None), ("direct", False)])
     def test_masked_constraint_infeasibility(
         self,

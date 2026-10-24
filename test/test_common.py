@@ -13,7 +13,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.common import (
-    assign_multiindex_safe,
+    assign_fields,
     best_int,
     coords_from_dataset,
     coords_to_dataset_vars,
@@ -46,72 +46,70 @@ def test_best_int() -> None:
         best_int(9223372036854775808)
 
 
-def test_assign_multiindex_safe() -> None:
-    # Create a multi-indexed dataset
-    index = pd.MultiIndex.from_product([["A", "B"], [1, 2]], names=["letter", "number"])
-    data = xr.DataArray([1, 2, 3, 4], dims=["index"], coords={"index": index})
-    ds = xr.Dataset({"value": data})
-
-    # This would now warn about the index deletion of single index level
-    # ds["humidity"] = data
-
-    # Case 1: Assigning a single DataArray
-    result = assign_multiindex_safe(ds, humidity=data)
-    assert "humidity" in result
-    assert "value" in result
-    assert result["humidity"].equals(data)
-
-    # Case 2: Assigning a Dataset
-    result = assign_multiindex_safe(ds, **xr.Dataset({"humidity": data}))  # type: ignore
-    assert "humidity" in result
-    assert "value" in result
-    assert result["humidity"].equals(data)
-
-    # Case 3: Assigning multiple DataArrays
-    result = assign_multiindex_safe(ds, humidity=data, pressure=data)
-    assert "humidity" in result
-    assert "pressure" in result
-    assert "value" in result
-    assert result["humidity"].equals(data)
-    assert result["pressure"].equals(data)
+def test_assign_fields_replaces_without_aligning() -> None:
+    ds = xr.Dataset({"vars": ("_term", [0, 1, 2]), "const": 1.0}, attrs={"a": 1})
+    result = assign_fields(ds, vars=xr.DataArray([5], dims="_term"), scaling=2.0)
+    assert list(result) == ["const", "vars", "scaling"]
+    assert result.sizes["_term"] == 1
+    assert result.attrs == {"a": 1}
 
 
-def test_coords_dataset_vars_roundtrip_multiindex() -> None:
-    """MultiIndex and plain coords survive serialization to Dataset vars and back."""
-    mi = pd.MultiIndex.from_product(
-        [[2020, 2030], ["t1", "t2"]], names=("period", "time-step")
-    )
-    mi.name = "snap-shot"
-    plain = pd.Index([1, 2, 3], name="my-simple")
-
-    ds = xr.Dataset(coords_to_dataset_vars([mi, plain]))
+def test_coords_dataset_vars_roundtrip() -> None:
+    """Dash-named coords survive serialization to Dataset vars and back."""
+    coords = [pd.Index([1, 2, 3], name="my-simple"), pd.Index(["a"], name="b-c")]
+    ds = xr.Dataset(coords_to_dataset_vars(coords))
     assert not any("-" in str(k) for k in ds)
-    restored = coords_from_dataset(ds, ["snap-shot", "my-simple"])
-
-    assert isinstance(restored[0], pd.MultiIndex)
-    assert restored[0].equals(mi)
-    assert list(restored[0].names) == ["period", "time-step"]
-    assert restored[0].name == "snap-shot"
-    assert restored[1].equals(plain)
-    assert restored[1].name == "my-simple"
+    restored, levels = coords_from_dataset(ds, ["my-simple", "b-c"])
+    assert levels == {}
+    for got, want in zip(restored, coords):
+        assert got.equals(want)
+        assert got.name == want.name
 
 
 def test_coords_from_dataset_reads_name_keyed_format() -> None:
     """Files written before the positional format keyed the variables by name."""
-    ds = xr.Dataset(
-        {
-            "_coord_snapshot_level_period": ("a", [2020, 2030]),
-            "_coord_snapshot_level_timestep": ("b", ["t1", "t2"]),
-            "_coord_snapshot_codes": (("c", "d"), [[0, 0], [0, 1], [1, 0], [1, 1]]),
-            "_coord_simple": ("e", [1, 2, 3]),
-        }
-    )
-    mi, plain = coords_from_dataset(ds, ["snapshot", "simple"])
-    want = pd.MultiIndex.from_product(
-        [[2020, 2030], ["t1", "t2"]], names=("period", "timestep")
-    )
-    assert mi.equals(want) and mi.name == "snapshot"
+    ds = xr.Dataset({"_coord_simple": ("e", [1, 2, 3])})
+    (plain,), _ = coords_from_dataset(ds, ["simple"])
     assert plain.equals(pd.Index([1, 2, 3])) and plain.name == "simple"
+
+
+@pytest.mark.parametrize(
+    "ds",
+    [
+        pytest.param(
+            xr.Dataset(
+                {
+                    "_coord_d_level_p": ("l0", [1, 2]),
+                    "_coord_d_level_q": ("l1", ["a", "b"]),
+                    "_coord_d_codes": (("n", "k"), [[0, 0], [0, 1], [1, 0]]),
+                }
+            ),
+            id="name-keyed-0.9",
+        ),
+        pytest.param(
+            xr.Dataset(
+                {
+                    "_index0_level0": ("l0", [1, 2]),
+                    "_index0_level1": ("l1", ["a", "b"]),
+                    "_index0_codes": (
+                        ("n", "k"),
+                        [[0, 0], [0, 1], [1, 0]],
+                        {"level_names": '["p", "q"]'},
+                    ),
+                }
+            ),
+            id="positional-0.10",
+        ),
+    ],
+)
+def test_coords_from_dataset_loads_multiindex_flat(ds: xr.Dataset) -> None:
+    """A frozen constraint over a MultiIndex from linopy < 1.0 loads flat."""
+    (index,), levels = coords_from_dataset(ds, ["d"])
+    assert index.equals(pd.RangeIndex(3)) and index.name == "d"
+    assert {n: (d, v.tolist()) for n, (d, v) in levels.items()} == {
+        "p": ("d", [1, 1, 2]),
+        "q": ("d", ["a", "b", "a"]),
+    }
 
 
 def test_iterate_slices_basic() -> None:
@@ -234,65 +232,10 @@ def test_get_dims_with_index_levels() -> None:
         coords={"time": pd.date_range("2024-01-01", periods=3), "lat": [0, 1]},
     )
 
-    # Case 2: Dataset with a multi-index dimension
-    stations_index = pd.MultiIndex.from_product(
-        [["USA", "Canada"], ["NYC", "Toronto"]], names=["country", "city"]
-    )
-    stations_coords = xr.Coordinates.from_pandas_multiindex(stations_index, "station")
-    ds2 = xr.Dataset(
-        {"temp": (("time", "station"), np.random.rand(3, 4))},  # noqa: NPY002
-        coords={"time": pd.date_range("2024-01-01", periods=3), **stations_coords},
-    )
-
-    # Case 3: Dataset with unnamed multi-index levels
-    unnamed_stations_index = pd.MultiIndex.from_product(
-        [["USA", "Canada"], ["NYC", "Toronto"]]
-    )
-    unnamed_stations_coords = xr.Coordinates.from_pandas_multiindex(
-        unnamed_stations_index, "station"
-    )
-    ds3 = xr.Dataset(
-        {"temp": (("time", "station"), np.random.rand(3, 4))},  # noqa: NPY002
-        coords={
-            "time": pd.date_range("2024-01-01", periods=3),
-            **unnamed_stations_coords,
-        },
-    )
-
-    # Case 4: Dataset with multiple multi-indexed dimensions
-    locations_index = pd.MultiIndex.from_product(
-        [["North", "South"], ["A", "B"]], names=["region", "site"]
-    )
-    locations_coords = xr.Coordinates.from_pandas_multiindex(
-        locations_index, "location"
-    )
-
-    ds4 = xr.Dataset(
-        {"temp": (("time", "station", "location"), np.random.rand(2, 4, 4))},  # noqa: NPY002
-        coords={
-            "time": pd.date_range("2024-01-01", periods=2),
-            **stations_coords,
-            **locations_coords,
-        },
-    )
-
     # Run tests
 
     # Test case 1: Regular dimensions
     assert get_dims_with_index_levels(ds1) == ["time", "lat"]
-
-    # Test case 2: Named multi-index
-    assert get_dims_with_index_levels(ds2) == ["time", "station (country, city)"]
-
-    # Test case 3: Unnamed multi-index
-    assert get_dims_with_index_levels(ds3) == [
-        "time",
-        "station (station_level_0, station_level_1)",
-    ]
-
-    # Test case 4: Multiple multi-indices
-    expected = ["time", "station (country, city)", "location (region, site)"]
-    assert get_dims_with_index_levels(ds4) == expected
 
     # Test case 5: Empty dataset
     ds5 = xr.Dataset()
