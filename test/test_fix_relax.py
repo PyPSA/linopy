@@ -648,7 +648,7 @@ class TestFixValueAlignment:
 
     @pytest.mark.parametrize("value, expected", ALIGNED_VALUES)
     def test_aligns_to_named_dimension(
-        self, variable: Variable, value: ConstantLike, expected: ConstantLike
+        self, variable: Variable, value: ConstantLike, expected: list[float]
     ) -> None:
         variable.fix(value)
         assert variable.lower.dims == ("time",)

@@ -12,7 +12,7 @@ import pytest
 import xarray as xr
 from test_store_conformance import RELATION, TABLE_A, TABLE_AB, A, B, assert_same
 
-from linopy import LinearExpression, Model, Table, Variable
+from linopy import LinearExpression, Model, QuadraticExpression, Table, Variable
 from linopy.testing import assert_equivalent
 
 TABLES: dict[str, tuple[Table, xr.DataArray]] = {
@@ -88,7 +88,7 @@ def test_table_reflected_comparison(backend: Model) -> None:
 
 
 def test_table_penalty(backend: Model) -> None:
-    def softened(m: Model, penalty: Any) -> LinearExpression:
+    def softened(m: Model, penalty: Any) -> LinearExpression | QuadraticExpression:
         v = x(m)
         m.add_objective(v.sum())
         m.add_constraints(v >= 0, penalty=penalty)
