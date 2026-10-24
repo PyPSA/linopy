@@ -1406,46 +1406,6 @@ class TestBroadcasting:
 # ===========================================================================
 
 
-@pytest.mark.legacy
-class TestNaNMasking:
-    """
-    NaN-as-masking patterns — legacy-only; v1 requires explicit ``mask=``
-    or ``.where()`` (see convention.md §4, §5).
-    """
-
-    def test_nan_masks_lambda_labels(self) -> None:
-        """NaN in y_points produces masked labels in SOS2 formulation."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=[BREAKPOINT_DIM])
-        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
-        m.add_piecewise_formulation(
-            (x, x_pts),
-            (y, y_pts),
-            method="sos2",
-        )
-        lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
-        # First 3 should be valid, last masked
-        assert (lam.labels.isel({BREAKPOINT_DIM: slice(None, 3)}) != -1).all()
-        assert int(lam.labels.isel({BREAKPOINT_DIM: 3})) == -1
-
-    @pytest.mark.parametrize("method", ["sos2", "auto"])
-    def test_sos2_interior_nan_raises(self, method: Method) -> None:
-        """SOS2 with interior NaN breakpoints raises ValueError."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, np.nan, 50, 100], dims=[BREAKPOINT_DIM])
-        y_pts = xr.DataArray([0, np.nan, 20, 40], dims=[BREAKPOINT_DIM])
-        with pytest.raises(ValueError, match="non-trailing NaN"):
-            m.add_piecewise_formulation(
-                (x, x_pts),
-                (y, y_pts),
-                method=method,
-            )
-
-
 # ===========================================================================
 # LP file output
 # ===========================================================================
@@ -2032,13 +1992,12 @@ class TestValidationEdgeCases:
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
-    def test_disjunctive_interior_nan_raises(self, semantics: str) -> None:
+    def test_disjunctive_interior_nan_raises(self) -> None:
         """
         Disjunctive with interior NaN raises ValueError.
 
-        Under v1 the user-NaN check fires first — an interior NaN is
-        exactly the data error it is there to catch. Legacy still reaches
-        the layout check further in.
+        The user-NaN check fires first — an interior NaN is exactly the
+        data error it is there to catch.
         """
         m = Model()
         x = m.add_variables(name="x")
@@ -2052,10 +2011,7 @@ class TestValidationEdgeCases:
             [[0, np.nan, 5], [20, 50, 80]],
             dims=[SEGMENT_DIM, BREAKPOINT_DIM],
         )
-        expected = (
-            "NaN found in user-supplied" if semantics == "v1" else "non-trailing NaN"
-        )
-        with pytest.raises(ValueError, match=expected):
+        with pytest.raises(ValueError, match="NaN found in user-supplied"):
             m.add_piecewise_formulation((x, x_pts), (y, y_pts))
 
     def test_expression_name_fallback(self) -> None:
@@ -2070,27 +2026,6 @@ class TestValidationEdgeCases:
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-
-    @pytest.mark.legacy
-    def test_incremental_with_nan_mask(self) -> None:
-        """
-        Incremental method with trailing NaN creates masked delta vars.
-
-        Legacy-only: NaN-as-mask in user input (see convention.md §5).
-        """
-        m = Model()
-        gens = pd.Index(["a", "b"], name="gen")
-        x = m.add_variables(coords=[gens], name="x")
-        y = m.add_variables(coords=[gens], name="y")
-        x_pts = breakpoints({"a": [0, 10, 50], "b": [0, 20]}, dim="gen")
-        y_pts = breakpoints({"a": [0, 5, 20], "b": [0, 8]}, dim="gen")
-        m.add_piecewise_formulation(
-            (x, x_pts),
-            (y, y_pts),
-            method="incremental",
-        )
-        delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
-        assert delta.labels.shape[0] == 2  # 2 generators
 
     def test_scalar_coord_dropped(self) -> None:
         """Scalar coords on breakpoints are dropped before stacking."""
@@ -2118,12 +2053,11 @@ def nan_padded_pwl_model() -> Callable[..., Model]:
     Factory: NaN-padded per-entity piecewise model parametrized by method.
 
     Entity ``b`` has one breakpoint fewer than ``a``, so its last slot is
-    padding. With ``declare=True`` that absence is passed as ``mask=``, as
-    v1 requires, instead of being left for linopy to infer from the NaN.
+    padding, declared via ``mask=``.
     """
     from linopy.piecewise import breakpoints
 
-    def _build(method: Method, declare: bool = False) -> Model:
+    def _build(method: Method) -> Model:
         bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
         bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
         y_pts = breakpoints(bp_y, dim="entity")
@@ -2137,7 +2071,7 @@ def nan_padded_pwl_model() -> Callable[..., Model]:
             (y, y_pts, "<="),
             (x, x_pts),
             method=method,
-            mask=(x_pts.notnull() & y_pts.notnull()) if declare else None,
+            mask=x_pts.notnull() & y_pts.notnull(),
         )
         m.add_constraints(x.sel(entity="b") == 10)
         m.add_objective(-y.sel(entity="b"))
@@ -2363,49 +2297,6 @@ class TestSignParameter:
         assert f_asc.method != "lp"
         assert f_desc.method != "lp"
 
-    @pytest.mark.legacy
-    def test_lp_per_entity_nan_padding(
-        self, nan_padded_pwl_model: Callable[..., Model]
-    ) -> None:
-        """
-        Per-entity NaN-padded breakpoints with method='lp': padded
-        segments must be masked out so they don't create spurious
-        ``y ≤ 0`` constraints (bug-2 regression).
-
-        Legacy-only: NaN-as-mask in user input (see convention.md §5).
-        """
-        m = nan_padded_pwl_model("lp")
-        m.solve()
-        # f_b(10) on chord (5,10)→(15,15) is 12.5
-        assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
-
-    @pytest.mark.legacy
-    @pytest.mark.skipif(not _SOS_PATHS, reason="No SOS-capable solver installed")
-    @pytest.mark.parametrize(("solver", "io_api"), _SOS_PATHS)
-    def test_sos2_per_entity_nan_padding(
-        self,
-        nan_padded_pwl_model: Callable[..., Model],
-        solver: str,
-        io_api: str,
-    ) -> None:
-        """
-        Per-entity NaN-padded breakpoints with method='sos2': the SOS
-        lambda variable's masked entries must flow through both the
-        direct API (via label→position resolution) and the LP writer
-        (via masked-member filtering) so the solve returns the same
-        answer as ``method='lp'``. Regression for #688.
-
-        Parametrized across every SOS-capable solver × io_api so the
-        bug surfaces no matter which backend handles the SOS section
-        (gurobi-lp masked the bug on master by silently dropping
-        unknown ``x-1`` members; cplex-lp and gurobi-direct surfaced
-        it as a parse / OOB error).
-        """
-        m = nan_padded_pwl_model("sos2")
-        m.solve(solver_name=solver, io_api=io_api)
-        # f_b(10) on chord (5,10)→(15,15) is 12.5 — same oracle as lp variant
-        assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
-
     def test_lp_rejects_decreasing_x_concave_ge(self) -> None:
         """
         Explicit LP on a concave curve with sign='>=' must raise, even
@@ -2452,7 +2343,7 @@ class TestSignParameter:
     @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     def test_active_off_with_sign_le_and_lower_zero_pins_output(self) -> None:
         """
-        Docstring recipe: with ``y.lower = 0`` (the common case for
+        Docstring recipe: with a lower bound of 0 on ``y`` (the common case for
         fuel/cost/heat outputs), the sign='<=' + active=0 asymmetry
         disappears — the variable bound combined with y ≤ 0 forces
         y = 0 automatically.
@@ -2557,27 +2448,6 @@ class TestSignParameter:
             method="lp",
         )
         m.add_constraints(x >= 50)
-        m.add_objective(-y)
-        status, _ = m.solve()
-        assert status != "ok"
-
-    @pytest.mark.legacy
-    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
-    def test_lp_domain_uses_paired_valid_breakpoints(self) -> None:
-        """
-        A trailing NaN in y must also shrink the LP x-domain.
-
-        Legacy-only: NaN-as-mask in user input (see convention.md §5).
-        """
-        m = Model()
-        x = m.add_variables(lower=0, upper=2, name="x")
-        y = m.add_variables(lower=0, upper=10, name="y")
-        m.add_piecewise_formulation(
-            (y, [0, 1, np.nan], "<="),
-            (x, [0, 1, 2]),
-            method="lp",
-        )
-        m.add_constraints(x == 2)
         m.add_objective(-y)
         status, _ = m.solve()
         assert status != "ok"
@@ -3087,9 +2957,8 @@ class TestRaggedBreakpointMask:
     """
     Ragged curves must be *declared*, not inferred from NaN placement.
 
-    Under v1 a NaN linopy did not create itself is rejected; ``mask=`` is
-    the way to say "this slot is absent". Legacy keeps inferring, with a
-    deprecation warning. Regression for
+    A NaN linopy did not create itself is rejected; ``mask=`` is the way
+    to say "this slot is absent". Regression for
     https://github.com/PyPSA/linopy/issues/884. Every formulation path reaches
     the padded slot through a different expression, so each is covered.
     """
@@ -3109,7 +2978,6 @@ class TestRaggedBreakpointMask:
         ),
     ]
 
-    @pytest.mark.v1
     @pytest.mark.parametrize(
         ("label", "method", "kwargs"), CASES, ids=[c[0] for c in CASES]
     )
@@ -3119,7 +2987,6 @@ class TestRaggedBreakpointMask:
         with pytest.raises(ValueError, match="NaN found in user-supplied breakpoints"):
             _build_ragged(method, declare=False, **kwargs)
 
-    @pytest.mark.v1
     def test_error_names_the_remedy(self) -> None:
         """The error message must point at mask=, not at the generic fillna advice."""
         with pytest.raises(ValueError) as excinfo:
@@ -3137,15 +3004,6 @@ class TestRaggedBreakpointMask:
         """All formulation paths accept ragged input once it is declared."""
         m = _build_ragged(method, declare=True, **kwargs)
         assert len(m.constraints) > 0
-
-    @pytest.mark.legacy
-    def test_legacy_warns_but_still_builds(self) -> None:
-        from linopy.config import LinopySemanticsWarning
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", LinopySemanticsWarning)
-            _build_ragged("lp", declare=False)
-        assert any(issubclass(w.category, LinopySemanticsWarning) for w in caught)
 
     def test_disjunctive_declared_mask(self) -> None:
         names = pd.Index(["a", "b"], name="name")
@@ -3172,7 +3030,7 @@ class TestRaggedBreakpointMask:
         assert len(m.constraints) > 0
 
     def test_nan_under_a_present_mask_raises(self) -> None:
-        """A NaN the mask calls present is a data error, in both semantics."""
+        """A NaN the mask calls present is a data error."""
         x_pts, y_pts, names = _ragged_pair()
         m = Model()
         x = m.add_variables(0, 100, coords=[names], name="x")
@@ -3223,7 +3081,6 @@ class TestRaggedBreakpointMask:
                 name="pw",
             )
 
-    @pytest.mark.v1
     def test_tangent_lines_reports_raggedness(self) -> None:
         """
         The low-level helper has no mask to declare absence with, so it can
@@ -3236,20 +3093,17 @@ class TestRaggedBreakpointMask:
         with pytest.raises(ValueError, match="NaN found in user-supplied breakpoints"):
             tangent_lines(x, x_pts, y_pts)
 
-    @pytest.mark.v1
     @pytest.mark.parametrize("method", ["lp", "sos2"])
-    def test_declared_mask_matches_legacy_oracle(
+    def test_declared_mask_matches_nan_padding_oracle(
         self, nan_padded_pwl_model: Callable[..., Model], method: Method
     ) -> None:
         """
-        The declared model is the model legacy inferred.
-
-        Same oracle as the legacy-only ``test_*_per_entity_nan_padding``
-        tests: f_b(10) on the chord (5,10)→(15,15) is 12.5.
+        The declared mask pads entity ``b`` correctly: f_b(10) on the
+        chord (5,10)→(15,15) is 12.5.
         """
         if method == "sos2" and not _SOS_PATHS:
             pytest.skip("No SOS-capable solver installed")
-        m = nan_padded_pwl_model(method, True)
+        m = nan_padded_pwl_model(method)
         m.solve()
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 

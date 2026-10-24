@@ -7,6 +7,9 @@ Created on Tue Nov  2 22:38:48 2021.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -84,17 +87,6 @@ def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     assert isinstance(c, linopy.constraints.CSRConstraint)
     assert isinstance(m.constraints["frozen_c"], linopy.constraints.CSRConstraint)
     assert c.ncons == 10
-
-
-@pytest.mark.v1
-def test_add_constraints_uses_model_freeze_default() -> None:
-    m = Model(sparse=True)
-    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
-    c = m.add_constraints(x >= 1, name="frozen_by_default")
-    assert isinstance(c, linopy.constraints.CSRConstraint)
-    assert isinstance(
-        m.constraints["frozen_by_default"], linopy.constraints.CSRConstraint
-    )
 
 
 def test_add_constraints_penalty_softens_constraint(
@@ -275,12 +267,38 @@ def test_constraint_inherited_properties(
     assert isinstance(con.dims, xr.core.utils.Frozen)
 
 
+def test_constraint_assign_replaces_term_fields(
+    x: linopy.Variable, y: linopy.Variable
+) -> None:
+    con = 10 * x + y <= 10
+    assert isinstance(con, Constraint)
+    res = con.assign(
+        vars=con.vars.isel({TERM_DIM: [0]}), coeffs=con.coeffs.isel({TERM_DIM: [0]})
+    )
+    assert isinstance(res, Constraint)
+    assert res.sizes[TERM_DIM] == 1
+    assert_equal(res.vars, con.vars.isel({TERM_DIM: [0]}))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda x: x, lambda x: 1 * x, lambda x: x >= 0],
+    ids=["var", "expr", "con"],
+)
+def test_set_index_swaps_dim_coord(x: linopy.Variable, build: Callable) -> None:
+    obj = build(x)
+    alt = np.arange(10, 20)
+    res = obj.assign_coords(alt=("first", alt)).set_index(first="alt")
+    assert type(res) is type(obj)
+    assert res.indexes["first"].tolist() == alt.tolist()
+
+
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
     con = 10 * x + y <= 10
     assert isinstance(con, Constraint)
 
     # Test wrapped methods
-    con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
+    con.assign(new_var=xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)]))
     con.assign_attrs({"new_attr": "value"})
     con.assign_coords(
         {"new_coord": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])}
@@ -316,20 +334,6 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
     con = con.swap_dims({"second": "third"})
     assert isinstance(con, ConstraintBase)
     assert con.coord_dims == ("first", "third")
-
-
-def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) -> None:
-    expr = 10 * x + y
-    con = expr <= 10
-    assert isinstance(con, Constraint)
-    con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
-    con = con.set_index({"multi": ["second", "third"]})
-    assert isinstance(con, ConstraintBase)
-    assert con.coord_dims == (
-        "first",
-        "multi",
-    )
-    assert isinstance(con.indexes["multi"], pd.MultiIndex)
 
 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
@@ -392,83 +396,80 @@ def test_constraint_rhs_getter(c: linopy.constraints.CSRConstraint) -> None:
     assert (c.rhs == 0).all()
 
 
-def test_constraint_vars_setter(
+def test_constraint_update_variables(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.vars = x
+    mc.update(variables=x)
     assert_equal(mc.vars, x.labels)
 
 
-def test_constraint_vars_setter_with_array(
-    mc: linopy.constraints.Constraint, x: linopy.Variable
+@pytest.mark.parametrize("as_type", [lambda v: v, pd.DataFrame])
+def test_constraint_update_variables_invalid(
+    mc: linopy.constraints.Constraint,
+    x: linopy.Variable,
+    as_type: Callable[[xr.DataArray], Any],
 ) -> None:
-    """Passing a raw DataArray is deprecated but still works for back-compat."""
-    with pytest.warns(FutureWarning, match="DataArray"):
-        mc.vars = x.labels
-    assert_equal(mc.vars, x.labels)
+    with pytest.raises(TypeError, match="expects a Variable"):
+        mc.update(variables=as_type(x.labels))
 
 
-def test_constraint_vars_setter_invalid(
-    mc: linopy.constraints.Constraint, x: linopy.Variable
+@pytest.mark.parametrize(
+    "attr", ["coeffs", "vars", "sign", "rhs", "lhs"], ids=lambda a: f"{a}-setter"
+)
+def test_constraint_field_setters_removed(
+    mc: linopy.constraints.Constraint, attr: str
 ) -> None:
-    with pytest.raises(TypeError):
-        mc.vars = pd.DataFrame(x.labels)
+    with pytest.raises(AttributeError):
+        setattr(mc, attr, getattr(mc, attr))
 
 
-def test_constraint_coeffs_setter(mc: linopy.constraints.Constraint) -> None:
-    mc.coeffs = 3
+def test_constraint_update_coeffs(mc: linopy.constraints.Constraint) -> None:
+    mc.update(coeffs=3)
     assert (mc.coeffs == 3).all()
 
 
-def test_constraint_lhs_setter(
+def test_constraint_update_lhs(
     mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    mc.lhs = x + y
+    mc.update(lhs=x + y)
     assert mc.lhs.nterm == 2
     assert mc.vars.notnull().all().item()
     assert mc.coeffs.notnull().all().item()
 
 
-def test_constraint_lhs_setter_with_variable(
+def test_constraint_update_lhs_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.lhs = x
+    mc.update(lhs=x)
     assert mc.lhs.nterm == 1
 
 
-def test_constraint_lhs_setter_with_constant(
+def test_constraint_update_lhs_with_constant(
     mc: linopy.constraints.Constraint,
 ) -> None:
     sizes = mc.sizes
-    mc.lhs = 10
+    mc.update(lhs=10)
     assert (mc.rhs == -10).all()
     assert mc.lhs.nterm == 0
     assert mc.sizes["first"] == sizes["first"]
 
 
-def test_constraint_sign_setter(mc: linopy.constraints.Constraint) -> None:
-    mc.sign = EQUAL
+@pytest.mark.parametrize("sign", [EQUAL, long_EQUAL])
+def test_constraint_update_sign(mc: linopy.constraints.Constraint, sign: str) -> None:
+    mc.update(sign=sign)
     assert (mc.sign == EQUAL).all()
 
 
-def test_constraint_sign_setter_alternative(
+def test_constraint_update_sign_invalid(
     mc: linopy.constraints.Constraint,
 ) -> None:
-    mc.sign = long_EQUAL
-    assert (mc.sign == EQUAL).all()
-
-
-def test_constraint_sign_setter_invalid(
-    mc: linopy.constraints.Constraint,
-) -> None:
-    # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
-        mc.sign = "asd"
+        mc.update(sign="asd")
 
 
-def test_constraint_rhs_setter(mc: linopy.constraints.Constraint) -> None:
+def test_constraint_update_rhs(mc: linopy.constraints.Constraint) -> None:
     sizes = mc.sizes
-    mc.rhs = 2
+    mc.update(rhs=2)
     assert (mc.rhs == 2).all()
     assert mc.sizes == sizes
 
@@ -579,74 +580,48 @@ def test_constraint_update_lhs_and_variables_rejected(
 ) -> None:
     """lhs= (full replacement) and variables= (partial) are mutually exclusive."""
     with pytest.raises(TypeError, match="lhs.*coeffs.*variables"):
-        mc.update(lhs=2 * x, variables=mc.vars)
+        mc.update(lhs=2 * x, variables=mc.vars)  # type: ignore[arg-type]
 
 
-def test_constraint_rhs_setter_with_variable(
+def test_constraint_update_rhs_with_variable(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.rhs = x
+    mc.update(rhs=x)
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 2
 
 
-def test_constraint_rhs_setter_with_expression(
+def test_constraint_update_rhs_with_expression(
     mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    mc.rhs = x + y
+    mc.update(rhs=x + y)
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 3
 
 
-def test_constraint_rhs_setter_with_expression_and_constant(
+def test_constraint_update_rhs_with_expression_and_constant(
     mc: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    mc.rhs = x + 1
+    mc.update(rhs=x + 1)
     assert (mc.rhs == 1).all()
     assert (mc.coeffs.sum(mc.term_dim) == 0).all()
     assert mc.lhs.nterm == 2
 
 
-def test_constraint_rhs_setter_broadcasts_missing_dim() -> None:
-    """Rhs assignment broadcasts against the constraint coords: missing dims expand."""
+def test_constraint_update_rhs_broadcasts_missing_dim() -> None:
+    """Rhs update broadcasts against the constraint coords: missing dims expand."""
     m = Model()
     x = m.add_variables(
         coords=[pd.RangeIndex(2, name="i"), pd.RangeIndex(3, name="j")], name="x"
     )
     con = m.add_constraints(1 * x >= 0, name="con")
 
-    con.rhs = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})
+    con.update(rhs=xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]}))
 
     assert dict(con.rhs.sizes) == {"i": 2, "j": 3}
     assert (con.rhs.sel(i=1) == 2.0).all()
-
-
-@pytest.mark.legacy
-def test_constraint_rhs_setter_projects_multiindex_level() -> None:
-    """
-    Rhs indexed by one MultiIndex level is projected onto the stacked dim.
-
-    Regression: as_expression must convert constants with the broadcast rung
-    (broadcast_to_coords), not plain conversion — otherwise the level dim
-    collides with the MI level coord downstream (xarray AlignmentError).
-    """
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "dim_3"
-    coords = xr.Coordinates.from_pandas_multiindex(idx, "dim_3")
-    m = Model()
-    x = m.add_variables(coords=coords, name="x")
-    con = m.add_constraints(1 * x >= 0, name="con")
-
-    rhs_by_level = xr.DataArray(
-        [10.0, 20.0], coords={"level1": [1, 2]}, dims=["level1"]
-    )
-    with pytest.warns(linopy.LinopySemanticsWarning, match="broadcasting level subset"):
-        con.rhs = rhs_by_level
-
-    assert con.rhs.sel(dim_3=(1, "b")).item() == 10.0
-    assert con.rhs.sel(dim_3=(2, "a")).item() == 20.0
 
 
 def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:
@@ -660,8 +635,9 @@ def test_constraint_sel(c: linopy.constraints.CSRConstraint) -> None:
     assert isinstance(c.mutable().isel(first=[1, 2]), ConstraintBase)
 
 
-def test_constraint_flat(c: linopy.constraints.CSRConstraint) -> None:
-    assert isinstance(c.flat, pd.DataFrame)
+def test_constraint_flat_removed(c: linopy.constraints.CSRConstraint) -> None:
+    with pytest.raises(AttributeError):
+        c.flat  # type: ignore[attr-defined]
 
 
 def test_iterate_slices(mc: linopy.constraints.Constraint) -> None:

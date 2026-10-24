@@ -164,3 +164,8 @@ def test_scalar_variable(m: Model) -> None:
     x = ScalarVariable(label=0, model=m)
     assert isinstance(x, ScalarVariable)
     assert x.__rmul__(x) is NotImplemented  # type: ignore
+
+
+def test_to_linexpr_builds_on_the_model_store_cls(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    assert type(x.to_linexpr(2)._store) is backend.store_cls

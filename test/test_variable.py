@@ -143,47 +143,10 @@ def test_variable_lower_getter(z: linopy.Variable) -> None:
     assert z.lower.item() == 0
 
 
-def test_variable_upper_setter(z: linopy.Variable) -> None:
-    z.upper = 20
-    assert z.upper.item() == 20
-
-
-def test_variable_lower_setter(z: linopy.Variable) -> None:
-    z.lower = 8
-    assert z.lower == 8
-
-
-def test_variable_upper_setter_with_array(x: linopy.Variable) -> None:
-    idx = pd.RangeIndex(10, name="first")
-    upper = pd.Series(range(25, 35), index=idx)
-    x.upper = upper
-    assert isinstance(x.upper, xr.DataArray)
-    assert (x.upper == upper).all()
-
-
-def test_variable_upper_setter_with_array_invalid_dim(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        upper = pd.Series(range(25, 35))
-        x.upper = upper
-
-
-def test_variable_upper_setter_with_non_constant(z: linopy.Variable) -> None:
-    with pytest.raises(TypeError):
-        z.upper = z
-
-
-def test_variable_lower_setter_with_array(x: linopy.Variable) -> None:
-    idx = pd.RangeIndex(10, name="first")
-    lower = pd.Series(range(15, 25), index=idx)
-    x.lower = lower
-    assert isinstance(x.lower, xr.DataArray)
-    assert (x.lower == lower).all()
-
-
-def test_variable_lower_setter_with_array_invalid_dim(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        lower = pd.Series(range(15, 25))
-        x.lower = lower
+@pytest.mark.parametrize("bound", ["lower", "upper"])
+def test_variable_bound_setters_removed(z: linopy.Variable, bound: str) -> None:
+    with pytest.raises(AttributeError):
+        setattr(z, bound, 5)
 
 
 def test_variable_update_bounds(z: linopy.Variable) -> None:
@@ -245,14 +208,9 @@ def test_variable_sum(x: linopy.Variable) -> None:
     assert res.nterm == 10
 
 
-def test_variable_sum_warn_using_dims(x: linopy.Variable) -> None:
-    with pytest.warns(DeprecationWarning):
-        x.sum(dims="first")
-
-
-def test_variable_sum_warn_unknown_kwargs(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        x.sum(unknown_kwarg="first")
+def test_variable_sum_rejects_dims_kwarg(x: linopy.Variable) -> None:
+    with pytest.raises(TypeError):
+        x.sum(dims="first")  # type: ignore[call-arg]
 
 
 def test_fill_value() -> None:
@@ -296,14 +254,6 @@ def test_variable_swap_dims(x: linopy.Variable) -> None:
     x = x.swap_dims({"first": "second"})
     assert isinstance(x, linopy.variables.Variable)
     assert x.dims == ("second",)
-
-
-def test_variable_set_index(x: linopy.Variable) -> None:
-    x = x.assign_coords({"second": ("first", x.indexes["first"] + 100)})
-    x = x.set_index({"multi": ["first", "second"]})
-    assert isinstance(x, linopy.variables.Variable)
-    assert x.dims == ("multi",)
-    assert isinstance(x.indexes["multi"], pd.MultiIndex)
 
 
 def test_isnull(x: linopy.Variable) -> None:
@@ -875,95 +825,22 @@ class TestAddVariablesBoundsWithCoords:
             )
 
 
-@pytest.mark.legacy
-class TestAddVariablesMultiIndexCoords:
-    """MultiIndex-specific coord handling in add_variables (legacy; v1 rejects MI)."""
-
-    @pytest.fixture
-    def model(self) -> "Model":
-        return Model()
-
-    @pytest.fixture
-    def midx(self) -> pd.MultiIndex:
-        mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-        mi.name = "multi"
-        return mi
-
-    def test_scalar_bounds(self, model: "Model", midx: pd.MultiIndex) -> None:
-        var = model.add_variables(lower=0, upper=1, coords=[midx], name="x")
-        assert var.shape == (4,)
-        assert var.dims == ("multi",)
-
-    def test_dataarray_bound(self, model: "Model", midx: pd.MultiIndex) -> None:
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
-        var = model.add_variables(upper=bound, coords=[midx], name="x")
-        assert var.shape == (4,)
-        assert (var.data.upper == [1, 2, 3, 4]).all()
-
-    def test_dataarray_bound_broadcast(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        time = pd.Index([10, 20, 30], name="time")
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": midx})
-        var = model.add_variables(
-            lower=-bound, upper=bound, coords=[midx, time], name="x"
-        )
-        assert var.dims == ("multi", "time")
-        assert var.shape == (4, 3)
-        assert (var.data.upper.sel(time=10) == [1, 2, 3, 4]).all()
-
-    def test_without_name_raises(self, model: "Model") -> None:
-        midx = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-        with pytest.raises(TypeError, match="MultiIndex.*must have .name set"):
-            model.add_variables(lower=0, upper=1, coords=[midx], name="x")
-
-    def test_mismatched_multiindex_raises(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        other = pd.MultiIndex.from_product([[0, 1], ["x", "y"]], names=("l1", "l2"))
-        other.name = "multi"
-        bound = DataArray([1, 2, 3, 4], dims=["multi"], coords={"multi": other})
-        with pytest.raises(ValueError, match="MultiIndex.*does not match"):
-            model.add_variables(upper=bound, coords=[midx], name="x")
-
-    @pytest.mark.legacy
-    def test_single_level_bound_broadcasts(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        bound = DataArray([5, 6], dims=["l1"], coords={"l1": [0, 1]})
-        with pytest.warns(
-            linopy.LinopySemanticsWarning, match=r"broadcasting level subset"
-        ):
-            var = model.add_variables(upper=bound, coords=[midx], name="x")
-        assert var.dims == ("multi",)
-        assert (var.data.upper == [5, 5, 6, 6]).all()
-
-    def test_incomplete_level_bound_raises(
-        self, model: "Model", midx: pd.MultiIndex
-    ) -> None:
-        subset = pd.MultiIndex.from_tuples([(0, "a"), (1, "b")], names=("l1", "l2"))
-        bound = pd.Series([1, 2], index=subset)
-        with pytest.raises(ValueError, match="no value for .* level combination"):
-            model.add_variables(upper=bound, coords=[midx], name="x")
-
-
-@pytest.mark.v1
-def test_add_variables_multiindex_rejected_v1() -> None:
-    """v1: an MI dim-coord is rejected at construction with a reset_index hint."""
+def test_add_variables_multiindex_rejected() -> None:
+    """An MI dim-coord is rejected at construction with a reset_index hint."""
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
     mi.name = "multi"
-    with pytest.raises(ValueError, match=r"v1 convention does not support"):
+    with pytest.raises(ValueError, match=r"convention does not support"):
         Model().add_variables(lower=0, upper=1, coords=[mi], name="x")
 
 
-@pytest.mark.v1
-def test_add_constraint_and_objective_multiindex_rejected_v1() -> None:
-    """v1: an MI forced onto an expression is rejected at the constraint/objective."""
+def test_add_constraint_and_objective_multiindex_rejected() -> None:
+    """An MI forced onto an expression is rejected at the constraint/objective."""
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
     mi.name = "d"
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
-    with pytest.raises(ValueError, match=r"constraint .* v1 convention does not"):
-        m.add_constraints((1 * x).assign_coords(d=mi) >= 0, name="c")
-    with pytest.raises(ValueError, match=r"objective .* v1 convention does not"):
-        m.add_objective((1 * x).assign_coords(d=mi))
+    expr = (1 * x).assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "d"))
+    with pytest.raises(ValueError, match=r"`pd.MultiIndex`, which the convention"):
+        m.add_constraints(expr >= 0, name="c")
+    with pytest.raises(ValueError, match=r"objective .* convention does not"):
+        m.add_objective(expr)

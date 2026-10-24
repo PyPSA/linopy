@@ -14,8 +14,6 @@ from collections.abc import (
     Callable,
     Generator,
     Hashable,
-    ItemsView,
-    Iterator,
     Mapping,
     Sequence,
 )
@@ -28,14 +26,13 @@ from typing import (
     NoReturn,
     overload,
 )
-from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import scipy.sparse
 import xarray as xr
-from numpy import array, ndarray
+from numpy import array
 from xarray import DataArray, Dataset
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
@@ -45,12 +42,10 @@ from linopy import expressions, variables
 from linopy.alignment import as_dataarray, broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
-    LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
+    assign_fields,
     assigned_labels,
     check_has_nulls,
     check_has_nulls_polars,
@@ -59,16 +54,15 @@ from linopy.common import (
     format_coord,
     format_single_constraint,
     format_single_expression,
-    format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position,
     get_printout_labels,
     has_optimized_model,
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_sign,
     maybe_replace_signs,
+    reassign_coords,
     replace_by_map,
     save_join,
     to_dataframe,
@@ -85,9 +79,11 @@ from linopy.constants import (
     PerformanceWarning,
     SIGNS_pretty,
 )
+from linopy.containers import LabelContainer
 from linopy.csr import (
     Grid,
     _densify_notice,
+    canonical,
     csr_nterm,
     csr_to_term_arrays,
     index_dtype,
@@ -104,7 +100,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.csr import CSRLinearExpression
+    from linopy.csr import CSRStore
     from linopy.model import Model
 
 
@@ -606,23 +602,7 @@ class ConstraintBase(ABC):
             )
             print(self)
 
-    @property
-    def flat(self) -> pd.DataFrame:
-        """
-        Convert the constraint to a pandas DataFrame.
-
-        The resulting DataFrame represents a long table format of the all
-        non-masked constraints with non-zero coefficients. It contains the
-        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
-
-        .. deprecated::
-            Use ``to_polars()`` instead.
-        """
-        warnings.warn(
-            "Constraint.flat is deprecated, use to_polars() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    def _flat(self) -> pd.DataFrame:
         ds = self.data
 
         def mask_func(data: dict) -> pd.Series:
@@ -1219,7 +1199,7 @@ class CSRConstraint(ConstraintBase):
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=self._model._dtypes["labels"])
             labels_flat[active_positions] = self.active_labels()
-            ds = assign_multiindex_safe(
+            ds = assign_fields(
                 ds,
                 labels=self._grid.dataarray(labels_flat),
             )
@@ -1245,7 +1225,7 @@ class CSRConstraint(ConstraintBase):
                 extra["binary_val"] = self._active_to_dataarray(binval, fill=-1)
             else:
                 extra["binary_val"] = binval
-        return assign_multiindex_safe(ds, **extra).assign_attrs(self.attrs)
+        return assign_fields(ds, **extra).assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
@@ -1621,8 +1601,6 @@ class CSRConstraint(ConstraintBase):
         if con.nterm > 1:
             csr.sum_duplicates()
             csr.eliminate_zeros()
-        else:
-            csr.has_canonical_format = True
         grid = Grid.from_dataset(con.data, map(str, con.coord_dims))
         rhs = con.rhs.values.ravel()[active_mask]
         scaling = con.scaling.values.ravel()[active_mask]
@@ -1665,14 +1643,13 @@ class CSRConstraint(ConstraintBase):
         )
 
     @classmethod
-    def from_csr(
-        cls, expr: CSRLinearExpression, sign: str, rhs: DataArray
-    ) -> CSRConstraint:
+    def from_csr(cls, expr: CSRStore, sign: str, rhs: DataArray) -> CSRConstraint:
         """
         Staple sign and rhs onto a CSR-backed lhs to form an unassigned CSRConstraint.
 
-        Builds directly from a :class:`~linopy.csr.CSRLinearExpression`. The
-        expression's label columns are kept as they are, its constant moves to
+        Builds directly from a :class:`~linopy.csr.CSRStore`. The
+        expression's label columns are kept as they are, its rows brought to
+        canonical form (:func:`~linopy.csr.canonical`), its constant moves to
         the rhs, and rows with a NaN rhs are inactive. ``rhs`` must come from
         :func:`csr_rhs`.
         """
@@ -1680,8 +1657,9 @@ class CSRConstraint(ConstraintBase):
         rhs_flat = _rhs_grid_values(expr, rhs) - expr.const
         active = np.flatnonzero(~np.isnan(rhs_flat))
         all_active = active.size == rhs_flat.size
+        lhs = canonical(expr.csr) if all_active else canonical(expr.csr[active], True)
         return cls(
-            expr.csr if all_active else expr.csr[active],
+            lhs,
             active,
             rhs_flat if all_active else rhs_flat[active],
             sign,
@@ -1690,26 +1668,22 @@ class CSRConstraint(ConstraintBase):
         )
 
 
-def csr_rhs(expr: CSRLinearExpression, rhs: Any) -> DataArray | str:
+def csr_rhs(expr: CSRStore, rhs: Any) -> DataArray | str:
     """
     Return the constant ``rhs`` as a DataArray on the expression grid, or the
-    reason the sparse path cannot take it: an rhs that is no DataArray-like,
-    or one with helper dims or dims outside the grid falls back to the dense
-    path. An expression rhs is moved to the lhs before, see
-    :meth:`LinearExpression.to_constraint`.
+    reason the sparse path cannot take it: an rhs with helper dims or dims
+    outside the grid falls back to the dense path. An expression rhs is moved
+    to the lhs before, see :meth:`LinearExpression.to_constraint`.
     """
-    try:
-        da = as_dataarray(rhs)
-    except (TypeError, ValueError):
-        return "constraint with an rhs that is not array-like"
+    da = as_dataarray(rhs)
     if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(expr.grid.dims):
-        return "constraint with an rhs over dimensions outside the grid"
+        return "to_constraint(rhs over dimensions outside the grid)"
     return da
 
 
-def _rhs_grid_values(expr: CSRLinearExpression, rhs: DataArray) -> np.ndarray:
+def _rhs_grid_values(expr: CSRStore, rhs: DataArray) -> np.ndarray:
     """
-    Broadcast the rhs onto the expression grid and flatten it, with v1 parity:
+    Broadcast the rhs onto the expression grid and flatten it, with dense parity:
     NaN in the rhs raises (§5) and a reordered or differing index on a
     shared dim raises (§8), as on the dense path.
     """
@@ -1772,7 +1746,7 @@ class Constraint(ConstraintBase):
 
         if not skip_broadcast:
             (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        data = ensure_scaling(data, data.rhs, f"scaling for constraint '{name}'")
+        data = ensure_scaling(data, data.rhs)
 
         self._assigned = "labels" in data
         self._data = data
@@ -1823,61 +1797,17 @@ class Constraint(ConstraintBase):
     def coeffs(self) -> DataArray:
         return self.data.coeffs
 
-    @coeffs.setter
-    def coeffs(self, value: ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.coeffs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(coeffs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(coeffs=value)
-
     @property
     def vars(self) -> DataArray:
         return self.data.vars
-
-    @vars.setter
-    def vars(self, value: variables.Variable | DataArray) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.vars setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(variables=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(variables=value)
 
     @property
     def sign(self) -> DataArray:
         return self.data.sign
 
-    @sign.setter
-    def sign(self, value: SignLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.sign setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(sign=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(sign=value)
-
     @property
     def rhs(self) -> DataArray:
         return self.data.rhs
-
-    @rhs.setter
-    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.rhs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(rhs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(rhs=value)
 
     @property
     def scaling(self) -> DataArray:
@@ -1892,7 +1822,7 @@ class Constraint(ConstraintBase):
             label=f"scaling for constraint '{self.name}'",
         )
         scaling = validate_scaling(scaling, f"scaling for constraint '{self.name}'")
-        self._data = assign_multiindex_safe(self.data, scaling=scaling)
+        self._data = assign_fields(self.data, scaling=scaling)
 
     @property
     def is_indicator(self) -> bool:
@@ -1912,17 +1842,6 @@ class Constraint(ConstraintBase):
     def lhs(self) -> expressions.LinearExpression:
         data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
         return expressions.LinearExpression(data, self.model)
-
-    @lhs.setter
-    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        """Syntactic sugar for :meth:`Constraint.update`. Do not add logic here; mutate via ``update`` so the contract stays single-sourced."""
-        warn(
-            "Constraint.lhs setter is deprecated and will be removed in a "
-            "future release; use Constraint.update(lhs=...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.update(lhs=value)
 
     def _assign_lhs(
         self, expr: expressions.LinearExpression, rhs: DataArray | None = None
@@ -1946,7 +1865,7 @@ class Constraint(ConstraintBase):
         Writes that touch the lhs structure (``coeffs``, ``vars``) flip
         ``_coef_dirty``. Other fields (``rhs``, ``sign``, …) leave it alone.
         """
-        self._data = assign_multiindex_safe(self.data, **fields)
+        self._data = assign_fields(self.data, **fields)
         if "coeffs" in fields or "vars" in fields:
             self._coef_dirty = True
 
@@ -1958,7 +1877,7 @@ class Constraint(ConstraintBase):
         rhs: ExpressionLike | VariableLike | ConstantLike | None = None,
         sign: SignLike | None = None,
         coeffs: ConstantLike | None = None,
-        variables: variables.Variable | DataArray | None = None,
+        variables: variables.Variable | None = None,
     ) -> Constraint:
         """
         Update the constraint in place.
@@ -2027,11 +1946,6 @@ class Constraint(ConstraintBase):
             Replace variable label array (same sparsity / term
             structure). Lower-level than ``lhs=``; sets ``_coef_dirty``.
 
-            A raw ``DataArray`` of integer labels is still accepted
-            for back-compat but emits a ``FutureWarning`` — pass a
-            ``Variable`` instead. The DataArray path will be removed
-            in a future release.
-
         Returns
         -------
         Constraint
@@ -2097,23 +2011,14 @@ class Constraint(ConstraintBase):
         if variables is not None:
             from linopy.variables import Variable as _Variable
 
-            if isinstance(variables, _Variable):
-                v = variables.labels
-            elif isinstance(variables, DataArray):
-                warnings.warn(
-                    "Passing a DataArray to Constraint.update(variables=...) "
-                    "is deprecated and will be removed in a future release; "
-                    "pass a Variable instead.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
-                v = variables
-            else:
+            if not isinstance(variables, _Variable):
                 raise TypeError(
                     "Constraint.update(variables=...) expects a Variable; "
                     f"got {type(variables).__name__}."
                 )
-            new_vars = v.broadcast_like(self.coeffs, exclude=[self.term_dim])
+            new_vars = variables.labels.broadcast_like(
+                self.coeffs, exclude=[self.term_dim]
+            )
             self._update_data(vars=new_vars)
 
         # 4. sign last so it composes cleanly with the rest.
@@ -2132,7 +2037,7 @@ class Constraint(ConstraintBase):
         reindexing, no shape change, and the order of the underlying data is
         preserved.
         """
-        self._data = assign_coords_multiindex_safe(self.data, **coords)
+        self._data = reassign_coords(self.data, **coords)
         return self
 
     @property
@@ -2147,7 +2052,7 @@ class Constraint(ConstraintBase):
     @dual.setter
     def dual(self, value: ConstantLike) -> None:
         value = DataArray(value).broadcast_like(self.labels)
-        self._data = assign_multiindex_safe(self.data, dual=value)
+        self._data = assign_fields(self.data, dual=value)
 
     def has_labels(self, labels: np.ndarray) -> bool:
         return contains_labels(self.data["vars"].values.ravel(), labels)
@@ -2233,7 +2138,7 @@ class Constraint(ConstraintBase):
         """Mask out rows where all variables are missing (-1)."""
         contains_non_missing = (self.vars != -1).any(self.term_dim)
         labels = self.labels.where(contains_non_missing, -1)
-        self._data = assign_multiindex_safe(self.data, labels=labels)
+        self._data = assign_fields(self.data, labels=labels)
         return self
 
     def sanitize_infinities(self) -> Constraint:
@@ -2242,7 +2147,7 @@ class Constraint(ConstraintBase):
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
         )
         labels = self.labels.where(~valid_infinity_values, -1)
-        self._data = assign_multiindex_safe(self.data, labels=labels)
+        self._data = assign_fields(self.data, labels=labels)
         return self
 
     def freeze(self) -> CSRConstraint:
@@ -2382,8 +2287,7 @@ class Constraint(ConstraintBase):
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     # Wrapped xarray methods — only available on Constraint
-    assign = conwrap(Dataset.assign)
-    assign_multiindex_safe = conwrap(assign_multiindex_safe)
+    assign = conwrap(assign_fields)
     assign_attrs = conwrap(Dataset.assign_attrs)
     assign_coords = conwrap(Dataset.assign_coords)
     broadcast_like = conwrap(Dataset.broadcast_like)
@@ -2406,61 +2310,14 @@ class Constraint(ConstraintBase):
 
 
 @dataclass(repr=False)
-class Constraints:
+class Constraints(LabelContainer[ConstraintBase]):
     """
     A constraint container used for storing multiple constraint arrays.
     """
 
-    data: dict[str, ConstraintBase]
-    model: Model
-    _label_position_index: LabelPositionIndex | None = None
     _constraint_label_index: ConstraintLabelIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs", "scaling"]
-    dataset_names = [
-        "Labels",
-        "Left-hand-side coefficients",
-        "Left-hand-side variables",
-        "Signs",
-        "Right-hand-side constants",
-        "Scaling factors",
-    ]
-
-    def _formatted_names(self) -> dict[str, str]:
-        """
-        Get a dictionary of formatted names to the proper constraint names.
-        This map enables a attribute like accession of variable names which
-        are not valid python variable names.
-        """
-        return {format_string_as_variable_name(n): n for n in self}
-
-    def _format_items(self, exclude: set[str] | None = None) -> str:
-        """Format constraint items, optionally excluding names in a group."""
-        r = ""
-        count = 0
-        for name, ds in self.items():
-            if exclude and name in exclude:
-                continue
-            count += 1
-            coords = (
-                " (" + ", ".join([str(c) for c in ds.coords.keys()]) + ")"
-                if ds.coords
-                else ""
-            )
-            r += f" * {name}{coords}\n"
-        if count == 0:
-            r += "<empty>\n"
-        return r
-
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the constraints container.
-        """
-        r = "linopy.model.Constraints"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-        r += self._format_items()
-        return r
 
     @overload
     def __getitem__(self, names: str) -> Constraint: ...
@@ -2469,52 +2326,7 @@ class Constraints:
     def __getitem__(self, names: list[str]) -> Constraints: ...
 
     def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
-        if isinstance(names, str):
-            return self.data[names]  # type: ignore[return-value]
-        return Constraints({name: self.data[name] for name in names}, self.model)
-
-    def __getattr__(self, name: str) -> ConstraintBase:
-        # If name is an attribute of self (including methods and properties), return that
-        if name in self.data:
-            return self.data[name]
-        else:
-            if name in (formatted_names := self._formatted_names()):
-                return self.data[formatted_names[name]]
-        raise AttributeError(
-            f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
-        )
-
-    def __getstate__(self) -> dict:
-        return self.__dict__
-
-    def __setstate__(self, d: dict) -> None:
-        self.__dict__.update(d)
-
-    def __dir__(self) -> list[str]:
-        base_attributes = list(super().__dir__())
-        formatted_names = [
-            n for n in self._formatted_names() if n not in base_attributes
-        ]
-        return base_attributes + formatted_names
-
-    def __len__(self) -> int:
-        return self.data.__len__()
-
-    def __iter__(self) -> Iterator[str]:
-        return self.data.__iter__()
-
-    def items(self) -> ItemsView[str, ConstraintBase]:
-        return self.data.items()
-
-    def _ipython_key_completions_(self) -> list[str]:
-        """
-        Provide method for the key-autocompletions in IPython.
-
-        See
-        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
-        For the details.
-        """
-        return list(self)
+        return super().__getitem__(names)  # type: ignore[return-value]
 
     def add(self, constraint: ConstraintBase, freeze: bool = False) -> ConstraintBase:
         """
@@ -2531,17 +2343,8 @@ class Constraints:
         self._invalidate_label_position_index()
         return constraint
 
-    def remove(self, name: str) -> None:
-        """
-        Remove constraint `name` from the constraints.
-        """
-        self.data.pop(name)
-        self._invalidate_label_position_index()
-
     def _invalidate_label_position_index(self) -> None:
-        """Invalidate the label position index cache."""
-        if self._label_position_index is not None:
-            self._label_position_index.invalidate()
+        super()._invalidate_label_position_index()
         if self._constraint_label_index is not None:
             self._constraint_label_index.invalidate()
 
@@ -2688,50 +2491,6 @@ class Constraints:
         for con in self.data.values():
             con.sanitize_infinities()
 
-    def get_name_by_label(self, label: int | float) -> str:
-        """
-        Get the constraint name of the constraint containing the passed label.
-
-        Parameters
-        ----------
-        label : int
-            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
-            constraint label.
-
-        Raises
-        ------
-        ValueError
-            If label is not contained by any constraint.
-
-        Returns
-        -------
-        name : str
-            Name of the containing constraint.
-        """
-        if not isinstance(label, float | int) or label < 0:
-            raise ValueError("Label must be a positive number.")
-        for name, ds in self.items():
-            if label in ds.labels:
-                return name
-        raise ValueError(f"No constraint found containing the label {label}.")
-
-    def get_label_position(
-        self, values: int | ndarray
-    ) -> (
-        tuple[str, dict]
-        | tuple[None, None]
-        | list[tuple[str, dict] | tuple[None, None]]
-        | list[list[tuple[str, dict] | tuple[None, None]]]
-    ):
-        """
-        Get tuple of name and coordinate for constraint labels.
-
-        Uses an optimized O(log n) binary search implementation with a cached index.
-        """
-        if self._label_position_index is None:
-            self._label_position_index = LabelPositionIndex(self)
-        return get_label_position(self, values, self._label_position_index)
-
     def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
     ) -> str:
@@ -2757,22 +2516,6 @@ class Constraints:
             res = [format_single_constraint(self.model, v) for v in values]
 
         return "\n".join(res)
-
-    def print_labels(
-        self, values: Sequence[int], display_max_terms: int | None = None
-    ) -> None:
-        """
-        Print a selection of labels of the constraints.
-
-        .. deprecated::
-            Use :meth:`format_labels` instead.
-        """
-        warn(
-            "`Constraints.print_labels` is deprecated. Use `Constraints.format_labels` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        print(self.format_labels(values, display_max_terms=display_max_terms))
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
@@ -2808,7 +2551,7 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
+            constraint._data = assign_fields(constraint.data, blocks=res)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -2822,17 +2565,10 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        dfs = [self[k].flat for k in self]
+        dfs = [self[k]._flat() for k in self]
         if not len(dfs):
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
-        df = pd.concat(dfs, ignore_index=True)
-        unique_labels = df.labels.unique()
-        map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=self.model._dtypes["labels"]),
-            index=unique_labels,
-        )
-        df["key"] = df.labels.map(map_labels)
-        return df
+        return self._flat_with_keys(dfs)
 
     def to_matrix(self) -> tuple[scipy.sparse.csr_array, np.ndarray]:
         """

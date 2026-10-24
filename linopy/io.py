@@ -11,13 +11,12 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
-from dataclasses import replace
+from collections.abc import Callable
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -31,11 +30,11 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constants import FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.csr import CSRStore
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
-
-Buffer = TypeVar("Buffer", np.ndarray, scipy.sparse.sparray)
+from linopy.store import DenseStore, expression_dataset
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
@@ -52,9 +51,6 @@ NETCDF_VERSION_ATTR = "_linopy_version"
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
 
-
-ufunc_kwargs = dict(vectorize=True)
-concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 
 TQDM_COLOR = "#80bfff"
 
@@ -204,8 +200,8 @@ def get_printers_scalar(
 
         def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variables(labels: np.ndarray) -> list[str]:
             return np.vectorize(_fmt_var)(labels).tolist()
@@ -238,8 +234,8 @@ def get_printers(
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -633,7 +629,6 @@ def constraints_to_file(
     variable_scaling: np.ndarray | None,
     constraint_scaling: np.ndarray | None,
     progress: bool = False,
-    lazy: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:
@@ -1101,16 +1096,6 @@ def to_netcdf(
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-
-        # Flatten multiindexes
-        for dim in ds.dims:
-            if isinstance(ds[dim].to_index(), pd.MultiIndex):
-                prefix_len = len(prefix) + 1  # leave original index level name
-                names = [n[prefix_len:] for n in ds[dim].to_index().names]
-                ds = ds.reset_index(dim)
-                # scipy netCDF3 backend cannot write unicode-array attrs.
-                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
-
         return ds
 
     vars = [
@@ -1122,7 +1107,7 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_dataset().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1138,7 +1123,7 @@ def to_netcdf(
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    scalars |= {"sparse": m.sparse, "freeze_constraints": m._freeze_constraints}
+    scalars["sparse"] = m.sparse
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
@@ -1221,22 +1206,11 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
-    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
-        # str = JSON (new); iterable = legacy list from older linopy.
-        if isinstance(value, str):
-            return [str(n) for n in json.loads(value)]
-        return [str(n) for n in value]
-
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if owners[str(k)] == prefix]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        ds = ds.drop_vars(
+            [c for c in ds.coords if ds[c].ndim == 0 and owners[str(c)] != prefix]
+        )
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
@@ -1245,11 +1219,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             if owners[k] == prefix
         }
 
-        for dim in ds.dims:
-            if f"{dim}_multiindex" in ds.attrs:
-                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
+        for dim in list(ds.dims):
+            if ds.attrs.pop(f"{dim}_multiindex", None) is not None:
+                ds = ds.assign_coords({dim: pd.RangeIndex(ds.sizes[dim], name=dim)})
         return ds
 
     def container_names(kind: str) -> list[str]:
@@ -1279,7 +1251,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
                 return k
         return None
 
-    owners = {k: owner(k) for k in [*map(str, ds), *ds.attrs]}
+    owners = {k: owner(k) for k in [*map(str, ds.variables), *ds.attrs]}
 
     variables = {}
     for k in containers["variables"]:
@@ -1300,7 +1272,11 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         ):
             expr = QuadraticExpression(expr_ds, m)
         else:
-            expr = LinearExpression(expr_ds, m)
+            dense = DenseStore(expression_dataset(expr_ds, m), m)
+            store = dense.to_sparse() if m.store_cls is CSRStore else dense
+            expr = LinearExpression._from_store(
+                dense if isinstance(store, str) else store, m
+            )
         expr.attrs["name"] = name
         expressions[name] = expr
 
@@ -1337,7 +1313,6 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         if k in ds.attrs:
             setattr(m, k, ds.attrs[k])
-    m._freeze_constraints = bool(ds.attrs.get("freeze_constraints", False))
 
     if max(m._xCounter, m._cCounter) > np.iinfo(np.int32).max:
         m._dtypes["labels"] = np.int64
@@ -1412,7 +1387,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model = Model(
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
-        auto_mask=m._auto_mask,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
         sparse=m.sparse,
@@ -1432,21 +1406,26 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
+    def _copy_expression(
+        expr: LinearExpression | QuadraticExpression,
+    ) -> LinearExpression | QuadraticExpression:
+        if isinstance(expr, LinearExpression):
+            store = expr._store.copy(new_model, deep)
+            return LinearExpression._from_store(store, new_model)
+        return QuadraticExpression(expr._to_dataset().copy(deep=deep), new_model)
+
     def _copy_expr(
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = type(expr)(expr.data.copy(deep=deep), new_model)
-        new_expr.attrs["name"] = name  # __init__ resets the name to None
+        new_expr = _copy_expression(expr)
+        new_expr.attrs["name"] = name
         return new_expr
 
     new_model._expressions = Expressions(
         {name: _copy_expr(name, expr) for name, expr in m.expressions.items()},
         new_model,
     )
-
-    def _buffer(value: Buffer) -> Buffer:
-        return value.copy() if deep else value
 
     def _copy_con(name: str, con: ConstraintBase) -> ConstraintBase:
         if isinstance(con, CSRConstraint):
@@ -1470,18 +1449,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    expr = m.objective.expression
-    csr = expr._csr if isinstance(expr, LinearExpression) else None
-    obj_expr = (
-        type(expr)(expr.data.copy(deep=deep), new_model)
-        if csr is None
-        else LinearExpression._from_csr(
-            replace(
-                csr, csr=_buffer(csr.csr), const=_buffer(csr.const), model=new_model
-            ),
-            new_model,
-        )
-    )
+    obj_expr = _copy_expression(m.objective.expression)
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )
@@ -1497,7 +1465,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
-    new_model._freeze_constraints = m._freeze_constraints
 
     if m._sos_reformulation_state is not None:
         new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)

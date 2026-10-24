@@ -116,7 +116,7 @@ def test_rhs_only_in_place(solver_name: str) -> None:
     base_obj = _obj(m)
 
     c = m.constraints["c1"]
-    c.rhs = 8.0
+    c.update(rhs=8.0)
     assert c._coef_dirty is False
     obj = _solve(s, m)
     assert s._in_place_updates == 1
@@ -132,7 +132,7 @@ def test_constraint_coef_change_in_place(solver_name: str) -> None:
     base_obj = _obj(m)
 
     c = m.constraints["c1"]
-    c.coeffs = c.coeffs * 2
+    c.update(coeffs=c.coeffs * 2)
     obj = _solve(s, m)
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
@@ -192,7 +192,7 @@ def test_cross_model_in_place(solver_name: str) -> None:
     s.solve(assign=True)
 
     m2 = _base_model()
-    m2.constraints["c1"].rhs = 8.0
+    m2.constraints["c1"].update(rhs=8.0)
 
     s.solve(m2, assign=True)
     assert s._in_place_updates == 1
@@ -200,7 +200,7 @@ def test_cross_model_in_place(solver_name: str) -> None:
 
     cross_obj = _obj(m2)
     m3 = _base_model()
-    m3.constraints["c1"].rhs = 8.0
+    m3.constraints["c1"].update(rhs=8.0)
     s_fresh = _built(solver_name, m3)
     s_fresh.solve(assign=True)
     assert np.isclose(cross_obj, _obj(m3))
@@ -212,7 +212,7 @@ def test_sign_flip(solver_name: str) -> None:
     s = _built(solver_name, m)
     s.solve(assign=True)
 
-    m.constraints["c1"].sign = "<="
+    m.constraints["c1"].update(sign="<=")
     s.solve(m, assign=True)
     if _SIGN_CHANGE_IN_PLACE[solver_name]:
         assert s._in_place_updates == 1
