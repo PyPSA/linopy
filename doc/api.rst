@@ -644,6 +644,7 @@ Utilities
    align
    options
    ABSENT
+   Table
 
 ``options`` holds these keys:
 

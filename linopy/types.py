@@ -9,6 +9,8 @@ from pandas import DataFrame, Index, Series
 from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
+from linopy.table import Table
+
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
@@ -33,6 +35,7 @@ ConstantLike: TypeAlias = (
     | Series
     | DataFrame
     | pl.Series
+    | Table
 )
 CONSTANT_TYPES: tuple[type, ...] = get_args(ConstantLike)
 
