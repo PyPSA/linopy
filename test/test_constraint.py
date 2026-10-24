@@ -57,6 +57,11 @@ def y(m: Model) -> linopy.Variable:
 
 
 @pytest.fixture
+def z(m: Model) -> linopy.Variable:
+    return m.variables["z"]
+
+
+@pytest.fixture
 def c(m: Model) -> linopy.constraints.Constraint:
     return m.constraints["c"]
 
@@ -430,9 +435,9 @@ def test_constraint_update_coeffs(mc: linopy.constraints.Constraint) -> None:
 
 
 def test_constraint_update_lhs(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
-    mc.update(lhs=x + y)
+    mc.update(lhs=x + z)
     assert mc.lhs.nterm == 2
     assert mc.vars.notnull().all().item()
     assert mc.coeffs.notnull().all().item()
@@ -511,10 +516,10 @@ def test_constraint_update_returns_self(
 
 
 def test_constraint_update_positional_constraint_expression(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
     """``c.update(x + 5 <= 3)`` replaces lhs / sign / rhs in one call."""
-    mc.update(x + y <= 7)
+    mc.update(x + z <= 7)
     assert (mc.rhs == 7).all()
     assert (mc.sign == LESS_EQUAL).all()
     assert mc.lhs.nterm == 2
@@ -537,12 +542,12 @@ def test_constraint_update_positional_rejects_non_constraint(
 
 
 def test_constraint_update_lhs_only(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
     """lhs= alone replaces the expression; rhs and sign untouched."""
     old_rhs = mc.rhs.copy()
     old_sign = mc.sign.copy()
-    mc.update(lhs=5 * x + 7 * y)
+    mc.update(lhs=5 * x + 7 * z)
     assert (mc.rhs == old_rhs).all()
     assert (mc.sign == old_sign).all()
     assert mc.lhs.nterm == 2
@@ -594,9 +599,9 @@ def test_constraint_update_rhs_with_variable(
 
 
 def test_constraint_update_rhs_with_expression(
-    mc: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.Constraint, x: linopy.Variable, z: linopy.Variable
 ) -> None:
-    mc.update(rhs=x + y)
+    mc.update(rhs=x + z)
     assert (mc.rhs == 0).all()
     assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
     assert mc.lhs.nterm == 3
@@ -684,11 +689,12 @@ def test_constraint_assignment_with_anonymous_constraints(
     assert m.constraints["c2"].coeffs.notnull().all()
 
 
+@pytest.mark.parametrize("coeff", [0.0, 1e-12])
 @pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
 def test_constraint_assignment_sanitize_zeros(
-    m: Model, x: linopy.Variable, y: linopy.Variable, sparse: bool
+    m: Model, x: linopy.Variable, y: linopy.Variable, sparse: bool, coeff: float
 ) -> None:
-    con = m.add_constraints(0 * x + y == 0, name="c2")
+    con = m.add_constraints(coeff * x + y == 0, name="c2")
     if sparse:
         con.to_sparse()
     m.constraints.sanitize_zeros()

@@ -254,8 +254,6 @@ class Constraint:
         "_coef_dirty",
     )
 
-    _fill_value = FILL_VALUE
-
     _lhs: expressions.LinearExpression
     _sign: DataArray
     _rhs: DataArray
@@ -373,12 +371,24 @@ class Constraint:
         self._binary_val = self._optional_on_grid(fields, "binary_val", template)
         self._blocks = self._optional_on_grid(fields, "blocks", template)
 
+    def _rebind(self, store: Store, fields: Mapping[Any, Any]) -> None:
+        """
+        Internal: hold ``store`` as the lhs of this constraint, its grid dims
+        kept in the current order so the labels stay contiguous. Raises if
+        ``store`` adds dims.
+        """
+        current = self._grid_template().dims
+        extra = [d for d in store.dims if d not in current]
+        if extra:
+            raise ValueError(
+                f"Constraint.update with an expression that adds dimensions {extra} is unsupported."
+            )
+        store = store.transpose([d for d in current if d in store.dims])
+        self._bind(expressions.LinearExpression._from_store(store, self._model), fields)
+
     def _replace_store(self, store: Store) -> None:
         """Internal: hold ``store`` as the lhs, the fields kept. Sets ``_coef_dirty``."""
-        self._bind(
-            expressions.LinearExpression._from_store(store, self._model),
-            self._fields(),
-        )
+        self._rebind(store, self._fields())
         self._coef_dirty = True
 
     @staticmethod
@@ -709,7 +719,7 @@ class Constraint:
         base_rhs = self.rhs if rhs is None else rhs
         fields = self._fields() | {"rhs": base_rhs - expr.const}
         store = _sparse_if(expr.reset_const()._store, self._lhs.is_sparse, reason)
-        self._bind(expressions.LinearExpression._from_store(store, self._model), fields)
+        self._rebind(store, fields)
         self._coef_dirty = True
 
     def _assign_terms(
@@ -892,7 +902,7 @@ class Constraint:
         preserved.
         """
         fields = reassign_coords(Dataset(self._fields()), **coords)
-        self._bind(self.lhs._assign_coords(**coords), fields)
+        self._rebind(self.lhs._assign_coords(**coords)._store, fields)
         return self
 
     @property
@@ -1257,7 +1267,7 @@ class Constraint:
         :func:`linopy.common.slice_indexers`. The lhs store is sliced by
         :meth:`~linopy.store.Store.isel` and keeps its backing.
         """
-        sizes = {**self._grid_template().sizes, TERM_DIM: self.nterm}
+        sizes = dict(self.sizes)
         dims = list(self.coord_dims) if slice_dims is None else slice_dims
         for indexers in slice_indexers(sizes, slice_size, dims):
             yield self._isel(indexers) if indexers else self

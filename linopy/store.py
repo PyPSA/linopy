@@ -276,14 +276,24 @@ class Store(ABC):
         absent without terms.
         """
 
-    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
-        """The cells at the positional slices ``indexers`` of grid dims."""
+    def _take_positions(self, positions: DataArray) -> Self:
         from linopy.csr import Grid
 
+        dims = tuple(map(str, positions.dims))
+        return self.take(positions.values.ravel(), Grid.from_dataset(positions, dims))
+
+    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
+        """The cells at the positional slices ``indexers`` of grid dims."""
         grid = self.grid
-        positions = grid.dataarray(np.arange(grid.size)).isel(indexers)
-        return self.take(
-            positions.values.ravel(), Grid.from_dataset(positions, grid.dims)
+        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+
+    def transpose(self, dims: Sequence[str]) -> Self:
+        """The cells on the grid dims reordered to ``dims``."""
+        if tuple(dims) == self.dims:
+            return self
+        grid = self.grid
+        return self._take_positions(
+            grid.dataarray(np.arange(grid.size)).transpose(*dims)
         )
 
     def broadcast(self, grid: Grid) -> Self:
@@ -702,6 +712,9 @@ class DenseStore(Store):
 
     def isel(self, indexers: Mapping[Hashable, slice]) -> DenseStore:
         return DenseStore(self.ds.isel(indexers), self.model)
+
+    def transpose(self, dims: Sequence[str]) -> DenseStore:
+        return DenseStore(self.ds.transpose(*dims, TERM_DIM), self.model)
 
     def reindex(self, grid: Grid, fill: float = np.nan) -> DenseStore:
         fill_value = FILL_VALUE | {"const": fill}

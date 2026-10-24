@@ -1,15 +1,17 @@
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 import linopy
 import linopy.constants
-from linopy.store import DenseStore
 
 
 @pytest.fixture
-def model_with_mask() -> linopy.Model:
-    m = linopy.Model()
+def model_with_mask(backend: linopy.Model) -> linopy.Model:
+    m = backend
     coords = pd.Index(range(5), name="i")
     mask = np.array([True, False, True, True, False])
     x = m.add_variables(lower=0, coords=[coords], name="x")
@@ -30,13 +32,14 @@ def test_assign_result_does_not_build_matrix(
     monkeypatch: pytest.MonkeyPatch, model_with_mask: linopy.Model
 ) -> None:
     calls = {"n": 0}
-    original = DenseStore.positional_csr
+    store_cls = type(model_with_mask.constraints["c_xy"].lhs._store)
+    original = store_cls.positional_csr
 
     def counting(self, label_index, active_rows, name):  # type: ignore[no-untyped-def]
         calls["n"] += 1
         return original(self, label_index, active_rows, name)
 
-    monkeypatch.setattr(DenseStore, "positional_csr", counting)
+    monkeypatch.setattr(store_cls, "positional_csr", counting)
 
     model_with_mask.solve("highs")
 
@@ -84,3 +87,47 @@ def test_assign_result_correctness_with_mask(model_with_mask: linopy.Model) -> N
     mask = np.array([True, False, True, True, False])
     assert np.isfinite(dual[mask]).all()
     assert np.isnan(dual[~mask]).all()
+
+
+def test_update_with_reordered_lhs_keeps_label_order(backend: linopy.Model) -> None:
+    m = backend
+    i = pd.RangeIndex(2, name="i")
+    j = pd.Index(list("abc"), name="j")
+    x = m.add_variables(0, 10, coords=[i, j], name="x")
+    y = m.add_variables(0, 10, coords=[j], name="y")
+    z = m.add_variables(0, 10, coords=[i], name="z")
+    rhs = xr.DataArray(np.arange(6.0).reshape(2, 3), coords=[i, j])
+    c = m.add_constraints(x >= rhs, name="c")
+    c.update(lhs=y + 0 * z + x)
+    assert c.labels.dims == ("i", "j")
+    start, end = c.range
+    np.testing.assert_array_equal(c.labels.values.ravel(), np.arange(start, end))
+    m.add_objective(x.sum() + y.sum() + z.sum())
+    m.solve("highs")
+    expected = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]
+    np.testing.assert_allclose(c.dual.transpose("i", "j").values, expected, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda c, x: c.update(lhs=x),
+        lambda c, x: c.update(rhs=x),
+        lambda c, x: c.update(x >= 1),
+    ],
+    ids=["lhs", "rhs", "constraint"],
+)
+def test_update_adding_dims_raises(
+    backend: linopy.Model,
+    update: Callable[[linopy.constraints.Constraint, linopy.Variable], object],
+) -> None:
+    m = backend
+    i = pd.RangeIndex(2, name="i")
+    j = pd.Index(list("abc"), name="j")
+    x = m.add_variables(0, 10, coords=[j, i], name="x")
+    z = m.add_variables(0, 10, coords=[i], name="z")
+    c = m.add_constraints(z >= 1, name="c")
+    with pytest.raises(
+        ValueError, match=r"expression that adds dimensions \['j'\] is unsupported"
+    ):
+        update(c, x)

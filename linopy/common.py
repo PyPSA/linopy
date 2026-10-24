@@ -429,7 +429,9 @@ def iterate_slices(
 
 
 def slice_indexers(
-    sizes: Mapping[Hashable, int], slice_size: int | None, slice_dims: list
+    sizes: Mapping[Hashable, int],
+    slice_size: int | None,
+    slice_dims: Sequence[Hashable],
 ) -> Generator[dict[Hashable, slice], None, None]:
     """
     Positional slices along the largest of ``slice_dims`` cutting an object
