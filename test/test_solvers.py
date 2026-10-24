@@ -6,6 +6,7 @@ Created on Tue Jan 28 09:03:35 2025.
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -220,7 +221,7 @@ def test_copt_closes_env_per_solve(
     closes: list[object] = []
     original = coptpy.Envr.close
 
-    def close(self: object) -> None:
+    def close(self: Any) -> None:
         closes.append(self)
         original(self)
 

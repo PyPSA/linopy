@@ -4,7 +4,7 @@ import enum
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -15,6 +15,7 @@ from linopy.persistent.snapshot import (
     ContainerVarBuffers,
     ModelSnapshot,
     StructuralKey,
+    VarKind,
     _coord_snapshot,
     _extract_con_buffers,
     _extract_var_buffers,
@@ -28,6 +29,15 @@ if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.model import Model
     from linopy.variables import Variable
+
+
+#: Matrix column kinds (``vtypes``) mapped onto the persistent diff's enum.
+_VAR_KIND = {
+    "C": VarKind.CONTINUOUS,
+    "B": VarKind.BINARY,
+    "I": VarKind.INTEGER,
+    "S": VarKind.SEMI_CONTINUOUS,
+}
 
 
 class RebuildReason(enum.Enum):
@@ -144,7 +154,7 @@ class ModelDiff:
     #: buffers the diff walk already extracted — adopting it after a
     #: successful apply replaces a full re-capture. Note: holding a diff
     #: therefore pins all container buffers for its lifetime.
-    snapshot: ModelSnapshot
+    snapshot: ModelSnapshot | None
 
     @property
     def is_empty(self) -> bool:
@@ -346,6 +356,81 @@ class ModelDiff:
             model_b,
             same_model=False,
             ignore_dims=ignore_dims,
+        )
+
+    @classmethod
+    def from_windows(cls, previous: Any, current: Any) -> ModelDiff:
+        """
+        Delta between two matrix windows of the same shape.
+
+        A rolling-horizon window is already flat, so the difference is a set of
+        changed bound, rhs, cost and coefficient entries. Building it here lets
+        the window path reuse :meth:`Solver.apply_update` and every backend's
+        in-place hooks, instead of a parallel update implementation.
+        """
+        columns = np.flatnonzero(
+            (current.lb != previous.lb) | (current.ub != previous.ub)
+        )
+        rows = np.flatnonzero(current.b != previous.b)
+        cost = np.flatnonzero(current.c != previous.c)
+
+        coef_deltas: list[_CoefDelta] = []
+        n_coef_updates = 0
+        changed = np.flatnonzero(current.A.data != previous.A.data)
+        if changed.size:
+            changed_rows = np.unique(
+                np.searchsorted(current.A.indptr, changed, side="right") - 1
+            )
+            counts = np.diff(current.A.indptr)[changed_rows]
+            buffer = ContainerConBuffers(
+                indptr=current.A.indptr,
+                indices=current.A.indices,
+                data=current.A.data,
+                rhs=current.b,
+                sign=current.sense,
+                active_labels=np.empty(0, dtype=np.int64),
+            )
+            coef_deltas = [
+                _CoefDelta(buffer, changed_rows, changed_rows, int(counts.sum()))
+            ]
+            n_coef_updates = int(counts.sum())
+
+        # Windows always carry a per-row sign array, so no scalar handling here.
+        rhs_signs = current.sense[rows]
+        sign_changed = np.flatnonzero(
+            np.broadcast_to(current.sense, current.b.shape)
+            != np.broadcast_to(previous.sense, previous.b.shape)
+        )
+        sign_values = current.sense[sign_changed]
+
+        types = np.flatnonzero(current.vtypes != previous.vtypes)
+        kinds = np.array(
+            [_VAR_KIND[kind] for kind in current.vtypes[types]], dtype=object
+        )
+
+        return cls(
+            var_bounds_indices=columns,
+            var_bounds_lower=current.lb[columns],
+            var_bounds_upper=current.ub[columns],
+            var_type_positions=types,
+            var_type_kinds=kinds,
+            coef_deltas=coef_deltas,
+            n_coef_updates=n_coef_updates,
+            con_rhs_indices=rows,
+            con_rhs_values=current.b[rows],
+            con_rhs_signs=rhs_signs,
+            con_sign_indices=sign_changed,
+            con_sign_values=sign_values,
+            obj_c_indices=cost if cost.size else None,
+            obj_c_values=current.c[cost] if cost.size else None,
+            obj_sense=(
+                current.objective_sense
+                if current.objective_sense != previous.objective_sense
+                else None
+            ),
+            var_slices={},
+            con_slices={},
+            snapshot=None,
         )
 
 
