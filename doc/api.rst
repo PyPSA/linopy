@@ -644,6 +644,8 @@ Utilities
    align
    options
    ABSENT
+   from_long
+   Relation
 
 ``options`` holds these keys:
 

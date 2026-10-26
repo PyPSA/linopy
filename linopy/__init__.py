@@ -24,6 +24,7 @@ from linopy.constants import (
 from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
+from linopy.long import Relation, from_long
 from linopy.model import Model, Variable, Variables
 from linopy.objective import Objective
 from linopy.piecewise import (
@@ -60,6 +61,7 @@ __all__ = (
     "QuadraticExpression",
     "RemoteHandler",
     "Slopes",
+    "Relation",
     "SolverFeature",
     "Variable",
     "Variables",
@@ -67,6 +69,7 @@ __all__ = (
     "available_solvers",
     "licensed_solvers",
     "breakpoints",
+    "from_long",
     "merge",
     "options",
     "read_netcdf",

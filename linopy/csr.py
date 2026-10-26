@@ -974,9 +974,13 @@ def coo_to_csr(
     the triplets by row in their given order, duplicates kept.
     """
     dtype = index_dtype(len(data), shape, model)
-    order, indptr = _grouped(rows, shape[0])
-    indices = cols.astype(dtype, copy=False)[order]
-    csr_arrays = (data[order], indices, indptr.astype(dtype, copy=False))
+    indices = cols.astype(dtype, copy=False)
+    if (rows[1:] < rows[:-1]).any():
+        order, indptr = _grouped(rows, shape[0])
+        data, indices = data[order], indices[order]
+    else:
+        indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
+    csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 
 

@@ -1572,10 +1572,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: e.isel(bus=xr.DataArray([0, 1], dims="pt")),
         r"isel\(new dimensions or coordinates\)",
     ),
-    "where-new-dim": (
-        lambda e, c: e.where(xr.DataArray([True, False], coords=[LOC])),
-        r"where\(new dimensions or coordinates\)",
-    ),
     "where-callable": (
         lambda e, c: e.where(lambda ds: ds.const > 0),
         r"where\(condition no DataArray\)",
@@ -2299,7 +2295,7 @@ def test_where_on_mismatched_labels_raises_like_dense() -> None:
     assert sparse.is_sparse
 
 
-SELECTION_FALLBACKS = ["isel-pointwise", "where-new-dim", "where-callable"]
+SELECTION_FALLBACKS = ["isel-pointwise", "where-callable"]
 
 
 @pytest.mark.parametrize("op", SELECTION_FALLBACKS)

@@ -50,6 +50,16 @@ SHIFTED_A = xr.DataArray([1.0, 2.0], coords=[pd.Index([1, 5], name="a")])
 COEFFS = OVER_AB.expand_dims({TERM_DIM: 2}, axis=-1)
 SERIES = pd.Series([0, 1, 0], index=A, name="g")
 FRAME = pd.DataFrame({"k1": [0, 1, 0], "k2": [1, 1, 2]}, index=A)
+RELATION_FRAME = pd.DataFrame({"a": [0, 0, 1, 2, 2], "g": ["u", "v", "v", "u", "w"]})
+RELATION = linopy.Relation(RELATION_FRAME, "a", "g")
+GROUPS = pd.Index(["u", "v", "w", "z"], name="g")
+RELATION_GROUPS = linopy.Relation(RELATION_FRAME, "a", "g", groups=GROUPS)
+RELATION_EMPTY = linopy.Relation(RELATION_FRAME.iloc[:0], "a", "g", groups=GROUPS)
+R = pd.RangeIndex(3, name="r")
+AT_R = xr.DataArray([2, 0, 2], coords=[R])
+MULTI_R = xr.Coordinates.from_pandas_multiindex(
+    pd.MultiIndex.from_tuples([("x", 1), ("y", 2)], names=["k1", "k2"]), "r"
+)
 
 
 def var(e: LinearExpression, name: str) -> Variable:
@@ -161,11 +171,16 @@ CASES: dict[str, Case] = {
         lambda e: e.isel(a=xr.DataArray([0, 1], dims="c")),
         "isel(new dimensions or coordinates)",
     ),
-    "getitem-new-dim": Case(
-        grid,
-        lambda e: e[xr.DataArray([0, 1], coords=[C])],
-        "getitem(new dimensions or coordinates)",
+    "isel-vectorised": Case(
+        grid, lambda e: e.isel(a=AT_R, b=xr.DataArray([0, 1, 1], coords=[R])), KEPT
     ),
+    "sel-vectorised": Case(grid, lambda e: e.sel(a=AT_R), KEPT),
+    "sel-multiindex-indexer": Case(
+        grid,
+        lambda e: e.sel(a=xr.DataArray([2, 0], coords=MULTI_R)),
+        "sel(new dimensions or coordinates)",
+    ),
+    "getitem-new-dim": Case(grid, lambda e: e[xr.DataArray([0, 1], coords=[C])], KEPT),
     "shift": Case(grid, lambda e: e.shift(a=1), KEPT),
     "shift-negative": Case(grid, lambda e: e.shift(a=-1), KEPT),
     "shift-fill-value": Case(
@@ -184,9 +199,7 @@ CASES: dict[str, Case] = {
         grid, lambda e: e.where(COND, 3 * e), "where(non-scalar other)"
     ),
     "where-new-dim": Case(
-        grid,
-        lambda e: e.where(xr.DataArray([True, False], coords=[C])),
-        "where(new dimensions or coordinates)",
+        grid, lambda e: e.where(xr.DataArray([True, False], coords=[C])), KEPT
     ),
     "where-drop-scalar-other": Case(
         grid, lambda e: e.where(COND, 1.0, drop=True), "where(other with drop)"
@@ -428,6 +441,13 @@ CASES: dict[str, Case] = {
     "const": Case(grid, lambda e: (e + OVER_A).const, KEPT),
     "const-assign-new-dim": Case(grid, const_assigned(OVER_C), ASSIGNMENT),
     "coeffs-assign": Case(grid, coeffs_assigned, ASSIGN_COEFFS),
+    "groupby-relation": Case(grid, lambda e: e.groupby(RELATION).sum(), KEPT),
+    "groupby-relation-groups": Case(
+        grid, lambda e: e.groupby(RELATION_GROUPS).sum(), KEPT
+    ),
+    "groupby-relation-empty": Case(
+        grid, lambda e: e.groupby(RELATION_EMPTY).sum(), KEPT
+    ),
 }
 
 CONST_REJECTED: dict[str, tuple[Any, str]] = {

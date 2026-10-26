@@ -102,10 +102,12 @@ from linopy.constants import (
     GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
+    RELATION_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
+from linopy.long import Relation, _positions
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -218,6 +220,13 @@ def _resolve_group(group: Any, data: Dataset) -> Any:
     like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
     DataFrame, DataArray, multi-key lists) are returned unchanged.
     """
+    if isinstance(group, pl.DataFrame) or (
+        isinstance(group, pd.DataFrame) and group.index.name is None
+    ):
+        raise TypeError(
+            "Grouping by a frame needs a pandas index named after a dimension, "
+            "use `linopy.Relation(frame, member, group)` for member-group pairs."
+        )
     if isinstance(group, (list, tuple)) and len(group) == 1:
         group = group[0]
     if isinstance(group, str) and group in data.coords:
@@ -433,7 +442,7 @@ class LinearExpressionGroupby:
     """
 
     obj: xr.Dataset | BaseExpression
-    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame
+    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame | Relation
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -550,6 +559,18 @@ class LinearExpressionGroupby:
                 "`observed=True` is not supported with `use_fallback=True`."
             )
 
+        if isinstance(self.group, Relation):
+            if isinstance(self.obj, QuadraticExpression):
+                raise NotImplementedError(
+                    "Grouping a quadratic expression by a relation is not supported."
+                )
+            if use_fallback or observed:
+                raise ValueError(
+                    "`use_fallback` and `observed` are not supported when "
+                    "grouping by a relation."
+                )
+            return self._relation_sum(self.group)
+
         labels = self._labels
         group = _resolve_group(self.group, labels)
         _check_grouper_alignment(group, labels)
@@ -648,6 +669,51 @@ class LinearExpressionGroupby:
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
+
+    def _relation_sum(self, relation: Relation) -> LinearExpression:
+        """
+        Sum over a relation: every row adds its member cell's terms to its
+        group, so a member listed in several rows lands in several groups and
+        one not listed in none. The member cells of the rows are gathered by
+        a vectorised :meth:`~BaseExpression.isel`, rows sorted by group, and
+        summed by group as a series grouper over the rows.
+        """
+        obj = self.obj
+        assert isinstance(obj, LinearExpression)
+        store = obj._store
+        dims, members, group = store.dims, relation.members, relation.group
+        if group in dims:
+            raise ValueError(
+                f"relation group column {group!r} must not name an "
+                f"existing dimension {list(dims)}."
+            )
+        for m in members:
+            if m not in dims:
+                raise ValueError(
+                    f"relation member column {m!r} must name a dimension "
+                    f"of {list(dims)}."
+                )
+        labels = relation.frame[group].to_numpy()
+        codes, _ = pd.factorize(labels, sort=True)
+        order = np.argsort(codes, kind="stable")
+        rows = pd.RangeIndex(len(order), name=RELATION_DIM)
+        indexers = {
+            m: DataArray(
+                _positions(store.grid.indexes[m], relation.frame[m]).to_numpy()[order],
+                coords=[rows],
+            )
+            for m in members
+        }
+        grouper = pd.Series(labels[order], index=rows, name=group)
+        res = obj.isel(indexers).groupby(grouper).sum()
+        if relation.groups is not None:
+            res = res.reindex({group: relation.groups.rename(group)}).fillna(0)
+        slot = min(dims.index(m) for m in members)
+        kept = [d for d in dims if d not in members]
+        order_dims = [*kept[:slot], group, *kept[slot:]]
+        return LinearExpression._from_store(
+            res._store.transpose(order_dims), self.model
+        )
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """
@@ -1830,7 +1896,7 @@ class BaseExpression(ABC):
 
     def groupby(
         self,
-        group: DataFrame | Series | DataArray,
+        group: DataFrame | Series | DataArray | Relation,
         restore_coord_dims: bool | None = None,
         **kwargs: Any,
     ) -> LinearExpressionGroupby:
@@ -1842,9 +1908,12 @@ class BaseExpression(ABC):
 
         Parameters
         ----------
-        group : str, DataArray or IndexVariable
+        group : str, DataArray, IndexVariable, pandas.Series, pandas.DataFrame or linopy.Relation
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
+            A :class:`~linopy.long.Relation` maps members to groups, possibly
+            several groups per member: ``sum`` adds each member to each of
+            its groups.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.
@@ -2310,7 +2379,7 @@ class LinearExpression(BaseExpression):
         """
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
-        cell absent. The reason where the selection leaves the grid: new or
+        cell absent. The reason where the selection leaves the grid:
         unlabelled dimensions, or coordinates that are no auxiliary
         coordinates of the grid.
         """
@@ -2318,7 +2387,10 @@ class LinearExpression(BaseExpression):
         reason = f"{name.strip('_')}(new dimensions or coordinates)"
         rows = select(store.grid.dataarray(np.arange(store.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
-        if not set(dims) <= set(store.grid.dims) & set(rows.indexes):
+        indexes = rows.indexes
+        if not set(dims) <= set(indexes):
+            return reason
+        if any(isinstance(indexes[d], pd.MultiIndex) for d in dims):
             return reason
         grid = Grid.from_dataset(rows, dims)
         if set(rows.coords) != set(dims) | set(grid.aux):
