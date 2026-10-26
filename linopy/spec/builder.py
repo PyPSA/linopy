@@ -26,6 +26,7 @@ from linopy.spec.evaluate import (
     evaluate,
     flipped,
     refuse_made,
+    without_strays,
 )
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
@@ -253,15 +254,13 @@ def _framed(
     term: Term, dims: tuple[str, ...]
 ) -> LinearExpression | QuadraticExpression:
     """
-    *term* with its dimensions in the order the entry declares, without the
-    coordinates a lookup leaves beside them, which no file keeps. A dimension
-    the entry declares and the term lacks is what the other side of a
-    comparison brings in.
+    *term* with its dimensions in the order the entry declares, without
+    stray coordinates. A dimension the entry declares and the term lacks is
+    what the other side of a comparison brings in.
     """
-    expression = term.to_linexpr() if isinstance(term, Variable) else term
-    stray = [c for c in expression.coords if c not in expression.dims]
-    if stray:
-        expression = expression.drop_vars(stray)
+    expression = without_strays(
+        term.to_linexpr() if isinstance(term, Variable) else term
+    )
     order = [d for d in dims if d in expression.coord_dims]
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         store = expression._store.transpose(order)

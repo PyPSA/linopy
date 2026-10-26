@@ -5,12 +5,13 @@ from __future__ import annotations
 import functools
 import operator
 from collections.abc import Callable
-from typing import assert_never, cast
+from typing import TypeVar, assert_never, cast
 
 import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
+from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value
 from linopy.spec.errors import SpecDataError, first_coordinates, unknown
@@ -18,6 +19,9 @@ from linopy.spec.where import evaluate_where
 from linopy.variables import Variable
 
 _Binary = ms.Add | ms.Multiply | ms.Divide | ms.Power
+_Framed = TypeVar(
+    "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
+)
 
 
 def evaluate_named(name: str, ctx: Context) -> Value:
@@ -27,7 +31,7 @@ def evaluate_named(name: str, ctx: Context) -> Value:
     declared = ctx.program.expressions[name]
     value = evaluate(declared.expression, ctx)
     if isinstance(value, xr.DataArray):
-        return _named(value, name).transpose(*declared.dims, ...)
+        return without_strays(value).rename(name).transpose(*declared.dims, ...)
     return value
 
 
@@ -39,10 +43,10 @@ def fold(name: str, ctx: Context) -> xr.DataArray:
     return cast(xr.DataArray, value)
 
 
-def _named(value: xr.DataArray, name: str) -> xr.DataArray:
-    """*value* with its stray non-dimension coordinates dropped and renamed to *name*."""
+def without_strays(value: _Framed) -> _Framed:
+    """*value* without the non-dimension coordinates a lookup leaves beside its dimensions, which no file keeps."""
     stray = [c for c in value.coords if c not in value.dims]
-    return value.drop_vars(stray).rename(name)
+    return cast(_Framed, value.drop_vars(stray)) if stray else value
 
 
 def evaluate(node: ms.Expression, ctx: Context) -> Value:

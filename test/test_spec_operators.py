@@ -15,16 +15,12 @@ import xarray as xr
 
 pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
+pytest.importorskip("highspy")
 
 from spec_helpers import TT, WHERE_DATA, WHERE_SPEC, S, solved, with_  # noqa: E402
 
-import linopy  # noqa: E402
 from linopy import LinearExpression, Model, QuadraticExpression  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
-
-pytestmark = [
-    pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
-]
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -278,6 +274,54 @@ def test_a_member_with_no_value_is_still_refused_through_a_group() -> None:
         Model.from_spec(GROUPED_SPEC, grouped_sources(pd.Series([3.0], index=GENS[:1])))
 
 
+def test_a_sum_over_several_axes_collapses_each() -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
+        "variables": {"x": {"dims": ["t", "s"], "bounds": {"lower": 0, "upper": 1}}},
+        "constraints": {"cap": {"dims": [], "expression": "sum(x, over=[t, s]) <= 3"}},
+        "objective": {"sense": "maximize", "expression": "sum(x, over=[s, t])"},
+        "expressions": {"total": "sum(x, over=[t, s])"},
+    }
+    m = solved(spec, {"t": TT, "s": S})
+    assert m.constraints["cap"].lhs.nterm == len(TT) * len(S)
+    assert float(m.spec.expressions["total"].solution) == pytest.approx(3.0)
+
+
+SELF_MAP_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int", "ordered": True}},
+    "relations": {"next_of": {"key": "t", "values": {"next": "t"}}},
+    "parameters": {"v": {"dims": ["t"]}},
+    "variables": {
+        "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+        "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+    },
+    "constraints": {
+        "fix": {"dims": ["t"], "expression": "x == v"},
+        "link": {"dims": ["t"], "expression": "y == sum(x, over=t, by=next_of[next])"},
+    },
+    "objective": {"sense": "minimize", "expression": "sum(y)"},
+    "expressions": {
+        "terms": "sum(x, over=t, by=next_of[next])",
+        "data": "sum(v, over=t, by=next_of[next])",
+    },
+}
+
+
+def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
+    t = TT[:3]
+    data = {
+        "t": t,
+        "v": pd.Series(V[:3], index=t),
+        "next_of": pd.Series([1, 2, 2], index=t),
+    }
+    m = backend.add_spec(SELF_MAP_SPEC, data)
+    m.solve(solver_name="highs", output_flag=False)
+    want = [0.0, 1.0, 6.0]
+    assert m.solution["y"].values.tolist() == pytest.approx(want)
+    for name in ("terms", "data"):
+        assert m.spec.expressions[name].solution.values.tolist() == pytest.approx(want)
+
+
 # ---------------------------------------------------------------------------
 # where predicates
 # ---------------------------------------------------------------------------
@@ -299,9 +343,11 @@ WHERE_CASES: dict[str, tuple[str, str, list[Any]]] = {
     "position": ("x", "position(t) == -1", [3]),
     "position-in-groups": ("x", "position(t, within=season_of[s]) == 0", [0, 2]),
     "bool-parameter": ("x", "flag", [0]),
-    "float-parameter-must-be-finite": ("x", "cost", [0, 2]),
+    "float-parameter-present-and-finite": ("x", "cost", [0, 2]),
     "str-parameter": ("x", "label", [1, 2]),
     "parameter-comparison": ("x", "cost > 2", [2, 1]),
+    "condition": ("x", "late", [2, 3]),
+    "condition-in-a-conjunction": ("x", "late AND t < 3", [2]),
     "datetime-axis": ("y", "d >= '2030-01-03'", list(WHERE_DATA["d"][2:])),
 }
 

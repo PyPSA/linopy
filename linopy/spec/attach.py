@@ -74,8 +74,6 @@ EVOLVING_MESSAGE = (
     '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
-_Rows = tuple[xr.DataArray, xr.DataArray]
-
 
 class Parameter(NamedTuple):
     """
@@ -153,14 +151,14 @@ class Attached:
     relations: Mapping[str, xr.DataArray]
     sources: Mapping[str, Any]
 
-    def parameter(self, name: str) -> xr.DataArray:
+    def read(self, name: str) -> Parameter:
         """
         The parameter *name* resolved from ``sources`` and aligned to ``coords``.
 
-        Resolved on every call and never cached. The array is filled the way
-        the parameter's ``missing:`` says: a ``refused`` row is refused here,
-        an ``absent`` one is NaN (``False`` for ``bool``), a ``neutral`` one
-        is 0 and a value is that value.
+        Resolved on every call and never cached. ``filled`` reads the way the
+        parameter's ``missing:`` says: a ``refused`` row is refused here, an
+        ``absent`` one is NaN (``False`` for ``bool``), a ``neutral`` one is 0
+        and a value is that value. ``present`` is where the data has a row.
 
         Raises
         ------
@@ -170,10 +168,6 @@ class Attached:
             coordinate, a null value in a row, values of another type
             than declared, or a missing row the declaration refuses.
         """
-        return self.read(name).filled
-
-    def read(self, name: str) -> Parameter:
-        """The parameter *name* as :meth:`parameter` gives it, beside where the data has a row for it."""
         declared = self._declaration(name)
         if name not in self._keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
@@ -479,7 +473,7 @@ def _as_array(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> _Rows:
+) -> Parameter:
     if isinstance(obj, xr.DataArray):
         return _from_dense(name, declared, obj)
     if isinstance(obj, pd.DataFrame):
@@ -501,9 +495,9 @@ def _parameter_shapes(dims: Sequence[str]) -> str:
     return _PARAMETER_SHAPES.format(dims=list(dims), columns=[*dims, "value"])
 
 
-def _everywhere(arr: xr.DataArray) -> _Rows:
+def _everywhere(arr: xr.DataArray) -> Parameter:
     """*arr* beside the presence of every one of its rows."""
-    return arr, xr.ones_like(arr, dtype=bool)
+    return Parameter(arr, xr.ones_like(arr, dtype=bool))
 
 
 def _from_scalar(
@@ -511,7 +505,7 @@ def _from_scalar(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> _Rows:
+) -> Parameter:
     if pd.isna(obj):
         raise SpecDataError(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
@@ -527,7 +521,7 @@ def _from_scalar(
     return _everywhere(arr)
 
 
-def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> _Rows:
+def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> Parameter:
     dims = declared.dims
     _check_value_dtype(name, declared.dtype, arr.dtype)
     if set(arr.dims) != set(dims) or len(arr.dims) != len(dims):
@@ -557,7 +551,7 @@ def _from_frame(
     declared: ms.Parameter,
     df: pd.DataFrame,
     coords: Mapping[str, pd.Index],
-) -> _Rows:
+) -> Parameter:
     dims = declared.dims
     tidy = df
     if not set(dims) <= set(df.columns) and set(dims) <= _headers(df):
@@ -602,7 +596,7 @@ def _from_rows(
     declared: ms.Parameter,
     series: pd.Series,
     coords: Mapping[str, pd.Index],
-) -> _Rows:
+) -> Parameter:
     dims = declared.dims
     if not dims:
         if len(series) != 1:
@@ -635,7 +629,7 @@ def _from_rows(
     on = dict(zip(dims, onto))
     arr = xr.DataArray(values.reshape(shape), dims=dims, coords=on, name=name)
     present = xr.DataArray(rows.to_numpy().reshape(shape), dims=dims, coords=on)
-    return arr, present
+    return Parameter(arr, present)
 
 
 def _with_dims(name: str, dims: tuple[str, ...], series: pd.Series) -> pd.Series:
@@ -694,15 +688,17 @@ def _aligned(
     present: xr.DataArray,
     onto: Mapping[str, pd.Index],
     fill: Any,
-) -> _Rows:
+) -> Parameter:
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
         if stale:
-            return arr.assign_coords(stale), present.assign_coords(stale)
-        return arr, present
+            return Parameter(arr.assign_coords(stale), present.assign_coords(stale))
+        return Parameter(arr, present)
     for d, index in onto.items():
         _refuse_strangers(name, d, arr.indexes[d], index)
-    return arr.reindex(onto, fill_value=fill), present.reindex(onto, fill_value=False)
+    return Parameter(
+        arr.reindex(onto, fill_value=fill), present.reindex(onto, fill_value=False)
+    )
 
 
 def _filled(

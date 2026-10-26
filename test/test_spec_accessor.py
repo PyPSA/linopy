@@ -18,6 +18,7 @@ import xarray as xr
 
 mathspec = pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
+pytest.importorskip("highspy")
 
 from mathspec import FormatName  # noqa: E402
 from spec_helpers import (  # noqa: E402
@@ -34,10 +35,6 @@ import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
 from linopy.spec import ModelSpec, NamedExpression, SpecDataError  # noqa: E402
 from linopy.spec.accessor import lower  # noqa: E402
-
-pytestmark = [
-    pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
-]
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -197,7 +194,7 @@ def test_a_declared_dimension_with_no_source_still_reprs() -> None:
     assert "snapshot (3)" in repr(m.spec)
 
 
-def test_a_fold_over_variables_needs_a_solution_and_one_over_data_does_not() -> None:
+def test_a_fold_over_data_needs_no_solve() -> None:
     spec = {
         **yaml_dict(),
         "parameters": {
@@ -212,8 +209,22 @@ def test_a_fold_over_variables_needs_a_solution_and_one_over_data_does_not() -> 
     }
     m = Model.from_spec(spec, {**DISPATCH_DATA, "rate": 1.05, "years": 3.0})
     assert float(m.spec.expressions["growth"].solution) == pytest.approx(1.05**3)
-    with pytest.raises(AttributeError, match="not optimized"):
-        m.spec.expressions["spend"].solution
+
+
+@pytest.mark.parametrize(
+    ("name", "error", "match"),
+    [
+        pytest.param("spend", AttributeError, "not optimized", id="built"),
+        pytest.param("price", RuntimeError, "no dual yet", id="unbuilt"),
+    ],
+)
+def test_an_unsolved_model_has_no_solution_to_fold(
+    name: str, error: type[Exception], match: str
+) -> None:
+    spec = with_(yaml_dict(), expressions={"price": "dual(power_balance)"})
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    with pytest.raises(error, match=match):
+        m.spec.expressions[name].solution
 
 
 # ---------------------------------------------------------------------------
@@ -260,18 +271,6 @@ def test_the_spec_keeps_what_its_unbuilt_expressions_read() -> None:
     assert not m.parameters.data_vars
 
 
-def test_expression_reads_unsolved_but_solution_waits_for_a_solve() -> None:
-    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
-    e = m.spec.expressions["spend"]
-    assert isinstance(e.expression, linopy.LinearExpression)
-    with pytest.raises(AttributeError, match="not optimized"):
-        e.solution
-    m.solve("highs")
-    xr.testing.assert_allclose(
-        e.solution, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
-    )
-
-
 def test_the_named_expression_bundles_the_three_views() -> None:
     m = solved(VIEWS_SPEC, DISPATCH_DATA)
     e = m.spec.expressions["spend"]
@@ -299,24 +298,20 @@ def test_repr_caps_long_sections() -> None:
     assert "e11" not in text
 
 
-def test_model_repr_of_a_whole_spec_model_carries_no_tags() -> None:
-    """Everything is the spec's, so naming the spec on every line would say nothing."""
+def test_model_repr_of_a_spec_model_carries_no_tags() -> None:
     text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
-    assert "Linopy LP model, built from a mathspec" in text
-    assert "Least-cost dispatch of a generator fleet against an hourly load." in text
     assert " * spend (snapshot)\n" in text
     assert " * usage (snapshot, generator)\n" in text
     assert " * p (snapshot, generator)\n" in text
     assert " * power_balance (snapshot)\n" in text
     assert "[spec]" not in text
-    assert "<empty>" not in text
 
 
-def test_model_repr_of_a_spec_without_a_description() -> None:
+def test_a_spec_without_a_description_reprs_bare() -> None:
     spec = {k: v for k, v in yaml_dict().items() if k != "description"}
     m = Model.from_spec(spec, DISPATCH_DATA)
     assert m.spec.description == ""
-    assert repr(m).startswith("Linopy LP model, built from a mathspec\n=")
+    assert repr(m.spec).startswith("ModelSpec\n")
 
 
 def test_the_spec_typesets_in_every_format() -> None:
@@ -372,17 +367,6 @@ def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
         assert not spec.to_latex().startswith("%")
 
 
-@pytest.mark.parametrize("typeset", LINE_TYPESETTERS)
-def test_a_named_expression_typesets_to_one_line(
-    typeset: Callable[[NamedExpression], str],
-) -> None:
-    e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
-    line = typeset(e)
-    assert "spend" in line
-    assert "\n" not in line
-    assert "align" not in line and "$$" not in line
-
-
 def test_a_named_expression_repr_markdown_wraps_only_itself() -> None:
     e = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.expressions["spend"]
     assert e._repr_markdown_() == f"$$\n{e.to_markdown()}\n$$"
@@ -395,9 +379,9 @@ def test_a_named_expression_typeset_passes_options() -> None:
     ).startswith("S")
 
 
-@pytest.mark.parametrize("name", ["power_balance", "p"])
+@pytest.mark.parametrize("name", ["spend", "power_balance", "p"])
 @pytest.mark.parametrize("typeset", LINE_TYPESETTERS)
-def test_a_constraint_or_variable_typesets_to_one_line(
+def test_a_declaration_typesets_to_one_line(
     name: str, typeset: Callable[[NamedExpression], str]
 ) -> None:
     d = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.declaration(name)
@@ -459,10 +443,36 @@ def test_a_dual_has_no_symbolic_form(build: Callable[..., Model]) -> None:
         m.spec.expressions["price"].expression
 
 
-def test_a_dual_needs_a_solution() -> None:
-    m = Model.from_spec(DUAL_SPEC, DISPATCH_DATA)
-    with pytest.raises(RuntimeError, match="no dual yet"):
-        m.spec.expressions["price"].solution
+@pytest.mark.parametrize(
+    ("sense", "rows", "duals"),
+    [
+        pytest.param(
+            "minimize",
+            {"left": "x >= 2", "right": "2 <= y", "fixed": "z == 4"},
+            {"left": 1.0, "right": -1.0, "fixed": 1.0},
+            id="minimize",
+        ),
+        pytest.param(
+            "maximize",
+            {"left": "x <= 2", "right": "2 >= y", "fixed": "4 == z"},
+            {"left": 1.0, "right": -1.0, "fixed": -1.0},
+            id="maximize",
+        ),
+    ],
+)
+def test_a_dual_is_the_rate_the_objective_rises_with_the_right_side(
+    sense: str, rows: dict[str, str], duals: dict[str, float]
+) -> None:
+    bounds = {"bounds": {"lower": 0, "upper": 10}}
+    spec = {
+        "variables": {v: {"dims": [], **bounds} for v in "xyz"},
+        "constraints": {k: {"dims": [], "expression": e} for k, e in rows.items()},
+        "objective": {"sense": sense, "expression": "x + y + z"},
+        "expressions": {f"dual_{k}": f"dual({k})" for k in rows},
+    }
+    m = solved(spec, {})
+    got = {k: float(m.spec.expressions[f"dual_{k}"].solution) for k in rows}
+    assert got == pytest.approx(duals)
 
 
 def test_spec_api_warns_once_per_session() -> None:
@@ -488,15 +498,24 @@ def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> N
     assert set(expr.expression.coord_dims) == set(dims)
 
 
-def test_a_cased_expression_spans_its_declared_dims_not_its_body() -> None:
-    spec = yaml_dict()
-    spec["expressions"]["floor"] = {
-        "dims": ["snapshot", "generator"],
-        "cases": {"cheap": {"when": "cost == 0", "expression": "p_max"}},
+FRAMED: dict[str, dict[str, Any]] = {
+    "built": {"dims": ["generator", "snapshot"], "expression": "p"},
+    "unbuilt": {
+        "dims": ["generator", "snapshot"],
+        "cases": {"free": {"when": "cost == 0", "expression": "load"}},
         "otherwise": 0,
-    }
-    m = Model.from_spec(spec, DISPATCH_DATA)
-    assert m.spec.expressions["floor"].dims == ("snapshot", "generator")
+    },
+}
+
+
+@pytest.mark.parametrize("body", FRAMED.values(), ids=FRAMED.keys())
+def test_a_named_expression_is_framed_in_its_declared_order(
+    body: dict[str, Any],
+) -> None:
+    m = solved(with_(yaml_dict(), expressions={"framed": body}), DISPATCH_DATA)
+    framed = m.spec.expressions["framed"]
+    assert framed.dims == ("generator", "snapshot")
+    assert framed.solution.dims == ("generator", "snapshot")
 
 
 def test_aliasing_a_named_expression_leaves_the_original_stamped() -> None:

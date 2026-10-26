@@ -119,6 +119,15 @@ data, and let linopy build it.
   expressions back through ``model.spec`` after solving. Requires
   ``pip install "linopy[spec]"`` (Python >= 3.12).
 
+linopy supports a subset of mathspec. A constraint row that absence
+leaves without terms (a ``missing: absent`` parameter, a ``missing:
+neutral`` parameter such as ``0 == load``, or a ``where:``-masked
+variable inside a sum) is refused, where mathspec skips and reports it;
+linopy is stricter here (`#993
+<https://github.com/PyPSA/linopy/issues/993>`__). A relation maps one
+key column to one value column only; bare relations, several key
+columns or several value columns raise ``SpecDataError``.
+
 
 Where to go next
 ----------------

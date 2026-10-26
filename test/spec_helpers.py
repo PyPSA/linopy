@@ -104,6 +104,7 @@ WHERE_SPEC: dict[str, Any] = {
         "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}},
         "y": {"dims": ["d"], "bounds": {"lower": 0, "upper": 1}},
     },
+    "conditions": {"late": {"condition": "t > 1"}},
     "objective": {"sense": "minimize", "expression": "sum(x) + sum(y)"},
 }
 WHERE_DATA: dict[str, Any] = {

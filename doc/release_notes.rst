@@ -87,6 +87,7 @@ Version 1.0.0
 * Everything a spec builds carries the spec's name in ``.spec`` on the variable, constraint or expression.
 * ``model.spec.expressions`` evaluates the spec's named expressions against the solved model, and ``model.spec.typeset`` (``to_latex`` / ``to_markdown`` / ``to_typst``) renders the spec.
 * Spec models round-trip through ``to_netcdf`` / ``read_netcdf``; a file read without ``mathspec`` installed loads as a plain model with a warning.
+* Two limits apply. A constraint row that absence leaves without terms (from a ``missing: absent`` parameter, a ``missing: neutral`` parameter such as ``0 == load``, or a ``where:``-masked variable inside a sum) is refused with an error, where mathspec skips and reports it; linopy is stricter here (`#993 <https://github.com/PyPSA/linopy/issues/993>`__). A relation maps one key column to one value column only; bare relations, several key columns or several value columns raise ``SpecDataError``.
 
 **Bug fixes**
 

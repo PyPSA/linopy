@@ -33,7 +33,12 @@ from mathspec.spec import Spec
 from linopy.constants import _warn_evolving_api
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
-from linopy.spec.attach import EVOLVING_MESSAGE, Parameter, parameters_read
+from linopy.spec.attach import (
+    EVOLVING_MESSAGE,
+    Parameter,
+    _everywhere,
+    parameters_read,
+)
 from linopy.spec.attach import attach as attach_data
 from linopy.spec.builder import build, unbuilt_expressions
 from linopy.spec.context import Context, Value
@@ -248,7 +253,7 @@ class ModelSpec:
         filled = self._parameters[name]
         if name in self._presence:
             return Parameter(filled, self._presence[name])
-        return Parameter(filled, xr.ones_like(filled, dtype=bool))
+        return _everywhere(filled)
 
     @property
     def description(self) -> str:
@@ -400,16 +405,19 @@ class NamedExpression:
     def _repr_markdown_(self) -> str:
         return f"$$\n{self.to_markdown()}\n$$"
 
-    @property
-    def _declared(self) -> ms.NamedExpression:
-        """The lowered named expression; a constraint or a variable has none."""
-        expressions = self._spec.program.expressions
-        if self._name not in expressions:
+    def _refuse_declaration(self) -> None:
+        """Refuse a constraint or a variable, which has no expression to read."""
+        if self._name not in self._spec.program.expressions:
             raise SpecDataError(
                 f"'{self._name}' is a constraint or a variable, not a named expression: "
                 "it only typesets. Read it off model.constraints or model.variables."
             )
-        return expressions[self._name]
+
+    @property
+    def _declared(self) -> ms.NamedExpression:
+        """The lowered named expression; a constraint or a variable has none."""
+        self._refuse_declaration()
+        return self._spec.program.expressions[self._name]
 
     @property
     def node(self) -> ms.Expression:
@@ -437,7 +445,7 @@ class NamedExpression:
         a bare ``Variable``, a ``DataArray`` for a data-only body or a
         ``float`` for a constant.
         """
-        self._declared
+        self._refuse_declaration()
         stored = self._stored
         if stored is not None:
             return stored
@@ -464,7 +472,7 @@ class NamedExpression:
             ``model.expressions``, so the parameters it reads are not kept,
             or this is a constraint or a variable.
         """
-        self._declared
+        self._refuse_declaration()
         stored = self._stored
         if stored is not None:
             return stored.solution.rename(self._name)

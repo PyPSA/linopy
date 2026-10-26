@@ -3,14 +3,16 @@ Round trips of a spec-built model through netcdf and through ``copy``.
 
 The spec itself is persisted as its YAML text and lowered again on read, so
 what has to survive besides the model is data: the master coordinates, the
-relations and the retained parameters. Labels are the delicate part — a partial
+relations and the kept parameters. Labels are the delicate part — a partial
 relation holds NaN in an array of strings — so every relation shape is checked
-value by value and dtype by dtype, on both netcdf engines ``test_io`` uses.
+value by value, on both netcdf engines ``test_io`` uses. No test here asserts a
+model container's dtype after a round trip: the scipy engine narrows int64.
 """
 
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ import pytest
 import xarray as xr
 
 mathspec = pytest.importorskip("mathspec")
+pytest.importorskip("highspy")
 
 from spec_helpers import (  # noqa: E402
     DISPATCH_DATA,
@@ -36,10 +39,6 @@ from linopy import Model, read_netcdf  # noqa: E402
 from linopy.spec.accessor import lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
-
-pytestmark = [
-    pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
-]
 
 ENGINES = ["netcdf4", "scipy"]
 
@@ -130,12 +129,6 @@ def roundtrip(m: Model, tmp_path: Path, engine: str) -> Model:
     return read_netcdf(path)
 
 
-def assert_arrayequal(a: xr.DataArray, b: xr.DataArray) -> None:
-    """Assert equal values and dtype — the dtype is what a netcdf type drops."""
-    assert a.dtype == b.dtype, f"dtypes differ: {a.dtype} != {b.dtype}"
-    xr.testing.assert_equal(a, b)
-
-
 @pytest.mark.parametrize("engine", ENGINES)
 def test_a_spec_built_model_round_trips(tmp_path: Path, engine: str) -> None:
     m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
@@ -146,7 +139,7 @@ def test_a_spec_built_model_round_trips(tmp_path: Path, engine: str) -> None:
     assert p.spec.program.constraints == m.spec.program.constraints
     assert set(p.spec.expressions) == set(m.spec.expressions)
     for name in m.spec.expressions:
-        assert_arrayequal(
+        xr.testing.assert_equal(
             m.spec.expressions[name].solution, p.spec.expressions[name].solution
         )
 
@@ -161,8 +154,8 @@ def test_the_caller_parameters_and_the_spec_ones_stay_apart(
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert_arrayequal(p.parameters["cost"], m.parameters["cost"])
-    assert_arrayequal(p.spec.parameters["cost"], m.spec.parameters["cost"])
+    xr.testing.assert_equal(p.parameters["cost"], m.parameters["cost"])
+    xr.testing.assert_equal(p.spec.parameters["cost"], m.spec.parameters["cost"])
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -225,29 +218,39 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("sparse", [False, True], ids=["dataset", "csr"])
-def test_every_container_shares_the_master_coordinate_dtypes(
-    tmp_path: Path, engine: str, sparse: bool
+def test_every_container_shares_the_master_coordinates(
+    tmp_path: Path, engine: str, backend: Model
 ) -> None:
     """The master coordinates are canonical: no container may disagree with them."""
-    if sparse and engine == "scipy":
+    if backend.sparse and engine == "scipy":
         pytest.skip(
-            "netCDF3 holds no unicode-array attr, and a CSR constraint writes one"
+            "netCDF3 holds no unicode-array attr, and a sparse constraint writes one"
         )
-    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA, sparse=sparse)
+    m = backend.add_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 
-    master = {dim: index.dtype for dim, index in p.spec.coords.items()}
+    master = p.spec.coords
     holders = [
-        *(v.data for _, v in p.variables.items()),
-        *(c.data for _, c in p.constraints.items()),
-        p.objective.expression.data,
+        *p.variables.data.values(),
+        *p.constraints.data.values(),
+        p.objective.expression,
     ]
-    assert master == {dim: index.dtype for dim, index in m.spec.coords.items()}
-    for data in holders:
-        for dim, index in data.indexes.items():
-            if str(dim) in master:
-                assert index.dtype == master[str(dim)], f"{dim} differs on {data}"
+    for holder in holders:
+        for dim, index in holder.indexes.items():
+            assert index.equals(master[str(dim)]), f"{dim} differs on {holder}"
+
+
+def test_a_model_whose_expressions_all_carry_variables_writes_no_parameters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "model.nc"
+    Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
+    written = {str(n) for n in xr.load_dataset(path).data_vars}
+    assert {n for n in written if n.startswith("spec-")} == {
+        "spec-coords__snapshot",
+        "spec-coords__generator",
+    }
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -357,33 +360,34 @@ def test_a_spec_file_reads_as_a_plain_model_without_mathspec(
     EXAMPLES_DIR is None, reason="set MATHSPEC_EXAMPLES to a mathspec examples dir"
 )
 @pytest.mark.parametrize("engine", ENGINES)
-def test_the_pypsa_example_round_trips(tmp_path: Path, engine: str) -> None:
-    """Nine relations into one dimension, a datetime axis, bool and str parameters."""
-    path = Path(EXAMPLES_DIR or "", "pypsa.yaml")
-    program = lower(str(path))
-    m = Model.from_spec(path, synthetic_sources(program, 3))
+@pytest.mark.parametrize("example", ["commitment.yaml", "operators/sum_by.yaml"])
+def test_a_mathspec_example_round_trips(
+    tmp_path: Path, engine: str, example: str
+) -> None:
+    path = Path(EXAMPLES_DIR or "", example)
+    m = Model.from_spec(path, synthetic_sources(lower(str(path)), 3))
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
     assert set(p.spec.coords) == set(m.spec.coords)
 
 
-@pytest.mark.parametrize("engine", ENGINES)
-def test_a_round_trip_keeps_the_stamp_and_the_name(tmp_path: Path, engine: str) -> None:
+TRANSFORMS: dict[str, Callable[[Model, Path], Model]] = {
+    "built": lambda m, tmp_path: m,
+    "copy": lambda m, tmp_path: m.copy(),
+    "netcdf": lambda m, tmp_path: roundtrip(m, tmp_path, "netcdf4"),
+}
+
+
+@pytest.mark.parametrize("transform", TRANSFORMS.values(), ids=TRANSFORMS.keys())
+def test_the_stamp_names_the_spec_file_through_a_copy_and_a_round_trip(
+    tmp_path: Path, backend: Model, transform: Callable[[Model, Path], Model]
+) -> None:
     path = tmp_path / "dispatch.yaml"
     path.write_text(EXAMPLE_DISPATCH)
-    p = roundtrip(Model.from_spec(path, DISPATCH_DATA), tmp_path, engine)
+    p = transform(backend.add_spec(path, DISPATCH_DATA), tmp_path)
     assert p.spec.name == "dispatch"
     assert p.variables["p"].spec == "dispatch"
     assert p.constraints["power_balance"].spec == "dispatch"
     assert p.expressions["spend"].spec == "dispatch"
     assert p.spec.expressions["spend"].expression is p.expressions["spend"]
-
-
-def test_a_sparse_constraint_keeps_the_stamp_through_a_round_trip(
-    tmp_path: Path,
-) -> None:
-    """A sparse constraint carries the stamp beside its rows; the scipy engine cannot write its dimension attribute at all."""
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, sparse=True)
-    p = roundtrip(m, tmp_path, "netcdf4")
-    assert p.constraints["power_balance"].spec == "spec"

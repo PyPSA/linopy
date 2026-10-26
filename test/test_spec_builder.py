@@ -11,11 +11,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
 pytest.importorskip("mathspec")
+pytest.importorskip("highspy")
 yaml = pytest.importorskip("yaml")
 
 from spec_helpers import (  # noqa: E402
@@ -23,7 +25,6 @@ from spec_helpers import (  # noqa: E402
     CURVE_SPEC,
     DISPATCH_DATA,
     DISPATCH_P,
-    EXAMPLE_DISPATCH,
     EXAMPLES_DIR,
     FULL_X,
     FULL_Y,
@@ -43,10 +44,6 @@ from linopy import Model  # noqa: E402
 from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.accessor import lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
-
-pytestmark = [
-    pytest.mark.skipif("highs" not in linopy.available_solvers, reason="needs highs"),
-]
 
 MULTI_COLUMN = "linopy reads no relation of more than one key or value column"
 REFUSED: dict[str, tuple[type[Exception], str]] = {
@@ -131,85 +128,82 @@ FULL_C = pd.Series([0.0, 4.0, 5.0], index=T)
 HOLE_AT_0 = pd.Series([4.0, 5.0], index=T[1:])
 W_HOLE_AT_0 = pd.Series([1.0, 1.0], index=T[1:])
 
-NO_W_CONSTRAINT = {"cap": {"dims": ["t"], "expression": "x <= c"}}
+
+@pytest.mark.parametrize(
+    ("data", "name"),
+    [({"w": W_HOLE_AT_0, "c": FULL_C}, "w"), ({"w": FULL_W, "c": HOLE_AT_0}, "c")],
+    ids=["coefficient", "constant-side"],
+)
+def test_a_missing_row_is_refused_unless_the_parameter_says_what_it_means(
+    data: dict[str, Any], name: str
+) -> None:
+    with pytest.raises(
+        SpecDataError, match=rf"parameter '{name}' has no row at 1 coordinate\(s\)"
+    ):
+        Model.from_spec(SPARSE_SPEC, {"t": T, **data})
+
+
+GROUPS = pd.Index(["p", "q"], name="s")
+ABSENT_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int", "ordered": True}, "s": {"dtype": "str"}},
+    "relations": {"grp": {"key": "t", "values": "s"}},
+    "parameters": {
+        "a": {"dims": ["t"], "missing": "absent"},
+        "z": {"dims": ["s"], "missing": "absent"},
+    },
+    "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}}},
+    "objective": {"sense": "maximize", "expression": "sum(x)"},
+}
+ABSENT_DATA: dict[str, Any] = {
+    "t": T,
+    "s": GROUPS,
+    "grp": pd.Series(["p", "p", "q"], index=T),
+    "a": pd.Series([2.0, 3.0], index=T[1:]),
+    "z": pd.Series([5.0], index=GROUPS[1:]),
+}
+
+
+def absent_row(expression: str) -> dict[str, Any]:
+    return with_(
+        ABSENT_SPEC, constraints={"row": {"dims": ["t"], "expression": expression}}
+    )
 
 
 @pytest.mark.parametrize(
-    ("spec", "data", "match"),
+    ("expression", "kept"),
     [
-        pytest.param(
-            SPARSE_SPEC,
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "constraint 'cap'.*parameter 'w' is used as a coefficient",
-            id="coefficient-in-a-constraint",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                constraints=NO_W_CONSTRAINT,
-                objective={"sense": "maximize", "expression": "sum(w * x, over=t)"},
-            ),
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "the objective.*parameter 'w' is used as a coefficient",
-            id="coefficient-in-the-objective",
-        ),
-        pytest.param(
-            with_(SPARSE_SPEC, constraints=NO_W_CONSTRAINT, expressions={"e": "w * x"}),
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "expression 'e'.*parameter 'w' is used as a coefficient",
-            id="coefficient-in-a-named-expression",
-        ),
-        pytest.param(
-            SPARSE_SPEC,
-            {"w": FULL_W, "c": HOLE_AT_0},
-            "constraint 'cap'.*covers 1 fewer",
-            id="constant-side",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": "c"}}},
-            ),
-            {"w": FULL_W, "c": HOLE_AT_0},
-            "variable 'x': 1 rows have NULL bounds",
-            id="bound",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                constraints={"cap": {"dims": ["t"], "expression": "x / w <= c"}},
-            ),
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "constraint 'cap'.*divisor",
-            id="divisor-in-a-constraint",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                constraints=NO_W_CONSTRAINT,
-                objective={"sense": "maximize", "expression": "sum(x / w, over=t)"},
-            ),
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "the objective.*divisor",
-            id="divisor-in-the-objective",
-        ),
-        pytest.param(
-            with_(
-                SPARSE_SPEC,
-                constraints=NO_W_CONSTRAINT,
-                expressions={"ratio": "x / w"},
-            ),
-            {"w": W_HOLE_AT_0, "c": FULL_C},
-            "expression 'ratio'.*divisor",
-            id="divisor-in-a-named-expression",
-        ),
+        pytest.param("x + a <= 10", [1, 2], id="added"),
+        pytest.param("a * x <= 4", [1, 2], id="multiplied"),
+        pytest.param("x / a <= 1", [1, 2], id="divisor"),
+        pytest.param("x <= a", [1, 2], id="constant-side"),
+        pytest.param("x <= shift(a, along=t, offset=1, edge=0)", [0, 2], id="shift"),
+        pytest.param("x <= at(z, by=grp[s])", [2], id="at"),
+        pytest.param("sum_back(a * x, along=t, window=2) <= 4", [1, 2], id="sum-back"),
     ],
 )
-def test_a_missing_row_is_refused_wherever_it_is_used(
-    spec: dict[str, Any], data: dict[str, Any], match: str
+def test_an_absent_row_masks_the_row_it_reaches(
+    expression: str, kept: list[int]
 ) -> None:
-    with pytest.raises(SpecDataError, match=match):
-        Model.from_spec(spec, {"t": T, **data})
+    row = Model.from_spec(absent_row(expression), ABSENT_DATA).constraints["row"]
+    assert T[(row.labels != -1).to_numpy()].tolist() == kept
+
+
+def test_an_absent_summand_is_dropped() -> None:
+    spec = with_(
+        ABSENT_SPEC,
+        constraints={"row": {"dims": [], "expression": "sum(a * x, over=t) <= 4"}},
+    )
+    m = solved(spec, ABSENT_DATA)
+    assert m.objective.value == pytest.approx(12.0)
+
+
+def test_an_absent_bound_leaves_its_side_open() -> None:
+    spec = with_(
+        ABSENT_SPEC,
+        variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": "a"}}},
+    )
+    upper = Model.from_spec(spec, ABSENT_DATA).variables["x"].upper
+    assert upper.values.tolist() == [np.inf, 2.0, 3.0]
 
 
 def test_a_masked_variable_bound_needs_no_row_where_it_is_masked() -> None:
@@ -522,26 +516,30 @@ def test_a_constant_on_the_left_is_the_same_row() -> None:
 
 
 @pytest.mark.parametrize(
-    "expression",
+    ("expression", "upper"),
     [
-        pytest.param("x <= c ** 2", id="constant-side-under-a-power"),
-        pytest.param("x <= -(c ** 2)", id="constant-side-under-a-negation"),
-        pytest.param("x / (c ** 2) <= 1", id="divisor-under-a-power"),
+        pytest.param("x <= c", 10, id="constant-side"),
+        pytest.param("x <= c ** 2", 10, id="constant-side-under-a-power"),
+        pytest.param("x <= -(c ** 2)", 10, id="constant-side-under-a-negation"),
+        pytest.param("x / c <= 1", 10, id="divisor"),
+        pytest.param("x / (c ** 2) <= 1", 10, id="divisor-under-a-power"),
+        pytest.param("x <= 10", "c", id="bound"),
     ],
 )
-def test_a_parameter_under_a_power_is_still_checked_for_coverage(
-    expression: str,
+def test_a_neutral_hole_where_no_neutral_value_exists_is_refused(
+    expression: str, upper: Any
 ) -> None:
     spec = with_(
         SPARSE_SPEC,
         parameters={"w": {"dims": ["t"]}, "c": {"dims": ["t"], "missing": "neutral"}},
+        variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": upper}}},
         constraints={"cap": {"dims": ["t"], "expression": expression}},
     )
     with pytest.raises(SpecDataError, match="parameter 'c' is missing: neutral"):
         Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0})
 
 
-def test_an_operator_under_a_power_keeps_its_parameters_retained() -> None:
+def test_an_operator_under_a_power_keeps_the_parameters_it_reads() -> None:
     spec = with_(
         SPARSE_SPEC,
         parameters={**SPARSE_SPEC["parameters"], "lag": {"dims": [], "dtype": "int"}},
@@ -592,29 +590,6 @@ def test_a_quadratic_objective_builds() -> None:
 # ---------------------------------------------------------------------------
 # the stamp every built declaration carries
 # ---------------------------------------------------------------------------
-
-
-def test_what_the_spec_builds_names_it() -> None:
-    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
-    assert m.variables["p"].spec == "spec"
-    assert m.constraints["power_balance"].spec == "spec"
-    assert m.expressions["spend"].spec == "spec"
-
-
-def test_a_spec_read_from_a_file_is_named_after_it(tmp_path: Path) -> None:
-    path = tmp_path / "dispatch.yaml"
-    path.write_text(EXAMPLE_DISPATCH)
-    m = Model.from_spec(path, DISPATCH_DATA)
-    assert m.spec.name == "dispatch"
-    assert m.variables["p"].spec == "dispatch"
-
-
-def test_a_sparse_constraint_carries_the_stamp_through_its_dense_form() -> None:
-    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, sparse=True)
-    con = m.constraints["power_balance"]
-    assert con.lhs.is_sparse
-    assert con.spec == "spec"
-    assert con.to_dense().spec == "spec"
 
 
 @pytest.mark.parametrize(

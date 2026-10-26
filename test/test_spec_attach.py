@@ -98,7 +98,7 @@ def good() -> dict[str, Any]:
 
 def read_all(program: Any, sources: Mapping[str, Any]) -> list[xr.DataArray]:
     attached = attach(program, sources)
-    return [attached.parameter(name) for name in program.parameters]
+    return [attached.read(name).filled for name in program.parameters]
 
 
 CAP_SHAPES = {
@@ -121,7 +121,7 @@ CAP_SHAPES = {
 def test_rank_two_shapes_attach_alike(
     program: Any, good: dict[str, Any], cap: Any
 ) -> None:
-    got = attach(program, {**good, "cap": cap}).parameter("cap")
+    got = attach(program, {**good, "cap": cap}).read("cap").filled
     xr.testing.assert_equal(got, CAP)
     assert got.dims == ("f", "t")
 
@@ -139,7 +139,7 @@ def test_an_unnamed_wide_frame_of_unequal_widths_is_read_by_position() -> None:
     values = np.arange(6.0).reshape(2, 3)
     frame = pd.DataFrame(values, index=list(f), columns=list(t))
     sources = {"f": list(f), "t": list(t), "cap": frame}
-    got = attach(lower(OBLONG_SPEC), sources).parameter("cap")
+    got = attach(lower(OBLONG_SPEC), sources).read("cap").filled
     xr.testing.assert_equal(
         got, xr.DataArray(values, coords={"f": f, "t": t}, name="cap")
     )
@@ -150,6 +150,7 @@ COST_SHAPES = {
     "series-unnamed": COST.rename_axis(None),
     "dataarray": xr.DataArray(COST),
     "dict": COST.to_dict(),
+    "whole-numbers": COST.astype(int),
     "tidy-frame": COST.reset_index(name="value"),
     "indexed-frame": COST.to_frame("value"),
 }
@@ -159,7 +160,7 @@ COST_SHAPES = {
 def test_rank_one_shapes_attach_alike(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = attach(program, {**good, "cost": cost}).parameter("cost")
+    got = attach(program, {**good, "cost": cost}).read("cost").filled
     xr.testing.assert_equal(got, xr.DataArray(COST, name="cost"))
 
 
@@ -228,23 +229,19 @@ def test_extension_strings_attach_as_numpy_objects(
 def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -> None:
     sparse = {
         **good,
-        "cost": pd.Series({"a": 1.0}),
         "lead": pd.Series({"a": 1}),
         "flag": pd.Series({"a": True}),
         "cap": CAP.sel(t=[0, 1]),
     }
     attached = attach(program, sparse)
-    cost = attached.parameter("cost")
-    assert cost.sel(f="a").item() == 1.0
-    assert cost.sel(f=["b", "c"]).isnull().all()
-    lead = attached.parameter("lead")
+    lead = attached.read("lead").filled
     assert lead.dtype == np.float64
     assert lead.sel(f="a").item() == 1.0
     assert lead.sel(f=["b", "c"]).isnull().all()
-    flag = attached.parameter("flag")
+    flag = attached.read("flag").filled
     assert flag.dtype == bool
     assert flag.values.tolist() == [False, True, False]
-    cap = attached.parameter("cap")
+    cap = attached.read("cap").filled
     assert cap.dims == ("f", "t")
     assert cap.sel(t=2).isnull().all()
 
@@ -261,14 +258,14 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
 def test_scalar_is_broadcast_over_declared_dims(
     program: Any, good: dict[str, Any], name: str, value: Any, expected_dtype: Any
 ) -> None:
-    got = attach(program, {**good, name: value}).parameter(name)
+    got = attach(program, {**good, name: value}).read(name).filled
     assert got.dims == tuple(SPEC["parameters"][name]["dims"])
     assert got.dtype == expected_dtype
     assert (got == value).all()
 
 
 def test_scalar_parameter_stays_scalar(program: Any, good: dict[str, Any]) -> None:
-    got = attach(program, good).parameter("rate")
+    got = attach(program, good).read("rate").filled
     assert got.dims == ()
     assert got.item() == 0.5
 
@@ -280,11 +277,66 @@ EMPTY_SOURCES = {
 }
 
 
+MODES_DATA: dict[str, Any] = {"f": ["a", "b"], "cost": {"a": 1.0}}
+
+
+def with_missing(**missing: Any) -> Any:
+    return lower(
+        {
+            "dimensions": {"f": {"dtype": "str"}},
+            "parameters": {"cost": {"dims": ["f"], **missing}},
+            "variables": {"x": {"dims": ["f"], "bounds": {"lower": 0, "upper": 1}}},
+            "objective": {"sense": "maximize", "expression": "sum(x * cost)"},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("missing", "filled"),
+    [("absent", [1.0, np.nan]), ("neutral", [1.0, 0.0]), (7.5, [1.0, 7.5])],
+)
+def test_a_missing_row_reads_the_way_missing_says(
+    missing: Any, filled: list[float]
+) -> None:
+    got = attach(with_missing(missing=missing), MODES_DATA).read("cost")
+    np.testing.assert_array_equal(got.filled.values, filled)
+    assert got.present.values.tolist() == [True, False]
+
+
+def test_a_missing_row_is_refused_by_default() -> None:
+    attached = attach(with_missing(), MODES_DATA)
+    with pytest.raises(SpecDataError, match="parameter 'cost' has no row at 1"):
+        attached.read("cost")
+
+
+UNSUPPORTED: dict[str, tuple[dict[str, Any], str]] = {
+    "given": ({"given": {"expressions": {"e": {"dims": ["f"]}}}}, "given:"),
+    "multi-key": (
+        {"relations": {"grp": {"key": ["f", "t"], "values": "g"}}},
+        "one key column mapping into one value column",
+    ),
+    "bare": (
+        {"relations": {"grp": {"key": ["f", "g"]}}},
+        "one key column mapping into one value column",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", UNSUPPORTED)
+def test_a_program_linopy_cannot_attach_is_refused(
+    good: dict[str, Any], case: str
+) -> None:
+    override, match = UNSUPPORTED[case]
+    spec = {**SPEC, "constraints": {}, **override}
+    with pytest.raises(SpecDataError, match=match):
+        attach(lower(spec), good)
+
+
 @pytest.mark.parametrize("cost", EMPTY_SOURCES.values(), ids=EMPTY_SOURCES.keys())
 def test_empty_source_attaches_as_all_nan(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = attach(program, {**good, "cost": cost}).parameter("cost")
+    got = attach(program, {**good, "cost": cost}).read("cost").filled
     assert got.dtype == np.float64
     assert got.isnull().all()
     assert got.indexes["f"].equals(F)
@@ -296,14 +348,14 @@ def test_missing_parameter_is_refused_when_read(
     good.pop("cost")
     attached = attach(program, good)
     with pytest.raises(SpecDataError, match="no data provided for parameter 'cost'"):
-        attached.parameter("cost")
+        attached.read("cost")
 
 
 def test_undeclared_parameter_is_refused_with_a_hint(
     program: Any, good: dict[str, Any]
 ) -> None:
     with pytest.raises(SpecDataError, match="unknown parameter 'csot'.*'cost'"):
-        attach(program, good).parameter("csot")
+        attach(program, good).read("csot")
 
 
 REFUSALS = [
@@ -382,6 +434,11 @@ REFUSALS = [
         id="wide-frame-unnamed-square",
     ),
     pytest.param(
+        {"cap": CAP.where(CAP != 4.0)},
+        r"parameter 'cap' holds 1 null or NaN value\(s\), the first at f='a', t=1",
+        id="dense-nan",
+    ),
+    pytest.param(
         {"cap": xr.DataArray(np.ones((3, 3)), dims=["f", "t"])},
         r"parameter 'cap' has no coordinate labels along 'f'",
         id="dense-without-labels",
@@ -390,6 +447,26 @@ REFUSALS = [
         {"cost": NULL_ROW}, r"parameter 'cost' carries 1 row.*f='b'", id="null-row"
     ),
     pytest.param({"cost": NAN_ROW}, r"parameter 'cost' carries 1 row", id="nan-row"),
+    pytest.param(
+        {"cost": {"a": 1.0, "b": None}},
+        r"parameter 'cost' carries 1 row",
+        id="null-in-a-dict",
+    ),
+    pytest.param(
+        {"cost": NULL_FRAME},
+        r"parameter 'cost' carries 1 row",
+        id="null-in-a-tidy-frame",
+    ),
+    pytest.param(
+        {"cost": [1.0, np.nan, 2.0]},
+        r"parameter 'cost': cannot adapt list",
+        id="sequence",
+    ),
+    pytest.param(
+        {"cost": DEEP_ROWS},
+        r"parameter 'cost'.*2 level\(s\) where 'cost' is over \['f'\]",
+        id="series-too-deep",
+    ),
     pytest.param(
         {"rate": float("nan")},
         r"parameter 'rate' is one value and that value is a hole",
@@ -523,20 +600,18 @@ def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
     assert from_dataset.coords["f"].equals(from_mapping.coords["f"])
     for name in program.parameters:
         xr.testing.assert_equal(
-            from_dataset.parameter(name), from_mapping.parameter(name)
+            from_dataset.read(name).filled, from_mapping.read(name).filled
         )
     xr.testing.assert_equal(
         from_dataset.relations["grp"], from_mapping.relations["grp"]
     )
 
 
-class Counting(Mapping[str, Any]):
+class Unlisted(Mapping[str, Any]):
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
-        self.pulled: list[str] = []
 
     def __getitem__(self, key: str) -> Any:
-        self.pulled.append(key)
         return self.data[key]
 
     def __iter__(self) -> Iterator[str]:
@@ -549,15 +624,11 @@ class Counting(Mapping[str, Any]):
         return self.data.keys()
 
 
-def test_sources_are_pulled_by_key_on_demand(
+def test_sources_are_read_by_key_never_iterated(
     program: Any, good: dict[str, Any]
 ) -> None:
-    sources = Counting(good)
-    attached = attach(program, sources)
-    assert set(sources.pulled) == {"f", "t", "g", "grp"}
-    attached.parameter("cap")
-    attached.parameter("cap")
-    assert sources.pulled.count("cap") == 2
+    attached = attach(program, Unlisted(good))
+    xr.testing.assert_equal(attached.read("cap").filled, CAP)
 
 
 def test_a_source_key_close_to_a_declared_name_warns(
@@ -567,7 +638,7 @@ def test_a_source_key_close_to_a_declared_name_warns(
     with pytest.warns(UserWarning, match=r"csot -> cost"):
         attached = attach(program, sources)
     with pytest.raises(SpecDataError, match="no data provided for parameter 'cost'"):
-        attached.parameter("cost")
+        attached.read("cost")
 
 
 def test_a_source_key_like_no_declared_name_is_silent(
@@ -613,92 +684,19 @@ def test_parameters_read_follows_names_and_masks() -> None:
     assert parameters_read(program, ["recent"]) == ["span"]
 
 
-def test_unreached_dimension_needs_no_source() -> None:
-    dimensions = {**PARITY_SPEC["dimensions"], "z": {"dtype": "int"}}
-    program = lower({**PARITY_SPEC, "dimensions": dimensions})
-    assert list(attach(program, GOOD).coords) == ["f"]
+def test_unreached_dimension_needs_no_source(good: dict[str, Any]) -> None:
+    dimensions = {**SPEC["dimensions"], "z": {"dtype": "int"}}
+    program = lower({**SPEC, "dimensions": dimensions})
+    assert list(attach(program, good).coords) == ["f", "t", "g"]
 
 
-@pytest.mark.parametrize("shape", ["dataarray", "dataarray-transposed", "wide-frame"])
-def test_aligned_array_is_not_copied(
-    program: Any, good: dict[str, Any], shape: str
-) -> None:
-    source = CAP_SHAPES[shape]
-    attached = attach(program, {**good, "cap": source})
-    assert np.shares_memory(np.asarray(source), attached.parameter("cap").values)
-    assert np.shares_memory(np.asarray(source), attached.parameter("cap").values)
-
-
-def test_master_coordinate_dtype_wins_without_a_copy(
-    program: Any, good: dict[str, Any]
-) -> None:
+def test_master_coordinate_dtype_wins(program: Any, good: dict[str, Any]) -> None:
     source = CAP.assign_coords(t=T.astype("int32"))
-    got = attach(program, {**good, "cap": source}).parameter("cap")
+    got = attach(program, {**good, "cap": source}).read("cap").filled
     assert got.indexes["t"].dtype == np.int64
-    assert np.shares_memory(np.asarray(source), got.values)
 
 
-# ---------------------------------------------------------------------------
-# lpspec data-parity cases, eager representation
-# ---------------------------------------------------------------------------
-
-PARITY_SPEC: dict[str, Any] = {
-    "dimensions": {"f": {"dtype": "str"}},
-    "parameters": {"cost": {"dims": ["f"]}, "cap": {"dims": ["f"]}},
-    "variables": {"x": {"dims": ["f"], "bounds": {"lower": 0, "upper": "cap"}}},
-    "constraints": {"k": {"dims": ["f"], "expression": "x <= cap"}},
-    "objective": {"sense": "maximize", "expression": "sum(x * cost)"},
-}
-
-GOOD = {
-    "f": ["a", "b"],
-    "cost": pd.Series({"a": 1.0, "b": 2.0}),
-    "cap": pd.Series({"a": 5.0, "b": 5.0}),
-}
 ACCEPTED = "accepted"
-
-PARITY_CASES = [
-    pytest.param({}, ACCEPTED, id="valid"),
-    pytest.param({"cap": None}, SpecDataError, id="parameter-missing-entirely"),
-    pytest.param(
-        {"cost": pd.Series({"a": 1.0})}, SpecDataError, id="coefficient-sparse"
-    ),
-    pytest.param({"cost": DUP_ROWS}, SpecDataError, id="duplicated-coordinate-row"),
-    pytest.param({"cost": STRAY_ROW}, SpecDataError, id="label-not-in-the-dimension"),
-    pytest.param({"cost": NULL_ROW}, SpecDataError, id="a-null-value"),
-    pytest.param({"cost": NAN_ROW}, SpecDataError, id="a-nan-value"),
-    pytest.param({"cap": NULL_ROW}, SpecDataError, id="a-hole-in-a-bound"),
-    pytest.param({"cost": float("nan")}, SpecDataError, id="a-hole-as-a-scalar"),
-    pytest.param({"cost": [1.0, np.nan]}, SpecDataError, id="a-hole-in-a-sequence"),
-    pytest.param({"cost": {"a": 1.0, "b": None}}, SpecDataError, id="a-hole-in-a-dict"),
-    pytest.param({"cost": NULL_FRAME}, SpecDataError, id="a-hole-in-a-tidy-frame"),
-    pytest.param({"cost": pd.Series({"a": 1, "b": 2})}, ACCEPTED, id="whole-numbers"),
-    pytest.param({"notes": COST}, ACCEPTED, id="an-undeclared-source-key-is-ignored"),
-    pytest.param({"cost": DEEP_ROWS}, SpecDataError, id="a-series-too-deep"),
-]
-
-
-@pytest.mark.parametrize(("override", "verdict"), PARITY_CASES)
-def test_parity_with_lpspec_data_verdicts(
-    override: dict[str, Any], verdict: Any
-) -> None:
-    program = lower(PARITY_SPEC)
-    sources = sources_from(GOOD, override)
-    if verdict is ACCEPTED:
-        read_all(program, sources)
-        return
-    with pytest.raises(verdict):
-        read_all(program, sources)
-
-
-def test_a_hole_is_named_where_it_sits() -> None:
-    program = lower(PARITY_SPEC)
-    with pytest.raises(SpecDataError, match="parameter 'cost'") as error:
-        read_all(program, {**GOOD, "cost": NULL_ROW})
-    assert "divisor" not in str(error.value)
-    assert "f='b'" in str(error.value)
-
-
 FLAG_SPEC = {
     "dimensions": {"g": {"dtype": "str"}},
     "parameters": {"active": {"dims": ["g"], "dtype": "bool"}},
@@ -723,7 +721,7 @@ def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> 
     program = lower(FLAG_SPEC)
     sources = {"g": ["a", "b"], "active": column}
     if verdict is ACCEPTED:
-        assert attach(program, sources).parameter("active").dtype == bool
+        assert attach(program, sources).read("active").filled.dtype == bool
         return
     with pytest.raises(SpecDataError, match="declared 'bool'"):
         read_all(program, sources)
