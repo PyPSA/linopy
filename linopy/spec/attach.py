@@ -43,16 +43,7 @@ _ACCEPTED_KINDS: dict[str, frozenset[str]] = {
     "str": frozenset("OUS"),
     "datetime": frozenset("M"),
 }
-_KIND_NAMES: dict[str, str] = {
-    "f": "float",
-    "i": "int",
-    "u": "int",
-    "b": "bool",
-    "O": "str",
-    "U": "str",
-    "S": "str",
-    "M": "datetime",
-}
+_KIND_NAMES = {k: n for n, kinds in _ACCEPTED_KINDS.items() for k in kinds}
 _EMPTY_DTYPES: dict[str, Any] = {
     "float": float,
     "int": int,
@@ -168,21 +159,16 @@ class Attached:
             coordinate, a null value in a row, values of another type
             than declared, or a missing row the declaration refuses.
         """
-        declared = self._declaration(name)
-        if name not in self._keys:
-            raise SpecDataError(f"no data provided for parameter '{name}'")
-        arr, present = _as_array(name, declared, self.sources[name], self.coords)
-        onto = {d: self.coords[d] for d in declared.dims}
-        arr, present = _aligned(name, _numpy(arr), present, onto, _fill(declared))
-        filled = _filled(name, declared, arr, present, name in self._strict)
-        return Parameter(filled, present)
-
-    def _declaration(self, name: str) -> ms.Parameter:
         if name not in self.program.parameters:
             raise SpecDataError(
                 f"unknown parameter '{name}'. {did_you_mean(name, self.program.parameters)}"
             )
-        return self.program.parameters[name]
+        declared = self.program.parameters[name]
+        if name not in self._keys:
+            raise SpecDataError(f"no data provided for parameter '{name}'")
+        arr, present = _as_array(name, declared, self.sources[name], self.coords)
+        filled = _filled(name, declared, arr, present, name in self._strict)
+        return Parameter(filled, present)
 
     @cached_property
     def _keys(self) -> frozenset[str]:
@@ -191,25 +177,24 @@ class Attached:
     @cached_property
     def _strict(self) -> frozenset[str]:
         """The parameters standing where no neutral value exists: a divisor, a bound, or the whole constant side of a comparison."""
-        return _strict_positions(self.program)
-
-
-def _strict_positions(program: ms.Program) -> frozenset[str]:
-    names: set[str] = set()
-    for variable in program.variables.values():
-        for bound in (variable.lower, variable.upper):
-            if isinstance(bound, ms.ParameterReference):
-                names.add(bound.name)
-    bodies = [e.expression for e in program.expressions.values()]
-    for node in walk(*program.roots, *bodies):
-        if isinstance(node, ms.Divide):
-            names |= parameters_of(node.divisor)
-    for constraint in program.constraints.values():
-        for side in (constraint.lhs, constraint.rhs):
-            side = _bare(side)
-            if isinstance(side, ms.ParameterReference) and not carries_variable(side):
-                names.add(side.name)
-    return frozenset(names)
+        program = self.program
+        names: set[str] = set()
+        for variable in program.variables.values():
+            for bound in (variable.lower, variable.upper):
+                if isinstance(bound, ms.ParameterReference):
+                    names.add(bound.name)
+        bodies = [e.expression for e in program.expressions.values()]
+        for node in walk(*program.roots, *bodies):
+            if isinstance(node, ms.Divide):
+                names |= parameters_of(node.divisor)
+        for constraint in program.constraints.values():
+            for side in (constraint.lhs, constraint.rhs):
+                side = _bare(side)
+                if isinstance(side, ms.ParameterReference) and not carries_variable(
+                    side
+                ):
+                    names.add(side.name)
+        return frozenset(names)
 
 
 def _bare(node: ms.Expression) -> ms.Expression:
@@ -223,22 +208,16 @@ def _bare(node: ms.Expression) -> ms.Expression:
     return node
 
 
-def amounts_of(node: ms.Expression) -> list[str]:
-    """The parameters *node* names as an amount: a translation's offset or a window's width."""
-    if isinstance(node, ms.Translate) and isinstance(node.offset, str):
-        return [node.offset]
-    if isinstance(node, ms.WindowSum) and isinstance(node.width, str):
-        return [node.width]
-    return []
-
-
 def parameters_read(program: ms.Program, expressions: Iterable[str]) -> list[str]:
     """Every parameter the named *expressions* read, by node or by name, in declared order."""
     bodies = tuple(program.expressions[e].expression for e in expressions)
     names = set(parameters_of(*bodies))
     for node in walk(*bodies):
-        names.update(amounts_of(node))
-        if isinstance(node, ms.Cases):
+        if isinstance(node, ms.Translate) and isinstance(node.offset, str):
+            names.add(node.offset)
+        elif isinstance(node, ms.WindowSum) and isinstance(node.width, str):
+            names.add(node.width)
+        elif isinstance(node, ms.Cases):
             for region in node.regions:
                 names |= region.when.names_read
     return [n for n in program.parameters if n in names]
@@ -328,7 +307,7 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
     index = flat.rename(dim)
     _check_value_dtype(dim, declared.dtype, index.dtype, what="dimension")
     if index.has_duplicates:
-        twice = index[index.duplicated()].unique().tolist()
+        twice = _twice(index)
         raise SpecDataError(
             f"dimension '{dim}' lists {shown(twice)} more than once. A dimension's members are a set: "
             f"each label appears once, in the order the source gives it."
@@ -396,6 +375,14 @@ def _numpy(arr: xr.DataArray) -> xr.DataArray:
     return arr.copy(data=arr.to_numpy())
 
 
+def _twice(index: pd.Index) -> list[Any]:
+    return index[index.duplicated()].unique().tolist()
+
+
+def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
+    return labels[~labels.isin(known)].unique().tolist()
+
+
 def _relation_series(name: str, over: str, obj: Any) -> pd.Series:
     if isinstance(obj, xr.DataArray):
         if obj.dims != (over,) or over not in obj.indexes:
@@ -434,12 +421,12 @@ def _check_relation(
             f"label is unmapped, which is what every operator reading the relation already means by it."
         )
     if series.index.has_duplicates:
-        twice = series.index[series.index.duplicated()].unique().tolist()
+        twice = _twice(series.index)
         raise SpecDataError(
             f"relation '{name}' maps {len(twice)} '{over}' label(s) more than once: {shown(twice)}. "
             f"This relation is single-valued, so each label it maps takes exactly one row."
         )
-    strays = series.index[~series.index.isin(coords[over])].tolist()
+    strays = _outside(series.index, coords[over])
     if strays:
         raise SpecDataError(
             f"relation '{name}' maps {shown(strays)}, which are not labels of '{over}'. "
@@ -449,7 +436,7 @@ def _check_relation(
             f"missing from the other."
         )
     values = pd.Index(series.to_numpy())
-    foreign = values[~values.isin(coords[target])].unique().tolist()
+    foreign = _outside(values, coords[target])
     if foreign:
         raise SpecDataError(
             f"relation '{name}' has value(s) that are not '{target}' labels: "
@@ -475,7 +462,7 @@ def _as_array(
     coords: Mapping[str, pd.Index],
 ) -> Parameter:
     if isinstance(obj, xr.DataArray):
-        return _from_dense(name, declared, obj)
+        return _from_dense(name, declared, obj, coords)
     if isinstance(obj, pd.DataFrame):
         return _from_frame(name, declared, obj, coords)
     if isinstance(obj, pd.Series):
@@ -521,7 +508,12 @@ def _from_scalar(
     return _everywhere(arr)
 
 
-def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> Parameter:
+def _from_dense(
+    name: str,
+    declared: ms.Parameter,
+    arr: xr.DataArray,
+    coords: Mapping[str, pd.Index],
+) -> Parameter:
     dims = declared.dims
     _check_value_dtype(name, declared.dtype, arr.dtype)
     if set(arr.dims) != set(dims) or len(arr.dims) != len(dims):
@@ -543,7 +535,8 @@ def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> Paramet
             f"{first_coordinates(holes, 3)}. A coordinate with no value has no row: leave it "
             f"out of the table, and the declaration's missing: says what that means."
         )
-    return _everywhere(arr.transpose(*dims))
+    onto = {d: coords[d] for d in dims}
+    return _aligned(name, _numpy(arr.transpose(*dims)), onto, _fill(declared))
 
 
 def _from_frame(
@@ -554,21 +547,19 @@ def _from_frame(
 ) -> Parameter:
     dims = declared.dims
     tidy = df
-    if not set(dims) <= set(df.columns) and set(dims) <= _headers(df):
+    headers = {*df.columns, *df.index.names}
+    if not set(dims) <= set(df.columns) and set(dims) <= headers:
         tidy = df.reset_index()
     if "value" in tidy.columns and set(dims) <= set(tidy.columns):
         indexed = tidy.set_index(list(dims)) if dims else tidy
         return _from_rows(name, declared, indexed["value"], coords)
     if len(dims) == 2:
-        return _from_dense(name, declared, xr.DataArray(_wide(name, dims, df)))
+        wide = xr.DataArray(_wide(name, dims, df))
+        return _from_dense(name, declared, wide, coords)
     raise SpecDataError(
         f"parameter '{name}' arrived as a DataFrame with columns {list(df.columns)}; a table for "
         f"'{name}' carries columns {[*dims, 'value']}."
     )
-
-
-def _headers(df: pd.DataFrame) -> set[Any]:
-    return set(df.columns) | set(df.index.names)
 
 
 def _wide(name: str, dims: tuple[str, ...], df: pd.DataFrame) -> pd.DataFrame:
@@ -671,7 +662,7 @@ def _refuse_duplicate_coordinates(
 
 
 def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) -> None:
-    strangers = labels[~labels.isin(known)].unique().tolist()
+    strangers = _outside(labels, known)
     if not strangers:
         return
     raise SpecDataError(
@@ -683,12 +674,9 @@ def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) ->
 
 
 def _aligned(
-    name: str,
-    arr: xr.DataArray,
-    present: xr.DataArray,
-    onto: Mapping[str, pd.Index],
-    fill: Any,
+    name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index], fill: Any
 ) -> Parameter:
+    present = xr.ones_like(arr, dtype=bool)
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
         if stale:

@@ -21,6 +21,7 @@ back in, which reproduces what attach built, values and dtype alike.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Hashable
 from typing import Any
 
 import numpy as np
@@ -29,9 +30,8 @@ import xarray as xr
 from mathspec import __version__ as MATHSPEC_VERSION
 
 from linopy.model import Model
-from linopy.spec.accessor import ModelSpec, restore
+from linopy.spec.accessor import ModelSpec, lower_text
 
-PREFIX = "spec"
 TEXT_ATTR = "text"
 NAME_ATTR = "name"
 VERSION_ATTR = "mathspec"
@@ -59,7 +59,7 @@ def restore_dtype(arr: xr.DataArray) -> xr.DataArray:
 
 def encode(spec: ModelSpec) -> xr.Dataset:
     """
-    The spec's own dataset under the ``spec-`` prefix: its text, its name, its master coordinates and its parameters.
+    The spec's own dataset: its text, its name, its master coordinates and its parameters.
 
     The spec text, the mathspec version and the name are the dataset's
     attributes, which the merge lifts to the file's. Beside them sits one
@@ -73,31 +73,19 @@ def encode(spec: ModelSpec) -> xr.Dataset:
         COORD + dim: record_dtype(xr.DataArray(index.to_numpy(), dims=(dim,)))
         for dim, index in spec.coords.items()
     }
-    coded = _coded(spec)
     for name, arr in spec.parameters.items():
-        if str(name) in coded:
+        if name in spec.program.relations or arr.dtype == object:
             arrays.update(_encode(str(name), arr))
         else:
-            arrays[PARAM + str(name)] = record_dtype(
-                xr.DataArray(arr.to_numpy(), dims=arr.dims), str(arr.dtype)
-            )
+            arrays[PARAM + str(name)] = record_dtype(_bare(arr))
     for name, present in spec.presence.items():
-        arrays[PRESENT + str(name)] = record_dtype(
-            xr.DataArray(present.to_numpy(), dims=present.dims)
-        )
+        arrays[PRESENT + str(name)] = record_dtype(_bare(present))
     attrs = {
         TEXT_ATTR: spec.text,
         VERSION_ATTR: MATHSPEC_VERSION,
         NAME_ATTR: spec.name,
     }
-    return _with_prefix(xr.Dataset(arrays, attrs=attrs))
-
-
-def _with_prefix(ds: xr.Dataset) -> xr.Dataset:
-    """*ds* with every dimension, variable and attribute of it namespaced under the spec prefix."""
-    ds = ds.rename({d: f"{PREFIX}-{d}" for d in set([*ds.dims, *ds])})
-    ds.attrs = {f"{PREFIX}-{k}": v for k, v in ds.attrs.items()}
-    return ds
+    return xr.Dataset(arrays, attrs=attrs)
 
 
 def decode(model: Model, sub: xr.Dataset) -> ModelSpec:
@@ -122,44 +110,39 @@ def decode(model: Model, sub: xr.Dataset) -> ModelSpec:
             stacklevel=4,
         )
     coords = {
-        _stripped(name, COORD): _index(sub[name])
-        for name in sub.data_vars
-        if str(name).startswith(COORD)
+        dim: pd.Index(restore_dtype(arr).to_numpy(), name=dim)
+        for dim, arr in _group(sub, COORD).items()
     }
     arrays = {
-        _stripped(name, PARAM): _plain(sub[name], _stripped(name, PARAM), coords)
-        for name in sub.data_vars
-        if str(name).startswith(PARAM)
+        name: _plain(arr, name, coords) for name, arr in _group(sub, PARAM).items()
     }
-    arrays.update(
-        {
-            _stripped(name, CODES): _decode(sub, _stripped(name, CODES), coords)
-            for name in sub.data_vars
-            if str(name).startswith(CODES)
-        }
-    )
+    arrays |= {name: _decode(sub, name, coords) for name in _group(sub, CODES)}
     presence = {
-        _stripped(name, PRESENT): _plain(sub[name], _stripped(name, PRESENT), coords)
-        for name in sub.data_vars
-        if str(name).startswith(PRESENT)
+        name: _plain(arr, name, coords) for name, arr in _group(sub, PRESENT).items()
     }
-    return restore(
+    text = str(sub.attrs[TEXT_ATTR])
+    parameters = xr.Dataset(arrays).assign_coords(coords)
+    return ModelSpec(
         model,
         str(sub.attrs[NAME_ATTR]),
-        str(sub.attrs[TEXT_ATTR]),
-        xr.Dataset(arrays).assign_coords(coords),
+        lower_text(text),
+        text,
+        parameters,
         xr.Dataset(presence),
     )
 
 
-def _coded(spec: ModelSpec) -> set[str]:
-    """The parameters written as codes: every relation and every array of objects."""
-    relations = set(spec.relations)
+def _group(sub: xr.Dataset, prefix: str) -> dict[str, xr.DataArray]:
+    """The arrays of *sub* written under *prefix*, by their names without it."""
     return {
-        str(name)
-        for name, arr in spec.parameters.items()
-        if name in relations or arr.dtype == object
+        str(name)[len(prefix) :]: sub[name]
+        for name in sub.data_vars
+        if str(name).startswith(prefix)
     }
+
+
+def _bare(arr: xr.DataArray) -> xr.DataArray:
+    return xr.DataArray(arr.to_numpy(), dims=arr.dims)
 
 
 def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
@@ -174,17 +157,23 @@ def _encode(name: str, arr: xr.DataArray) -> dict[str, xr.DataArray]:
 
 def _plain(arr: xr.DataArray, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
     """An array written as its own values, back on the master coordinates at its own dtype."""
-    dims = tuple(str(d) for d in arr.dims)
-    values = restore_dtype(arr).to_numpy()
-    return xr.DataArray(
-        values, coords={d: coords[d] for d in dims}, dims=dims, name=name
-    )
+    return _on_master(restore_dtype(arr).to_numpy(), arr.dims, name, coords)
 
 
 def _decode(sub: xr.Dataset, name: str, coords: dict[str, pd.Index]) -> xr.DataArray:
+    """
+    A coded array, its codes looked up in its table of categories.
+
+    A map that leaves every label unmapped has no table: netCDF3 writes a
+    zero-length dimension as the unlimited one, of which a file holds one.
+    """
     codes = sub[CODES + name]
     dtype = np.dtype(codes.attrs[DTYPE_ATTR])
-    categories = _categories(sub, name, dtype)
+    table = CATEGORIES + name
+    if table in sub.data_vars:
+        categories = restore_dtype(sub[table]).to_numpy()
+    else:
+        categories = np.empty(0, dtype=dtype)
     positions = codes.to_numpy().astype(int)
     mapped = positions >= 0
     if mapped.all():
@@ -192,28 +181,17 @@ def _decode(sub: xr.Dataset, name: str, coords: dict[str, pd.Index]) -> xr.DataA
     else:
         values = np.full(positions.shape, HOLES[dtype.kind], dtype=dtype)
         values[mapped] = categories[positions[mapped]]
-    dims = tuple(str(d) for d in codes.dims)
+    return _on_master(values, codes.dims, name, coords)
+
+
+def _on_master(
+    values: np.ndarray,
+    dims: tuple[Hashable, ...],
+    name: str,
+    coords: dict[str, pd.Index],
+) -> xr.DataArray:
+    """*values* over *dims*, put back on the master coordinates."""
+    framed = tuple(str(d) for d in dims)
     return xr.DataArray(
-        values, coords={d: coords[d] for d in dims}, dims=dims, name=name
+        values, coords={d: coords[d] for d in framed}, dims=framed, name=name
     )
-
-
-def _categories(sub: xr.Dataset, name: str, dtype: np.dtype) -> np.ndarray:
-    """
-    The table a coded array indexes.
-
-    A map that leaves every label unmapped has no table: netCDF3 writes a
-    zero-length dimension as the unlimited one, of which a file holds one.
-    """
-    written = CATEGORIES + name
-    if written in sub.data_vars:
-        return restore_dtype(sub[written]).to_numpy()
-    return np.empty(0, dtype=dtype)
-
-
-def _stripped(name: Any, prefix: str) -> str:
-    return str(name)[len(prefix) :]
-
-
-def _index(arr: xr.DataArray) -> pd.Index:
-    return pd.Index(restore_dtype(arr).to_numpy(), name=_stripped(arr.name, COORD))

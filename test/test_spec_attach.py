@@ -12,6 +12,8 @@ import xarray as xr
 
 pytest.importorskip("mathspec")
 
+from spec_helpers import with_  # noqa: E402
+
 from linopy.spec import SpecDataError, attach, lower  # noqa: E402
 from linopy.spec.attach import parameters_read  # noqa: E402
 
@@ -223,6 +225,30 @@ def test_extension_strings_attach_as_numpy_objects(
     assert got.values[:2].tolist() == ["n", "e"]
     assert pd.isna(got.values[2])
     assert got.sel(f=["b", "a"]).values.tolist() == ["n", "e"]
+
+
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+@pytest.mark.parametrize("shape", ["series", "tidy-frame", "dict", "dataarray"])
+def test_string_parameter_rows_attach_as_numpy_objects(
+    good: dict[str, Any], storage: str, shape: str
+) -> None:
+    if storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    tagged = with_(
+        SPEC, parameters={"tag": {"dims": ["f"], "dtype": "str", "missing": "absent"}}
+    )
+    series = pd.Series(["n", "e"], index=F[:2], dtype=pd.StringDtype(storage))
+    shapes = {
+        "series": series,
+        "tidy-frame": series.reset_index(name="value"),
+        "dict": series.to_dict(),
+        "dataarray": xr.DataArray(series),
+    }
+    filled, present = attach(lower(tagged), {**good, "tag": shapes[shape]}).read("tag")
+    assert filled.dtype == np.dtype(object)
+    assert filled.values[:2].tolist() == ["n", "e"]
+    assert pd.isna(filled.values[2])
+    assert present.values.tolist() == [True, True, False]
 
 
 def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -> None:

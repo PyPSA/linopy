@@ -13,9 +13,9 @@ from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
-from linopy.spec.context import Array, Context, Term, Value
-from linopy.spec.errors import SpecDataError, first_coordinates, unknown
-from linopy.spec.where import evaluate_where
+from linopy.spec.context import Array, Context, Term, Value, as_expression
+from linopy.spec.errors import SpecDataError, first_coordinates
+from linopy.spec.where import evaluate_where, looked_up
 from linopy.variables import Variable
 
 _Binary = ms.Add | ms.Multiply | ms.Divide | ms.Power
@@ -26,8 +26,6 @@ _Framed = TypeVar(
 
 def evaluate_named(name: str, ctx: Context) -> Value:
     """The named expression *name* as its linopy term, array or number over *ctx*, framed as declared."""
-    if name not in ctx.program.expressions:
-        raise unknown("named expression", name, ctx.program.expressions)
     declared = ctx.program.expressions[name]
     value = evaluate(declared.expression, ctx)
     if isinstance(value, xr.DataArray):
@@ -74,7 +72,7 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Sum):
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
-        return _joined(node, ctx)
+        return looked_up(_operand(node.operand, ctx), node.columns, ctx)
     if isinstance(node, ms.Translate):
         return operators.shift(
             _operand(node.operand, ctx),
@@ -122,16 +120,6 @@ def _sum(node: ms.Sum, ctx: Context) -> Array:
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
-
-
-def _joined(node: ms.Join, ctx: Context) -> Array:
-    """A lookup: the operand read through the relation, one value per row of the key."""
-    columns = node.columns
-    return operators.at(
-        _operand(node.operand, ctx),
-        ctx.relations[columns.name],
-        into=columns.dropped_dims[0],
-    )
 
 
 def _parameter(name: str, ctx: Context) -> xr.DataArray:
@@ -200,7 +188,7 @@ def _combine(
     if isinstance(left, Term) or isinstance(right, Term):
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
-            refuse_made(kind, ms.parameters_of(node), a + b, a, b, ctx)
+            refuse_made(kind, ms.parameters_of(node), operator.add, a, b, ctx)
         return op(*_paired(left, right))
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
@@ -212,9 +200,7 @@ def _combine(
                 f"{b.indexes[dim].tolist()[:5]}. Every operand is read on the master "
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
-    made = cast(xr.DataArray, op(a, b))
-    refuse_made(kind, ms.parameters_of(node), made, a, b, ctx)
-    return made
+    return refuse_made(kind, ms.parameters_of(node), op, a, b, ctx)
 
 
 def _paired(left: Value, right: Value) -> tuple[Value, Value]:
@@ -238,19 +224,21 @@ def constant_of(value: Value) -> xr.DataArray:
 def refuse_made(
     kind: str,
     params: frozenset[str],
-    made: xr.DataArray,
+    op: Callable[[Value, Value], Value],
     left: xr.DataArray,
     right: xr.DataArray,
     ctx: Context,
-) -> None:
+) -> xr.DataArray:
+    """*op* of *left* and *right*, refused wherever it is not finite though both are present."""
+    made = cast(xr.DataArray, op(left, right))
     if made.dtype.kind not in "fc":
-        return
+        return made
     nan_made = made.isnull() & left.notnull() & right.notnull()
     bad = nan_made | (np.isinf(made) & _finite(left) & _finite(right))
     if ctx.rows is not None:
         bad = bad & ctx.rows
     if not bool(bad.any()):
-        return
+        return made
     named = ", ".join(f"'{p}'" for p in sorted(params))
     raise SpecDataError(
         f"{ctx.subject}: the {kind} of {named} is not finite at "
@@ -284,9 +272,7 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
     """*value* where the region holds and a hard zero everywhere else: a fill, so absence inside the region stands."""
     if isinstance(value, float | int):
         return rows * value
-    if isinstance(value, Variable):
-        value = value.to_linexpr()
-    return value.where(rows, 0)
+    return as_expression(value).where(rows, 0)
 
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:

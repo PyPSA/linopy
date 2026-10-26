@@ -11,7 +11,8 @@ array or a linopy term.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
+from typing import overload
 
 import pandas as pd
 import xarray as xr
@@ -25,6 +26,16 @@ from linopy.variables import Variable
 Term = Variable | LinearExpression | QuadraticExpression
 Array = xr.DataArray | Term
 Value = float | Array
+Expression = xr.DataArray | LinearExpression | QuadraticExpression
+
+
+@overload
+def as_expression(value: Term) -> LinearExpression | QuadraticExpression: ...
+@overload
+def as_expression(value: Array) -> Expression: ...
+def as_expression(value: Array) -> Expression:
+    """*value* with a bare variable as its linear expression."""
+    return value.to_linexpr() if isinstance(value, Variable) else value
 
 
 @dataclass(frozen=True)
@@ -51,21 +62,7 @@ class Context:
     relations: Mapping[str, xr.DataArray]
     parameter: Callable[[str], Parameter]
     name: str
-    solved: bool = field(default=False)
-    filled: bool = field(default=True)
-    rows: xr.DataArray | None = field(default=None)
-    subject: str = field(default="the spec")
-
-    @property
-    def unsolved(self) -> Context:
-        """The same context with the fold's switch off, so a variable enters as its linopy term."""
-        return replace(self, solved=False)
-
-    @property
-    def unfilled(self) -> Context:
-        """The same context with the comparison's switch off, so a missing row reaches the comparison."""
-        return replace(self, filled=False)
-
-    def within(self, rows: xr.DataArray, subject: str) -> Context:
-        """The same context narrowed to the rows a constraint builds, naming it as *subject*."""
-        return replace(self, rows=rows, subject=subject)
+    solved: bool = False
+    filled: bool = True
+    rows: xr.DataArray | None = None
+    subject: str = "the spec"

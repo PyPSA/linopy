@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable
+from dataclasses import replace
 from typing import assert_never, cast
 
 import numpy as np
@@ -11,7 +12,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.spec import operators
-from linopy.spec.context import Context
+from linopy.spec.context import Array, Context
 from linopy.spec.errors import SpecDataError
 
 _COMPARISONS: dict[str, Callable[..., xr.DataArray]] = {
@@ -66,22 +67,15 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
             return compared & present
         return compared
     if isinstance(node, ms.ExpressionComparison):
-        left, right = _side(node.left, ctx), _side(node.right, ctx)
-        compared = _COMPARISONS[node.op](left, right) & left.notnull()
-        return _bool(compared & right.notnull())
+        return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):
         count = _node(node.condition.root, ctx).sum(node.over)
-        return _COMPARISONS[node.op](count, node.value).astype(bool)
+        return _COMPARISONS[node.op](count, node.value)
     if isinstance(node, ms.TranslatedCondition):
         shifted = _node(node.operand.root, ctx).shift({node.along: node.offset})
         return _bool(shifted)
     if isinstance(node, ms.JoinedCondition):
-        columns = node.columns
-        pulled = operators.at(
-            _node(node.operand.root, ctx),
-            ctx.relations[columns.name],
-            into=columns.dropped_dims[0],
-        )
+        pulled = looked_up(_node(node.operand.root, ctx), node.columns, ctx)
         return _bool(cast(xr.DataArray, pulled))
     if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
@@ -91,12 +85,9 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
         return _position(node, ctx)
     if isinstance(node, ms.RelationComparison):
         arr = ctx.relations[node.name]
-        return _bool(_compared(arr, node.op, node.value) & arr.notnull())
+        return _compared(arr, node.op, node.value) & arr.notnull()
     if isinstance(node, ms.RelationPairComparison):
-        left = ctx.relations[node.name]
-        right = ctx.relations[node.other]
-        compared = _COMPARISONS[node.op](left, right) & left.notnull()
-        return _bool(compared & right.notnull())
+        return _both(node.op, ctx.relations[node.name], ctx.relations[node.other])
     if isinstance(node, ms.RelationDefined):
         return ctx.relations[node.name].notnull()
     if isinstance(node, ms.Not):
@@ -106,6 +97,12 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.Or):
         return _node(node.left, ctx) | _node(node.right, ctx)
     assert_never(node)
+
+
+def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
+    """*arr* read through the relation *columns* name, one value per row of its key."""
+    relation = ctx.relations[columns.name]
+    return operators.at(arr, relation, into=columns.dropped_dims[0])
 
 
 def _defined(name: str, ctx: Context) -> xr.DataArray:
@@ -124,11 +121,15 @@ def _bool(arr: xr.DataArray) -> xr.DataArray:
     return arr.fillna(False).astype(bool)
 
 
+def _both(op: str, left: xr.DataArray, right: xr.DataArray) -> xr.DataArray:
+    return _bool(_COMPARISONS[op](left, right) & left.notnull() & right.notnull())
+
+
 def _side(node: ms.Expression, ctx: Context) -> xr.DataArray:
     """One side of an expression comparison as data, its missing rows kept so they read as exclusion."""
     from linopy.spec.evaluate import evaluate
 
-    return xr.DataArray(evaluate(node, ctx.unfilled))
+    return xr.DataArray(evaluate(node, replace(ctx, filled=False)))
 
 
 def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:
@@ -152,7 +153,7 @@ def _position(node: ms.DimensionPosition, ctx: Context) -> xr.DataArray:
     arr = xr.DataArray(
         np.arange(len(labels)), coords={node.name: labels}, dims=[node.name]
     )
-    return _COMPARISONS[node.op](arr, at).astype(bool)
+    return _COMPARISONS[node.op](arr, at)
 
 
 def _group_offsets(

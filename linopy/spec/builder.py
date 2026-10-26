@@ -10,7 +10,9 @@ spec's name and framed in the order its entry declares its dims.
 
 from __future__ import annotations
 
+import operator
 import warnings
+from dataclasses import replace
 from typing import cast
 
 import numpy as np
@@ -18,7 +20,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.spec.context import Context, Term, Value
+from linopy.spec.context import Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluate import (
     carried,
@@ -31,8 +33,7 @@ from linopy.spec.evaluate import (
 from linopy.spec.where import as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
-_SIGN = {"==": "=", "<=": "<=", ">=": ">="}
-_FLIPPED = {"==": "==", "<=": ">=", ">=": "<="}
+_FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
@@ -45,23 +46,16 @@ def build(ctx: Context) -> None:
     assumptions are checked once the variables exist, so a condition may
     read where one is defined.
     """
-    check_supported(ctx.program)
+    _check_supported(ctx.program)
     _variables(ctx)
-    check_assumptions(ctx)
+    _check_assumptions(ctx)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
     _expressions(ctx)
 
 
-def check_supported(program: ms.Program) -> None:
-    """
-    Refuse the constructs of *program* linopy cannot build, before any of it is built.
-
-    A product of two variable-carrying operands is a quadratic term, and
-    linopy carries one in the objective only: a constraint holding one has no
-    linopy form to be built into.
-    """
+def _check_supported(program: ms.Program) -> None:
     if "constraint" in program.footprint.quadratic:
         raise NotImplementedError(
             "a constraint of the spec multiplies two variable-carrying operands, and linopy "
@@ -71,7 +65,7 @@ def check_supported(program: ms.Program) -> None:
         )
 
 
-def check_assumptions(ctx: Context) -> None:
+def _check_assumptions(ctx: Context) -> None:
     """
     Refuse the data wherever an assumption of the program does not hold.
 
@@ -82,7 +76,8 @@ def check_assumptions(ctx: Context) -> None:
     """
     for name, assumption in ctx.program.assumptions.items():
         admitted = evaluate_where(assumption.where, ctx)
-        failing = admitted & ~evaluate_where(assumption.holds, ctx)
+        held = evaluate_where(assumption.holds, ctx)
+        failing = admitted & ~held
         if bool(failing.any()):
             raise SpecDataError(
                 f"{ms.assumption_message(name, assumption)}\n"
@@ -130,24 +125,21 @@ def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
         rows = evaluate_where(row.where, ctx)
         mask = as_linopy_mask(rows)
-        scoped = ctx.within(rows, f"constraint '{name}'")
+        scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
+        lhs, rhs, sense = row.lhs, row.rhs, row.sense
         if flipped(row):
-            sign = _SIGN[_FLIPPED[row.sense]]
-            term, other = evaluate(row.rhs, scoped), evaluate(row.lhs, scoped)
-        else:
-            sign = _SIGN[row.sense]
-            term, other = evaluate(row.lhs, scoped), evaluate(row.rhs, scoped)
-        term = cast(Term, term)
+            lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
+        term, other = cast(Term, evaluate(lhs, scoped)), evaluate(rhs, scoped)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
         _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
-            const = constant_of(term)
             params = ms.parameters_of(row.lhs, row.rhs)
-            refuse_made("comparison", params, const - other, const, other, scoped)
+            const = constant_of(term)
+            refuse_made("comparison", params, operator.sub, const, other, scoped)
             term, other = carried(term, other)
         built = ctx.model.add_constraints(
-            _framed(term, row.dims), sign, other, name=name, mask=mask
+            _framed(term, row.dims), sense, other, name=name, mask=mask
         )
         built.spec = ctx.name
 
@@ -259,9 +251,7 @@ def _framed(
     stray coordinates. A dimension the entry declares and the term lacks is
     what the other side of a comparison brings in.
     """
-    expression = without_strays(
-        term.to_linexpr() if isinstance(term, Variable) else term
-    )
+    expression = without_strays(as_expression(term))
     order = [d for d in dims if d in expression.coord_dims]
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         store = expression._store.transpose(order)

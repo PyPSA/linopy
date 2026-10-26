@@ -71,9 +71,8 @@ def build_into(
             "add_spec builds into an empty model, and this one already holds "
             f"{len(model.variables)} variable(s) and {len(model.constraints)} constraint(s)."
         )
-    text, program, stem = normalize_spec(spec)
+    text, program, name = normalize_spec(spec)
     attached = attach_data(program, sources)
-    name = stem or "spec"
     read = functools.cache(attached.read)
     unbuilt = unbuilt_expressions(program)
     kept = {p: read(p) for p in parameters_read(program, unbuilt)}
@@ -88,18 +87,6 @@ def build_into(
     return ModelSpec(model, name, program, text, parameters, presence)
 
 
-def restore(
-    model: Model, name: str, text: str, parameters: xr.Dataset, presence: xr.Dataset
-) -> ModelSpec:
-    """
-    The accessor for *model*, with the program lowered afresh from *text*.
-
-    *parameters* and *presence* are what :attr:`ModelSpec.parameters` and
-    :attr:`ModelSpec.presence` held when the model was written.
-    """
-    return ModelSpec(model, name, lower(_read(text)), text, parameters, presence)
-
-
 def lower(spec: SpecLike) -> ms.Program:
     """
     *spec* lowered to the program linopy builds, its piecewise curves written out.
@@ -110,14 +97,19 @@ def lower(spec: SpecLike) -> ms.Program:
     return to_spec(spec).expand("piecewise").program
 
 
+def lower_text(text: str) -> ms.Program:
+    """YAML *text* lowered, as :func:`lower` would lower it."""
+    return lower(_read(text))
+
+
 def _read(text: str) -> Spec:
     """YAML *text* as a Spec, a one-line text included, which ``to_spec`` would read as a path."""
     return to_spec(f"{text}\n")
 
 
-def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
+def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str]:
     """
-    *spec* as the YAML text kept on the model, lowered, and the file's stem where it came from one.
+    *spec* as the YAML text kept on the model, lowered, and its name: the file's stem where it came from one, else ``spec``.
 
     A ``Path``, or a ``str`` naming an existing file, is read; any other
     ``str`` is YAML text; a mapping is a spec as a dict; a ``Spec`` is used
@@ -148,13 +140,13 @@ def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
             "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             f"not a {type(spec).__name__}."
         )
-    program = lower(_read(text))
+    program = lower_text(text)
     if not (program.dimensions or program.parameters or program.variables):
         raise SpecDataError(
             "the spec declares nothing: no dimension, no parameter and no variable. "
             "There is nothing to attach data to and nothing to build."
         )
-    return text, program, spec.stem if isinstance(spec, Path) else None
+    return text, program, spec.stem if isinstance(spec, Path) else "spec"
 
 
 def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
@@ -348,7 +340,7 @@ class ModelSpec:
         """The spec as the typesetter reads it."""
         return _read(self.text)
 
-    def _context(self) -> Context:
+    def _context(self, *, solved: bool) -> Context:
         return Context(
             self._model,
             self.program,
@@ -356,7 +348,7 @@ class ModelSpec:
             self.relations,
             functools.cache(self._parameter),
             self.name,
-            solved=True,
+            solved=solved,
         )
 
 
@@ -433,6 +425,7 @@ class NamedExpression:
     @property
     def _stored(self) -> LinearExpression | QuadraticExpression | None:
         """The entry the spec built into ``model.expressions``, if it is still there."""
+        self._refuse_declaration()
         held = self._spec._model.expressions.data.get(self._name)
         return held if held is not None and held.spec == self._spec.name else None
 
@@ -446,11 +439,10 @@ class NamedExpression:
         a bare ``Variable``, a ``DataArray`` for a data-only body or a
         ``float`` for a constant.
         """
-        self._refuse_declaration()
         stored = self._stored
         if stored is not None:
             return stored
-        return evaluate_named(self._name, self._spec._context().unsolved)
+        return evaluate_named(self._name, self._spec._context(solved=False))
 
     @property
     def solution(self) -> xr.DataArray:
@@ -471,11 +463,10 @@ class NamedExpression:
             ``model.expressions``, so the parameters it reads are not kept,
             or this is a constraint or a variable.
         """
-        self._refuse_declaration()
         stored = self._stored
         if stored is not None:
             return stored.solution.rename(self._name)
-        return fold(self._name, self._spec._context())
+        return fold(self._name, self._spec._context(solved=True))
 
     def __repr__(self) -> str:
         value = self.__dict__.get("expression")

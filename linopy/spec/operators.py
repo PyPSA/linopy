@@ -21,20 +21,17 @@ import pandas as pd
 import xarray as xr
 
 from linopy.constants import EvolvingAPIWarning
-from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.long import Relation
-from linopy.spec.context import Array
+from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
-from linopy.variables import Variable
 
 Amount = int | xr.DataArray
 
 
 def filled(expression: Array, fill: float) -> Array:
     """*expression* with every absence in it standing as *fill*."""
-    if isinstance(expression, Variable):
-        expression = expression.to_linexpr()
-    return expression.fillna(fill)
+    return as_expression(expression).fillna(fill)
 
 
 def vacated(
@@ -57,8 +54,7 @@ def sum_over(array: Array, over: str) -> Array:
     if not isinstance(array, xr.DataArray) and any(
         not array.sizes[dim] for dim in array.coord_dims if dim != over
     ):
-        kept = [dim for dim in _coord_dims(array) if dim != over]
-        return _zeros(array, kept, {dim: array.indexes[dim] for dim in kept})
+        return _zeros(array, over)
     return array.sum(over)
 
 
@@ -77,29 +73,25 @@ def grouped_sum(
     dim = str(relation.dims[0])
     present = relation.notnull()
     if not bool(present.any()):
-        return _empty_groups(array, dim, into=into, labels=labels)
+        return _zeros(array, dim, {into: labels})
     member = dim if dim != into else f"{dim}__member"
     keep = present.to_numpy()
     members = np.asarray(relation.indexes[dim])[keep]
     groups = relation.to_numpy()[keep]
-    if isinstance(array, QuadraticExpression):
-        if member != dim:
-            array = array.rename({dim: member})
+    expression = as_expression(array)
+    if member != dim:
+        expression = expression.rename({dim: member})
+    if isinstance(expression, QuadraticExpression):
         weights = xr.DataArray(
             (groups[:, None] == labels.to_numpy()[None, :]).astype(float),
             coords={member: members, into: labels},
             dims=[member, into],
         )
-        return (array.sel({member: members}) * weights).sum(member)
-    if isinstance(array, xr.DataArray):
-        if member != dim:
-            array = array.rename({dim: member})
-        attached = array.sel({member: members}).assign_coords({into: (member, groups)})
-        summed = attached.groupby(into).sum()
-        return summed.reindex({into: labels}).fillna(0.0)
-    expression = array.to_linexpr() if isinstance(array, Variable) else array
-    if member != dim:
-        expression = expression.rename({dim: member})
+        return (expression.sel({member: members}) * weights).sum(member)
+    if isinstance(expression, xr.DataArray):
+        picked = expression.sel({member: members})
+        attached = picked.assign_coords({into: (member, groups)})
+        return attached.groupby(into).sum().reindex({into: labels}).fillna(0.0)
     frame = pd.DataFrame({member: members, into: groups})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", EvolvingAPIWarning)
@@ -107,31 +99,16 @@ def grouped_sum(
     return expression.groupby(by).sum()
 
 
-def _empty_groups(
-    array: Array,
-    dim: str,
-    *,
-    into: str,
-    labels: pd.Index,
+def _zeros(
+    array: Array, without: str, extra: dict[str, pd.Index] | None = None
 ) -> Array:
-    """
-    The grouped sum of an operand no member of *dim* is mapped out of.
-
-    Every declared group holds the empty sum, which is 0. Grouping cannot say
-    so itself: filtering the operand down to its mapped members leaves nothing,
-    and an empty dimension is one xarray refuses to group over.
-    """
-    kept = [d for d in _coord_dims(array) if d != dim]
-    coords = {**{d: array.indexes[d] for d in kept}, into: labels}
-    return _zeros(array, kept + [into], coords)
-
-
-def _zeros(array: Array, dims: list[str], coords: dict[str, pd.Index]) -> Array:
-    """The constant zero over *dims*, of the kind *array* is: data, or a term of its model."""
+    """The constant zero over the operand's dimensions but *without*, and *extra*: data, or a term of its model."""
+    kept = [d for d in _coord_dims(array) if d != without]
+    coords = {**{d: array.indexes[d] for d in kept}, **(extra or {})}
     zeros = xr.DataArray(
-        np.zeros([len(coords[d]) for d in dims]),
-        coords={d: coords[d] for d in dims},
-        dims=dims,
+        np.zeros([len(index) for index in coords.values()]),
+        coords=coords,
+        dims=list(coords),
     )
     if isinstance(array, xr.DataArray):
         return zeros
@@ -152,12 +129,9 @@ def at(array: Array, relation: xr.DataArray, *, into: str) -> Array:
     operand's own absence rather than a zero.
     """
     mapping = relation.rename(into)
-    present = mapping.notnull()
     dim = str(mapping.dims[0])
     labels = mapping.indexes[dim]
-    if bool(present.all()):
-        return array.sel({into: mapping}).assign_coords({dim: labels})
-    keep = present.to_numpy()
+    keep = mapping.notnull().to_numpy()
     picked = array.sel({into: mapping.isel({dim: keep})})
     return picked.assign_coords({dim: labels[keep]}).reindex({dim: labels})
 
@@ -223,12 +197,9 @@ def shift(
     is an array differs per entity and is a gather. *by* is the relation
     whose groups the translation stays inside.
     """
-    if by is not None:
-        partition = grouped(over, np.asarray(array.indexes[over]), by)
-        offset = _per_group(offset, by)
-        return _gather_in_groups(array, over, offset, partition, wrap, fill)
-    if isinstance(offset, xr.DataArray) and offset.ndim:
-        return _gather_by_offset(array, over, offset, wrap, fill)
+    offset, partition = _grouping(array, over, offset, by)
+    if partition is not None or (isinstance(offset, xr.DataArray) and offset.ndim):
+        return _gather(array, over, offset, partition, wrap, fill)
     amount: dict[Hashable, int] = {over: int(offset)}
     if wrap:
         if isinstance(array, xr.DataArray):
@@ -260,8 +231,7 @@ def sum_back(
     axis. Without it such a width asks for positions that do not exist and is
     refused.
     """
-    if by is not None:
-        within = _per_group(within, by)
+    within, partition = _grouping(array, over, within, by)
     asked = _widest(within)
     size = int(array.sizes[over])
     if asked > size and not wrap:
@@ -271,17 +241,10 @@ def sum_back(
             f"window continues from the other end."
         )
     widest = max(1, min(asked, size))
-    partition = (
-        None if by is None else grouped(over, np.asarray(array.indexes[over]), by)
-    )
     lagged_terms: list[Array] = []
     reached: list[xr.DataArray] = []
     for lag in range(widest):
-        lagged = (
-            _gather_by_offset(array, over, lag, wrap, None)
-            if partition is None
-            else _gather_in_groups(array, over, lag, partition, wrap, None)
-        )
+        lagged = _gather(array, over, lag, partition, wrap, None)
         live, term = ~lagged.isnull(), filled(lagged, 0.0)
         if isinstance(within, xr.DataArray):
             live, term = live & (within > lag), term * (within > lag).astype(float)
@@ -302,9 +265,30 @@ def _merged(values: list[Array]) -> Array:
     """The sum of *values* in one step: a running sum would re-concatenate the term axis once per lag."""
     if isinstance(values[0], xr.DataArray):
         return reduce(operator.add, values)
-    from linopy import merge
-
     return cast(LinearExpression, merge(cast(list[LinearExpression], values)))
+
+
+def _grouping(
+    array: Array, over: str, amount: Amount, by: xr.DataArray | None
+) -> tuple[Amount, Groups | None]:
+    """*amount* read per group, beside how *by* partitions *over*; no relation keeps the axis whole."""
+    if by is None:
+        return amount, None
+    return _per_group(amount, by), grouped(over, np.asarray(array.indexes[over]), by)
+
+
+def _gather(
+    array: Array,
+    over: str,
+    offset: Amount,
+    partition: Groups | None,
+    wrap: bool,
+    fill: float | None,
+) -> Array:
+    """*array* translated by *offset* along *over*, or inside each group of *partition*."""
+    if partition is None:
+        return _gather_by_offset(array, over, offset, wrap, fill)
+    return _gather_in_groups(array, over, offset, partition, wrap, fill)
 
 
 def _gather_by_offset(
@@ -379,6 +363,4 @@ def _gather_in_groups(
 
 def _labelled(labels: np.ndarray, ordinals: xr.DataArray) -> xr.DataArray:
     """*ordinals* as the labels they stand for, carrying no coordinates of their own."""
-    return xr.DataArray(
-        labels[ordinals.transpose(*ordinals.dims).values], dims=ordinals.dims
-    )
+    return xr.DataArray(labels[ordinals.values], dims=ordinals.dims)

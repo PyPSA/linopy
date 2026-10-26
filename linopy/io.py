@@ -1050,6 +1050,13 @@ def _spec_stamp(expr: LinearExpression | QuadraticExpression) -> dict[str, str]:
     return {SPEC_STAMP_ATTR: expr.spec} if expr.spec is not None else {}
 
 
+def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+    ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+    return ds
+
+
 def to_netcdf(
     m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
 ) -> None:
@@ -1099,12 +1106,6 @@ def to_netcdf(
             stacklevel=2,
         )
 
-    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
-        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-        return ds
-
     vars = [
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
@@ -1137,7 +1138,7 @@ def to_netcdf(
     if m._spec is not None:
         from linopy.spec.netcdf import encode
 
-        specs = [encode(m._spec)]
+        specs = [with_prefix(encode(m._spec), "spec")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     scalars["sparse"] = m.sparse
@@ -1391,10 +1392,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         A deep or shallow copy of the model.
     """
     from linopy.constraints import Constraints
-    from linopy.expressions import (
-        Expressions,
-        copy_expression,
-    )
+    from linopy.expressions import Expressions, copy_expression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
