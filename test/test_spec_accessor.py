@@ -33,7 +33,13 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
-from linopy.spec import ModelSpec, NamedExpression, SpecDataError, lower  # noqa: E402
+from linopy.spec import (  # noqa: E402
+    Declaration,
+    ModelSpec,
+    NamedExpression,
+    SpecDataError,
+    lower,
+)
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -415,7 +421,7 @@ def test_a_named_expression_typeset_passes_options() -> None:
 @pytest.mark.parametrize("name", ["spend", "power_balance", "p"])
 @pytest.mark.parametrize("typeset", LINE_TYPESETTERS)
 def test_a_declaration_typesets_to_one_line(
-    name: str, typeset: Callable[[NamedExpression], str]
+    name: str, typeset: Callable[[Declaration], str]
 ) -> None:
     d = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.declaration(name)
     line = typeset(d)
@@ -431,7 +437,7 @@ def test_declaration_reaches_every_kind_and_an_unknown_name_is_a_key_error() -> 
         spec.declaration("spent")
 
 
-VIEWS: dict[str, Callable[[NamedExpression], Any]] = {
+VIEWS: dict[str, Callable[[Any], Any]] = {
     "node": lambda d: d.node,
     "dims": lambda d: d.dims,
     "expression": lambda d: d.expression,
@@ -442,10 +448,11 @@ VIEWS: dict[str, Callable[[NamedExpression], Any]] = {
 @pytest.mark.parametrize("name", ["power_balance", "p"])
 @pytest.mark.parametrize("view", VIEWS.values(), ids=VIEWS.keys())
 def test_a_constraint_or_variable_has_only_its_typesetting(
-    name: str, view: Callable[[NamedExpression], Any]
+    name: str, view: Callable[[Any], Any]
 ) -> None:
     d = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA).spec.declaration(name)
-    with pytest.raises(SpecDataError, match=f"'{name}' is a constraint or a variable"):
+    assert type(d) is Declaration
+    with pytest.raises(AttributeError):
         view(d)
 
 

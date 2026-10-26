@@ -24,8 +24,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from mathspec import program as ms
-from mathspec.errors import did_you_mean
-from mathspec.program import carries_variable, parameters_of, walk
+from mathspec.program import parameters_of, walk
 
 from linopy.constants import _warn_evolving_api
 from linopy.spec.errors import (
@@ -34,6 +33,7 @@ from linopy.spec.errors import (
     coordinates_shown,
     first_coordinates,
     shown,
+    unknown,
 )
 
 _ACCEPTED_KINDS: dict[str, frozenset[str]] = {
@@ -109,7 +109,8 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
             "linopy builds a spec on its own, with no host model to look them up in."
         )
     if isinstance(sources, xr.Dataset):
-        sources = _dataset_sources(sources)
+        tabular = (*sources.indexes.items(), *sources.data_vars.items())
+        sources = {str(k): v for k, v in tabular}
     keys = frozenset(sources.keys())
     _warn_near_misses(keys, program)
     coords = _master_coords(program, sources, keys)
@@ -153,6 +154,8 @@ class Attached:
 
         Raises
         ------
+        KeyError
+            The program declares no parameter *name*.
         SpecDataError
             No data, a shape no reader accepts, a rank other
             than declared, a label its dimension lacks, two rows for one
@@ -160,41 +163,26 @@ class Attached:
             than declared, or a missing row the declaration refuses.
         """
         if name not in self.program.parameters:
-            raise SpecDataError(
-                f"unknown parameter '{name}'. {did_you_mean(name, self.program.parameters)}"
-            )
-        declared = self.program.parameters[name]
-        if name not in self._keys:
+            raise unknown("parameter", name, self.program.parameters)
+        if name not in self.sources:
             raise SpecDataError(f"no data provided for parameter '{name}'")
+        declared = self.program.parameters[name]
         arr, present = _as_array(name, declared, self.sources[name], self.coords)
         filled = _filled(name, declared, arr, present, name in self._strict)
         return Parameter(filled, present)
 
     @cached_property
-    def _keys(self) -> frozenset[str]:
-        return frozenset(self.sources.keys())
-
-    @cached_property
     def _strict(self) -> frozenset[str]:
         """The parameters standing where no neutral value exists: a divisor, a bound, or the whole constant side of a comparison."""
-        program = self.program
-        names: set[str] = set()
-        for variable in program.variables.values():
-            for bound in (variable.lower, variable.upper):
-                if isinstance(bound, ms.ParameterReference):
-                    names.add(bound.name)
-        bodies = [e.expression for e in program.expressions.values()]
-        for node in walk(*program.roots, *bodies):
-            if isinstance(node, ms.Divide):
-                names |= parameters_of(node.divisor)
-        for constraint in program.constraints.values():
-            for side in (constraint.lhs, constraint.rhs):
-                side = _bare(side)
-                if isinstance(side, ms.ParameterReference) and not carries_variable(
-                    side
-                ):
-                    names.add(side.name)
-        return frozenset(names)
+        p = self.program
+        bounds = [b for v in p.variables.values() for b in (v.lower, v.upper)]
+        sides = [_bare(s) for c in p.constraints.values() for s in (c.lhs, c.rhs)]
+        bodies = [e.expression for e in p.expressions.values()]
+        divisors = [
+            n.divisor for n in walk(*p.roots, *bodies) if isinstance(n, ms.Divide)
+        ]
+        references = [n for n in bounds + sides if isinstance(n, ms.ParameterReference)]
+        return frozenset({r.name for r in references} | parameters_of(*divisors))
 
 
 def _bare(node: ms.Expression) -> ms.Expression:
@@ -228,12 +216,6 @@ def parameters_read(program: ms.Program, expressions: Iterable[str]) -> list[str
 # ---------------------------------------------------------------------------
 
 
-def _dataset_sources(ds: xr.Dataset) -> dict[str, Any]:
-    sources: dict[str, Any] = {str(d): index for d, index in ds.indexes.items()}
-    sources.update({str(n): ds[n] for n in ds.data_vars})
-    return sources
-
-
 def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
     """Warn about a key naming nothing the spec declares and close to a name it does: a typo, which leaves that name without data."""
     declared = sorted({*program.parameters, *program.dimensions, *program.relations})
@@ -260,12 +242,9 @@ def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
 
 
 def _reached(program: ms.Program) -> set[str]:
-    dims: set[str] = set()
-    for declared in (program.parameters, program.variables, program.constraints):
-        dims.update(d for decl in declared.values() for d in decl.dims)
-    for rel in program.relations.values():
-        dims.update(rel.dims)
-    return dims
+    p = program
+    sections = (p.parameters, p.variables, p.constraints, p.relations)
+    return {d for section in sections for decl in section.values() for d in decl.dims}
 
 
 def _master_coords(
@@ -516,7 +495,7 @@ def _from_dense(
 ) -> Parameter:
     dims = declared.dims
     _check_value_dtype(name, declared.dtype, arr.dtype)
-    if set(arr.dims) != set(dims) or len(arr.dims) != len(dims):
+    if set(arr.dims) != set(dims):
         raise SpecDataError(
             f"parameter '{name}' arrived as a DataArray over {list(arr.dims)}, and '{name}' is over "
             f"{list(dims)}. The dims must be the declared ones, in any order."
@@ -612,15 +591,15 @@ def _from_rows(
     _refuse_duplicate_coordinates(name, dims, series.index)
     for d in dims:
         _refuse_strangers(name, d, series.index.get_level_values(d), coords[d])
-    onto = [coords[d] for d in dims]
-    full = onto[0] if len(dims) == 1 else pd.MultiIndex.from_product(onto, names=dims)
-    shape = tuple(len(index) for index in onto)
-    values = series.reindex(full, fill_value=_fill(declared)).to_numpy()
-    rows = pd.Series(True, index=series.index).reindex(full, fill_value=False)
-    on = dict(zip(dims, onto))
-    arr = xr.DataArray(values.reshape(shape), dims=dims, coords=on, name=name)
-    present = xr.DataArray(rows.to_numpy().reshape(shape), dims=dims, coords=on)
-    return Parameter(arr, present)
+    onto = {d: coords[d] for d in dims}
+    full: pd.Index = onto[dims[0]]
+    if len(dims) > 1:
+        full = pd.MultiIndex.from_product(onto.values(), names=dims)
+    shape = [len(index) for index in onto.values()]
+    values = series.reindex(full, fill_value=_fill(declared)).to_numpy().reshape(shape)
+    present = full.isin(series.index).reshape(shape)
+    arr = xr.DataArray(values, dims=dims, coords=onto, name=name)
+    return Parameter(arr, xr.DataArray(present, dims=dims, coords=onto))
 
 
 def _with_dims(name: str, dims: tuple[str, ...], series: pd.Series) -> pd.Series:

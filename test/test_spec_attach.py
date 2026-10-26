@@ -379,7 +379,7 @@ def test_missing_parameter_is_refused_when_read(
 def test_undeclared_parameter_is_refused_with_a_hint(
     program: Any, good: dict[str, Any]
 ) -> None:
-    with pytest.raises(SpecDataError, match="unknown parameter 'csot'.*'cost'"):
+    with pytest.raises(KeyError, match="unknown parameter 'csot'.*'cost'"):
         attach(program, good).read("csot")
 
 

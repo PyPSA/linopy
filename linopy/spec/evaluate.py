@@ -19,6 +19,12 @@ from linopy.spec.where import evaluate_where, looked_up
 from linopy.variables import Variable
 
 _Binary = ms.Add | ms.Multiply | ms.Divide | ms.Power
+_OPERATORS: dict[type, Callable[[Value, Value], Value]] = {
+    ms.Add: operator.add,
+    ms.Multiply: operator.mul,
+    ms.Divide: operator.truediv,
+    ms.Power: operator.pow,
+}
 _Framed = TypeVar(
     "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
 )
@@ -61,14 +67,8 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
         return _parameter(node.name, ctx)
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
-    if isinstance(node, ms.Add):
-        return _combine(node, operator.add, node.left, node.right, ctx)
-    if isinstance(node, ms.Multiply):
-        return _combine(node, operator.mul, node.left, node.right, ctx)
-    if isinstance(node, ms.Divide):
-        return _combine(node, operator.truediv, node.numerator, node.divisor, ctx)
-    if isinstance(node, ms.Power):
-        return _combine(node, operator.pow, node.base, node.exponent, ctx)
+    if isinstance(node, _Binary):
+        return _combine(node, ctx)
     if isinstance(node, ms.Sum):
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
@@ -168,22 +168,25 @@ def flipped(constraint: ms.Constraint) -> bool:
     return not ms.carries_variable(constraint.lhs)
 
 
-def _combine(
-    node: _Binary,
-    op: Callable[[Value, Value], Value],
-    left_node: ms.Expression,
-    right_node: ms.Expression,
-    ctx: Context,
-) -> Value:
+def _operands(node: _Binary) -> tuple[ms.Expression, ms.Expression]:
+    if isinstance(node, ms.Divide):
+        return node.numerator, node.divisor
+    if isinstance(node, ms.Power):
+        return node.base, node.exponent
+    return node.left, node.right
+
+
+def _combine(node: _Binary, ctx: Context) -> Value:
     """
-    *left* and *right* combined by *op*.
+    The operands of *node* combined by its operator.
 
     Two arrays have to agree on their shared coordinates, and the data they
     make has to be finite wherever both are: a NaN made of present data would
     read as an absence and silently drop the row, an infinity would stand in
     the problem. A hole beside a term becomes the term's absence.
     """
-    left, right = evaluate(left_node, ctx), evaluate(right_node, ctx)
+    op = _OPERATORS[type(node)]
+    left, right = (evaluate(operand, ctx) for operand in _operands(node))
     kind = type(node).__name__.lower()
     if isinstance(left, Term) or isinstance(right, Term):
         if isinstance(node, ms.Add):
