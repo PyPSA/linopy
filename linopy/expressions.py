@@ -567,8 +567,19 @@ class LinearExpressionGroupby:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
                 grouper = group.to_pandas() if is_1d else group
             coord_dims = store.dims
+            # CSRStore stores one variable label per term. A quadratic product
+            # carries a second label along the factor dimension, which a sparse
+            # scatter cannot represent, so such expressions take the dense
+            # groupby path instead (see https://github.com/PyPSA/linopy/issues/1060).
+            # Inspect the object's type rather than ``self.data``: reading data
+            # would densify a CSR-backed linear expression and emit a notice even
+            # though its groupby-sum has a sparse path.
+            carries_factor = isinstance(self.obj, QuadraticExpression) or (
+                isinstance(self.obj, Dataset) and FACTOR_DIM in self.obj.vars.dims
+            )
             supported = (
                 not use_fallback
+                and not carries_factor
                 and isinstance(grouper, (pd.Series, pd.DataFrame))
                 and grouper.index.name in coord_dims
             )
@@ -647,6 +658,13 @@ class LinearExpressionGroupby:
             ds = grouped.map(func)
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
+        if FACTOR_DIM in ds.vars.dims:
+            # A quadratic product carries two variable labels per term. Keep it
+            # a QuadraticExpression instead of trapping the factor dimension in
+            # a LinearExpression (see https://github.com/PyPSA/linopy/issues/1060).
+            # The declared return type stays LinearExpression: the quadratic
+            # groupby is an exceptional path on an otherwise linear groupby API.
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
         return LinearExpression(ds, self.model)
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:

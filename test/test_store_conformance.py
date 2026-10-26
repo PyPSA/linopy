@@ -24,7 +24,7 @@ from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint
 from linopy.csr import CSRStore
 from linopy.store import DenseStore
-from linopy.testing import assert_equivalent
+from linopy.testing import assert_equivalent, assert_quadequal
 
 KEPT = "kept"
 ELLIPSIS: Any = ...
@@ -582,6 +582,45 @@ def test_sum_over_missing_dim_raises_without_densifying(
     with no_densify(), pytest.raises(KeyError, match="zzz"):
         expr.sum(dim)
     assert expr.is_sparse == backend.sparse
+
+
+def _quadratic_groupby_sum(sparse: bool) -> LinearExpression:
+    m = Model(sparse=sparse)
+    x = m.add_variables(coords=[A], name="x")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", linopy.PerformanceWarning)
+        return (x * x).groupby(pd.Series(SERIES)).sum()
+
+
+def test_quadratic_groupby_sum_densifies() -> None:
+    # Regression test for #1060: a quadratic term carries two variable labels
+    # along the ``_factor`` dimension, which CSRStore cannot scatter, so the
+    # sparse model falls back to the dense groupby-sum instead of raising.
+    # The reference floor is a dense model built without any conversion notice.
+    with no_densify():
+        dense = _quadratic_groupby_sum(False)
+    assert isinstance(dense, QuadraticExpression)
+
+    m = Model(sparse=True)
+    x = m.add_variables(coords=[A], name="x")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", linopy.PerformanceWarning)
+        quadratic = x * x
+    with pytest.warns(
+        linopy.PerformanceWarning,
+        match=re.escape("groupby.sum(grouper without a sparse path)"),
+    ):
+        sparse = quadratic.groupby(pd.Series(SERIES)).sum()
+
+    assert isinstance(sparse, QuadraticExpression)
+    assert not sparse.is_sparse
+    assert_quadequal(sparse, dense)
+
+    # Each group keeps the squared terms of its members: g=0 -> x[0]^2+x[2]^2,
+    # g=1 -> x[1]^2 (the padded empty term carries label -1 and is dropped).
+    labels = dense.data.vars.sel(_factor=0).values
+    assert set(labels[0][labels[0] >= 0].tolist()) == {0, 2}
+    assert set(labels[1][labels[1] >= 0].tolist()) == {1}
 
 
 DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {
