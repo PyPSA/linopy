@@ -31,6 +31,11 @@ you're unsure what a particular operator or argument does.
 
 After these four you can build any LP/MIP/QP linopy supports.
 
+If your data comes as tables, one row per key combination, read
+:doc:`long-form-inputs`. It pivots such frames with
+``linopy.from_long`` and sums over member-group tables with
+``linopy.Relation``.
+
 
 Numerical scaling
 -----------------

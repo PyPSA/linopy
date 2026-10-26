@@ -4,6 +4,7 @@ Linopy module for defining constant values used within the package.
 """
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, Self, TypeAlias, get_args
@@ -120,6 +121,24 @@ class EvolvingAPIWarning(FutureWarning):
             message=r"^piecewise:",
         )
     """
+
+
+_emitted_evolving_warnings: set[str] = set()
+
+
+def _warn_evolving_api(key: str, message: str, stacklevel: int = 3) -> None:
+    """
+    Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``.
+
+    ``stacklevel`` defaults to 3 (helper → entry-point function → user
+    code).  Pass a larger value when called from one frame deeper than
+    a function — e.g. from a dataclass ``__post_init__``, which is
+    itself invoked by an auto-generated ``__init__``.
+    """
+    if key in _emitted_evolving_warnings:
+        return
+    _emitted_evolving_warnings.add(key)
+    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=stacklevel)
 
 
 class ModelStatus(StrEnum):

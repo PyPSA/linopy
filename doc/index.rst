@@ -114,6 +114,7 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
+   long-form-inputs
    migrating-to-v1
    manipulating-models
 

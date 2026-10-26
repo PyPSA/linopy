@@ -100,6 +100,7 @@ class Store(ABC):
         group_dim: str,
         stacked: bool,
         coord_dims: tuple[str, ...],
+        positions: np.ndarray | None = None,
     ) -> Self:
         """The grouped sum of ``source``, see :meth:`linopy.csr.CSRStore.from_grouper`."""
 
@@ -276,11 +277,7 @@ class Store(ABC):
         absent without terms.
         """
 
-    def take_positions(self, positions: DataArray) -> Self:
-        """
-        Gather cell ``positions[...]`` (flat positions into this grid) into
-        each cell of a grid over the dims and coords of ``positions``.
-        """
+    def _take_positions(self, positions: DataArray) -> Self:
         from linopy.csr import Grid
 
         dims = tuple(map(str, positions.dims))
@@ -289,14 +286,14 @@ class Store(ABC):
     def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
         """The cells at the positional slices ``indexers`` of grid dims."""
         grid = self.grid
-        return self.take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
 
     def transpose(self, dims: Sequence[str]) -> Self:
         """The cells on the grid dims reordered to ``dims``."""
         if tuple(dims) == self.dims:
             return self
         grid = self.grid
-        return self.take_positions(
+        return self._take_positions(
             grid.dataarray(np.arange(grid.size)).transpose(*dims)
         )
 
@@ -538,10 +535,11 @@ class DenseStore(Store):
         group_dim: str,
         stacked: bool,
         coord_dims: tuple[str, ...],
+        positions: np.ndarray | None = None,
     ) -> DenseStore:
         from linopy.csr import CSRStore
 
-        args = (grouper, group_dim, stacked, coord_dims)
+        args = (grouper, group_dim, stacked, coord_dims, positions)
         return CSRStore.from_grouper(source, model, *args).to_dense()
 
     @classmethod

@@ -300,6 +300,7 @@ class CSRStore(Store):
         group_dim: str,
         stacked: bool,
         coord_dims: tuple[str, ...],
+        positions: np.ndarray | None = None,
     ) -> CSRStore:
         """
         Build the grouped sum in CSR form.
@@ -311,8 +312,10 @@ class CSRStore(Store):
         empty cells -- or, ``stacked``, a single ``group_dim`` over the
         observed key combinations only, the key values attached as auxiliary
         coordinates. The new dims take the member dim's slot in
-        ``coord_dims``. A dense ``source`` is scattered from its dataset, a
-        CSR one regrouped through :meth:`aggregate`.
+        ``coord_dims``. With ``positions``, grouper row ``i`` takes the member
+        at position ``positions[i]`` of the member dim instead, so a member
+        may land in several groups or none. A dense ``source`` is scattered
+        from its dataset, a CSR one regrouped through :meth:`aggregate`.
         """
         ds = (
             source.grid.to_dataset()
@@ -320,9 +323,9 @@ class CSRStore(Store):
             else source.to_dataset()
         )
         member_dim = str(grouper.index.name)
-        if member_dim in ds.indexes:
+        if positions is None and member_dim in ds.indexes:
             grouper = grouper.reindex(ds.indexes[member_dim])
-        elif len(grouper) != ds.sizes[member_dim]:
+        elif positions is None and len(grouper) != ds.sizes[member_dim]:
             raise ValueError(f"grouper length does not match dimension {member_dim!r}")
         if grouper.isna().to_numpy().any():
             raise ValueError(
@@ -360,11 +363,23 @@ class CSRStore(Store):
                 indexes[d] = ds.get_index(d).rename(d)
         aux |= _aux_coords(ds, set(coord_dims) - {member_dim})
         grid = Grid({d: indexes[d] for d in grid_dims}, aux)
+        member_rows = _member_rows(grid, scatter_codes, len(frame))
+        if positions is not None:
+            by_cell = np.argsort(member_rows, kind="stable")
+            scatter_codes = {d: c[by_cell] for d, c in scatter_codes.items()}
+            positions = positions[by_cell]
+            member_rows = member_rows[by_cell]
         if not isinstance(source, CSRStore):
-            return cls._from_scatter(ds, model, grid, member_dim, scatter_codes, True)
-        member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
-        rows = _cell_rows(grid, member_rows, member_dim, source.grid.dims)
-        return source.aggregate(grid, rows)
+            return cls._from_scatter(
+                ds, model, grid, member_dim, scatter_codes, True, positions
+            )
+        source_dims = source.grid.dims
+        rows = _cell_rows(grid, member_rows, member_dim, source_dims)
+        if positions is None:
+            return source.aggregate(grid, rows)
+        source_rows = positions * source.grid.strides[member_dim]
+        take = _cell_rows(source.grid, source_rows, member_dim, source_dims)
+        return source.aggregate(grid, rows, take)
 
     @classmethod
     def from_dense(cls, ds: Dataset, model: Model) -> CSRStore:
@@ -411,6 +426,7 @@ class CSRStore(Store):
         member_dim: str,
         scatter_codes: dict[str, np.ndarray],
         skipna: bool,
+        positions: np.ndarray | None = None,
     ) -> CSRStore:
         """
         Scatter an expression's terms into grid rows (conceptually ``G @ A``):
@@ -420,17 +436,24 @@ class CSRStore(Store):
         each cell, giving the group sum. Cells no member lands in stay absent
         (NaN const). With ``skipna``, NaN member constants count as 0 in the
         sum; without it, a NaN member constant propagates and leaves the cell
-        absent (NaN const).
+        absent (NaN const). With ``positions``, scatter code ``i`` belongs to
+        the member at position ``positions[i]`` of ``member_dim``.
         """
         grid_dims = grid.dims
         slot = min((grid_dims.index(d) for d in scatter_codes), default=0)
         transposed = [d for d in grid_dims if d not in scatter_codes]
         transposed.insert(slot, member_dim)
-        member_rows = _member_rows(grid, scatter_codes, ds.sizes[member_dim])
+        n_members = ds.sizes[member_dim] if positions is None else len(positions)
+        member_rows = _member_rows(grid, scatter_codes, n_members)
         cell_rows = _cell_rows(grid, member_rows, member_dim, transposed)
 
-        coeffs = ds.coeffs.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
-        vars_ = ds.vars.transpose(*transposed, TERM_DIM).to_numpy().reshape(-1)
+        def members(da: DataArray, *dims: str) -> np.ndarray:
+            values = da.transpose(*transposed, *dims).to_numpy()
+            if positions is not None:
+                values = values.take(positions, axis=slot)
+            return values.reshape(-1)
+
+        coeffs, vars_ = members(ds.coeffs, TERM_DIM), members(ds.vars, TERM_DIM)
         rows = np.repeat(cell_rows, ds.sizes[TERM_DIM])
         keep = (vars_ != -1) & ~np.isnan(coeffs)
 
@@ -439,7 +462,7 @@ class CSRStore(Store):
             coeffs[keep], rows[keep], vars_[keep], (full_size, model._xCounter), model
         )
 
-        const_vals = ds.const.transpose(*transposed).to_numpy().reshape(-1)
+        const_vals = members(ds.const)
         if skipna:
             const_vals = np.where(np.isnan(const_vals), 0.0, const_vals)
         const = np.full(full_size, np.nan)
@@ -448,30 +471,38 @@ class CSRStore(Store):
 
         return cls(csr, const, grid, model)
 
-    def aggregate(self, grid: Grid, rows: np.ndarray) -> CSRStore:
+    def aggregate(
+        self, grid: Grid, rows: np.ndarray, take: np.ndarray | None = None
+    ) -> CSRStore:
         """
         Sum source rows into the cells of ``grid``, row ``i`` landing in cell
         ``rows[i]`` (conceptually ``G @ A``), their terms stacked in row order,
-        explicit zeros kept, as by :meth:`add`. Rows already in cell order
-        share the stored arrays, others are gathered into cell order first.
-        The constant is the NaN-skipping sum of its rows' constants (NaN
-        counts as 0); cells no row lands in are absent. Auxiliary coordinates
-        are ``grid``'s.
+        explicit zeros kept, as by :meth:`add`. With ``take``, the ``i``-th
+        summand is source row ``take[i]`` instead, so a row may land in
+        several cells or none. Rows already in cell order share the stored
+        arrays, others are gathered into cell order first. The constant is
+        the NaN-skipping sum of its rows' constants (NaN counts as 0); cells
+        no row lands in are absent. Auxiliary coordinates are ``grid``'s.
         """
         shape = (grid.size, self.csr.shape[1])
-        source = self.csr
+        weights = np.where(np.isnan(self.const), 0.0, self.const)
+        if take is not None:
+            weights = weights[take]
+        const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
+        del weights
+        order = take
         if (rows[1:] < rows[:-1]).any():
             order, bounds = _grouped(rows, grid.size)
-            source = source[order]
+            if take is not None:
+                order = take[order]
         else:
             bounds = np.searchsorted(rows, np.arange(grid.size + 1))
+        const[np.diff(bounds) == 0] = np.nan
+        source = self.csr if order is None else self.csr[order]
         dtype = index_dtype(source.nnz, shape, self.model)
         indptr = source.indptr[bounds].astype(dtype, copy=False)
         indices = source.indices.astype(dtype, copy=False)
         csr = scipy.sparse.csr_array((source.data, indices, indptr), shape=shape)
-        weights = np.where(np.isnan(self.const), 0.0, self.const)
-        const = np.bincount(rows, weights=weights, minlength=grid.size).astype(float)
-        const[np.diff(bounds) == 0] = np.nan
         return replace(self, csr=csr, const=const, grid=grid)
 
     def sum(self, dims: Iterable[str] | None = None) -> CSRStore:
@@ -974,9 +1005,13 @@ def coo_to_csr(
     the triplets by row in their given order, duplicates kept.
     """
     dtype = index_dtype(len(data), shape, model)
-    order, indptr = _grouped(rows, shape[0])
-    indices = cols.astype(dtype, copy=False)[order]
-    csr_arrays = (data[order], indices, indptr.astype(dtype, copy=False))
+    indices = cols.astype(dtype, copy=False)
+    if (rows[1:] < rows[:-1]).any():
+        order, indptr = _grouped(rows, shape[0])
+        data, indices = data[order], indices[order]
+    else:
+        indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
+    csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 
 

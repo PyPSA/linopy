@@ -8,7 +8,6 @@ constraint methods for use with linopy.Model.
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from numbers import Real
@@ -47,7 +46,7 @@ from linopy.constants import (
     PWL_SELECT_SUFFIX,
     SEGMENT_DIM,
     SIGNS,
-    EvolvingAPIWarning,
+    _warn_evolving_api,
     sign_replace_dict,
 )
 from linopy.semantics import check_user_nan_breakpoints, warn_outside_linopy
@@ -60,30 +59,6 @@ if TYPE_CHECKING:
     from linopy.variables import Variable, Variables
 
 logger = logging.getLogger(__name__)
-
-# Each user-facing piecewise entry point fires its EvolvingAPIWarning at
-# most once per process.  Without dedup, a single model build emits the
-# verbose warning hundreds of times and drowns out other output.
-_EvolvingApiKey: TypeAlias = Literal[
-    "tangent_lines", "add_piecewise_formulation", "Slopes"
-]
-_emitted_evolving_warnings: set[_EvolvingApiKey] = set()
-
-
-def _warn_evolving_api(key: _EvolvingApiKey, message: str, stacklevel: int = 3) -> None:
-    """
-    Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``.
-
-    ``stacklevel`` defaults to 3 (helper → entry-point function → user
-    code).  Pass a larger value when called from one frame deeper than
-    a function — e.g. from a dataclass ``__post_init__``, which is
-    itself invoked by an auto-generated ``__init__``.
-    """
-    if key in _emitted_evolving_warnings:
-        return
-    _emitted_evolving_warnings.add(key)
-    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=stacklevel)
-
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (

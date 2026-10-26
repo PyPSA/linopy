@@ -674,9 +674,8 @@ class LinearExpressionGroupby:
         """
         Sum over a relation: every row adds its member's terms to its group,
         so a member listed in several rows lands in several groups and one
-        not listed in none. The member cells are gathered once per row onto a
-        positional member dim, then scattered by
-        :meth:`~linopy.store.Store.from_grouper`.
+        not listed in none. :meth:`~linopy.store.Store.from_grouper` scatters
+        the member cells of each row straight into its group.
         """
         member, group = relation.member, relation.group
         if group in store.dims:
@@ -691,14 +690,10 @@ class LinearExpressionGroupby:
             )
         positions = relation.positions(store.grid.indexes[member])
         rows = pd.RangeIndex(len(positions), name=member)
-        cells = store.grid.dataarray(np.arange(store.grid.size))
-        cells = cells.isel({member: positions}).assign_coords({member: rows})
-        gathered = store.take_positions(cells)
         grouper = pd.Series(relation.groups(), index=rows, name=group)
         store_cls = result_store_cls(store, self.model)
-        res = store_cls.from_grouper(
-            gathered, self.model, grouper, group, True, store.dims
-        )
+        args = (grouper, group, True, store.dims, positions)
+        res = store_cls.from_grouper(store, self.model, *args)
         return LinearExpression._from_store(res, self.model)
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:

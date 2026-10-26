@@ -17,6 +17,7 @@ import polars as pl
 from xarray import DataArray
 
 from linopy.alignment import _as_index, _coords_to_dict
+from linopy.constants import _warn_evolving_api
 from linopy.types import CoordsLike
 
 Frame: TypeAlias = pl.DataFrame | pd.DataFrame
@@ -29,7 +30,6 @@ KIND_FAMILIES = {
     "f": "numeric",
     "M": "datetime",
     "m": "duration",
-    "O": "string",
     "U": "string",
     "S": "string",
 }
@@ -38,17 +38,26 @@ KIND_FAMILIES = {
 def _family(column: Column | pd.Index) -> str:
     """
     The dtype family of ``column``: numeric, datetime with its time zone,
-    duration, string or boolean.
+    date, duration, string or boolean, a pandas categorical classified by
+    its categories.
     """
     dtype = column.dtype
+    if isinstance(dtype, pd.CategoricalDtype):
+        return _family(dtype.categories.rename(column.name))
     if isinstance(dtype, pd.DatetimeTZDtype):
         return f"datetime[{dtype.tz}]"
-    if not isinstance(dtype, pl.DataType):
+    if not isinstance(dtype, pl.DataType) and dtype.kind == "O":
+        return "date" if pd.api.types.infer_dtype(column) == "date" else "string"
+    if not isinstance(dtype, pl.DataType) and dtype.kind in KIND_FAMILIES:
         return KIND_FAMILIES[dtype.kind]
+    if not isinstance(dtype, pl.DataType):
+        raise TypeError(f"Column {column.name!r} has unsupported dtype {dtype}.")
     if isinstance(dtype, pl.Datetime) and dtype.time_zone is not None:
         return f"datetime[{dtype.time_zone}]"
-    if isinstance(dtype, pl.Date | pl.Datetime):
+    if isinstance(dtype, pl.Datetime):
         return "datetime"
+    if isinstance(dtype, pl.Date):
+        return "date"
     if isinstance(dtype, pl.Duration):
         return "duration"
     if dtype.is_numeric():
@@ -64,6 +73,8 @@ def _as_polars(index: pd.Index) -> pl.Series:
     if isinstance(index, pd.DatetimeIndex) and index.tz is not None:
         utc = pl.Series(index.asi8).cast(pl.Datetime(index.unit))
         return utc.dt.replace_time_zone("UTC").dt.convert_time_zone(str(index.tz))
+    if _family(index) == "date":
+        return pl.Series(index.to_numpy(dtype="datetime64[D]")).cast(pl.Date)
     return pl.Series(index.to_numpy())
 
 
@@ -94,9 +105,13 @@ def _check_frame(frame: Frame) -> None:
 def _positions(index: pd.Index, column: Column) -> pl.Series:
     """
     The positions of the values of ``column`` in ``index``. Raises for null
-    values, a dtype family other than the one of ``index`` and values not in
-    ``index``.
+    values, a dtype family other than the one of ``index``, values not in
+    ``index`` and duplicate labels of ``index``.
     """
+    if not index.is_unique:
+        raise ValueError(
+            f"Coordinates of dimension {index.name!r} have duplicate labels."
+        )
     if _has_nulls(column):
         raise ValueError(f"Column {column.name!r} has null values.")
     if _family(column) != _family(index):
@@ -137,30 +152,27 @@ def _positions(index: pd.Index, column: Column) -> pl.Series:
     return pos.cast(pl.Int64)
 
 
-def from_long(
-    frame: Frame, value: str, coords: CoordsLike, default: float = np.nan
-) -> DataArray:
+def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> DataArray:
     """
     Pivot a long-form frame onto ``coords``.
 
-    Every column of ``frame`` but ``value`` is a key column named after a
-    dimension of ``coords``. The result spans the key dimensions only, in
-    column order, with the full coordinates of ``coords``: key combinations
-    not listed take ``default``. Dimensions of ``coords`` without a key column
-    are not part of the result, linopy broadcasts it over them where it is
-    used. The result is the full cube over the key dimensions, a sparsely
-    filled frame costs the memory of its cube.
+    The columns of ``frame`` named after a dimension of ``coords`` are the key
+    columns, exactly one other column is the value column. The result is
+    named after the value column and spans the key dimensions only, in column
+    order, with the full coordinates of ``coords``: key combinations not
+    listed take ``default``. Dimensions of ``coords`` without a key column are
+    not part of the result, linopy broadcasts it over them where it is used.
+    The result is the full cube over the key dimensions, a sparsely filled
+    frame costs the memory of its cube.
 
     Parameters
     ----------
     frame : polars.DataFrame or pandas.DataFrame
-        The long-form data, one row per key combination. A pandas frame needs
-        an unnamed index, its keys are columns.
-    value : str
-        Name of the value column, numeric without null values; NaN values
-        are kept.
+        The long-form data, one row per key combination: key columns plus one
+        value column, numeric without null values; NaN values are kept. A
+        pandas frame needs an unnamed index, its keys are columns.
     coords : list/dict/xarray.Coordinates
-        The coordinates the keys are positioned in, e.g. the coordinates of
+        The coordinates the keys are positioned in, e.g. ``var.coords`` of
         the variable the result is used with.
     default : float
         Value of key combinations missing from ``frame``. Defaults to NaN.
@@ -168,18 +180,27 @@ def from_long(
     Returns
     -------
     xarray.DataArray
-        Float values over the key dimensions.
+        Float values over the key dimensions, named after the value column.
 
     Raises
     ------
     ValueError
-        For a missing value column, no key column, a key column not naming a
-        dimension of ``coords``, null keys or values, duplicate keys and keys
-        outside ``coords``.
+        For no key column, not exactly one column besides the key columns (a
+        misspelled key column counts as a second value column), null keys or
+        values, duplicate keys, keys outside ``coords`` and key coordinates
+        with duplicate labels.
     TypeError
         For a frame type other than a polars or pandas DataFrame, a non-numeric
         value column and key dtypes (numeric, datetime with its time zone,
-        duration, string) differing from the ones of ``coords``.
+        date, duration, string) differing from the ones of ``coords``.
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        :func:`from_long` is part of the newly-added long-form API; its signature and
+        input format may change in minor releases. Silence with
+        ``warnings.filterwarnings("ignore", message=r"^long-form:",
+        category=linopy.EvolvingAPIWarning)``.
 
     Examples
     --------
@@ -188,23 +209,34 @@ def from_long(
     >>> m = linopy.Model()
     >>> i = pd.RangeIndex(3, name="i")
     >>> ub = linopy.from_long(
-    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), "ub", coords=[i], default=0
+    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), coords=[i], default=0
     ... )
+    >>> ub.name
+    'ub'
     >>> m.add_variables(upper=ub, coords=[i], name="x").upper.values
     array([5., 0., 7.])
     """
+    _warn_evolving_api(
+        "from_long",
+        "long-form: from_long is a new API; its signature and input format may "
+        "change in minor releases. Please share your use cases at "
+        "https://github.com/PyPSA/linopy/issues. This warning fires once per "
+        "session.",
+    )
     _check_frame(frame)
-    if value not in frame.columns:
-        raise ValueError(f"Frame has no value column {value!r}.")
-    keys = [k for k in frame.columns if k != value]
-    if not keys:
-        raise ValueError("Frame has no key column.")
     target = {d: _as_index(v).rename(d) for d, v in _coords_to_dict(coords).items()}
-    unknown = [k for k in keys if k not in target]
-    if unknown:
+    keys = [k for k in frame.columns if k in target]
+    if not keys:
         raise ValueError(
-            f"Key columns {unknown} do not name a dimension of {list(target)}."
+            f"Frame has no key column naming a dimension of {list(target)}."
         )
+    values = [c for c in frame.columns if c not in target]
+    if len(values) != 1:
+        raise ValueError(
+            f"Frame needs exactly one value column besides the key columns "
+            f"{keys} naming dimensions of {list(target)}, got {values}."
+        )
+    (value,) = values
     if _family(frame[value]) != "numeric":
         raise TypeError(
             f"Value column {value!r} has non-numeric dtype {frame[value].dtype}."
@@ -218,13 +250,15 @@ def from_long(
         raise ValueError(f"Frame has duplicate keys over {keys}.")
     shape = [len(target[k]) for k in keys]
     size = int(np.prod(shape))
-    values = frame[value].to_numpy().astype(float)
+    data = frame[value].to_numpy().astype(float)
     if len(flat) == size and flat.is_sorted():
-        out = values
+        out = data
     else:
         out = np.full(size, default, dtype=float)
-        out[flat.to_numpy()] = values
-    return DataArray(out.reshape(shape), coords=[target[k] for k in keys], dims=keys)
+        out[flat.to_numpy()] = data
+    return DataArray(
+        out.reshape(shape), coords=[target[k] for k in keys], dims=keys, name=value
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -242,11 +276,19 @@ class Relation:
     Parameters
     ----------
     frame : polars.DataFrame or pandas.DataFrame
-        The member-group pairs.
+        The member-group pairs, exactly the columns ``member`` and ``group``.
     member : str
         Name of the member column, a dimension of the grouped expression.
     group : str
         Name of the group column, the dimension of the result.
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        :class:`Relation` is part of the newly-added long-form API; its signature and
+        input format may change in minor releases. Silence with
+        ``warnings.filterwarnings("ignore", message=r"^long-form:",
+        category=linopy.EvolvingAPIWarning)``.
 
     Examples
     --------
@@ -265,12 +307,28 @@ class Relation:
     group: str
 
     def __post_init__(self) -> None:
+        _warn_evolving_api(
+            "Relation",
+            "long-form: Relation is a new API; its signature and input format may "
+            "change in minor releases. Please share your use cases at "
+            "https://github.com/PyPSA/linopy/issues. This warning fires once per "
+            "session.",
+            stacklevel=4,
+        )
         _check_frame(self.frame)
-        missing = {self.member, self.group} - set(self.frame.columns)
-        if missing or self.member == self.group:
+        member, group = self.member, self.group
+        columns = list(self.frame.columns)
+        if member == group:
             raise ValueError(
-                f"Relation needs distinct columns {self.member!r} and "
-                f"{self.group!r}, missing {sorted(missing)}."
+                f"Relation member and group columns must differ, both are {member!r}."
+            )
+        missing = [c for c in (member, group) if c not in columns]
+        if missing:
+            raise ValueError(f"Relation frame has no columns {missing}.")
+        if len(columns) != 2:
+            raise ValueError(
+                f"Relation frame must have exactly the columns {member!r} and "
+                f"{group!r}, got {columns}."
             )
         if _has_nulls(self.frame[self.group]):
             raise ValueError(f"Relation group column {self.group!r} has null values.")
