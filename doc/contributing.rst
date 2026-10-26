@@ -83,20 +83,17 @@ When working on performance-sensitive code, use the internal benchmark suite in 
 
 .. code-block:: bash
 
-    # Install benchmark dependencies
-    uv sync --extra benchmarks
+    # Install benchmark dependencies (keep the dev extra: the benchmarks need both)
+    uv sync --extra dev --extra benchmarks
 
-    # Quick timing benchmarks
-    pytest benchmarks/ --quick
+    # Smoke run: every spec builds once, no timing
+    pytest benchmarks/ --benchmark-disable -q
 
     # Compare timing between branches
-    pytest benchmarks/test_build.py --benchmark-save=master
-    pytest benchmarks/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
+    pytest benchmarks/drivers/test_build.py --benchmark-save=master
+    pytest benchmarks/drivers/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
 
-    # Compare peak memory between branches
-    python benchmarks/memory.py save master --quick
-    python benchmarks/memory.py save my-feature --quick
-    python benchmarks/memory.py compare master my-feature
+Peak memory is tracked on every pull request by CodSpeed rather than by a local script.
 
 See ``benchmarks/README.md`` for full details on models, phases, and usage.
 
