@@ -8,20 +8,19 @@ was put there, and nothing reading a spec-built model has to guess which of
 its parameters the spec owns. All of it round trips through a file, written
 under the ``spec-`` prefix.
 
-A parameter is resolved from the retained dataset where a named expression
-reads it, else from the sources the model was built with, which the accessor
-keeps for as long as the model lives; after a round trip through a file only
-the retained ones can be read.
+Only the parameters a named expression left unbuilt reads are kept: one over
+data alone, or one reading a dual. A built one sits in ``model.expressions``
+and reads its solution off it, so the sources are dropped once the build is
+done.
 """
 
 from __future__ import annotations
 
 import functools
-import io
+import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -34,67 +33,14 @@ from mathspec.spec import Spec
 from linopy.constants import _warn_evolving_api
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
-from linopy.spec.attach import EVOLVING_MESSAGE, Attached
+from linopy.spec.attach import EVOLVING_MESSAGE, Parameter, parameters_read
 from linopy.spec.attach import attach as attach_data
-from linopy.spec.builder import build
-from linopy.spec.context import Context, Parameters, Resolve, Value
+from linopy.spec.builder import build, unbuilt_expressions
+from linopy.spec.context import Context, Value
 from linopy.spec.errors import SpecDataError, unknown
 from linopy.spec.evaluate import evaluate_named, fold
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
-
-_DRIFTED = "This model has drifted from the spec typeset here: {}."
-
-_COMMENT: dict[str, str] = {
-    "latex": "% {}",
-    "markdown": "<!-- {} -->",
-    "typst": "// {}",
-}
-
-
-@dataclass(frozen=True)
-class Unspecified:
-    """
-    How a spec-built model has drifted from the spec it was built from.
-
-    A model goes on taking everything linopy can add to it, and none of that
-    carries a mathspec declaration to typeset. A spec's own ``piecewise:``
-    and ``sos:`` are not drift: the curves are expanded into ordinary
-    declarations and the sets stay declared, so both sit in the program.
-    """
-
-    variables: tuple[str, ...]
-    constraints: tuple[str, ...]
-    expressions: tuple[str, ...]
-    sos: tuple[str, ...]
-    piecewise: tuple[str, ...]
-
-    def __bool__(self) -> bool:
-        return bool(
-            self.variables
-            or self.constraints
-            or self.expressions
-            or self.sos
-            or self.piecewise
-        )
-
-
-def _joined(parts: list[str]) -> str:
-    """``a``, ``a and b``, ``a, b and c``."""
-    if len(parts) < 3:
-        return " and ".join(parts)
-    return f"{', '.join(parts[:-1])} and {parts[-1]}"
-
-
-def _counted(names: tuple[str, ...], kind: str, cap: int = 5) -> str:
-    """``2 constraints (a, b)``, capped with a ``+N more`` tail; empty for no names."""
-    if not names:
-        return ""
-    shown = list(names[:cap])
-    if len(names) > cap:
-        shown.append(f"+{len(names) - cap} more")
-    plural = kind if len(names) == 1 else f"{kind}s"
-    return f"{len(names)} {plural} ({', '.join(shown)})"
 
 
 def build_into(
@@ -110,10 +56,9 @@ def build_into(
     ValueError
         The model already holds variables or constraints.
     TypeError
-        *spec* is a lowered ``Program`` or an open file, neither of which
-        has a YAML form to keep on the model.
+        *spec* is none of the forms :data:`SpecLike` names.
     FileNotFoundError
-        *spec* reads as a path and there is no file there.
+        *spec* is a ``Path`` and there is no file there.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
     if len(model.variables) or len(model.constraints):
@@ -123,18 +68,19 @@ def build_into(
         )
     text, program, stem = normalize_spec(spec)
     attached = attach_data(program, sources)
-    parameters, presence = attached.retained()
     name = stem or "spec"
-    build(model, attached, name)
-    return ModelSpec(
-        model,
-        name,
-        program,
-        text,
-        parameters.assign_coords(dict(attached.coords)),
-        presence,
-        attached,
+    read = functools.cache(attached.read)
+    unbuilt = unbuilt_expressions(program)
+    kept = {p: read(p) for p in parameters_read(program, unbuilt)}
+    build(Context(model, program, attached.coords, attached.relations, read, name))
+    parameters = xr.Dataset(
+        {p: kept[p].filled for p in kept} | dict(attached.relations),
+        coords=attached.coords,
     )
+    presence = xr.Dataset(
+        {p: kept[p].present for p in kept if not bool(kept[p].present.all())}
+    )
+    return ModelSpec(model, name, program, text, parameters, presence)
 
 
 def restore(
@@ -143,10 +89,10 @@ def restore(
     """
     The accessor for *model*, with the program lowered afresh from *text*.
 
-    Read from a file, so the sources the model was built with are gone and
-    only the retained parameters can be read back.
+    *parameters* and *presence* are what :attr:`ModelSpec.parameters` and
+    :attr:`ModelSpec.presence` held when the model was written.
     """
-    return ModelSpec(model, name, lower(_read(text)), text, parameters, presence, None)
+    return ModelSpec(model, name, lower(_read(text)), text, parameters, presence)
 
 
 def lower(spec: SpecLike) -> ms.Program:
@@ -164,65 +110,46 @@ def _read(text: str) -> Spec:
     return to_spec(f"{text}\n")
 
 
-def _is_yaml_text(spec: str) -> bool:
-    """A ``str`` is YAML rather than a path if it looks like YAML and names no file."""
-    if "\n" in spec or spec.lstrip()[:1] in ("{", "-"):
-        return True
-    return ": " in spec and not Path(spec).is_file()
-
-
 def normalize_spec(spec: SpecLike) -> tuple[str, ms.Program, str | None]:
     """
     *spec* as the YAML text kept on the model, lowered, and the file's stem where it came from one.
 
-    A ``str`` is YAML text if it holds a newline, opens a mapping or a
-    sequence, or holds a ``: `` and names no file; every other ``str`` is a
-    path.
+    A ``Path``, or a ``str`` naming an existing file, is read; any other
+    ``str`` is YAML text; a mapping is a spec as a dict; a ``Spec`` is used
+    as it is.
 
     Raises
     ------
     TypeError
-        A lowered ``Program`` or an open file: neither has a YAML form to
-        keep on the model.
+        *spec* is none of these, such as a lowered ``Program`` or an open
+        file, neither of which has a YAML form to keep on the model.
     FileNotFoundError
-        *spec* reads as a path and there is no file there.
+        *spec* is a ``Path`` and there is no file there.
     mathspec.errors.LanguageError
         The spec is not valid under the installed mathspec.
     SpecDataError
         The spec declares no dimension, parameter or variable.
     """
-    if isinstance(spec, ms.Program):
-        raise TypeError(
-            "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
-            "not a lowered Program: a Program has no YAML form to keep on the model."
-        )
-    if isinstance(spec, io.IOBase):
-        raise TypeError(
-            "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
-            "not an open file: pass the path it was opened on, or spec.read()."
-        )
-    if isinstance(spec, str) and not _is_yaml_text(spec):
+    if isinstance(spec, str) and os.path.isfile(spec):
         spec = Path(spec)
-    stem = spec.stem if isinstance(spec, Path) else None
     if isinstance(spec, Path):
-        if not spec.is_file():
-            raise FileNotFoundError(
-                f"no spec file at '{spec}'. A str is read as a path unless it holds a "
-                f"newline, opens a mapping or a sequence, or holds a ':' and names no "
-                f"file, so YAML text written on one line arrives here as a path."
-            )
         text = spec.read_text()
     elif isinstance(spec, str):
         text = spec
-    else:
+    elif isinstance(spec, Mapping | Spec):
         text = to_spec(dict(spec) if isinstance(spec, Mapping) else spec).to_yaml()
+    else:
+        raise TypeError(
+            "add_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
+            f"not a {type(spec).__name__}."
+        )
     program = lower(_read(text))
     if not (program.dimensions or program.parameters or program.variables):
         raise SpecDataError(
             "the spec declares nothing: no dimension, no parameter and no variable. "
             "There is nothing to attach data to and nothing to build."
         )
-    return text, program, stem
+    return text, program, spec.stem if isinstance(spec, Path) else None
 
 
 def _dimension(dim: str, coords: Mapping[str, pd.Index]) -> str:
@@ -261,7 +188,6 @@ class ModelSpec:
         text: str,
         parameters: xr.Dataset,
         presence: xr.Dataset,
-        attached: Attached | None,
     ) -> None:
         self._model = model
         self.name = name
@@ -269,7 +195,6 @@ class ModelSpec:
         self.text = text
         self._parameters = parameters
         self._presence = presence
-        self._attached = attached
 
     def __repr__(self) -> str:
         p = self.program
@@ -295,18 +220,35 @@ class ModelSpec:
             self.text,
             self._parameters.copy(deep=deep),
             self._presence.copy(deep=deep),
-            self._attached,
         )
 
     @property
     def parameters(self) -> xr.Dataset:
-        """The parameters the named expressions read and the relations, on the master coordinates."""
+        """
+        The relations, and the parameters an unbuilt named expression reads, on the master coordinates.
+
+        Each parameter is filled the way its ``missing:`` says, see
+        :class:`~linopy.spec.attach.Parameter`.
+        """
         return self._parameters
 
     @property
     def presence(self) -> xr.Dataset:
-        """Where the data has a row, for each retained parameter some row is missing from."""
+        """Where the data has a row, for each parameter in :attr:`parameters` some row is missing from."""
         return self._presence
+
+    def _parameter(self, name: str) -> Parameter:
+        """The kept parameter *name*, beside where the data has a row for it."""
+        if name not in self._parameters:
+            raise SpecDataError(
+                f"parameter '{name}' is not kept on the spec: only the parameters a named "
+                f"expression the build left unbuilt reads are, and a built one reads its "
+                f"solution off model.expressions. Rebuild the model to fold it again."
+            )
+        filled = self._parameters[name]
+        if name in self._presence:
+            return Parameter(filled, self._presence[name])
+        return Parameter(filled, xr.ones_like(filled, dtype=bool))
 
     @property
     def description(self) -> str:
@@ -325,78 +267,30 @@ class ModelSpec:
         return {name: self.parameters[name] for name in self.program.relations}
 
     @property
-    def expressions(self) -> NamedExpressions:
+    def expressions(self) -> dict[str, NamedExpression]:
         """Each named expression as a :class:`NamedExpression`: its math, its linopy fold and its solution."""
-        return NamedExpressions(self)
+        return {name: NamedExpression(self, name) for name in self.program.expressions}
 
-    def declaration(self, name: str) -> Declaration:
+    def declaration(self, name: str) -> NamedExpression:
         """
         One declaration typeset on its own: a named expression, constraint or variable.
 
-        Its math as a single line, no document around it. A named expression
-        also carries its linopy fold and solution through :attr:`expressions`;
-        this handle is the typesetting one every declaration shares.
+        The handle :attr:`expressions` holds for a named expression; for a
+        constraint or a variable only its typesetting applies, and its other
+        views raise :class:`SpecDataError`.
         """
-        if name not in self._declarations:
-            raise unknown("declaration", name, self._declarations)
-        return Declaration(self, name)
-
-    @property
-    def _declarations(self) -> list[str]:
         p = self.program
-        return [*p.expressions, *p.constraints, *p.variables]
-
-    @property
-    def unspecified(self) -> Unspecified:
-        """
-        How the model has drifted from this spec, see :class:`Unspecified`.
-
-        Falsy for a model that is only what its spec says; everything added
-        beside the spec lands here, and is what typesetting cannot show.
-        """
-        return self.drift()
-
-    def drift(self, piecewise: tuple[set[str], set[str]] | None = None) -> Unspecified:
-        """:attr:`unspecified`, given the piecewise variables and constraints where a caller has them already."""
-        from linopy.constants import SOS_TYPE_ATTR
-        from linopy.piecewise import _get_piecewise_groups
-
-        model, program = self._model, self.program
-        if piecewise is None:
-            piecewise = _get_piecewise_groups(model)
-        pw_variables, pw_constraints = piecewise
-        declared_sos = {sos.variable for sos in program.sos.values()}
-        return Unspecified(
-            variables=tuple(
-                n
-                for n, v in model.variables.items()
-                if v.spec is None and n not in pw_variables
-            ),
-            constraints=tuple(
-                n
-                for n, c in model.constraints.items()
-                if c.spec is None and n not in pw_constraints
-            ),
-            expressions=tuple(
-                n for n, e in model.expressions.items() if e.spec is None
-            ),
-            sos=tuple(
-                n
-                for n in model.variables
-                if SOS_TYPE_ATTR in model.variables[n].attrs and n not in declared_sos
-            ),
-            piecewise=tuple(model._piecewise_formulations),
-        )
+        declared = [*p.expressions, *p.constraints, *p.variables]
+        if name not in declared:
+            raise unknown("declaration", name, declared)
+        return NamedExpression(self, name)
 
     def typeset(self, fmt: FormatName, **options: Any) -> str:
         """
         The spec this model was built from, typeset in *fmt* as a document.
 
         The spec, and so not necessarily the whole model: what was added
-        beside the spec carries no declaration to typeset. Where the model
-        holds such a thing, :attr:`unspecified` names it, a warning says so,
-        and the rendered text opens with the same tally as a comment of
-        *fmt*'s own.
+        beside the spec carries no declaration to typeset.
 
         Parameters
         ----------
@@ -408,178 +302,56 @@ class ModelSpec:
         Warns
         -----
         UserWarning
-            The model holds variables or constraints the spec does not
-            declare, which are not in the rendered text.
+            The model holds a variable, constraint or expression the spec
+            does not declare, which is not in the rendered text.
         """
-        return self._render(fmt, options)
+        return self._document(fmt, options)
+
+    def _document(self, fmt: FormatName, options: dict[str, Any]) -> str:
+        """The spec typeset in *fmt*, warning the caller of :meth:`typeset` or a ``to_*`` alias."""
+        m = self._model
+        stamps = [v.spec for v in m.variables.data.values()]
+        stamps += [c.spec for c in m.constraints.data.values()]
+        stamps += [e.spec for e in m.expressions.data.values()]
+        if None in stamps:
+            warnings.warn(
+                "the model holds variables, constraints or expressions the spec does "
+                "not declare. What is typeset is the spec, so it is not this model.",
+                UserWarning,
+                stacklevel=3,
+            )
+        return typeset(self._schema, fmt, **options)
 
     def to_latex(self, **options: Any) -> str:
         """The spec typeset as a LaTeX document, see :meth:`typeset`."""
-        return self._render("latex", options)
+        return self._document("latex", options)
 
     def to_markdown(self, **options: Any) -> str:
         """The spec typeset as Markdown, its equations in ``$$`` blocks, see :meth:`typeset`."""
-        return self._render("markdown", options)
+        return self._document("markdown", options)
 
     def to_typst(self, **options: Any) -> str:
         """The spec typeset as Typst, see :meth:`typeset`."""
-        return self._render("typst", options)
-
-    def _render(self, fmt: FormatName, options: Mapping[str, Any]) -> str:
-        """Typeset in *fmt*, warned and commented where the model holds more than the spec."""
-        rendered = typeset(self._schema, fmt, **options)
-        tally = self._tally()
-        if tally is None:
-            return rendered
-        warnings.warn(
-            f"this model has drifted from the spec it was built from: {tally}. "
-            f"What is typeset is the spec, so it is not this model.",
-            UserWarning,
-            stacklevel=3,
-        )
-        comment = _COMMENT.get(fmt)
-        if comment is None:
-            return rendered
-        return f"{comment.format(_DRIFTED.format(tally))}\n{rendered}"
-
-    def _tally(self) -> str | None:
-        """How the model has drifted, counted and named; ``None`` when it has not."""
-        found = self.unspecified
-        if not found:
-            return None
-        parts = [
-            _counted(found.variables, "variable"),
-            _counted(found.constraints, "constraint"),
-            _counted(found.expressions, "expression"),
-            _counted(found.sos, "SOS set"),
-            _counted(found.piecewise, "piecewise formulation"),
-        ]
-        return _joined([p for p in parts if p])
+        return self._document("typst", options)
 
     def _repr_markdown_(self) -> str:
-        """The spec as Markdown, with a *visible* note where a notebook would swallow the warning."""
-        rendered = _notebook_math(self._render("markdown", {}))
-        tally = self._tally()
-        if tally is None:
-            return rendered
-        return f"{rendered}\n\n*{_DRIFTED.format(tally)}*"
+        return _notebook_math(self._document("markdown", {}))
 
     @functools.cached_property
     def _schema(self) -> Spec:
         """The spec as the typesetter reads it."""
         return _read(self.text)
 
-    def evaluate(
-        self, name: str, sources: Mapping[str, Any] | xr.Dataset
-    ) -> NamedExpression:
-        """
-        The named expression *name*, with its parameters attached afresh from *sources*.
-
-        For reading the spec against other data than the model was built with,
-        and for a model read from a file, whose own sources are gone.
-        ``model.spec.expressions`` needs neither. *sources* is read the way
-        ``add_spec`` read it, and must describe the coordinates the model was
-        built on.
-
-        Raises
-        ------
-        SpecDataError
-            *sources* label a dimension differently than the
-            model was built on.
-        """
-        attached = attach_data(self.program, sources)
-        coords = self.coords
-        for dim, index in attached.coords.items():
-            if dim in coords and not index.equals(coords[dim]):
-                raise SpecDataError(
-                    f"sources describe dimension '{dim}' as {index.tolist()[:5]}, and the model "
-                    f"was built on {coords[dim].tolist()[:5]}. evaluate() reads the solution the "
-                    f"model holds, so the data must be attached on the same labels in the same order."
-                )
-        return NamedExpression(self, name, self._context(attached.read))
-
-    def _resolve(self, name: str) -> tuple[xr.DataArray, xr.DataArray]:
-        """The parameter *name* with the rows it has: retained if it was kept, else read from the sources again."""
-        if name in self.parameters:
-            arr = self.parameters[name]
-            if name in self._presence:
-                return arr, self._presence[name]
-            return arr, xr.ones_like(arr, dtype=bool)
-        if self._attached is not None:
-            return self._attached.read(name)
-        raise SpecDataError(
-            f"parameter '{name}' was not retained and this model no longer holds the sources "
-            f"it was built with, which is what a model read from a file looks like. Read the "
-            f"expression with evaluate(name, sources)."
-        )
-
-    def _context(self, resolve: Resolve) -> Context:
+    def _context(self) -> Context:
         return Context(
             self._model,
             self.program,
             self.coords,
             self.relations,
-            Parameters(self.program, resolve),
+            functools.cache(self._parameter),
             self.name,
             solved=True,
         )
-
-
-class NamedExpressions(Mapping[str, "NamedExpression"]):
-    """The named expressions of a spec, each a :class:`NamedExpression` on read."""
-
-    def __init__(self, spec: ModelSpec) -> None:
-        self._spec = spec
-
-    def __getitem__(self, name: str) -> NamedExpression:
-        if name not in self._spec.program.expressions:
-            raise unknown("named expression", name, self._spec.program.expressions)
-        spec = self._spec
-        held = spec._model.expressions.data.get(name)
-        stored = held if held is not None and held.spec == spec.name else None
-        return NamedExpression(spec, name, spec._context(spec._resolve), stored)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._spec.program.expressions)
-
-    def __len__(self) -> int:
-        return len(self._spec.program.expressions)
-
-    def __repr__(self) -> str:
-        return f"NamedExpressions({list(self)})"
-
-
-class Declaration:
-    """
-    One declaration of a spec, typeset on its own: math only, no document.
-
-    A named expression, a constraint or a variable, reached by name through
-    :meth:`ModelSpec.declaration`. :class:`NamedExpression` adds the linopy
-    fold and the solution on top of this.
-    """
-
-    def __init__(self, spec: ModelSpec, name: str) -> None:
-        self._spec = spec
-        self._name = name
-
-    def typeset(self, fmt: FormatName, **options: Any) -> str:
-        """This declaration typeset in *fmt* as a single line, no document around it."""
-        return typeset_line(self._spec._schema, self._name, fmt, **options)
-
-    def to_latex(self, **options: Any) -> str:
-        """This declaration typeset as a single LaTeX line, no document around it."""
-        return self.typeset("latex", **options)
-
-    def to_markdown(self, **options: Any) -> str:
-        """This declaration typeset as a single Markdown math line, no ``$$`` around it."""
-        return self.typeset("markdown", **options)
-
-    def to_typst(self, **options: Any) -> str:
-        """This declaration typeset as a single Typst line, no document around it."""
-        return self.typeset("typst", **options)
-
-    def _repr_markdown_(self) -> str:
-        return f"$$\n{self.to_markdown()}\n$$"
 
 
 def _notebook_math(markdown: str) -> str:
@@ -594,44 +366,66 @@ def _notebook_math(markdown: str) -> str:
     return re.sub(r"\$`(.*?)`\$", r"$\1$", fenced)
 
 
-class NamedExpression(Declaration):
+class NamedExpression:
     """
     One named expression, in three views: its math, its linopy fold and its solution.
 
-    The object pins the data sources it was made with for its lifetime, so the
-    three views agree. ``expressions[name]`` reads the model's own data,
-    ``evaluate(name, sources)`` attaches fresh data instead.
-
-    Where the spec built the expression into ``model.expressions``,
-    ``expressions[name].expression`` is that stored object and needs no
-    parameters at all; ``solution`` folds afresh and does.
-
-    Attributes
-    ----------
-    node
-        The lowered expression body, mathspec's own AST handle.
+    Where the spec built the expression into ``model.expressions``, both
+    ``expression`` and ``solution`` are read off that stored object; else
+    they fold the body over the parameters the spec kept. Reached through
+    :meth:`ModelSpec.declaration`, a constraint or a variable typesets the
+    same way.
     """
 
-    def __init__(
-        self,
-        spec: ModelSpec,
-        name: str,
-        ctx: Context,
-        stored: LinearExpression | QuadraticExpression | None = None,
-    ) -> None:
-        super().__init__(spec, name)
-        self._ctx = ctx
-        self._stored = stored
+    def __init__(self, spec: ModelSpec, name: str) -> None:
+        self._spec = spec
+        self._name = name
+
+    def typeset(self, fmt: FormatName, **options: Any) -> str:
+        """This declaration typeset in *fmt* as a single line, no document around it."""
+        return typeset_line(self._spec._schema, self._name, fmt, **options)
+
+    def to_latex(self, **options: Any) -> str:
+        """This declaration typeset as a single LaTeX line."""
+        return self.typeset("latex", **options)
+
+    def to_markdown(self, **options: Any) -> str:
+        """This declaration typeset as a single Markdown math line, no ``$$`` around it."""
+        return self.typeset("markdown", **options)
+
+    def to_typst(self, **options: Any) -> str:
+        """This declaration typeset as a single Typst line."""
+        return self.typeset("typst", **options)
+
+    def _repr_markdown_(self) -> str:
+        return f"$$\n{self.to_markdown()}\n$$"
+
+    @property
+    def _declared(self) -> ms.NamedExpression:
+        """The lowered named expression; a constraint or a variable has none."""
+        expressions = self._spec.program.expressions
+        if self._name not in expressions:
+            raise SpecDataError(
+                f"'{self._name}' is a constraint or a variable, not a named expression: "
+                "it only typesets. Read it off model.constraints or model.variables."
+            )
+        return expressions[self._name]
 
     @property
     def node(self) -> ms.Expression:
         """The expression body as lowered, mathspec's own AST handle."""
-        return self._spec.program.expressions[self._name].expression
+        return self._declared.expression
 
     @property
     def dims(self) -> tuple[str, ...]:
         """The frame the entry is read over, in the declared order."""
-        return self._spec.program.expressions[self._name].dims
+        return self._declared.dims
+
+    @property
+    def _stored(self) -> LinearExpression | QuadraticExpression | None:
+        """The entry the spec built into ``model.expressions``, if it is still there."""
+        held = self._spec._model.expressions.data.get(self._name)
+        return held if held is not None and held.spec == self._spec.name else None
 
     @functools.cached_property
     def expression(self) -> Value:
@@ -643,16 +437,18 @@ class NamedExpression(Declaration):
         a bare ``Variable``, a ``DataArray`` for a data-only body or a
         ``float`` for a constant.
         """
-        if self._stored is not None:
-            return self._stored
-        return evaluate_named(self._name, self._ctx.unsolved)
+        self._declared
+        stored = self._stored
+        if stored is not None:
+            return stored
+        return evaluate_named(self._name, self._spec._context().unsolved)
 
     @property
     def solution(self) -> xr.DataArray:
         """
-        The expression folded over the model's solution, as data.
+        The expression over the model's solution, as data.
 
-        Folded afresh on every read, so it follows the model: a body over
+        Read afresh on every access, so it follows the model: a body over
         data alone reads without a solve at all.
 
         Raises
@@ -660,11 +456,19 @@ class NamedExpression(Declaration):
         RuntimeError
             The body reads a variable the model holds no solution for, or a
             constraint it holds no dual for.
+        AttributeError
+            The expression is built into ``model.expressions`` and the model
+            is not solved.
         SpecDataError
-            A parameter the body reads was neither retained nor
-            still reachable through the model's sources.
+            The expression was built and has since been removed from
+            ``model.expressions``, so the parameters it reads are not kept,
+            or this is a constraint or a variable.
         """
-        return fold(self._name, self._ctx)
+        self._declared
+        stored = self._stored
+        if stored is not None:
+            return stored.solution.rename(self._name)
+        return fold(self._name, self._spec._context())
 
     def __repr__(self) -> str:
         value = self.__dict__.get("expression")

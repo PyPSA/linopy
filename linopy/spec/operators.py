@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass
 from functools import reduce
-from typing import cast, overload
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -23,9 +23,8 @@ import xarray as xr
 from linopy.constants import EvolvingAPIWarning
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.long import Relation
-from linopy.spec.context import Array, Term
+from linopy.spec.context import Array
 from linopy.spec.errors import SpecDataError
-from linopy.spec.groups import Groups, grouped
 from linopy.variables import Variable
 
 Amount = int | xr.DataArray
@@ -145,14 +144,6 @@ def _coord_dims(array: Array) -> list[str]:
     return [str(d) for d in dims]
 
 
-@overload
-def at(array: xr.DataArray, relation: xr.DataArray, *, into: str) -> xr.DataArray: ...
-
-
-@overload
-def at(array: Term, relation: xr.DataArray, *, into: str) -> Term: ...
-
-
 def at(array: Array, relation: xr.DataArray, *, into: str) -> Array:
     """
     Read *array* through *relation*: the adjoint of :func:`grouped_sum`.
@@ -172,9 +163,47 @@ def at(array: Array, relation: xr.DataArray, *, into: str) -> Array:
 
 
 @dataclass(frozen=True)
-class _Edge:
-    wrap: bool
-    fill: float | None
+class Groups:
+    """How a relation partitions an axis: the shape every group-wise operator reads."""
+
+    labels: np.ndarray
+    grouped: xr.DataArray
+    belongs: xr.DataArray
+    within: xr.DataArray
+    size: xr.DataArray
+    roster: np.ndarray
+    names: np.ndarray
+    counts: np.ndarray
+
+
+def grouped(over: str, labels: np.ndarray, groups: xr.DataArray) -> Groups:
+    """
+    How the relation *groups* partitions the axis *over*, groups in order of first appearance.
+
+    A coordinate the relation sends nowhere belongs to no group: its ``within``
+    is 0, its ``size`` 1 and its ``grouped`` False.
+    """
+    codes, names = pd.factorize(groups.sel({over: labels}).to_numpy())
+    held = codes >= 0
+    belongs = np.where(held, codes, 0)
+    within = np.where(held, pd.Series(codes).groupby(codes).cumcount().to_numpy(), 0)
+    counts = np.bincount(codes[held], minlength=max(len(names), 1))
+    roster = np.zeros((len(counts), max(counts.max(), 1)), dtype=int)
+    roster[codes[held], within[held]] = np.flatnonzero(held)
+
+    def on_axis(values: np.ndarray) -> xr.DataArray:
+        return xr.DataArray(values, coords={over: labels}, dims=[over])
+
+    return Groups(
+        labels,
+        on_axis(held),
+        on_axis(belongs),
+        on_axis(within),
+        on_axis(np.where(held, counts[belongs], 1)),
+        roster,
+        np.asarray(names),
+        counts,
+    )
 
 
 def shift(
@@ -194,12 +223,12 @@ def shift(
     is an array differs per entity and is a gather. *by* is the relation
     whose groups the translation stays inside.
     """
-    edge = _Edge(wrap, fill)
     if by is not None:
         partition = grouped(over, np.asarray(array.indexes[over]), by)
-        return _gather_in_groups(array, over, _per_group(offset, by), partition, edge)
+        offset = _per_group(offset, by)
+        return _gather_in_groups(array, over, offset, partition, wrap, fill)
     if isinstance(offset, xr.DataArray) and offset.ndim:
-        return _gather_by_offset(array, over, offset, edge)
+        return _gather_by_offset(array, over, offset, wrap, fill)
     amount: dict[Hashable, int] = {over: int(offset)}
     if wrap:
         if isinstance(array, xr.DataArray):
@@ -207,10 +236,9 @@ def shift(
         return array.roll(amount)
     if isinstance(array, xr.DataArray):
         return array.shift(amount, fill_value=np.nan if fill is None else fill)
-    shifted = array.shift(amount)
     if fill is None:
-        return shifted
-    return vacated(shifted, array, over, _off_the_axis(array, over, amount[over]), fill)
+        return array.shift(amount)
+    return _gather_by_offset(array, over, offset, wrap, fill)
 
 
 def sum_back(
@@ -243,7 +271,6 @@ def sum_back(
             f"window continues from the other end."
         )
     widest = max(1, min(asked, size))
-    probe = _Edge(wrap=wrap, fill=None)
     partition = (
         None if by is None else grouped(over, np.asarray(array.indexes[over]), by)
     )
@@ -251,9 +278,9 @@ def sum_back(
     reached: list[xr.DataArray] = []
     for lag in range(widest):
         lagged = (
-            _gather_by_offset(array, over, lag, probe)
+            _gather_by_offset(array, over, lag, wrap, None)
             if partition is None
-            else _gather_in_groups(array, over, lag, partition, probe)
+            else _gather_in_groups(array, over, lag, partition, wrap, None)
         )
         live, term = ~lagged.isnull(), filled(lagged, 0.0)
         if isinstance(within, xr.DataArray):
@@ -280,7 +307,9 @@ def _merged(values: list[Array]) -> Array:
     return cast(LinearExpression, merge(cast(list[LinearExpression], values)))
 
 
-def _gather_by_offset(array: Array, over: str, offset: Amount, edge: _Edge) -> Array:
+def _gather_by_offset(
+    array: Array, over: str, offset: Amount, wrap: bool, fill: float | None
+) -> Array:
     """
     Translate *array* along *over* by an offset that may differ per entity.
 
@@ -297,13 +326,13 @@ def _gather_by_offset(array: Array, over: str, offset: Amount, edge: _Edge) -> A
         picked = array.sel({over: _labelled(labels, ordinals)})
         return picked.assign_coords({over: labels})
 
-    if edge.wrap:
+    if wrap:
         return gathered(source % card)
     inside = ((source >= 0) & (source < card)).assign_coords({over: labels})
     moved = gathered(source.clip(0, card - 1)).where(inside)
-    if edge.fill is None:
+    if fill is None:
         return moved
-    return vacated(moved, array, over, ~inside, edge.fill)
+    return vacated(moved, array, over, ~inside, fill)
 
 
 def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
@@ -311,11 +340,16 @@ def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
     target = str(groups.name)
     if not isinstance(offset, xr.DataArray) or target not in offset.dims:
         return offset
-    return at(offset, groups, into=target).drop_vars(target)
+    return cast(xr.DataArray, at(offset, groups, into=target)).drop_vars(target)
 
 
 def _gather_in_groups(
-    array: Array, over: str, offset: Amount, groups: Groups, edge: _Edge
+    array: Array,
+    over: str,
+    offset: Amount,
+    groups: Groups,
+    wrap: bool,
+    fill: float | None,
 ) -> Array:
     """
     Translate *array* inside each group rather than along the axis.
@@ -324,7 +358,7 @@ def _gather_in_groups(
     reaching off a group's edge: only the second is what a fill speaks for.
     """
     reached = groups.within - offset
-    if edge.wrap:
+    if wrap:
         reached = reached % groups.size
     inside = groups.grouped & (reached >= 0) & (reached < groups.size)
 
@@ -338,16 +372,9 @@ def _gather_in_groups(
         .assign_coords({over: labels})
         .where(inside)
     )
-    if edge.fill is None:
+    if fill is None:
         return gathered
-    return vacated(gathered, array, over, groups.grouped & ~inside, edge.fill)
-
-
-def _off_the_axis(array: Array, over: str, offset: int) -> xr.DataArray:
-    labels = np.asarray(array.indexes[over])
-    source = xr.DataArray(np.arange(len(labels)), coords={over: labels}, dims=[over])
-    source = source - offset
-    return (source < 0) | (source >= len(labels))
+    return vacated(gathered, array, over, groups.grouped & ~inside, fill)
 
 
 def _labelled(labels: np.ndarray, ordinals: xr.DataArray) -> xr.DataArray:

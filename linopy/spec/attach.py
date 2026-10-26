@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import difflib
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -74,7 +74,22 @@ EVOLVING_MESSAGE = (
     '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
-Parameter = tuple[xr.DataArray, xr.DataArray]
+_Rows = tuple[xr.DataArray, xr.DataArray]
+
+
+class Parameter(NamedTuple):
+    """
+    A parameter as a build and a fold read it.
+
+    ``filled`` holds the values on the master coordinates, a missing row
+    filled the way the declaration's ``missing:`` says: NaN (``False`` for
+    ``bool``) where ``absent``, 0 where ``neutral``, else the literal.
+    ``present`` is where the data has a row, so a missing row stays
+    distinguishable from a supplied value equal to the fill.
+    """
+
+    filled: xr.DataArray
+    present: xr.DataArray
 
 
 def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Attached:
@@ -86,8 +101,8 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
     program
         The lowered spec.
     sources
-        Data keyed by declared name. Any mapping works; ``keys()`` is
-        called once, and everything after that is read by key. An
+        Data keyed by declared name. Any mapping works: membership is
+        read off ``keys()``, never by iterating, and values by key. An
         ``xr.Dataset`` is accepted too: its indexes are dimension sources,
         its data variables parameters and relations.
 
@@ -97,8 +112,6 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
         A program reading what it does not build (``given:``), a reached
         dimension or a relation with no source, a duplicated dimension
         member, or a relation breaking the rules a map has.
-    TypeError
-        *sources* offers no ``keys()``.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
     if program.given:
@@ -108,10 +121,11 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
         )
     if isinstance(sources, xr.Dataset):
         sources = _dataset_sources(sources)
-    read = Sources(sources, _attachable(program))
-    coords = _master_coords(program, read)
-    relations = _relations(program, read, coords)
-    return Attached(program, coords, relations, read)
+    keys = frozenset(sources.keys())
+    _warn_near_misses(keys, program)
+    coords = _master_coords(program, sources, keys)
+    relations = _relations(program, sources, keys, coords)
+    return Attached(program, coords, relations, sources)
 
 
 @dataclass(frozen=True, eq=False)
@@ -137,7 +151,7 @@ class Attached:
     program: ms.Program
     coords: Mapping[str, pd.Index]
     relations: Mapping[str, xr.DataArray]
-    sources: Sources
+    sources: Mapping[str, Any]
 
     def parameter(self, name: str) -> xr.DataArray:
         """
@@ -156,28 +170,18 @@ class Attached:
             coordinate, a null value in a row, values of another type
             than declared, or a missing row the declaration refuses.
         """
-        return self.read(name)[0]
+        return self.read(name).filled
 
     def read(self, name: str) -> Parameter:
         """The parameter *name* as :meth:`parameter` gives it, beside where the data has a row for it."""
         declared = self._declaration(name)
-        if name not in self.sources:
+        if name not in self._keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         arr, present = _as_array(name, declared, self.sources[name], self.coords)
         onto = {d: self.coords[d] for d in declared.dims}
         arr, present = _aligned(name, _numpy(arr), present, onto, _fill(declared))
-        return _filled(name, declared, arr, present, name in self._strict), present
-
-    def retained(self) -> tuple[xr.Dataset, xr.Dataset]:
-        """The relations plus the parameters the named expressions read, and the presence mask of each parameter a row is missing from."""
-        arrays: dict[str, xr.DataArray] = {}
-        presence: dict[str, xr.DataArray] = {}
-        for name in self._retained_names():
-            arrays[name], present = self.read(name)
-            if not bool(present.all()):
-                presence[name] = present
-        arrays.update(self.relations)
-        return xr.Dataset(arrays), xr.Dataset(presence)
+        filled = _filled(name, declared, arr, present, name in self._strict)
+        return Parameter(filled, present)
 
     def _declaration(self, name: str) -> ms.Parameter:
         if name not in self.program.parameters:
@@ -186,9 +190,9 @@ class Attached:
             )
         return self.program.parameters[name]
 
-    def _retained_names(self) -> list[str]:
-        keep = _report_closure(self.program)
-        return [n for n in self.program.parameters if n in keep]
+    @cached_property
+    def _keys(self) -> frozenset[str]:
+        return frozenset(self.sources.keys())
 
     @cached_property
     def _strict(self) -> frozenset[str]:
@@ -234,16 +238,16 @@ def amounts_of(node: ms.Expression) -> list[str]:
     return []
 
 
-def _report_closure(program: ms.Program) -> set[str]:
-    """Every parameter a named expression reads, by node or by name."""
-    bodies = tuple(d.expression for d in program.expressions.values())
+def parameters_read(program: ms.Program, expressions: Iterable[str]) -> list[str]:
+    """Every parameter the named *expressions* read, by node or by name, in declared order."""
+    bodies = tuple(program.expressions[e].expression for e in expressions)
     names = set(parameters_of(*bodies))
     for node in walk(*bodies):
         names.update(amounts_of(node))
         if isinstance(node, ms.Cases):
             for region in node.regions:
                 names |= region.when.names_read
-    return names & set(program.parameters)
+    return [n for n in program.parameters if n in names]
 
 
 # ---------------------------------------------------------------------------
@@ -257,46 +261,14 @@ def _dataset_sources(ds: xr.Dataset) -> dict[str, Any]:
     return sources
 
 
-def _attachable(program: ms.Program) -> dict[str, str]:
-    kinds = {n: "parameter" for n in program.parameters}
-    kinds.update({d: "dimension" for d in program.dimensions})
-    kinds.update({name: "relation" for name in program.relations})
-    return kinds
-
-
-class Sources:
-    """
-    The caller's data, read by key.
-
-    ``keys()`` is called once, to see which declared names have data;
-    everything after that goes through ``__getitem__``, so a source is
-    read when a declaration reaches it and never otherwise. A key naming
-    nothing the spec declares is ignored, so one mapping can feed several
-    specs; one close to a declared name is a typo and is warned about.
-    """
-
-    def __init__(self, mapping: Mapping[str, Any], declared: Mapping[str, str]) -> None:
-        self._mapping = mapping
-        try:
-            self._keys = frozenset(mapping.keys())
-        except AttributeError:
-            raise TypeError(
-                f"sources must offer keys(): it is called once, to see which declared names "
-                f"have data, and everything after that is read by key. "
-                f"{type(mapping).__name__} offers no keys()."
-            ) from None
-        _warn_near_misses(self._keys, declared)
-
-    def __contains__(self, key: str) -> bool:
-        return key in self._keys
-
-    def __getitem__(self, key: str) -> Any:
-        return self._mapping[key]
-
-
-def _warn_near_misses(keys: frozenset[str], declared: Mapping[str, str]) -> None:
-    unknown = sorted(keys - set(declared))
-    typos = {k: near for k in unknown if (near := _near(k, declared)) is not None}
+def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
+    """Warn about a key naming nothing the spec declares and close to a name it does: a typo, which leaves that name without data."""
+    declared = sorted({*program.parameters, *program.dimensions, *program.relations})
+    typos = {
+        k: near[0]
+        for k in sorted(keys.difference(declared))
+        if (near := difflib.get_close_matches(k, declared, n=1, cutoff=0.6))
+    }
     if not typos:
         return
     warnings.warn(
@@ -305,14 +277,8 @@ def _warn_near_misses(keys: frozenset[str], declared: Mapping[str, str]) -> None
         f"{shown([f'{k} -> {near}' for k, near in sorted(typos.items())])}. "
         f"An unknown key is ignored, so a mistyped one leaves its declaration without data.",
         UserWarning,
-        stacklevel=4,
+        stacklevel=3,
     )
-
-
-def _near(key: str, declared: Mapping[str, str]) -> str | None:
-    """The one declared name *key* is close enough to be a typo of."""
-    near = difflib.get_close_matches(key, sorted(declared), n=1, cutoff=0.6)
-    return near[0] if near else None
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +295,13 @@ def _reached(program: ms.Program) -> set[str]:
     return dims
 
 
-def _master_coords(program: ms.Program, sources: Sources) -> dict[str, pd.Index]:
+def _master_coords(
+    program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
+) -> dict[str, pd.Index]:
     reached = _reached(program)
     coords: dict[str, pd.Index] = {}
     for dim in program.dimensions:
-        if dim in sources:
+        if dim in keys:
             coords[dim] = _index(dim, sources[dim], program.dimensions[dim])
         elif dim in reached:
             raise SpecDataError(
@@ -392,12 +360,15 @@ def _key_value(name: str, rel: ms.Relation) -> tuple[str, str]:
 
 
 def _relations(
-    program: ms.Program, sources: Sources, coords: Mapping[str, pd.Index]
+    program: ms.Program,
+    sources: Mapping[str, Any],
+    keys: frozenset[str],
+    coords: Mapping[str, pd.Index],
 ) -> dict[str, xr.DataArray]:
     out: dict[str, xr.DataArray] = {}
     for name, rel in program.relations.items():
         over, target = _key_value(name, rel)
-        if name not in sources:
+        if name not in keys:
             raise SpecDataError(
                 f"no data provided for relation '{name}'. Pass it under key '{name}' as "
                 f"{_RELATION_SHAPES.format(key=over)}, holding a '{target}' value for each "
@@ -508,7 +479,7 @@ def _as_array(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> _Rows:
     if isinstance(obj, xr.DataArray):
         return _from_dense(name, declared, obj)
     if isinstance(obj, pd.DataFrame):
@@ -530,7 +501,7 @@ def _parameter_shapes(dims: Sequence[str]) -> str:
     return _PARAMETER_SHAPES.format(dims=list(dims), columns=[*dims, "value"])
 
 
-def _everywhere(arr: xr.DataArray) -> Parameter:
+def _everywhere(arr: xr.DataArray) -> _Rows:
     """*arr* beside the presence of every one of its rows."""
     return arr, xr.ones_like(arr, dtype=bool)
 
@@ -540,7 +511,7 @@ def _from_scalar(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> _Rows:
     if pd.isna(obj):
         raise SpecDataError(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
@@ -556,7 +527,7 @@ def _from_scalar(
     return _everywhere(arr)
 
 
-def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> Parameter:
+def _from_dense(name: str, declared: ms.Parameter, arr: xr.DataArray) -> _Rows:
     dims = declared.dims
     _check_value_dtype(name, declared.dtype, arr.dtype)
     if set(arr.dims) != set(dims) or len(arr.dims) != len(dims):
@@ -586,7 +557,7 @@ def _from_frame(
     declared: ms.Parameter,
     df: pd.DataFrame,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> _Rows:
     dims = declared.dims
     tidy = df
     if not set(dims) <= set(df.columns) and set(dims) <= _headers(df):
@@ -631,7 +602,7 @@ def _from_rows(
     declared: ms.Parameter,
     series: pd.Series,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> _Rows:
     dims = declared.dims
     if not dims:
         if len(series) != 1:
@@ -723,7 +694,7 @@ def _aligned(
     present: xr.DataArray,
     onto: Mapping[str, pd.Index],
     fill: Any,
-) -> Parameter:
+) -> _Rows:
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
         if stale:

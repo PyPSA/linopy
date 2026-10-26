@@ -11,16 +11,14 @@ spec's name and framed in the order its entry declares its dims.
 from __future__ import annotations
 
 import warnings
+from typing import cast
 
 import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.model import Model
-from linopy.spec.assumptions import check_assumptions
-from linopy.spec.attach import Attached
-from linopy.spec.context import Context, Parameters, Term, Value
+from linopy.spec.context import Context, Term, Value
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluate import (
     carried,
@@ -37,24 +35,16 @@ _FLIPPED = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
-def build(model: Model, attached: Attached, name: str) -> None:
+def build(ctx: Context) -> None:
     """
-    Add every declaration of the attached program to *model* as the spec *name*.
+    Add every declaration of the program to the model of *ctx* as the spec ``ctx.name``.
 
     Variables, special-ordered sets, constraints, the objective and the
     named expressions holding a variable term, in that order. The program's
     assumptions are checked once the variables exist, so a condition may
     read where one is defined.
     """
-    check_supported(attached.program)
-    ctx = Context(
-        model,
-        attached.program,
-        attached.coords,
-        attached.relations,
-        Parameters(attached.program, attached.read),
-        name,
-    )
+    check_supported(ctx.program)
     _variables(ctx)
     check_assumptions(ctx)
     _sos(ctx)
@@ -80,6 +70,25 @@ def check_supported(program: ms.Program) -> None:
         )
 
 
+def check_assumptions(ctx: Context) -> None:
+    """
+    Refuse the data wherever an assumption of the program does not hold.
+
+    The language decides nothing about the numbers, so every fact it needs of
+    them, the file's own and the ones a ``piecewise:`` method implies, is an
+    ``assumptions:`` entry. One holds at every coordinate its ``where`` admits;
+    a missing row on either side of a comparison reads as false there.
+    """
+    for name, assumption in ctx.program.assumptions.items():
+        admitted = evaluate_where(assumption.where, ctx)
+        failing = admitted & ~evaluate_where(assumption.holds, ctx)
+        if bool(failing.any()):
+            raise SpecDataError(
+                f"{ms.assumption_message(name, assumption)}\n"
+                f"  Not so at {first_coordinates(failing, 3)}"
+            )
+
+
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
         mask = as_linopy_mask(evaluate_where(declared.where, ctx))
@@ -98,14 +107,13 @@ def _variables(ctx: Context) -> None:
 def _bound(
     node: ms.Expression | None, ctx: Context, open_side: float
 ) -> float | xr.DataArray:
-    """A bound as linopy takes it: an open side, and a missing ``absent`` row, is *open_side*."""
+    """A bound, a number or a parameter, as linopy takes it: an open side, and a missing ``absent`` row, is *open_side*."""
     if node is None:
         return open_side
-    if isinstance(node, ms.ParameterReference):
-        return ctx.parameters[node.name].fillna(open_side)
-    if isinstance(node, ms.Constant):
-        return node.value
-    raise TypeError(f"a bound is a number or a parameter, not {type(node).__name__}")
+    value = evaluate(node, ctx)
+    if isinstance(value, xr.DataArray):
+        return value.fillna(open_side)
+    return cast(float, value)
 
 
 def _sos(ctx: Context) -> None:
@@ -128,11 +136,7 @@ def _constraints(ctx: Context) -> None:
         else:
             sign = _SIGN[row.sense]
             term, other = evaluate(row.lhs, scoped), evaluate(row.rhs, scoped)
-        if not isinstance(term, Term):
-            raise SpecDataError(
-                f"constraint '{name}' holds no variable term once the data is attached, "
-                f"so there is nothing to constrain."
-            )
+        term = cast(Term, term)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
         _check_live(name, row, term, other, rows, ctx)
@@ -226,14 +230,23 @@ def _expressions(ctx: Context) -> None:
     A data-only body has no linopy term to hold and stays on the spec; so
     does one reading a ``dual``, which needs a solved model.
     """
+    unbuilt = set(unbuilt_expressions(ctx.program))
     for name, declared in ctx.program.expressions.items():
-        body = declared.expression
-        if any(isinstance(n, ms.Dual) for n in ms.walk(body)):
+        if name in unbuilt:
             continue
-        value = evaluate(body, ctx)
-        if isinstance(value, Term):
-            built = ctx.model.add_expressions(_framed(value, declared.dims), name=name)
-            built.spec = ctx.name
+        value = cast(Term, evaluate(declared.expression, ctx))
+        built = ctx.model.add_expressions(_framed(value, declared.dims), name=name)
+        built.spec = ctx.name
+
+
+def unbuilt_expressions(program: ms.Program) -> list[str]:
+    """The named expressions a build leaves on the spec: one over data alone, or one reading a ``dual``."""
+    return [
+        name
+        for name, declared in program.expressions.items()
+        if not ms.carries_variable(declared.expression)
+        or any(isinstance(n, ms.Dual) for n in ms.walk(declared.expression))
+    ]
 
 
 def _framed(

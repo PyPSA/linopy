@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable
-from typing import assert_never
+from typing import assert_never, cast
 
 import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
 from linopy.spec import operators
-from linopy.spec.context import Context, Term, Value
+from linopy.spec.context import Context
 from linopy.spec.errors import SpecDataError
-from linopy.spec.groups import grouped
 
 _COMPARISONS: dict[str, Callable[..., xr.DataArray]] = {
     "==": operator.eq,
@@ -57,19 +56,14 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.ConditionReference):
         return _node(node.body, ctx)
     if isinstance(node, ms.ParameterDefined):
-        dtype = ctx.program.parameters[node.name].dtype
-        if dtype == "bool":
-            return _bool(ctx.parameters[node.name])
-        present = ctx.parameters.present(node.name)
-        if dtype == "float":
-            return present & np.isfinite(ctx.parameters[node.name])
-        return present
+        return _defined(node.name, ctx)
     if isinstance(node, ms.VariableDefined):
         return ctx.model.variables[node.name].mask
     if isinstance(node, ms.ParameterComparison):
-        compared = _compared(ctx.parameters[node.name], node.op, node.value)
+        filled, present = ctx.parameter(node.name)
+        compared = _compared(filled, node.op, node.value)
         if isinstance(ctx.program.parameters[node.name].missing, str):
-            return compared & ctx.parameters.present(node.name)
+            return compared & present
         return compared
     if isinstance(node, ms.ExpressionComparison):
         left, right = _side(node.left, ctx), _side(node.right, ctx)
@@ -88,7 +82,7 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
             ctx.relations[columns.name],
             into=columns.dropped_dims[0],
         )
-        return _bool(pulled)
+        return _bool(cast(xr.DataArray, pulled))
     if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
         arr = xr.DataArray(labels, coords={node.name: labels}, dims=[node.name])
@@ -114,6 +108,17 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
     assert_never(node)
 
 
+def _defined(name: str, ctx: Context) -> xr.DataArray:
+    """Where a parameter is defined: a bool reads its value, a float has a row and a finite value, any other a row."""
+    filled, present = ctx.parameter(name)
+    dtype = ctx.program.parameters[name].dtype
+    if dtype == "bool":
+        return _bool(filled)
+    if dtype == "float":
+        return present & np.isfinite(filled)
+    return present
+
+
 def _bool(arr: xr.DataArray) -> xr.DataArray:
     """*arr* as a boolean mask, a hole reading as exclusion."""
     return arr.fillna(False).astype(bool)
@@ -123,10 +128,7 @@ def _side(node: ms.Expression, ctx: Context) -> xr.DataArray:
     """One side of an expression comparison as data, its missing rows kept so they read as exclusion."""
     from linopy.spec.evaluate import evaluate
 
-    value: Value = evaluate(node, ctx.unfilled)
-    if isinstance(value, Term):
-        raise TypeError("a side of a where comparison is variable-free")
-    return value if isinstance(value, xr.DataArray) else xr.DataArray(value)
+    return xr.DataArray(evaluate(node, ctx.unfilled))
 
 
 def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:
@@ -157,7 +159,7 @@ def _group_offsets(
     node: ms.DimensionPosition, groups: xr.DataArray, labels: np.ndarray
 ) -> xr.DataArray:
     """Each coordinate's distance from the boundary of its own group; NaN where it is in no group."""
-    partition = grouped(node.name, labels, groups)
+    partition = operators.grouped(node.name, labels, groups)
     needed = node.position + 1 if node.position >= 0 else -node.position
     short = sorted(
         str(g) for g, n in zip(partition.names, partition.counts) if n < needed

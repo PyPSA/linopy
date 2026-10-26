@@ -1,7 +1,7 @@
 """
 Building declarations from mathspec programs: variables, constraints, the
-objective, SOS-constrained curves, coverage refusals and side-swapped
-expressions.
+objective, SOS-constrained curves, coverage refusals, side-swapped
+expressions and the assumptions checked against the data.
 """
 
 from __future__ import annotations
@@ -28,6 +28,11 @@ from spec_helpers import (  # noqa: E402
     FULL_X,
     FULL_Y,
     GENERATOR,
+    MASKED_CURVE_SPEC,
+    RAGGED_X,
+    RAGGED_Y,
+    UNITS,
+    curve,
     solved,
     with_,
     yaml_dict,
@@ -105,7 +110,7 @@ def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     assert (
         set(m.spec.expressions) == {"spend", "usage"} and len(m.spec.expressions) == 2
     )
-    assert set(m.spec.parameters.data_vars) == {"cost", "p_max"}
+    assert not m.spec.parameters.data_vars
     assert m.spec.coords["generator"].equals(GENERATOR)
 
 
@@ -501,8 +506,6 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
     )
     m = Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": FULL_Y})
     assert m.variables["cost_curve_lam"].attrs["sos_type"] == 2
-    # Expanding the block writes it out as ordinary declarations, so none of it is drift.
-    assert not m.spec.unspecified
 
 
 # ---------------------------------------------------------------------------
@@ -649,3 +652,176 @@ def test_a_named_expression_reading_a_dual_stays_on_the_spec() -> None:
     m = Model.from_spec(spec, DISPATCH_DATA)
     assert list(m.expressions) == []
     assert set(m.spec.expressions) == {"price"}
+
+
+# ---------------------------------------------------------------------------
+# assumptions: the ones a piecewise method implies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("spec", "data", "spend"),
+    [
+        pytest.param(
+            CURVE_SPEC, {"bp_x": FULL_X, "bp_y": FULL_Y}, 400.0, id="whole-curves"
+        ),
+        pytest.param(
+            MASKED_CURVE_SPEC,
+            {"bp_x": RAGGED_X, "bp_y": RAGGED_Y},
+            275.0,
+            id="ragged-curves-under-points",
+        ),
+    ],
+)
+def test_a_piecewise_cost_lands_on_the_curve(
+    spec: dict[str, Any], data: dict[str, Any], spend: float
+) -> None:
+    m = solved(spec, {**CURVE_DATA, **data})
+    assert m.spec.expressions["spend"].solution.item() == pytest.approx(spend)
+    assert m.objective.value == pytest.approx(spend)
+
+
+def without(series: pd.Series, *keys: tuple[str, int]) -> pd.Series:
+    return series.drop(index=list(keys))
+
+
+@pytest.mark.parametrize(
+    ("spec", "data", "match"),
+    [
+        pytest.param(
+            with_(
+                CURVE_SPEC,
+                parameters={
+                    **CURVE_SPEC["parameters"],
+                    "bp_x": {"dims": ["generator", "bp"], "missing": "absent"},
+                },
+            ),
+            {"bp_x": without(FULL_X, ("gas", 3)), "bp_y": FULL_Y},
+            "assumption 'cost_curve_complete' does not hold.*\n  Not so at generator='gas', bp=3",
+            id="a-hole-in-a-whole-curve",
+        ),
+        pytest.param(
+            MASKED_CURVE_SPEC,
+            {"bp_x": RAGGED_X, "bp_y": without(RAGGED_Y, ("gas", 3))},
+            "assumption 'cost_curve_complete' does not hold.*narrow points: 'bp_x'",
+            id="a-hole-inside-the-mask",
+        ),
+        pytest.param(
+            MASKED_CURVE_SPEC,
+            {"bp_x": without(FULL_X, ("gas", 1)), "bp_y": FULL_Y},
+            "assumption 'cost_curve_contiguous' does not hold.*\n  Not so at generator='gas'",
+            id="a-mask-with-a-gap",
+        ),
+        pytest.param(
+            CURVE_SPEC,
+            {
+                "bp_x": curve(
+                    {
+                        (g, k): x
+                        for g in UNITS
+                        for k, x in enumerate([0.0, 20.0, 20.0, 80.0])
+                    }
+                ),
+                "bp_y": FULL_Y,
+            },
+            "strictly increasing",
+            id="breakpoints-that-do-not-increase",
+        ),
+        pytest.param(
+            CURVE_SPEC,
+            {
+                "bp_x": FULL_X,
+                "bp_y": curve(
+                    {
+                        (g, k): y
+                        for g in UNITS
+                        for k, y in enumerate([0.0, 300.0, 500.0, 600.0])
+                    }
+                ),
+            },
+            "exact only for a convex curve",
+            id="a-concave-curve-under-lp",
+        ),
+        pytest.param(
+            MASKED_CURVE_SPEC,
+            {"bp_x": without(RAGGED_X, ("hydro", 1)), "bp_y": RAGGED_Y},
+            "at least two breakpoints per curve.*\n  Not so at generator='hydro'",
+            id="a-one-point-curve-under-lp",
+        ),
+    ],
+)
+def test_a_curve_the_method_cannot_build_is_refused(
+    spec: dict[str, Any], data: dict[str, Any], match: str
+) -> None:
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, {**CURVE_DATA, **data})
+
+
+def test_a_convex_hull_curve_may_bend_either_way_but_not_both() -> None:
+    spec = with_(
+        CURVE_SPEC,
+        piecewise={
+            "cost_curve": {
+                "over": "bp",
+                "links": [["p", "bp_x"], ["op_cost", "bp_y"]],
+                "method": "convex",
+            }
+        },
+    )
+    concave = curve(
+        {(g, k): y for g in UNITS for k, y in enumerate([0.0, 300.0, 500.0, 600.0])}
+    )
+    mixed = curve(
+        {(g, k): y for g in UNITS for k, y in enumerate([0.0, 300.0, 350.0, 600.0])}
+    )
+    assert (
+        "cost_curve_lam"
+        in Model.from_spec(
+            spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": concave}
+        ).variables
+    )
+    with pytest.raises(SpecDataError, match="exact only for a single bend"):
+        Model.from_spec(spec, {**CURVE_DATA, "bp_x": FULL_X, "bp_y": mixed})
+
+
+# ---------------------------------------------------------------------------
+# a spec's own assumptions
+# ---------------------------------------------------------------------------
+
+CURVES = {"bp_x": FULL_X, "bp_y": FULL_Y}
+
+
+@pytest.mark.parametrize(
+    ("assumption", "match"),
+    [
+        pytest.param("p_max > 0", None, id="holds"),
+        pytest.param(
+            {"holds": "p_max >= 50", "where": "p_max > 40"},
+            None,
+            id="holds-where-checked",
+        ),
+        pytest.param(
+            {
+                "holds": "p_max >= 50",
+                "description": "a small unit is not worth a curve",
+            },
+            "assumption 'sized' does not hold for the data attached to 'p_max': a small "
+            "unit is not worth a curve\n  Not so at generator='hydro'",
+            id="fails-with-the-description",
+        ),
+        pytest.param(
+            "load <= sum(p_max, over=generator)",
+            None,
+            id="holds-across-an-expression",
+        ),
+    ],
+)
+def test_a_declared_assumption_is_checked_against_the_data(
+    assumption: Any, match: str | None
+) -> None:
+    spec = with_(CURVE_SPEC, assumptions={"sized": assumption})
+    if match is None:
+        assert "p" in Model.from_spec(spec, {**CURVE_DATA, **CURVES}).variables
+        return
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, {**CURVE_DATA, **CURVES})

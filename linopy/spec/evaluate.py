@@ -11,7 +11,7 @@ import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
-from linopy.spec import context, operators
+from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value
 from linopy.spec.errors import SpecDataError, first_coordinates, unknown
 from linopy.spec.where import evaluate_where
@@ -73,7 +73,7 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
         return _joined(node, ctx)
     if isinstance(node, ms.Translate):
         return operators.shift(
-            _array(evaluate(node.operand, ctx)),
+            _operand(node.operand, ctx),
             over=node.along,
             offset=_amount(node.offset, ctx),
             wrap=node.wrap,
@@ -82,7 +82,7 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
         )
     if isinstance(node, ms.WindowSum):
         return operators.sum_back(
-            _array(evaluate(node.operand, ctx)),
+            _operand(node.operand, ctx),
             over=node.along,
             within=_amount(node.width, ctx),
             wrap=node.wrap,
@@ -93,7 +93,7 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
             _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
             for region in node.regions
         )
-        return functools.reduce(lambda a, b: _added(a, b), regions)
+        return functools.reduce(lambda a, b: operator.add(*_paired(a, b)), regions)
     assert_never(node)
 
 
@@ -108,13 +108,13 @@ def _sum(node: ms.Sum, ctx: Context) -> Array:
         columns = operand.columns
         into = columns.added_dims[0]
         summed = operators.grouped_sum(
-            _array(evaluate(operand.operand, ctx)),
+            _operand(operand.operand, ctx),
             ctx.relations[columns.name],
             into=into,
             labels=ctx.coords[into],
         )
     else:
-        summed = _array(evaluate(operand, ctx))
+        summed = _operand(operand, ctx)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
@@ -124,7 +124,7 @@ def _joined(node: ms.Join, ctx: Context) -> Array:
     """A lookup: the operand read through the relation, one value per row of the key."""
     columns = node.columns
     return operators.at(
-        _array(evaluate(node.operand, ctx)),
+        _operand(node.operand, ctx),
         ctx.relations[columns.name],
         into=columns.dropped_dims[0],
     )
@@ -132,22 +132,22 @@ def _joined(node: ms.Join, ctx: Context) -> Array:
 
 def _parameter(name: str, ctx: Context) -> xr.DataArray:
     """The parameter filled as its ``missing:`` says; unfilled, a missing row is a hole that a comparison reads as false."""
-    arr = ctx.parameters[name]
+    filled, present = ctx.parameter(name)
     if ctx.filled or not isinstance(ctx.program.parameters[name].missing, str):
-        return arr
-    return arr.where(ctx.parameters.present(name))
+        return filled
+    return filled.where(present)
 
 
 def _variable(name: str, ctx: Context) -> Value:
     variable = ctx.model.variables[name]
-    missing = ctx.program.variables[name].missing
+    neutral = ctx.program.variables[name].missing == "neutral"
     if not ctx.solved:
-        return context.variable_term(variable, missing)
+        return variable.fillna(0) if neutral else variable
     if "solution" not in variable.data:
         raise RuntimeError(
             f"variable '{name}' has no solution yet: solve the model before reading a named expression"
         )
-    return context.solution(variable, missing)
+    return variable.solution.fillna(0) if neutral else variable.solution
 
 
 def _dual(constraint: str, ctx: Context) -> xr.DataArray:
@@ -197,11 +197,7 @@ def _combine(
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
             refuse_made(kind, ms.parameters_of(node), a + b, a, b, ctx)
-        if isinstance(left, xr.DataArray) and isinstance(right, Term):
-            right, left = carried(right, left)
-        elif isinstance(right, xr.DataArray) and isinstance(left, Term):
-            left, right = carried(left, right)
-        return op(left, right)
+        return op(*_paired(left, right))
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
     a, b = xr.DataArray(left), xr.DataArray(right)
@@ -217,13 +213,13 @@ def _combine(
     return made
 
 
-def _added(left: Value, right: Value) -> Value:
-    """*left* plus *right*, a hole beside a term becoming the term's absence."""
+def _paired(left: Value, right: Value) -> tuple[Value, Value]:
+    """*left* and *right* to combine, a hole in data beside a term becoming the term's absence."""
     if isinstance(left, xr.DataArray) and isinstance(right, Term):
         right, left = carried(right, left)
     elif isinstance(right, xr.DataArray) and isinstance(left, Term):
         left, right = carried(left, right)
-    return left + right
+    return left, right
 
 
 def constant_of(value: Value) -> xr.DataArray:
@@ -275,10 +271,9 @@ def carried(term: Term, data: xr.DataArray) -> tuple[Term, xr.DataArray]:
     return term.where(data.notnull()), data.fillna(1.0)
 
 
-def _array(value: Value) -> Array:
-    if isinstance(value, float | int):
-        raise TypeError("a shape operator takes an array or a term, not a bare number")
-    return value
+def _operand(node: ms.Expression, ctx: Context) -> Array:
+    """An operand the language gives dims, so never a bare number."""
+    return cast(Array, evaluate(node, ctx))
 
 
 def _in_region(value: Value, rows: xr.DataArray) -> Value:
@@ -292,7 +287,7 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:
     if isinstance(amount, str):
-        return ctx.parameters[amount]
+        return ctx.parameter(amount).filled
     return amount
 
 

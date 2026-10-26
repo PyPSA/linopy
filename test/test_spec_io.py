@@ -28,11 +28,11 @@ from spec_helpers import (  # noqa: E402
     WHERE_SPEC,
     solved,
     with_,
+    yaml_dict,
 )
 
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.spec import SpecDataError  # noqa: E402
 from linopy.spec.accessor import lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
@@ -82,7 +82,7 @@ DTYPE_SPEC: dict[str, Any] = {
         "report": {
             "dims": ["s1"],
             "cases": {
-                "on": {"when": "flag AND tag == 'u'", "expression": "x * cost * count"}
+                "on": {"when": "flag AND tag == 'u'", "expression": "cost * count"}
             },
             "otherwise": 0,
         }
@@ -93,7 +93,7 @@ TAGGED_SPEC = with_(
     expressions={
         "tagged": {
             "dims": ["t"],
-            "cases": {"u": {"when": "label == 'u'", "expression": "x"}},
+            "cases": {"u": {"when": "label == 'u'", "expression": "1"}},
             "otherwise": 0,
         }
     },
@@ -137,10 +137,7 @@ def assert_arrayequal(a: xr.DataArray, b: xr.DataArray) -> None:
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("retain", ["report", "all"])
-def test_a_spec_built_model_round_trips(
-    tmp_path: Path, engine: str, retain: str
-) -> None:
+def test_a_spec_built_model_round_trips(tmp_path: Path, engine: str) -> None:
     m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
     p = roundtrip(m, tmp_path, engine)
 
@@ -155,52 +152,17 @@ def test_a_spec_built_model_round_trips(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-def test_a_retain_none_model_evaluates_after_a_round_trip(
-    tmp_path: Path, engine: str
-) -> None:
-    """A file is where retain bites: the sources the built model still read are gone."""
-    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    p = roundtrip(m, tmp_path, engine)
-
-    assert_model_equal(m, p)
-    assert not p.spec.parameters.data_vars
-    with pytest.raises(SpecDataError, match="no longer holds the sources"):
-        p.spec.expressions["spend"].solution
-    stored = p.spec.expressions["spend"].expression
-    assert isinstance(stored, linopy.LinearExpression)
-    assert_linequal(stored, m.expressions["spend"])
-    assert_arrayequal(
-        m.spec.expressions["spend"].solution,
-        p.spec.evaluate("spend", DISPATCH_DATA).solution,
-    )
-
-
-@pytest.mark.parametrize("engine", ENGINES)
 def test_the_caller_parameters_and_the_spec_ones_stay_apart(
     tmp_path: Path, engine: str
 ) -> None:
     """A model parameter of the caller's is written beside the spec's, not into them."""
-    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    m = solved(with_(yaml_dict(), expressions={"twice": "cost * 2"}), DISPATCH_DATA)
     m.parameters["cost"] = xr.DataArray([1.0, 2.0, 3.0], dims=["own"])
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
     assert_arrayequal(p.parameters["cost"], m.parameters["cost"])
     assert_arrayequal(p.spec.parameters["cost"], m.spec.parameters["cost"])
-
-
-@pytest.mark.parametrize("engine", ENGINES)
-def test_a_replaced_objective_is_still_known_after_a_round_trip(
-    tmp_path: Path, engine: str
-) -> None:
-    """Nothing else in the file would say the typeset objective is not the model's."""
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    m.add_objective(m.variables["p"].sum() * 2.0, overwrite=True)
-    p = roundtrip(m, tmp_path, engine)
-
-    assert m.spec.unspecified.objective
-    assert p.spec.unspecified.objective
-    assert_model_equal(m, p)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -306,7 +268,7 @@ def test_a_presence_mask_round_trips_and_is_compared(
     tmp_path: Path, engine: str
 ) -> None:
     m = Model.from_spec(
-        with_(WHERE_SPEC, expressions={"spend": "x * cost"}), WHERE_DATA
+        with_(WHERE_SPEC, expressions={"twice": "cost * 2"}), WHERE_DATA
     )
     p = roundtrip(m, tmp_path, engine)
     assert_model_equal(m, p)

@@ -14,6 +14,7 @@ pytest.importorskip("mathspec")
 
 from linopy.spec import SpecDataError, attach  # noqa: E402
 from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec.attach import parameters_read  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {
@@ -305,14 +306,6 @@ def test_undeclared_parameter_is_refused_with_a_hint(
         attach(program, good).parameter("csot")
 
 
-def test_retain_is_validated_before_attaching(
-    program: Any, good: dict[str, Any]
-) -> None:
-    with pytest.raises(SpecDataError, match=r"'report', 'all', 'none'") as error:
-        attach(program, good)  # type: ignore[arg-type]
-    assert "Did you mean 'report'?" in str(error.value)
-
-
 REFUSALS = [
     pytest.param(
         {"f": ["a", "a", "b"]},
@@ -567,28 +560,6 @@ def test_sources_are_pulled_by_key_on_demand(
     assert sources.pulled.count("cap") == 2
 
 
-class ByKeyOnly:
-    def __getitem__(self, key: str) -> Any:
-        raise AssertionError("nothing may be read out of a source without keys()")
-
-
-def test_sources_must_offer_keys(program: Any) -> None:
-    with pytest.raises(TypeError, match="sources must offer keys"):
-        attach(program, ByKeyOnly())  # type: ignore[arg-type]
-
-
-def test_an_extra_source_key_is_ignored_and_stays_unused(
-    program: Any, good: dict[str, Any]
-) -> None:
-    attached = attach(program, {**good, "notes": COST})
-    assert attached.unused == frozenset(
-        {"cost", "cap", "flag", "rate", "lead", "notes"}
-    )
-    for name in program.parameters:
-        attached.parameter(name)
-    assert attached.unused == frozenset({"notes"})
-
-
 def test_a_source_key_close_to_a_declared_name_warns(
     program: Any, good: dict[str, Any]
 ) -> None:
@@ -606,23 +577,7 @@ def test_a_source_key_like_no_declared_name_is_silent(
     assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
 
-@pytest.mark.parametrize("extra", ["csot", "notes"])
-def test_strict_refuses_every_extra_source_key(
-    program: Any, good: dict[str, Any], extra: str
-) -> None:
-    with pytest.raises(SpecDataError, match=f"source key '{extra}' names"):
-        attach(program, {**good, extra: COST}, strict=True)
-
-
-def test_retained_follows_the_named_expressions(
-    program: Any, good: dict[str, Any]
-) -> None:
-    retained = attach(program, good).retained()[0]
-    assert set(retained.data_vars) == {"cost", "rate", "grp"}
-    assert retained.coords["f"].values.tolist() == ["b", "a", "c"]
-
-
-def test_report_closure_reads_names_and_masks() -> None:
+def test_parameters_read_follows_names_and_masks() -> None:
     spec = {
         "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int", "ordered": True}},
         "parameters": {
@@ -649,18 +604,13 @@ def test_report_closure_reads_names_and_masks() -> None:
         },
     }
     program = lower(spec)
-    f = pd.Index(["a"], name="f")
-    sources = {
-        "f": f,
-        "t": [0, 1],
-        "cost": pd.Series([1.0], index=f),
-        "lag": pd.Series([1], index=f),
-        "span": pd.Series([2], index=f),
-        "on": pd.Series([True], index=f),
-        "other": pd.Series([2.0], index=f),
-    }
-    retained = attach(program, sources).retained()[0]
-    assert set(retained.data_vars) == {"cost", "lag", "span", "on"}
+    assert parameters_read(program, program.expressions) == [
+        "cost",
+        "lag",
+        "span",
+        "on",
+    ]
+    assert parameters_read(program, ["recent"]) == ["span"]
 
 
 def test_unreached_dimension_needs_no_source() -> None:

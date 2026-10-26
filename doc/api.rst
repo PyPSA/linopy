@@ -131,13 +131,11 @@ program attached to data. Requires ``pip install "linopy[spec]"`` (Python >=
    model.Model.from_spec
    model.Model.spec
    spec.ModelSpec
-   spec.NamedExpressions
    spec.NamedExpression
-   spec.Declaration
-   spec.Unspecified
    spec.attach
    spec.Attached
    spec.SpecDataError
+   spec.synthetic_sources
 
 
 Variable
