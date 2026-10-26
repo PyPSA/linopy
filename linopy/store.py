@@ -100,7 +100,6 @@ class Store(ABC):
         group_dim: str,
         stacked: bool,
         coord_dims: tuple[str, ...],
-        positions: np.ndarray | None = None,
     ) -> Self:
         """The grouped sum of ``source``, see :meth:`linopy.csr.CSRStore.from_grouper`."""
 
@@ -535,11 +534,10 @@ class DenseStore(Store):
         group_dim: str,
         stacked: bool,
         coord_dims: tuple[str, ...],
-        positions: np.ndarray | None = None,
     ) -> DenseStore:
         from linopy.csr import CSRStore
 
-        args = (grouper, group_dim, stacked, coord_dims, positions)
+        args = (grouper, group_dim, stacked, coord_dims)
         return CSRStore.from_grouper(source, model, *args).to_dense()
 
     @classmethod

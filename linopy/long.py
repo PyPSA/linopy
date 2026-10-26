@@ -8,6 +8,7 @@ to groups for :meth:`~linopy.expressions.LinearExpressionGroupby.sum`.
 
 from __future__ import annotations
 
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias
 
@@ -152,7 +153,48 @@ def _positions(index: pd.Index, column: Column) -> pl.Series:
     return pos.cast(pl.Int64)
 
 
-def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> DataArray:
+def _flat(
+    frame: Frame,
+    keys: Sequence[str],
+    coords: CoordsLike,
+    strict: bool,
+    hint: str = "",
+    duplicate_hint: str = "",
+) -> tuple[dict[Hashable, pd.Index], pl.Series, list[int], int]:
+    """
+    The flat positions of the key combinations of ``frame`` in the cube of
+    ``coords`` over ``keys``, with the target indexes, the cube shape and size.
+    Raises for duplicate key combinations and, if ``strict``, for key
+    combinations of the cube missing from ``frame``.
+    """
+    target = {d: _as_index(v).rename(d) for d, v in _coords_to_dict(coords).items()}
+    absent = [k for k in keys if k not in target]
+    if absent:
+        raise ValueError(
+            f"Coords lack the dimensions {absent} of columns {list(keys)}."
+        )
+    flat = pl.Series(np.zeros(frame.shape[0], dtype=np.int64))
+    for k in keys:
+        flat = flat * len(target[k]) + _positions(target[k], frame[k])
+    if flat.n_unique() != len(flat):
+        raise ValueError(f"Frame has duplicate keys over {list(keys)}{duplicate_hint}.")
+    shape = [len(target[k]) for k in keys]
+    size = int(np.prod(shape))
+    if strict and len(flat) < size:
+        missing = np.ones(size, dtype=bool)
+        missing[flat.to_numpy()] = False
+        at = np.unravel_index(int(missing.argmax()), shape)
+        first = [target[k][[i]].item() for k, i in zip(keys, at)]
+        raise ValueError(
+            f"Frame misses {int(missing.sum())} of {size} key combinations over "
+            f"{list(keys)}, first {first}{hint}."
+        )
+    return target, flat, shape, size
+
+
+def from_long(
+    frame: Frame, coords: CoordsLike, default: float | None = None
+) -> DataArray:
     """
     Pivot a long-form frame onto ``coords``.
 
@@ -160,8 +202,9 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
     columns, exactly one other column is the value column. The result is
     named after the value column and spans the key dimensions only, in column
     order, with the full coordinates of ``coords``: key combinations not
-    listed take ``default``. Dimensions of ``coords`` without a key column are
-    not part of the result, linopy broadcasts it over them where it is used.
+    listed take ``default`` or raise without it. Dimensions of ``coords``
+    without a key column are not part of the result, linopy broadcasts it over
+    them where it is used.
     The result is the full cube over the key dimensions, a sparsely filled
     frame costs the memory of its cube.
 
@@ -174,8 +217,8 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
     coords : list/dict/xarray.Coordinates
         The coordinates the keys are positioned in, e.g. ``var.coords`` of
         the variable the result is used with.
-    default : float
-        Value of key combinations missing from ``frame``. Defaults to NaN.
+    default : float, optional
+        Value of key combinations missing from ``frame``; without it, gaps raise.
 
     Returns
     -------
@@ -187,8 +230,9 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
     ValueError
         For no key column, not exactly one column besides the key columns (a
         misspelled key column counts as a second value column), null keys or
-        values, duplicate keys, keys outside ``coords`` and key coordinates
-        with duplicate labels.
+        values, duplicate keys, key combinations missing from ``frame``
+        without ``default``, keys outside ``coords`` and key coordinates with
+        duplicate labels.
     TypeError
         For a frame type other than a polars or pandas DataFrame, a non-numeric
         value column and key dtypes (numeric, datetime with its time zone,
@@ -224,17 +268,15 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
         "session.",
     )
     _check_frame(frame)
-    target = {d: _as_index(v).rename(d) for d, v in _coords_to_dict(coords).items()}
-    keys = [k for k in frame.columns if k in target]
+    dims = list(_coords_to_dict(coords))
+    keys = [k for k in frame.columns if k in dims]
     if not keys:
-        raise ValueError(
-            f"Frame has no key column naming a dimension of {list(target)}."
-        )
-    values = [c for c in frame.columns if c not in target]
+        raise ValueError(f"Frame has no key column naming a dimension of {dims}.")
+    values = [c for c in frame.columns if c not in dims]
     if len(values) != 1:
         raise ValueError(
             f"Frame needs exactly one value column besides the key columns "
-            f"{keys} naming dimensions of {list(target)}, got {values}."
+            f"{keys} naming dimensions of {dims}, got {values}."
         )
     (value,) = values
     if _family(frame[value]) != "numeric":
@@ -243,13 +285,13 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
         )
     if _has_nulls(frame[value]) and not _is_float_numpy(frame[value]):
         raise ValueError(f"Value column {value!r} has null values.")
-    flat = pl.Series(np.zeros(frame.shape[0], dtype=np.int64))
-    for k in keys:
-        flat = flat * len(target[k]) + _positions(target[k], frame[k])
-    if flat.n_unique() != len(flat):
-        raise ValueError(f"Frame has duplicate keys over {keys}.")
-    shape = [len(target[k]) for k in keys]
-    size = int(np.prod(shape))
+    target, flat, shape, size = _flat(
+        frame,
+        keys,
+        coords,
+        strict=default is None,
+        hint="; pass `default=` to fill them",
+    )
     data = frame[value].to_numpy().astype(float)
     if len(flat) == size and flat.is_sorted():
         out = data
@@ -264,23 +306,28 @@ def from_long(frame: Frame, coords: CoordsLike, default: float = np.nan) -> Data
 @dataclass(frozen=True, eq=False)
 class Relation:
     """
-    A many-to-many map from the members of a dimension to groups.
+    A many-to-many map from the member cells of one or several dimensions to
+    groups.
 
-    Each row of ``frame`` relates the member in column ``member``, a
-    coordinate of the dimension of the same name, to the group in column
-    ``group``; a member may be listed in several rows.
-    ``expr.groupby(relation).sum()`` adds each row's member to its group, so a
-    member listed in several rows lands in several groups and one not listed
-    in none.
+    Each row of ``frame`` relates the member cell in the ``member`` columns,
+    each a coordinate of the dimension of the same name, to the group in
+    column ``group``; a member cell may be listed in several rows.
+    ``expr.groupby(relation).sum()`` adds each row's member cell to its
+    group, so a member cell listed in several rows lands in several groups
+    and one not listed in none.
 
     Parameters
     ----------
     frame : polars.DataFrame or pandas.DataFrame
-        The member-group pairs, exactly the columns ``member`` and ``group``.
-    member : str
-        Name of the member column, a dimension of the grouped expression.
+        The member-group pairs, exactly the ``member`` columns and ``group``.
+    member : str or sequence of str
+        Name of the member column or columns, each a dimension of the grouped
+        expression.
     group : str
         Name of the group column, the dimension of the result.
+    groups : pandas.Index, optional
+        The group labels the result spans, groups without a member are zero.
+        Without it, the result spans the groups listed in ``frame``.
 
     Warns
     -----
@@ -296,15 +343,19 @@ class Relation:
     >>> import linopy
     >>> m = linopy.Model()
     >>> link = pd.Index(["l0", "l1"], name="link")
-    >>> p = m.add_variables(coords=[link], name="p")
-    >>> ports = pd.DataFrame({"link": ["l0", "l0", "l1"], "bus": ["b0", "b1", "b1"]})
-    >>> p.groupby(linopy.Relation(ports, "link", "bus")).sum().nterm
+    >>> port = pd.Index([0, 1], name="port")
+    >>> p = m.add_variables(coords=[link, port], name="p")
+    >>> ports = pd.DataFrame(
+    ...     {"link": ["l0", "l0", "l1"], "port": [0, 1, 1], "bus": ["b0", "b1", "b1"]}
+    ... )
+    >>> p.groupby(linopy.Relation(ports, ["link", "port"], "bus")).sum().nterm
     2
     """
 
     frame: Frame
-    member: str
+    member: str | Sequence[str]
     group: str
+    groups: pd.Index | None = None
 
     def __post_init__(self) -> None:
         _warn_evolving_api(
@@ -316,27 +367,61 @@ class Relation:
             stacklevel=4,
         )
         _check_frame(self.frame)
-        member, group = self.member, self.group
+        members, group = self.members, self.group
         columns = list(self.frame.columns)
-        if member == group:
+        if group in members:
             raise ValueError(
-                f"Relation member and group columns must differ, both are {member!r}."
+                f"Relation member and group columns must differ, both are {group!r}."
             )
-        missing = [c for c in (member, group) if c not in columns]
+        missing = [c for c in (*members, group) if c not in columns]
         if missing:
             raise ValueError(f"Relation frame has no columns {missing}.")
-        if len(columns) != 2:
+        if len(columns) != len(members) + 1:
             raise ValueError(
-                f"Relation frame must have exactly the columns {member!r} and "
-                f"{group!r}, got {columns}."
+                f"Relation frame must have exactly the columns {[*members, group]}, "
+                f"got {columns}."
             )
-        if _has_nulls(self.frame[self.group]):
-            raise ValueError(f"Relation group column {self.group!r} has null values.")
+        if _has_nulls(self.frame[group]):
+            raise ValueError(f"Relation group column {group!r} has null values.")
+        if self.groups is not None:
+            _positions(self.groups.rename(group), self.frame[group])
 
-    def positions(self, index: pd.Index) -> np.ndarray:
-        """The positions of the members in ``index``."""
-        return _positions(index, self.frame[self.member]).to_numpy()
+    @property
+    def members(self) -> tuple[str, ...]:
+        """The member columns."""
+        member = self.member
+        return (member,) if isinstance(member, str) else tuple(member)
 
-    def groups(self) -> np.ndarray:
-        """The group of each row."""
-        return self.frame[self.group].to_numpy()
+    def group_of(self, coords: CoordsLike) -> DataArray:
+        """
+        The group of each member cell over the member dims of ``coords``.
+
+        Every member cell of ``coords`` must be listed in exactly one row,
+        the result keeps the dtype of the group column.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>> gen = pd.Index(["g0", "g1"], name="gen")
+        >>> frame = pd.DataFrame({"gen": ["g1", "g0"], "bus": ["b1", "b0"]})
+        >>> linopy.Relation(frame, "gen", "bus").group_of([gen]).values
+        array(['b0', 'b1'], dtype=object)
+        """
+        members = self.members
+        target, flat, shape, _ = _flat(
+            self.frame,
+            members,
+            coords,
+            strict=True,
+            duplicate_hint="; group_of needs exactly one row per member cell",
+        )
+        values = self.frame[self.group].to_numpy()
+        out = np.empty_like(values)
+        out[flat.to_numpy()] = values
+        return DataArray(
+            out.reshape(shape),
+            coords=[target[m] for m in members],
+            dims=members,
+            name=self.group,
+        )

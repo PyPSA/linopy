@@ -68,8 +68,8 @@ def test_from_long(case: str, lib: str) -> None:
 def test_from_long_variable_coords(lib: str) -> None:
     frame = FRAME_AB.rename(columns={"v": "cost"})
     var = x(Model())
-    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords)
-    want = from_long(frame, coords=[A, B])
+    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords, default=np.nan)
+    want = from_long(frame, coords=[A, B], default=np.nan)
     assert res.name == "cost"
     xr.testing.assert_identical(res, want)
 
@@ -174,6 +174,12 @@ INVALID: dict[str, tuple[pd.DataFrame, type[Exception], str]] = {
         ValueError,
         "duplicate keys",
     ),
+    "gaps": (
+        pd.DataFrame({"a": [0], "b": ["q"], "v": [1.0]}),
+        ValueError,
+        r"misses 5 of 6 key combinations over \['a', 'b'\], first \[0, 'p'\]; "
+        "pass `default=`",
+    ),
     "key-outside-coords": (
         pd.DataFrame({"a": [7, 1, 9], "v": [1.0, 2, 3]}),
         ValueError,
@@ -263,9 +269,9 @@ def test_from_long_column_dtypes(case: str) -> None:
     frame = pl.DataFrame(data) if isinstance(column, pl.Series) else pd.DataFrame(data)
     if isinstance(want, tuple):
         with pytest.raises(want[0], match=want[1]):
-            from_long(frame, coords=[index])
+            from_long(frame, coords=[index], default=np.nan)
     else:
-        res = from_long(frame, coords=[index])
+        res = from_long(frame, coords=[index], default=np.nan)
         xr.testing.assert_identical(res, xr.DataArray(want, coords=[index], name="v"))
 
 
@@ -285,10 +291,9 @@ def test_from_long_rejects_frame_forms(frame: Any) -> None:
 
 
 def incidence(relation: pd.DataFrame, weights: Any = 1.0) -> xr.DataArray:
-    member, group = relation.columns
-    weighted = relation.assign(w=weights)
-    matrix = weighted.pivot_table("w", member, group, aggfunc="sum", fill_value=0.0)
-    return xr.DataArray(matrix)
+    keys = list(relation.columns)
+    summed = relation.assign(w=weights).groupby(keys).w.sum()
+    return xr.DataArray.from_series(summed).fillna(0.0)
 
 
 @pytest.mark.parametrize("lib", list(FRAME_LIBS))
@@ -387,7 +392,7 @@ def test_invalid_relation_groupby_raises(
         (
             pd.DataFrame({"a": [0], "g": ["u"], "w": [1.0]}),
             "g",
-            r"exactly the columns 'a' and 'g', got \['a', 'g', 'w'\]",
+            r"exactly the columns \['a', 'g'\], got \['a', 'g', 'w'\]",
         ),
     ],
     ids=["missing-column", "null-group", "same-column", "extra-column"],
@@ -397,6 +402,30 @@ def test_invalid_relation_raises(
 ) -> None:
     with pytest.raises(ValueError, match=match):
         Relation(FRAME_LIBS[lib](frame), "a", group)
+
+
+@pytest.mark.parametrize("lib", list(FRAME_LIBS))
+def test_relation_group_outside_groups_raises(lib: str) -> None:
+    groups = pd.Index(["u", "v"])
+    with pytest.raises(ValueError, match=r"Values \['w'\] of column 'g' are not in"):
+        Relation(FRAME_LIBS[lib](RELATION_FRAME), "a", "g", groups=groups)
+
+
+@pytest.mark.parametrize(
+    "frame", [RELATION_FRAME, RELATION_FRAME.iloc[:0]], ids=["listed", "empty"]
+)
+def test_relation_groups_without_member_are_zero(
+    backend: Model, frame: pd.DataFrame
+) -> None:
+    groups = pd.Index(["u", "v", "w", "z"], name="g")
+    expr = 2 * x(backend) + 1
+    res = expr.groupby(Relation(frame, "a", "g", groups=groups)).sum()
+    assert res.is_sparse == backend.sparse
+    assert res.coord_dims == ("g", "b")
+    pd.testing.assert_index_equal(res.indexes["g"], groups)
+    empty = res.sel(g=groups.difference(frame.g))
+    assert (empty.const == 0).all()
+    assert not empty.has_terms.any()
 
 
 DUPLICATE_A = pd.Index([0, 0, 1], name="a")
@@ -418,6 +447,7 @@ def test_duplicate_coordinate_labels_raise(backend: Model, case: str, lib: str) 
 
 
 LINKS = pd.Index(["l0", "l1", "l2", "l3"], name="link")
+PORT = pd.Index([0, 1], name="port")
 TIMES = pd.RangeIndex(2, name="snapshot")
 PORTS = pd.DataFrame(
     {
@@ -426,30 +456,98 @@ PORTS = pd.DataFrame(
         "bus": ["b0", "b0", "b1", "b2", "b1", "b2", "b2", "b0"],
     }
 )
-EFFICIENCY = pd.DataFrame({"link": LINKS, "eff": [0.9, 0.8, 0.95, 0.7]})
+WEIGHTS = PORTS[["link", "port"]].assign(w=[-1.0] * 4 + [0.9, 0.8, 0.95, 0.7])
 
 
-LINK_BUS = PORTS[["link", "bus"]]
+@pytest.mark.parametrize("lib", list(FRAME_LIBS))
+@pytest.mark.parametrize(
+    ("coords", "dims"),
+    [
+        ([TIMES, LINKS, PORT], ("snapshot", "bus")),
+        ([LINKS, TIMES, PORT], ("bus", "snapshot")),
+        ([TIMES, PORT, LINKS], ("snapshot", "bus")),
+    ],
+    ids=["adjacent", "apart", "reversed"],
+)
+def test_link_ports_to_bus(
+    backend: Model, coords: list[pd.Index], dims: tuple[str, ...], lib: str
+) -> None:
+    p = backend.add_variables(coords=coords, name="p")
+    weight = from_long(WEIGHTS, coords=coords)
+    relation = Relation(FRAME_LIBS[lib](PORTS), ["link", "port"], "bus")
+    touching = p.groupby(relation).sum()
+    balance = (weight * p).groupby(relation).sum()
 
-
-def port(i: int) -> Relation:
-    return Relation(LINK_BUS[PORTS.port == i], "link", "bus")
-
-
-def test_link_ports_to_bus(backend: Model) -> None:
-    p = backend.add_variables(coords=[TIMES, LINKS], name="p")
-    eff = from_long(EFFICIENCY, coords=[TIMES, LINKS])
-    touching = p.groupby(Relation(LINK_BUS, "link", "bus")).sum()
-    balance = (-1 * p).groupby(port(0)).sum() + (eff * p).groupby(port(1)).sum()
-
-    weights = np.where(PORTS.port == 0, -1.0, np.tile(EFFICIENCY.eff, 2))
     for res, matrix in [
-        (touching, incidence(LINK_BUS)),
-        (balance, incidence(LINK_BUS, weights)),
+        (touching, incidence(PORTS)),
+        (balance, incidence(PORTS, WEIGHTS.w)),
     ]:
         assert isinstance(res, LinearExpression)
         assert res.is_sparse == backend.sparse
-        assert_equivalent(res, 1 * p @ matrix)
+        assert res.coord_dims == dims
+        want = (1 * p @ matrix)._store.transpose(list(dims))
+        assert_equivalent(res, LinearExpression._from_store(want, backend))
+
+
+GROUP_OF: dict[str, tuple[pd.DataFrame, list[pd.Index]]] = {
+    "members": (PORTS, [LINKS, PORT]),
+    "int-groups": (pd.DataFrame({"a": [2, 0, 1], "g": [5, 6, 7]}), [A]),
+    "datetime-groups": (
+        pd.DataFrame({"a": [2, 0, 1], "g": pd.date_range("2030", periods=3)}),
+        [A],
+    ),
+}
+
+
+@pytest.mark.parametrize("lib", list(FRAME_LIBS))
+@pytest.mark.parametrize("case", list(GROUP_OF))
+def test_relation_group_of_matches_pivot(case: str, lib: str) -> None:
+    frame, coords = GROUP_OF[case]
+    *members, group = frame.columns
+    relation = Relation(FRAME_LIBS[lib](frame), members, group)
+    res = relation.group_of(coords)
+    pivot = frame.set_index(members)[group].to_xarray()
+    xr.testing.assert_equal(res, pivot.reindex({c.name: c for c in coords}))
+    assert res.dtype == relation.frame[group].to_numpy().dtype
+
+
+@pytest.mark.parametrize(
+    ("frame", "coords", "match"),
+    [
+        (
+            pd.DataFrame({"a": [0, 0, 1, 2], "g": list("uvuw")}),
+            [A],
+            "duplicate keys.*group_of needs exactly one row",
+        ),
+        (pd.DataFrame({"a": [0, 2], "g": list("uv")}), [A], r"first \[1\]\.$"),
+        (
+            pd.DataFrame({"a": [0, 1, 2], "g": list("uvw")}),
+            [B],
+            r"lack the dimensions \['a'\]",
+        ),
+    ],
+    ids=["duplicate", "missing", "absent-dim"],
+)
+def test_relation_group_of_raises(
+    frame: pd.DataFrame, coords: list[pd.Index], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        Relation(frame, "a", "g").group_of(coords)
+
+
+def test_relation_group_of_selects_group_cells(backend: Model) -> None:
+    gens = pd.Index(["g0", "g1", "g2"], name="gen")
+    buses = pd.Index(["b0", "b1"], name="bus")
+    frame = pd.DataFrame({"gen": gens, "bus": ["b1", "b0", "b1"]})
+    expr = 2 * backend.add_variables(coords=[TIMES, buses], name="theta") + 1
+    res = expr.sel(bus=Relation(frame, "gen", "bus").group_of([gens]))
+    assert res.is_sparse == backend.sparse
+    assert res.coord_dims == ("snapshot", "gen")
+    for gen, bus in zip(frame.gen, frame.bus):
+        assert_equivalent(
+            res.sel(gen=gen).drop_vars(["gen", "bus"]),
+            expr.sel(bus=bus).drop_vars("bus"),
+        )
 
 
 EVOLVING: dict[str, Callable[[], object]] = {

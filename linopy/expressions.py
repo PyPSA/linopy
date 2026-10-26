@@ -102,11 +102,12 @@ from linopy.constants import (
     GROUP_STACK_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
+    RELATION_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
-from linopy.long import Relation
+from linopy.long import Relation, _positions
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -568,9 +569,7 @@ class LinearExpressionGroupby:
                     "`use_fallback` and `observed` are not supported when "
                     "grouping by a relation."
                 )
-            return self._relation_sum(self._store, self.group)
-
-        store = self._store
+            return self._relation_sum(self.group)
 
         labels = self._labels
         group = _resolve_group(self.group, labels)
@@ -578,6 +577,7 @@ class LinearExpressionGroupby:
 
         multikey_frame = None if use_fallback else _multikey_value_frame(group, labels)
 
+        store = self._store
         store_cls = result_store_cls(store, self.model)
         if multikey_frame is not None and not observed:
             _warn_dense_grid(multikey_frame)
@@ -670,31 +670,50 @@ class LinearExpressionGroupby:
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         return LinearExpression(ds, self.model)
 
-    def _relation_sum(self, store: Store, relation: Relation) -> LinearExpression:
+    def _relation_sum(self, relation: Relation) -> LinearExpression:
         """
-        Sum over a relation: every row adds its member's terms to its group,
-        so a member listed in several rows lands in several groups and one
-        not listed in none. :meth:`~linopy.store.Store.from_grouper` scatters
-        the member cells of each row straight into its group.
+        Sum over a relation: every row adds its member cell's terms to its
+        group, so a member listed in several rows lands in several groups and
+        one not listed in none. The member cells of the rows are gathered by
+        a vectorised :meth:`~BaseExpression.isel`, rows sorted by group, and
+        summed by group as a series grouper over the rows.
         """
-        member, group = relation.member, relation.group
-        if group in store.dims:
+        obj = self.obj
+        assert isinstance(obj, LinearExpression)
+        store = obj._store
+        dims, members, group = store.dims, relation.members, relation.group
+        if group in dims:
             raise ValueError(
                 f"relation group column {group!r} must not name an "
-                f"existing dimension {list(store.dims)}."
+                f"existing dimension {list(dims)}."
             )
-        if member not in store.dims:
-            raise ValueError(
-                f"relation member column {member!r} must name a dimension "
-                f"of {list(store.dims)}."
+        for m in members:
+            if m not in dims:
+                raise ValueError(
+                    f"relation member column {m!r} must name a dimension "
+                    f"of {list(dims)}."
+                )
+        labels = relation.frame[group].to_numpy()
+        codes, _ = pd.factorize(labels, sort=True)
+        order = np.argsort(codes, kind="stable")
+        rows = pd.RangeIndex(len(order), name=RELATION_DIM)
+        indexers = {
+            m: DataArray(
+                _positions(store.grid.indexes[m], relation.frame[m]).to_numpy()[order],
+                coords=[rows],
             )
-        positions = relation.positions(store.grid.indexes[member])
-        rows = pd.RangeIndex(len(positions), name=member)
-        grouper = pd.Series(relation.groups(), index=rows, name=group)
-        store_cls = result_store_cls(store, self.model)
-        args = (grouper, group, True, store.dims, positions)
-        res = store_cls.from_grouper(store, self.model, *args)
-        return LinearExpression._from_store(res, self.model)
+            for m in members
+        }
+        grouper = pd.Series(labels[order], index=rows, name=group)
+        res = obj.isel(indexers).groupby(grouper).sum()
+        if relation.groups is not None:
+            res = res.reindex({group: relation.groups.rename(group)}).fillna(0)
+        slot = min(dims.index(m) for m in members)
+        kept = [d for d in dims if d not in members]
+        order_dims = [*kept[:slot], group, *kept[slot:]]
+        return LinearExpression._from_store(
+            res._store.transpose(order_dims), self.model
+        )
 
     def _grouped_sum(self, group: pd.Series, data: Dataset | None = None) -> Dataset:
         """
@@ -2360,7 +2379,7 @@ class LinearExpression(BaseExpression):
         """
         Apply the dense selection ``select`` to the grid's row numbers and
         gather the selected rows, a row number of ``-1`` or NaN leaving the
-        cell absent. The reason where the selection leaves the grid: new or
+        cell absent. The reason where the selection leaves the grid:
         unlabelled dimensions, or coordinates that are no auxiliary
         coordinates of the grid.
         """
@@ -2368,7 +2387,10 @@ class LinearExpression(BaseExpression):
         reason = f"{name.strip('_')}(new dimensions or coordinates)"
         rows = select(store.grid.dataarray(np.arange(store.n_cells)))
         dims = tuple(str(d) for d in rows.dims)
-        if not set(dims) <= set(store.grid.dims) & set(rows.indexes):
+        indexes = rows.indexes
+        if not set(dims) <= set(indexes):
+            return reason
+        if any(isinstance(indexes[d], pd.MultiIndex) for d in dims):
             return reason
         grid = Grid.from_dataset(rows, dims)
         if set(rows.coords) != set(dims) | set(grid.aux):
