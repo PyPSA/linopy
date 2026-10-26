@@ -81,6 +81,13 @@ Version 1.0.0
 * ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
 * ``linopy.testing.assert_equivalent`` compares two linear expressions independently of their backing (dense or sparse) and term layout: coordinates including auxiliary ones, dimension order, absent cells, constants and the per-cell terms after summing duplicate variables and dropping zero coefficients. It never densifies a sparse operand. A conformance suite checks that every operation on a sparse expression either stays sparse or names its densify fallback, and that both backends agree. (`#1044 <https://github.com/PyPSA/linopy/issues/1044>`__)
 
+*Build a model from a mathspec program*
+
+* ``Model.from_spec`` / ``model.add_spec`` build a model from a `mathspec <https://github.com/energy-models/mathspec>`__ program attached to data, and ``model.spec`` reads it back with its ``program``, ``text``, ``parameters``, ``coords`` and ``relations``. Requires mathspec 0.4 (``pip install "linopy[spec]"``, Python >= 3.12). The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
+* Everything a spec builds carries the spec's name in ``.spec`` on the variable, constraint or expression.
+* ``model.spec.expressions`` evaluates the spec's named expressions against the solved model, and ``model.spec.typeset`` (``to_latex`` / ``to_markdown`` / ``to_typst``) renders the spec.
+* Spec models round-trip through ``to_netcdf`` / ``read_netcdf``; a file read without ``mathspec`` installed loads as a plain model with a warning.
+
 **Bug fixes**
 
 * Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.

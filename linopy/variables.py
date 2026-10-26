@@ -56,6 +56,7 @@ from linopy.constants import (
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
+    SPEC_STAMP_ATTR,
     STASHED_ATTRS,
     STASHED_LOWER,
     STASHED_UPPER,
@@ -899,6 +900,16 @@ class Variable:
         Return the model of the variable.
         """
         return self._model
+
+    @property
+    def spec(self) -> str | None:
+        """The name of the spec that built this variable; ``None`` for one built by hand."""
+        stamp = self.attrs.get(SPEC_STAMP_ATTR)
+        return None if stamp is None else str(stamp)
+
+    @spec.setter
+    def spec(self, name: str) -> None:
+        self.attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def type(self) -> str:

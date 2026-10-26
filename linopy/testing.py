@@ -158,18 +158,28 @@ def assert_model_equal(a: Model, b: Model) -> None:
 
     for v in a.variables:
         assert_varequal(a.variables[v], b.variables[v])
+        assert a.variables[v].spec == b.variables[v].spec
 
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
+        assert a.constraints[c].spec == b.constraints[c].spec
 
     assert list(a.expressions) == list(b.expressions)
 
     for e in a.expressions:
         assert_exprequal(a.expressions[e], b.expressions[e])
+        assert a.expressions[e].spec == b.expressions[e].spec
 
     assert_exprequal(a.objective.expression, b.objective.expression, check_name=False)
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
+
+    assert (a._spec is None) == (b._spec is None)
+    if a._spec is not None and b._spec is not None:
+        assert a._spec.text == b._spec.text
+        assert a._spec.name == b._spec.name
+        assert_equal(a._spec.parameters, b._spec.parameters)
+        assert_equal(a._spec.presence, b._spec.presence)
 
     assert a.status == b.status
     assert a.termination_condition == b.termination_condition

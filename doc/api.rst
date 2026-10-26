@@ -117,6 +117,28 @@ IO
    model.Model.to_netcdf
    io.read_netcdf
 
+Building from specs
+-------------------
+
+Build a model from a `mathspec <https://mathspec.readthedocs.io>`__ YAML
+program attached to data. Requires ``pip install "linopy[spec]"`` (Python >=
+3.12).
+
+.. autosummary::
+   :toctree: generated/
+
+   model.Model.add_spec
+   model.Model.from_spec
+   model.Model.spec
+   spec.ModelSpec
+   spec.NamedExpressions
+   spec.NamedExpression
+   spec.Declaration
+   spec.Unspecified
+   spec.attach
+   spec.Attached
+   spec.SpecDataError
+
 
 Variable
 ========

@@ -103,6 +103,7 @@ from linopy.constants import (
     HELPER_DIMS,
     LESS_EQUAL,
     RELATION_DIM,
+    SPEC_STAMP_ATTR,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
@@ -1473,6 +1474,15 @@ class BaseExpression(ABC):
         Get the attributes of the expression
         """
         return self.data.attrs
+
+    @property
+    def spec(self) -> str | None:
+        """The name of the spec whose named expression this is; ``None`` for one built by hand."""
+        return self.attrs.get(SPEC_STAMP_ATTR)
+
+    @spec.setter
+    def spec(self, name: str) -> None:
+        self.attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def coords(self) -> DatasetCoordinates:
@@ -3658,6 +3668,15 @@ def merge(
 
     data = [e.data if isinstance(e, BaseExpression) else e for e in exprs]
     return cls(merge_datasets(data, dim, join, fill, kwargs, linear), model)
+
+
+def copy_expression(
+    expr: LinearExpression | QuadraticExpression, model: Model, deep: bool = True
+) -> LinearExpression | QuadraticExpression:
+    """*expr* on *model* with its own attributes, its arrays copied if *deep*."""
+    if isinstance(expr, LinearExpression):
+        return LinearExpression._from_store(expr._store.copy(model, deep), model)
+    return QuadraticExpression(expr._to_dataset().copy(deep=deep), model)
 
 
 @dataclass(repr=False)

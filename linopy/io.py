@@ -13,6 +13,7 @@ import time
 import warnings
 from collections.abc import Callable
 from importlib.metadata import version
+from importlib.util import find_spec
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,7 +30,7 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR, SPEC_STAMP_ATTR
 from linopy.constraints import Constraint
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
@@ -1107,7 +1108,11 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr._to_netcdf_ds().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_netcdf_ds().assign_attrs(
+                name=name,
+                **{EXPR_TYPE_ATTR: expr.type},
+                **({SPEC_STAMP_ATTR: expr.spec} if expr.spec is not None else {}),
+            ),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1121,10 +1126,17 @@ def to_netcdf(
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
     params = [with_prefix(m.parameters, "parameters")]
+    specs: list[xr.Dataset] = []
+    if m._spec is not None:
+        from linopy.spec.netcdf import encode
+
+        specs = [encode(m._spec)]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     scalars["sparse"] = m.sparse
-    ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(
+        vars + cons + exprs + obj + params + specs, combine_attrs="drop_conflicts"
+    )
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     ds.attrs[NETCDF_LAYOUT_ATTR] = NETCDF_LAYOUT
@@ -1228,9 +1240,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return ds
 
     def read_expression(ds: xr.Dataset) -> LinearExpression | QuadraticExpression:
+        expr: LinearExpression | QuadraticExpression
         if ds.attrs[EXPR_TYPE_ATTR] == QuadraticExpression.__name__:
-            return QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
-        return LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
+            expr = QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
+        else:
+            expr = LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
+        if SPEC_STAMP_ATTR in ds.attrs:
+            expr.spec = ds.attrs[SPEC_STAMP_ATTR]
+        return expr
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
@@ -1248,7 +1265,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         kind: container_names(kind)
         for kind in ("variables", "expressions", "constraints")
     }
-    prefixes = {"objective", "parameters"}.union(*containers.values())
+    prefixes = {"objective", "parameters", "spec"}.union(*containers.values())
 
     def owner(k: str) -> str | None:
         while "-" in k:
@@ -1291,6 +1308,19 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.objective._value = objective.attrs.get("value")
 
     m.parameters = get_prefix(ds, "parameters")
+
+    if any(owners[k] == "spec" for k in ds.attrs):
+        if find_spec("mathspec") is None:
+            warnings.warn(
+                f"'{path}' holds a spec and mathspec is not installed; loaded as a "
+                f"plain model, without model.spec. Install mathspec to read the spec.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            from linopy.spec.netcdf import decode
+
+            m._spec = decode(m, get_prefix(ds, "spec"))
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
@@ -1355,7 +1385,12 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         A deep or shallow copy of the model.
     """
     from linopy.constraints import Constraints
-    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
+    from linopy.expressions import (
+        Expressions,
+        LinearExpression,
+        QuadraticExpression,
+        copy_expression,
+    )
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
@@ -1383,20 +1418,14 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_expression(
-        expr: LinearExpression | QuadraticExpression,
-    ) -> LinearExpression | QuadraticExpression:
-        if isinstance(expr, LinearExpression):
-            store = expr._store.copy(new_model, deep)
-            return LinearExpression._from_store(store, new_model)
-        return QuadraticExpression(expr._to_dataset().copy(deep=deep), new_model)
-
     def _copy_expr(
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = _copy_expression(expr)
+        new_expr = copy_expression(expr, new_model, deep)
         new_expr.attrs["name"] = name
+        if expr.spec is not None:
+            new_expr.spec = expr.spec
         return new_expr
 
     new_model._expressions = Expressions(
@@ -1412,7 +1441,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = _copy_expression(m.objective.expression)
+    obj_expr = copy_expression(m.objective.expression, new_model, deep)
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )
@@ -1423,6 +1452,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     new_model._parameters = m._parameters.copy(deep=deep)
+    if m._spec is not None:
+        new_model._spec = m._spec._reattach(new_model, deep=deep)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:
