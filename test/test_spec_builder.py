@@ -41,8 +41,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import SpecDataError  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec import SpecDataError, lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 
 MULTI_COLUMN = "linopy reads no relation of more than one key or value column"

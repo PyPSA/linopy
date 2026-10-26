@@ -49,8 +49,7 @@ objective: { sense: minimize, expression: sum(p) }
 
 def _build(spec: str, n: int) -> linopy.Model:
     import linopy
-    from linopy.spec import synthetic_sources
-    from linopy.spec.accessor import lower
+    from linopy.spec import lower, synthetic_sources
 
     return linopy.Model.from_spec(spec, synthetic_sources(lower(spec), n))
 

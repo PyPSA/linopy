@@ -36,7 +36,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec import lower  # noqa: E402
 from linopy.spec.testing import synthetic_sources  # noqa: E402
 from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
 
@@ -390,4 +390,5 @@ def test_the_stamp_names_the_spec_file_through_a_copy_and_a_round_trip(
     assert p.variables["p"].spec == "dispatch"
     assert p.constraints["power_balance"].spec == "dispatch"
     assert p.expressions["spend"].spec == "dispatch"
+    assert p.objective.expression.spec == "dispatch"
     assert p.spec.expressions["spend"].expression is p.expressions["spend"]

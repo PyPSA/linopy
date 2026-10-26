@@ -148,7 +148,7 @@ def _variable(name: str, ctx: Context) -> Value:
     if not ctx.solved:
         return variable.fillna(0) if neutral else variable
     if "solution" not in variable.data:
-        raise RuntimeError(
+        raise AttributeError(
             f"variable '{name}' has no solution yet: solve the model before reading a named expression"
         )
     return variable.solution.fillna(0) if neutral else variable.solution
@@ -167,7 +167,7 @@ def _dual(constraint: str, ctx: Context) -> xr.DataArray:
         )
     built = ctx.model.constraints[constraint]
     if built._dual is None:
-        raise RuntimeError(
+        raise AttributeError(
             f"constraint '{constraint}' has no dual yet: solve the model, with a solver "
             f"and a problem that report duals, before reading one"
         )

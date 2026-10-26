@@ -12,8 +12,7 @@ import xarray as xr
 
 pytest.importorskip("mathspec")
 
-from linopy.spec import SpecDataError, attach  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec import SpecDataError, attach, lower  # noqa: E402
 from linopy.spec.attach import parameters_read  # noqa: E402
 
 SPEC: dict[str, Any] = {

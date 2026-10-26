@@ -30,7 +30,7 @@ from mathspec import FormatName, to_spec, typeset, typeset_line
 from mathspec import program as ms
 from mathspec.spec import Spec
 
-from linopy.constants import _warn_evolving_api
+from linopy.constants import SOS_TYPE_ATTR, _warn_evolving_api
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec.attach import (
@@ -204,7 +204,8 @@ class ModelSpec:
     def __repr__(self) -> str:
         p = self.program
         coords = self.coords
-        head = f"ModelSpec: {self.description}" if self.description else "ModelSpec"
+        lines = (p.description or "").strip().splitlines()
+        head = f"ModelSpec: {lines[0]}" if lines else "ModelSpec"
         rows = [
             head,
             _row("Dimensions", [_dimension(d, coords) for d in p.dimensions]),
@@ -256,12 +257,6 @@ class ModelSpec:
         return _everywhere(filled)
 
     @property
-    def description(self) -> str:
-        """The spec's own description, its first line, or an empty string."""
-        lines = (self.program.description or "").strip().splitlines()
-        return lines[0] if lines else ""
-
-    @property
     def coords(self) -> dict[str, pd.Index]:
         """Master coordinates by dimension, as the model was built on them."""
         return {str(d): index for d, index in self.parameters.indexes.items()}
@@ -307,21 +302,27 @@ class ModelSpec:
         Warns
         -----
         UserWarning
-            The model holds a variable, constraint or expression the spec
-            does not declare, which is not in the rendered text.
+            The model holds a variable, constraint, expression, objective or
+            special ordered set the spec does not declare, which is not in
+            the rendered text.
         """
         return self._document(fmt, options)
 
     def _document(self, fmt: FormatName, options: dict[str, Any]) -> str:
         """The spec typeset in *fmt*, warning the caller of :meth:`typeset` or a ``to_*`` alias."""
-        m = self._model
+        m, p = self._model, self.program
         stamps = [v.spec for v in m.variables.data.values()]
         stamps += [c.spec for c in m.constraints.data.values()]
         stamps += [e.spec for e in m.expressions.data.values()]
-        if None in stamps:
+        if p.objective is not None or not m.objective.expression.empty:
+            stamps.append(m.objective.expression.spec)
+        sos = {n for n, v in m.variables.items() if SOS_TYPE_ATTR in v.attrs}
+        undeclared_sos = sos - {s.variable for s in p.sos.values()}
+        if None in stamps or undeclared_sos:
             warnings.warn(
-                "the model holds variables, constraints or expressions the spec does "
-                "not declare. What is typeset is the spec, so it is not this model.",
+                "the model holds variables, constraints, expressions, an objective or "
+                "special ordered sets the spec does not declare. What is typeset is "
+                "the spec, so it is not this model.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -461,12 +462,10 @@ class NamedExpression:
 
         Raises
         ------
-        RuntimeError
-            The body reads a variable the model holds no solution for, or a
-            constraint it holds no dual for.
         AttributeError
-            The expression is built into ``model.expressions`` and the model
-            is not solved.
+            The model is not solved: the expression is built into
+            ``model.expressions``, or its body reads a variable the model
+            holds no solution for or a constraint it holds no dual for.
         SpecDataError
             The expression was built and has since been removed from
             ``model.expressions``, so the parameters it reads are not kept,

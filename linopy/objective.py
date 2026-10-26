@@ -23,6 +23,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions
+from linopy.constants import SPEC_STAMP_ATTR
 from linopy.types import ConstantLike
 
 if TYPE_CHECKING:
@@ -220,12 +221,14 @@ class Objective:
                 " Must be a LinearExpression or QuadraticExpression."
             )
 
+        expr = expressions.copy_expression(expr, self.model, deep=False)
         if len(expr.coord_dims):
             expr = expr.sum()
 
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
+        expr.attrs.pop(SPEC_STAMP_ATTR, None)
         expr.attrs["name"] = self.name
         self._expression = expr
 

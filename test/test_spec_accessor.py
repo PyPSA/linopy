@@ -33,8 +33,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
-from linopy.spec import ModelSpec, NamedExpression, SpecDataError  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec import ModelSpec, NamedExpression, SpecDataError, lower  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -212,18 +211,16 @@ def test_a_fold_over_data_needs_no_solve() -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "error", "match"),
+    ("name", "match"),
     [
-        pytest.param("spend", AttributeError, "not optimized", id="built"),
-        pytest.param("price", RuntimeError, "no dual yet", id="unbuilt"),
+        pytest.param("spend", "not optimized", id="built"),
+        pytest.param("price", "no dual yet", id="unbuilt"),
     ],
 )
-def test_an_unsolved_model_has_no_solution_to_fold(
-    name: str, error: type[Exception], match: str
-) -> None:
+def test_an_unsolved_model_has_no_solution_to_fold(name: str, match: str) -> None:
     spec = with_(yaml_dict(), expressions={"price": "dual(power_balance)"})
     m = Model.from_spec(spec, DISPATCH_DATA)
-    with pytest.raises(error, match=match):
+    with pytest.raises(AttributeError, match=match):
         m.spec.expressions[name].solution
 
 
@@ -310,7 +307,6 @@ def test_model_repr_of_a_spec_model_carries_no_tags() -> None:
 def test_a_spec_without_a_description_reprs_bare() -> None:
     spec = {k: v for k, v in yaml_dict().items() if k != "description"}
     m = Model.from_spec(spec, DISPATCH_DATA)
-    assert m.spec.description == ""
     assert repr(m.spec).startswith("ModelSpec\n")
 
 
@@ -346,6 +342,17 @@ HAND_BUILT: dict[str, Callable[[Model], Any]] = {
     "variable": lambda m: m.add_variables(lower=0, coords=[GENERATOR], name="r"),
     "constraint": lambda m: m.add_constraints(m.variables["p"] <= 10.0, name="cap"),
     "expression": lambda m: m.add_expressions(m.variables["p"] * 2.0, name="twice"),
+    "objective": lambda m: m.add_objective(2 * m.objective.expression, overwrite=True),
+    "objective-scaled": lambda m: setattr(m, "objective", m.objective * 2),
+    "objective-extended": lambda m: setattr(
+        m, "objective", m.objective + m.variables["p"].sum()
+    ),
+    "objective-expression": lambda m: setattr(
+        m.objective, "expression", 2 * m.objective.expression
+    ),
+    "sos": lambda m: m.add_sos_constraints(
+        m.variables["p"], sos_type=1, sos_dim="generator"
+    ),
 }
 
 
@@ -360,8 +367,34 @@ def test_typesetting_a_model_grown_past_its_spec_warns(
     assert record[0].filename == __file__
 
 
-def test_a_spec_that_is_the_whole_model_typesets_without_a_word() -> None:
-    spec = Model.from_spec(yaml_dict(), DISPATCH_DATA).spec
+def test_an_objective_from_a_named_expression_keeps_its_stamp() -> None:
+    spec = with_(yaml_dict(), expressions={"total": "sum(p * cost)"})
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    total = m.expressions["total"]
+    stamp = total.spec
+    m.add_objective(total, overwrite=True)
+    assert stamp is not None
+    assert total.spec == stamp
+    assert m.objective.expression.spec is None
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param(yaml_dict(), id="plain"),
+        pytest.param(
+            with_(
+                yaml_dict(),
+                sos={"one": {"variable": "p", "along": "generator", "type": 1}},
+            ),
+            id="sos",
+        ),
+    ],
+)
+def test_a_spec_that_is_the_whole_model_typesets_without_a_word(
+    declared: dict[str, Any],
+) -> None:
+    spec = Model.from_spec(declared, DISPATCH_DATA).spec
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         assert not spec.to_latex().startswith("%")

@@ -222,6 +222,7 @@ def _objective(ctx: Context) -> None:
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
     ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])
+    ctx.model.objective.expression.spec = ctx.name
 
 
 def _expressions(ctx: Context) -> None:

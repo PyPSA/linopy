@@ -134,6 +134,7 @@ program attached to data. Requires ``pip install "linopy[spec]"`` (Python >=
    spec.NamedExpression
    spec.attach
    spec.Attached
+   spec.lower
    spec.SpecDataError
    spec.synthetic_sources
 

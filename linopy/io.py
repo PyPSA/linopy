@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -1044,6 +1045,11 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
+def _spec_stamp(expr: LinearExpression | QuadraticExpression) -> dict[str, str]:
+    """The attribute stamping *expr* with the spec it was built from, if any."""
+    return {SPEC_STAMP_ATTR: expr.spec} if expr.spec is not None else {}
+
+
 def to_netcdf(
     m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
 ) -> None:
@@ -1111,7 +1117,7 @@ def to_netcdf(
             expr._to_netcdf_ds().assign_attrs(
                 name=name,
                 **{EXPR_TYPE_ATTR: expr.type},
-                **({SPEC_STAMP_ATTR: expr.spec} if expr.spec is not None else {}),
+                **_spec_stamp(expr),
             ),
             f"expressions-{name}",
         )
@@ -1121,6 +1127,7 @@ def to_netcdf(
         sense=m.objective.sense,
         scaling=m.objective.scaling,
         **{EXPR_TYPE_ATTR: m.objective.expression.type},
+        **_spec_stamp(m.objective.expression),
     )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
@@ -1299,12 +1306,11 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
+    obj_expr = read_expression(objective)
     m.objective = Objective(
-        read_expression(objective),
-        m,
-        objective.attrs["sense"],
-        objective.attrs["scaling"],
+        obj_expr, m, objective.attrs["sense"], objective.attrs["scaling"]
     )
+    m.objective.expression.attrs.update(_spec_stamp(obj_expr))
     m.objective._value = objective.attrs.get("value")
 
     m.parameters = get_prefix(ds, "parameters")
@@ -1387,8 +1393,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     from linopy.constraints import Constraints
     from linopy.expressions import (
         Expressions,
-        LinearExpression,
-        QuadraticExpression,
         copy_expression,
     )
     from linopy.model import Model, Objective
@@ -1445,6 +1449,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )
+    new_model._objective.expression.attrs.update(_spec_stamp(m.objective.expression))
     new_model._objective._value = (
         float(m.objective.value)
         if (include_solution and m.objective.value is not None)
