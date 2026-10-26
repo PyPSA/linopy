@@ -10,6 +10,7 @@ Version 1.0.0
 * ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
 * ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
 * ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* Setting ``Objective.expression`` (also through ``add_objective``) stores a shallow copy of the expression without its ``spec`` stamp and leaves the caller's object untouched; a scalar objective expression no longer gets ``attrs["name"]`` written onto it.
 * The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
 * ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``.
