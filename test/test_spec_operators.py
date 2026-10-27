@@ -567,7 +567,10 @@ def test_store_refuses_a_relation_no_single_array_holds(relation: str) -> None:
         "objective": {"sense": "minimize", "expression": "sum(x)"},
     }
     data = {d: RELATION_DATA[d] for d in ("t", "s", "k", relation)}
-    assert Model.from_spec(spec, data).variables["x"].shape == (4,)
+    m = Model.from_spec(spec, data)
+    assert m.variables["x"].shape == (4,)
+    with pytest.raises(KeyError, match=f"no '{relation}', and store=True stores no"):
+        evaluate(spec, m)
     with pytest.raises(
         SpecDataError,
         match=f"relation '{relation}' has the key column.* model.parameters",

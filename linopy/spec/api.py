@@ -87,7 +87,7 @@ def _storable(attached: Attached) -> dict[str, xr.DataArray]:
     stored = {}
     for name, table in attached.relations.items():
         rel = table.declared
-        if len(rel.key) != 1 or len(rel.values) != 1:
+        if not _is_storable(rel):
             raise SpecDataError(
                 f"relation '{name}' has the key column(s) {list(rel.key)} and the value "
                 f"column(s) {list(rel.values)}, and model.parameters stores a relation as "
@@ -96,6 +96,10 @@ def _storable(attached: Attached) -> dict[str, xr.DataArray]:
             )
         stored[name] = table.column(rel.values[0]).rename(name)
     return stored
+
+
+def _is_storable(relation: ms.Relation) -> bool:
+    return len(relation.key) == 1 and len(relation.values) == 1
 
 
 def evaluate(
@@ -138,6 +142,17 @@ def _stored(program: ms.Program, model: Model) -> xr.Dataset:
         for name in (*program.parameters, *program.relations)
         if name not in model.parameters
     ] + sorted(reached_dimensions(program) - set(model.parameters.indexes))
+    unstorable = [
+        n
+        for n in lacking
+        if n in program.relations and not _is_storable(program.relations[n])
+    ]
+    if unstorable:
+        raise KeyError(
+            f"model.parameters holds no {shown(unstorable)}, and store=True stores no "
+            f"bare, multi-key or multi-value relation: pass the data as "
+            f"evaluate(spec, model, sources=...)"
+        )
     if lacking:
         raise KeyError(
             f"model.parameters holds no {shown(lacking)} that the spec declares: pass the "
