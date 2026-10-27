@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar, assert_never, cast
 
 import numpy as np
@@ -33,6 +33,7 @@ _Framed = TypeVar(
 def fold(name: str, ctx: Context) -> xr.DataArray:
     """The named expression *name* as data, folded over the solution and the parameters *ctx* holds, framed as declared."""
     declared = ctx.program.expressions[name]
+    refuse_holes(f"expression '{name}'", [declared.expression], ctx)
     value = evaluate(declared.expression, ctx)
     if isinstance(value, xr.DataArray):
         return without_strays(value).rename(name).transpose(*declared.dims, ...)
@@ -66,22 +67,9 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Join):
         return looked_up(_operand(node.operand, ctx), node.columns, ctx)
     if isinstance(node, ms.Translate):
-        return operators.shift(
-            _operand(node.operand, ctx),
-            over=node.along,
-            offset=_amount(node.offset, ctx),
-            wrap=node.wrap,
-            fill=node.fill,
-            by=_partition(node.partition, ctx),
-        )
+        return _moved(node, _operand(node.operand, ctx), ctx, node.fill)
     if isinstance(node, ms.WindowSum):
-        return operators.sum_back(
-            _operand(node.operand, ctx),
-            over=node.along,
-            within=_amount(node.width, ctx),
-            wrap=node.wrap,
-            by=_partition(node.partition, ctx),
-        )
+        return _moved(node, _operand(node.operand, ctx), ctx, None)
     if isinstance(node, ms.Cases):
         regions = (
             _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
@@ -91,24 +79,28 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     assert_never(node)
 
 
-def _sum(node: ms.Sum, ctx: Context) -> Array:
+def _sum(
+    node: ms.Sum, ctx: Context, of: Callable[[ms.Expression], Array] | None = None
+) -> Array:
     """
     A sum over its axes: the join axes a relation opens are closed by grouping
     the operand through the relation, the plain ones by summing them away.
+    *of* evaluates an operand, :func:`evaluate` when not given.
     """
+    value = functools.partial(_operand, ctx=ctx) if of is None else of
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
     if isinstance(operand, ms.Join) and operand.columns.axes:
         columns = operand.columns
         into = columns.added_dims[0]
         summed = operators.grouped_sum(
-            _operand(operand.operand, ctx),
+            value(operand.operand),
             ctx.relations[columns.name],
             into=into,
             labels=ctx.coords[into],
         )
     else:
-        summed = _operand(operand, ctx)
+        summed = value(operand)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
@@ -271,9 +263,32 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
 
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:
-    if isinstance(amount, str):
-        return ctx.parameter(amount).values
-    return amount
+    """An amount, a ``refused`` hole moving nothing: no live row reads it, as :func:`refuse_holes` checks."""
+    if not isinstance(amount, str):
+        return amount
+    values = ctx.parameter(amount).values
+    if ctx.program.parameters[amount].missing == "refused":
+        return values.fillna(0)
+    return values
+
+
+def _moved(
+    node: ms.Translate | ms.WindowSum, operand: Array, ctx: Context, fill: float | None
+) -> Array:
+    """*operand* shifted or summed back the way *node* says, a vacated row of a shift *fill*."""
+    by = _partition(node.partition, ctx)
+    amount = _amount(_amount_of(node), ctx)
+    if isinstance(node, ms.Translate):
+        return operators.shift(
+            operand, over=node.along, offset=amount, wrap=node.wrap, fill=fill, by=by
+        )
+    return operators.sum_back(
+        operand, over=node.along, within=amount, wrap=node.wrap, by=by
+    )
+
+
+def _amount_of(node: ms.Translate | ms.WindowSum) -> int | str:
+    return node.offset if isinstance(node, ms.Translate) else node.width
 
 
 def _partition(partition: ms.Partition | None, ctx: Context) -> xr.DataArray | None:
@@ -282,3 +297,169 @@ def _partition(partition: ms.Partition | None, ctx: Context) -> xr.DataArray | N
         return None
     grouped = partition.dim(partition.grouped[0])
     return ctx.relations[partition.name].rename(grouped)
+
+
+def refuse_holes(
+    subject: str,
+    nodes: Sequence[ms.Expression],
+    ctx: Context,
+    rows: xr.DataArray | None = None,
+) -> None:
+    """
+    Refuse a missing row of a ``missing: refused`` parameter that a row of *nodes* reads.
+
+    *nodes* are read together, as the sides of a comparison: a row exists
+    where *rows* keeps it, every row when not given, and none of *nodes* is
+    absent there. A hole is read where it reaches such a row through the
+    operators that move and gather data on the way, unless a term it meets
+    is absent there: a masked variable or an ``absent`` parameter row takes
+    the hole's term with it, as in :func:`evaluate`. A condition never reads
+    a row: a missing row compares as false there, whatever its ``missing:``.
+    """
+    live = xr.DataArray(True) if rows is None else rows
+    for name in sorted(_read_parameters(nodes)):
+        present = ctx.parameter(name).present
+        if ctx.program.parameters[name].missing != "refused" or bool(present.all()):
+            continue
+        found = _read_holes(~present, functools.partial(_reads, nodes, name, live, ctx))
+        if bool(found.any()):
+            raise SpecDataError(
+                f"{subject} reads parameter '{name}' at {first_coordinates(found, 3)}, "
+                f"where it has no row. A missing: refused parameter needs a row wherever "
+                f"a declaration reads it.\n"
+                f"  Supply the row, mask the coordinate out with a where:, or say what a "
+                f"missing row means with missing:."
+            )
+
+
+def _reads(
+    nodes: Sequence[ms.Expression],
+    name: str,
+    live: xr.DataArray,
+    ctx: Context,
+    holes: xr.DataArray,
+) -> bool:
+    """Whether a row of *nodes* that *live* keeps reads one of *holes* of parameter *name*."""
+    marks = functools.reduce(operator.add, (_marks(n, name, holes, ctx) for n in nodes))
+    return bool(((marks > 0) & live).any())
+
+
+def _read_parameters(nodes: Sequence[ms.Expression]) -> set[str]:
+    """Every parameter *nodes* read, the ones naming a shift or window amount included."""
+    amounts = (
+        _amount_of(node)
+        for node in ms.walk(*nodes)
+        if isinstance(node, ms.Translate | ms.WindowSum)
+    )
+    return set(ms.parameters_of(*nodes)) | {a for a in amounts if isinstance(a, str)}
+
+
+def _read_holes(
+    holes: xr.DataArray, reads: Callable[[xr.DataArray], bool], n: int = 3
+) -> xr.DataArray:
+    """The first *n* of *holes* that *reads* finds read, found by halving the candidates."""
+    found: list[int] = []
+    pending = [np.flatnonzero(holes.values)]
+    while pending and len(found) < n:
+        positions = pending.pop()
+        if not reads(_only(holes, positions)):
+            continue
+        if len(positions) == 1:
+            found.append(int(positions[0]))
+            continue
+        half = len(positions) // 2
+        pending += [positions[half:], positions[:half]]
+    return _only(holes, found)
+
+
+def _only(holes: xr.DataArray, positions: Sequence[int] | np.ndarray) -> xr.DataArray:
+    picked = np.zeros(holes.size, dtype=bool)
+    picked[positions] = True
+    return holes.copy(data=picked.reshape(holes.shape))
+
+
+def _marks(
+    node: ms.Expression, name: str, holes: xr.DataArray, ctx: Context
+) -> xr.DataArray:
+    """
+    Where *node* reads one of *holes*, the missing rows of parameter *name*:
+    positive there, zero elsewhere, NaN where *node* is absent.
+
+    Absence spreads as it does in :func:`evaluate`: through every arithmetic
+    operator, a shift and a lookup, but not out of a sum or a window. A case
+    reads its value inside its region only. A parameter amount reads its own
+    row at every row the operator gives.
+    """
+
+    def of(operand: ms.Expression) -> xr.DataArray:
+        return _marks(operand, name, holes, ctx)
+
+    if isinstance(node, ms.ParameterReference):
+        return _parameter_marks(node, name, holes, ctx)
+    if isinstance(node, ms.VariableReference):
+        labels = ctx.model.variables[node.name].labels
+        zeros = xr.zeros_like(labels, dtype=float)
+        if ctx.program.variables[node.name].missing == "neutral":
+            return zeros
+        return zeros.where(labels != -1)
+    if isinstance(node, ms.Constant | ms.Dual):
+        return _zeros(node, ctx)
+    if isinstance(node, ms.ExpressionReference):
+        return of(node.body)
+    if isinstance(node, ms.Negate):
+        return of(node.operand)
+    if isinstance(node, _Binary):
+        left, right = (of(operand) for operand in _operands(node))
+        return left + right
+    if isinstance(node, ms.Sum):
+        return cast(xr.DataArray, _sum(node, ctx, lambda o: of(o).fillna(0.0)))
+    if isinstance(node, ms.Join):
+        return cast(xr.DataArray, looked_up(of(node.operand), node.columns, ctx))
+    if isinstance(node, ms.Translate | ms.WindowSum):
+        operand = of(node.operand)
+        if isinstance(node, ms.WindowSum):
+            operand = operand.fillna(0.0)
+        fill = None if isinstance(node, ms.Translate) and node.fill is None else 0.0
+        moved = cast(xr.DataArray, _moved(node, operand, ctx, fill))
+        amount = _amount_marks(node, name, holes, ctx)
+        return (moved.fillna(0.0) + amount).where(moved.notnull() | (amount > 0))
+    if isinstance(node, ms.Cases):
+        regions = (
+            of(region.value).where(evaluate_where(region.when, ctx), 0.0)
+            for region in node.regions
+        )
+        return functools.reduce(operator.add, regions)
+    assert_never(node)
+
+
+def _parameter_marks(
+    node: ms.ParameterReference, name: str, holes: xr.DataArray, ctx: Context
+) -> xr.DataArray:
+    """*holes* on parameter *name*, NaN on a missing ``absent`` row of another."""
+    if node.name == name:
+        return holes.astype(float)
+    if ctx.program.parameters[node.name].missing != "absent":
+        return _zeros(node, ctx)
+    present = ctx.parameter(node.name).present
+    return xr.zeros_like(present, dtype=float).where(present)
+
+
+def _zeros(node: ms.Expression, ctx: Context) -> xr.DataArray:
+    return xr.DataArray(
+        np.zeros([len(ctx.coords[d]) for d in node.dims]),
+        coords={d: ctx.coords[d] for d in node.dims},
+        dims=node.dims,
+    )
+
+
+def _amount_marks(
+    node: ms.Translate | ms.WindowSum, name: str, holes: xr.DataArray, ctx: Context
+) -> xr.DataArray:
+    """The marks a parameter amount leaves on the rows it gives, read per group under its partition."""
+    if _amount_of(node) != name:
+        return xr.DataArray(0.0)
+    marks = holes.astype(float)
+    by = _partition(node.partition, ctx)
+    if by is None:
+        return marks
+    return cast(xr.DataArray, operators.per_group(marks, by)).fillna(0.0)

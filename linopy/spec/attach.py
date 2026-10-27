@@ -688,28 +688,23 @@ def fill(
     ``fill(attached.program, name, attached.read(name))`` reads a parameter
     filled. An ``absent`` row is NaN (``False`` for ``bool``), a ``neutral``
     one 0 and a value that value; an ``int`` or ``bool`` parameter is back at
-    its declared dtype unless a row stays NaN. *strict* names the parameters
+    its declared dtype unless a row stays NaN. A ``refused`` row stays NaN
+    too: whether a declaration reads it is for
+    :func:`linopy.spec.evaluator.refuse_holes` to decide. *strict* names the parameters
     standing where no neutral value exists, worked out from *program* when
     not given; pass it to skip that walk on repeated calls.
 
     Raises
     ------
     SpecDataError
-        A missing row the declaration refuses, or a ``neutral`` one where
-        no neutral value exists: as a divisor, a bound, or the whole
-        constant side of a comparison.
+        A ``neutral`` missing row where no neutral value exists: as a
+        divisor, a bound, or the whole constant side of a comparison.
     """
     arr, present = parameter
     declared = program.parameters[name]
     missing = declared.missing
-    if bool(present.all()):
+    if missing == "refused" or bool(present.all()):
         return arr
-    if missing == "refused":
-        raise SpecDataError(
-            f"parameter '{name}' has no row at {int((~present).sum())} coordinate(s), the "
-            f"first at {first_coordinates(~present, 3)}. Every coordinate of {list(declared.dims)} "
-            f"needs a row, or the declaration says what a missing row means with missing:."
-        )
     if missing == "absent":
         if declared.dtype == "bool":
             return _with_fill(arr, present, False, "bool")

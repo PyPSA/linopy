@@ -40,7 +40,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.spec import SpecDataError, evaluate, parameter  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import synthetic_sources  # noqa: E402
 
@@ -127,18 +127,184 @@ HOLE_AT_0 = pd.Series([4.0, 5.0], index=T[1:])
 W_HOLE_AT_0 = pd.Series([1.0, 1.0], index=T[1:])
 
 
-@pytest.mark.parametrize(
-    ("data", "name"),
-    [({"w": W_HOLE_AT_0, "c": FULL_C}, "w"), ({"w": FULL_W, "c": HOLE_AT_0}, "c")],
-    ids=["coefficient", "constant-side"],
+C_HOLE_AT_2 = FULL_C.iloc[:2]
+LATER = {"dims": ["t"], "where": "t > 0"}
+X_LATER = {**LATER, "bounds": {"lower": 0, "upper": 10}}
+CAP_LATER = with_(
+    SPARSE_SPEC, constraints={"cap": {**LATER, "expression": "w * x <= c"}}
 )
-def test_a_missing_row_is_refused_unless_the_parameter_says_what_it_means(
-    data: dict[str, Any], name: str
+SHIFTED = with_(
+    SPARSE_SPEC,
+    constraints={
+        "cap": {**LATER, "expression": "x <= shift(c, along=t, offset=1, edge=0)"}
+    },
+)
+BOUND_LATER = with_(
+    CAP_LATER,
+    variables={"x": {**LATER, "bounds": {"lower": 0, "upper": "c"}}},
+)
+OBJECTIVE_READS_W = with_(
+    CAP_LATER, objective={"sense": "maximize", "expression": "sum(w * x, over=t)"}
+)
+BESIDE_A_VACATED_SHIFT = with_(
+    SPARSE_SPEC,
+    constraints={
+        "cap": {
+            "dims": ["t"],
+            "expression": "w * x + shift(x, along=t, offset=1) <= c",
+        }
+    },
+)
+NAMED_WX = with_(
+    SPARSE_SPEC,
+    variables={"x": X_LATER},
+    constraints={"cap": {**LATER, "expression": "wx <= c"}},
+    expressions={"wx": "w * x"},
+)
+
+
+def windowed(where: str) -> dict[str, Any]:
+    cap = {
+        "dims": ["t"],
+        "where": where,
+        "expression": "x <= sum_back(c, along=t, window=2)",
+    }
+    return with_(SPARSE_SPEC, constraints={"cap": cap})
+
+
+def in_region(when: str) -> dict[str, Any]:
+    region = {
+        "dims": ["t"],
+        "cases": {"on": {"when": when, "expression": "c"}},
+        "otherwise": 0,
+    }
+    return with_(CAP_LATER, expressions={"region": region})
+
+
+@pytest.mark.parametrize(
+    ("spec", "data", "match"),
+    [
+        pytest.param(
+            SPARSE_SPEC,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "constraint 'cap' reads parameter 'w' at t=0",
+            id="coefficient",
+        ),
+        pytest.param(
+            SPARSE_SPEC,
+            {"w": FULL_W, "c": HOLE_AT_0},
+            "constraint 'cap' reads parameter 'c' at t=0",
+            id="constant-side",
+        ),
+        pytest.param(
+            SHIFTED,
+            {"w": FULL_W, "c": HOLE_AT_0},
+            "constraint 'cap' reads parameter 'c' at t=0",
+            id="shifted-onto-a-live-row",
+        ),
+        pytest.param(
+            OBJECTIVE_READS_W,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "the objective reads parameter 'w' at t=0",
+            id="objective",
+        ),
+        pytest.param(
+            windowed("t > 0"),
+            {"w": FULL_W, "c": HOLE_AT_0},
+            "constraint 'cap' reads parameter 'c' at t=0",
+            id="window",
+        ),
+        pytest.param(
+            in_region("t >= 0"),
+            {"w": FULL_W, "c": FULL_C.iloc[1:]},
+            "expression 'region' reads parameter 'c' at t=0",
+            id="cases-region",
+        ),
+    ],
+)
+def test_a_refused_row_a_live_row_reads_is_refused(
+    spec: dict[str, Any], data: dict[str, Any], match: str
 ) -> None:
-    with pytest.raises(
-        SpecDataError, match=rf"parameter '{name}' has no row at 1 coordinate\(s\)"
-    ):
-        Model.from_spec(SPARSE_SPEC, {"t": T, **data})
+    with pytest.raises(SpecDataError, match=rf"{match}, where it has no row"):
+        Model.from_spec(spec, {"t": T, **data})
+
+
+@pytest.mark.parametrize(
+    ("spec", "data", "name", "hole"),
+    [
+        pytest.param(
+            CAP_LATER, {"w": W_HOLE_AT_0, "c": HOLE_AT_0}, "w", 0, id="masked-row"
+        ),
+        pytest.param(
+            SHIFTED, {"w": FULL_W, "c": C_HOLE_AT_2}, "c", 2, id="shifted-past-the-end"
+        ),
+        pytest.param(
+            BOUND_LATER, {"w": FULL_W, "c": HOLE_AT_0}, "c", 0, id="masked-bound"
+        ),
+        pytest.param(
+            BESIDE_A_VACATED_SHIFT,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "w",
+            0,
+            id="beside-a-vacated-shift",
+        ),
+        pytest.param(
+            with_(OBJECTIVE_READS_W, variables={"x": X_LATER}),
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "w",
+            0,
+            id="objective-over-a-masked-variable",
+        ),
+        pytest.param(
+            NAMED_WX,
+            {"w": W_HOLE_AT_0, "c": FULL_C},
+            "w",
+            0,
+            id="named-expression-over-a-masked-variable",
+        ),
+        pytest.param(
+            with_(
+                SPARSE_SPEC,
+                parameters={"p": {"dims": ["t"], "missing": "absent"}},
+                constraints={"cap": {"dims": ["t"], "expression": "w * p * x <= c"}},
+            ),
+            {"w": W_HOLE_AT_0, "p": W_HOLE_AT_0, "c": FULL_C},
+            "w",
+            0,
+            id="beside-an-absent-row",
+        ),
+        pytest.param(
+            windowed("t < 2"), {"w": FULL_W, "c": C_HOLE_AT_2}, "c", 2, id="window"
+        ),
+        pytest.param(
+            in_region("t > 0"),
+            {"w": FULL_W, "c": FULL_C.iloc[1:]},
+            "c",
+            0,
+            id="cases-region",
+        ),
+    ],
+)
+def test_a_refused_row_no_live_row_reads_builds_and_stays_a_hole(
+    spec: dict[str, Any], data: dict[str, Any], name: str, hole: int
+) -> None:
+    m = Model.from_spec(spec, {"t": T, **data})
+    values = parameter(spec, m, name)
+    assert values.isnull().values.tolist() == [t == hole for t in T]
+
+
+def test_a_named_expression_reading_a_refused_row_is_refused_by_build_and_evaluate() -> (
+    None
+):
+    data = {"t": T, "w": W_HOLE_AT_0, "c": FULL_C}
+    m = Model.from_spec(CAP_LATER, data)
+    spec = with_(CAP_LATER, expressions={"weighted": "w * c"})
+    match = "expression 'weighted' reads parameter 'w' at t=0, where it has no row"
+    with pytest.raises(SpecDataError, match=match):
+        evaluate(spec, m, "weighted")
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(spec, data)
+    assert parameter(spec, m, "w").isnull().values.tolist() == [True, False, False]
 
 
 GROUPS = pd.Index(["p", "q"], name="s")

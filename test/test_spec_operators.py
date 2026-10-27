@@ -146,7 +146,14 @@ AMOUNT_SPEC: dict[str, Any] = {
 }
 
 
-def test_a_missing_shift_amount_is_refused() -> None:
+@pytest.mark.parametrize(
+    ("where", "refused"),
+    [({}, True), ({"where": "t < 2"}, False)],
+    ids=["read", "masked-out"],
+)
+def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
+    where: dict[str, str], refused: bool
+) -> None:
     t = pd.Index([0, 1, 2], name="t")
     g = pd.Index([0, 1], name="g")
     data = {
@@ -156,8 +163,20 @@ def test_a_missing_shift_amount_is_refused() -> None:
         "v": pd.Series([0.0, 4.0, 5.0], index=t),
         "lag": pd.Series([1], index=g[:1]),
     }
-    with pytest.raises(SpecDataError, match="parameter 'lag' has no row"):
-        Model.from_spec(AMOUNT_SPEC, data)
+    link = {**AMOUNT_SPEC["constraints"]["link"], **where}
+    spec = with_(AMOUNT_SPEC, constraints={"link": link})
+    if refused:
+        with pytest.raises(
+            SpecDataError, match="constraint 'link' reads parameter 'lag' at g=1, where"
+        ):
+            Model.from_spec(spec, data)
+    else:
+        m = Model.from_spec(spec, data)
+        assert (m.constraints["link"].labels != -1).values.tolist() == [
+            True,
+            True,
+            False,
+        ]
 
 
 WINDOW_SPEC: dict[str, Any] = {
@@ -272,9 +291,28 @@ def test_a_quadratic_term_sums_by_group_and_stays_quadratic() -> None:
     np.testing.assert_allclose(per_bus.values, [2.0, 0.0])
 
 
-def test_a_member_with_no_value_is_still_refused_through_a_group() -> None:
-    with pytest.raises(SpecDataError, match="parameter 'capacity' has no row"):
-        Model.from_spec(GROUPED_SPEC, grouped_sources(pd.Series([3.0], index=GENS[:1])))
+@pytest.mark.parametrize(
+    ("where", "refused"),
+    [({}, True), ({"where": "bus == 'south'"}, False)],
+    ids=["read", "group-masked-out"],
+)
+def test_a_member_with_no_value_is_refused_where_its_group_is_read(
+    where: dict[str, str], refused: bool
+) -> None:
+    limit = {**GROUPED_SPEC["constraints"]["import_limit"], **where}
+    spec = with_(GROUPED_SPEC, constraints={"import_limit": limit})
+    sources = grouped_sources(pd.Series([3.0], index=GENS[:1]))
+    if refused:
+        with pytest.raises(
+            SpecDataError, match="parameter 'capacity' at generator='g2'"
+        ):
+            Model.from_spec(spec, sources)
+    else:
+        m = Model.from_spec(spec, sources)
+        assert (m.constraints["import_limit"].labels != -1).values.tolist() == [
+            False,
+            True,
+        ]
 
 
 def test_a_sum_over_several_axes_collapses_each() -> None:

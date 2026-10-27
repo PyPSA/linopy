@@ -116,9 +116,17 @@ when every present value is whole, a ``bool`` when every present value is 0 or
 
 The parameter's ``missing:`` decides what a missing row means:
 
-- ``refused`` (the default): every row must be there, even where a
-  ``where:`` masks it, or ``SpecDataError`` names it. Use ``missing: absent``
-  for data that only exists where the feature does.
+- ``refused`` (the default): every row a declaration reads must be there, or
+  ``SpecDataError`` names the declaration, the parameter and the coordinate.
+  A row is read by a variable's bounds and a constraint's sides on the rows
+  their ``where:`` keeps, and by the objective and a named expression
+  everywhere; a ``shift``, a lookup or a window reads the row it moves, and
+  a ``cases:`` value only inside its region. A hole is not read where the
+  term reading it is absent: a variable its ``where:`` masks, or an
+  ``absent`` row of another parameter, takes the term with it, so
+  ``w * x`` reads no ``w`` where ``x`` does not exist. A hole no
+  declaration reads is left alone. A condition never demands a row: a
+  missing row compares as false there, whatever the ``missing:``.
 - ``neutral``: the row reads as the neutral value, ``0`` or ``False``.
 - ``absent``: the row is absent, and the absence propagates through the
   arithmetic that reads it.
@@ -202,7 +210,10 @@ rows. To switch a feature off, say so with ``where:``, over a
         bounds: { lower: 0, upper: e_max }
 
 - A variable exists exactly where its ``where:`` holds. A missing ``absent`` row
-  in one of its bounds leaves that side open.
+  in one of its bounds leaves that side open; a missing ``refused`` row is
+  refused only where the variable exists. Wherever it does not, a parameter
+  multiplying it reads no row, in a constraint, the objective or a named
+  expression: a cost may be missing where the asset is off.
 - A constraint row exists where its ``where:`` holds and absence does not
   propagate to the whole row. An ``absent`` row read outside a sum takes the
   row with it, so ``x <= c`` has no row where ``c`` is absent; write
@@ -226,11 +237,14 @@ The parameters are raw: a missing row is a ``NaN`` hole, and an ``int`` or
 key dimension, ``NaN`` where a label is unmapped.
 
 - :func:`linopy.spec.parameter` returns a parameter filled as its ``missing:``
-  says, at its declared dtype; only an ``absent`` hole stays ``NaN``.
+  says, at its declared dtype; only an ``absent`` or a ``refused`` hole stays
+  ``NaN``. Whether a declaration reads a ``refused`` hole is for the build and
+  ``evaluate`` to refuse.
 - :func:`linopy.spec.evaluate` folds named expressions over ``m.solution``,
   the duals and ``m.parameters``, read afresh on every call. A body over data
   alone needs no solve; one that reads a variable before a solve raises
-  ``AttributeError``. An unknown name raises ``KeyError``.
+  ``AttributeError``, one that reads a ``refused`` hole ``SpecDataError``. An
+  unknown name raises ``KeyError``.
 
 Editing ``m.parameters`` changes what ``evaluate`` and ``parameter`` return,
 but not the model: bounds, coefficients and right-hand sides were fixed when

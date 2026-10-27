@@ -27,6 +27,7 @@ from linopy.spec.evaluator import (
     constant_of,
     evaluate,
     flipped,
+    refuse_holes,
     refuse_made,
     without_strays,
 )
@@ -44,7 +45,9 @@ def build(ctx: Context) -> None:
     Variables, special-ordered sets, constraints, the objective and the
     named expressions holding a variable term, in that order. The program's
     assumptions are checked once the variables exist, so a condition may
-    read where one is defined.
+    read where one is defined. Each declaration refuses the missing
+    ``refused`` rows its live rows read, a named expression's whether it is
+    built or left to :func:`linopy.spec.evaluate`.
     """
     _check_supported(ctx.program)
     _variables(ctx)
@@ -87,13 +90,16 @@ def _check_assumptions(ctx: Context) -> None:
 
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
-        mask = as_linopy_mask(evaluate_where(declared.where, ctx))
+        rows = evaluate_where(declared.where, ctx)
+        for bound in (declared.lower, declared.upper):
+            if bound is not None:
+                refuse_holes(f"variable '{name}'", [bound], ctx, rows)
         ctx.model.add_variables(
             lower=_bound(declared.lower, ctx, -np.inf),
             upper=_bound(declared.upper, ctx, np.inf),
             coords={d: ctx.coords[d] for d in declared.dims},
             name=name,
-            mask=mask,
+            mask=as_linopy_mask(rows),
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
         )
@@ -125,6 +131,7 @@ def _constraints(ctx: Context) -> None:
         rows = evaluate_where(row.where, ctx)
         mask = as_linopy_mask(rows)
         scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
+        refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
         lhs, rhs, sense = row.lhs, row.rhs, row.sense
         if flipped(row):
             lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
@@ -206,6 +213,7 @@ def _objective(ctx: Context) -> None:
     declared = ctx.program.objective
     if declared is None:
         return
+    refuse_holes("the objective", [declared.expression], ctx)
     expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
@@ -223,6 +231,7 @@ def _expressions(ctx: Context) -> None:
     """
     for name, declared in ctx.program.expressions.items():
         body = declared.expression
+        refuse_holes(f"expression '{name}'", [body], ctx)
         if not ms.carries_variable(body) or any(
             isinstance(n, ms.Dual) for n in ms.walk(body)
         ):

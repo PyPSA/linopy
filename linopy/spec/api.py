@@ -80,6 +80,8 @@ def evaluate(spec: SpecLike, model: Model, *names: str) -> dict[str, xr.DataArra
     AttributeError
         The model is not solved: a body reads a variable the model holds no
         solution for or a constraint it holds no dual for.
+    SpecDataError
+        A body reads a missing row of a ``missing: refused`` parameter.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
     program = normalize_spec(spec)
@@ -95,14 +97,13 @@ def parameter(spec: SpecLike, model: Model, name: str) -> xr.DataArray:
     The parameter *name* of *spec* in *model*, filled the way its ``missing:`` says.
 
     An ``int`` or ``bool`` parameter is at its declared dtype unless an
-    ``absent`` row stays a NaN hole.
+    ``absent`` or a ``refused`` row stays a NaN hole: whether a declaration
+    reads a ``refused`` one is the build's and :func:`evaluate`'s to refuse.
 
     Raises
     ------
     KeyError
         *spec* declares no parameter *name*, or ``model.parameters`` lacks it.
-    SpecDataError
-        A missing row its ``missing:`` refuses.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
     program = normalize_spec(spec)

@@ -382,7 +382,12 @@ def with_missing(**missing: Any) -> Any:
 
 @pytest.mark.parametrize(
     ("missing", "expected"),
-    [("absent", [1.0, np.nan]), ("neutral", [1.0, 0.0]), (7.5, [1.0, 7.5])],
+    [
+        ("refused", [1.0, np.nan]),
+        ("absent", [1.0, np.nan]),
+        ("neutral", [1.0, 0.0]),
+        (7.5, [1.0, 7.5]),
+    ],
 )
 def test_a_missing_row_reads_the_way_missing_says(
     missing: Any, expected: list[float]
@@ -390,17 +395,6 @@ def test_a_missing_row_reads_the_way_missing_says(
     attached = attach(with_missing(missing=missing), MODES_DATA)
     np.testing.assert_array_equal(filled(attached, "cost").values, expected)
     assert attached.read("cost").present.values.tolist() == [True, False]
-
-
-@pytest.mark.parametrize(
-    "cost",
-    [{"a": 1.0}, xr.DataArray([1.0, np.nan], coords={"f": ["a", "b"]})],
-    ids=["row-left-out", "hole-in-a-dataarray"],
-)
-def test_a_missing_row_is_refused_by_default(cost: Any) -> None:
-    attached = attach(with_missing(), {**MODES_DATA, "cost": cost})
-    with pytest.raises(SpecDataError, match="parameter 'cost' has no row at 1"):
-        filled(attached, "cost")
 
 
 STR_HOLE = np.array(["x", np.nan, "z"], dtype=object)

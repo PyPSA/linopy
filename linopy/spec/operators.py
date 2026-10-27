@@ -274,7 +274,7 @@ def _grouping(
     """*amount* read per group, beside how *by* partitions *over*; no relation keeps the axis whole."""
     if by is None:
         return amount, None
-    return _per_group(amount, by), grouped(over, np.asarray(array.indexes[over]), by)
+    return per_group(amount, by), grouped(over, np.asarray(array.indexes[over]), by)
 
 
 def _gather(
@@ -319,7 +319,7 @@ def _gather_by_offset(
     return _vacated(moved, array, over, ~inside, fill)
 
 
-def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
+def per_group(offset: Amount, groups: xr.DataArray) -> Amount:
     """*offset* at every coordinate where it is declared over the group's own dimension."""
     target = str(groups.name)
     if not isinstance(offset, xr.DataArray) or target not in offset.dims:
