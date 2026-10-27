@@ -87,6 +87,7 @@ Version 1.0.0
 * ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
 * ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 * ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
+* Multiplying a constant or one-term ``LinearExpression`` by a multi-term ``LinearExpression`` no longer raises ``TypeError`` and gives the same result as the mirrored product, on both the dense and sparse backends. (`#1055 <https://github.com/PyPSA/linopy/issues/1055>`__)
 
 **Internal**
 
