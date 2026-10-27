@@ -619,6 +619,15 @@ def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
     assert int(m.constraints["row"].labels.sel(t=0)) == -1
 
 
+def test_arithmetic_masked_out_for_one_row_is_refused_for_the_next_reading_it() -> None:
+    masked = quotient("x + a / b >= 1", where="b > 0")
+    spec = with_(
+        masked, constraints={"open": {"dims": ["t"], "expression": "x + a / b >= 1"}}
+    )
+    with pytest.raises(SpecDataError, match=r"constraint 'open'.*not finite at t=0"):
+        Model.from_spec(spec, ZERO_AT_0)
+
+
 def test_a_dead_row_of_zero_absences_against_a_zero_side_is_only_warned_about() -> None:
     with pytest.warns(UserWarning, match=r"constraint 'sized'.*trivially true"):
         m = solved(sized("neutral", "size >= 0"), ENVELOPE_DATA)

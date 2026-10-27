@@ -40,6 +40,11 @@ def as_linopy_mask(mask: xr.DataArray) -> xr.DataArray | None:
 
 
 def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
+    """One condition node as a boolean array, each evaluated once per context."""
+    return ctx.memo.kept(node, lambda: _condition(node, ctx))
+
+
+def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     """
     One condition node as a boolean array.
 

@@ -47,7 +47,15 @@ def without_strays(value: _Framed) -> _Framed:
 
 
 def evaluate(node: ms.Expression, ctx: Context) -> Value:
-    """One node as a linopy term, an array or a number."""
+    """One node as a linopy term, an array or a number, a reference evaluated once per context."""
+    if isinstance(node, ms.ExpressionReference):
+        node = node.body
+    elif not isinstance(node, ms.VariableReference | ms.ParameterReference):
+        return _evaluated(node, ctx)
+    return ctx.memo.kept((node, ctx.filled), lambda: _evaluated(node, ctx))
+
+
+def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.ExpressionReference):
         return evaluate(node.body, ctx)
     if isinstance(node, ms.Constant):
@@ -220,11 +228,12 @@ def refuse_made(
 ) -> xr.DataArray:
     """*op* of *left* and *right*, refused wherever it is not finite though both are present."""
     made = cast(xr.DataArray, op(left, right))
-    if made.dtype.kind not in "fc":
+    if made.dtype.kind not in "fc" or bool(np.isfinite(made.values).all()):
         return made
     nan_made = made.isnull() & left.notnull() & right.notnull()
     bad = nan_made | (np.isinf(made) & _finite(left) & _finite(right))
-    if ctx.rows is not None:
+    if ctx.rows is not None and bool(bad.any()):
+        ctx.memo.masked += 1
         bad = bad & ctx.rows
     if not bool(bad.any()):
         return made

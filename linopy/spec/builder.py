@@ -253,7 +253,8 @@ def _expressions(ctx: Context) -> None:
             isinstance(n, ms.Dual) for n in ms.walk(body)
         ):
             continue
-        value = cast(Term, evaluate(body, ctx))
+        reference = ms.ExpressionReference(name, body, dims=declared.dims)
+        value = cast(Term, evaluate(reference, ctx))
         ctx.model.add_expressions(_framed(value, declared.dims), name=name)
 
 
@@ -270,7 +271,12 @@ def _framed(
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         store = expression._store.transpose(order)
         return LinearExpression._from_store(store, expression.model)
-    data = expression.data.transpose(*order, ...)
+    data = expression.data
+    if set(data.coords) == set(order) and all(
+        v.dims[: len(order)] == tuple(order) for v in data.data_vars.values()
+    ):
+        return expression
+    data = data.transpose(*order, ...)
     framed = xr.Dataset(coords={d: data.indexes[d] for d in order}).assign(
         {str(k): v.variable for k, v in data.data_vars.items()}
     )
