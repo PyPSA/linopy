@@ -121,8 +121,8 @@ Building from specs
 -------------------
 
 Build a model from a `mathspec <https://mathspec.readthedocs.io>`__ YAML
-program attached to data, and read its named expressions and filled
-parameters as functions of the spec and the model. Requires ``pip install
+program attached to data, and read its named expressions as functions of the
+spec, the model and the data. Requires ``pip install
 "linopy[spec]"`` (Python >= 3.12). See :doc:`spec-data`.
 
 .. autosummary::
@@ -130,7 +130,6 @@ parameters as functions of the spec and the model. Requires ``pip install
 
    model.Model.from_spec
    spec.evaluate
-   spec.parameter
    spec.SpecDataError
 
 

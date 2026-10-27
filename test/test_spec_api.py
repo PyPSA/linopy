@@ -1,6 +1,6 @@
 """
-``Model.from_spec`` argument handling, the data it writes into ``model.parameters``,
-and ``linopy.spec.evaluate`` and ``linopy.spec.parameter`` reading a spec-built model.
+``Model.from_spec`` argument handling, the data it stores in ``model.parameters``,
+and ``linopy.spec.evaluate`` reading a spec-built model.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -36,7 +35,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
-from linopy.spec import SpecDataError, evaluate, parameter  # noqa: E402
+from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import synthetic_sources  # noqa: E402
 
@@ -69,7 +68,6 @@ def test_spec_forms_build_the_same_model(
     m = Model.from_spec(form(_written(tmp_path)), DISPATCH_DATA)
     assert list(m.variables) == ["p"]
     assert list(m.constraints) == ["power_balance"]
-    assert set(m.parameters.data_vars) == {"p_max", "load", "cost"}
 
 
 @pytest.mark.parametrize("form", SPEC_FORMS.values(), ids=SPEC_FORMS.keys())
@@ -164,7 +162,7 @@ def test_from_spec_passes_model_kwargs() -> None:
 
 def test_the_spec_package_exports() -> None:
     assert isinstance(linopy.spec.attach, types.ModuleType)
-    assert set(linopy.spec.__all__) == {"SpecDataError", "evaluate", "parameter"}
+    assert set(linopy.spec.__all__) == {"SpecDataError", "evaluate"}
     assert callable(linopy.spec.evaluate)
 
 
@@ -201,10 +199,16 @@ def test_aliasing_a_named_expression_leaves_the_original_named() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_from_spec_writes_raw_parameters_and_relations() -> None:
-    m = Model.from_spec(WHERE_SPEC, WHERE_DATA)
+@pytest.mark.parametrize("store", [False, True])
+def test_from_spec_stores_parameters_only_when_asked(store: bool) -> None:
+    m = Model.from_spec(WHERE_SPEC, WHERE_DATA, store=store)
     program = lower(WHERE_SPEC)
-    assert set(m.parameters.data_vars) == {*program.parameters, *program.relations}
+    names = {*program.parameters, *program.relations} if store else set()
+    assert set(m.parameters.data_vars) == names
+
+
+def test_from_spec_stores_raw_parameters_and_relations() -> None:
+    m = Model.from_spec(WHERE_SPEC, WHERE_DATA, store=True)
     for name in ("cost", "season_of"):
         assert m.parameters[name].isnull().values.tolist() == [False] * 3 + [True]
 
@@ -220,40 +224,19 @@ def test_a_missing_parameter_is_refused() -> None:
         Model.from_spec(spec, DISPATCH_DATA)
 
     spare = pd.Series([1.0, 2.0], index=GENERATOR)
-    m = Model.from_spec(spec, {**DISPATCH_DATA, "spare": spare})
+    m = Model.from_spec(spec, {**DISPATCH_DATA, "spare": spare}, store=True)
     assert "spare" in m.parameters
 
 
-@pytest.mark.parametrize(
-    ("dtype", "missing", "value", "want", "kind"),
-    [
-        ("float", "absent", 1.0, [1.0, np.nan], "f"),
-        ("float", "neutral", 1.0, [1.0, 0.0], "f"),
-        ("float", 7.5, 1.0, [1.0, 7.5], "f"),
-        ("int", "neutral", 1, [1, 0], "i"),
-        ("int", "absent", 1, [1.0, np.nan], "f"),
-        ("bool", "absent", True, [True, False], "b"),
-    ],
-)
-def test_parameter_reads_the_way_missing_says(
-    dtype: str, missing: Any, value: Any, want: list[Any], kind: str
-) -> None:
-    spec = {
-        "dimensions": {"t": {"dtype": "int"}},
-        "parameters": {"v": {"dims": ["t"], "dtype": dtype, "missing": missing}},
-    }
-    t = pd.Index([0, 1], name="t")
-    m = Model.from_spec(spec, {"t": t, "v": pd.Series([value], index=t[:1])})
-    got = parameter(spec, m, "v")
-    np.testing.assert_array_equal(got.values, want)
-    assert got.dtype.kind == kind
-
-
-@pytest.mark.parametrize("name", ["costs", "season_of", "x"])
-def test_parameter_of_an_unknown_name_is_a_key_error(name: str) -> None:
-    m = Model.from_spec(WHERE_SPEC, WHERE_DATA)
-    with pytest.raises(KeyError, match=f"unknown parameter '{name}'"):
-        parameter(WHERE_SPEC, m, name)
+def test_extra_stored_parameters_are_ignored(recwarn: Any) -> None:
+    m = solved(yaml_dict(), DISPATCH_DATA)
+    m.parameters["costs"] = m.parameters["cost"] * 2
+    m.parameters["note"] = xr.DataArray(1.0)
+    rebuilt = Model.from_spec(yaml_dict(), m.parameters, store=True)
+    got = evaluate(yaml_dict(), m, "spend")["spend"]
+    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+    xr.testing.assert_allclose(got, m.expressions["spend"].solution)
+    assert set(rebuilt.parameters.data_vars) == {"p_max", "load", "cost"}
 
 
 # ---------------------------------------------------------------------------
@@ -284,23 +267,60 @@ def test_evaluate_matches_the_dispatch() -> None:
     )
 
 
+INDEXED_ONLY: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}},
+    "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}}},
+    "objective": {"sense": "maximize", "expression": "sum(x)"},
+    "expressions": {"tot": "sum(x)"},
+}
+
+
 @pytest.mark.parametrize(
-    ("model", "name", "match"),
+    ("spec", "model", "name", "match"),
     [
         pytest.param(
+            yaml_dict(),
             lambda: Model.from_spec(yaml_dict(), DISPATCH_DATA),
             "spent",
             "unknown expression 'spent'",
             id="unknown-name",
         ),
-        pytest.param(Model, "spend", "model.parameters holds no", id="not-built"),
+        pytest.param(
+            yaml_dict(), Model, "spend", "model.parameters holds no", id="not-built"
+        ),
+        pytest.param(
+            yaml_dict(),
+            lambda: Model.from_spec(yaml_dict(), DISPATCH_DATA),
+            "spend",
+            r"sources=\.\.\.\), or build the model with .*store=True",
+            id="not-stored",
+        ),
+        pytest.param(
+            INDEXED_ONLY,
+            lambda: Model.from_spec(INDEXED_ONLY, {"t": TT}),
+            "tot",
+            r"holds no 't'.*store=True",
+            id="index-not-stored",
+        ),
     ],
 )
 def test_evaluate_refuses_with_a_key_error(
-    model: Callable[[], Model], name: str, match: str
+    spec: dict[str, Any], model: Callable[[], Model], name: str, match: str
 ) -> None:
     with pytest.raises(KeyError, match=match):
-        evaluate(yaml_dict(), model(), name)
+        evaluate(spec, model(), name)
+
+
+def test_evaluate_reads_given_sources_over_stored_parameters() -> None:
+    m = solved(yaml_dict(), DISPATCH_DATA)
+    unstored = m.copy(include_solution=True)
+    unstored.parameters = xr.Dataset()
+    cheap = {**DISPATCH_DATA, "cost": DISPATCH_DATA["cost"] / 2}
+    stored = evaluate(yaml_dict(), m, "spend")["spend"]
+    given = evaluate(yaml_dict(), unstored, "spend", sources=DISPATCH_DATA)["spend"]
+    xr.testing.assert_allclose(given, stored)
+    halved = evaluate(yaml_dict(), m, "spend", sources=cheap)["spend"]
+    xr.testing.assert_allclose(halved, stored / 2)
 
 
 def test_evaluate_after_removing_the_built_expression() -> None:
@@ -343,8 +363,10 @@ def test_a_fold_over_data_needs_no_solve() -> None:
         parameters={"rate": {"dims": []}, "years": {"dims": []}},
         expressions={"growth": "rate ** years"},
     )
-    m = Model.from_spec(spec, {**DISPATCH_DATA, "rate": 1.05, "years": 3.0})
-    assert float(evaluate(spec, m, "growth")["growth"]) == pytest.approx(1.05**3)
+    sources = {**DISPATCH_DATA, "rate": 1.05, "years": 3.0}
+    m = Model.from_spec(spec, sources)
+    growth = evaluate(spec, m, "growth", sources=sources)["growth"]
+    assert float(growth) == pytest.approx(1.05**3)
 
 
 @pytest.mark.parametrize(
@@ -356,14 +378,15 @@ def test_a_fold_over_data_needs_no_solve() -> None:
 )
 def test_an_unsolved_model_has_no_solution_to_fold(name: str, match: str) -> None:
     spec = with_(yaml_dict(), expressions={"price": "dual(power_balance)"})
-    m = Model.from_spec(spec, DISPATCH_DATA)
+    m = Model.from_spec(spec, DISPATCH_DATA, store=True)
     with pytest.raises(AttributeError, match=match):
         evaluate(spec, m, name)
 
 
 def test_a_constant_expression_folds_to_a_scalar() -> None:
     spec = {**yaml_dict(), "expressions": {"answer": "6 * 7"}}
-    got = evaluate(spec, Model.from_spec(spec, DISPATCH_DATA), "answer")["answer"]
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    got = evaluate(spec, m, "answer", sources=DISPATCH_DATA)["answer"]
     assert got.ndim == 0 and float(got) == 42.0
 
 

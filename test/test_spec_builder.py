@@ -40,7 +40,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import SpecDataError, evaluate, parameter  # noqa: E402
+from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import synthetic_sources  # noqa: E402
 
@@ -288,23 +288,22 @@ def test_a_refused_row_a_live_row_reads_is_refused(
 def test_a_refused_row_no_live_row_reads_builds_and_stays_a_hole(
     spec: dict[str, Any], data: dict[str, Any], name: str, hole: int
 ) -> None:
-    m = Model.from_spec(spec, {"t": T, **data})
-    values = parameter(spec, m, name)
-    assert values.isnull().values.tolist() == [t == hole for t in T]
+    m = Model.from_spec(spec, {"t": T, **data}, store=True)
+    assert m.parameters[name].isnull().values.tolist() == [t == hole for t in T]
 
 
 def test_a_named_expression_reading_a_refused_row_is_refused_by_build_and_evaluate() -> (
     None
 ):
     data = {"t": T, "w": W_HOLE_AT_0, "c": FULL_C}
-    m = Model.from_spec(CAP_LATER, data)
+    m = Model.from_spec(CAP_LATER, data, store=True)
     spec = with_(CAP_LATER, expressions={"weighted": "w * c"})
     match = "expression 'weighted' reads parameter 'w' at t=0, where it has no row"
     with pytest.raises(SpecDataError, match=match):
         evaluate(spec, m, "weighted")
     with pytest.raises(SpecDataError, match=match):
         Model.from_spec(spec, data)
-    assert parameter(spec, m, "w").isnull().values.tolist() == [True, False, False]
+    assert m.parameters["w"].isnull().values.tolist() == [True, False, False]
 
 
 GROUPS = pd.Index(["p", "q"], name="s")
@@ -727,7 +726,7 @@ def test_an_operator_under_a_power_keeps_the_parameters_it_reads() -> None:
         parameters={**SPARSE_SPEC["parameters"], "lag": {"dims": [], "dtype": "int"}},
         expressions={"e": "shift(c, along=t, offset=lag, edge=0) ** 1"},
     )
-    m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
+    m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1}, store=True)
     assert {"c", "lag"} <= set(m.parameters.data_vars)
     xr.testing.assert_allclose(
         evaluate(spec, m, "e")["e"],
@@ -770,7 +769,7 @@ def test_a_quadratic_objective_builds() -> None:
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:
     """A dual needs a solved model, so the body cannot be folded at build time."""
     spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
-    m = Model.from_spec(spec, DISPATCH_DATA)
+    m = Model.from_spec(spec, DISPATCH_DATA, store=True)
     assert list(m.expressions) == []
     with pytest.raises(AttributeError, match="no dual yet"):
         evaluate(spec, m, "price")

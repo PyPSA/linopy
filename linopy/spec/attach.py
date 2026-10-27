@@ -200,12 +200,13 @@ def _bare(node: ms.Expression) -> ms.Expression:
 
 
 def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
-    """Warn about a key naming nothing the spec declares and close to a name it does: a typo, which leaves that name without data."""
-    declared = sorted({*program.parameters, *program.dimensions, *program.relations})
+    """Warn about a key naming nothing the spec declares and close to a name it does that has no key: a typo, which leaves that name without data."""
+    declared = {*program.parameters, *program.dimensions, *program.relations}
+    unsupplied = sorted(declared.difference(keys))
     typos = {
         k: near[0]
         for k in sorted(keys.difference(declared))
-        if (near := difflib.get_close_matches(k, declared, n=1, cutoff=0.6))
+        if (near := difflib.get_close_matches(k, unsupplied, n=1, cutoff=0.6))
     }
     if not typos:
         return
@@ -224,14 +225,16 @@ def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
 # ---------------------------------------------------------------------------
 
 
+def reached_dimensions(program: ms.Program) -> set[str]:
+    p = program
+    sections = (p.parameters, p.variables, p.constraints, p.relations)
+    return {d for section in sections for decl in section.values() for d in decl.dims}
+
+
 def _master_coords(
     program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
 ) -> dict[str, pd.Index]:
-    p = program
-    sections = (p.parameters, p.variables, p.constraints, p.relations)
-    reached = {
-        d for section in sections for decl in section.values() for d in decl.dims
-    }
+    reached = reached_dimensions(program)
     coords: dict[str, pd.Index] = {}
     for dim in program.dimensions:
         if dim in keys:

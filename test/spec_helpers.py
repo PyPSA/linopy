@@ -64,7 +64,7 @@ DISPATCH_P = xr.DataArray(
 
 
 def solved(spec: Any, sources: Any, **kwargs: Any) -> Model:
-    m = Model.from_spec(spec, sources, **kwargs)
+    m = Model.from_spec(spec, sources, store=True, **kwargs)
     m.solve(solver_name="highs", output_flag=False, reformulate_sos=True)
     return m
 

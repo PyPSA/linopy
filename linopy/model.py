@@ -433,19 +433,20 @@ class Model:
 
     @classmethod
     def from_spec(
-        cls, spec: SpecLike, sources: Mapping[str, Any] | Dataset, **model_kwargs: Any
+        cls,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        store: bool = False,
+        **model_kwargs: Any,
     ) -> Model:
         """
         A new model built from a mathspec program with its data.
 
         Requires the ``mathspec`` package (``pip install "linopy[spec]"``).
         Variables, constraints, the objective and the named expressions
-        holding a variable term are added as the spec declares them. The
-        spec's parameters, unfilled with a missing row a NaN hole, and its
-        relations are written into ``model.parameters`` under their declared
-        names; nothing else of the spec is kept. Read the named expressions
-        with :func:`linopy.spec.evaluate` and filled parameters with
-        :func:`linopy.spec.parameter`.
+        holding a variable term are added as the spec declares them; nothing
+        of the spec itself is kept. Read the named expressions with
+        :func:`linopy.spec.evaluate`.
 
         Parameters
         ----------
@@ -457,6 +458,14 @@ class Model:
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters and
             relations.
+        store : bool, default False
+            Write the spec's parameters, unfilled with a missing row a NaN
+            hole, and its relations into ``model.parameters`` under their
+            declared names. They travel with the model through netcdf, and
+            ``Model.from_spec(spec, model.parameters, store=True)`` rebuilds
+            the model from them, edits included. An edit reaches the
+            variables, constraints and objective only on that rebuild, while
+            :func:`linopy.spec.evaluate` reads it at once.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -480,7 +489,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources)
+        build_into(model, spec, sources, store)
         return model
 
     @property

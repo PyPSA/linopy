@@ -5,29 +5,30 @@ Spec data and results
 
 :doc:`building-models-from-specs` walks through a spec from YAML to a solved
 model. This page is the reference for the parts around it: how linopy reads the
-spec and its data, what a missing row means, where the data lives after the
-build, and how to read results, rebuild, typeset and vary a model.
+spec and its data, what a missing row means, how to store the data on the
+model, and how to read results, rebuild, typeset and vary a model.
 
 A spec-built model is a plain linopy model. Everything the spec adds beyond
-the variables, constraints and objective is read as a function of the spec and
-the model:
+the variables, constraints and objective is read as a function of the spec,
+the model and the data:
 
 .. code-block:: python
 
     from pathlib import Path
 
     from linopy import Model
-    from linopy.spec import evaluate, parameter
+    from linopy.spec import evaluate
 
     spec = Path("dispatch.yaml")
     m = Model.from_spec(spec, sources)
     m.solve()
 
-    evaluate(spec, m)  # every named expression, folded over the solution
-    evaluate(spec, m, "spend")["spend"]  # one of them
-    parameter(spec, m, "p_max")  # a parameter, filled as its missing: says
+    evaluate(
+        spec, m, sources=sources
+    )  # every named expression, folded over the solution
+    evaluate(spec, m, "spend", sources=sources)["spend"]  # one of them
 
-All three need ``pip install "linopy[spec]"`` (Python >= 3.12).
+Both need ``pip install "linopy[spec]"`` (Python >= 3.12).
 
 .. contents::
    :local:
@@ -37,9 +38,8 @@ All three need ``pip install "linopy[spec]"`` (Python >= 3.12).
 Passing the spec
 ----------------
 
-``Model.from_spec``, :func:`linopy.spec.evaluate`,
-:func:`linopy.spec.parameter` and ``linopy.testing.synthetic_sources``
-take the spec in any of four forms:
+``Model.from_spec``, :func:`linopy.spec.evaluate` and
+``linopy.testing.synthetic_sources`` take the spec in any of four forms:
 
 - a ``pathlib.Path`` to a YAML file,
 - a ``str`` holding the YAML text itself,
@@ -225,47 +225,64 @@ rows. To switch a feature off, say so with ``where:``, over a
   on the constraint (`#993 <https://github.com/PyPSA/linopy/issues/993>`__).
 
 
-Data in ``m.parameters``
-------------------------
+Storing the data in ``m.parameters``
+------------------------------------
 
-``Model.from_spec`` writes the spec's parameters and relations into
-``m.parameters`` under their declared names, on the dimension members it
-attached. Nothing else of the spec is kept on the model.
+``Model.from_spec`` reads the data straight from ``sources`` and, by default,
+leaves ``m.parameters`` untouched. With ``store=True`` it writes the spec's
+parameters and relations into ``m.parameters`` under their declared names, on
+the dimension members it attached. Nothing else of the spec is kept on the
+model.
 
-The parameters are raw: a missing row is a ``NaN`` hole, and an ``int`` or
-``bool`` parameter with a hole is ``float64``. A relation is an array over its
-key dimension, ``NaN`` where a label is unmapped.
+The stored parameters are raw: a missing row is a ``NaN`` hole, and an ``int``
+or ``bool`` parameter with a hole is ``float64``. A relation is an array over
+its key dimension, ``NaN`` where a label is unmapped.
 
-- :func:`linopy.spec.parameter` returns a parameter filled as its ``missing:``
-  says, at its declared dtype; only an ``absent`` or a ``refused`` hole stays
-  ``NaN``. Whether a declaration reads a ``refused`` hole is for the build and
-  ``evaluate`` to refuse.
-- :func:`linopy.spec.evaluate` folds named expressions over ``m.solution``,
-  the duals and ``m.parameters``, read afresh on every call. A body over data
-  alone needs no solve; one that reads a variable before a solve raises
-  ``AttributeError``, one that reads a ``refused`` hole ``SpecDataError``. An
-  unknown name raises ``KeyError``.
+Editing ``m.parameters`` does not change the model: bounds, coefficients and
+right-hand sides were fixed when the model was built. ``evaluate(spec, m)``
+reads the edit at once, over the solution of the unedited model; the model
+itself takes it only when rebuilt from the stored parameters:
 
-Editing ``m.parameters`` changes what ``evaluate`` and ``parameter`` return,
-but not the model: bounds, coefficients and right-hand sides were fixed when
-the model was built. To change the data the model holds, build it again.
+.. code-block:: python
+
+    m = Model.from_spec(spec, sources, store=True)
+    m.parameters["cost"].loc["wind"] = 10.0
+    m = Model.from_spec(spec, m.parameters, store=True)
+
+A key in ``m.parameters`` that the spec does not declare, such as data added by
+hand, is ignored on a rebuild and by ``evaluate``.
 
 ``Model.copy()`` carries ``m.parameters``; the copy is unsolved, so solve it
 before evaluating an expression that reads a variable.
+
+
+Reading results
+---------------
+
+:func:`linopy.spec.evaluate` folds named expressions over ``m.solution`` and
+the duals. It reads the data from ``sources=`` or, when none is given, from
+``m.parameters`` as ``store=True`` wrote it; with neither, it raises
+``KeyError``. The data goes through the same checks and ``missing:`` rules as
+in the build. A body over data alone needs no solve; one that reads a variable
+before a solve raises ``AttributeError``, one that reads a ``refused`` hole
+``SpecDataError``. An unknown name raises ``KeyError``.
 
 
 Saving and rebuilding
 ---------------------
 
 ``m.parameters`` is ordinary model data, so ``to_netcdf`` and ``read_netcdf``
-carry it like any other parameter. Object parameters, such as a ``str``
+carry the data a model was built with ``store=True`` like any other
+parameter. Object parameters, such as a ``str``
 parameter with a hole, keep their ``NaN`` holes on both the ``netcdf4`` and the
 ``scipy`` engine; an object parameter mixing types is refused on write.
 
 The restored model is a plain linopy model with its solution and parameters,
-so ``evaluate(spec, restored)`` works on it directly. The file holds the data,
+so ``evaluate(spec, restored)`` works on it directly if it was built with
+``store=True``; otherwise pass the data as ``evaluate(spec, restored, sources=...)``. The file holds the data,
 not the spec: keep the YAML next to it. To rebuild the model, pass the YAML and
-the restored parameters, a ``Dataset`` whose holes are missing rows:
+the restored parameters, a ``Dataset`` whose holes are missing rows, and store
+them again:
 
 .. code-block:: python
 
@@ -273,7 +290,7 @@ the restored parameters, a ``Dataset`` whose holes are missing rows:
 
     m.to_netcdf("dispatch.nc")
     rebuilt = Model.from_spec(
-        Path("dispatch.yaml"), read_netcdf("dispatch.nc").parameters
+        Path("dispatch.yaml"), read_netcdf("dispatch.nc").parameters, store=True
     )
 
 
@@ -318,4 +335,4 @@ both return a ``mathspec.Spec``, which ``Model.from_spec`` takes as it is:
     capped = mathspec.override(Path("dispatch.yaml"), [CO2_CAP])
     m = Model.from_spec(capped, {**sources, "emission": emission, "co2_limit": 100.0})
 
-Pass the same ``capped`` spec to ``evaluate`` and ``parameter`` for that model.
+Pass the same ``capped`` spec to ``evaluate`` for that model.

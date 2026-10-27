@@ -1,9 +1,9 @@
 """
 Round trips of a spec-built model through netcdf and through ``copy``.
 
-A spec-built model keeps its raw parameters and relations in
-``model.parameters``, so the netcdf file holds the data a model is rebuilt
-from with the spec. Labels are the delicate part, a partial relation holds
+A spec-built model built with ``store=True`` keeps its raw parameters and
+relations in ``model.parameters``, so the netcdf file holds the data a model
+is rebuilt from with the spec. Labels are the delicate part, a partial relation holds
 NaN in an array of strings, so every relation shape is checked value by value,
 on both netcdf engines ``test_io`` uses. No test here asserts a model
 container's dtype after a round trip: the scipy engine narrows int64.
@@ -35,7 +35,7 @@ from spec_helpers import (  # noqa: E402
 )
 
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.spec import evaluate, parameter  # noqa: E402
+from linopy.spec import evaluate  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_linequal,
     assert_model_equal,
@@ -154,7 +154,7 @@ def test_a_spec_built_model_round_trips(tmp_path: Path, engine: str) -> None:
 def test_a_relation_round_trips_exactly(
     tmp_path: Path, engine: str, mapped: int, name: str
 ) -> None:
-    m = Model.from_spec(RELATION_SPEC, relation_sources(mapped))
+    m = Model.from_spec(RELATION_SPEC, relation_sources(mapped), store=True)
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
@@ -188,7 +188,7 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 ) -> None:
     """A container sharing a master dimension's name but not its labels is left alone."""
     own = pd.Index(labels, name="snapshot")
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, store=True)
     m.add_variables(coords=[own], name="side")
     p = roundtrip(m, tmp_path, engine)
 
@@ -207,7 +207,9 @@ def test_every_container_shares_the_master_coordinates(
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a sparse constraint writes one"
         )
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, sparse=backend.sparse)
+    m = Model.from_spec(
+        EXAMPLE_DISPATCH, DISPATCH_DATA, store=True, sparse=backend.sparse
+    )
     m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 
@@ -227,7 +229,7 @@ def test_labelled_parameters_and_unreached_coordinates_round_trip(
     tmp_path: Path, engine: str
 ) -> None:
     """A str parameter with holes, and a dimension only a relation reaches."""
-    m = Model.from_spec(TAGGED_SPEC, WHERE_DATA)
+    m = Model.from_spec(TAGGED_SPEC, WHERE_DATA, store=True)
     assert "label" in m.parameters
     p = roundtrip(m, tmp_path, engine)
 
@@ -243,7 +245,7 @@ def test_a_hole_round_trips_and_is_compared(
     tmp_path: Path, engine: str, position: int, value: float
 ) -> None:
     m = Model.from_spec(
-        with_(WHERE_SPEC, expressions={"twice": "cost * 2"}), WHERE_DATA
+        with_(WHERE_SPEC, expressions={"twice": "cost * 2"}), WHERE_DATA, store=True
     )
     p = roundtrip(m, tmp_path, engine)
     assert_model_equal(m, p)
@@ -267,28 +269,11 @@ REBUILT: dict[str, tuple[Any, Any]] = {
 def test_a_model_rebuilds_from_its_netcdf_parameters(
     tmp_path: Path, engine: str, spec: Any, sources: Any
 ) -> None:
-    m = Model.from_spec(spec, sources)
-    rebuilt = Model.from_spec(spec, roundtrip(m, tmp_path, engine).parameters)
+    m = Model.from_spec(spec, sources, store=True)
+    rebuilt = Model.from_spec(
+        spec, roundtrip(m, tmp_path, engine).parameters, store=True
+    )
     assert_model_equal(rebuilt, m)
-
-
-@pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize(
-    ("name", "kind"),
-    [
-        ("count", "i"),
-        ("flag", "b"),
-        ("cost", "f"),
-        ("tag", "O"),
-        ("sparse_count", "i"),
-        ("sparse_flag", "b"),
-    ],
-)
-def test_a_parameter_keeps_its_dtype(
-    tmp_path: Path, engine: str, name: str, kind: str
-) -> None:
-    p = roundtrip(Model.from_spec(DTYPE_SPEC, DTYPE_DATA), tmp_path, engine)
-    assert parameter(DTYPE_SPEC, p, name).dtype.kind == kind
 
 
 def copied(deep: bool) -> Callable[[Model, Path, str], Model]:
@@ -313,6 +298,23 @@ def test_evaluate_after_a_round_trip_and_a_copy(
         xr.testing.assert_allclose(got[name], value)
 
 
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    "transform", [roundtrip, copied(deep=True)], ids=["netcdf", "deep-copy"]
+)
+def test_an_edit_to_stored_parameters_takes_effect_on_rebuild(
+    tmp_path: Path, engine: str, transform: Callable[[Model, Path, str], Model]
+) -> None:
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    p = transform(m, tmp_path, engine)
+    p.parameters["cost"].loc["wind"] = 10.0
+    rebuilt = solved(EXAMPLE_DISPATCH, p.parameters)
+
+    assert m.objective.value == pytest.approx(2500.0)
+    assert rebuilt.objective.value == pytest.approx(4800.0)
+    xr.testing.assert_identical(rebuilt.parameters, p.parameters)
+
+
 @pytest.mark.skipif(
     EXAMPLES_DIR is None, reason="set MATHSPEC_EXAMPLES to a mathspec examples dir"
 )
@@ -322,7 +324,7 @@ def test_a_mathspec_example_round_trips(
     tmp_path: Path, engine: str, example: str
 ) -> None:
     path = Path(EXAMPLES_DIR or "", example)
-    m = Model.from_spec(path, synthetic_sources(path, 3))
+    m = Model.from_spec(path, synthetic_sources(path, 3), store=True)
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)

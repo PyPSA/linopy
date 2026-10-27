@@ -793,10 +793,11 @@ def test_a_source_key_close_to_a_declared_name_warns(
         attached.read("cost")
 
 
-def test_a_source_key_like_no_declared_name_is_silent(
-    program: Any, good: dict[str, Any], recwarn: Any
+@pytest.mark.parametrize("key", ["notes", "csot"], ids=["unlike", "beside-its-name"])
+def test_a_source_key_that_leaves_no_name_without_data_is_silent(
+    program: Any, good: dict[str, Any], recwarn: Any, key: str
 ) -> None:
-    attach(program, {**good, "notes": COST})
+    attach(program, {**good, key: COST})
     assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
 

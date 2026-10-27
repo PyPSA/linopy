@@ -118,8 +118,8 @@ data, and let linopy build it.
   data to a spec, solving, and folding named expressions with
   ``linopy.spec.evaluate``. Requires ``pip install "linopy[spec]"``
   (Python >= 3.12).
-- :doc:`spec-data` — the source contract and missing rows, the data in
-  ``model.parameters``, reading results, saving and rebuilding,
+- :doc:`spec-data` — the source contract and missing rows, storing the
+  data in ``model.parameters``, reading results, saving and rebuilding,
   typesetting and variants.
 
 linopy supports a subset of mathspec. A constraint row that absence

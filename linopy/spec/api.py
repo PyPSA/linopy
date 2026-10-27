@@ -1,17 +1,18 @@
 """
-Build a model from a spec, and read a spec-built model's data and results.
+Build a model from a spec, and read a spec-built model's results.
 
-A spec-built model is a plain linopy model: the build writes the spec's
+A spec-built model is a plain linopy model. The build reads its data from
+the sources it is given and, asked to ``store`` it, writes the spec's
 parameters, unfilled with a missing row a NaN hole, and its relations into
-``model.parameters``. What a spec adds beyond the model is read as a function
-of the spec and the model: :func:`evaluate` folds named expressions over the
-solution and :func:`parameter` fills a parameter the way its ``missing:`` says.
+``model.parameters``, the data a model is rebuilt from. What a spec adds
+beyond the model is read as a function of the spec, the model and the data:
+:func:`evaluate` folds named expressions over the solution.
 """
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -22,26 +23,32 @@ from mathspec.spec import Spec
 
 from linopy.constants import _warn_evolving_api
 from linopy.model import Model
-from linopy.spec.attach import Parameter, attach, fill, strict_parameters
+from linopy.spec.attach import (
+    Attached,
+    Parameter,
+    attach,
+    fill,
+    reached_dimensions,
+    strict_parameters,
+)
 from linopy.spec.builder import build
 from linopy.spec.context import Context
-from linopy.spec.errors import SpecDataError, unknown
+from linopy.spec.errors import SpecDataError, shown, unknown
 from linopy.spec.evaluator import fold
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
+Sources: TypeAlias = Mapping[str, Any] | xr.Dataset
 
 EVOLVING_MESSAGE = (
-    "spec: Model.from_spec, linopy.spec.evaluate and linopy.spec.parameter are newly added "
+    "spec: Model.from_spec and linopy.spec.evaluate are newly added "
     "and their details may change in minor releases. Silence with "
     '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
 
-def build_into(
-    model: Model, spec: SpecLike, sources: Mapping[str, Any] | xr.Dataset
-) -> None:
+def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> None:
     """
-    Build *spec* with *sources* into the fresh *model*, its data into ``model.parameters``.
+    Build *spec* with *sources* into the fresh *model*, with *store* its data into ``model.parameters``.
 
     Raises
     ------
@@ -57,87 +64,83 @@ def build_into(
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
     program = normalize_spec(spec)
     attached = attach(program, sources)
-    model.parameters = xr.Dataset(
-        {p: attached.read(p).values for p in program.parameters}
-        | dict(attached.relations),
-        coords=attached.coords,
-    )
-    build(_context(program, model, solved=False))
+    raw = functools.cache(attached.read)
+    unfilled = {name: raw(name).values for name in program.parameters}
+    if store:
+        model.parameters = xr.Dataset(
+            unfilled | dict(attached.relations), coords=attached.coords
+        )
+    build(_context(attached, model, raw, solved=False))
 
 
-def evaluate(spec: SpecLike, model: Model, *names: str) -> dict[str, xr.DataArray]:
+def evaluate(
+    spec: SpecLike, model: Model, *names: str, sources: Sources | None = None
+) -> dict[str, xr.DataArray]:
     """
     The named expressions *names* of *spec*, all in declared order when none is named, folded over *model*.
 
-    Each folds over ``model.solution``, its duals and ``model.parameters``,
-    read afresh on every call: a body over data alone needs no solve.
+    Each folds over ``model.solution`` and its duals, with the data read from
+    *sources*, or from ``model.parameters`` when none is given, as
+    ``Model.from_spec(..., store=True)`` writes it: a body over data alone
+    needs no solve.
 
     Raises
     ------
     KeyError
-        *spec* declares no expression of one of *names*, or
-        ``model.parameters`` lacks a parameter or relation *spec* declares.
+        *spec* declares no expression of one of *names*, or no *sources* are
+        given and ``model.parameters`` lacks a parameter, relation or dimension
+        index *spec* needs.
     AttributeError
         The model is not solved: a body reads a variable the model holds no
         solution for or a constraint it holds no dual for.
     SpecDataError
-        A body reads a missing row of a ``missing: refused`` parameter.
+        The data does not fit the spec, or a body reads a missing row of a
+        ``missing: refused`` parameter.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
     program = normalize_spec(spec)
     for name in names:
         if name not in program.expressions:
             raise unknown("expression", name, program.expressions)
-    ctx = _context(program, model, solved=True)
+    attached = attach(program, _stored(program, model) if sources is None else sources)
+    ctx = _context(attached, model, attached.read, solved=True)
     return {name: fold(name, ctx) for name in names or program.expressions}
 
 
-def parameter(spec: SpecLike, model: Model, name: str) -> xr.DataArray:
-    """
-    The parameter *name* of *spec* in *model*, filled the way its ``missing:`` says.
-
-    An ``int`` or ``bool`` parameter is at its declared dtype unless an
-    ``absent`` or a ``refused`` row stays a NaN hole: whether a declaration
-    reads a ``refused`` one is the build's and :func:`evaluate`'s to refuse.
-
-    Raises
-    ------
-    KeyError
-        *spec* declares no parameter *name*, or ``model.parameters`` lacks it.
-    """
-    _warn_evolving_api("spec", EVOLVING_MESSAGE)
-    program = normalize_spec(spec)
-    if name not in program.parameters:
-        raise unknown("parameter", name, program.parameters)
-    return _filled(program, model, strict_parameters(program), name).values
-
-
-def _held(model: Model, name: str) -> xr.DataArray:
-    if name not in model.parameters:
+def _stored(program: ms.Program, model: Model) -> xr.Dataset:
+    lacking = [
+        name
+        for name in (*program.parameters, *program.relations)
+        if name not in model.parameters
+    ] + sorted(reached_dimensions(program) - set(model.parameters.indexes))
+    if lacking:
         raise KeyError(
-            f"model.parameters holds no '{name}' that the spec declares: build the model "
-            f"with Model.from_spec(spec, ...) or restore its parameters"
+            f"model.parameters holds no {shown(lacking)} that the spec declares: pass the "
+            f"data as evaluate(spec, model, sources=...), or build the model with "
+            f"Model.from_spec(spec, sources, store=True)"
         )
-    return model.parameters[name]
+    return model.parameters
 
 
-def _filled(
-    program: ms.Program, model: Model, strict: frozenset[str], name: str
-) -> Parameter:
-    raw = _held(model, name)
-    present = raw.notnull()
-    return Parameter(fill(program, name, Parameter(raw, present), strict), present)
+def _context(
+    attached: Attached,
+    model: Model,
+    raw: Callable[[str], Parameter],
+    *,
+    solved: bool,
+) -> Context:
+    program = attached.program
+    strict = strict_parameters(program)
 
+    def read(name: str) -> Parameter:
+        parameter = raw(name)
+        return Parameter(fill(program, name, parameter, strict), parameter.present)
 
-def _context(program: ms.Program, model: Model, *, solved: bool) -> Context:
-    for name in program.parameters:
-        _held(model, name)
-    read = functools.partial(_filled, program, model, strict_parameters(program))
     return Context(
         model,
         program,
-        {str(d): index for d, index in model.parameters.indexes.items()},
-        {name: _held(model, name) for name in program.relations},
+        attached.coords,
+        attached.relations,
         functools.cache(read),
         solved=solved,
     )

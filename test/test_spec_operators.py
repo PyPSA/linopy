@@ -359,7 +359,7 @@ def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
     m.solve(solver_name="highs", output_flag=False)
     want = [0.0, 1.0, 6.0]
     assert m.solution["y"].values.tolist() == pytest.approx(want)
-    for folded in evaluate(SELF_MAP_SPEC, m, "terms", "data").values():
+    for folded in evaluate(SELF_MAP_SPEC, m, "terms", "data", sources=data).values():
         assert folded.values.tolist() == pytest.approx(want)
 
 
