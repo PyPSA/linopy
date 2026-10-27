@@ -127,17 +127,13 @@ program attached to data. Requires ``pip install "linopy[spec]"`` (Python >=
 .. autosummary::
    :toctree: generated/
 
-   model.Model.add_spec
    model.Model.from_spec
    model.Model.spec
    spec.ModelSpec
    spec.NamedExpression
    spec.Declaration
    spec.attach
-   spec.Attached
-   spec.lower
    spec.SpecDataError
-   spec.synthetic_sources
 
 
 Variable

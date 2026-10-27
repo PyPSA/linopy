@@ -3,8 +3,8 @@ Persist the spec of a spec-built model in its netcdf file.
 
 Variables, constraints and the solution round trip through :mod:`linopy.io`
 already. Besides them a spec-built model carries the spec text, the master
-coordinates, the relations, the retained parameters and where those have
-rows; the program is re-lowered from the text on read, so no lowered
+coordinates, the relations and the parameters, a missing row a NaN hole;
+the program is re-lowered from the text on read, so no lowered
 ``Program`` ever reaches the file. The dataset names the mathspec version
 that lowered the text, and a read under another version warns.
 
@@ -30,7 +30,7 @@ import xarray as xr
 from mathspec import __version__ as MATHSPEC_VERSION
 
 from linopy.model import Model
-from linopy.spec.accessor import ModelSpec, lower_text
+from linopy.spec.accessor import ModelSpec, lower
 
 TEXT_ATTR = "text"
 NAME_ATTR = "name"
@@ -38,7 +38,6 @@ VERSION_ATTR = "mathspec"
 DTYPE_ATTR = "_linopy_dtype"
 COORD = "coords__"
 PARAM = "param__"
-PRESENT = "present__"
 CODES = "codes__"
 CATEGORIES = "cats__"
 CATEGORY_DIM = "category__"
@@ -64,10 +63,9 @@ def encode(spec: ModelSpec) -> xr.Dataset:
     The spec text, the mathspec version and the name are the dataset's
     attributes, which the merge lifts to the file's. Beside them sits one
     array of labels per master coordinate and, per parameter, either its
-    values or, where it is coded, its codes and its categories, and its
-    presence mask where a row is missing. The dataset carries no coordinates
-    of its own: a parameter is written over bare dimensions and put back on
-    the master coordinates on read.
+    values or, where it is coded, its codes and its categories. The dataset
+    carries no coordinates of its own: a parameter is written over bare
+    dimensions and put back on the master coordinates on read.
     """
     arrays: dict[str, xr.DataArray] = {
         COORD + dim: record_dtype(xr.DataArray(index.to_numpy(), dims=(dim,)))
@@ -78,8 +76,6 @@ def encode(spec: ModelSpec) -> xr.Dataset:
             arrays.update(_encode(str(name), arr))
         else:
             arrays[PARAM + str(name)] = record_dtype(_bare(arr))
-    for name, present in spec.presence.items():
-        arrays[PRESENT + str(name)] = record_dtype(_bare(present))
     attrs = {
         TEXT_ATTR: spec.text,
         VERSION_ATTR: MATHSPEC_VERSION,
@@ -92,8 +88,8 @@ def decode(model: Model, sub: xr.Dataset) -> ModelSpec:
     """
     Re-lower the text onto *model* and read back the dataset :func:`encode` wrote, its prefix already removed.
 
-    The master coordinates, the plainly written parameters, the coded ones
-    and the presence masks together are what :func:`linopy.spec.attach`
+    The master coordinates, the plainly written parameters and the coded
+    ones together are what :func:`linopy.spec.attach`
     gave the spec when the model was built. ``model.parameters`` is not
     touched: it holds what the caller put there and nothing of the spec.
 
@@ -117,19 +113,9 @@ def decode(model: Model, sub: xr.Dataset) -> ModelSpec:
         name: _plain(arr, name, coords) for name, arr in _group(sub, PARAM).items()
     }
     arrays |= {name: _decode(sub, name, coords) for name in _group(sub, CODES)}
-    presence = {
-        name: _plain(arr, name, coords) for name, arr in _group(sub, PRESENT).items()
-    }
     text = str(sub.attrs[TEXT_ATTR])
     parameters = xr.Dataset(arrays).assign_coords(coords)
-    return ModelSpec(
-        model,
-        str(sub.attrs[NAME_ATTR]),
-        lower_text(text),
-        text,
-        parameters,
-        xr.Dataset(presence),
-    )
+    return ModelSpec(model, str(sub.attrs[NAME_ATTR]), lower(text), text, parameters)
 
 
 def _group(sub: xr.Dataset, prefix: str) -> dict[str, xr.DataArray]:

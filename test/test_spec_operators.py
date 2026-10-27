@@ -314,7 +314,7 @@ def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
         "v": pd.Series(V[:3], index=t),
         "next_of": pd.Series([1, 2, 2], index=t),
     }
-    m = backend.add_spec(SELF_MAP_SPEC, data)
+    m = Model.from_spec(SELF_MAP_SPEC, data, sparse=backend.sparse)
     m.solve(solver_name="highs", output_flag=False)
     want = [0.0, 1.0, 6.0]
     assert m.solution["y"].values.tolist() == pytest.approx(want)

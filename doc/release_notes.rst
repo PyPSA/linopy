@@ -10,7 +10,7 @@ Version 1.0.0
 * ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
 * ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
 * ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
-* Setting ``Objective.expression`` (also through ``add_objective``) stores a shallow copy of the expression without its ``spec`` stamp and leaves the caller's object untouched; a scalar objective expression no longer gets ``attrs["name"]`` written onto it.
+* Setting ``Objective.expression`` (also through ``add_objective``) stores a shallow copy of the expression and leaves the caller's object untouched; a scalar objective expression no longer gets ``attrs["name"]`` written onto it.
 * The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
 * ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``.
@@ -84,10 +84,10 @@ Version 1.0.0
 
 *Build a model from a mathspec program*
 
-* ``Model.from_spec`` / ``model.add_spec`` build a model from a `mathspec <https://github.com/energy-models/mathspec>`__ program attached to data, and ``model.spec`` reads it back with its ``program``, ``text``, ``parameters``, ``coords`` and ``relations``. Requires mathspec 0.4 (``pip install "linopy[spec]"``, Python >= 3.12). The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
-* Everything a spec builds carries the spec's name in ``.spec`` on the variable, constraint or expression.
+* ``Model.from_spec`` builds a model from a `mathspec <https://github.com/energy-models/mathspec>`__ program attached to data, the spec given as a ``pathlib.Path``, YAML text (a ``str`` is never read as a file name), a mapping or a ``mathspec.Spec``, and ``model.spec`` reads it back with its ``program``, ``text``, every parameter in ``parameters`` (unfilled, a missing row a NaN hole that the declaration's ``missing:`` fills on read), ``coords`` and ``relations``. Requires mathspec 0.4 (``pip install "linopy[spec]"``, Python >= 3.12). The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs`.
 * ``model.spec.expressions`` evaluates the spec's named expressions against the solved model, and ``model.spec.typeset`` (``to_latex`` / ``to_markdown`` / ``to_typst``) renders the spec.
 * Spec models round-trip through ``to_netcdf`` / ``read_netcdf``; a file read without ``mathspec`` installed loads as a plain model with a warning.
+* ``linopy.testing.synthetic_sources`` makes up dense data for every declaration of a lowered spec, for tests and benchmarks.
 * Two limits apply. A constraint row that absence leaves without terms (from a ``missing: absent`` parameter, a ``missing: neutral`` parameter such as ``0 == load``, or a ``where:``-masked variable inside a sum) is refused with an error, where mathspec skips and reports it; linopy is stricter here (`#993 <https://github.com/PyPSA/linopy/issues/993>`__). A relation maps one key column to one value column only; bare relations, several key columns or several value columns raise ``SpecDataError``.
 
 **Bug fixes**

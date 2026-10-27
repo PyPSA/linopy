@@ -7,7 +7,6 @@ expressions and the assumptions checked against the data.
 from __future__ import annotations
 
 import glob
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +40,9 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import SpecDataError, lower  # noqa: E402
-from linopy.spec.testing import synthetic_sources  # noqa: E402
+from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
+from linopy.testing import synthetic_sources  # noqa: E402
 
 MULTI_COLUMN = "linopy reads no relation of more than one key or value column"
 REFUSED: dict[str, tuple[type[Exception], str]] = {
@@ -67,7 +67,7 @@ def example(path: str) -> Any:
     if name in REFUSED:
         raises, reason = REFUSED[name]
         marks = [pytest.mark.xfail(strict=True, raises=raises, reason=reason)]
-    return pytest.param(path, id=name, marks=marks)
+    return pytest.param(Path(path), id=name, marks=marks)
 
 
 EXAMPLES = (
@@ -85,7 +85,7 @@ EXAMPLES = (
     not EXAMPLES, reason="set MATHSPEC_EXAMPLES to a mathspec examples directory"
 )
 @pytest.mark.parametrize("path", [example(p) for p in EXAMPLES])
-def test_every_mathspec_example_builds_and_solves(path: str) -> None:
+def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     """Every whole mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
     program = lower(path)
     m = solved(path, synthetic_sources(program))
@@ -106,7 +106,7 @@ def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     assert (
         set(m.spec.expressions) == {"spend", "usage"} and len(m.spec.expressions) == 2
     )
-    assert not m.spec.parameters.data_vars
+    assert set(m.spec.parameters.data_vars) == set(m.spec.program.parameters)
     assert m.spec.coords["generator"].equals(GENERATOR)
 
 
@@ -461,6 +461,23 @@ def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
         Model.from_spec(spec, {"t": empty, "w": none, "c": none})
 
 
+def test_a_neutral_hole_in_a_where_reads_as_false() -> None:
+    spec = {
+        "dimensions": {"f": {"dtype": "str"}},
+        "parameters": {"count": {"dims": ["f"], "dtype": "int", "missing": "neutral"}},
+        "variables": {
+            "x": {
+                "dims": ["f"],
+                "where": "count == 0",
+                "bounds": {"lower": 0, "upper": 1},
+            }
+        },
+        "objective": {"sense": "maximize", "expression": "sum(x)"},
+    }
+    m = Model.from_spec(spec, {"f": ["a", "b"], "count": pd.Series({"a": 0})})
+    assert (m.variables["x"].labels != -1).values.tolist() == [True, False]
+
+
 @pytest.mark.parametrize(
     ("missing", "masked_reads_nan"),
     [("absent", True), ("neutral", False)],
@@ -567,13 +584,11 @@ QUADRATIC_SPEC: dict[str, Any] = {
 }
 
 
-def test_a_quadratic_constraint_is_refused_before_anything_is_built() -> None:
-    m = Model()
+def test_a_quadratic_constraint_is_refused() -> None:
     with pytest.raises(
         NotImplementedError, match="quadratic term in the objective only"
     ):
-        m.add_spec(QUADRATIC_SPEC, {"t": T})
-    assert list(m.variables) == [] and list(m.constraints) == []
+        Model.from_spec(QUADRATIC_SPEC, {"t": T})
 
 
 def test_a_quadratic_objective_builds() -> None:
@@ -584,40 +599,6 @@ def test_a_quadratic_objective_builds() -> None:
     )
     m = Model.from_spec(spec, {"t": T})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
-
-
-# ---------------------------------------------------------------------------
-# the stamp every built declaration carries
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "add",
-    [
-        pytest.param(
-            lambda m: m.add_expressions(m.expressions["spend"] * 2, name="twice"),
-            id="scaled",
-        ),
-        pytest.param(
-            lambda m: m.add_expressions(
-                linopy.merge([m.expressions["spend"]] * 2, dim="copy"), name="twinned"
-            ),
-            id="merged",
-        ),
-        pytest.param(
-            lambda m: m.add_constraints(
-                m.expressions["spend"] >= 0, name="spend_positive"
-            ),
-            id="constraint",
-        ),
-    ],
-)
-def test_what_the_caller_derives_from_a_stamped_expression_is_the_callers_own(
-    add: Callable[[Model], Any],
-) -> None:
-    m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
-    assert add(m).spec is None
-    assert m.expressions["spend"].spec == "spec"
 
 
 def test_a_named_expression_reading_a_dual_stays_on_the_spec() -> None:

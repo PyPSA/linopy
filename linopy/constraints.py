@@ -68,7 +68,6 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
-    SPEC_STAMP_ATTR,
     TERM_DIM,
     SIGNS_pretty,
 )
@@ -481,15 +480,6 @@ class Constraint:
     @property
     def attrs(self) -> dict[str, Any]:
         return self._attrs
-
-    @property
-    def spec(self) -> str | None:
-        """The name of the spec that built this constraint; ``None`` for one built by hand."""
-        return self._attrs.get(SPEC_STAMP_ATTR)
-
-    @spec.setter
-    def spec(self, name: str) -> None:
-        self._attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def coords(self) -> DatasetCoordinates:

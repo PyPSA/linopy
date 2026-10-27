@@ -1,6 +1,6 @@
 """
 ``model.spec``, ``ModelSpec``, ``NamedExpression``, typesetting,
-and the ``add_spec``/``from_spec`` argument handling that builds them.
+and the ``from_spec`` argument handling that builds them.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from linopy.spec import (  # noqa: E402
     ModelSpec,
     NamedExpression,
     SpecDataError,
-    lower,
 )
+from linopy.spec.accessor import lower  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -48,7 +48,6 @@ from linopy.spec import (  # noqa: E402
 
 SPEC_FORMS: dict[str, Callable[[Path], Any]] = {
     "path": lambda path: path,
-    "path-string": str,
     "yaml-text": lambda path: path.read_text(),
     "flow-yaml": lambda path: yaml.safe_dump(
         mathspec.to_spec(path).to_dict(), default_flow_style=True, width=10**6
@@ -75,13 +74,17 @@ def test_spec_forms_build_the_same_model(
 def test_a_lowered_program_is_refused() -> None:
     program = lower(yaml_dict())
     with pytest.raises(TypeError, match="mathspec.Spec, not a Program"):
-        Model().add_spec(program, DISPATCH_DATA)  # type: ignore[arg-type]
+        Model.from_spec(program, DISPATCH_DATA)  # type: ignore[arg-type]
+
+
+def _written(tmp_path: Path) -> Path:
+    path = tmp_path / "dispatch.yaml"
+    path.write_text(EXAMPLE_DISPATCH)
+    return path
 
 
 def _opened(tmp_path: Path) -> Any:
-    path = tmp_path / "dispatch.yaml"
-    path.write_text(EXAMPLE_DISPATCH)
-    with path.open() as handle:
+    with _written(tmp_path).open() as handle:
         return handle
 
 
@@ -106,6 +109,12 @@ UNREADABLE_SPECS: list[Any] = [
         id="missing-path-string-is-yaml-text",
     ),
     pytest.param(
+        lambda tmp_path: str(_written(tmp_path)),
+        mathspec.errors.SchemaError,
+        "holds a str, not a mapping of sections",
+        id="existing-path-string-is-yaml-text",
+    ),
+    pytest.param(
         lambda tmp_path: {"description": "a spec that declares nothing"},
         SpecDataError,
         "the spec declares nothing",
@@ -125,14 +134,7 @@ def test_an_unreadable_spec_is_refused(
     tmp_path: Path, form: Callable[[Path], Any], error: type[Exception], match: str
 ) -> None:
     with pytest.raises(error, match=match):
-        Model().add_spec(form(tmp_path), DISPATCH_DATA)
-
-
-def test_add_spec_needs_an_empty_model() -> None:
-    m = Model()
-    m.add_variables(name="x")
-    with pytest.raises(ValueError, match="empty model"):
-        m.add_spec(yaml_dict(), DISPATCH_DATA)
+        Model.from_spec(form(tmp_path), DISPATCH_DATA)
 
 
 def test_a_model_without_a_spec_has_no_accessor() -> None:
@@ -140,52 +142,50 @@ def test_a_model_without_a_spec_has_no_accessor() -> None:
         _ = Model().spec
 
 
-def test_from_spec_passes_model_kwargs_and_chains() -> None:
+def test_from_spec_passes_model_kwargs() -> None:
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA, force_dim_names=True)
     assert m.force_dim_names
-    assert Model().add_spec(
-        yaml_dict(), DISPATCH_DATA
-    ).spec.program.variables.keys() == {"p"}
 
 
 # ---------------------------------------------------------------------------
-# kept parameters
+# parameters
 # ---------------------------------------------------------------------------
 
 
 def test_the_spec_keeps_its_parameters_off_the_model() -> None:
     """``model.parameters`` is the caller's: a build neither reads nor writes it."""
     own = xr.DataArray(np.array(["a", "b", "c"], dtype=object), dims=["own"])
-    m = Model()
-    m.parameters["cost"] = own
-    m.add_spec(with_(yaml_dict(), expressions={"twice": "cost * 2"}), DISPATCH_DATA)
+    spec = with_(yaml_dict(), expressions={"twice": "cost * 2"})
+    m = Model.from_spec(spec, DISPATCH_DATA)
+    assert not m.parameters.data_vars
 
+    m.parameters["cost"] = own
     assert m.parameters["cost"].equals(own)
     assert m.spec.parameters["cost"].dims == ("generator",)
 
 
-def test_a_build_missing_a_kept_parameter_leaves_the_model_buildable() -> None:
-    """A dual-reading expression is skipped by the build, so what it reads is read before it."""
+def test_a_missing_parameter_is_refused() -> None:
+    """Every parameter is read, even one only an unbuilt expression reads."""
     spec = with_(
         yaml_dict(),
         parameters={"spare": {"dims": ["generator"]}},
         expressions={"price": "dual(power_balance) * sum(spare, over=generator)"},
     )
-    m = Model()
     with pytest.raises(SpecDataError, match="no data provided for parameter 'spare'"):
-        m.add_spec(spec, DISPATCH_DATA)
-    assert not len(m.variables) and not len(m.constraints)
+        Model.from_spec(spec, DISPATCH_DATA)
 
     spare = pd.Series([1.0, 2.0], index=GENERATOR)
-    m.add_spec(spec, {**DISPATCH_DATA, "spare": spare})
+    m = Model.from_spec(spec, {**DISPATCH_DATA, "spare": spare})
     assert "spare" in m.spec.parameters
 
 
-def test_a_removed_built_expression_names_what_is_not_kept() -> None:
+def test_a_removed_built_expression_still_folds_from_the_spec() -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)
+    original = m.expressions["spend"].solution
     m.remove_expressions("spend")
-    with pytest.raises(SpecDataError, match="parameter 'cost' is not kept"):
-        m.spec.expressions["spend"].solution
+    named = m.spec.expressions["spend"]
+    assert isinstance(named.expression, LinearExpression)
+    xr.testing.assert_allclose(named.solution, original)
 
 
 def test_a_declared_dimension_with_no_source_still_reprs() -> None:
@@ -219,7 +219,7 @@ def test_a_fold_over_data_needs_no_solve() -> None:
 @pytest.mark.parametrize(
     ("name", "match"),
     [
-        pytest.param("spend", "not optimized", id="built"),
+        pytest.param("spend", "has no solution yet", id="built"),
         pytest.param("price", "no dual yet", id="unbuilt"),
     ],
 )
@@ -265,13 +265,6 @@ def test_a_variable_bearing_named_expression_is_the_model_expression(name: str) 
     m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
     assert set(m.expressions) == {"spend", "bare"}
     assert m.spec.expressions[name].expression is m.expressions[name]
-    assert m.expressions[name].spec == "spec"
-
-
-def test_the_spec_keeps_what_its_unbuilt_expressions_read() -> None:
-    m = Model.from_spec(VIEWS_SPEC, DISPATCH_DATA)
-    assert set(m.spec.parameters.data_vars) == {"cost"}
-    assert not m.parameters.data_vars
 
 
 def test_the_named_expression_bundles_the_three_views() -> None:
@@ -348,14 +341,6 @@ HAND_BUILT: dict[str, Callable[[Model], Any]] = {
     "variable": lambda m: m.add_variables(lower=0, coords=[GENERATOR], name="r"),
     "constraint": lambda m: m.add_constraints(m.variables["p"] <= 10.0, name="cap"),
     "expression": lambda m: m.add_expressions(m.variables["p"] * 2.0, name="twice"),
-    "objective": lambda m: m.add_objective(2 * m.objective.expression, overwrite=True),
-    "objective-scaled": lambda m: setattr(m, "objective", m.objective * 2),
-    "objective-extended": lambda m: setattr(
-        m, "objective", m.objective + m.variables["p"].sum()
-    ),
-    "objective-expression": lambda m: setattr(
-        m.objective, "expression", 2 * m.objective.expression
-    ),
     "sos": lambda m: m.add_sos_constraints(
         m.variables["p"], sos_type=1, sos_dim="generator"
     ),
@@ -373,15 +358,12 @@ def test_typesetting_a_model_grown_past_its_spec_warns(
     assert record[0].filename == __file__
 
 
-def test_an_objective_from_a_named_expression_keeps_its_stamp() -> None:
-    spec = with_(yaml_dict(), expressions={"total": "sum(p * cost)"})
+def test_typesetting_an_objective_the_spec_does_not_declare_warns() -> None:
+    spec = {k: v for k, v in yaml_dict().items() if k != "objective"}
     m = Model.from_spec(spec, DISPATCH_DATA)
-    total = m.expressions["total"]
-    stamp = total.spec
-    m.add_objective(total, overwrite=True)
-    assert stamp is not None
-    assert total.spec == stamp
-    assert m.objective.expression.spec is None
+    m.add_objective(m.expressions["spend"].sum())
+    with pytest.warns(UserWarning, match="the spec does not declare"):
+        m.spec.to_latex()
 
 
 @pytest.mark.parametrize(
@@ -520,7 +502,7 @@ def test_spec_api_warns_once_per_session() -> None:
     from linopy.constants import _emitted_evolving_warnings
 
     _emitted_evolving_warnings.discard("spec")
-    with pytest.warns(EvolvingAPIWarning, match="spec: Model.add_spec"):
+    with pytest.warns(EvolvingAPIWarning, match="spec: Model.from_spec"):
         Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     with warnings.catch_warnings():
         warnings.simplefilter("error", EvolvingAPIWarning)
@@ -558,9 +540,8 @@ def test_a_named_expression_is_framed_in_its_declared_order(
     assert framed.solution.dims == ("generator", "snapshot")
 
 
-def test_aliasing_a_named_expression_leaves_the_original_stamped() -> None:
+def test_aliasing_a_named_expression_leaves_the_original_named() -> None:
     m = Model.from_spec(yaml_dict(), DISPATCH_DATA)
     alias = m.add_expressions(m.expressions["spend"], name="alias")
-    spend = m.expressions["spend"]
-    assert (spend.attrs["name"], spend.spec) == ("spend", "spec")
-    assert (alias.attrs["name"], alias.spec) == ("alias", None)
+    assert m.expressions["spend"].attrs["name"] == "spend"
+    assert alias.attrs["name"] == "alias"

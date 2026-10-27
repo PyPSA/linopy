@@ -46,7 +46,6 @@ from linopy.constants import (
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
-    SPEC_STAMP_ATTR,
     TERM_DIM,
     ModelStatus,
     Result,
@@ -119,16 +118,11 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
-    from linopy.spec import ModelSpec, SpecLike
+    from linopy.spec.accessor import ModelSpec, SpecLike
 
 logger = logging.getLogger(__name__)
 
 DtypeKey = Literal["labels"]
-
-
-def _unstamped(attrs: Mapping[str, Any]) -> dict[str, Any]:
-    """*attrs* without the stamp of the spec a constraint was derived from."""
-    return {k: v for k, v in attrs.items() if k != SPEC_STAMP_ATTR}
 
 
 def _check_infinities(
@@ -442,7 +436,7 @@ class Model:
     @property
     def spec(self) -> ModelSpec:
         """
-        The mathspec program this model was built from, see :meth:`add_spec`.
+        The mathspec program this model was built from, see :meth:`from_spec`.
 
         Raises
         ------
@@ -451,39 +445,41 @@ class Model:
         """
         if self._spec is None:
             raise AttributeError(
-                "This model was not built from a spec. Use `Model.add_spec` or "
-                "`Model.from_spec` to build one."
+                "This model was not built from a spec. Use `Model.from_spec` to "
+                "build one."
             )
         return self._spec
 
-    def add_spec(self, spec: SpecLike, sources: Mapping[str, Any] | Dataset) -> Model:
+    @classmethod
+    def from_spec(
+        cls, spec: SpecLike, sources: Mapping[str, Any] | Dataset, **model_kwargs: Any
+    ) -> Model:
         """
-        Build a mathspec program with its data into this empty model.
+        A new model built from a mathspec program with its data.
 
         Requires the ``mathspec`` package (``pip install "linopy[spec]"``).
         Variables, constraints, the objective and the named expressions
-        holding a variable term are added as the spec declares them, each
-        stamped with the spec's name in ``.spec``; the spec text, the
-        parameters the named expressions read and the relations are kept on
+        holding a variable term are added as the spec declares them; the
+        spec text, its parameters and its relations are kept on
         ``model.spec``, apart from ``model.parameters``.
 
         Parameters
         ----------
         spec : str, pathlib.Path, dict or mathspec.Spec
-            The spec: a path, YAML text, a mapping or a loaded ``Spec``.
+            The spec: a path, YAML text, a mapping or a loaded ``Spec``. A
+            ``str`` is always YAML text; pass a file as a ``pathlib.Path``.
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters and
             relations.
+        **model_kwargs
+            Passed to :class:`Model`, such as ``sparse=True``.
 
         Returns
         -------
         linopy.Model
-            This model, for chaining.
 
         Raises
         ------
-        ValueError
-            If the model already holds variables or constraints.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
 
@@ -495,19 +491,9 @@ class Model:
         """
         from linopy.spec.accessor import build_into
 
-        self._spec = build_into(self, spec, sources)
-        return self
-
-    @classmethod
-    def from_spec(
-        cls, spec: SpecLike, sources: Mapping[str, Any] | Dataset, **model_kwargs: Any
-    ) -> Model:
-        """
-        A new model built from a mathspec program, see :meth:`add_spec`.
-
-        ``model_kwargs`` are passed to :class:`Model`.
-        """
-        return cls(**model_kwargs).add_spec(spec, sources)
+        model = cls(**model_kwargs)
+        model._spec = build_into(model, spec, sources)
+        return model
 
     @property
     def solution(self) -> Dataset:
@@ -1107,7 +1093,6 @@ class Model:
             expr = expr.chunk(self.chunk)
 
         expr = copy_expression(expr, self, deep=False)
-        expr.attrs.pop(SPEC_STAMP_ATTR, None)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr
@@ -1362,7 +1347,7 @@ class Model:
             name,
             labels=labels,
             scaling=row_scaling,
-            attrs={**_unstamped(con.attrs), "label_range": label_range},
+            attrs={**con.attrs, "label_range": label_range},
         )
         enforce_no_multiindex(constraint, context=f"constraint {name!r}")
 
@@ -1457,7 +1442,7 @@ class Model:
             scaling=row_scaling,
             binary_var=binary_var.labels,
             binary_val=binary_val,
-            attrs={**_unstamped(base.attrs), "label_range": label_range},
+            attrs={**base.attrs, "label_range": label_range},
         )
         enforce_no_multiindex(con, context=f"constraint {name!r}")
         return self.constraints.add(con)

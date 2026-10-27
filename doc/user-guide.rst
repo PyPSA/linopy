@@ -114,10 +114,10 @@ you can declare a model as a `mathspec
 <https://mathspec.readthedocs.io>`__ YAML program attached to
 data, and let linopy build it.
 
-- :doc:`building-models-from-specs` — ``Model.from_spec`` and
-  ``model.add_spec``, attaching data to a spec, and reading named
-  expressions back through ``model.spec`` after solving. Requires
-  ``pip install "linopy[spec]"`` (Python >= 3.12).
+- :doc:`building-models-from-specs` — ``Model.from_spec``, attaching
+  data to a spec, and reading named expressions back through
+  ``model.spec`` after solving. Requires ``pip install "linopy[spec]"``
+  (Python >= 3.12).
 
 linopy supports a subset of mathspec. A constraint row that absence
 leaves without terms (a ``missing: absent`` parameter, a ``missing:

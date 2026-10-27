@@ -14,8 +14,9 @@ pytest.importorskip("mathspec")
 
 from spec_helpers import with_  # noqa: E402
 
-from linopy.spec import SpecDataError, attach, lower  # noqa: E402
-from linopy.spec.attach import parameters_read  # noqa: E402
+from linopy.spec import SpecDataError, attach  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec.attach import Attached, fill  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {
@@ -97,9 +98,13 @@ def good() -> dict[str, Any]:
     }
 
 
+def filled(attached: Attached, name: str) -> xr.DataArray:
+    return fill(attached.program, name, attached.read(name))
+
+
 def read_all(program: Any, sources: Mapping[str, Any]) -> list[xr.DataArray]:
     attached = attach(program, sources)
-    return [attached.read(name).filled for name in program.parameters]
+    return [filled(attached, name) for name in program.parameters]
 
 
 CAP_SHAPES = {
@@ -122,7 +127,7 @@ CAP_SHAPES = {
 def test_rank_two_shapes_attach_alike(
     program: Any, good: dict[str, Any], cap: Any
 ) -> None:
-    got = attach(program, {**good, "cap": cap}).read("cap").filled
+    got = filled(attach(program, {**good, "cap": cap}), "cap")
     xr.testing.assert_equal(got, CAP)
     assert got.dims == ("f", "t")
 
@@ -140,7 +145,7 @@ def test_an_unnamed_wide_frame_of_unequal_widths_is_read_by_position() -> None:
     values = np.arange(6.0).reshape(2, 3)
     frame = pd.DataFrame(values, index=list(f), columns=list(t))
     sources = {"f": list(f), "t": list(t), "cap": frame}
-    got = attach(lower(OBLONG_SPEC), sources).read("cap").filled
+    got = filled(attach(lower(OBLONG_SPEC), sources), "cap")
     xr.testing.assert_equal(
         got, xr.DataArray(values, coords={"f": f, "t": t}, name="cap")
     )
@@ -161,7 +166,7 @@ COST_SHAPES = {
 def test_rank_one_shapes_attach_alike(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = attach(program, {**good, "cost": cost}).read("cost").filled
+    got = filled(attach(program, {**good, "cost": cost}), "cost")
     xr.testing.assert_equal(got, xr.DataArray(COST, name="cost"))
 
 
@@ -244,10 +249,10 @@ def test_string_parameter_rows_attach_as_numpy_objects(
         "dict": series.to_dict(),
         "dataarray": xr.DataArray(series),
     }
-    filled, present = attach(lower(tagged), {**good, "tag": shapes[shape]}).read("tag")
-    assert filled.dtype == np.dtype(object)
-    assert filled.values[:2].tolist() == ["n", "e"]
-    assert pd.isna(filled.values[2])
+    values, present = attach(lower(tagged), {**good, "tag": shapes[shape]}).read("tag")
+    assert values.dtype == np.dtype(object)
+    assert values.values[:2].tolist() == ["n", "e"]
+    assert pd.isna(values.values[2])
     assert present.values.tolist() == [True, True, False]
 
 
@@ -259,14 +264,17 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
         "cap": CAP.sel(t=[0, 1]),
     }
     attached = attach(program, sparse)
-    lead = attached.read("lead").filled
+    lead = filled(attached, "lead")
     assert lead.dtype == np.float64
     assert lead.sel(f="a").item() == 1.0
     assert lead.sel(f=["b", "c"]).isnull().all()
-    flag = attached.read("flag").filled
+    unfilled = attached.read("flag").values
+    assert unfilled.dtype == np.float64
+    np.testing.assert_array_equal(unfilled.values, [np.nan, 1.0, np.nan])
+    flag = filled(attached, "flag")
     assert flag.dtype == bool
     assert flag.values.tolist() == [False, True, False]
-    cap = attached.read("cap").filled
+    cap = filled(attached, "cap")
     assert cap.dims == ("f", "t")
     assert cap.sel(t=2).isnull().all()
 
@@ -283,14 +291,14 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
 def test_scalar_is_broadcast_over_declared_dims(
     program: Any, good: dict[str, Any], name: str, value: Any, expected_dtype: Any
 ) -> None:
-    got = attach(program, {**good, name: value}).read(name).filled
+    got = filled(attach(program, {**good, name: value}), name)
     assert got.dims == tuple(SPEC["parameters"][name]["dims"])
     assert got.dtype == expected_dtype
     assert (got == value).all()
 
 
 def test_scalar_parameter_stays_scalar(program: Any, good: dict[str, Any]) -> None:
-    got = attach(program, good).read("rate").filled
+    got = filled(attach(program, good), "rate")
     assert got.dims == ()
     assert got.item() == 0.5
 
@@ -317,21 +325,21 @@ def with_missing(**missing: Any) -> Any:
 
 
 @pytest.mark.parametrize(
-    ("missing", "filled"),
+    ("missing", "expected"),
     [("absent", [1.0, np.nan]), ("neutral", [1.0, 0.0]), (7.5, [1.0, 7.5])],
 )
 def test_a_missing_row_reads_the_way_missing_says(
-    missing: Any, filled: list[float]
+    missing: Any, expected: list[float]
 ) -> None:
-    got = attach(with_missing(missing=missing), MODES_DATA).read("cost")
-    np.testing.assert_array_equal(got.filled.values, filled)
-    assert got.present.values.tolist() == [True, False]
+    attached = attach(with_missing(missing=missing), MODES_DATA)
+    np.testing.assert_array_equal(filled(attached, "cost").values, expected)
+    assert attached.read("cost").present.values.tolist() == [True, False]
 
 
 def test_a_missing_row_is_refused_by_default() -> None:
     attached = attach(with_missing(), MODES_DATA)
     with pytest.raises(SpecDataError, match="parameter 'cost' has no row at 1"):
-        attached.read("cost")
+        filled(attached, "cost")
 
 
 UNSUPPORTED: dict[str, tuple[dict[str, Any], str]] = {
@@ -361,7 +369,7 @@ def test_a_program_linopy_cannot_attach_is_refused(
 def test_empty_source_attaches_as_all_nan(
     program: Any, good: dict[str, Any], cost: Any
 ) -> None:
-    got = attach(program, {**good, "cost": cost}).read("cost").filled
+    got = filled(attach(program, {**good, "cost": cost}), "cost")
     assert got.dtype == np.float64
     assert got.isnull().all()
     assert got.indexes["f"].equals(F)
@@ -624,9 +632,7 @@ def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
     from_mapping = attach(program, good)
     assert from_dataset.coords["f"].equals(from_mapping.coords["f"])
     for name in program.parameters:
-        xr.testing.assert_equal(
-            from_dataset.read(name).filled, from_mapping.read(name).filled
-        )
+        xr.testing.assert_equal(filled(from_dataset, name), filled(from_mapping, name))
     xr.testing.assert_equal(
         from_dataset.relations["grp"], from_mapping.relations["grp"]
     )
@@ -653,7 +659,7 @@ def test_sources_are_read_by_key_never_iterated(
     program: Any, good: dict[str, Any]
 ) -> None:
     attached = attach(program, Unlisted(good))
-    xr.testing.assert_equal(attached.read("cap").filled, CAP)
+    xr.testing.assert_equal(filled(attached, "cap"), CAP)
 
 
 def test_a_source_key_close_to_a_declared_name_warns(
@@ -673,42 +679,6 @@ def test_a_source_key_like_no_declared_name_is_silent(
     assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
 
-def test_parameters_read_follows_names_and_masks() -> None:
-    spec = {
-        "dimensions": {"f": {"dtype": "str"}, "t": {"dtype": "int", "ordered": True}},
-        "parameters": {
-            "cost": {"dims": ["f"]},
-            "lag": {"dims": ["f"], "dtype": "int"},
-            "span": {"dims": ["f"], "dtype": "int"},
-            "on": {"dims": ["f"], "dtype": "bool"},
-            "other": {"dims": ["f"]},
-        },
-        "variables": {"x": {"dims": ["f", "t"], "bounds": {"lower": 0, "upper": 1}}},
-        "objective": {"sense": "maximize", "expression": "sum(x * other)"},
-        "expressions": {
-            "recent": "sum_back(x, along=t, window=span)",
-            "late": {
-                "dims": ["f", "t"],
-                "cases": {
-                    "active": {
-                        "when": "on",
-                        "expression": "shift(x, along=t, offset=lag, edge=0)",
-                    }
-                },
-                "otherwise": "x * cost",
-            },
-        },
-    }
-    program = lower(spec)
-    assert parameters_read(program, program.expressions) == [
-        "cost",
-        "lag",
-        "span",
-        "on",
-    ]
-    assert parameters_read(program, ["recent"]) == ["span"]
-
-
 def test_unreached_dimension_needs_no_source(good: dict[str, Any]) -> None:
     dimensions = {**SPEC["dimensions"], "z": {"dtype": "int"}}
     program = lower({**SPEC, "dimensions": dimensions})
@@ -717,7 +687,7 @@ def test_unreached_dimension_needs_no_source(good: dict[str, Any]) -> None:
 
 def test_master_coordinate_dtype_wins(program: Any, good: dict[str, Any]) -> None:
     source = CAP.assign_coords(t=T.astype("int32"))
-    got = attach(program, {**good, "cap": source}).read("cap").filled
+    got = filled(attach(program, {**good, "cap": source}), "cap")
     assert got.indexes["t"].dtype == np.int64
 
 
@@ -746,7 +716,7 @@ def test_a_flag_attaches_by_its_declaration(column: pd.Series, verdict: Any) -> 
     program = lower(FLAG_SPEC)
     sources = {"g": ["a", "b"], "active": column}
     if verdict is ACCEPTED:
-        assert attach(program, sources).read("active").filled.dtype == bool
+        assert filled(attach(program, sources), "active").dtype == bool
         return
     with pytest.raises(SpecDataError, match="declared 'bool'"):
         read_all(program, sources)

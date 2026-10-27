@@ -4,8 +4,8 @@ Program plus attached data to linopy declarations.
 A build hands every variable to linopy as its term, then adds special-ordered
 sets, constraints, the objective and the named expressions that carry a
 variable term; which linopy call each construct becomes is one branch of
-:func:`linopy.spec.evaluate.evaluate`. Everything built is stamped with the
-spec's name and framed in the order its entry declares its dims.
+:func:`linopy.spec.evaluate.evaluate`. Everything built is framed in the
+order its entry declares its dims.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _SENSE = {"minimize": "min", "maximize": "max"}
 
 def build(ctx: Context) -> None:
     """
-    Add every declaration of the program to the model of *ctx* as the spec ``ctx.name``.
+    Add every declaration of the program to the model of *ctx*.
 
     Variables, special-ordered sets, constraints, the objective and the
     named expressions holding a variable term, in that order. The program's
@@ -88,7 +88,7 @@ def _check_assumptions(ctx: Context) -> None:
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
         mask = as_linopy_mask(evaluate_where(declared.where, ctx))
-        variable = ctx.model.add_variables(
+        ctx.model.add_variables(
             lower=_bound(declared.lower, ctx, -np.inf),
             upper=_bound(declared.upper, ctx, np.inf),
             coords={d: ctx.coords[d] for d in declared.dims},
@@ -97,7 +97,6 @@ def _variables(ctx: Context) -> None:
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
         )
-        variable.spec = ctx.name
 
 
 def _bound(
@@ -138,10 +137,9 @@ def _constraints(ctx: Context) -> None:
             const = constant_of(term)
             refuse_made("comparison", params, operator.sub, const, other, scoped)
             term, other = carried(term, other)
-        built = ctx.model.add_constraints(
+        ctx.model.add_constraints(
             _framed(term, row.dims), sense, other, name=name, mask=mask
         )
-        built.spec = ctx.name
 
 
 def _check_live(
@@ -214,7 +212,6 @@ def _objective(ctx: Context) -> None:
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
     ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])
-    ctx.model.objective.expression.spec = ctx.name
 
 
 def _expressions(ctx: Context) -> None:
@@ -224,16 +221,15 @@ def _expressions(ctx: Context) -> None:
     A data-only body has no linopy term to hold and stays on the spec; so
     does one reading a ``dual``, which needs a solved model.
     """
-    unbuilt = set(unbuilt_expressions(ctx.program))
+    unbuilt = set(_unbuilt_expressions(ctx.program))
     for name, declared in ctx.program.expressions.items():
         if name in unbuilt:
             continue
         value = cast(Term, evaluate(declared.expression, ctx))
-        built = ctx.model.add_expressions(_framed(value, declared.dims), name=name)
-        built.spec = ctx.name
+        ctx.model.add_expressions(_framed(value, declared.dims), name=name)
 
 
-def unbuilt_expressions(program: ms.Program) -> list[str]:
+def _unbuilt_expressions(program: ms.Program) -> list[str]:
     """The named expressions a build leaves on the spec: one over data alone, or one reading a ``dual``."""
     return [
         name

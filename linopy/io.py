@@ -30,7 +30,7 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR, SPEC_STAMP_ATTR
+from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.constraints import Constraint
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
@@ -1045,11 +1045,6 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
-def _spec_stamp(expr: LinearExpression | QuadraticExpression) -> dict[str, str]:
-    """The attribute stamping *expr* with the spec it was built from, if any."""
-    return {SPEC_STAMP_ATTR: expr.spec} if expr.spec is not None else {}
-
-
 def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
     to_rename = set([*ds.dims, *ds.coords, *ds])
     ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
@@ -1115,11 +1110,7 @@ def to_netcdf(
     ]
     exprs = [
         with_prefix(
-            expr._to_netcdf_ds().assign_attrs(
-                name=name,
-                **{EXPR_TYPE_ATTR: expr.type},
-                **_spec_stamp(expr),
-            ),
+            expr._to_netcdf_ds().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
@@ -1128,7 +1119,6 @@ def to_netcdf(
         sense=m.objective.sense,
         scaling=m.objective.scaling,
         **{EXPR_TYPE_ATTR: m.objective.expression.type},
-        **_spec_stamp(m.objective.expression),
     )
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
@@ -1248,14 +1238,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return ds
 
     def read_expression(ds: xr.Dataset) -> LinearExpression | QuadraticExpression:
-        expr: LinearExpression | QuadraticExpression
         if ds.attrs[EXPR_TYPE_ATTR] == QuadraticExpression.__name__:
-            expr = QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
-        else:
-            expr = LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
-        if SPEC_STAMP_ATTR in ds.attrs:
-            expr.spec = ds.attrs[SPEC_STAMP_ATTR]
-        return expr
+            return QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
+        return LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
@@ -1307,11 +1292,12 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    obj_expr = read_expression(objective)
     m.objective = Objective(
-        obj_expr, m, objective.attrs["sense"], objective.attrs["scaling"]
+        read_expression(objective),
+        m,
+        objective.attrs["sense"],
+        objective.attrs["scaling"],
     )
-    m.objective.expression.attrs.update(_spec_stamp(obj_expr))
     m.objective._value = objective.attrs.get("value")
 
     m.parameters = get_prefix(ds, "parameters")
@@ -1426,8 +1412,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
         new_expr = copy_expression(expr, new_model, deep)
         new_expr.attrs["name"] = name
-        if expr.spec is not None:
-            new_expr.spec = expr.spec
         return new_expr
 
     new_model._expressions = Expressions(
@@ -1447,7 +1431,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )
-    new_model._objective.expression.attrs.update(_spec_stamp(m.objective.expression))
     new_model._objective._value = (
         float(m.objective.value)
         if (include_solution and m.objective.value is not None)

@@ -3,7 +3,7 @@ Round trips of a spec-built model through netcdf and through ``copy``.
 
 The spec itself is persisted as its YAML text and lowered again on read, so
 what has to survive besides the model is data: the master coordinates, the
-relations and the kept parameters. Labels are the delicate part — a partial
+relations and the parameters. Labels are the delicate part — a partial
 relation holds NaN in an array of strings — so every relation shape is checked
 value by value, on both netcdf engines ``test_io`` uses. No test here asserts a
 model container's dtype after a round trip: the scipy engine narrows int64.
@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -36,9 +37,13 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.spec import lower  # noqa: E402
-from linopy.spec.testing import synthetic_sources  # noqa: E402
-from linopy.testing import assert_linequal, assert_model_equal  # noqa: E402
+from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec.attach import Parameter, fill  # noqa: E402
+from linopy.testing import (  # noqa: E402
+    assert_linequal,
+    assert_model_equal,
+    synthetic_sources,
+)
 
 ENGINES = ["netcdf4", "scipy"]
 
@@ -74,6 +79,8 @@ DTYPE_SPEC: dict[str, Any] = {
         "flag": {"dims": ["s1"], "dtype": "bool"},
         "cost": {"dims": ["s1"]},
         "tag": {"dims": ["s1"], "dtype": "str"},
+        "sparse_count": {"dims": ["s1"], "dtype": "int", "missing": "neutral"},
+        "sparse_flag": {"dims": ["s1"], "dtype": "bool", "missing": "absent"},
     },
     "variables": {"x": {"dims": ["s1"], "bounds": {"lower": 0, "upper": 1}}},
     "objective": {"sense": "minimize", "expression": "sum(x * cost)"},
@@ -103,6 +110,8 @@ DTYPE_DATA: dict[str, Any] = {
     "flag": pd.Series([True, False, True], index=S1),
     "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
     "tag": pd.Series(["u", "v", "w"], index=S1),
+    "sparse_count": pd.Series([1, 2], index=S1[:2]),
+    "sparse_flag": pd.Series([True, False], index=S1[:2]),
 }
 
 
@@ -190,13 +199,30 @@ def test_a_named_expression_read_through_a_lookup_round_trips(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("name", ["count", "flag", "cost", "tag"])
-def test_a_parameter_keeps_its_dtype(tmp_path: Path, engine: str, name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("count", "i"),
+        ("flag", "b"),
+        ("cost", "f"),
+        ("tag", "O"),
+        ("sparse_count", "i"),
+        ("sparse_flag", "b"),
+    ],
+)
+def test_a_parameter_keeps_its_dtype(
+    tmp_path: Path, engine: str, name: str, kind: str
+) -> None:
     m = Model.from_spec(DTYPE_SPEC, DTYPE_DATA)
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert p.spec.parameters[name].dtype == m.spec.parameters[name].dtype
+    read = p.spec.parameters[name]
+    assert read.dtype == m.spec.parameters[name].dtype
+    assert read.isnull().equals(m.spec.parameters[name].isnull())
+    assert (
+        fill(p.spec.program, name, Parameter(read, read.notnull())).dtype.kind == kind
+    )
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -226,7 +252,7 @@ def test_every_container_shares_the_master_coordinates(
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a sparse constraint writes one"
         )
-    m = backend.add_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, sparse=backend.sparse)
     m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 
@@ -241,16 +267,11 @@ def test_every_container_shares_the_master_coordinates(
             assert index.equals(master[str(dim)]), f"{dim} differs on {holder}"
 
 
-def test_a_model_whose_expressions_all_carry_variables_writes_no_parameters(
-    tmp_path: Path,
-) -> None:
+def test_a_spec_built_model_writes_every_parameter(tmp_path: Path) -> None:
     path = tmp_path / "model.nc"
     Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
-    written = {str(n) for n in xr.load_dataset(path).data_vars}
-    assert {n for n in written if n.startswith("spec-")} == {
-        "spec-coords__snapshot",
-        "spec-coords__generator",
-    }
+    spec = read_netcdf(path).spec
+    assert set(spec.parameters.data_vars) == set(spec.program.parameters)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -267,16 +288,25 @@ def test_labelled_parameters_and_unreached_coordinates_round_trip(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-def test_a_presence_mask_round_trips_and_is_compared(
-    tmp_path: Path, engine: str
+@pytest.mark.parametrize(
+    ("position", "value"), [(0, np.nan), (3, 0.0)], ids=["a-new-hole", "a-filled-hole"]
+)
+def test_a_hole_round_trips_and_is_compared(
+    tmp_path: Path, engine: str, position: int, value: float
 ) -> None:
     m = Model.from_spec(
         with_(WHERE_SPEC, expressions={"twice": "cost * 2"}), WHERE_DATA
     )
     p = roundtrip(m, tmp_path, engine)
     assert_model_equal(m, p)
+    assert p.spec.parameters["cost"].isnull().values.tolist() == [
+        False,
+        False,
+        False,
+        True,
+    ]
 
-    p.spec.presence["cost"].values[:] = True
+    p.spec.parameters["cost"].values[position] = value
     with pytest.raises(AssertionError):
         assert_model_equal(m, p)
 
@@ -365,7 +395,7 @@ def test_a_mathspec_example_round_trips(
     tmp_path: Path, engine: str, example: str
 ) -> None:
     path = Path(EXAMPLES_DIR or "", example)
-    m = Model.from_spec(path, synthetic_sources(lower(str(path)), 3))
+    m = Model.from_spec(path, synthetic_sources(lower(path), 3))
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
@@ -380,15 +410,11 @@ TRANSFORMS: dict[str, Callable[[Model, Path], Model]] = {
 
 
 @pytest.mark.parametrize("transform", TRANSFORMS.values(), ids=TRANSFORMS.keys())
-def test_the_stamp_names_the_spec_file_through_a_copy_and_a_round_trip(
+def test_the_spec_file_names_the_spec_through_a_copy_and_a_round_trip(
     tmp_path: Path, backend: Model, transform: Callable[[Model, Path], Model]
 ) -> None:
     path = tmp_path / "dispatch.yaml"
     path.write_text(EXAMPLE_DISPATCH)
-    p = transform(backend.add_spec(path, DISPATCH_DATA), tmp_path)
+    p = transform(Model.from_spec(path, DISPATCH_DATA, sparse=backend.sparse), tmp_path)
     assert p.spec.name == "dispatch"
-    assert p.variables["p"].spec == "dispatch"
-    assert p.constraints["power_balance"].spec == "dispatch"
-    assert p.expressions["spend"].spec == "dispatch"
-    assert p.objective.expression.spec == "dispatch"
     assert p.spec.expressions["spend"].expression is p.expressions["spend"]

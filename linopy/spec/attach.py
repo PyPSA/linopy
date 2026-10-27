@@ -8,16 +8,16 @@ parameter or relation source is read for values, never for labels. Parameters
 are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out is a missing row, and the parameter's ``missing:`` says what it
-means: refused, absent (NaN beside a presence mask), neutral (0) or a value.
+means: refused, absent (NaN, ``False`` for ``bool``), neutral (0) or a value.
+Read leaves a missing row a hole, and :func:`fill` applies ``missing:``.
 """
 
 from __future__ import annotations
 
 import difflib
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import cached_property
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -60,24 +60,23 @@ _PARAMETER_SHAPES = (
 )
 
 EVOLVING_MESSAGE = (
-    "spec: Model.add_spec, Model.from_spec, model.spec and linopy.spec.attach are "
-    "newly added and their details may change in minor releases. Silence with "
+    "spec: Model.from_spec, model.spec and linopy.spec.attach are newly added "
+    "and their details may change in minor releases. Silence with "
     '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.'
 )
 
 
 class Parameter(NamedTuple):
     """
-    A parameter as a build and a fold read it.
+    A parameter's values on the master coordinates beside where the data has a row.
 
-    ``filled`` holds the values on the master coordinates, a missing row
-    filled the way the declaration's ``missing:`` says: NaN (``False`` for
-    ``bool``) where ``absent``, 0 where ``neutral``, else the literal.
-    ``present`` is where the data has a row, so a missing row stays
-    distinguishable from a supplied value equal to the fill.
+    :meth:`Attached.read` leaves a missing row a NaN hole, an ``int`` or
+    ``bool`` parameter with one then held as ``float``; :func:`fill` makes it
+    read the way the declaration's ``missing:`` says. ``present`` keeps a
+    missing row distinguishable from a supplied value equal to the fill.
     """
 
-    filled: xr.DataArray
+    values: xr.DataArray
     present: xr.DataArray
 
 
@@ -88,7 +87,8 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
     Parameters
     ----------
     program
-        The lowered spec.
+        The lowered spec: ``model.spec.program`` of a model built with
+        ``Model.from_spec``, or ``mathspec.to_spec(spec).expand("piecewise").program``.
     sources
         Data keyed by declared name. Any mapping works: membership is
         read off ``keys()``, never by iterating, and values by key. An
@@ -145,12 +145,11 @@ class Attached:
 
     def read(self, name: str) -> Parameter:
         """
-        The parameter *name* resolved from ``sources`` and aligned to ``coords``.
+        The parameter *name* resolved from ``sources`` and aligned to ``coords``, unfilled.
 
-        Resolved on every call and never cached. ``filled`` reads the way the
-        parameter's ``missing:`` says: a ``refused`` row is refused here, an
-        ``absent`` one is NaN (``False`` for ``bool``), a ``neutral`` one is 0
-        and a value is that value. ``present`` is where the data has a row.
+        Resolved on every call and never cached. A missing row is a NaN hole
+        in ``values``, which :func:`fill` makes read the way the parameter's
+        ``missing:`` says. ``present`` is where the data has a row.
 
         Raises
         ------
@@ -160,7 +159,7 @@ class Attached:
             No data, a shape no reader accepts, a rank other
             than declared, a label its dimension lacks, two rows for one
             coordinate, a null value in a row, values of another type
-            than declared, or a missing row the declaration refuses.
+            than declared.
         """
         if name not in self.program.parameters:
             raise unknown("parameter", name, self.program.parameters)
@@ -168,21 +167,20 @@ class Attached:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         declared = self.program.parameters[name]
         arr, present = _as_array(name, declared, self.sources[name], self.coords)
-        filled = _filled(name, declared, arr, present, name in self._strict)
-        return Parameter(filled, present)
+        if declared.dtype == "bool" and not bool(present.all()):
+            arr = arr.astype(float)
+        return Parameter(arr, present)
 
-    @cached_property
-    def _strict(self) -> frozenset[str]:
-        """The parameters standing where no neutral value exists: a divisor, a bound, or the whole constant side of a comparison."""
-        p = self.program
-        bounds = [b for v in p.variables.values() for b in (v.lower, v.upper)]
-        sides = [_bare(s) for c in p.constraints.values() for s in (c.lhs, c.rhs)]
-        bodies = [e.expression for e in p.expressions.values()]
-        divisors = [
-            n.divisor for n in walk(*p.roots, *bodies) if isinstance(n, ms.Divide)
-        ]
-        references = [n for n in bounds + sides if isinstance(n, ms.ParameterReference)]
-        return frozenset({r.name for r in references} | parameters_of(*divisors))
+
+def _strict_parameters(program: ms.Program) -> frozenset[str]:
+    """The parameters standing where no neutral value exists: a divisor, a bound, a whole comparison side."""
+    p = program
+    bounds = [b for v in p.variables.values() for b in (v.lower, v.upper)]
+    sides = [_bare(s) for c in p.constraints.values() for s in (c.lhs, c.rhs)]
+    bodies = [e.expression for e in p.expressions.values()]
+    divisors = [n.divisor for n in walk(*p.roots, *bodies) if isinstance(n, ms.Divide)]
+    references = [n for n in bounds + sides if isinstance(n, ms.ParameterReference)]
+    return frozenset({r.name for r in references} | parameters_of(*divisors))
 
 
 def _bare(node: ms.Expression) -> ms.Expression:
@@ -194,21 +192,6 @@ def _bare(node: ms.Expression) -> ms.Expression:
     if isinstance(node, ms.Negate):
         return _bare(node.operand)
     return node
-
-
-def parameters_read(program: ms.Program, expressions: Iterable[str]) -> list[str]:
-    """Every parameter the named *expressions* read, by node or by name, in declared order."""
-    bodies = tuple(program.expressions[e].expression for e in expressions)
-    names = set(parameters_of(*bodies))
-    for node in walk(*bodies):
-        if isinstance(node, ms.Translate) and isinstance(node.offset, str):
-            names.add(node.offset)
-        elif isinstance(node, ms.WindowSum) and isinstance(node.width, str):
-            names.add(node.width)
-        elif isinstance(node, ms.Cases):
-            for region in node.regions:
-                names |= region.when.names_read
-    return [n for n in program.parameters if n in names]
 
 
 # ---------------------------------------------------------------------------
@@ -430,10 +413,6 @@ def _check_relation(
 # ---------------------------------------------------------------------------
 
 
-def _fill(declared: ms.Parameter) -> Any:
-    return False if declared.dtype == "bool" else np.nan
-
-
 def _as_array(
     name: str,
     declared: ms.Parameter,
@@ -462,7 +441,7 @@ def _parameter_shapes(dims: Sequence[str]) -> str:
 
 
 def _everywhere(arr: xr.DataArray) -> Parameter:
-    """*arr* beside the presence of every one of its rows."""
+    """*arr* with a row at every one of its coordinates."""
     return Parameter(arr, xr.ones_like(arr, dtype=bool))
 
 
@@ -515,7 +494,7 @@ def _from_dense(
             f"out of the table, and the declaration's missing: says what that means."
         )
     onto = {d: coords[d] for d in dims}
-    return _aligned(name, _numpy(arr.transpose(*dims)), onto, _fill(declared))
+    return _aligned(name, _numpy(arr.transpose(*dims)), onto)
 
 
 def _from_frame(
@@ -596,7 +575,7 @@ def _from_rows(
     if len(dims) > 1:
         full = pd.MultiIndex.from_product(onto.values(), names=dims)
     shape = [len(index) for index in onto.values()]
-    values = series.reindex(full, fill_value=_fill(declared)).to_numpy().reshape(shape)
+    values = series.reindex(full, fill_value=np.nan).to_numpy().reshape(shape)
     present = full.isin(series.index).reshape(shape)
     arr = xr.DataArray(values, dims=dims, coords=onto, name=name)
     return Parameter(arr, xr.DataArray(present, dims=dims, coords=onto))
@@ -652,9 +631,7 @@ def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) ->
     )
 
 
-def _aligned(
-    name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index], fill: Any
-) -> Parameter:
+def _aligned(name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index]) -> Parameter:
     present = xr.ones_like(arr, dtype=bool)
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
@@ -664,18 +641,36 @@ def _aligned(
     for d, index in onto.items():
         _refuse_strangers(name, d, arr.indexes[d], index)
     return Parameter(
-        arr.reindex(onto, fill_value=fill), present.reindex(onto, fill_value=False)
+        arr.reindex(onto, fill_value=np.nan), present.reindex(onto, fill_value=False)
     )
 
 
-def _filled(
+def fill(
+    program: ms.Program,
     name: str,
-    declared: ms.Parameter,
-    arr: xr.DataArray,
-    present: xr.DataArray,
-    strict: bool,
+    parameter: Parameter,
+    strict: frozenset[str] | None = None,
 ) -> xr.DataArray:
-    """*arr* with its missing rows reading the way the declaration's ``missing:`` says."""
+    """
+    The values of *parameter* with its missing rows reading the way *program* declares *name* ``missing:``.
+
+    *parameter* is what :meth:`Attached.read` returns, so
+    ``fill(attached.program, name, attached.read(name))`` reads a parameter
+    filled. An ``absent`` row is NaN (``False`` for ``bool``), a ``neutral``
+    one 0 and a value that value; an ``int`` or ``bool`` parameter is back at
+    its declared dtype unless a row stays NaN. *strict* names the parameters
+    standing where no neutral value exists, worked out from *program* when
+    not given; pass it to skip that walk on repeated calls.
+
+    Raises
+    ------
+    SpecDataError
+        A missing row the declaration refuses, or a ``neutral`` one where
+        no neutral value exists: as a divisor, a bound, or the whole
+        constant side of a comparison.
+    """
+    arr, present = parameter
+    declared = program.parameters[name]
     missing = declared.missing
     if bool(present.all()):
         return arr
@@ -686,9 +681,11 @@ def _filled(
             f"needs a row, or the declaration says what a missing row means with missing:."
         )
     if missing == "absent":
+        if declared.dtype == "bool":
+            return _with_fill(arr, present, False, "bool")
         return arr
     if missing == "neutral":
-        if strict:
+        if name in (_strict_parameters(program) if strict is None else strict):
             raise SpecDataError(
                 f"parameter '{name}' is missing: neutral and has no row at "
                 f"{first_coordinates(~present, 3)}, and it stands where no neutral value "

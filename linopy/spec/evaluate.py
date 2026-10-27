@@ -280,7 +280,7 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:
     if isinstance(amount, str):
-        return ctx.parameter(amount).filled
+        return ctx.parameter(amount).values
     return amount
 
 

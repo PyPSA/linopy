@@ -103,7 +103,6 @@ from linopy.constants import (
     HELPER_DIMS,
     LESS_EQUAL,
     RELATION_DIM,
-    SPEC_STAMP_ATTR,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
@@ -1474,15 +1473,6 @@ class BaseExpression(ABC):
         Get the attributes of the expression
         """
         return self.data.attrs
-
-    @property
-    def spec(self) -> str | None:
-        """The name of the spec whose named expression this is; ``None`` for one built by hand."""
-        return self.attrs.get(SPEC_STAMP_ATTR)
-
-    @spec.setter
-    def spec(self, name: str) -> None:
-        self.attrs[SPEC_STAMP_ATTR] = name
 
     @property
     def coords(self) -> DatasetCoordinates:

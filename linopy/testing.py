@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
+import pandas as pd
 import scipy.sparse
 import xarray as xr
 from xarray.testing import assert_equal
@@ -10,6 +13,9 @@ from linopy.constraints import Constraint, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
+
+if TYPE_CHECKING:
+    from mathspec import program as ms
 
 
 def _align_dim_order(target: xr.Dataset, other: xr.Dataset) -> xr.Dataset:
@@ -158,17 +164,14 @@ def assert_model_equal(a: Model, b: Model) -> None:
 
     for v in a.variables:
         assert_varequal(a.variables[v], b.variables[v])
-        assert a.variables[v].spec == b.variables[v].spec
 
     for c in a.constraints:
         assert_conequal(a.constraints[c], b.constraints[c])
-        assert a.constraints[c].spec == b.constraints[c].spec
 
     assert list(a.expressions) == list(b.expressions)
 
     for e in a.expressions:
         assert_exprequal(a.expressions[e], b.expressions[e])
-        assert a.expressions[e].spec == b.expressions[e].spec
 
     assert_exprequal(a.objective.expression, b.objective.expression, check_name=False)
     assert a.objective.sense == b.objective.sense
@@ -179,9 +182,76 @@ def assert_model_equal(a: Model, b: Model) -> None:
         assert a._spec.text == b._spec.text
         assert a._spec.name == b._spec.name
         assert_equal(a._spec.parameters, b._spec.parameters)
-        assert_equal(a._spec.presence, b._spec.presence)
 
     assert a.status == b.status
     assert a.termination_condition == b.termination_condition
 
     assert a.type == b.type
+
+
+_START = "2030-01-01"
+
+
+def synthetic_sources(program: ms.Program, n: int = 3) -> dict[str, Any]:
+    """
+    Dense data for every declaration of *program*, *n* labels per dimension.
+
+    *program* is a lowered spec: ``model.spec.program`` of a model built with
+    ``Model.from_spec``, or ``mathspec.to_spec(spec).expand("piecewise").program``.
+
+    Labels are numbered after their dimension, parameters are a linear ramp,
+    and each relation cycles through the labels it maps into.
+
+    Raises
+    ------
+    SpecDataError
+        A relation that is not one key column mapping into one value column.
+    """
+    from linopy.spec.errors import SpecDataError
+
+    sources: dict[str, Any] = {
+        dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
+    }
+    for name, relation in program.relations.items():
+        if len(relation.key) != 1 or len(relation.values) != 1:
+            raise SpecDataError(
+                f"relation '{name}' keys {list(relation.key)} into {list(relation.values)}; "
+                f"synthetic data is made for one key column mapping into one value column."
+            )
+        over = relation.dim(relation.key[0])
+        into = sources[relation.dim(relation.values[0])]
+        sources[name] = pd.Series(
+            [into[i % len(into)] for i in range(n)], index=sources[over]
+        )
+    for name, parameter in program.parameters.items():
+        sources[name] = _parameter(name, parameter, sources, n)
+    return sources
+
+
+def _labels(name: str, dtype: str | None, n: int) -> pd.Index:
+    """*n* labels of the declared dtype, named after what they label."""
+    if dtype == "int":
+        return pd.Index(range(n), name=name)
+    if dtype == "datetime":
+        return pd.date_range(_START, periods=n, freq="h", name=name)
+    return pd.Index([f"{name}{i}" for i in range(n)], name=name)
+
+
+def _parameter(
+    name: str, declared: ms.Parameter, sources: dict[str, Any], n: int
+) -> Any:
+    dims = declared.dims
+    shape = [n] * len(dims)
+    if declared.dtype == "bool":
+        values: Any = np.ones(shape, dtype=bool)
+    elif declared.dtype == "int":
+        values = np.ones(shape, dtype=int)
+    elif declared.dtype == "str":
+        values = np.full(shape, "a", dtype=object)
+    elif dims:
+        values = np.broadcast_to(1.0 + np.arange(n), shape).copy()
+    else:
+        values = np.array(1.0)
+    if not dims:
+        return values.item()
+    return xr.DataArray(values, coords={d: sources[d] for d in dims}, dims=list(dims))
