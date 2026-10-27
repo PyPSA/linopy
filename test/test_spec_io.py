@@ -30,6 +30,7 @@ from spec_helpers import (  # noqa: E402
     EXAMPLES_DIR,
     WHERE_DATA,
     WHERE_SPEC,
+    needs_examples,
     solved,
     with_,
 )
@@ -315,9 +316,7 @@ def test_an_edit_to_stored_parameters_takes_effect_on_rebuild(
     xr.testing.assert_identical(rebuilt.parameters, p.parameters)
 
 
-@pytest.mark.skipif(
-    EXAMPLES_DIR is None, reason="set MATHSPEC_EXAMPLES to a mathspec examples dir"
-)
+@needs_examples
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("example", ["commitment.yaml", "operators/sum_by.yaml"])
 def test_a_mathspec_example_round_trips(

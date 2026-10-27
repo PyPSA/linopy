@@ -33,6 +33,7 @@ from spec_helpers import (  # noqa: E402
     RAGGED_Y,
     UNITS,
     curve,
+    needs_examples,
     solved,
     with_,
     yaml_dict,
@@ -77,9 +78,7 @@ EXAMPLES = (
 )
 
 
-@pytest.mark.skipif(
-    not EXAMPLES, reason="set MATHSPEC_EXAMPLES to a mathspec examples directory"
-)
+@needs_examples
 @pytest.mark.parametrize("path", [example(p) for p in EXAMPLES])
 def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     """Every whole mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
@@ -87,6 +86,64 @@ def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     m = solved(path, synthetic_sources(path), store=False)
     assert m.nvars == sum(int(m.variables[v].labels.count()) for v in program.variables)
     assert m.termination_condition in ("optimal", "infeasible")
+
+
+PYPSA = Path(EXAMPLES_DIR or "", "pypsa.yaml")
+COMMITTED = ("Generator", "Link", "Process")
+PYPSA_SCHEDULES = (
+    "Generator_p_set Link_p_set Process_p_set Line_s_set Transformer_s_set "
+    "StorageUnit_p_set StorageUnit_p_dispatch_set StorageUnit_p_store_set "
+    "StorageUnit_state_of_charge_set Store_e_set Store_p_set"
+).split()
+PYPSA_DATA: dict[str, Any] = {
+    "snapshot_weightings_generators": 1.0,
+    "StorageUnit_opens_late": False,
+    "Store_opens_late": False,
+    **{
+        f"{c}_marginal_cost_quadratic": 0.0
+        for c in (*COMMITTED, "StorageUnit", "Store")
+    },
+    "CVaR_alpha": 0.5,
+    **dict.fromkeys(PYPSA_SCHEDULES, 0.0),
+    "Line_loss_offset": 0.0,
+    "Transformer_loss_offset": 0.0,
+    "Transformer_phase_shift_min": 0.0,
+    "Transformer_phase_shift_weight": 0.0,
+    **{f"{c}_must_stay_up": False for c in COMMITTED},
+    "StorageUnit_p_min_pu": 0.0,
+    "Store_e_min_pu": 0.0,
+    "Generator_e_sum_min": -np.inf,
+    "Carrier_max_growth": 1e3,
+    **{f"{c}_maintenance_start_blocked": False for c in COMMITTED},
+}
+
+
+def pypsa_sources(**overrides: Any) -> dict[str, Any]:
+    """Two labels per dimension of synthetic data that pypsa.yaml's assumptions accept and that solves."""
+    sources = synthetic_sources(PYPSA, n=2)
+    for name, value in {**PYPSA_DATA, **overrides}.items():
+        held = sources[name]
+        sources[name] = (
+            xr.full_like(held, value) if isinstance(held, xr.DataArray) else value
+        )
+    return sources
+
+
+@needs_examples
+@pytest.mark.slow
+def test_the_pypsa_example_solves_on_data_its_assumptions_accept() -> None:
+    sources = pypsa_sources()
+    m = solved(PYPSA, sources, store=False)
+    assert m.termination_condition == "optimal"
+    assert int((m.constraints["CVaR_excess"].labels != -1).sum()) == 2
+    assert set(evaluate(PYPSA, m, sources=sources)) == set(lower(PYPSA).expressions)
+
+
+@needs_examples
+def test_the_pypsa_example_refuses_a_quadratic_cost_under_a_risk_preference() -> None:
+    sources = pypsa_sources(Generator_marginal_cost_quadratic=1.0)
+    with pytest.raises(SpecDataError, match="quadratic_without_risk_preference"):
+        Model.from_spec(PYPSA, sources, store=False)
 
 
 def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:

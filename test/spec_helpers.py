@@ -7,12 +7,17 @@ from typing import Any
 
 import mathspec
 import pandas as pd
+import pytest
 import xarray as xr
 import yaml
 
 from linopy import Model
 
 EXAMPLES_DIR = os.environ.get("MATHSPEC_EXAMPLES")
+needs_examples = pytest.mark.skipif(
+    EXAMPLES_DIR is None,
+    reason="set MATHSPEC_EXAMPLES to a mathspec examples directory",
+)
 EXAMPLE_DISPATCH = """
 description: Least-cost dispatch of a generator fleet against an hourly load.
 
