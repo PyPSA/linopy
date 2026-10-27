@@ -528,7 +528,7 @@ ZERO_AT_0 = {"t": T, "a": pd.Series([0.0, 1.0, 1.0], index=T), "b": FULL_C}
 INF_AT_0 = {"t": T, "a": pd.Series([float("inf"), 1.0, 1.0], index=T), "b": FULL_C}
 
 
-SHIFTED = "shift(a, along=t, offset=1, edge=0)"
+SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
 
 
 @pytest.mark.parametrize(
@@ -548,7 +548,7 @@ SHIFTED = "shift(a, along=t, offset=1, edge=0)"
             id="sums-beside-a-term",
         ),
         pytest.param(
-            f"x + {SHIFTED} - {SHIFTED} >= 1",
+            f"x + {SHIFTED_TERM} - {SHIFTED_TERM} >= 1",
             INF_AT_0,
             "t=1",
             id="shifts-beside-a-term",

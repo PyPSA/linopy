@@ -162,7 +162,7 @@ def grouped(over: str, labels: np.ndarray, groups: xr.DataArray) -> Groups:
     belongs = np.where(held, codes, 0)
     within = np.where(held, pd.Series(codes).groupby(codes).cumcount().to_numpy(), 0)
     counts = np.bincount(codes[held], minlength=max(len(names), 1))
-    roster = np.zeros((len(counts), max(counts.max(), 1)), dtype=int)
+    roster = np.zeros((len(counts), max(int(counts.max()), 1)), dtype=int)
     roster[codes[held], within[held]] = np.flatnonzero(held)
 
     def on_axis(values: np.ndarray) -> xr.DataArray:
