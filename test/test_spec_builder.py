@@ -42,14 +42,17 @@ import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
-from linopy.testing import synthetic_sources  # noqa: E402
+from linopy.testing import assert_conequal, synthetic_sources  # noqa: E402
 
 REFUSED: dict[str, tuple[type[Exception], str]] = {
     "operators/shift_by_parameter.yaml": (
         SpecDataError,
         "the synthetic data leaves a 0 >= demand row",
     ),
-    "pypsa.yaml": (NotImplementedError, "a quadratic constraint"),
+    "pypsa.yaml": (
+        SpecDataError,
+        "the synthetic data breaks Link_output_delay_under_uniform_weighting",
+    ),
 }
 
 
@@ -733,20 +736,52 @@ def test_an_operator_under_a_power_keeps_the_parameters_it_reads() -> None:
 
 QUADRATIC_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}},
+    "parameters": {"k": {"dims": ["t"], "missing": "absent"}},
     "variables": {
         "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
         "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
     },
-    "constraints": {"cap": {"dims": ["t"], "expression": "x * y <= 5"}},
+    "constraints": {
+        "cap": {"dims": ["t"], "where": "t > 0", "expression": "k * x * y + x <= 5"}
+    },
     "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
 }
 
 
-def test_a_quadratic_constraint_is_refused() -> None:
+def capped(expression: str) -> dict[str, Any]:
+    cap = {"dims": ["t"], "where": "t > 0", "expression": expression}
+    return with_(QUADRATIC_SPEC, constraints={"cap": cap})
+
+
+@pytest.mark.parametrize(
+    ("expression", "k"),
+    [
+        pytest.param("k * x * y + x <= 5", [0.0, 0.0, 0.0], id="zero"),
+        pytest.param("k * x * y + x <= 5", [2.0, 0.0, 0.0], id="outside-where"),
+        pytest.param("x <= k * x * y + 5", [0.0, 0.0, 0.0], id="right-hand-side"),
+        pytest.param(
+            "sum(k * x * y, over=t) + x <= 5", [0.0, 0.0], id="absent-summand"
+        ),
+    ],
+)
+def test_a_quadratic_constraint_the_data_linearises_builds(
+    expression: str, k: list[float]
+) -> None:
+    data = {"t": T, "k": pd.Series(k, index=T[: len(k)])}
+    m = Model.from_spec(capped(expression), data)
+    linear = Model.from_spec(capped("x <= 5"), data)
+    assert_conequal(m.constraints["cap"], linear.constraints["cap"], strict=False)
+
+
+@pytest.mark.parametrize("expression", ["k * x * y + x <= 5", "x <= k * x * y + 5"])
+def test_a_quadratic_constraint_the_data_keeps_is_refused(expression: str) -> None:
     with pytest.raises(
-        NotImplementedError, match="quadratic term in the objective only"
+        NotImplementedError,
+        match="constraint 'cap': 1 row.*quadratic term in the objective only",
     ):
-        Model.from_spec(QUADRATIC_SPEC, {"t": T})
+        Model.from_spec(
+            capped(expression), {"t": T, "k": pd.Series([0.0, 0.0, 2.0], index=T)}
+        )
 
 
 def test_a_quadratic_objective_builds() -> None:
@@ -755,7 +790,7 @@ def test_a_quadratic_objective_builds() -> None:
         constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
         objective={"sense": "maximize", "expression": "sum(x * y, over=t)"},
     )
-    m = Model.from_spec(spec, {"t": T})
+    m = Model.from_spec(spec, {"t": T, "k": 0.0})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
 
 

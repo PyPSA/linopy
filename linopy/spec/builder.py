@@ -19,6 +19,7 @@ import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
+from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec.context import Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
@@ -49,23 +50,12 @@ def build(ctx: Context) -> None:
     ``refused`` rows its live rows read, a named expression's whether it is
     built or left to :func:`linopy.spec.evaluate`.
     """
-    _check_supported(ctx.program)
     _variables(ctx)
     _check_assumptions(ctx)
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
     _expressions(ctx)
-
-
-def _check_supported(program: ms.Program) -> None:
-    if "constraint" in program.footprint.quadratic:
-        raise NotImplementedError(
-            "a constraint of the spec multiplies two variable-carrying operands, and linopy "
-            "carries a quadratic term in the objective only. Move the product into the "
-            "objective, or write the constraint so that at most one side of each product "
-            "holds a variable."
-        )
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -135,7 +125,10 @@ def _constraints(ctx: Context) -> None:
         lhs, rhs, sense = row.lhs, row.rhs, row.sense
         if flipped(row):
             lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
-        term, other = cast(Term, evaluate(lhs, scoped)), evaluate(rhs, scoped)
+        term, other = (
+            _linear(name, evaluate(side, scoped), rows) for side in (lhs, rhs)
+        )
+        term = cast(Term, term)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
         _check_live(name, row, term, other, rows, ctx)
@@ -147,6 +140,30 @@ def _constraints(ctx: Context) -> None:
         ctx.model.add_constraints(
             _framed(term, row.dims), sense, other, name=name, mask=mask
         )
+
+
+def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
+    """
+    One *side* of a constraint as a linear expression, refused where the data leaves
+    a product of two variables with a nonzero coefficient on a row *rows* keeps.
+
+    A product whose coefficient is zero, or one of whose variables is absent or
+    masked, holds nothing to constrain, so the row keeps its linear terms only.
+    """
+    if not isinstance(side, QuadraticExpression):
+        return side
+    paired = (side.vars != -1).all(FACTOR_DIM)
+    live = rows & (paired & (side.coeffs.fillna(0) != 0)).any(TERM_DIM)
+    if bool(live.any()):
+        raise NotImplementedError(
+            f"constraint '{name}': {int(live.sum())} row(s) multiply two variables with a "
+            f"nonzero coefficient once the data is attached, the first at "
+            f"{first_coordinates(live, 3)}, and linopy carries a quadratic term in the "
+            f"objective only. Move the product into the objective, or write the constraint "
+            f"so that at most one side of each product holds a variable."
+        )
+    vars = side.vars.max(FACTOR_DIM).where(~paired, -1)
+    return LinearExpression(side.data.assign(vars=vars), side.model)
 
 
 def _check_live(

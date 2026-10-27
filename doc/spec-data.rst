@@ -245,6 +245,12 @@ rows. To switch a feature off, say so with ``where:``, over a
   entirely, is refused rather than dropped: nothing is left to constrain, and
   the row would leave the problem without saying so. Mask it with a ``where:``
   on the constraint (`#993 <https://github.com/PyPSA/linopy/issues/993>`__).
+- linopy carries a product of two variables in the objective only. A
+  constraint whose spec multiplies two variables builds wherever the data
+  leaves no such product on a row its ``where:`` keeps: its coefficient is
+  zero, or it is an absent term left out of a sum. The row then holds its
+  linear terms only. A product the data keeps raises ``NotImplementedError`` naming
+  the constraint and its first such rows.
 
 
 Storing the data in ``m.parameters``
