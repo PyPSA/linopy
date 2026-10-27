@@ -127,7 +127,7 @@ def _both(op: str, left: xr.DataArray, right: xr.DataArray) -> xr.DataArray:
 
 def _side(node: ms.Expression, ctx: Context) -> xr.DataArray:
     """One side of an expression comparison as data, its missing rows kept so they read as exclusion."""
-    from linopy.spec.evaluate import evaluate
+    from linopy.spec.evaluator import evaluate
 
     return xr.DataArray(evaluate(node, replace(ctx, filled=False)))
 

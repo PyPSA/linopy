@@ -29,12 +29,12 @@ from linopy.spec.errors import SpecDataError
 Amount = int | xr.DataArray
 
 
-def filled(expression: Array, fill: float) -> Array:
+def _filled(expression: Array, fill: float) -> Array:
     """*expression* with every absence in it standing as *fill*."""
     return as_expression(expression).fillna(fill)
 
 
-def vacated(
+def _vacated(
     shifted: Array, operand: Array, over: str, vacated: xr.DataArray, fill: float
 ) -> Array:
     """
@@ -46,7 +46,7 @@ def vacated(
     """
     carried = (~operand.isnull()).any(over)
     keep = carried & (~shifted.isnull() | vacated)
-    return filled(shifted, fill).where(keep)
+    return _filled(shifted, fill).where(keep)
 
 
 def sum_over(array: Array, over: str) -> Array:
@@ -245,7 +245,7 @@ def sum_back(
     reached: list[xr.DataArray] = []
     for lag in range(widest):
         lagged = _gather(array, over, lag, partition, wrap, None)
-        live, term = ~lagged.isnull(), filled(lagged, 0.0)
+        live, term = ~lagged.isnull(), _filled(lagged, 0.0)
         if isinstance(within, xr.DataArray):
             live, term = live & (within > lag), term * (within > lag).astype(float)
         lagged_terms.append(term)
@@ -316,7 +316,7 @@ def _gather_by_offset(
     moved = gathered(source.clip(0, card - 1)).where(inside)
     if fill is None:
         return moved
-    return vacated(moved, array, over, ~inside, fill)
+    return _vacated(moved, array, over, ~inside, fill)
 
 
 def _per_group(offset: Amount, groups: xr.DataArray) -> Amount:
@@ -358,7 +358,7 @@ def _gather_in_groups(
     )
     if fill is None:
         return gathered
-    return vacated(gathered, array, over, groups.grouped & ~inside, fill)
+    return _vacated(gathered, array, over, groups.grouped & ~inside, fill)
 
 
 def _labelled(labels: np.ndarray, ordinals: xr.DataArray) -> xr.DataArray:

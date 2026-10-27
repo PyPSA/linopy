@@ -118,7 +118,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
-    from linopy.spec.accessor import ModelSpec, SpecLike
+    from linopy.spec.api import SpecLike
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,6 @@ class Model:
         "_piecewise_formulations",
         "_solver",
         "_sos_reformulation_state",
-        "_spec",
         "__weakref__",
     )
 
@@ -307,7 +306,6 @@ class Model:
         )
         self._solver: solvers.Solver | None = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
-        self._spec: ModelSpec | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -433,23 +431,6 @@ class Model:
         enforce_no_multiindex(parameters, context="parameters")
         self._parameters = parameters
 
-    @property
-    def spec(self) -> ModelSpec:
-        """
-        The mathspec program this model was built from, see :meth:`from_spec`.
-
-        Raises
-        ------
-        AttributeError
-            If the model was not built from a spec.
-        """
-        if self._spec is None:
-            raise AttributeError(
-                "This model was not built from a spec. Use `Model.from_spec` to "
-                "build one."
-            )
-        return self._spec
-
     @classmethod
     def from_spec(
         cls, spec: SpecLike, sources: Mapping[str, Any] | Dataset, **model_kwargs: Any
@@ -459,15 +440,20 @@ class Model:
 
         Requires the ``mathspec`` package (``pip install "linopy[spec]"``).
         Variables, constraints, the objective and the named expressions
-        holding a variable term are added as the spec declares them; the
-        spec text, its parameters and its relations are kept on
-        ``model.spec``, apart from ``model.parameters``.
+        holding a variable term are added as the spec declares them. The
+        spec's parameters, unfilled with a missing row a NaN hole, and its
+        relations are written into ``model.parameters`` under their declared
+        names; nothing else of the spec is kept. Read the named expressions
+        with :func:`linopy.spec.evaluate` and filled parameters with
+        :func:`linopy.spec.parameter`.
 
         Parameters
         ----------
         spec : str, pathlib.Path, dict or mathspec.Spec
             The spec: a path, YAML text, a mapping or a loaded ``Spec``. A
             ``str`` is always YAML text; pass a file as a ``pathlib.Path``.
+            A one-line ``str`` ending in ``.yaml`` or ``.yml`` reads like a
+            file name and is refused.
         sources : mapping or xarray.Dataset
             Data keyed by declared name: dimension labels, parameters and
             relations.
@@ -480,6 +466,8 @@ class Model:
 
         Raises
         ------
+        ValueError
+            If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
 
@@ -489,10 +477,10 @@ class Model:
             Once per session: the spec API is newly added and may change in
             minor releases.
         """
-        from linopy.spec.accessor import build_into
+        from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        model._spec = build_into(model, spec, sources)
+        build_into(model, spec, sources)
         return model
 
     @property

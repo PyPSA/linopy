@@ -47,12 +47,11 @@ objective: { sense: minimize, expression: sum(p) }
 """
 
 
-def _build(spec: str, n: int) -> linopy.Model:
+def _build(spec: str | Path, n: int) -> linopy.Model:
     import linopy
-    from linopy.spec.accessor import lower
     from linopy.testing import synthetic_sources
 
-    return linopy.Model.from_spec(spec, synthetic_sources(lower(spec), n))
+    return linopy.Model.from_spec(spec, synthetic_sources(spec, n))
 
 
 def build_spec_commitment(n: int) -> linopy.Model:
@@ -61,7 +60,7 @@ def build_spec_commitment(n: int) -> linopy.Model:
 
     if EXAMPLE is None or not EXAMPLE.exists():
         pytest.skip("set MATHSPEC_EXAMPLES to a mathspec examples directory")
-    return _build(str(EXAMPLE), n)
+    return _build(EXAMPLE, n)
 
 
 def build_spec_sum_by(n: int) -> linopy.Model:

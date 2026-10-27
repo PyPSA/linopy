@@ -44,7 +44,7 @@ class Context:
     Everything evaluating a node needs beyond the node.
 
     ``parameter`` reads a parameter by name, filled the way its
-    ``missing:`` says; a build resolves each once up front.
+    ``missing:`` says, each resolved once and cached.
     ``solved`` is the fold's switch: a build leaves it false
     and a variable enters an expression as its linopy term; a fold sets it
     true and a variable enters as its solved values, so a named expression

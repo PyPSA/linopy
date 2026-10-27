@@ -4,7 +4,7 @@ Program plus attached data to linopy declarations.
 A build hands every variable to linopy as its term, then adds special-ordered
 sets, constraints, the objective and the named expressions that carry a
 variable term; which linopy call each construct becomes is one branch of
-:func:`linopy.spec.evaluate.evaluate`. Everything built is framed in the
+:func:`linopy.spec.evaluator.evaluate`. Everything built is framed in the
 order its entry declares its dims.
 """
 
@@ -22,7 +22,7 @@ from mathspec import program as ms
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec.context import Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
-from linopy.spec.evaluate import (
+from linopy.spec.evaluator import (
     carried,
     constant_of,
     evaluate,
@@ -218,25 +218,17 @@ def _expressions(ctx: Context) -> None:
     """
     Every named expression holding a variable term added to the model.
 
-    A data-only body has no linopy term to hold and stays on the spec; so
-    does one reading a ``dual``, which needs a solved model.
+    A data-only body has no linopy term to hold, and one reading a ``dual``
+    needs a solved model: both are left to :func:`linopy.spec.evaluate`.
     """
-    unbuilt = set(_unbuilt_expressions(ctx.program))
     for name, declared in ctx.program.expressions.items():
-        if name in unbuilt:
+        body = declared.expression
+        if not ms.carries_variable(body) or any(
+            isinstance(n, ms.Dual) for n in ms.walk(body)
+        ):
             continue
-        value = cast(Term, evaluate(declared.expression, ctx))
+        value = cast(Term, evaluate(body, ctx))
         ctx.model.add_expressions(_framed(value, declared.dims), name=name)
-
-
-def _unbuilt_expressions(program: ms.Program) -> list[str]:
-    """The named expressions a build leaves on the spec: one over data alone, or one reading a ``dual``."""
-    return [
-        name
-        for name, declared in program.expressions.items()
-        if not ms.carries_variable(declared.expression)
-        or any(isinstance(n, ms.Dual) for n in ms.walk(declared.expression))
-    ]
 
 
 def _framed(

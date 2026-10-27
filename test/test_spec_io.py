@@ -1,17 +1,17 @@
 """
 Round trips of a spec-built model through netcdf and through ``copy``.
 
-The spec itself is persisted as its YAML text and lowered again on read, so
-what has to survive besides the model is data: the master coordinates, the
-relations and the parameters. Labels are the delicate part — a partial
-relation holds NaN in an array of strings — so every relation shape is checked
-value by value, on both netcdf engines ``test_io`` uses. No test here asserts a
-model container's dtype after a round trip: the scipy engine narrows int64.
+A spec-built model keeps its raw parameters and relations in
+``model.parameters``, so the netcdf file holds the data a model is rebuilt
+from with the spec. Labels are the delicate part, a partial relation holds
+NaN in an array of strings, so every relation shape is checked value by value,
+on both netcdf engines ``test_io`` uses. No test here asserts a model
+container's dtype after a round trip: the scipy engine narrows int64.
 """
 
 from __future__ import annotations
 
-import warnings
+import importlib.util
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -32,20 +32,24 @@ from spec_helpers import (  # noqa: E402
     WHERE_SPEC,
     solved,
     with_,
-    yaml_dict,
 )
 
-import linopy  # noqa: E402
 from linopy import Model, read_netcdf  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
-from linopy.spec.attach import Parameter, fill  # noqa: E402
+from linopy.spec import evaluate, parameter  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_linequal,
     assert_model_equal,
     synthetic_sources,
 )
 
-ENGINES = ["netcdf4", "scipy"]
+HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
+ENGINES = [
+    pytest.param(
+        "netcdf4",
+        marks=pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed"),
+    ),
+    "scipy",
+]
 
 S1 = pd.Index(["a", "b", "c"], name="s1")
 S2 = pd.Index(["p", "q"], name="s2")
@@ -141,30 +145,7 @@ def roundtrip(m: Model, tmp_path: Path, engine: str) -> Model:
 @pytest.mark.parametrize("engine", ENGINES)
 def test_a_spec_built_model_round_trips(tmp_path: Path, engine: str) -> None:
     m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    p = roundtrip(m, tmp_path, engine)
-
-    assert_model_equal(m, p)
-    assert p.spec.text == m.spec.text
-    assert p.spec.program.constraints == m.spec.program.constraints
-    assert set(p.spec.expressions) == set(m.spec.expressions)
-    for name in m.spec.expressions:
-        xr.testing.assert_equal(
-            m.spec.expressions[name].solution, p.spec.expressions[name].solution
-        )
-
-
-@pytest.mark.parametrize("engine", ENGINES)
-def test_the_caller_parameters_and_the_spec_ones_stay_apart(
-    tmp_path: Path, engine: str
-) -> None:
-    """A model parameter of the caller's is written beside the spec's, not into them."""
-    m = solved(with_(yaml_dict(), expressions={"twice": "cost * 2"}), DISPATCH_DATA)
-    m.parameters["cost"] = xr.DataArray([1.0, 2.0, 3.0], dims=["own"])
-    p = roundtrip(m, tmp_path, engine)
-
-    assert_model_equal(m, p)
-    xr.testing.assert_equal(p.parameters["cost"], m.parameters["cost"])
-    xr.testing.assert_equal(p.spec.parameters["cost"], m.spec.parameters["cost"])
+    assert_model_equal(m, roundtrip(m, tmp_path, engine))
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -177,7 +158,7 @@ def test_a_relation_round_trips_exactly(
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert name in p.spec.relations
+    xr.testing.assert_identical(p.parameters[name], m.parameters[name])
 
 
 AT_SPEC = with_(
@@ -200,33 +181,6 @@ def test_a_named_expression_read_through_a_lookup_round_trips(
 
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize(
-    ("name", "kind"),
-    [
-        ("count", "i"),
-        ("flag", "b"),
-        ("cost", "f"),
-        ("tag", "O"),
-        ("sparse_count", "i"),
-        ("sparse_flag", "b"),
-    ],
-)
-def test_a_parameter_keeps_its_dtype(
-    tmp_path: Path, engine: str, name: str, kind: str
-) -> None:
-    m = Model.from_spec(DTYPE_SPEC, DTYPE_DATA)
-    p = roundtrip(m, tmp_path, engine)
-
-    assert_model_equal(m, p)
-    read = p.spec.parameters[name]
-    assert read.dtype == m.spec.parameters[name].dtype
-    assert read.isnull().equals(m.spec.parameters[name].isnull())
-    assert (
-        fill(p.spec.program, name, Parameter(read, read.notnull())).dtype.kind == kind
-    )
-
-
-@pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize(
     "labels", [[10, 11, 12], [0, 1]], ids=["relabelled", "shorter"]
 )
 def test_a_hand_added_variable_keeps_its_own_labels(
@@ -238,9 +192,10 @@ def test_a_hand_added_variable_keeps_its_own_labels(
     m.add_variables(coords=[own], name="side")
     p = roundtrip(m, tmp_path, engine)
 
+    master = m.parameters.indexes["snapshot"]
     assert p.variables["side"].indexes["snapshot"].equals(own)
-    assert p.spec.coords["snapshot"].equals(m.spec.coords["snapshot"])
-    assert p.variables["p"].indexes["snapshot"].equals(m.spec.coords["snapshot"])
+    assert p.parameters.indexes["snapshot"].equals(master)
+    assert p.variables["p"].indexes["snapshot"].equals(master)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -256,7 +211,7 @@ def test_every_container_shares_the_master_coordinates(
     m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 
-    master = p.spec.coords
+    master = p.parameters.indexes
     holders = [
         *p.variables.data.values(),
         *p.constraints.data.values(),
@@ -264,14 +219,7 @@ def test_every_container_shares_the_master_coordinates(
     ]
     for holder in holders:
         for dim, index in holder.indexes.items():
-            assert index.equals(master[str(dim)]), f"{dim} differs on {holder}"
-
-
-def test_a_spec_built_model_writes_every_parameter(tmp_path: Path) -> None:
-    path = tmp_path / "model.nc"
-    Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
-    spec = read_netcdf(path).spec
-    assert set(spec.parameters.data_vars) == set(spec.program.parameters)
+            assert index.equals(master[dim]), f"{dim} differs on {holder}"
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -280,11 +228,11 @@ def test_labelled_parameters_and_unreached_coordinates_round_trip(
 ) -> None:
     """A str parameter with holes, and a dimension only a relation reaches."""
     m = Model.from_spec(TAGGED_SPEC, WHERE_DATA)
-    assert "label" in m.spec.parameters
+    assert "label" in m.parameters
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert set(p.spec.coords) == set(m.spec.coords)
+    assert set(p.parameters.indexes) == set(m.parameters.indexes)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -299,91 +247,70 @@ def test_a_hole_round_trips_and_is_compared(
     )
     p = roundtrip(m, tmp_path, engine)
     assert_model_equal(m, p)
-    assert p.spec.parameters["cost"].isnull().values.tolist() == [
-        False,
-        False,
-        False,
-        True,
-    ]
+    assert p.parameters["cost"].isnull().values.tolist() == [False, False, False, True]
 
-    p.spec.parameters["cost"].values[position] = value
+    p.parameters["cost"].values[position] = value
     with pytest.raises(AssertionError):
         assert_model_equal(m, p)
 
 
-@pytest.mark.parametrize("deep", [True, False])
-def test_a_copy_carries_the_spec(deep: bool) -> None:
-    """The copy's spec reads the copy, and only a deep copy owns its buffers."""
-    m = Model.from_spec(TAGGED_SPEC, WHERE_DATA)
-    p = m.copy(deep=deep)
-    p.spec.parameters["label"].values[1] = "changed"
-
-    assert p.spec.text == m.spec.text
-    assert p.spec.parameters["label"].values[1] == "changed"
-    assert m.spec.parameters["label"].values[1] == ("u" if deep else "changed")
+REBUILT: dict[str, tuple[Any, Any]] = {
+    "dispatch": (EXAMPLE_DISPATCH, DISPATCH_DATA),
+    "dtypes": (DTYPE_SPEC, DTYPE_DATA),
+    "relations": (RELATION_SPEC, relation_sources(2)),
+    "tagged": (TAGGED_SPEC, WHERE_DATA),
+}
 
 
-def test_a_model_without_a_spec_carries_none(tmp_path: Path) -> None:
-    m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
-    m.add_objective(x.sum())
-    path = tmp_path / "plain.nc"
-    m.to_netcdf(path)
-
-    assert "spec-text" not in xr.load_dataset(path).attrs
-    assert read_netcdf(path)._spec is None
-    assert m.copy()._spec is None
-
-
-def rewritten(tmp_path: Path, m: Model, **attrs: Any) -> Path:
-    """*m* written out, its file attributes updated with *attrs*, as another writer would have left them."""
-    path = tmp_path / "current.nc"
-    m.to_netcdf(path)
-    ds = xr.load_dataset(path).assign_attrs(attrs)
-    other = tmp_path / "other.nc"
-    ds.to_netcdf(other)
-    return other
-
-
-def test_the_file_names_the_mathspec_version(tmp_path: Path) -> None:
-    path = tmp_path / "model.nc"
-    Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA).to_netcdf(path)
-    assert xr.load_dataset(path).attrs["spec-mathspec"] == mathspec.__version__
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        read_netcdf(path)
-
-
-def test_a_file_from_another_mathspec_version_warns_and_still_reads(
-    tmp_path: Path,
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(("spec", "sources"), REBUILT.values(), ids=REBUILT.keys())
+def test_a_model_rebuilds_from_its_netcdf_parameters(
+    tmp_path: Path, engine: str, spec: Any, sources: Any
 ) -> None:
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    path = rewritten(tmp_path, m, **{"spec-mathspec": "0.0.0"})
-    with pytest.warns(UserWarning, match="lowered by mathspec 0.0.0"):
-        p = read_netcdf(path)
-    assert_model_equal(m, p)
+    m = Model.from_spec(spec, sources)
+    rebuilt = Model.from_spec(spec, roundtrip(m, tmp_path, engine).parameters)
+    assert_model_equal(rebuilt, m)
 
 
-def test_a_spec_file_reads_as_a_plain_model_without_mathspec(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("count", "i"),
+        ("flag", "b"),
+        ("cost", "f"),
+        ("tag", "O"),
+        ("sparse_count", "i"),
+        ("sparse_flag", "b"),
+    ],
+)
+def test_a_parameter_keeps_its_dtype(
+    tmp_path: Path, engine: str, name: str, kind: str
 ) -> None:
-    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
-    path = tmp_path / "model.nc"
-    m.to_netcdf(path)
-    monkeypatch.setattr(linopy.io, "find_spec", lambda name: None)
-    with pytest.warns(UserWarning, match="mathspec is not installed"):
-        p = read_netcdf(path)
+    p = roundtrip(Model.from_spec(DTYPE_SPEC, DTYPE_DATA), tmp_path, engine)
+    assert parameter(DTYPE_SPEC, p, name).dtype.kind == kind
 
-    assert p._spec is None
-    assert list(p.variables) == list(m.variables)
-    assert list(p.constraints) == list(m.constraints)
-    assert_linequal(p.objective.expression, m.objective.expression)
-    p.remove_constraints("power_balance")
-    again = tmp_path / "plain.nc"
-    p.to_netcdf(again)
-    assert "spec-text" not in xr.load_dataset(again).attrs
-    monkeypatch.undo()
-    assert read_netcdf(again)._spec is None
+
+def copied(deep: bool) -> Callable[[Model, Path, str], Model]:
+    return lambda m, tmp_path, engine: m.copy(include_solution=True, deep=deep)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize(
+    "transform",
+    [roundtrip, copied(deep=True), copied(deep=False)],
+    ids=["netcdf", "deep-copy", "shallow-copy"],
+)
+def test_evaluate_after_a_round_trip_and_a_copy(
+    tmp_path: Path, engine: str, transform: Callable[[Model, Path, str], Model]
+) -> None:
+    m = solved(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    expected = evaluate(EXAMPLE_DISPATCH, m)
+    got = evaluate(EXAMPLE_DISPATCH, transform(m, tmp_path, engine))
+
+    assert list(got) == list(expected)
+    for name, value in expected.items():
+        xr.testing.assert_allclose(got[name], value)
 
 
 @pytest.mark.skipif(
@@ -395,26 +322,8 @@ def test_a_mathspec_example_round_trips(
     tmp_path: Path, engine: str, example: str
 ) -> None:
     path = Path(EXAMPLES_DIR or "", example)
-    m = Model.from_spec(path, synthetic_sources(lower(path), 3))
+    m = Model.from_spec(path, synthetic_sources(path, 3))
     p = roundtrip(m, tmp_path, engine)
 
     assert_model_equal(m, p)
-    assert set(p.spec.coords) == set(m.spec.coords)
-
-
-TRANSFORMS: dict[str, Callable[[Model, Path], Model]] = {
-    "built": lambda m, tmp_path: m,
-    "copy": lambda m, tmp_path: m.copy(),
-    "netcdf": lambda m, tmp_path: roundtrip(m, tmp_path, "netcdf4"),
-}
-
-
-@pytest.mark.parametrize("transform", TRANSFORMS.values(), ids=TRANSFORMS.keys())
-def test_the_spec_file_names_the_spec_through_a_copy_and_a_round_trip(
-    tmp_path: Path, backend: Model, transform: Callable[[Model, Path], Model]
-) -> None:
-    path = tmp_path / "dispatch.yaml"
-    path.write_text(EXAMPLE_DISPATCH)
-    p = transform(Model.from_spec(path, DISPATCH_DATA, sparse=backend.sparse), tmp_path)
-    assert p.spec.name == "dispatch"
-    assert p.spec.expressions["spend"].expression is p.expressions["spend"]
+    assert set(p.parameters.indexes) == set(m.parameters.indexes)

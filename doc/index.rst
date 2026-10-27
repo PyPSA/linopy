@@ -118,6 +118,7 @@ This package is published under MIT license.
    migrating-to-v1
    manipulating-models
    building-models-from-specs
+   spec-data
 
 .. toctree::
    :hidden:

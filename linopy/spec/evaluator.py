@@ -30,21 +30,13 @@ _Framed = TypeVar(
 )
 
 
-def evaluate_named(name: str, ctx: Context) -> Value:
-    """The named expression *name* as its linopy term, array or number over *ctx*, framed as declared."""
+def fold(name: str, ctx: Context) -> xr.DataArray:
+    """The named expression *name* as data, folded over the solution and the parameters *ctx* holds, framed as declared."""
     declared = ctx.program.expressions[name]
     value = evaluate(declared.expression, ctx)
     if isinstance(value, xr.DataArray):
         return without_strays(value).rename(name).transpose(*declared.dims, ...)
-    return value
-
-
-def fold(name: str, ctx: Context) -> xr.DataArray:
-    """The named expression *name* as data, folded over the solution and the parameters *ctx* holds."""
-    value = evaluate_named(name, ctx)
-    if isinstance(value, float | int):
-        return xr.DataArray(float(value), name=name)
-    return cast(xr.DataArray, value)
+    return xr.DataArray(float(cast(float, value)), name=name)
 
 
 def without_strays(value: _Framed) -> _Framed:

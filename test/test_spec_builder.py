@@ -40,8 +40,8 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import SpecDataError  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
+from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import synthetic_sources  # noqa: E402
 
 MULTI_COLUMN = "linopy reads no relation of more than one key or value column"
@@ -88,7 +88,7 @@ EXAMPLES = (
 def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     """Every whole mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
     program = lower(path)
-    m = solved(path, synthetic_sources(program))
+    m = solved(path, synthetic_sources(path))
     assert m.nvars == sum(int(m.variables[v].labels.count()) for v in program.variables)
     assert m.termination_condition in ("optimal", "infeasible")
 
@@ -97,17 +97,16 @@ def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)
     assert m.objective.value == pytest.approx(2500.0)
     xr.testing.assert_allclose(m.solution["p"], DISPATCH_P)
-    spend = m.spec.expressions["spend"].solution
+    folded = evaluate(yaml_dict(), m)
+    assert list(folded) == ["spend", "usage"]
     xr.testing.assert_allclose(
-        spend, (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
+        folded["spend"], (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
     )
-    usage = m.spec.expressions["usage"].solution
-    xr.testing.assert_allclose(usage, (DISPATCH_P / [100.0, 200.0]).rename("usage"))
-    assert (
-        set(m.spec.expressions) == {"spend", "usage"} and len(m.spec.expressions) == 2
+    xr.testing.assert_allclose(
+        folded["usage"], (DISPATCH_P / [100.0, 200.0]).rename("usage")
     )
-    assert set(m.spec.parameters.data_vars) == set(m.spec.program.parameters)
-    assert m.spec.coords["generator"].equals(GENERATOR)
+    assert set(m.parameters.data_vars) == set(lower(yaml_dict()).parameters)
+    assert m.parameters.indexes["generator"].equals(GENERATOR)
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +417,8 @@ def test_a_coefficient_needs_no_row_where_its_variable_is_absent() -> None:
     data = {**ENVELOPE_DATA, "relmax": pd.Series([0.5], index=F[:1])}
     m = solved(spec, data)
     assert float(m.solution["x"].sel(f="a")) == pytest.approx(25.0)
-    assert float(m.spec.expressions["sized"].solution.sel(f="a")) == pytest.approx(25.0)
+    sized = evaluate(spec, m, "sized")["sized"]
+    assert float(sized.sel(f="a")) == pytest.approx(25.0)
 
 
 SCALAR_SWITCH: dict[str, Any] = {
@@ -490,7 +490,7 @@ def test_a_fold_reads_a_masked_slot_the_way_its_absence_says(
     spec["variables"]["p"]["missing"] = missing
     spec["expressions"] = {"spend_by_unit": "p * cost"}
     data = {**DISPATCH_DATA, "p_max": pd.Series([200.0, 0.0], index=GENERATOR)}
-    spend = solved(spec, data).spec.expressions["spend_by_unit"].solution
+    spend = evaluate(spec, solved(spec, data), "spend_by_unit")["spend_by_unit"]
     masked = spend.sel(generator="gas")
     assert bool(masked.isnull().all()) is masked_reads_nan
     if not masked_reads_nan:
@@ -562,9 +562,9 @@ def test_an_operator_under_a_power_keeps_the_parameters_it_reads() -> None:
         expressions={"e": "shift(c, along=t, offset=lag, edge=0) ** 1"},
     )
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": FULL_C, "lag": 1})
-    assert {"c", "lag"} <= set(m.spec.parameters.data_vars)
+    assert {"c", "lag"} <= set(m.parameters.data_vars)
     xr.testing.assert_allclose(
-        m.spec.expressions["e"].solution,
+        evaluate(spec, m, "e")["e"],
         xr.DataArray([0.0, 0.0, 4.0], coords={"t": T}, name="e"),
     )
 
@@ -601,12 +601,13 @@ def test_a_quadratic_objective_builds() -> None:
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
 
 
-def test_a_named_expression_reading_a_dual_stays_on_the_spec() -> None:
+def test_a_named_expression_reading_a_dual_is_not_built() -> None:
     """A dual needs a solved model, so the body cannot be folded at build time."""
     spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
     m = Model.from_spec(spec, DISPATCH_DATA)
     assert list(m.expressions) == []
-    assert set(m.spec.expressions) == {"price"}
+    with pytest.raises(AttributeError, match="no dual yet"):
+        evaluate(spec, m, "price")
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +633,7 @@ def test_a_piecewise_cost_lands_on_the_curve(
     spec: dict[str, Any], data: dict[str, Any], spend: float
 ) -> None:
     m = solved(spec, {**CURVE_DATA, **data})
-    assert m.spec.expressions["spend"].solution.item() == pytest.approx(spend)
+    assert evaluate(spec, m, "spend")["spend"].item() == pytest.approx(spend)
     assert m.objective.value == pytest.approx(spend)
 
 

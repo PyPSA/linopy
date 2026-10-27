@@ -20,7 +20,7 @@ pytest.importorskip("highspy")
 from spec_helpers import TT, WHERE_DATA, WHERE_SPEC, S, solved, with_  # noqa: E402
 
 from linopy import LinearExpression, Model, QuadraticExpression  # noqa: E402
-from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec import SpecDataError, evaluate  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -120,7 +120,9 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
     name = key.replace("-", "_")
     want = xr.DataArray(expected, coords={dims[0]: OPERATOR_DATA[dims[0]]}, dims=dims)
     built = operators_model.solution[f"y_{name}"]
-    folded = operators_model.spec.expressions[f"probe_{name}"].solution
+    folded = evaluate(operator_spec(), operators_model, f"probe_{name}")[
+        f"probe_{name}"
+    ]
     xr.testing.assert_allclose(built, want.rename(f"y_{name}"))
     xr.testing.assert_allclose(folded, want.rename(f"probe_{name}"))
 
@@ -176,14 +178,15 @@ def test_a_trailing_sum_wider_than_its_axis_is_refused() -> None:
     with pytest.raises(
         SpecDataError, match=r"asks for a window of 5 position\(s\) where 't' holds 4"
     ):
-        m = Model.from_spec(window("sum_back(x, along=t, window=5)"), WINDOW_DATA)
-        m.spec.expressions["recent"].expression
+        Model.from_spec(window("sum_back(x, along=t, window=5)"), WINDOW_DATA)
 
 
 def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
-    m = solved(window("sum_back(x, along=t, window=5, edge='wrap')"), WINDOW_DATA)
+    spec = window("sum_back(x, along=t, window=5, edge='wrap')")
     want = xr.DataArray([V.sum()] * len(TT), coords={"t": TT}, name="recent")
-    xr.testing.assert_allclose(m.spec.expressions["recent"].solution, want)
+    xr.testing.assert_allclose(
+        evaluate(spec, solved(spec, WINDOW_DATA), "recent")["recent"], want
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,11 +243,11 @@ def test_a_relation_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> N
     m = solved(spec, sources)
 
     assert m.objective.value == pytest.approx(0.0)
-    per_bus = m.spec.expressions["per_bus"]
-    assert isinstance(per_bus.expression, LinearExpression)
-    assert per_bus.expression.nterm == 0
-    assert per_bus.solution.indexes["bus"].tolist() == ["north", "south"]
-    np.testing.assert_allclose(per_bus.solution.values, [0.0, 0.0])
+    assert isinstance(m.expressions["per_bus"], LinearExpression)
+    assert m.expressions["per_bus"].nterm == 0
+    per_bus = evaluate(spec, m, "per_bus")["per_bus"]
+    assert per_bus.indexes["bus"].tolist() == ["north", "south"]
+    np.testing.assert_allclose(per_bus.values, [0.0, 0.0])
 
 
 def test_a_quadratic_term_sums_by_group_and_stays_quadratic() -> None:
@@ -264,9 +267,9 @@ def test_a_quadratic_term_sums_by_group_and_stays_quadratic() -> None:
 
     assert m.is_quadratic
     assert m.objective.value == pytest.approx(2.0)
-    per_bus = m.spec.expressions["per_bus"]
-    assert isinstance(per_bus.expression, QuadraticExpression)
-    np.testing.assert_allclose(per_bus.solution.values, [2.0, 0.0])
+    assert isinstance(m.expressions["per_bus"], QuadraticExpression)
+    per_bus = evaluate(spec, m, "per_bus")["per_bus"]
+    np.testing.assert_allclose(per_bus.values, [2.0, 0.0])
 
 
 def test_a_member_with_no_value_is_still_refused_through_a_group() -> None:
@@ -284,7 +287,7 @@ def test_a_sum_over_several_axes_collapses_each() -> None:
     }
     m = solved(spec, {"t": TT, "s": S})
     assert m.constraints["cap"].lhs.nterm == len(TT) * len(S)
-    assert float(m.spec.expressions["total"].solution) == pytest.approx(3.0)
+    assert float(evaluate(spec, m, "total")["total"]) == pytest.approx(3.0)
 
 
 SELF_MAP_SPEC: dict[str, Any] = {
@@ -318,8 +321,8 @@ def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
     m.solve(solver_name="highs", output_flag=False)
     want = [0.0, 1.0, 6.0]
     assert m.solution["y"].values.tolist() == pytest.approx(want)
-    for name in ("terms", "data"):
-        assert m.spec.expressions[name].solution.values.tolist() == pytest.approx(want)
+    for folded in evaluate(SELF_MAP_SPEC, m, "terms", "data").values():
+        assert folded.values.tolist() == pytest.approx(want)
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +402,7 @@ def test_a_member_a_relation_sends_nowhere_reaches_nothing(key: str) -> None:
     m = solved(operator_spec(), data)
     _, dims, _ = OPERATORS[key]
     name = key.replace("-", "_")
-    folded = m.spec.expressions[f"probe_{name}"].solution
+    folded = evaluate(operator_spec(), m, f"probe_{name}")[f"probe_{name}"]
     want = xr.DataArray(
         PARTIAL_CASES[key], coords={dims[0]: OPERATOR_DATA[dims[0]]}, dims=dims
     )
@@ -427,5 +430,7 @@ def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
         ),
     }
     m = solved(operator_spec(), data)
-    folded = m.spec.expressions["probe_sum_back_group_width"].solution
+    folded = evaluate(operator_spec(), m, "probe_sum_back_group_width")[
+        "probe_sum_back_group_width"
+    ]
     assert bool(folded.isnull().all())

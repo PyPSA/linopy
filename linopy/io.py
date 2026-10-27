@@ -13,7 +13,6 @@ import time
 import warnings
 from collections.abc import Callable
 from importlib.metadata import version
-from importlib.util import find_spec
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1045,6 +1044,65 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
+CODED_ATTR = "_linopy_coded"
+CATEGORIES_SUFFIX = "__categories"
+CATEGORY_DIM_SUFFIX = "__category"
+
+
+def _encode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Write each object-dtype data variable as int32 codes into its own categories.
+
+    A hole is ``-1``. A variable without any present value gets no categories
+    variable, since netCDF3 holds one zero-length (unlimited) dimension only.
+
+    Raises
+    ------
+    TypeError
+        A variable mixes values of different types, e.g. ``str`` and ``int``.
+    """
+    encoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.dtype != object:
+            continue
+        codes, categories = pd.factorize(arr.to_numpy().ravel())
+        inferred = pd.api.types.infer_dtype(categories, skipna=True)
+        if inferred.startswith("mixed"):
+            raise TypeError(
+                f"Cannot write object variable '{name}' holding mixed types ({inferred})."
+            )
+        encoded[name] = xr.DataArray(
+            codes.astype(np.int32).reshape(arr.shape),
+            arr.coords,
+            arr.dims,
+            attrs=arr.attrs | {CODED_ATTR: "object"},
+        )
+        if len(categories):
+            encoded[f"{name}{CATEGORIES_SUFFIX}"] = (
+                f"{name}{CATEGORY_DIM_SUFFIX}",
+                np.asarray(categories.tolist()),
+            )
+    return encoded
+
+
+def _decode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """Restore the object-dtype data variables :func:`_encode_objects` wrote, NaN at the holes."""
+    decoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.attrs.get(CODED_ATTR) != "object":
+            continue
+        table = f"{name}{CATEGORIES_SUFFIX}"
+        codes = arr.to_numpy()
+        values = np.full(codes.shape, np.nan, dtype=object)
+        if table in ds.data_vars:
+            categories = ds[table].to_numpy().astype(object)
+            values[codes >= 0] = categories[codes[codes >= 0]]
+            decoded = decoded.drop_vars(table)
+        attrs = {k: v for k, v in arr.attrs.items() if k != CODED_ATTR}
+        decoded[name] = xr.DataArray(values, arr.coords, arr.dims, attrs=attrs)
+    return decoded
+
+
 def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
     to_rename = set([*ds.dims, *ds.coords, *ds])
     ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
@@ -1123,18 +1181,11 @@ def to_netcdf(
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "parameters")]
-    specs: list[xr.Dataset] = []
-    if m._spec is not None:
-        from linopy.spec.netcdf import encode
-
-        specs = [with_prefix(encode(m._spec), "spec")]
+    params = [with_prefix(_encode_objects(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     scalars["sparse"] = m.sparse
-    ds = xr.merge(
-        vars + cons + exprs + obj + params + specs, combine_attrs="drop_conflicts"
-    )
+    ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
     ds.attrs[NETCDF_LAYOUT_ATTR] = NETCDF_LAYOUT
@@ -1224,7 +1275,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return k[len(prefix) + 1 :]
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if owners[str(k)] == prefix]]
+        owned = {c: ds.variables[c] for c in ds.coords if owners[str(c)] == prefix}
+        ds = ds[[k for k in ds if owners[str(k)] == prefix]].assign_coords(owned)
         ds = ds.drop_vars(
             [c for c in ds.coords if ds[c].ndim == 0 and owners[str(c)] != prefix]
         )
@@ -1258,7 +1310,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         kind: container_names(kind)
         for kind in ("variables", "expressions", "constraints")
     }
-    prefixes = {"objective", "parameters", "spec"}.union(*containers.values())
+    prefixes = {"objective", "parameters"}.union(*containers.values())
 
     def owner(k: str) -> str | None:
         while "-" in k:
@@ -1300,20 +1352,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     )
     m.objective._value = objective.attrs.get("value")
 
-    m.parameters = get_prefix(ds, "parameters")
-
-    if any(owners[k] == "spec" for k in ds.attrs):
-        if find_spec("mathspec") is None:
-            warnings.warn(
-                f"'{path}' holds a spec and mathspec is not installed; loaded as a "
-                f"plain model, without model.spec. Install mathspec to read the spec.",
-                UserWarning,
-                stacklevel=2,
-            )
-        else:
-            from linopy.spec.netcdf import decode
-
-            m._spec = decode(m, get_prefix(ds, "spec"))
+    m.parameters = _decode_objects(get_prefix(ds, "parameters"))
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
@@ -1438,8 +1477,6 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     )
 
     new_model._parameters = m._parameters.copy(deep=deep)
-    if m._spec is not None:
-        new_model._spec = m._spec._reattach(new_model, deep=deep)
     new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
     for attr in m.scalar_attrs:

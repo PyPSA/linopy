@@ -20,8 +20,7 @@ if find_spec("mathspec") is None:
         message = "linopy.spec needs Python >= 3.12. " + message
     raise ImportError(message)
 
-from linopy.spec.accessor import Declaration, ModelSpec, NamedExpression
-from linopy.spec.attach import attach
+from linopy.spec.api import evaluate, parameter
 from linopy.spec.errors import SpecDataError
 
-__all__ = ["Declaration", "ModelSpec", "NamedExpression", "SpecDataError", "attach"]
+__all__ = ["SpecDataError", "evaluate", "parameter"]

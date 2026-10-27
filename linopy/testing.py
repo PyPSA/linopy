@@ -17,6 +17,8 @@ from linopy.variables import Variable, _var_unwrap
 if TYPE_CHECKING:
     from mathspec import program as ms
 
+    from linopy.spec.api import SpecLike
+
 
 def _align_dim_order(target: xr.Dataset, other: xr.Dataset) -> xr.Dataset:
     """
@@ -177,12 +179,6 @@ def assert_model_equal(a: Model, b: Model) -> None:
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
 
-    assert (a._spec is None) == (b._spec is None)
-    if a._spec is not None and b._spec is not None:
-        assert a._spec.text == b._spec.text
-        assert a._spec.name == b._spec.name
-        assert_equal(a._spec.parameters, b._spec.parameters)
-
     assert a.status == b.status
     assert a.termination_condition == b.termination_condition
 
@@ -192,34 +188,34 @@ def assert_model_equal(a: Model, b: Model) -> None:
 _START = "2030-01-01"
 
 
-def synthetic_sources(program: ms.Program, n: int = 3) -> dict[str, Any]:
+def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     """
-    Dense data for every declaration of *program*, *n* labels per dimension.
+    Dense data for every declaration of *spec*, *n* labels per dimension.
 
-    *program* is a lowered spec: ``model.spec.program`` of a model built with
-    ``Model.from_spec``, or ``mathspec.to_spec(spec).expand("piecewise").program``.
+    *spec* takes every form :meth:`Model.from_spec` does: a path, YAML text,
+    a mapping or a ``mathspec.Spec``.
 
     Labels are numbered after their dimension, parameters are a linear ramp,
     and each relation cycles through the labels it maps into.
 
     Raises
     ------
+    TypeError
+        *spec* is none of these, such as a lowered ``Program``.
     SpecDataError
         A relation that is not one key column mapping into one value column.
     """
-    from linopy.spec.errors import SpecDataError
+    from linopy.spec.api import normalize_spec
+    from linopy.spec.attach import key_value
+
+    program = normalize_spec(spec)
 
     sources: dict[str, Any] = {
         dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
     }
     for name, relation in program.relations.items():
-        if len(relation.key) != 1 or len(relation.values) != 1:
-            raise SpecDataError(
-                f"relation '{name}' keys {list(relation.key)} into {list(relation.values)}; "
-                f"synthetic data is made for one key column mapping into one value column."
-            )
-        over = relation.dim(relation.key[0])
-        into = sources[relation.dim(relation.values[0])]
+        over, target = key_value(name, relation)
+        into = sources[target]
         sources[name] = pd.Series(
             [into[i % len(into)] for i in range(n)], index=sources[over]
         )

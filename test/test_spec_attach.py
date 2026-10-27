@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections import Counter
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 import numpy as np
@@ -14,9 +15,9 @@ pytest.importorskip("mathspec")
 
 from spec_helpers import with_  # noqa: E402
 
-from linopy.spec import SpecDataError, attach  # noqa: E402
-from linopy.spec.accessor import lower  # noqa: E402
-from linopy.spec.attach import Attached, fill  # noqa: E402
+from linopy.spec import SpecDataError  # noqa: E402
+from linopy.spec.api import lower  # noqa: E402
+from linopy.spec.attach import Attached, attach, fill  # noqa: E402
 
 SPEC: dict[str, Any] = {
     "dimensions": {
@@ -102,9 +103,17 @@ def filled(attached: Attached, name: str) -> xr.DataArray:
     return fill(attached.program, name, attached.read(name))
 
 
-def read_all(program: Any, sources: Mapping[str, Any]) -> list[xr.DataArray]:
+def read_all(
+    program: Any, sources: Mapping[str, Any] | xr.Dataset
+) -> list[xr.DataArray]:
     attached = attach(program, sources)
     return [filled(attached, name) for name in program.parameters]
+
+
+def as_dataset(sources: Mapping[str, Any]) -> xr.Dataset:
+    dims = {d: sources[d] for d in SPEC["dimensions"]}
+    values = {k: xr.DataArray(v) for k, v in sources.items() if k not in dims}
+    return xr.Dataset(values, coords=dims)
 
 
 CAP_SHAPES = {
@@ -117,6 +126,10 @@ CAP_SHAPES = {
     "tidy-frame-extra-column": CAP.to_series()
     .reset_index(name="value")
     .assign(note="x"),
+    "tidy-frame-named-column": CAP.to_series().reset_index(name="cap"),
+    "tidy-frame-named-column-beside-value": CAP.to_series()
+    .reset_index(name="cap")
+    .assign(value=-1.0),
     "wide-frame": CAP.to_pandas(),
     "wide-frame-transposed": CAP.to_pandas().T,
     "dict": CAP.to_series().to_dict(),
@@ -159,6 +172,7 @@ COST_SHAPES = {
     "whole-numbers": COST.astype(int),
     "tidy-frame": COST.reset_index(name="value"),
     "indexed-frame": COST.to_frame("value"),
+    "indexed-frame-named-column": COST.to_frame("cost"),
 }
 
 
@@ -168,6 +182,23 @@ def test_rank_one_shapes_attach_alike(
 ) -> None:
     got = filled(attach(program, {**good, "cost": cost}), "cost")
     xr.testing.assert_equal(got, xr.DataArray(COST, name="cost"))
+
+
+def test_a_square_long_frame_is_read_long(program: Any, good: dict[str, Any]) -> None:
+    diagonal = pd.DataFrame({"f": list(F), "t": list(T), "cap": [1.0, 2.0, 3.0]})
+    values, present = attach(program, {**good, "cap": diagonal}).read("cap")
+    np.testing.assert_array_equal(present.values, np.eye(3, dtype=bool))
+    np.testing.assert_array_equal(np.diag(values.values), [1.0, 2.0, 3.0])
+
+
+def test_a_hole_in_a_wide_frame_is_a_missing_row(
+    program: Any, good: dict[str, Any]
+) -> None:
+    wide = CAP.to_pandas()
+    wide.loc["a", 1] = np.nan
+    values, present = attach(program, {**good, "cap": wide}).read("cap")
+    xr.testing.assert_equal(present, CAP != 4.0)
+    xr.testing.assert_equal(values, CAP.where(CAP != 4.0))
 
 
 DIMENSION_SHAPES = {
@@ -188,6 +219,31 @@ def test_dimension_shapes_keep_source_order(
     assert coords["f"].tolist() == ["b", "a", "c"]
     assert coords["f"].name == "f"
     assert list(coords) == ["f", "t", "g"]
+
+
+def arrow_strings() -> Any:
+    pytest.importorskip("pyarrow")
+    return pd.array(list(F), dtype=pd.StringDtype("pyarrow"))
+
+
+DIMENSION_SOURCES: dict[str, tuple[str, Callable[[], Any], list[Any]]] = {
+    "set": ("f", lambda: set(F), ["a", "b", "c"]),
+    "frozenset": ("f", lambda: frozenset(F), ["a", "b", "c"]),
+    "string-python": ("f", lambda: pd.array(list(F), dtype="string"), list(F)),
+    "string-pyarrow": ("f", arrow_strings, list(F)),
+    "categorical": ("f", lambda: pd.Categorical(list(F)), list(F)),
+    "masked-int": ("t", lambda: pd.array(list(T), dtype="Int64"), list(T)),
+}
+
+
+@pytest.mark.parametrize("case", DIMENSION_SOURCES)
+def test_dimension_sources_beyond_sequences(
+    program: Any, good: dict[str, Any], case: str
+) -> None:
+    dim, make, expected = DIMENSION_SOURCES[case]
+    attached = attach(program, {**good, dim: make()})
+    assert attached.coords[dim].tolist() == expected
+    xr.testing.assert_equal(filled(attached, "cap"), CAP.sel({dim: expected}))
 
 
 def test_relation_is_padded_onto_the_dimension(
@@ -336,10 +392,50 @@ def test_a_missing_row_reads_the_way_missing_says(
     assert attached.read("cost").present.values.tolist() == [True, False]
 
 
-def test_a_missing_row_is_refused_by_default() -> None:
-    attached = attach(with_missing(), MODES_DATA)
+@pytest.mark.parametrize(
+    "cost",
+    [{"a": 1.0}, xr.DataArray([1.0, np.nan], coords={"f": ["a", "b"]})],
+    ids=["row-left-out", "hole-in-a-dataarray"],
+)
+def test_a_missing_row_is_refused_by_default(cost: Any) -> None:
+    attached = attach(with_missing(), {**MODES_DATA, "cost": cost})
     with pytest.raises(SpecDataError, match="parameter 'cost' has no row at 1"):
         filled(attached, "cost")
+
+
+STR_HOLE = np.array(["x", np.nan, "z"], dtype=object)
+HOLES = [
+    pytest.param("float", "absent", [1.0, np.nan, 3.0], id="float"),
+    pytest.param("float", "neutral", [1.0, 0.0, 3.0], id="float-0"),
+    pytest.param("int", "absent", [1.0, np.nan, 3.0], id="int"),
+    pytest.param("int", "neutral", [1, 0, 3], id="int-0"),
+    pytest.param("int", 7, [1, 7, 3], id="int-7"),
+    pytest.param("bool", "absent", [True, False, False], id="bool"),
+    pytest.param("str", "absent", STR_HOLE, id="str"),
+]
+HELD = {
+    "float": [1.0, np.nan, 3.0],
+    "int": [1.0, np.nan, 3.0],
+    "bool": [1.0, np.nan, 0.0],
+}
+
+
+@pytest.mark.parametrize("source", ["dataarray", "dataset"])
+@pytest.mark.parametrize(("dtype", "missing", "expected"), HOLES)
+def test_a_hole_in_a_labelled_source_is_a_missing_row(
+    good: dict[str, Any], dtype: str, missing: Any, expected: Any, source: str
+) -> None:
+    spec = with_(
+        SPEC, parameters={"p": {"dims": ["f"], "dtype": dtype, "missing": missing}}
+    )
+    sources = {**good, "p": xr.DataArray(HELD.get(dtype, STR_HOLE), coords={"f": F})}
+    attached = attach(
+        lower(spec), as_dataset(sources) if source == "dataset" else sources
+    )
+    assert attached.read("p").present.values.tolist() == [True, False, True]
+    got = filled(attached, "p")
+    assert got.dtype == np.asarray(expected).dtype
+    xr.testing.assert_equal(got, xr.DataArray(expected, coords={"f": F}))
 
 
 UNSUPPORTED: dict[str, tuple[dict[str, Any], str]] = {
@@ -416,6 +512,11 @@ REFUSALS = [
         id="unknown-labels-rows-in-source-order",
     ),
     pytest.param(
+        {"cap": CAP.assign_coords(t=[0.0, 1.0, 5.0])},
+        r"not coordinates of it: 5\.0\.",
+        id="unknown-float-label-among-matching-ones",
+    ),
+    pytest.param(
         {"cost": DUP_ROWS},
         r"parameter 'cost' has more than one row for a coordinate: f='a' \(2 rows\)",
         id="duplicated-coordinate-row",
@@ -467,9 +568,24 @@ REFUSALS = [
         id="wide-frame-unnamed-square",
     ),
     pytest.param(
-        {"cap": CAP.where(CAP != 4.0)},
-        r"parameter 'cap' holds 1 null or NaN value\(s\), the first at f='a', t=1",
-        id="dense-nan",
+        {"lead": xr.DataArray([1.0, 0.0, 1.0], coords={"f": F})},
+        r"'lead' is declared 'int'.*'float'",
+        id="float-grid-without-hole-for-int",
+    ),
+    pytest.param(
+        {"lead": xr.DataArray([1.5, np.nan, 1.0], coords={"f": F})},
+        r"'lead' is declared 'int'.*1\.5 are not whole numbers",
+        id="fraction-in-a-grid-with-a-hole-for-int",
+    ),
+    pytest.param(
+        {"flag": xr.DataArray([2.0, np.nan, 1.0], coords={"f": F})},
+        r"'flag' is declared 'bool'.*2\.0 are not 0 or 1",
+        id="two-in-a-grid-with-a-hole-for-bool",
+    ),
+    pytest.param(
+        {"cap": CAP.assign_coords(t=["0", "1", "2"])},
+        r"parameter 'cap' has 'str' label\(s\) in dimension 't'.*differ in type, not spelling",
+        id="str-labels-on-an-int-dimension",
     ),
     pytest.param(
         {"cap": xr.DataArray(np.ones((3, 3)), dims=["f", "t"])},
@@ -541,6 +657,11 @@ REFUSALS = [
     ),
     pytest.param({"f": None}, r"dimension 'f' has no index", id="missing-dimension"),
     pytest.param(
+        {"f": {"a", 1}},
+        r"index for dimension 'f' arrived as a set.*do not sort",
+        id="dimension-set-that-does-not-sort",
+    ),
+    pytest.param(
         {"f": {"a": 1}},
         r"index for dimension 'f': cannot read labels out of dict",
         id="dimension-shape",
@@ -582,6 +703,11 @@ REFUSALS = [
         {"grp": {"zz": "n"}},
         r"relation 'grp' maps 'zz', which are not labels of 'f'",
         id="relation-stray-key",
+    ),
+    pytest.param(
+        {"grp": {1: "n"}},
+        r"relation 'grp' has 'int' label\(s\) in dimension 'f'.*differ in type",
+        id="relation-int-key-on-a-str-dimension",
     ),
     pytest.param(
         {"grp": {"a": "zz"}},
@@ -626,9 +752,7 @@ def test_int_labels_are_shown_as_written(program: Any, good: dict[str, Any]) -> 
 
 
 def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
-    dims = {"f": F, "t": T, "g": ["n", "e"]}
-    values = {k: xr.DataArray(v) for k, v in good.items() if k not in dims}
-    from_dataset = attach(program, xr.Dataset(values, coords=dims))
+    from_dataset = attach(program, as_dataset(good))
     from_mapping = attach(program, good)
     assert from_dataset.coords["f"].equals(from_mapping.coords["f"])
     for name in program.parameters:
@@ -641,8 +765,10 @@ def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
 class Unlisted(Mapping[str, Any]):
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
+        self.reads: list[str] = []
 
     def __getitem__(self, key: str) -> Any:
+        self.reads.append(key)
         return self.data[key]
 
     def __iter__(self) -> Iterator[str]:
@@ -655,11 +781,12 @@ class Unlisted(Mapping[str, Any]):
         return self.data.keys()
 
 
-def test_sources_are_read_by_key_never_iterated(
+def test_sources_are_read_by_key_once_never_iterated(
     program: Any, good: dict[str, Any]
 ) -> None:
-    attached = attach(program, Unlisted(good))
-    xr.testing.assert_equal(filled(attached, "cap"), CAP)
+    source = Unlisted(good)
+    read_all(program, source)
+    assert Counter(source.reads) == dict.fromkeys(good, 1)
 
 
 def test_a_source_key_close_to_a_declared_name_warns(
@@ -776,6 +903,40 @@ def test_a_relation_defect_is_refused(override: dict[str, Any], match: str) -> N
     program = lower(RELATION_SPEC)
     with pytest.raises(SpecDataError, match=match):
         read_all(program, sources_from(RELATION_GOOD, override))
+
+
+def test_a_relation_with_nan_in_a_dataarray_is_partial(good: dict[str, Any]) -> None:
+    grp = xr.DataArray(np.array(["n", np.nan, "n"], dtype=object), coords={"f": F})
+    got = attach(lower(SPEC), {**good, "grp": grp}).relations["grp"]
+    expected = attach(lower(SPEC), {**good, "grp": {"b": "n", "c": "n"}}).relations[
+        "grp"
+    ]
+    xr.testing.assert_identical(got, expected)
+    refused = with_(SPEC, relations={"grp": {"key": "f", "values": "g"}})
+    with pytest.raises(
+        SpecDataError, match=r"relation 'grp' has no row for 1 'f' label"
+    ):
+        attach(lower(refused), {**good, "grp": grp})
+
+
+def test_datetime_labels_given_as_text_are_a_type_mismatch() -> None:
+    snapshot = pd.date_range("2025-01-01", periods=3, freq="h", name="snapshot")
+    spec = {
+        "dimensions": {"snapshot": {"dtype": "datetime"}},
+        "parameters": {"load": {"dims": ["snapshot"]}},
+        "variables": {
+            "p": {"dims": ["snapshot"], "bounds": {"lower": 0, "upper": "load"}}
+        },
+        "objective": {"sense": "maximize", "expression": "sum(p)"},
+    }
+    from_sql = pd.DataFrame(
+        {"snapshot": snapshot.astype(str), "value": [1.0, 2.0, 3.0]}
+    )
+    attached = attach(lower(spec), {"snapshot": snapshot, "load": from_sql})
+    with pytest.raises(
+        SpecDataError, match=r"differ in type, not spelling.*pd\.to_datetime"
+    ):
+        attached.read("load")
 
 
 def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:

@@ -115,9 +115,12 @@ you can declare a model as a `mathspec
 data, and let linopy build it.
 
 - :doc:`building-models-from-specs` — ``Model.from_spec``, attaching
-  data to a spec, and reading named expressions back through
-  ``model.spec`` after solving. Requires ``pip install "linopy[spec]"``
+  data to a spec, solving, and folding named expressions with
+  ``linopy.spec.evaluate``. Requires ``pip install "linopy[spec]"``
   (Python >= 3.12).
+- :doc:`spec-data` — the source contract and missing rows, the data in
+  ``model.parameters``, reading results, saving and rebuilding,
+  typesetting and variants.
 
 linopy supports a subset of mathspec. A constraint row that absence
 leaves without terms (a ``missing: absent`` parameter, a ``missing:
