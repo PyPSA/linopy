@@ -20,7 +20,7 @@ from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
-from linopy.spec.attach import Parameter
+from linopy.spec.attach import Parameter, Table
 from linopy.variables import Variable
 
 Term = Variable | LinearExpression | QuadraticExpression
@@ -58,7 +58,7 @@ class Context:
     model: Model
     program: ms.Program
     coords: Mapping[str, pd.Index]
-    relations: Mapping[str, xr.DataArray]
+    relations: Mapping[str, Table]
     parameter: Callable[[str], Parameter]
     solved: bool = False
     filled: bool = True

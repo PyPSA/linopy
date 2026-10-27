@@ -84,12 +84,13 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.DimensionPosition):
         return _position(node, ctx)
     if isinstance(node, ms.RelationComparison):
-        arr = ctx.relations[node.name]
+        arr = ctx.relations[node.name].column(node.column)
         return _compared(arr, node.op, node.value) & arr.notnull()
     if isinstance(node, ms.RelationPairComparison):
-        return _both(node.op, ctx.relations[node.name], ctx.relations[node.other])
+        left = ctx.relations[node.name].column(node.column)
+        return _both(node.op, left, ctx.relations[node.other].column(node.other_column))
     if isinstance(node, ms.RelationDefined):
-        return ctx.relations[node.name].notnull()
+        return ctx.relations[node.name].defined()
     if isinstance(node, ms.Not):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.And):
@@ -100,9 +101,32 @@ def _node(node: ms.Condition, ctx: Context) -> xr.DataArray:
 
 
 def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
-    """*arr* read through the relation *columns* name, one value per row of its key."""
-    relation = ctx.relations[columns.name]
-    return operators.at(arr, relation, into=columns.dropped_dims[0])
+    """
+    *arr* read through the relation *columns* name, one value per key tuple.
+
+    *arr* is read along each dimension *columns* joins on: at the label a
+    value column holds, and along a key column it carries at the key's own label.
+    """
+    table = ctx.relations[columns.name]
+    present = table.defined()
+    positions = {}
+    for role in columns.joined:
+        dim = columns.dim(role)
+        labels = present[dim] if role in table.declared.key else table.column(role)
+        positions[dim] = operators.positions_of(labels, arr.indexes[dim])
+    return operators.at(arr, positions, present)
+
+
+def groups_of(partition: ms.Partition, ctx: Context) -> xr.DataArray:
+    """The group of each coordinate along the axis *partition* steps, named for the dimension the group column is over."""
+    if partition.joined or len(partition.grouped) != 1:
+        raise SpecDataError(
+            f"within={partition.name}[...] partitions by {list(partition.grouped)} and joins "
+            f"on the key column(s) {list(partition.joined)}, and linopy partitions by one "
+            f"value column of a relation keyed by the stepped dimension alone."
+        )
+    role = partition.grouped[0]
+    return ctx.relations[partition.name].column(role).rename(partition.dim(role))
 
 
 def _defined(name: str, ctx: Context) -> xr.DataArray:
@@ -140,8 +164,7 @@ def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:
 def _position(node: ms.DimensionPosition, ctx: Context) -> xr.DataArray:
     labels = ctx.coords[node.name]
     if node.partition is not None:
-        groups = ctx.relations[node.partition.name]
-        arr = _group_offsets(node, groups, np.asarray(labels))
+        arr = _group_offsets(node, node.partition, np.asarray(labels), ctx)
         return _bool(_COMPARISONS[node.op](arr, 0) & arr.notnull())
     at = node.position + len(labels) if node.position < 0 else node.position
     if not 0 <= at < len(labels):
@@ -157,17 +180,17 @@ def _position(node: ms.DimensionPosition, ctx: Context) -> xr.DataArray:
 
 
 def _group_offsets(
-    node: ms.DimensionPosition, groups: xr.DataArray, labels: np.ndarray
+    node: ms.DimensionPosition, within: ms.Partition, labels: np.ndarray, ctx: Context
 ) -> xr.DataArray:
     """Each coordinate's distance from the boundary of its own group; NaN where it is in no group."""
-    partition = operators.grouped(node.name, labels, groups)
+    partition = operators.grouped(node.name, labels, groups_of(within, ctx))
     needed = node.position + 1 if node.position >= 0 else -node.position
     short = sorted(
         str(g) for g, n in zip(partition.names, partition.counts) if n < needed
     )
     if short:
         raise SpecDataError(
-            f"where: position({node.name}, within={groups.name}) {node.op} {node.position} names position "
+            f"where: position({node.name}, within={within.name}) {node.op} {node.position} names position "
             f"{node.position} within each group, and {len(short)} of them are shorter than that: "
             f"{short[:5]}. A boundary that names no coordinate leaves the rows it was to seed unseeded."
         )

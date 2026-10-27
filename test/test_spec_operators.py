@@ -335,20 +335,33 @@ SELF_MAP_SPEC: dict[str, Any] = {
     "variables": {
         "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
         "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+        "a": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
     },
     "constraints": {
         "fix": {"dims": ["t"], "expression": "x == v"},
         "link": {"dims": ["t"], "expression": "y == sum(x, over=t, by=next_of[next])"},
+        "ahead": {"dims": ["t"], "expression": "a == at(x, by=next_of[next])"},
     },
     "objective": {"sense": "minimize", "expression": "sum(y)"},
     "expressions": {
         "terms": "sum(x, over=t, by=next_of[next])",
         "data": "sum(v, over=t, by=next_of[next])",
+        "ahead_terms": "at(x, by=next_of[next])",
+        "ahead_data": "at(v, by=next_of[next])",
     },
 }
 
 
-def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
+@pytest.mark.parametrize(
+    ("built", "folds", "want"),
+    [
+        ("y", ["terms", "data"], [0.0, 1.0, 6.0]),
+        ("a", ["ahead_terms", "ahead_data"], [2.0, 4.0, 4.0]),
+    ],
+)
+def test_a_relation_into_its_own_dimension_joins_on_it(
+    backend: Model, built: str, folds: list[str], want: list[float]
+) -> None:
     t = TT[:3]
     data = {
         "t": t,
@@ -357,10 +370,215 @@ def test_a_relation_into_its_own_dimension_groups_by_it(backend: Model) -> None:
     }
     m = Model.from_spec(SELF_MAP_SPEC, data, sparse=backend.sparse)
     m.solve(solver_name="highs", output_flag=False)
-    want = [0.0, 1.0, 6.0]
-    assert m.solution["y"].values.tolist() == pytest.approx(want)
-    for folded in evaluate(SELF_MAP_SPEC, m, "terms", "data", sources=data).values():
+    assert m.solution[built].values.tolist() == pytest.approx(want)
+    for folded in evaluate(SELF_MAP_SPEC, m, *folds, sources=data).values():
         assert folded.values.tolist() == pytest.approx(want)
+
+
+# ---------------------------------------------------------------------------
+# relations of several columns: bare, multi-key and multi-value
+# ---------------------------------------------------------------------------
+
+K = pd.Index(["p", "q"], name="k")
+RELATIONS: dict[str, dict[str, Any]] = {
+    "cover": {"key": {"start": "t", "covered": "t"}, "missing": "absent"},
+    "ends": {"key": "t", "values": {"from": "s", "to": "s"}},
+    "slot": {"key": "t", "values": ["s", "k"]},
+    "zone_of": {"key": ["t", "k"], "values": "s"},
+}
+RELATION_DATA: dict[str, Any] = {
+    "t": TT,
+    "s": S,
+    "k": K,
+    "cover": pd.DataFrame({"start": [0, 0, 1, 1, 2, 3], "covered": [0, 1, 1, 2, 2, 3]}),
+    "ends": pd.DataFrame(
+        {"t": TT, "from": ["a", "b", "a", "b"], "to": ["b", "a", "a", "b"]}
+    ),
+    "slot": pd.DataFrame(
+        {"s": ["a", "a", "b", "a"], "k": ["p", "q", "p", "p"]}, index=TT
+    ),
+    "zone_of": pd.Series(
+        list("aabbbbaa"), index=pd.MultiIndex.from_product([K, TT]).swaplevel()
+    ),
+    "v": pd.Series(V, index=TT),
+    "z": pd.Series([10.0, 20.0], index=S),
+    "w": pd.Series([1.0, 2.0], index=K),
+    "zk": xr.DataArray([[1.0, 2.0], [3.0, 4.0]], coords=[S, K]),
+}
+JOINS: dict[str, tuple[str, list[str], list[Any]]] = {
+    "sum-through-a-bare-relation": (
+        "sum(x, over=start, by=cover[covered])",
+        ["t"],
+        [1, 3, 6, 8],
+    ),
+    "at-one-of-two-columns": ("x * at(z, by=ends[to])", ["t"], [20, 20, 40, 160]),
+    "sum-by-one-of-two-columns": ("sum(x, over=t, by=ends[to])", ["s"], [6, 9]),
+    "at-a-variable-from-both-ends": (
+        "at(u, by=ends[from]) - at(u, by=ends[to])",
+        ["t"],
+        [-10, 10, 0, 0],
+    ),
+    "sum-by-a-column-list": (
+        "sum(x, over=t, by=slot[s, k])",
+        ["s", "k"],
+        [[9, 2], [4, 0]],
+    ),
+    "sum-keeping-a-key-column": (
+        "sum(x * w, over=t, by=zone_of[s])",
+        ["s", "k"],
+        [[3, 24], [12, 6]],
+    ),
+    "at-adding-a-key-column": (
+        "x * at(z, by=zone_of[s])",
+        ["t", "k"],
+        [[10, 20], [20, 40], [80, 40], [160, 80]],
+    ),
+    "at-joining-on-a-key-column": (
+        "x * at(zk, by=zone_of[s])",
+        ["t", "k"],
+        [[1, 4], [2, 8], [12, 8], [24, 16]],
+    ),
+}
+
+
+def relations_spec() -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "dimensions": {
+            "t": {"dtype": "int", "ordered": True},
+            "s": {"dtype": "str"},
+            "k": {"dtype": "str"},
+        },
+        "relations": RELATIONS,
+        "parameters": {
+            "v": {"dims": ["t"]},
+            "z": {"dims": ["s"]},
+            "w": {"dims": ["k"]},
+            "zk": {"dims": ["s", "k"]},
+        },
+        "variables": {
+            "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+            "u": {"dims": ["s"], "bounds": {"lower": 0, "upper": 100}},
+        },
+        "constraints": {
+            "fix": {"dims": ["t"], "expression": "x == v"},
+            "fix_u": {"dims": ["s"], "expression": "u == z"},
+        },
+        "expressions": {},
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+    }
+    for key, (expression, dims, _) in JOINS.items():
+        name = key.replace("-", "_")
+        spec["variables"][f"y_{name}"] = {
+            "dims": dims,
+            "bounds": {"lower": -1000, "upper": 1000},
+        }
+        spec["constraints"][f"link_{name}"] = {
+            "dims": dims,
+            "expression": f"y_{name} == {expression}",
+        }
+        spec["expressions"][f"probe_{name}"] = {"dims": dims, "expression": expression}
+    return spec
+
+
+@pytest.fixture(scope="module")
+def relations_model() -> Model:
+    return solved(relations_spec(), RELATION_DATA, store=False)
+
+
+@pytest.mark.parametrize("key", JOINS)
+def test_a_join_through_several_columns_builds_and_folds_alike(
+    relations_model: Model, key: str
+) -> None:
+    _, dims, expected = JOINS[key]
+    name = key.replace("-", "_")
+    coords = {d: RELATION_DATA[d] for d in dims}
+    want = xr.DataArray(np.asarray(expected, dtype=float), coords=coords, dims=dims)
+    built = relations_model.solution[f"y_{name}"]
+    probe = f"probe_{name}"
+    folded = evaluate(relations_spec(), relations_model, probe, sources=RELATION_DATA)
+    xr.testing.assert_allclose(built, want.rename(f"y_{name}"))
+    xr.testing.assert_allclose(folded[probe], want.rename(probe))
+
+
+@pytest.mark.parametrize(
+    ("predicate", "labels"),
+    [
+        ("ends[to] == 'a'", [1, 2]),
+        ("ends[from] != ends[to]", [0, 1]),
+    ],
+)
+def test_a_where_reads_one_column_of_several(predicate: str, labels: list[int]) -> None:
+    spec = with_(
+        relations_spec(),
+        variables={"x": {"dims": ["t"], "where": predicate, "bounds": {"lower": 0}}},
+    )
+    x = Model.from_spec(spec, RELATION_DATA).variables["x"]
+    assert x.labels.t[(x.labels != -1).to_numpy()].values.tolist() == labels
+
+
+@pytest.mark.parametrize(
+    ("relation", "rows", "match"),
+    [
+        pytest.param(
+            "zone_of",
+            RELATION_DATA["zone_of"].iloc[:-1],
+            r"no row for 1 \('t', 'k'\) label\(s\), the first at t=3, k='q'",
+            id="multi-key-missing-a-tuple",
+        ),
+        pytest.param(
+            "cover",
+            pd.DataFrame({"start": [0, 0], "covered": [1, 1]}),
+            r"maps 1 \('start', 'covered'\) label\(s\) more than once: \(0, 1\)",
+            id="bare-row-twice",
+        ),
+        pytest.param(
+            "cover",
+            pd.DataFrame({"start": [0], "covered": [9]}),
+            r"maps 9, which are not labels of 't'",
+            id="bare-stray-label",
+        ),
+        pytest.param(
+            "ends",
+            pd.DataFrame({"t": TT, "from": list("abab")}),
+            r"arrived as a DataFrame with columns \['t', 'from'\]",
+            id="multi-value-frame-lacking-a-column",
+        ),
+        pytest.param(
+            "ends",
+            pd.Series(list("abab"), index=TT),
+            r"cannot adapt Series to a table",
+            id="multi-value-as-a-series",
+        ),
+    ],
+)
+def test_a_relation_of_several_columns_is_checked_row_by_row(
+    relation: str, rows: Any, match: str
+) -> None:
+    with pytest.raises(SpecDataError, match=match):
+        Model.from_spec(relations_spec(), {**RELATION_DATA, relation: rows})
+
+
+@pytest.mark.parametrize("relation", ["cover", "ends", "slot", "zone_of"])
+def test_store_refuses_a_relation_no_single_array_holds(relation: str) -> None:
+    spec = {
+        "dimensions": relations_spec()["dimensions"],
+        "relations": {relation: RELATIONS[relation]},
+        "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0}}},
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+    }
+    data = {d: RELATION_DATA[d] for d in ("t", "s", "k", relation)}
+    assert Model.from_spec(spec, data).variables["x"].shape == (4,)
+    with pytest.raises(
+        SpecDataError,
+        match=f"relation '{relation}' has the key column.* model.parameters",
+    ):
+        Model.from_spec(spec, data, store=True)
+
+
+def test_store_keeps_a_single_valued_relation_read_from_a_frame() -> None:
+    frame = pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]})
+    m = Model.from_spec(WHERE_SPEC, {**WHERE_DATA, "season_of": frame}, store=True)
+    assert m.parameters["season_of"].values.tolist() == ["a", "a", "b", "b"]
 
 
 # ---------------------------------------------------------------------------

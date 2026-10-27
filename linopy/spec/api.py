@@ -57,20 +57,45 @@ def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> N
     SpecDataError
         The spec declares nothing, or the data does not fit it: a missing
         or malformed source, a label no dimension holds, an assumption the
-        numbers break, or a constraint row the data empties.
+        numbers break, or a constraint row the data empties. With *store*,
+        a relation ``model.parameters`` cannot hold, refused before anything
+        is stored.
     NotImplementedError
         A constraint multiplies two variable-carrying operands.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
     program = normalize_spec(spec)
     attached = attach(program, sources)
+    relations = _storable(attached) if store else {}
     raw = functools.cache(attached.read)
     unfilled = {name: raw(name).values for name in program.parameters}
     if store:
-        model.parameters = xr.Dataset(
-            unfilled | dict(attached.relations), coords=attached.coords
-        )
+        model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
     build(_context(attached, model, raw, solved=False))
+
+
+def _storable(attached: Attached) -> dict[str, xr.DataArray]:
+    """
+    Each relation as ``model.parameters`` stores it: its value column over its key.
+
+    Raises
+    ------
+    SpecDataError
+        A relation of more than one key or value column, or a bare one,
+        which no array over a key holds.
+    """
+    stored = {}
+    for name, table in attached.relations.items():
+        rel = table.declared
+        if len(rel.key) != 1 or len(rel.values) != 1:
+            raise SpecDataError(
+                f"relation '{name}' has the key column(s) {list(rel.key)} and the value "
+                f"column(s) {list(rel.values)}, and model.parameters stores a relation as "
+                f"one array over its one key column, holding its one value column. Build "
+                f"with store=False and keep the sources to rebuild from."
+            )
+        stored[name] = table.column(rel.values[0]).rename(name)
+    return stored
 
 
 def evaluate(

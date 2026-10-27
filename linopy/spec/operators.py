@@ -10,8 +10,7 @@ evaluates the operands and the keywords and calls in.
 from __future__ import annotations
 
 import operator
-import warnings
-from collections.abc import Hashable
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
 from typing import cast
@@ -20,13 +19,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from linopy.constants import EvolvingAPIWarning
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
-from linopy.long import Relation
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
 
 Amount = int | xr.DataArray
+_ROW = "_row"
 
 
 def _filled(expression: Array, fill: float) -> Array:
@@ -54,56 +52,67 @@ def sum_over(array: Array, over: str) -> Array:
     if not isinstance(array, xr.DataArray) and any(
         not array.sizes[dim] for dim in array.coord_dims if dim != over
     ):
-        return _zeros(array, over)
+        return _zeros(array, (over,))
     return array.sum(over)
 
 
 def grouped_sum(
-    array: Array, relation: xr.DataArray, *, into: str, labels: pd.Index
+    array: Array,
+    joined: Mapping[str, np.ndarray],
+    grouped: Mapping[str, np.ndarray],
+    onto: Mapping[str, pd.Index],
 ) -> Array:
     """
-    Sum *array* through *relation*, replacing the relation's key dimension by *into*.
+    Sum *array* through the rows of a relation: join, then group by.
 
-    A member the relation sends nowhere contributes nowhere. The result is
-    put onto every declared label of *into*: a group no member reaches holds
-    the empty sum, which is 0 and not an absence. A linear term is grouped through
-    :class:`linopy.Relation`, a quadratic term through a membership
-    matrix and data through xarray.
+    Row *i* of the relation reads *array* where each dimension of *joined*
+    holds its label ``joined[d][i]``, and adds it to the group at the labels
+    ``grouped[d][i]``. The result is put onto every label of *onto*, the
+    grouped dimensions: a group no row reaches holds the empty sum, which is
+    0 and not an absence. A row lands in as many groups as the relation lists
+    it, so a bare relation sums as a keyed one does.
     """
-    dim = str(relation.dims[0])
-    present = relation.notnull()
-    if not bool(present.any()):
-        return _zeros(array, dim, {into: labels})
-    member = dim if dim != into else f"{dim}__member"
-    keep = present.to_numpy()
-    members = np.asarray(relation.indexes[dim])[keep]
-    groups = relation.to_numpy()[keep]
+    rows = pd.RangeIndex(len(next(iter(joined.values()))), name=_ROW)
+    if not len(rows):
+        return _zeros(array, tuple(joined), onto)
     expression = as_expression(array)
-    if member != dim:
-        expression = expression.rename({dim: member})
+    positions = {
+        d: xr.DataArray(expression.indexes[d].get_indexer(labels), coords=[rows])
+        for d, labels in joined.items()
+    }
+    picked = expression.isel(positions)
+    if isinstance(picked, xr.DataArray):
+        return _scattered(picked, grouped, onto)
+    keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
+    summed = keyed.groupby(list(grouped)).sum()
     if isinstance(expression, QuadraticExpression):
-        weights = xr.DataArray(
-            (groups[:, None] == labels.to_numpy()[None, :]).astype(float),
-            coords={member: members, into: labels},
-            dims=[member, into],
-        )
-        return (expression.sel({member: members}) * weights).sum(member)
-    if isinstance(expression, xr.DataArray):
-        picked = expression.sel({member: members})
-        attached = picked.assign_coords({into: (member, groups)})
-        return attached.groupby(into).sum().reindex({into: labels}).fillna(0.0)
-    frame = pd.DataFrame({member: members, into: groups})
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", EvolvingAPIWarning)
-        by = Relation(frame, member, into, groups=labels)
-    return expression.groupby(by).sum()
+        summed = QuadraticExpression(summed.data, summed.model)
+    return summed.reindex(onto).fillna(0)
+
+
+def _scattered(
+    picked: xr.DataArray,
+    grouped: Mapping[str, np.ndarray],
+    onto: Mapping[str, pd.Index],
+) -> xr.DataArray:
+    """The rows of *picked* added into their groups, a hole adding nothing."""
+    shape = [len(onto[d]) for d in grouped]
+    at = [onto[d].get_indexer(labels) for d, labels in grouped.items()]
+    rows = picked.fillna(0).transpose(_ROW, ...)
+    others = [str(d) for d in rows.dims[1:]]
+    flat = np.zeros((int(np.prod(shape)), *rows.shape[1:]))
+    np.add.at(flat, np.ravel_multi_index(at, shape), rows.to_numpy())
+    coords = {**{d: onto[d] for d in grouped}, **{d: rows.indexes[d] for d in others}}
+    return xr.DataArray(
+        flat.reshape(*shape, *rows.shape[1:]), coords=coords, dims=list(coords)
+    )
 
 
 def _zeros(
-    array: Array, without: str, extra: dict[str, pd.Index] | None = None
+    array: Array, without: tuple[str, ...], extra: Mapping[str, pd.Index] | None = None
 ) -> Array:
     """The constant zero over the operand's dimensions but *without*, and *extra*: data, or a term of its model."""
-    kept = [d for d in _coord_dims(array) if d != without]
+    kept = [d for d in _coord_dims(array) if d not in without]
     coords = {**{d: array.indexes[d] for d in kept}, **(extra or {})}
     zeros = xr.DataArray(
         np.zeros([len(index) for index in coords.values()]),
@@ -121,19 +130,28 @@ def _coord_dims(array: Array) -> list[str]:
     return [str(d) for d in dims]
 
 
-def at(array: Array, relation: xr.DataArray, *, into: str) -> Array:
+def at(
+    array: Array, positions: Mapping[str, xr.DataArray], present: xr.DataArray
+) -> Array:
     """
-    Read *array* through *relation*: the adjoint of :func:`grouped_sum`.
+    Read *array* at *positions*: the adjoint of :func:`grouped_sum`.
 
-    A member the relation sends nowhere reads nothing, and its row keeps the
-    operand's own absence rather than a zero.
+    *positions* holds, for each dimension *array* is read along, the position
+    to read over the relation's key. A key tuple *present* leaves out reads
+    nothing, and its row keeps the operand's own absence rather than a zero.
     """
-    mapping = relation.rename(into)
-    dim = str(mapping.dims[0])
-    labels = mapping.indexes[dim]
-    keep = mapping.notnull().to_numpy()
-    picked = array.sel({into: mapping.isel({dim: keep})})
-    return picked.assign_coords({dim: labels[keep]}).reindex({dim: labels})
+    picked = as_expression(array).isel(positions)
+    joined = [d for d in positions if d not in picked.dims]
+    picked = picked.drop_vars(joined).assign_coords(present.coords)
+    if bool(present.all()):
+        return picked
+    return picked.where(present)
+
+
+def positions_of(labels: xr.DataArray, index: pd.Index) -> xr.DataArray:
+    """The position in *index* of each of *labels*, 0 at a hole, which :func:`at` masks."""
+    found = index.get_indexer(labels.to_numpy().ravel()).reshape(labels.shape)
+    return xr.DataArray(np.maximum(found, 0), dims=labels.dims)
 
 
 @dataclass(frozen=True)
@@ -324,7 +342,8 @@ def per_group(offset: Amount, groups: xr.DataArray) -> Amount:
     target = str(groups.name)
     if not isinstance(offset, xr.DataArray) or target not in offset.dims:
         return offset
-    return cast(xr.DataArray, at(offset, groups, into=target)).drop_vars(target)
+    positions = {target: positions_of(groups, offset.indexes[target])}
+    return cast(xr.DataArray, at(offset, positions, groups.notnull()))
 
 
 def _gather_in_groups(

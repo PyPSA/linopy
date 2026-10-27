@@ -91,11 +91,33 @@ dimension members. It can be
   does not say which axis is which),
 - one number, for a parameter over no dimension or the same value everywhere.
 
-**Relations.** A relation maps one key dimension into one value dimension. Its
-source is a ``pandas.Series`` indexed by the key labels, a ``dict`` keyed by
-them, or a 1-D ``DataArray`` over the key dimension. A ``NaN`` in a
-``DataArray`` relation leaves that key label unmapped. Bare relations and
-relations with several key or value columns raise ``SpecDataError``.
+**Relations.** A relation is a table of rows with one column per column its
+entry declares, key and value columns alike, each named after it. Its source is
+a ``DataFrame`` with those columns, its named index levels counting as columns
+and any further column ignored. A bare relation (key columns only), several key
+columns and several value columns all arrive this way:
+
+.. code-block:: python
+
+    # cover: {key: {start: t, covered: t}, missing: absent}
+    sources["cover"] = pd.DataFrame({"start": [0, 0, 1], "covered": [0, 1, 1]})
+    # ends: {key: line, values: {bus0: bus, bus1: bus}}
+    sources["ends"] = pd.DataFrame({"line": ["l0"], "bus0": ["b0"], "bus1": ["b1"]})
+
+A relation with one value column may also arrive as a ``pandas.Series`` whose
+(Multi)Index levels are the key columns, a ``dict`` keyed by key labels
+(tuples for several key columns) or a ``DataArray`` over the key's dimensions,
+where a ``NaN`` leaves that key unmapped. Each key tuple takes one row at most,
+a null in any column is refused, and every label must be a member of its
+column's dimension. Under ``missing: refused`` (the default) every key tuple
+needs a row.
+
+linopy holds a relation as its rows and never lays it out as a grid over its
+key, so a bare relation over two columns of one long dimension stays as small
+as its data. A ``sum(..., by=...)`` through it joins and groups row by row,
+with mathspec's semantics: an unnamed key column is joined on and kept, and
+``by=`` may name a list of columns. ``within=`` partitions by one value column
+of a relation keyed by the stepped dimension alone.
 
 Missing rows
 ~~~~~~~~~~~~
@@ -236,7 +258,11 @@ model.
 
 The stored parameters are raw: a missing row is a ``NaN`` hole, and an ``int``
 or ``bool`` parameter with a hole is ``float64``. A relation is an array over
-its key dimension, ``NaN`` where a label is unmapped.
+its key dimension, ``NaN`` where a label is unmapped, so only a relation of one
+key column and one value column is stored. With ``store=True``, a bare relation
+or one with several key or value columns raises ``SpecDataError`` before
+anything is written; build with ``store=False`` and keep the sources, to
+rebuild from and to pass as ``evaluate(spec, m, sources=...)``.
 
 Editing ``m.parameters`` does not change the model: bounds, coefficients and
 right-hand sides were fixed when the model was built. ``evaluate(spec, m)``

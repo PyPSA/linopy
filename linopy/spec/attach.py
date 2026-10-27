@@ -58,7 +58,6 @@ _DIMENSION_SHAPES = (
     "a pandas Index, a list, a tuple, a set (read sorted), a 1-D numpy or pandas array, "
     "a pandas Series or a 1-D DataArray"
 )
-_RELATION_SHAPES = "a pandas Series indexed by '{key}', a dict keyed by '{key}' labels, or a 1-D DataArray over '{key}'"
 _PARAMETER_SHAPES = (
     "a DataArray over {dims}, a pandas Series whose (Multi)Index levels are {dims}, "
     "a DataFrame with columns {columns} or in wide form, a dict keyed by label, or one number"
@@ -129,8 +128,7 @@ class Attached:
         named after its dimension. A declared dimension nothing reaches
         and nothing supplies is absent.
     relations
-        By relation name, the map as an array over its key dimension's
-        master coordinates, NaN where a label is unmapped.
+        By relation name, its rows checked against the master coordinates.
     sources
         The caller's data, read by key on demand, one ``__getitem__`` per read.
     keys
@@ -139,7 +137,7 @@ class Attached:
 
     program: ms.Program
     coords: Mapping[str, pd.Index]
-    relations: Mapping[str, xr.DataArray]
+    relations: Mapping[str, Table]
     sources: Mapping[str, Any]
     keys: frozenset[str]
 
@@ -297,16 +295,40 @@ def _sorted(dim: str, members: set[Any] | frozenset[Any]) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
-def key_value(name: str, rel: ms.Relation) -> tuple[str, str]:
-    """The key dimension and the value dimension of a relation with one key column mapping into one value column."""
-    if len(rel.key) != 1 or len(rel.values) != 1:
-        raise SpecDataError(
-            f"relation '{name}' keys {list(rel.key)} into {list(rel.values)}, and linopy "
-            f"reads a relation over two columns: one key column mapping into one value "
-            f"column. A bare relation, several key columns or several value columns are "
-            f"not supported yet; split it into single-valued relations."
-        )
-    return rel.dim(rel.key[0]), rel.dim(rel.values[0])
+@dataclass(frozen=True)
+class Table:
+    """
+    A relation's rows as the data gives them: one column per role of the
+    declaration, each holding labels of the role's dimension, one row per
+    key tuple.
+
+    The rows are the relation: a bare relation is never laid out as a grid
+    over its key, which for two columns over one dimension is that dimension
+    squared. A value column reads over the key's dimensions through
+    :meth:`column`.
+    """
+
+    declared: ms.Relation
+    rows: pd.DataFrame
+    coords: Mapping[str, pd.Index]
+
+    @property
+    def key_dims(self) -> list[str]:
+        return [self.declared.dim(role) for role in self.declared.key]
+
+    def column(self, role: str) -> xr.DataArray:
+        """The value column *role* over the key's dimensions, NaN where the key has no row."""
+        return self._on_key(self.rows[role])
+
+    def defined(self) -> xr.DataArray:
+        """Where the relation has a row, over the key's dimensions."""
+        return self._on_key(pd.Series(np.ones(len(self.rows)))).notnull()
+
+    def _on_key(self, values: pd.Series) -> xr.DataArray:
+        dims = self.key_dims
+        key = pd.MultiIndex.from_frame(self.rows[list(self.declared.key)], names=dims)
+        arr = _numpy(xr.DataArray.from_series(values.set_axis(key)))
+        return arr.reindex({d: self.coords[d] for d in dims})
 
 
 def _relations(
@@ -314,28 +336,35 @@ def _relations(
     sources: Mapping[str, Any],
     keys: frozenset[str],
     coords: Mapping[str, pd.Index],
-) -> dict[str, xr.DataArray]:
-    out: dict[str, xr.DataArray] = {}
+) -> dict[str, Table]:
+    out: dict[str, Table] = {}
     for name, rel in program.relations.items():
-        over, target = key_value(name, rel)
         if name not in keys:
             raise SpecDataError(
                 f"no data provided for relation '{name}'. Pass it under key '{name}' as "
-                f"{_RELATION_SHAPES.format(key=over)}, holding a '{target}' value for each "
-                f"'{over}' label it maps and nothing for a label it does not."
+                f"{_relation_shapes(rel)}, with a row for each key tuple it holds and "
+                f"none for one it does not."
             )
-        series = _relation_series(name, over, sources[name])
-        _check_relation(series, name, over, target, coords)
-        padded = series.reindex(coords[over])
-        unmapped = padded.isna()
-        if rel.missing == "refused" and unmapped.any():
-            raise SpecDataError(
-                f"relation '{name}' has no row for {int(unmapped.sum())} '{over}' label(s): "
-                f"{shown(padded.index[unmapped].tolist())}. Every '{over}' label needs a row, "
-                f"or the relation declares missing: absent."
-            )
-        out[name] = _numpy(xr.DataArray(padded, name=name))
+        rows = _relation_rows(name, rel, sources[name])
+        _check_relation(rows, name, rel, coords)
+        out[name] = Table(rel, rows, coords)
+        _refuse_unmapped(name, out[name])
     return out
+
+
+def _relation_shapes(rel: ms.Relation) -> str:
+    table = f"a DataFrame with the columns {list(rel.roles)}"
+    if len(rel.values) != 1:
+        return table
+    key, dims = _named(rel.key), [rel.dim(role) for role in rel.key]
+    return (
+        f"{table}, a pandas Series indexed by {key}, a dict keyed by {key} labels, "
+        f"or a DataArray over {dims}"
+    )
+
+
+def _named(roles: Sequence[Any]) -> str:
+    return repr(roles[0]) if len(roles) == 1 else repr(tuple(roles))
 
 
 def _numpy(arr: xr.DataArray) -> xr.DataArray:
@@ -360,68 +389,132 @@ def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
     return labels[~labels.isin(known)].unique().tolist()
 
 
-def _relation_series(name: str, over: str, obj: Any) -> pd.Series:
+def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> pd.DataFrame:
+    """*obj* as the relation's rows, one column per role."""
+    roles = list(rel.roles)
+    if isinstance(obj, pd.DataFrame):
+        tidy = obj.reset_index() if set(obj.index.names) & set(roles) else obj
+        if not set(roles) <= set(tidy.columns):
+            raise SpecDataError(
+                f"relation '{name}' arrived as a DataFrame with columns {list(tidy.columns)}, "
+                f"and a table for '{name}' carries the columns {roles}, one per column "
+                f"of its declaration and named after it."
+            )
+        return tidy[roles].reset_index(drop=True)
+    if len(rel.values) != 1:
+        raise SpecDataError(
+            f"relation '{name}': cannot adapt {type(obj).__name__} to a table; pass "
+            f"{_relation_shapes(rel)}."
+        )
+    series = _keyed_series(name, rel, obj)
+    return series.rename(rel.values[0]).reset_index()[roles]
+
+
+def _keyed_series(name: str, rel: ms.Relation, obj: Any) -> pd.Series:
+    """*obj*, a map into one value column, as a Series whose index levels are the key's roles."""
+    key = list(rel.key)
     if isinstance(obj, xr.DataArray):
-        if obj.dims != (over,) or over not in obj.indexes:
+        dims = [rel.dim(role) for role in key]
+        if set(obj.dims) != set(dims) or not set(dims) <= set(obj.indexes):
             raise SpecDataError(
-                f"relation '{name}' arrived as a DataArray over {list(obj.dims)}, and it is a map "
-                f"out of '{over}': pass a 1-D DataArray with '{over}' as its labelled dimension."
+                f"relation '{name}' arrived as a DataArray over {list(obj.dims)}, and it is a "
+                f"map out of {dims}: pass a DataArray with {dims} as its labelled dimensions."
             )
-        return obj.to_series().dropna()
+        series = obj.to_series().dropna()
+        return series.rename_axis([key[dims.index(d)] for d in series.index.names])
     if isinstance(obj, Mapping):
-        return pd.Series(dict(obj)).rename_axis(over)
-    if isinstance(obj, pd.Series):
-        if obj.index.name not in (None, over):
-            raise SpecDataError(
-                f"relation '{name}' is a Series indexed by '{obj.index.name}', and it is a map out of "
-                f"'{over}': index it by '{over}' labels."
-            )
-        return obj.rename_axis(over)
-    raise SpecDataError(
-        f"relation '{name}': cannot adapt {type(obj).__name__} to a map; pass {_RELATION_SHAPES.format(key=over)}."
-    )
+        obj = pd.Series(dict(obj))
+    if not isinstance(obj, pd.Series):
+        raise SpecDataError(
+            f"relation '{name}': cannot adapt {type(obj).__name__} to a map; pass "
+            f"{_relation_shapes(rel)}."
+        )
+    names = list(obj.index.names)
+    if all(n is None for n in names) and len(names) == len(key):
+        return obj.rename_axis(key)
+    if set(names) != set(key):
+        raise SpecDataError(
+            f"relation '{name}' is a Series indexed by {_named(names)}, and it is a map out "
+            f"of {_named(key)}: index it by {_named(key)} labels."
+        )
+    return obj
 
 
 def _check_relation(
-    series: pd.Series,
+    rows: pd.DataFrame,
     name: str,
-    over: str,
-    target: str,
+    rel: ms.Relation,
     coords: Mapping[str, pd.Index],
 ) -> None:
-    holes = series.isna()
-    if holes.any():
-        at = coordinates_shown((over,), series.index[holes][:5])
+    key = list(rel.key)
+    for role in rel.roles:
+        holes = rows[role].isna()
+        if holes.any():
+            nulls = rows.loc[holes, key].head(5).itertuples(index=False, name=None)
+            raise SpecDataError(
+                f"relation '{name}' carries {int(holes.sum())} row(s) with a null in "
+                f"'{role}': {coordinates_shown(key, nulls)}. A relation is partial by "
+                f"leaving a row out, not by a null in it: drop the row and the key is "
+                f"unmapped, which is what every operator reading the relation already "
+                f"means by it."
+            )
+    keys = (
+        pd.MultiIndex.from_frame(rows[key]) if len(key) > 1 else pd.Index(rows[key[0]])
+    )
+    if keys.has_duplicates:
+        twice = _twice(keys)
         raise SpecDataError(
-            f"relation '{name}' carries {int(holes.sum())} row(s) with a null in '{target}': {at}. A map is "
-            f"partial by leaving a label out, not by mapping it to nothing: drop the row and the "
-            f"label is unmapped, which is what every operator reading the relation already means by it."
+            f"relation '{name}' maps {len(twice)} {_named(key)} label(s) more than once: "
+            f"{shown(twice)}. A relation has one row per key tuple, so each label it maps "
+            f"takes exactly one row."
         )
-    if series.index.has_duplicates:
-        twice = _twice(series.index)
+    for role in rel.roles:
+        _refuse_stray_labels(rows[role], name, rel, role, coords)
+
+
+def _refuse_stray_labels(
+    column: pd.Series,
+    name: str,
+    rel: ms.Relation,
+    role: str,
+    coords: Mapping[str, pd.Index],
+) -> None:
+    dim = rel.dim(role)
+    labels, known = pd.Index(column), coords[dim]
+    strays = _outside(labels, known)
+    if not strays:
+        return
+    _refuse_label_type(f"relation '{name}'", dim, labels, known)
+    if role in rel.key:
         raise SpecDataError(
-            f"relation '{name}' maps {len(twice)} '{over}' label(s) more than once: {shown(twice)}. "
-            f"This relation is single-valued, so each label it maps takes exactly one row."
-        )
-    strays = _outside(series.index, coords[over])
-    if strays:
-        _refuse_label_type(f"relation '{name}'", over, series.index, coords[over])
-        raise SpecDataError(
-            f"relation '{name}' maps {shown(strays)}, which are not labels of '{over}'. "
-            f"'{over}' takes its labels from sources['{over}'], and they are "
-            f"{shown(coords[over].tolist(), 8)}. A map maps the labels that exist: a key matching "
+            f"relation '{name}' maps {shown(strays)}, which are not labels of '{dim}'. "
+            f"'{dim}' takes its labels from sources['{dim}'], and they are "
+            f"{shown(known.tolist(), 8)}. A map maps the labels that exist: a key matching "
             f"none of them would place its terms nowhere, so it is a typo on one side or a label "
             f"missing from the other."
         )
-    values = pd.Index(series.to_numpy())
-    foreign = _outside(values, coords[target])
-    if foreign:
-        raise SpecDataError(
-            f"relation '{name}' has value(s) that are not '{target}' labels: "
-            f"{shown(foreign)}. Every value must be a declared '{target}' label, otherwise "
-            f"a sum through {name} drops those terms in the join that places them, and the "
-            f"model builds and solves without them."
-        )
+    raise SpecDataError(
+        f"relation '{name}' has value(s) that are not '{dim}' labels: "
+        f"{shown(strays)}. Every value must be a declared '{dim}' label, otherwise "
+        f"a sum through {name} drops those terms in the join that places them, and the "
+        f"model builds and solves without them."
+    )
+
+
+def _refuse_unmapped(name: str, table: Table) -> None:
+    """Refuse a ``missing: refused`` relation lacking a key tuple, a keyed one naming the first few."""
+    rel = table.declared
+    grid = int(np.prod([len(table.coords[d]) for d in table.key_dims]))
+    lacking = grid - len(table.rows)
+    if rel.missing != "refused" or not lacking:
+        return
+    first = (
+        f", the first at {first_coordinates(~table.defined(), 3)}" if rel.values else ""
+    )
+    raise SpecDataError(
+        f"relation '{name}' has no row for {lacking} {_named(rel.key)} label(s){first}. "
+        f"Every key tuple needs a row, or the relation declares missing: absent."
+    )
 
 
 # ---------------------------------------------------------------------------

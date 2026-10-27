@@ -44,19 +44,12 @@ from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import synthetic_sources  # noqa: E402
 
-MULTI_COLUMN = "linopy reads no relation of more than one key or value column"
 REFUSED: dict[str, tuple[type[Exception], str]] = {
-    "operators/at_columns.yaml": (SpecDataError, MULTI_COLUMN),
-    "operators/sum_by_columns.yaml": (SpecDataError, MULTI_COLUMN),
-    "operators/sum_by_column_lists.yaml": (SpecDataError, MULTI_COLUMN),
     "operators/shift_by_parameter.yaml": (
         SpecDataError,
         "the synthetic data leaves a 0 >= demand row",
     ),
-    "pypsa.yaml": (
-        SpecDataError,
-        "bare and multi-key relations, a quadratic constraint",
-    ),
+    "pypsa.yaml": (NotImplementedError, "a quadratic constraint"),
 }
 
 
@@ -88,7 +81,7 @@ EXAMPLES = (
 def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     """Every whole mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
     program = lower(path)
-    m = solved(path, synthetic_sources(path))
+    m = solved(path, synthetic_sources(path), store=False)
     assert m.nvars == sum(int(m.variables[v].labels.count()) for v in program.variables)
     assert m.termination_condition in ("optimal", "infeasible")
 

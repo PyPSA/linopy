@@ -196,17 +196,16 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     a mapping or a ``mathspec.Spec``.
 
     Labels are numbered after their dimension, parameters are a linear ramp,
-    and each relation cycles through the labels it maps into.
+    and each relation holds a row for every key tuple, each value column
+    cycling through the labels it maps into on its own stride, so that a sum
+    grouping by several columns reaches every group.
 
     Raises
     ------
     TypeError
         *spec* is none of these, such as a lowered ``Program``.
-    SpecDataError
-        A relation that is not one key column mapping into one value column.
     """
     from linopy.spec.api import normalize_spec
-    from linopy.spec.attach import key_value
 
     program = normalize_spec(spec)
 
@@ -214,11 +213,14 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
         dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
     }
     for name, relation in program.relations.items():
-        over, target = key_value(name, relation)
-        into = sources[target]
-        sources[name] = pd.Series(
-            [into[i % len(into)] for i in range(n)], index=sources[over]
-        )
+        labels = [sources[relation.dim(role)] for role in relation.key]
+        grid = pd.MultiIndex.from_product(labels, names=relation.key)
+        rows = grid.to_frame(index=False)
+        for j, role in enumerate(relation.values):
+            into = sources[relation.dim(role)].to_numpy()
+            turn = sum((1 + j * k) * np.asarray(c) for k, c in enumerate(grid.codes))
+            rows[role] = into[turn % len(into)]
+        sources[name] = rows
     for name, parameter in program.parameters.items():
         sources[name] = _parameter(name, parameter, sources, n)
     return sources

@@ -250,7 +250,7 @@ def test_relation_is_padded_onto_the_dimension(
     program: Any, good: dict[str, Any]
 ) -> None:
     attached = attach(program, {**good, "grp": {"a": "n"}})
-    grp = attached.relations["grp"]
+    grp = attached.relations["grp"].column("g")
     assert grp.dims == ("f",)
     assert grp.sel(f="a").item() == "n"
     assert pd.isna(grp.sel(f=["b", "c"])).all()
@@ -261,6 +261,8 @@ RELATION_SHAPES = {
     "series-unnamed": pd.Series(["n", "e", "n"], index=F.rename(None)),
     "dict": {"b": "n", "a": "e", "c": "n"},
     "dataarray": xr.DataArray(["n", "e", "n"], coords={"f": F}),
+    "frame": pd.DataFrame({"g": ["e", "n", "n"], "f": ["a", "b", "c"]}),
+    "indexed-frame": pd.DataFrame({"g": ["n", "e", "n"]}, index=F),
 }
 
 
@@ -268,7 +270,7 @@ RELATION_SHAPES = {
 def test_relation_shapes_attach_alike(
     program: Any, good: dict[str, Any], grp: Any
 ) -> None:
-    got = attach(program, {**good, "grp": grp}).relations["grp"]
+    got = attach(program, {**good, "grp": grp}).relations["grp"].column("g")
     assert got.values.tolist() == ["n", "e", "n"]
 
 
@@ -281,7 +283,7 @@ def test_extension_strings_attach_as_numpy_objects(
         pytest.importorskip("pyarrow")
     series = pd.Series(["n", "e"], index=F[:2], dtype=pd.StringDtype(storage))
     grp = xr.DataArray(series) if shape == "dataarray" else series
-    got = attach(program, {**good, "grp": grp}).relations["grp"]
+    got = attach(program, {**good, "grp": grp}).relations["grp"].column("g")
     assert got.dtype == np.dtype(object)
     assert got.values[:2].tolist() == ["n", "e"]
     assert pd.isna(got.values[2])
@@ -434,14 +436,6 @@ def test_a_hole_in_a_labelled_source_is_a_missing_row(
 
 UNSUPPORTED: dict[str, tuple[dict[str, Any], str]] = {
     "given": ({"given": {"expressions": {"e": {"dims": ["f"]}}}}, "given:"),
-    "multi-key": (
-        {"relations": {"grp": {"key": ["f", "t"], "values": "g"}}},
-        "one key column mapping into one value column",
-    ),
-    "bare": (
-        {"relations": {"grp": {"key": ["f", "g"]}}},
-        "one key column mapping into one value column",
-    ),
 }
 
 
@@ -719,9 +713,14 @@ REFUSALS = [
         id="relation-null",
     ),
     pytest.param(
-        {"grp": pd.DataFrame({"f": ["a"], "g": ["n"]})},
-        r"relation 'grp': cannot adapt DataFrame",
+        {"grp": ["n"]},
+        r"relation 'grp': cannot adapt list",
         id="relation-shape",
+    ),
+    pytest.param(
+        {"grp": pd.DataFrame({"f": ["a"], "bus": ["n"]})},
+        r"relation 'grp' arrived as a DataFrame with columns \['f', 'bus'\]",
+        id="relation-frame-without-a-column",
     ),
     pytest.param(
         {"grp": pd.Series(["n"], index=pd.Index(["a"], name="t"))},
@@ -752,7 +751,8 @@ def test_dataset_is_a_source(program: Any, good: dict[str, Any]) -> None:
     for name in program.parameters:
         xr.testing.assert_equal(filled(from_dataset, name), filled(from_mapping, name))
     xr.testing.assert_equal(
-        from_dataset.relations["grp"], from_mapping.relations["grp"]
+        from_dataset.relations["grp"].column("g"),
+        from_mapping.relations["grp"].column("g"),
     )
 
 
@@ -906,7 +906,7 @@ def test_a_relation_with_nan_in_a_dataarray_is_partial(good: dict[str, Any]) -> 
     expected = attach(lower(SPEC), {**good, "grp": {"b": "n", "c": "n"}}).relations[
         "grp"
     ]
-    xr.testing.assert_identical(got, expected)
+    xr.testing.assert_identical(got.column("g"), expected.column("g"))
     refused = with_(SPEC, relations={"grp": {"key": "f", "values": "g"}})
     with pytest.raises(
         SpecDataError, match=r"relation 'grp' has no row for 1 'f' label"

@@ -127,9 +127,9 @@ leaves without terms (a ``missing: absent`` parameter, a ``missing:
 neutral`` parameter such as ``0 == load``, or a ``where:``-masked
 variable inside a sum) is refused, where mathspec skips and reports it;
 linopy is stricter here (`#993
-<https://github.com/PyPSA/linopy/issues/993>`__). A relation maps one
-key column to one value column only; bare relations, several key
-columns or several value columns raise ``SpecDataError``.
+<https://github.com/PyPSA/linopy/issues/993>`__). ``store=True`` stores
+only relations of one key column and one value column, and raises
+``SpecDataError`` for any other.
 
 
 Where to go next

@@ -15,7 +15,7 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
-from linopy.spec.where import evaluate_where, looked_up
+from linopy.spec.where import evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
 
 _Binary = ms.Add | ms.Multiply | ms.Divide | ms.Power
@@ -91,19 +91,21 @@ def _sum(
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
     if isinstance(operand, ms.Join) and operand.columns.axes:
-        columns = operand.columns
-        into = columns.added_dims[0]
-        summed = operators.grouped_sum(
-            value(operand.operand),
-            ctx.relations[columns.name],
-            into=into,
-            labels=ctx.coords[into],
-        )
+        summed = _through(value(operand.operand), operand.columns, ctx)
     else:
         summed = value(operand)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
+
+
+def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
+    """*array* summed through the rows of the relation *columns* name, joined and grouped as the call says."""
+    rows = ctx.relations[columns.name].rows
+    joined = {columns.dim(r): rows[r].to_numpy() for r in columns.joined}
+    grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
+    onto = {d: ctx.coords[d] for d in grouped}
+    return operators.grouped_sum(array, joined, grouped, onto)
 
 
 def _parameter(name: str, ctx: Context) -> xr.DataArray:
@@ -293,10 +295,7 @@ def _amount_of(node: ms.Translate | ms.WindowSum) -> int | str:
 
 def _partition(partition: ms.Partition | None, ctx: Context) -> xr.DataArray | None:
     """The relation a windowed operator stays inside, named for the dimension its group column is over."""
-    if partition is None:
-        return None
-    grouped = partition.dim(partition.grouped[0])
-    return ctx.relations[partition.name].rename(grouped)
+    return None if partition is None else groups_of(partition, ctx)
 
 
 def refuse_holes(
