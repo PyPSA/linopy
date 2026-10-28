@@ -39,7 +39,9 @@ support both 0.10 and 1.x keeps working.
 ## How to upgrade
 
 1.  **Run your test suite** on linopy 1.0. Every difference from legacy either
-    raises or changes a result as described in the table below.
+    raises or changes a result as described in the table below. To list every
+    affected line in one pass before you upgrade, see
+    [Listing affected lines on linopy 0.10](#listing-affected-lines-on-linopy-010).
 2.  **Find silently dropped terms.** Absence that propagates changes a result
     without raising. Set `linopy.options["warn_on_absorbed_terms"] = True`
     while you build your model: every operation where an absent operand drops
@@ -49,6 +51,52 @@ support both 0.10 and 1.x keeps working.
     `warnings.filterwarnings("error", category=linopy.AbsorbedTermsWarning)`.
 3.  **Fix each site** using the table.
 4.  **Drop** any `linopy.options["semantics"] = "v1"` line.
+
+## Listing affected lines on linopy 0.10
+
+On linopy 1.0 a build stops at the first raise. linopy 0.10 still runs the
+legacy semantics by default and emits a `LinopySemanticsWarning` wherever
+legacy and v1 differ. The warning points at the first line outside linopy, so
+one build on 0.10 lists every line to fix. Run your model build inside this
+snippet:
+
+```python
+import os
+import warnings
+from collections import Counter
+
+import linopy
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always", linopy.LinopySemanticsWarning)
+    m = build_model()  # your model-building code
+
+sites = Counter()
+for w in caught:
+    if issubclass(w.category, linopy.LinopySemanticsWarning):
+        lines = str(w.message).splitlines()
+        dim = next((s.strip() for s in lines if s.strip().startswith("Dim:")), "")
+        sites[os.path.relpath(w.filename), w.lineno, lines[0], dim] += 1
+
+for (filename, lineno, message, dim), n in sites.most_common():
+    print(f"{n:>4}x {filename}:{lineno}  {message}")
+    if dim:
+        print(f"        {dim}")
+```
+
+For a `build_model` that adds `x + y <= 10` three times in a loop, with
+`x` on `time` 0, 1, 2 and `y` on `time` 1, 2, 3, it prints:
+
+```text
+   3x model.py:11  Coordinate mismatch in merge along dim '_term' silently aligned by legacy (positional when sizes match, otherwise outer join by label). Under v1 this raises ValueError.
+        Dim:       'time': left=[0, 1, 2], right=[1, 2, 3]
+```
+
+Fix each listed line with the table below and run the snippet again until it
+prints nothing. Here, `x.add(y, join="inner")` keeps the shared labels 1 and
+2, and `x + y.assign_coords(time=x.indexes["time"])` keeps the legacy
+positional pairing. A line inside a downstream library is an item for its
+maintainer.
 
 ## What changes, and how to fix it
 
