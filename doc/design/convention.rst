@@ -13,7 +13,7 @@ Object scope
 The convention governs every operation a linopy object takes part in,
 whatever the other operand is — a DataArray, a pandas Series or DataFrame, a
 numpy array, a list, or a scalar. A non-linopy operand is converted to a
-labelled array (``as_dataarray`` in ``linopy.common``) and from there behaves
+labelled array (``as_dataarray`` in ``linopy.alignment``) and from there behaves
 exactly like the constant-only expression holding the same values and
 coordinates: ``x + arr`` builds what ``x + arr_expr`` builds, for every operator
 and in either operand position. No rule below depends on what type an
@@ -52,6 +52,10 @@ that introduce absence at a slot also absorb any live terms there, so the
 storage never carries a half-absent row. A term at a *present* slot may still
 carry ``vars = -1`` after ``fillna(value)`` revives the slot — that's a *dead
 term*, inert at the solver layer, and only meaningful as storage book-keeping.
+
+This describes the dense view. A sparse (CSR) store has no per-slot term
+padding: it holds an absent cell as a ``NaN`` ``const`` with no terms, and the
+dense view materialises ``coeffs = NaN`` and ``vars = -1`` for it.
 
 §3. Testing absence
 ~~~~~~~~~~~~~~~~~~~

@@ -25,7 +25,7 @@ you're unsure what a particular operator or argument does.
   quadratic) expressions; arithmetic, broadcasting, ``sum``,
   ``groupby``, ``rolling``, ``where``.
 - :doc:`creating-constraints` — turning expressions into ``≤`` / ``≥``
-  / ``==`` constraints, and their memory-efficient sparse (CSR) storage.
+  / ``==`` constraints, held dense or sparse (CSR).
 - :doc:`coordinate-alignment` — how linopy lines up operands that live
   on different coordinates, and how to control it with ``join``.
 
@@ -35,6 +35,27 @@ If your data comes as tables, one row per key combination, read
 :doc:`long-form-inputs`. It pivots such frames with
 ``linopy.from_long`` and sums over member-group tables with
 ``linopy.Relation``.
+
+
+Dense and sparse models
+-----------------------
+
+Every model holds its expressions in one of two representations, picked
+with ``Model(sparse=...)`` at construction. The dense representation, the
+default, pads each row to the widest row along ``_term``. The sparse
+representation stores each expression as a CSR matrix (compressed sparse
+rows) and holds every constraint's left-hand side in CSR form whenever the
+grid can hold its coordinates. Both share one API and give the same model.
+
+.. code-block:: python
+
+    m = linopy.Model(sparse=True)
+
+Sparse suits models that aggregate many entities into few rows, such as
+generators into buses. Operations without a sparse path run on a dense
+copy, emit a ``PerformanceWarning`` and leave the expression sparse. See
+:doc:`sparse-models` for the operations that keep the sparse backing, the
+ones that densify, and the ``warn_on_densify`` option.
 
 
 Numerical scaling
@@ -74,25 +95,6 @@ objective scaling once globally.
 
 For a worked example that builds a badly-scaled model and applies each of the
 three variants step by step, see the :doc:`numerical-scaling` tutorial.
-
-
-Sparse models
--------------
-
-Models that aggregate many entities into few rows, such as generators
-into buses, can store their expressions as sparse matrices instead of
-padded dense arrays. Opt in with ``Model(sparse=True)``. ``groupby(...).sum()`` and ``@`` then return sparse-backed
-expressions, and every constraint holds its left-hand side in CSR form
-whenever the grid can hold its coordinates.
-Operations without a sparse path convert an
-expression to dense and emit a ``PerformanceWarning``.
-
-.. code-block:: python
-
-    m = linopy.Model(sparse=True)
-
-See :doc:`sparse-models` for the operations that keep the sparse
-backing, the ones that densify, and the ``warn_on_densify`` option.
 
 
 Working with an existing model
