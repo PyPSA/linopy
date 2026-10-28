@@ -209,7 +209,7 @@ def test_repr_with_transposed_dataset_dim_order() -> None:
     labels = np.tile(x.labels.values, (2, 1))[..., None]
     ds = xr.Dataset(
         {
-            "coeffs": (dims, np.ones(labels.shape)),
+            "coeffs": (dims, np.ones(labels.shape, dtype=int)),
             "vars": (dims, labels),
             "const": (dims[:2], np.zeros(labels.shape[:2])),
         },

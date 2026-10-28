@@ -47,12 +47,17 @@ def without_strays(value: _Framed) -> _Framed:
 
 
 def evaluate(node: ms.Expression, ctx: Context) -> Value:
-    """One node as a linopy term, an array or a number, a reference evaluated once per context."""
+    """One node as a linopy term, an array or a number, each node evaluated once per context."""
+    if isinstance(node, ms.Constant):
+        return node.value
+    pinned = isinstance(
+        node, ms.ExpressionReference | ms.VariableReference | ms.ParameterReference
+    )
     if isinstance(node, ms.ExpressionReference):
         node = node.body
-    elif not isinstance(node, ms.VariableReference | ms.ParameterReference):
-        return _evaluated(node, ctx)
-    return ctx.memo.kept((node, ctx.filled), lambda: _evaluated(node, ctx))
+    return ctx.memo.evaluated(
+        node, ctx.filled, lambda: _evaluated(node, ctx), pinned=pinned
+    )
 
 
 def _evaluated(node: ms.Expression, ctx: Context) -> Value:
@@ -147,14 +152,21 @@ def _dual(constraint: str, ctx: Context) -> xr.DataArray:
         raise TypeError(
             f"the dual of constraint '{constraint}' has no symbolic form, read `.solution`"
         )
-    built = ctx.model.constraints[constraint]
-    if built._dual is None:
+    built = ctx.model.constraints.data
+    reported: xr.DataArray | None = None
+    if constraint in built:
+        reported = built[constraint]._dual
+    elif any(c._dual is not None for c in built.values()):
+        dims = ctx.program.constraints[constraint].dims
+        shape = [len(ctx.coords[d]) for d in dims]
+        coords = {d: ctx.coords[d] for d in dims}
+        reported = xr.DataArray(np.full(shape, np.nan), coords, dims=dims)
+    if reported is None:
         raise AttributeError(
             f"constraint '{constraint}' has no dual yet: solve the model, with a solver "
             f"and a problem that report duals, before reading one"
         )
-    dual = built.dual
-    return -dual if flipped(ctx.program.constraints[constraint]) else dual
+    return -reported if flipped(ctx.program.constraints[constraint]) else reported
 
 
 def flipped(constraint: ms.Constraint) -> bool:
@@ -180,12 +192,15 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     the problem. A hole beside a term becomes the term's absence.
     """
     op = _OPERATORS[type(node)]
-    left, right = (evaluate(operand, ctx) for operand in _operands(node))
+    first, second = _operands(node)
+    if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
+        op, second = operator.sub, second.operand
+    left, right = evaluate(first, ctx), evaluate(second, ctx)
     kind = type(node).__name__.lower()
     if isinstance(left, Term) or isinstance(right, Term):
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
-            refuse_made(kind, ms.parameters_of(node), operator.add, a, b, ctx)
+            refuse_made(kind, (node,), op, a, b, ctx)
         return op(*_paired(left, right))
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
@@ -197,7 +212,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"{b.indexes[dim].tolist()[:5]}. Every operand is read on the master "
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
-    return refuse_made(kind, ms.parameters_of(node), op, a, b, ctx)
+    return refuse_made(kind, (node,), op, a, b, ctx)
 
 
 def _paired(left: Value, right: Value) -> tuple[Value, Value]:
@@ -220,13 +235,13 @@ def constant_of(value: Value) -> xr.DataArray:
 
 def refuse_made(
     kind: str,
-    params: frozenset[str],
+    nodes: Sequence[ms.Expression],
     op: Callable[[Value, Value], Value],
     left: xr.DataArray,
     right: xr.DataArray,
     ctx: Context,
 ) -> xr.DataArray:
-    """*op* of *left* and *right*, refused wherever it is not finite though both are present."""
+    """*op* of *left* and *right*, refused wherever it is not finite though both are present, the parameters *nodes* read named."""
     made = cast(xr.DataArray, op(left, right))
     if made.dtype.kind not in "fc" or bool(np.isfinite(made.values).all()):
         return made
@@ -237,7 +252,7 @@ def refuse_made(
         bad = bad & ctx.rows
     if not bool(bad.any()):
         return made
-    named = ", ".join(f"'{p}'" for p in sorted(params))
+    named = ", ".join(f"'{p}'" for p in sorted(ms.parameters_of(*nodes)))
     raise SpecDataError(
         f"{ctx.subject}: the {kind} of {named} is not finite at "
         f"{first_coordinates(bad, 3)}, though its operands are present. A NaN made there "

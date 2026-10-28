@@ -17,9 +17,10 @@ leaves a missing row a hole, and :func:`fill` applies ``missing:``.
 from __future__ import annotations
 
 import difflib
+import functools
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -311,6 +312,9 @@ class Table:
     declared: ms.Relation
     rows: pd.DataFrame
     coords: Mapping[str, pd.Index]
+    _columns: dict[str, xr.DataArray] = field(
+        default_factory=dict, init=False, compare=False, repr=False
+    )
 
     @property
     def key_dims(self) -> list[str]:
@@ -318,10 +322,16 @@ class Table:
 
     def column(self, role: str) -> xr.DataArray:
         """The value column *role* over the key's dimensions, NaN where the key has no row."""
-        return self._on_key(self.rows[role])
+        if role not in self._columns:
+            self._columns[role] = self._on_key(self.rows[role])
+        return self._columns[role]
 
     def defined(self) -> xr.DataArray:
         """Where the relation has a row, over the key's dimensions."""
+        return self._defined
+
+    @functools.cached_property
+    def _defined(self) -> xr.DataArray:
         return self._on_key(pd.Series(np.ones(len(self.rows)))).notnull()
 
     def _on_key(self, values: pd.Series) -> xr.DataArray:

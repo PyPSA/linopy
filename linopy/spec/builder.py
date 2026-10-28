@@ -119,6 +119,9 @@ def _sos(ctx: Context) -> None:
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
         rows = evaluate_where(row.where, ctx)
+        if not bool(rows.any()):
+            ctx.memo.skipped(row.lhs, row.rhs)
+            continue
         mask = as_linopy_mask(rows)
         scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
         refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
@@ -133,9 +136,10 @@ def _constraints(ctx: Context) -> None:
             continue
         _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
-            params = ms.parameters_of(row.lhs, row.rhs)
             const = constant_of(term)
-            refuse_made("comparison", params, operator.sub, const, other, scoped)
+            refuse_made(
+                "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
+            )
             term, other = carried(term, other)
         ctx.model.add_constraints(
             _framed(term, row.dims), sense, other, name=name, mask=mask
@@ -187,7 +191,9 @@ def _check_live(
     """
     if isinstance(term, Variable):
         return
-    dead = rows & ~(term.has_terms | term.isnull())
+    store = cast(LinearExpression, term)._store
+    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
+    dead = rows & ~alive
     if not bool(dead.any()):
         return
     said = (

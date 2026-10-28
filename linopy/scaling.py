@@ -29,7 +29,8 @@ def validate_scaling(scaling: ScalingT, label: str = "scaling") -> ScalingT:
     Column scaling converts variable units, while row and objective scaling
     multiply exported coefficients. They must be finite and strictly positive.
     """
-    scaling = scaling.astype(float)
+    if scaling.dtype != np.float64:
+        scaling = scaling.astype(float)
     values = np.asarray(scaling)
     if not np.isfinite(values).all() or (values <= 0).any():
         raise ValueError(f"{label} must contain only finite positive values.")

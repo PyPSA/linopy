@@ -93,6 +93,12 @@ Version 1.0.0
 * A relation may be bare (key columns only), keyed by several columns or carry several value columns, and its source may be a ``DataFrame`` with one column per declared column. ``at(..., by=rel[col])``, ``sum(..., over=..., by=rel[col, ...])`` and conditions on a column follow mathspec's join semantics. A relation is held as its rows, never as a grid over its key, so a bare relation over two columns of one long dimension stays as small as its data. mathspec's ``operators/at_columns.yaml``, ``sum_by_columns.yaml`` and ``sum_by_column_lists.yaml`` build (`#1063 <https://github.com/PyPSA/linopy/issues/1063>`__, `#1071 <https://github.com/PyPSA/linopy/issues/1071>`__).
 * ``linopy.testing.synthetic_sources`` makes up dense data for every declaration of a spec, given in any form ``Model.from_spec`` takes, for tests and benchmarks.
 * Three limits apply. A constraint row that absence leaves without terms (from a ``missing: absent`` parameter, a ``missing: neutral`` parameter such as ``0 == load``, or a ``where:``-masked variable inside a sum) is refused with an error, where mathspec skips and reports it; linopy is stricter here (`#993 <https://github.com/PyPSA/linopy/issues/993>`__). With ``store=True``, only a relation of one key column and one value column is stored; a bare relation or one with several key or value columns raises ``SpecDataError`` before anything is written. A constraint may multiply two variables only where the data leaves the product no live row, through a zero coefficient, an absent term in a sum or a ``where:``; such a row keeps its linear terms, and a live product raises ``NotImplementedError``, as linopy carries a quadratic term in the objective only.
+* A constraint whose ``where:`` keeps no row adds no constraint group to the model and reserves no labels; ``dual(...)`` of such a constraint reads as all NaN.
+
+**Performance**
+
+* Building a model is faster on the dense path: ``add_variables``, ``add_constraints``, arithmetic between variables and constants, ``where``, subtraction and ``merge`` skip xarray alignment and copies when the operands already share their coordinates. PyPSA's own ``create_model`` builds about twice as fast.
+* ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 
 **Bug fixes**
 
