@@ -439,9 +439,15 @@ class Variable:
         if coeffs.dtype.kind != "f":
             coeffs = coeffs.astype(float)
         coeffs = coeffs[..., None]
+        if absent.any():
+            const = np.where(absent[..., 0], np.nan, 0.0)
+            coeffs = np.where(absent, np.nan, coeffs)
+        else:
+            const = np.broadcast_to(0.0, labels.shape)
+            coeffs = np.broadcast_to(coeffs, vars_.shape)
         fields = {
-            "const": XrVariable(labels.dims, np.where(absent[..., 0], np.nan, 0.0)),
-            "coeffs": XrVariable(dims, np.where(absent, np.nan, coeffs)),
+            "const": XrVariable(labels.dims, const),
+            "coeffs": XrVariable(dims, coeffs),
             "vars": XrVariable(dims, vars_),
         }
         ds = on_coords(fields, labels.coords, labels.attrs)
