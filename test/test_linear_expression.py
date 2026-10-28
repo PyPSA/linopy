@@ -1742,8 +1742,8 @@ def test_groupby_roll_by_aux_coord_period_boundary(
         soc = m.add_variables(lower=0, coords=[s], name="soc")
         charge = m.add_variables(lower=0, coords=[s], name="charge")
         if kind == "flat":
-            prev = (1.0 * soc).assign_coords(period=period).groupby("period")
-            prev = prev.roll(snapshot=1)
+            grouped = (1.0 * soc).assign_coords(period=period).groupby("period")
+            prev = grouped.roll(snapshot=1)
             if "period" in prev.coords:
                 prev = prev.drop_vars("period")
         elif kind == "oracle":

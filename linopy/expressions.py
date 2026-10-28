@@ -863,6 +863,21 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
+def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
+    """
+    The grid of ``ds`` over ``dims``, or None if ``ds`` leaves it: other or
+    unlabelled dimensions, a MultiIndex, or coordinates that are no auxiliary
+    coordinates of the grid.
+    """
+    indexes = ds.indexes
+    if set(ds.dims) != set(dims) or not set(dims) <= set(indexes):
+        return None
+    if any(isinstance(indexes[d], pd.MultiIndex) for d in dims):
+        return None
+    grid = Grid.from_dataset(ds, dims)
+    return grid if set(ds.coords) == set(dims) | set(grid.aux) else None
+
+
 def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
     """
     ``grid`` carrying the auxiliary coordinates of ``const``, or None if
@@ -2420,14 +2435,8 @@ class LinearExpression(BaseExpression):
         store = self._store
         reason = f"{name.strip('_')}(new dimensions or coordinates)"
         rows = select(store.grid.dataarray(np.arange(store.n_cells)))
-        dims = tuple(str(d) for d in rows.dims)
-        indexes = rows.indexes
-        if not set(dims) <= set(indexes):
-            return reason
-        if any(isinstance(indexes[d], pd.MultiIndex) for d in dims):
-            return reason
-        grid = Grid.from_dataset(rows, dims)
-        if set(rows.coords) != set(dims) | set(grid.aux):
+        grid = _grid_of(rows, tuple(str(d) for d in rows.dims))
+        if grid is None:
             return reason
         flat = rows.fillna(-1).to_numpy().reshape(-1).astype(np.int64)
         return store.take(flat, grid)
@@ -2481,6 +2490,23 @@ class LinearExpression(BaseExpression):
         expression, returns a CSR-backed result.
         """
         return self._gathered("roll", super().roll, *args, **kwargs)
+
+    def assign_coords(self, *args: Any, **kwargs: Any) -> Self:
+        """
+        Assign coordinates as ``Dataset.assign_coords``. For a CSR-backed
+        expression, returns a CSR-backed result when the coordinates lie on
+        the grid: new labels for a dimension, or one-dimensional or scalar
+        auxiliary coordinates.
+        """
+        store = self._store
+        if not isinstance(store, CSRStore):
+            return super().assign_coords(*args, **kwargs)
+        ds = store.grid.to_dataset().assign_coords(*args, **kwargs)
+        grid = _grid_of(ds, store.grid.dims)
+        if grid is None:
+            reason = "assign_coords(new dimensions or coordinates)"
+            return self._fallback(reason).assign_coords(*args, **kwargs)
+        return type(self)._from_store(store.with_grid(grid), self._model)
 
     def where(
         self,
