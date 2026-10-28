@@ -74,6 +74,7 @@ API
         ...,
         method="auto",  # "auto", "sos2", "incremental", or "lp"
         active=None,  # binary variable to gate the constraint
+        mask=None,  # which breakpoint slots are real (ragged curves)
         name=None,  # base name for generated variables/constraints
     )
 
@@ -83,6 +84,9 @@ point on the curve, the default) or a one-sided bound on a single
 tuple.  The pure-LP path adds chord and domain constraints only; SOS2,
 incremental, and disjunctive also add interpolation weights and/or
 binaries (see *Formulation Methods* below).
+
+``mask`` declares which breakpoint slots are real, for ragged curves
+(see *NaN masking* below).
 
 
 Breakpoint Construction
@@ -138,8 +142,9 @@ curves.  Pass a dict to ``breakpoints()`` with entity names as keys:
         ),
     )
 
-Ragged lengths are NaN-padded automatically.  Breakpoints are auto-
-broadcast over remaining dimensions (e.g. ``time``).
+``breakpoints`` pads ragged lengths with NaN; declare the real slots to
+the formulation with ``mask=bp.notnull()`` (see *NaN masking* below).
+Breakpoints are auto-broadcast over remaining dimensions (e.g. ``time``).
 
 **Specifying by slopes.**  :class:`linopy.Slopes` resolves to a
 breakpoint array from per-piece slopes plus an initial ``y0``,
@@ -327,6 +332,10 @@ The resolved choice is exposed on the returned ``PiecewiseFormulation``
 via ``.method`` (and ``.convexity`` when well-defined).  An
 ``INFO``-level log line explains the resolution whenever
 ``method="auto"`` is in play.
+
+For an all-equality pair, the convexity label treats the *second* tuple as
+:math:`x` and the first as :math:`y`; swapping the tuples can change the
+label.  With a bounded tuple, the pinned (equality) tuple is :math:`x`.
 
 At-a-glance comparison:
 
@@ -603,16 +612,21 @@ don't need ``expand_dims``:
 NaN masking
 ~~~~~~~~~~~
 
-Trailing NaN values in breakpoints mask the corresponding lambda / delta
-variables (and, for LP, the corresponding chord constraints).  This is useful
-for per-entity breakpoints with ragged lengths:
+Ragged curves (entities with different numbers of breakpoints) are stored
+densely, with NaN padding the surplus slots.  linopy does not read absence off
+the NaN: NaN in user-supplied breakpoints raises unless ``mask`` declares which
+slots are real.  Absent slots get no lambda / delta variable and no constraint
+(for LP, no chord constraint).  One ``mask`` applies to all tuples:
 
 .. code-block:: python
 
     # gen1 has 3 breakpoints, gen2 has 2 (NaN-padded)
-    bp = linopy.breakpoints({"gen1": [0, 50, 100], "gen2": [0, 80]}, dim="gen")
+    x_pts = linopy.breakpoints({"gen1": [0, 50, 100], "gen2": [0, 80]}, dim="gen")
+    y_pts = linopy.breakpoints({"gen1": [0, 70, 150], "gen2": [0, 90]}, dim="gen")
+    m.add_piecewise_formulation((x, x_pts), (y, y_pts), mask=x_pts.notnull())
 
-Interior NaN values (gaps in the middle) are not supported and raise an error.
+A NaN at a slot the mask calls present raises.  Interior NaN values (gaps in
+the middle) are not supported by the SOS2 method and raise an error.
 
 Inspecting generated objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

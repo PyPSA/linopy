@@ -61,6 +61,10 @@ Inspecting a model
    model.Model.is_linear
    model.Model.is_quadratic
    model.Model.sparse
+   model.Model.store_cls
+
+The backing stores are internal; ``Model.store_cls`` and
+``LinearExpression.is_sparse`` are the public entry points.
 
 Modifying a model
 -----------------
@@ -280,6 +284,8 @@ Operations
    expressions.LinearExpression.where
    expressions.LinearExpression.groupby
    expressions.LinearExpression.rolling
+   expressions.LinearExpression.simplify
+   expressions.LinearExpression.densify_terms
 
 Structure
 ---------
@@ -382,6 +388,7 @@ Structure
    constraints.Constraint.vars
    constraints.Constraint.ncons
    constraints.Constraint.nterm
+   constraints.Constraint.labels
 
 Modification
 ------------
@@ -392,6 +399,10 @@ Modification
    :toctree: generated/
 
    constraints.Constraint.update
+   constraints.Constraint.soften
+   constraints.Constraint.sanitize_zeros
+   constraints.Constraint.sanitize_infinities
+   constraints.Constraint.sanitize_missings
 
 Post-solve access
 -----------------
@@ -410,6 +421,15 @@ Conversion
    constraints.Constraint.to_polars
    constraints.Constraint.to_sparse
    constraints.Constraint.to_dense
+   constraints.Constraint.to_matrix
+
+Construction
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   constraints.Constraint.from_dataset
 
 
 Constraints
@@ -646,6 +666,9 @@ Utilities
    ABSENT
    from_long
    Relation
+   Relation.group_of
+   Relation.members
+   Relation.groups
 
 ``options`` holds these keys:
 
@@ -656,6 +679,23 @@ Utilities
   warns in a sparse model, ``True`` always warns, ``False`` never warns.
   Only implicit conversions warn; ``Constraint.to_dense()`` and
   ``Constraint.to_sparse()`` never do. See :doc:`sparse-models`.
+
+
+Testing
+=======
+
+Assertion helpers for comparing linopy objects in tests.
+
+.. autosummary::
+   :toctree: generated/
+
+   testing.assert_varequal
+   testing.assert_linequal
+   testing.assert_exprequal
+   testing.assert_quadequal
+   testing.assert_conequal
+   testing.assert_model_equal
+   testing.assert_equivalent
 
 
 Warnings

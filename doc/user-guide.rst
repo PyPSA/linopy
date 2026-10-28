@@ -84,8 +84,8 @@ into buses, can store their expressions as sparse matrices instead of
 padded dense arrays. Opt in with ``Model(sparse=True)``. ``groupby(...).sum()`` and ``@`` then return sparse-backed
 expressions, and every constraint holds its left-hand side in CSR form
 whenever the grid can hold its coordinates.
-Operations without a sparse path convert an
-expression to dense and emit a ``PerformanceWarning``.
+Operations without a sparse path run on a dense
+copy, emit a ``PerformanceWarning`` and leave the expression sparse.
 
 .. code-block:: python
 

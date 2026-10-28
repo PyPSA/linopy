@@ -765,7 +765,7 @@ class Constraint:
         """
         Update the constraint in place.
 
-        The only mutation API; setters forward here. Two call shapes:
+        The only mutation API. Two call shapes:
 
         * ``c.update(x + 5 <= 3)`` — pass a complete constraint
           expression (mirroring ``add_constraints``). Replaces lhs,

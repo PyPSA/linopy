@@ -5,7 +5,7 @@ This guide will provide you with the necessary steps to get started with Linopy,
 
 Before you start, make sure you have the following:
 
-- Python 3.9 or later installed on your system.
+- Python 3.11 or later installed on your system.
 - Basic knowledge of Python and linear programming.
 
 
@@ -39,6 +39,7 @@ CPU-based solvers
 -  `SCIP <https://www.scipopt.org/>`__ - open source (Apache-2.0), fast MIP solver
 -  `Gurobi <https://www.gurobi.com/>`__  - closed source, commercial, very fast
 -  `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__ - closed source, commercial, very fast (GPU acceleration available in v9.8+)
+-  `Knitro <https://www.artelys.com/solvers/knitro/>`__ - closed source, commercial, strong on nonlinear problems
 -  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
 -  `MOSEK <https://www.mosek.com/>`__ - closed source, commercial, strong on conic/QP
 -  `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__ - closed source, commercial
