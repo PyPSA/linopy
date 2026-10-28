@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from linopy.constants import TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
@@ -83,11 +84,50 @@ def grouped_sum(
     picked = expression.isel(positions)
     if isinstance(picked, xr.DataArray):
         return _scattered(picked, grouped, onto)
+    if isinstance(picked, LinearExpression) and not picked.is_sparse:
+        return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
     summed = keyed.groupby(list(grouped)).sum()
     if isinstance(expression, QuadraticExpression):
         summed = QuadraticExpression(summed.data, summed.model)
     return summed.reindex(onto).fillna(0)
+
+
+def _gathered(
+    picked: LinearExpression,
+    grouped: Mapping[str, np.ndarray],
+    onto: Mapping[str, pd.Index],
+) -> LinearExpression:
+    """The rows of *picked* gathered into their groups, each row's terms in row order behind the term slot it fills."""
+    shape = [len(onto[d]) for d in grouped]
+    at = np.ravel_multi_index(
+        [onto[d].get_indexer(labels) for d, labels in grouped.items()], shape
+    )
+    cells = int(np.prod(shape))
+    counts = np.bincount(at, minlength=cells)
+    order = np.argsort(at, kind="stable")
+    slot = np.empty_like(at)
+    slot[order] = np.arange(len(at)) - (np.cumsum(counts) - counts)[at[order]]
+    data = picked.data.transpose(_ROW, ..., TERM_DIM)
+    others = [str(d) for d in data.coeffs.dims[1:-1]]
+    sizes = [data.sizes[d] for d in others]
+    nterm, depth = data.sizes[TERM_DIM], int(counts.max())
+    k = list(picked.coord_dims).index(_ROW)
+    behind = (list(range(len(shape))), list(range(k, k + len(shape))))
+    framed = [*others[:k], *grouped, *others[k:]]
+    variables: dict[str, tuple[list[str], np.ndarray]] = {}
+    for name, fill in (("coeffs", np.nan), ("vars", -1)):
+        values = data[name].to_numpy()
+        out = np.full((cells, *sizes, nterm, depth), fill, dtype=values.dtype)
+        out[at, ..., slot] = values
+        out = out.reshape(*shape, *sizes, nterm * depth)
+        variables[name] = ([*framed, TERM_DIM], np.moveaxis(out, *behind))
+    const = np.zeros((cells, *sizes))
+    np.add.at(const, at, np.nan_to_num(data.const.transpose(_ROW, ...).to_numpy()))
+    const = np.moveaxis(const.reshape(*shape, *sizes), *behind)
+    variables["const"] = (framed, const)
+    coords = {d: onto[d] if d in grouped else data.indexes[d] for d in framed}
+    return LinearExpression(xr.Dataset(variables, coords=coords), picked.model)
 
 
 def _scattered(

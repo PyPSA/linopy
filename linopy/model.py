@@ -27,7 +27,12 @@ from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import (
+    _as_index,
+    _coords_to_dict,
+    as_dataarray,
+    broadcast_to_coords,
+)
 from linopy.common import (
     _as_renamed_index,
     assigned_labels,
@@ -105,7 +110,7 @@ from linopy.sos_reformulation import (
     sos_reformulation_context,
     undo_sos_reformulation,
 )
-from linopy.store import DenseStore, Store
+from linopy.store import DenseStore, Store, laid_on, on_cells, on_coords
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -128,11 +133,52 @@ DtypeKey = Literal["labels"]
 def _check_infinities(
     sign: Any, rhs: Any, name: str, where: np.ndarray | None = None
 ) -> None:
+    sign, rhs = np.asarray(sign), np.asarray(rhs)
+    if not np.isinf(rhs).any():
+        return
     invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
         (sign == GREATER_EQUAL) & (rhs == np.inf)
     )
     if np.any(invalid if where is None else invalid & where):
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+
+
+_VARIABLE_FIELDS = ("lower", "upper", "scaling", "labels")
+
+
+def _variables_on(
+    coords: Sequence[Sequence | pd.Index] | Mapping,
+    lower: Any,
+    upper: Any,
+    scaling: DataArray,
+    mask: Any,
+) -> tuple[Dataset, np.ndarray | None] | None:
+    """
+    The dataset of a variable laid out in numpy, with its mask as an array,
+    when ``coords`` labels every dim and each bound, ``scaling`` and the mask
+    is a number or a DataArray lying on them; else None, for the aligning path.
+    """
+    expected = _coords_to_dict(coords)
+    if not expected or not set(expected).isdisjoint(_VARIABLE_FIELDS):
+        return None
+    grid = xr.Coordinates({str(d): _as_index(v) for d, v in expected.items()})
+    like, dims = on_coords({}, grid), tuple(grid.dims)
+    shape = tuple(grid.sizes[d] for d in dims)
+
+    def laid(value: Any) -> np.ndarray | None:
+        if isinstance(value, int | float | np.number):
+            return np.broadcast_to(np.asarray(value), shape)
+        return laid_on(value, dims, like) if isinstance(value, DataArray) else None
+
+    bounds = {"lower": laid(lower), "upper": laid(upper), "scaling": laid(scaling)}
+    on_grid = None if mask is None else laid(mask)
+    if any(v is None for v in bounds.values()) or (mask is not None) is (
+        on_grid is None
+    ):
+        return None
+    fields = {k: xr.Variable(dims, v) for k, v in bounds.items()}
+    fields["labels"] = xr.Variable(dims, np.full(shape, -1))
+    return on_coords(fields, grid), None if on_grid is None else on_grid.astype(bool)
 
 
 class Model:
@@ -267,10 +313,12 @@ class Model:
             ``np.int64`` upfront to avoid that mid-build upcast.
         sparse : bool
             Build the model on the sparse (CSR) path, exposed read-only as
-            ``Model.sparse``. ``groupby(...).sum()`` and ``@``/``dot`` against
-            a constant return CSR-backed expressions, and ``add_constraints``
-            holds the constraint lhs on a CSR store. Requires no ``chunk``. See
-            :mod:`linopy.csr`. The default is False.
+            ``Model.sparse``. Every expression is then built on the CSR store
+            (``Model.store_cls``), from :meth:`Variable.to_linexpr` on:
+            arithmetic, ``groupby(...).sum()``, ``@``/``dot`` and the
+            constraint lhs held by ``add_constraints``. Variables stay dense.
+            Requires no ``chunk``. See :mod:`linopy.csr`. The default is
+            False.
 
         Returns
         -------
@@ -956,49 +1004,57 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
-        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         if np.isscalar(scaling):
             scaling_da = DataArray(scaling)
         else:
             scaling_da = broadcast_to_coords(
                 scaling, coords, label="variable scaling", **kwargs
             )
-        data = Dataset(
-            {
-                "lower": lower_da,
-                "upper": upper_da,
-                "scaling": validate_scaling(scaling_da, "variable scaling"),
-                "labels": -1,
-            }
+        scaling_da = validate_scaling(scaling_da, "variable scaling")
+        laid = (
+            None
+            if coords is None or kwargs
+            else _variables_on(coords, lower, upper, scaling_da, mask)
         )
-        (data,) = xr.broadcast(data)
+        if laid is not None:
+            data, on_grid = laid
+        else:
+            lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
+            upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
+            data = Dataset(
+                {
+                    "lower": lower_da,
+                    "upper": upper_da,
+                    "scaling": scaling_da,
+                    "labels": -1,
+                }
+            )
+            (data,) = xr.broadcast(data)
+            on_grid = None
+            if mask is not None:
+                on_grid = broadcast_to_coords(
+                    mask,
+                    coords if coords is not None else data.coords,
+                    label="mask",
+                    **kwargs,
+                ).values.astype(bool)
         self.check_force_dim_names(data)
         self._check_valid_dim_names(data)
 
-        if mask is not None:
-            mask = broadcast_to_coords(
-                mask,
-                coords if coords is not None else data.coords,
-                label="mask",
-                **kwargs,
-            ).astype(bool)
-
-        nan_bounds = data.lower.isnull() | data.upper.isnull()
-        if mask is not None:
-            nan_bounds &= mask
+        nan_bounds = np.isnan(data.lower.values) | np.isnan(data.upper.values)
+        if on_grid is not None:
+            nan_bounds &= on_grid
         if nan_bounds.any():
             check_user_nan("variable bound")
 
         start = self._xCounter
         end = start + data.labels.size
-        data.labels.values = self._allocate_labels(start, end).reshape(
-            data.labels.shape
-        )
+        labels = self._allocate_labels(start, end).reshape(data.labels.shape)
         self._xCounter += data.labels.size
 
-        if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
+        data.labels.values = (
+            labels if on_grid is None else np.where(on_grid, labels, -1)
+        )
 
         data = data.assign_attrs(
             label_range=(start, end),
@@ -1230,7 +1286,12 @@ class Model:
         )
         self._cCounter = end
         if mask is not None:
-            labels = labels.where(mask, -1)
+            if mask.dims == labels.dims:
+                labels = labels.copy(
+                    deep=False, data=np.where(mask.values, labels.values, -1)
+                )
+            else:
+                labels = labels.where(mask, -1)
         return labels, (start, end)
 
     def add_constraints(
@@ -1323,28 +1384,35 @@ class Model:
                 else (as_dataarray(mask).astype(bool) & rhs_mask)
             )
 
-        row_scaling = validate_scaling(
-            broadcast_to_coords(scaling, rhs.coords, label="constraint scaling"),
-            "constraint scaling",
-        )
+        if isinstance(scaling, int | float | np.number):
+            scaling = DataArray(float(scaling))
+        else:
+            scaling = broadcast_to_coords(
+                scaling, rhs.coords, label="constraint scaling"
+            )
+        row_scaling = validate_scaling(scaling, "constraint scaling")
 
         if mask is not None:
-            mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
+            on_grid = (
+                on_cells(mask, rhs.dims, rhs) if isinstance(mask, DataArray) else None
+            )
+            if on_grid is None:
+                mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
+            else:
+                mask = rhs.copy(deep=False, data=np.asarray(on_grid, dtype=bool))
 
         lhs = con.lhs
         self.check_force_dim_names(lhs)
         self._check_valid_dim_names(lhs)
 
         labels, label_range = self._allocate_constraint_labels(rhs, mask)
-        constraint = Constraint(
-            LinearExpression._from_store(model_store(lhs._store, self), self),
-            con.sign,
-            rhs,
+        constraint = con._added(
             self,
             name,
-            labels=labels,
-            scaling=row_scaling,
-            attrs={**con.attrs, "label_range": label_range},
+            rhs,
+            labels,
+            row_scaling,
+            {**con.attrs, "label_range": label_range},
         )
         enforce_no_multiindex(constraint, context=f"constraint {name!r}")
 

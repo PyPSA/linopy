@@ -1312,6 +1312,8 @@ class BaseExpression(ABC):
             Defaults to 0; ``linopy.ABSENT`` keeps them absent, for a constant
             or an expression ``other`` alike. Requires an explicit ``join``.
         """
+        if join is None and fill_value is None:
+            return cast("Self | QuadraticExpression", self.__sub__(other))
         return self.add(
             -other, join=join, fill_value=None if fill_value is None else -fill_value
         )
@@ -1744,7 +1746,10 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, CONSTANT_TYPES):
+        if isinstance(rhs, int | float | np.number):
+            if is_nan_scalar(rhs):
+                check_user_nan()
+        elif isinstance(rhs, CONSTANT_TYPES):
             rhs = self._broadcast_rhs(rhs)
             if rhs.isnull().any():
                 check_user_nan()
@@ -1752,8 +1757,12 @@ class BaseExpression(ABC):
         all_to_lhs = self.sub(rhs, join=join)
         if not isinstance(all_to_lhs, LinearExpression):
             raise TypeError("The lhs of a constraint must be a linear expression.")
+        const = all_to_lhs.const
         return constraints.Constraint(
-            all_to_lhs.reset_const(), sign, -all_to_lhs.const, self.model
+            all_to_lhs.reset_const(),
+            sign,
+            const.copy(deep=False, data=-const.values),
+            self.model,
         )
 
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
@@ -2373,6 +2382,24 @@ class LinearExpression(BaseExpression):
             return dense._combined_with_constant(self_const, operand, op, **flags)
         return type(self)._from_store(store, self._model)
 
+    def _apply_constant_op(
+        self,
+        other: ConstantLike,
+        op: Callable[[Any, Any], Any],
+        *,
+        join: JoinOptions | None = None,
+        fill_value: FillValueLike = None,
+    ) -> Self:
+        store = self._store
+        if join is None and isinstance(store, DenseStore):
+            operand = store.on_cells(other)
+            if operand is not None:
+                scale = op is not operator.add
+                return type(self)._from_store(
+                    store.combined(operand, op, scale), self._model
+                )
+        return super()._apply_constant_op(other, op, join=join, fill_value=fill_value)
+
     def _printout_cell(
         self, indices: tuple[Any, ...]
     ) -> tuple[np.ndarray, np.ndarray, Any]:
@@ -2466,11 +2493,20 @@ class LinearExpression(BaseExpression):
         | None = None,
         drop: bool = False,
     ) -> Self:
-        if not self.is_sparse:
+        absent = other is None or other is np.nan
+        dense = self._store
+        if isinstance(dense, DenseStore):
+            if (
+                absent
+                and not drop
+                and isinstance(cond, DataArray)
+                and cond.dtype == bool
+                and (keep := dense.on_cells(cond)) is not None
+            ):
+                return type(self)._from_store(dense.masked(keep), self._model)
             return super().where(cond, other, drop)
         enforce_no_multiindex(cond, context="The condition")
         cond_da = _expr_unwrap(cond)
-        absent = other is None or other is np.nan
         store: Store | Reason
         if not isinstance(cond_da, DataArray):
             store = "where(condition no DataArray)"
@@ -2555,6 +2591,13 @@ class LinearExpression(BaseExpression):
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         store = self._store
+        if isinstance(store, DenseStore) and join is None:
+            operand = store.on_cells(rhs)
+            if operand is not None:
+                lhs, moved = store.moved(operand)
+                return constraints.Constraint(
+                    type(self)._from_store(lhs, self.model), sign, moved, self.model
+                )
         if not isinstance(store, CSRStore):
             return super().to_constraint(sign, rhs, join)
         if not isinstance(sign, str):
@@ -2630,6 +2673,14 @@ class LinearExpression(BaseExpression):
         | QuadraticExpression,
     ) -> LinearExpression | QuadraticExpression:
         other = as_constant(other)
+        if type(self) is LinearExpression and type(other) is LinearExpression:
+            store, subtrahend = self._store, other._store
+            if isinstance(store, DenseStore) and isinstance(subtrahend, DenseStore):
+                enforce_no_multiindex(self, context="merge input")
+                enforce_no_multiindex(other, context="merge input")
+                res = store.subtracted(subtrahend)
+                if res is not None:
+                    return type(self)._from_store(res, self._model)
         try:
             return self.__add__(-other)
         except TypeError:

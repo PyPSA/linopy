@@ -95,7 +95,7 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         left = ctx.relations[node.name].column(node.column)
         return _both(node.op, left, ctx.relations[node.other].column(node.other_column))
     if isinstance(node, ms.RelationDefined):
-        return ctx.relations[node.name].defined()
+        return ctx.relations[node.name].defined
     if isinstance(node, ms.Not):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.And):
@@ -113,7 +113,7 @@ def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     value column holds, and along a key column it carries at the key's own label.
     """
     table = ctx.relations[columns.name]
-    present = table.defined()
+    present = table.defined
     positions = {}
     for role in columns.joined:
         dim = columns.dim(role)

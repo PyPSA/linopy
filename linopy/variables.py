@@ -22,6 +22,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
+import xarray as xr
 from numpy import floating, int64, issubdtype, ndarray, str_
 from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
@@ -59,6 +60,7 @@ from linopy.constants import (
     STASHED_ATTRS,
     STASHED_LOWER,
     STASHED_UPPER,
+    TERM_DIM,
 )
 from linopy.containers import LabelContainer
 from linopy.long import Relation
@@ -72,7 +74,7 @@ from linopy.semantics import (
     first_mismatched_dim,
     reindex_like_if_needed,
 )
-from linopy.store import DenseStore, Store
+from linopy.store import DenseStore, Store, on_cells, on_coords
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -383,6 +385,11 @@ class Variable:
         self, store_cls: type[Store], coefficient: ConstantLike = 1
     ) -> expressions.LinearExpression:
         """:meth:`to_linexpr` built on ``store_cls``."""
+        if store_cls is DenseStore:
+            on_labels = self._on_labels(coefficient)
+            if on_labels is not None:
+                dense = self._dense_term(*on_labels)
+                return expressions.LinearExpression._from_store(dense, self.model)
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
@@ -396,6 +403,51 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels})
         store = store_cls.from_labels(ds, self.model)
         return expressions.LinearExpression._from_store(store, self.model)
+
+    def _on_labels(
+        self, coefficient: ConstantLike
+    ) -> tuple[DataArray, float | np.ndarray] | None:
+        """
+        The labels and ``coefficient`` on their common grid, as a DataArray
+        and a number or an array over its dims, when the coefficient is a
+        scalar or lies on the labels' coordinates; else None.
+        """
+        labels = self.labels
+        if isinstance(coefficient, DataArray):
+            enforce_no_multiindex(coefficient, context="The constant")
+            extra = [d for d in coefficient.dims if d not in labels.dims]
+            if any(d not in coefficient.indexes for d in extra):
+                return None
+            if extra:
+                labels = labels.broadcast_like(coefficient)
+                labels = labels.transpose(*self.labels.dims, *extra)
+        values = on_cells(coefficient, labels.dims, labels)
+        return None if values is None else (labels, values)
+
+    def _dense_term(
+        self, labels: DataArray, coefficient: float | np.ndarray
+    ) -> DenseStore:
+        """The one-term dense store ``coefficient * self`` on the grid of ``labels``, absent where the variable is."""
+        vars_ = labels.values[..., None]
+        absent = vars_ == -1
+        dims = (*labels.dims, TERM_DIM)
+        coeffs = np.asarray(coefficient)
+        if coeffs.dtype.kind != "f":
+            coeffs = coeffs.astype(float)
+        coeffs = coeffs[..., None]
+        if absent.any():
+            const = np.where(absent[..., 0], np.nan, 0.0)
+            coeffs = np.where(absent, np.nan, coeffs)
+        else:
+            const = np.broadcast_to(0.0, labels.shape)
+            coeffs = np.broadcast_to(coeffs, vars_.shape)
+        fields = {
+            "const": xr.Variable(labels.dims, const),
+            "coeffs": xr.Variable(dims, coeffs),
+            "vars": xr.Variable(dims, vars_),
+        }
+        ds = on_coords(fields, labels.coords, labels.attrs)
+        return DenseStore.normalized(ds, self.model)
 
     def __repr__(self) -> str:
         """

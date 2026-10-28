@@ -665,6 +665,20 @@ def test_a_scalar_where_gates_a_whole_variable(on: bool, objective: float) -> No
     assert m.objective.value == pytest.approx(objective)
 
 
+def test_a_fully_masked_constraint_adds_no_group_and_reads_a_nan_dual() -> None:
+    spec = with_(
+        SCALAR_SWITCH,
+        constraints={
+            "cap": {"dims": ["i"], "expression": "y <= 4", "where": "on"},
+            "floor": {"dims": ["i"], "expression": "y >= 3"},
+        },
+        expressions={"price": "dual(cap)"},
+    )
+    m = solved(spec, {"i": [1, 2], "on": False})
+    assert list(m.constraints) == ["floor"]
+    assert evaluate(spec, m, "price")["price"].isnull().all()
+
+
 @pytest.mark.parametrize("expression", ["y <= 5", "5 >= y"], ids=["left", "flipped"])
 def test_a_constraint_is_framed_in_its_declared_order(expression: str) -> None:
     spec = {

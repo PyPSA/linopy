@@ -10,6 +10,7 @@ to is a :data:`Value`: a number, an array or a linopy term.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast, overload
@@ -42,8 +43,11 @@ def as_expression(value: Array) -> Expression:
 @dataclass
 class Memo:
     """
-    What a build or a fold has evaluated: a variable, a parameter or a named
-    expression by its node and ``filled``, a condition by its node.
+    What a build or a fold has evaluated: a condition by its node, an
+    expression node by its node and ``filled``. A reference and a named
+    expression's body are kept for the build; another node is kept while
+    ``uses`` counts a use of it ahead, and only when it is data: a term is
+    made again where it is used, so none is held for a later declaration.
 
     ``masked`` counts the refusals a ``rows`` narrowing let pass: a value
     made under one is not kept, so a value read back is refused wherever it
@@ -52,6 +56,8 @@ class Memo:
 
     values: dict[Hashable, Any] = field(default_factory=dict)
     masked: int = 0
+    uses: dict[ms.Expression, int] = field(default_factory=dict)
+    inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
 
     def kept(self, key: Hashable, make: Callable[[], _Kept]) -> _Kept:
         """The value kept at *key*, else made by *make* and kept unless a refusal was masked making it."""
@@ -62,6 +68,59 @@ class Memo:
         if self.masked == masked:
             self.values[key] = value
         return value
+
+    def evaluated(
+        self,
+        node: ms.Expression,
+        filled: bool,
+        make: Callable[[], _Kept],
+        pinned: bool = False,
+    ) -> _Kept:
+        """The value of *node* under *filled*, one use of it consumed: read back if kept, else made by *make* and kept for the build if *pinned*, else while a use is ahead and it is data."""
+        key = (node, filled)
+        if key in self.values:
+            value = cast(_Kept, self.values[key])
+            if node not in self.inner:
+                self.inner[node] = tuple(ms.walk(node))
+            for inner in self.inner[node]:
+                self._used(inner)
+            return value
+        masked = self.masked
+        value = make()
+        keep = pinned or (self.uses.get(node, 0) > 1 and not isinstance(value, Term))
+        if keep and self.masked == masked:
+            self.values[key] = value
+        if pinned:
+            self.uses.pop(node, None)
+        else:
+            self._used(node)
+        return value
+
+    def skipped(self, *roots: ms.Expression) -> None:
+        """Consume the uses of every node under *roots*, a declaration left unbuilt."""
+        for node in ms.walk(*roots):
+            self._used(node)
+
+    def _used(self, node: ms.Expression) -> None:
+        left = self.uses.get(node)
+        if left is None:
+            return
+        if left > 1:
+            self.uses[node] = left - 1
+            return
+        del self.uses[node]
+        for filled in (True, False):
+            self.values.pop((node, filled), None)
+
+
+def uses_of(program: ms.Program) -> dict[ms.Expression, int]:
+    """How often each node stands in what a build evaluates: the bounds, the sides of the constraints, the objective and the named expressions."""
+    bounds = (b for v in program.variables.values() for b in (v.lower, v.upper))
+    sides = (s for c in program.constraints.values() for s in (c.lhs, c.rhs))
+    bodies = (e.expression for e in program.expressions.values())
+    objective = () if program.objective is None else (program.objective.expression,)
+    roots = [*(b for b in bounds if b is not None), *sides, *bodies, *objective]
+    return Counter(ms.walk(*roots))
 
 
 @dataclass(frozen=True)

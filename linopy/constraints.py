@@ -6,6 +6,7 @@ This module contains implementations for the Constraint{s} class.
 
 from __future__ import annotations
 
+import copy
 import functools
 from collections.abc import (
     Callable,
@@ -212,6 +213,10 @@ def _on_grid(value: Any, template: DataArray, label: str) -> DataArray:
             f"Constraint {label} has dimensions {sorted(map(str, extra))} outside "
             f"the dimensions {list(map(str, template.dims))} of its lhs."
         )
+    if not da.ndim and template.ndim:
+        return template.copy(
+            deep=False, data=np.broadcast_to(da.values, template.shape)
+        )
     indexes = template.indexes
     aligned = all(i.equals(indexes[k]) for k, i in da.indexes.items() if k in indexes)
     if aligned and da.dims != template.dims:
@@ -370,6 +375,34 @@ class Constraint:
         self._binary_var = self._optional_on_grid(fields, "binary_var", template)
         self._binary_val = self._optional_on_grid(fields, "binary_val", template)
         self._blocks = self._optional_on_grid(fields, "blocks", template)
+
+    def _added(
+        self,
+        model: Model,
+        name: str,
+        rhs: DataArray,
+        labels: DataArray,
+        scaling: DataArray,
+        attrs: Mapping[str, Any],
+    ) -> Constraint:
+        """
+        Internal: this anonymous constraint as ``model`` adds it, named, with
+        ``rhs``, ``labels`` and ``scaling`` on its grid and its lhs on the
+        model's store class; the lhs and sign already held stay bound.
+        """
+        store = model_store(self._lhs._store, model)
+        if store is not self._lhs._store or model is not self._model:
+            lhs = expressions.LinearExpression._from_store(store, model)
+            return Constraint(
+                lhs, self._sign, rhs, model, name, labels, scaling, attrs=attrs
+            )
+        added = copy.copy(self)
+        template = self._grid_template()
+        added._attrs = {**attrs, "name": name}
+        added._rhs = _on_grid(rhs, template, "rhs")
+        added._labels = _on_grid(labels, template, "labels")
+        added._scaling = _on_grid(scaling, template, "scaling")
+        return added
 
     def _rebind(self, store: Store, fields: Mapping[Any, Any]) -> None:
         """

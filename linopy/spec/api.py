@@ -32,7 +32,7 @@ from linopy.spec.attach import (
     strict_parameters,
 )
 from linopy.spec.builder import build
-from linopy.spec.context import Context
+from linopy.spec.context import Context, Memo, uses_of
 from linopy.spec.errors import SpecDataError, shown, unknown
 from linopy.spec.evaluator import fold
 
@@ -183,6 +183,7 @@ def _context(
         attached.relations,
         functools.cache(read),
         solved=solved,
+        memo=Memo(uses=uses_of(program)),
     )
 
 
