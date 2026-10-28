@@ -527,7 +527,7 @@ class LinearExpressionGroupby:
         self,
         use_fallback: bool = False,
         observed: bool = False,
-    ) -> LinearExpression | QuadraticExpression:
+    ) -> LinearExpression:
         """
         Sum the expression over each group.
 
@@ -551,9 +551,9 @@ class LinearExpressionGroupby:
 
         Returns
         -------
-        LinearExpression or QuadraticExpression
+        LinearExpression
             The summed expression, with one entry per group. A quadratic
-            expression stays quadratic.
+            expression stays a QuadraticExpression.
         """
         if observed and use_fallback:
             raise ValueError(
@@ -674,7 +674,7 @@ class LinearExpressionGroupby:
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
         if FACTOR_DIM in ds.vars.dims:
-            return QuadraticExpression(ds, self.model)
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
         return LinearExpression(ds, self.model)
 
     def _relation_sum(self, relation: Relation) -> LinearExpression:
@@ -713,7 +713,6 @@ class LinearExpressionGroupby:
         }
         grouper = pd.Series(labels[order], index=rows, name=group)
         res = obj.isel(indexers).groupby(grouper).sum()
-        assert isinstance(res, LinearExpression)
         if relation.groups is not None:
             res = res.reindex({group: relation.groups.rename(group)}).fillna(0)
         slot = min(dims.index(m) for m in members)
