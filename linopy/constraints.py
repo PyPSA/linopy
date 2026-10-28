@@ -214,7 +214,9 @@ def _on_grid(value: Any, template: DataArray, label: str) -> DataArray:
             f"the dimensions {list(map(str, template.dims))} of its lhs."
         )
     if not da.ndim and template.ndim:
-        return template.copy(deep=False, data=np.full(template.shape, da.values[()]))
+        return template.copy(
+            deep=False, data=np.broadcast_to(da.values, template.shape)
+        )
     indexes = template.indexes
     aligned = all(i.equals(indexes[k]) for k, i in da.indexes.items() if k in indexes)
     if aligned and da.dims != template.dims:

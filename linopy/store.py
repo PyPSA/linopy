@@ -774,10 +774,10 @@ class DenseStore(Store):
         store = self.absorbed()
         const = store.ds.variables["const"]
         with np.errstate(all="ignore"):
-            remainder = const.values - rhs
-        check_arithmetic_nan(remainder, operator.sub, rhs, const.values)
+            moved = rhs - const.values
+        check_arithmetic_nan(moved, operator.sub, rhs, const.values)
         zero = xr.Variable(const.dims, np.broadcast_to(0.0, const.shape))
-        kept = DataArray(xr.Variable(const.dims, -remainder), coords=store.ds.coords)
+        kept = DataArray(xr.Variable(const.dims, moved), coords=store.ds.coords)
         return store._derived(store._own(const=zero)), kept
 
     def _assigned(self, **fields: DataArray) -> DenseStore:
