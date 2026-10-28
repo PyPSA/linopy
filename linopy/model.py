@@ -110,7 +110,7 @@ from linopy.sos_reformulation import (
     sos_reformulation_context,
     undo_sos_reformulation,
 )
-from linopy.store import DenseStore, Store, broadcast_on, laid_on, on_coords
+from linopy.store import DenseStore, Store, laid_on, on_cells, on_coords
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -162,31 +162,23 @@ def _variables_on(
     if not expected or not set(expected).isdisjoint(_VARIABLE_FIELDS):
         return None
     grid = xr.Coordinates({str(d): _as_index(v) for d, v in expected.items()})
-    like = on_coords({}, grid)
-    shape = tuple(grid.sizes[d] for d in grid.dims)
-    laid: dict[str, np.ndarray | None] = {}
-    for name, value in (
-        ("lower", lower),
-        ("upper", upper),
-        ("scaling", scaling),
-        ("mask", mask),
+    like, dims = on_coords({}, grid), tuple(grid.dims)
+    shape = tuple(grid.sizes[d] for d in dims)
+
+    def laid(value: Any) -> np.ndarray | None:
+        if isinstance(value, int | float | np.number):
+            return np.broadcast_to(np.asarray(value), shape)
+        return laid_on(value, dims, like) if isinstance(value, DataArray) else None
+
+    bounds = {"lower": laid(lower), "upper": laid(upper), "scaling": laid(scaling)}
+    on_grid = None if mask is None else laid(mask)
+    if any(v is None for v in bounds.values()) or (mask is not None) is (
+        on_grid is None
     ):
-        if value is None or isinstance(value, int | float | np.number):
-            laid[name] = (
-                None if value is None else np.broadcast_to(np.asarray(value), shape)
-            )
-            continue
-        if not isinstance(value, DataArray):
-            return None
-        values = laid_on(value, tuple(grid.dims), like)
-        if values is None:
-            return None
-        laid[name] = values
-    on_grid = laid["mask"]
-    fields = {k: xr.Variable(grid.dims, laid[k]) for k in _VARIABLE_FIELDS[:3]}
-    fields["labels"] = xr.Variable(grid.dims, np.full(shape, -1))
-    data = Dataset(fields, coords=grid)
-    return data, None if on_grid is None else on_grid.astype(bool)
+        return None
+    fields = {k: xr.Variable(dims, v) for k, v in bounds.items()}
+    fields["labels"] = xr.Variable(dims, np.full(shape, -1))
+    return on_coords(fields, grid), None if on_grid is None else on_grid.astype(bool)
 
 
 class Model:
@@ -1402,14 +1394,12 @@ class Model:
 
         if mask is not None:
             on_grid = (
-                broadcast_on(mask, rhs.dims, rhs)
-                if isinstance(mask, DataArray)
-                else None
+                on_cells(mask, rhs.dims, rhs) if isinstance(mask, DataArray) else None
             )
             if on_grid is None:
                 mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
             else:
-                mask = rhs.copy(deep=False, data=on_grid.astype(bool))
+                mask = rhs.copy(deep=False, data=np.asarray(on_grid, dtype=bool))
 
         lhs = con.lhs
         self.check_force_dim_names(lhs)

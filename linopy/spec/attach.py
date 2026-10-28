@@ -326,12 +326,9 @@ class Table:
             self._columns[role] = self._on_key(self.rows[role])
         return self._columns[role]
 
+    @functools.cached_property
     def defined(self) -> xr.DataArray:
         """Where the relation has a row, over the key's dimensions."""
-        return self._defined
-
-    @functools.cached_property
-    def _defined(self) -> xr.DataArray:
         return self._on_key(pd.Series(np.ones(len(self.rows)))).notnull()
 
     def _on_key(self, values: pd.Series) -> xr.DataArray:
@@ -519,7 +516,7 @@ def _refuse_unmapped(name: str, table: Table) -> None:
     if rel.missing != "refused" or not lacking:
         return
     first = (
-        f", the first at {first_coordinates(~table.defined(), 3)}" if rel.values else ""
+        f", the first at {first_coordinates(~table.defined, 3)}" if rel.values else ""
     )
     raise SpecDataError(
         f"relation '{name}' has no row for {lacking} {_named(rel.key)} label(s){first}. "

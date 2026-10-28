@@ -133,7 +133,6 @@ from linopy.store import (
     expression_dataset,
     merge_datasets,
     merge_stores,
-    on_coords,
     pruned_terms,
     summed,
 )
@@ -2495,7 +2494,6 @@ class LinearExpression(BaseExpression):
                 and not drop
                 and isinstance(cond, DataArray)
                 and cond.dtype == bool
-                and not set(HELPER_DIMS).intersection(cond.dims)
                 and (keep := dense.on_cells(cond)) is not None
             ):
                 return type(self)._from_store(dense.masked(keep), self._model)
@@ -2586,8 +2584,13 @@ class LinearExpression(BaseExpression):
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         store = self._store
-        if isinstance(store, DenseStore):
-            return self._dense_constraint(sign, rhs, join)
+        if isinstance(store, DenseStore) and join is None:
+            operand = store.on_cells(rhs)
+            if operand is not None:
+                lhs, moved = store.moved(operand)
+                return constraints.Constraint(
+                    type(self)._from_store(lhs, self.model), sign, moved, self.model
+                )
         if not isinstance(store, CSRStore):
             return super().to_constraint(sign, rhs, join)
         if not isinstance(sign, str):
@@ -2601,35 +2604,6 @@ class LinearExpression(BaseExpression):
             return self._fallback(rhs_da).to_constraint(sign, rhs, join)
         return constraints.Constraint(
             self.reset_const(), sign, rhs_da - self.const, self.model
-        )
-
-    def _dense_constraint(
-        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None
-    ) -> Constraint:
-        """
-        :meth:`to_constraint` on a dense store: a constant rhs lying on the
-        grid moves to the lhs in one numpy step, anything else takes the
-        general path.
-        """
-        store = cast(DenseStore, self._store)
-        operand = store.on_cells(rhs) if join is None else None
-        if operand is None:
-            return super().to_constraint(sign, rhs, join)
-        ds = absorb_absence(store.ds)
-        variables = ds.variables
-        const = variables["const"]
-        with np.errstate(all="ignore"):
-            moved = const.values - operand
-        check_arithmetic_nan(moved, operator.sub, operand, const.values)
-        fields = {
-            "const": xr.Variable(const.dims, np.broadcast_to(0.0, const.shape)),
-            "coeffs": variables["coeffs"],
-            "vars": variables["vars"],
-        }
-        lhs = DenseStore(on_coords(fields, ds.coords, ds.attrs), self.model)
-        moved = DataArray(xr.Variable(const.dims, -moved), coords=ds.coords)
-        return constraints.Constraint(
-            type(self)._from_store(lhs, self.model), sign, moved, self.model
         )
 
     @overload

@@ -30,6 +30,22 @@ and run it via `pre-commit <https://pre-commit.com/index.html>`_:
 * Install the git hook (once): ``pre-commit install``
 * Run manually: ``pre-commit run --all-files``
 
+Conventions for the dense store
+-------------------------------
+
+The dense store in ``linopy/store.py`` has numpy fast paths next to the
+general xarray path. To keep them lean, follow three rules:
+
+* A user value entering a fast path passes through ``on_cells`` (a NaN
+  raises) or ``laid_on`` (a NaN kept). Don't add a scalar NaN check or a
+  coordinate comparison at the call site.
+* A fast path doesn't call ``Dataset(...)`` or ``transpose`` directly. It
+  lays fields out with ``on_coords``, ``DenseStore._own``, ``transposed``
+  and ``DenseStore.normalized``.
+* A performance trick with a numeric threshold, e.g. a per-term loop below
+  some number of terms, needs a measured table in the pull request. Without
+  one, it goes.
+
 Running Tests
 =============
 

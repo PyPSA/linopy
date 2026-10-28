@@ -22,10 +22,10 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
+import xarray as xr
 from numpy import floating, int64, issubdtype, ndarray, str_
 from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
-from xarray import Variable as XrVariable
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
@@ -72,10 +72,9 @@ from linopy.semantics import (
     enforce_aux_conflict,
     enforce_no_multiindex,
     first_mismatched_dim,
-    is_nan_scalar,
     reindex_like_if_needed,
 )
-from linopy.store import DenseStore, Store, broadcast_on, expression_dataset, on_coords
+from linopy.store import DenseStore, Store, on_cells, on_coords
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -386,18 +385,11 @@ class Variable:
         self, store_cls: type[Store], coefficient: ConstantLike = 1
     ) -> expressions.LinearExpression:
         """:meth:`to_linexpr` built on ``store_cls``."""
-        if store_cls is DenseStore and isinstance(coefficient, (int, float, np.number)):
-            if is_nan_scalar(coefficient):
-                check_user_nan()
-            return expressions.LinearExpression._from_store(
-                self._dense_term(self.labels, float(coefficient)), self.model
-            )
-        if store_cls is DenseStore and isinstance(coefficient, DataArray):
+        if store_cls is DenseStore:
             on_labels = self._on_labels(coefficient)
             if on_labels is not None:
-                return expressions.LinearExpression._from_store(
-                    self._dense_term(*on_labels), self.model
-                )
+                dense = self._dense_term(*on_labels)
+                return expressions.LinearExpression._from_store(dense, self.model)
         if not np.isscalar(coefficient):
             coeff_da = as_dataarray(coefficient)
             enforce_aux_conflict([self.labels, coeff_da])
@@ -412,20 +404,24 @@ class Variable:
         store = store_cls.from_labels(ds, self.model)
         return expressions.LinearExpression._from_store(store, self.model)
 
-    def _on_labels(self, coefficient: DataArray) -> tuple[DataArray, np.ndarray] | None:
+    def _on_labels(
+        self, coefficient: ConstantLike
+    ) -> tuple[DataArray, float | np.ndarray] | None:
         """
         The labels and ``coefficient`` on their common grid, as a DataArray
-        and an array over its dims, when the coefficient lies on the labels'
-        coordinates; else None.
+        and a number or an array over its dims, when the coefficient is a
+        scalar or lies on the labels' coordinates; else None.
         """
-        enforce_no_multiindex(coefficient, context="The constant")
         labels = self.labels
-        extra = [d for d in coefficient.dims if d not in labels.dims]
-        if extra:
+        if isinstance(coefficient, DataArray):
+            enforce_no_multiindex(coefficient, context="The constant")
+            extra = [d for d in coefficient.dims if d not in labels.dims]
             if any(d not in coefficient.indexes for d in extra):
                 return None
-            labels = labels.broadcast_like(coefficient).transpose(*labels.dims, *extra)
-        values = broadcast_on(coefficient, labels.dims, labels)
+            if extra:
+                labels = labels.broadcast_like(coefficient)
+                labels = labels.transpose(*self.labels.dims, *extra)
+        values = on_cells(coefficient, labels.dims, labels)
         return None if values is None else (labels, values)
 
     def _dense_term(
@@ -446,12 +442,12 @@ class Variable:
             const = np.broadcast_to(0.0, labels.shape)
             coeffs = np.broadcast_to(coeffs, vars_.shape)
         fields = {
-            "const": XrVariable(labels.dims, const),
-            "coeffs": XrVariable(dims, coeffs),
-            "vars": XrVariable(dims, vars_),
+            "const": xr.Variable(labels.dims, const),
+            "coeffs": xr.Variable(dims, coeffs),
+            "vars": xr.Variable(dims, vars_),
         }
         ds = on_coords(fields, labels.coords, labels.attrs)
-        return DenseStore(expression_dataset(ds, self.model), self.model)
+        return DenseStore.normalized(ds, self.model)
 
     def __repr__(self) -> str:
         """

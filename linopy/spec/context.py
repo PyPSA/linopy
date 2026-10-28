@@ -85,18 +85,15 @@ class Memo:
             for inner in self.inner[node]:
                 self._used(inner)
             return value
-        if pinned:
-            value = self.kept(key, make)
-            self.uses.pop(node, None)
-            return value
-        if self.uses.get(node, 0) < 2:
-            self._used(node)
-            return make()
         masked = self.masked
         value = make()
-        if self.masked == masked and not isinstance(value, Term):
+        keep = pinned or (self.uses.get(node, 0) > 1 and not isinstance(value, Term))
+        if keep and self.masked == masked:
             self.values[key] = value
-        self._used(node)
+        if pinned:
+            self.uses.pop(node, None)
+        else:
+            self._used(node)
         return value
 
     def skipped(self, *roots: ms.Expression) -> None:

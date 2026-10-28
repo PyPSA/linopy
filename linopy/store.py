@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import EllipsisType
-from typing import TYPE_CHECKING, Any, Self, TypeAlias, cast, final
+from typing import TYPE_CHECKING, Any, Self, TypeAlias, TypeVar, cast, final
 
 import numpy as np
 import pandas as pd
@@ -336,6 +336,23 @@ class Store(ABC):
 
 
 _FIELDS = ("const", "coeffs", "vars")
+_SCALARS = (int, float, np.number)
+
+
+_Laid = TypeVar("_Laid", xr.Variable, DataArray)
+
+
+def transposed(variable: _Laid, dims: tuple[Hashable, ...]) -> _Laid:
+    """``variable`` on ``dims``, itself when already laid out so."""
+    return variable if variable.dims == dims else variable.transpose(*dims)
+
+
+def coords_within(value: DataArray, like: DataArray | Dataset) -> bool:
+    """Whether every coordinate of ``value`` equals the one ``like`` holds under its name."""
+    held = like.coords.variables
+    return all(
+        k in held and v.equals(held[k]) for k, v in value.coords.variables.items()
+    )
 
 
 def on_coords(
@@ -351,13 +368,20 @@ def on_coords(
     return Dataset(dict(fields), coords=coords, attrs=dict(attrs) if attrs else None)
 
 
-def broadcast_on(
-    value: DataArray, dims: tuple[Hashable, ...], like: DataArray | Dataset
-) -> np.ndarray | None:
+def on_cells(
+    value: Any, dims: tuple[Hashable, ...], like: DataArray | Dataset
+) -> float | np.ndarray | None:
     """
-    ``value`` as an array over ``dims`` when it lies on a subset of them with
-    the coordinates of ``like``, else None. A NaN in it raises (§5).
+    ``value`` as a number or an array over ``dims``: a numeric scalar, or a
+    DataArray lying on a subset of ``dims`` with the coordinates of ``like``;
+    else None. A NaN in it raises (§5).
     """
+    if isinstance(value, _SCALARS):
+        if is_nan_scalar(value):
+            check_user_nan()
+        return float(value)
+    if not isinstance(value, DataArray):
+        return None
     values = laid_on(value, dims, like)
     if values is not None and values.dtype.kind == "f" and np.isnan(values).any():
         check_user_nan()
@@ -367,28 +391,24 @@ def broadcast_on(
 def laid_on(
     value: DataArray, dims: tuple[Hashable, ...], like: DataArray | Dataset
 ) -> np.ndarray | None:
-    """:func:`broadcast_on` with a NaN kept, for a caller that reads NaN as its own."""
+    """The DataArray case of :func:`on_cells` with a NaN kept, for a caller that reads NaN as its own."""
     if value.dtype.kind not in "biuf" or not set(value.dims) <= set(dims):
         return None
     enforce_no_multiindex(value, context="The constant")
     sizes = like.sizes
     if any(value.sizes[d] != sizes[d] for d in value.dims):
         return None
-    variables, names = like.coords.variables, like.coords
-    if any(
-        k not in names or not v.equals(variables[k])
-        for k, v in value.coords.variables.items()
-    ):
+    if not coords_within(value, like):
         return None
     ordered = tuple(d for d in dims if d in value.dims)
-    values = (value if ordered == value.dims else value.transpose(*ordered)).values
+    values = transposed(value.variable, ordered).values
     shape = tuple(sizes[d] if d in value.dims else 1 for d in dims)
     return np.broadcast_to(values.reshape(shape), tuple(sizes[d] for d in dims))
 
 
 def _is_expression_dataset(data: Dataset, model: Model) -> bool:
     """Whether ``data`` already has the layout :func:`expression_dataset` makes."""
-    if set(data.data_vars) != {"const", "coeffs", "vars"}:
+    if set(data.data_vars) != set(_FIELDS):
         return False
     variables = data.variables
     const, coeffs, vars_ = variables["const"], variables["coeffs"], variables["vars"]
@@ -520,10 +540,7 @@ class DenseStore(Store):
 
     @property
     def const(self) -> np.ndarray:
-        const = self.ds.variables["const"]
-        if const.dims != self.dims:
-            const = const.transpose(*self.dims)
-        return const.values.reshape(-1)
+        return transposed(self.ds.variables["const"], self.dims).values.reshape(-1)
 
     @property
     def nterm(self) -> int:
@@ -553,7 +570,7 @@ class DenseStore(Store):
             },
             coords=grid.indexes | grid.aux,
         )
-        return cls(expression_dataset(ds, model), model)
+        return cls.normalized(ds, model)
 
     @classmethod
     def merged(
@@ -565,36 +582,46 @@ class DenseStore(Store):
         kwargs: Mapping[str, Any],
     ) -> DenseStore:
         """The dense merge of ``stores`` along ``dim``, see :func:`merge_datasets`."""
-        model = stores[0].model
         ds = merge_datasets([s.ds for s in stores], dim, join, fill, kwargs, True)
+        return cls.normalized(ds, stores[0].model)
+
+    @classmethod
+    def normalized(cls, ds: Dataset, model: Model) -> DenseStore:
+        """A store on ``model`` holding ``ds`` in the expression layout."""
         return cls(expression_dataset(ds, model), model)
 
     def subtracted(self, other: DenseStore) -> DenseStore | None:
         """``self - other`` where the two stack along the term dimension as :func:`merge_datasets` would, else None."""
         data = [self.ds, other.ds]
-        enforce_merge_dims(data, concat_dim=TERM_DIM)
-        enforce_aux_conflict(data, concat_dim=TERM_DIM)
-        if not (coord_sizes_agree(data) and _stackable(data)):
+        if not (_overriding(data, TERM_DIM, None) and _stackable(data)):
             return None
-        ds = absorb_absence(_stacked_terms(data, [False, True]))
-        return self._derived(ds)
+        return self._derived(absorb_absence(_stacked_terms(data, [False, True])))
 
     def _derived(self, ds: Dataset) -> DenseStore:
         """A store on this model holding ``ds``, normalized."""
-        return DenseStore(expression_dataset(ds, self.model), self.model)
+        return self.normalized(ds, self.model)
 
-    def _on_cells(self, values: float | np.ndarray) -> float | DataArray:
-        """A flat per-cell array as a DataArray over the dims; a scalar as is."""
-        if isinstance(values, np.ndarray) and values.ndim:
-            return DataArray(values.reshape(self.shape), dims=self.dims)
-        return float(values)
+    def _own(self, **fields: xr.Variable) -> Dataset:
+        """This store's dataset with ``fields`` replaced, on its own coordinates."""
+        ds = self.ds
+        held = {str(k): ds.variables[k] for k in ds.data_vars}
+        return on_coords(held | fields, ds.coords, ds.attrs)
+
+    def _laid_fields(self) -> tuple[xr.Variable, xr.Variable, xr.Variable]:
+        """``const``, ``coeffs`` and ``vars``, the terms on the dims of the constant."""
+        variables = self.ds.variables
+        const = variables["const"]
+        dims = (*const.dims, TERM_DIM)
+        coeffs, vars_ = variables["coeffs"], variables["vars"]
+        return const, transposed(coeffs, dims), transposed(vars_, dims)
 
     def _term_views(self) -> tuple[np.ndarray, np.ndarray]:
         """Coefficients and variable labels on ``(*dims, _term)``, uncopied."""
         dims = (*self.dims, TERM_DIM)
+        variables = self.ds.variables
         return (
-            self.ds.coeffs.transpose(*dims).values,
-            self.ds.vars.transpose(*dims).values,
+            transposed(variables["coeffs"], dims).values,
+            transposed(variables["vars"], dims).values,
         )
 
     def _term_rows(self, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -620,7 +647,7 @@ class DenseStore(Store):
         if absent.any():
             const = xr.where(absent, np.nan, 0.0)
             terms = terms.assign(coeffs=terms.coeffs.where(~absent), const=const)
-        return cls(expression_dataset(terms, model), model)
+        return cls.normalized(terms, model)
 
     @classmethod
     def from_grouper(
@@ -677,9 +704,7 @@ class DenseStore(Store):
         return cls(Dataset({k: ds[k] for k in ("coeffs", "vars", "const")}), model)
 
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
-        const = self.ds.const
-        if const.dims != self.dims:
-            const = const.transpose(*self.dims)
+        const = transposed(self.ds.const, self.dims)
         return const.copy(deep=False, data=values.reshape(const.shape)).rename(name)
 
     def has_terms(self) -> np.ndarray:
@@ -720,56 +745,47 @@ class DenseStore(Store):
         own = self.ds.variables[field]
         if value.dims != own.dims or value.shape != own.shape:
             return False
-        variables, names = self.ds.variables, self.ds.coords
-        return all(
-            k in names and v.equals(variables[k])
-            for k, v in value.coords.variables.items()
-        )
+        return coords_within(value, self.ds)
 
     def on_cells(self, value: Any) -> float | np.ndarray | None:
-        """``value`` as an array on this store's grid: a numeric scalar, or a DataArray lying on the grid's coordinates; else None. A NaN in it raises (§5)."""
-        if isinstance(value, int | float | np.number):
-            if is_nan_scalar(value):
-                check_user_nan()
-            return float(value)
-        if not isinstance(value, DataArray):
-            return None
-        return broadcast_on(value, self.ds.variables["const"].dims, self.ds)
+        """:func:`on_cells` on this store's grid."""
+        return on_cells(value, self.ds.variables["const"].dims, self.ds)
 
     def combined(
         self, operand: float | np.ndarray, op: Callable[[Any, Any], Any], scale: bool
     ) -> DenseStore:
         """The store with ``operand``, laid out by :meth:`on_cells`, combined into the constant by ``op``, and into the coefficients too if ``scale``."""
-        variables = self.ds.variables
-        const, vars_ = variables["const"], variables["vars"]
-        coeffs = variables["coeffs"].transpose(*const.dims, TERM_DIM)
-        fields = {k: variables[k] for k in _FIELDS}
+        const, coeffs, vars_ = self._laid_fields()
         with np.errstate(all="ignore"):
             result = op(const.values, operand)
             check_arithmetic_nan(result, op, operand, const.values)
-            fields["const"] = xr.Variable(const.dims, result)
+            fields = {"const": xr.Variable(const.dims, result)}
             if scale:
                 per_term = (
                     operand[..., None] if isinstance(operand, np.ndarray) else operand
                 )
                 scaled = op(coeffs.values, per_term)
                 check_arithmetic_nan(scaled, op, per_term, labels=vars_.values)
-                fields["coeffs"] = xr.Variable(coeffs.dims, scaled)
-                fields["vars"] = vars_.transpose(*coeffs.dims)
-        ds = self.ds
-        return self._derived(absorb_absence(on_coords(fields, ds.coords, ds.attrs)))
+                fields |= {"coeffs": xr.Variable(coeffs.dims, scaled), "vars": vars_}
+        return self._derived(absorb_absence(self._own(**fields)))
+
+    def moved(self, rhs: float | np.ndarray) -> tuple[DenseStore, DataArray]:
+        """``rhs``, laid out by :meth:`on_cells`, moved onto this side: the store with a zero constant, and the constant the other side keeps."""
+        store = self.absorbed()
+        const = store.ds.variables["const"]
+        with np.errstate(all="ignore"):
+            remainder = const.values - rhs
+        check_arithmetic_nan(remainder, operator.sub, rhs, const.values)
+        zero = xr.Variable(const.dims, np.broadcast_to(0.0, const.shape))
+        kept = DataArray(xr.Variable(const.dims, -remainder), coords=store.ds.coords)
+        return store._derived(store._own(const=zero)), kept
 
     def _assigned(self, **fields: DataArray) -> DenseStore:
         """The store with ``fields`` replaced, on its own coordinates where they fit, else through :func:`assign_fields`."""
-        ds = self.ds
-        if set(ds.data_vars) == set(_FIELDS) and all(
-            self._fits(k, v) for k, v in fields.items()
-        ):
-            variables = {k: ds.variables[k] for k in _FIELDS}
-            variables.update({k: v.variable for k, v in fields.items()})
-            ds = on_coords(variables, ds.coords, ds.attrs)
+        if all(self._fits(k, v) for k, v in fields.items()):
+            ds = self._own(**{k: v.variable for k, v in fields.items()})
         else:
-            ds = assign_fields(ds, **fields)
+            ds = assign_fields(self.ds, **fields)
         return self._derived(absorb_absence(ds))
 
     def scale(
@@ -782,10 +798,9 @@ class DenseStore(Store):
         return self.combined(float(factor), op, True)
 
     def assign_const(self, const: np.ndarray) -> DenseStore:
-        per_cell = self._on_cells(const)
-        if isinstance(per_cell, float):
-            per_cell = self.ds.const.copy(data=np.full(self.shape, per_cell))
-        return self._assigned(const=per_cell)
+        if np.ndim(const) == 0:
+            const = np.full(self.n_cells, float(const))
+        return self._assigned(const=self.dataarray(const, "const"))
 
     def fillna(self, value: float) -> DenseStore:
         return self._assigned(const=self.ds.const.fillna(value))
@@ -809,21 +824,16 @@ class DenseStore(Store):
 
     def masked(self, keep: float | np.ndarray) -> DenseStore:
         """The store with every cell ``keep`` is False at made absent, ``keep`` laid out by :meth:`on_cells`."""
-        ds = self.ds
-        variables = ds.variables
-        const = variables["const"]
-        dims = (*const.dims, TERM_DIM)
-        coeffs, vars_ = (
-            variables["coeffs"].transpose(*dims),
-            variables["vars"].transpose(*dims),
-        )
+        const, coeffs, vars_ = self._laid_fields()
         per_term = np.asarray(keep)[..., None]
         fields = {
             "const": xr.Variable(const.dims, np.where(keep, const.values, np.nan)),
-            "coeffs": xr.Variable(dims, np.where(per_term, coeffs.values, np.nan)),
-            "vars": xr.Variable(dims, np.where(per_term, vars_.values, -1)),
+            "coeffs": xr.Variable(
+                coeffs.dims, np.where(per_term, coeffs.values, np.nan)
+            ),
+            "vars": xr.Variable(vars_.dims, np.where(per_term, vars_.values, -1)),
         }
-        return self._derived(on_coords(fields, ds.coords, ds.attrs))
+        return self._derived(self._own(**fields))
 
     def absorbed(self) -> DenseStore:
         return self._derived(absorb_absence(self.ds))
@@ -1073,17 +1083,7 @@ def merge_datasets(
     ``kwargs`` replace the default ``xr.concat`` arguments. An absent cell of
     any operand stays absent (§6).
     """
-    if join is None:
-        enforce_merge_dims(data, concat_dim=dim)
-    enforce_aux_conflict(data, concat_dim=dim)
-
-    if join is not None:
-        override = join == "override"
-    elif dim in HELPER_DIMS:
-        override = coord_sizes_agree(data)
-    else:
-        override = False
-
+    override = _overriding(data, dim, join)
     if dim == TERM_DIM and override and not kwargs and _stackable(data):
         return absorb_absence(_stacked_terms(data))
 
@@ -1121,6 +1121,20 @@ def merge_datasets(
     return absorb_absence(ds)
 
 
+def _overriding(data: Sequence[Dataset], dim: str, join: JoinOptions | None) -> bool:
+    """
+    Whether a merge of ``data`` along ``dim`` under ``join`` overrides onto
+    the coordinates of the first, its operands checked for a dimension
+    mismatch and a conflicting auxiliary coordinate.
+    """
+    if join is None:
+        enforce_merge_dims(data, concat_dim=dim)
+    enforce_aux_conflict(data, concat_dim=dim)
+    if join is not None:
+        return join == "override"
+    return dim in HELPER_DIMS and coord_sizes_agree(data)
+
+
 def _stackable(data: Sequence[Dataset]) -> bool:
     """
     Whether every dataset holds exactly the three fields in the linear
@@ -1150,15 +1164,14 @@ def _stackable(data: Sequence[Dataset]) -> bool:
 def _stacked(parts: Sequence[np.ndarray], negate: Sequence[bool]) -> np.ndarray:
     """
     ``parts`` stacked along their last axis, a part ``negate`` flags
-    negated, a narrow part copied term by term so the inner loop runs over
-    the grid rather than over its few terms.
+    negated, a two-term part copied term by term, where that runs faster.
     """
     width = sum(part.shape[-1] for part in parts)
     out = np.empty((*parts[0].shape[:-1], width), np.result_type(*parts))
     j = 0
     for part, flip in zip(parts, negate):
         nterm = part.shape[-1]
-        slabs = [part[..., i : i + 1] for i in range(nterm)] if nterm < 4 else [part]
+        slabs = [part[..., i : i + 1] for i in range(nterm)] if nterm == 2 else [part]
         for slab in slabs:
             target = out[..., j : j + slab.shape[-1]]
             if flip:
@@ -1180,12 +1193,11 @@ def _stacked_terms(
     """
     negate = [False] * len(data) if negate is None else negate
     consts = [ds.variables["const"] for ds in data]
-    grid = tuple(dict.fromkeys(d for c in consts for d in c.dims))
-    sizes = {d: n for c in reversed(consts) for d, n in zip(c.dims, c.shape)}
-    sizes = {d: sizes[d] for d in grid}
-    held = {d: ds.coords for ds in reversed(data) for d in ds.coords}
+    sizes = {d: n for c in consts for d, n in zip(c.dims, c.shape)}
+    grid = tuple(sizes)
+    held = {d: ds for ds in reversed(data) for d in ds.coords}
     coords = xr.Coordinates(
-        {d: held[d].variables[d] for d in grid if d in held},
+        {d: held[d].coords.variables[d] for d in grid if d in held},
         indexes={d: held[d].xindexes[d] for d in grid if d in held},
     )
 
