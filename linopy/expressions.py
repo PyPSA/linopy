@@ -113,6 +113,7 @@ from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
     absorb_absence,
+    assign_flat_coords,
     check_arithmetic_nan,
     check_join_fill_value,
     check_user_nan,
@@ -2117,7 +2118,7 @@ class BaseExpression(ABC):
 
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
-    assign_coords = exprwrap(Dataset.assign_coords)
+    assign_coords = exprwrap(assign_flat_coords)
 
     astype = exprwrap(Dataset.astype)
 
@@ -2501,7 +2502,7 @@ class LinearExpression(BaseExpression):
         store = self._store
         if not isinstance(store, CSRStore):
             return super().assign_coords(*args, **kwargs)
-        ds = store.grid.to_dataset().assign_coords(*args, **kwargs)
+        ds = assign_flat_coords(store.grid.to_dataset(), *args, **kwargs)
         grid = _grid_of(ds, store.grid.dims)
         if grid is None:
             reason = "assign_coords(new dimensions or coordinates)"

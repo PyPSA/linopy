@@ -833,14 +833,18 @@ def test_add_variables_multiindex_rejected() -> None:
         Model().add_variables(lower=0, upper=1, coords=[mi], name="x")
 
 
-def test_add_constraint_and_objective_multiindex_rejected() -> None:
-    """An MI forced onto an expression is rejected at the constraint/objective."""
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda x: x,
+        lambda x: 1 * x,
+        lambda x: x * x,
+        lambda x: x >= 0,
+    ],
+    ids=["variable", "linear", "quadratic", "constraint"],
+)
+def test_assign_coords_multiindex_rejected(backend: Model, build: Any) -> None:
     mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
-    mi.name = "d"
-    m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
-    expr = (1 * x).assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "d"))
-    with pytest.raises(ValueError, match=r"`pd.MultiIndex`, which the convention"):
-        m.add_constraints(expr >= 0, name="c")
-    with pytest.raises(ValueError, match=r"objective .* convention does not"):
-        m.add_objective(expr)
+    x = backend.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
+    with pytest.raises(ValueError, match=r"assign_coords uses dimension 'd'"):
+        build(x).assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "d"))

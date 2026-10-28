@@ -16,7 +16,7 @@ Version 1.0.0
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``.
 * ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead.
 * NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
-* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters`` and constant operands reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
+* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters``, constant operands and ``assign_coords`` on variables, expressions and constraints reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
 * The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
 * Long-deprecated shims are removed:
 
