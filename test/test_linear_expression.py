@@ -1085,7 +1085,7 @@ def test_linear_expression_fillna(v: Variable) -> None:
 def test_variable_expand_dims(v: Variable) -> None:
     result = v.to_linexpr().expand_dims("new_dim")
     assert isinstance(result, LinearExpression)
-    assert result.coord_dims == ("dim_2", "new_dim")
+    assert result.coord_dims == ("new_dim", "dim_2")
 
 
 def test_variable_stack(v: Variable) -> None:

@@ -344,23 +344,11 @@ def on_coords(
     attrs: Mapping[str, Any] | None = None,
 ) -> Dataset:
     """
-    A dataset holding ``fields`` on ``coords`` and ``attrs``, laid out
-    coordinates first as xarray's merge lays a dataset out. ``fields`` are
-    taken as lying on ``coords``: nothing is validated or aligned.
-
-    The only use of xarray's private ``Dataset._construct_direct``: the public
-    constructor lays the fields first, which changes ``Dataset.dims`` where a
-    field is transposed against the coordinates, and costs 8 to 24 times as
-    much per call.
+    A dataset holding ``fields`` on ``coords`` and ``attrs``. ``fields`` are
+    taken as lying on ``coords``: nothing is aligned, and the indexes of
+    ``coords`` are reused.
     """
-    variables: dict[Hashable, xr.Variable] = dict(coords.variables)
-    variables.update(fields.items())
-    return Dataset._construct_direct(
-        variables,
-        set(coords),
-        attrs=dict(attrs) if attrs else None,
-        indexes=dict(coords.xindexes),
-    )
+    return Dataset(dict(fields), coords=coords, attrs=dict(attrs) if attrs else None)
 
 
 def broadcast_on(
