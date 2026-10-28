@@ -584,40 +584,29 @@ def test_sum_over_missing_dim_raises_without_densifying(
     assert expr.is_sparse == backend.sparse
 
 
-def _quadratic_groupby_sum(sparse: bool) -> LinearExpression:
+def _squared(sparse: bool) -> LinearExpression | QuadraticExpression:
     m = Model(sparse=sparse)
     x = m.add_variables(coords=[A], name="x")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", linopy.PerformanceWarning)
-        return (x * x).groupby(pd.Series(SERIES)).sum()
+        return x * x
 
 
 def test_quadratic_groupby_sum_densifies() -> None:
-    # Regression test for #1060: a quadratic term carries two variable labels
-    # along the ``_factor`` dimension, which CSRStore cannot scatter, so the
-    # sparse model falls back to the dense groupby-sum instead of raising.
-    # The reference floor is a dense model built without any conversion notice.
+    group = pd.Series(SERIES)
     with no_densify():
-        dense = _quadratic_groupby_sum(False)
-    assert isinstance(dense, QuadraticExpression)
-
-    m = Model(sparse=True)
-    x = m.add_variables(coords=[A], name="x")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", linopy.PerformanceWarning)
-        quadratic = x * x
+        dense = _squared(False).groupby(group).sum()
     with pytest.warns(
         linopy.PerformanceWarning,
         match=re.escape("groupby.sum(grouper without a sparse path)"),
     ):
-        sparse = quadratic.groupby(pd.Series(SERIES)).sum()
+        sparse = _squared(True).groupby(group).sum()
 
+    assert isinstance(dense, QuadraticExpression)
     assert isinstance(sparse, QuadraticExpression)
     assert not sparse.is_sparse
     assert_quadequal(sparse, dense)
 
-    # Each group keeps the squared terms of its members: g=0 -> x[0]^2+x[2]^2,
-    # g=1 -> x[1]^2 (the padded empty term carries label -1 and is dropped).
     labels = dense.data.vars.sel(_factor=0).values
     assert set(labels[0][labels[0] >= 0].tolist()) == {0, 2}
     assert set(labels[1][labels[1] >= 0].tolist()) == {1}
