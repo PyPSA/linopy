@@ -713,6 +713,7 @@ class LinearExpressionGroupby:
         }
         grouper = pd.Series(labels[order], index=rows, name=group)
         res = obj.isel(indexers).groupby(grouper).sum()
+        assert isinstance(res, LinearExpression)
         if relation.groups is not None:
             res = res.reindex({group: relation.groups.rename(group)}).fillna(0)
         slot = min(dims.index(m) for m in members)
