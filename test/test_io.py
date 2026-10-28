@@ -373,6 +373,46 @@ def test_model_to_netcdf_with_dash_named_parameters(
     assert p.parameters.attrs == m.parameters.attrs
 
 
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "scipy",
+        pytest.param(
+            "netcdf4",
+            marks=pytest.mark.skipif(not HAS_NETCDF4, reason="netCDF4 not installed"),
+        ),
+    ],
+)
+@pytest.mark.parametrize("values", [["a", np.nan], ["a", "b"], [np.nan, np.nan]])
+def test_object_parameters_round_trip(
+    model: Model, tmp_path: Path, values: list[Any], engine: str
+) -> None:
+    model.parameters["s"] = xr.DataArray(
+        np.array(values, dtype=object), dims=["label"], attrs={"unit": "label"}
+    )
+    model.to_netcdf(fn := tmp_path / "test.nc", engine=engine)
+
+    read = read_netcdf(fn).parameters
+    assert read["s"].dtype == object
+    xr.testing.assert_identical(read, model.parameters)
+
+
+@pytest.mark.parametrize("values", [["a", 1], [1, 2.0], ["a", np.nan, b"b"]])
+def test_mixed_object_parameters_are_refused(
+    model: Model, tmp_path: Path, values: list[Any]
+) -> None:
+    model.parameters["s"] = xr.DataArray(np.array(values, dtype=object), dims=["label"])
+    with pytest.raises(TypeError, match="mixed types"):
+        model.to_netcdf(tmp_path / "test.nc")
+
+
+def test_parameter_coords_without_data_round_trip(model: Model, tmp_path: Path) -> None:
+    model.parameters = model.parameters.assign_coords(unused=["a", "b"])
+    model.to_netcdf(fn := tmp_path / "test.nc")
+
+    xr.testing.assert_identical(read_netcdf(fn).parameters, model.parameters)
+
+
 def test_model_to_netcdf_with_status_and_condition(
     model_with_dash_names: Model, tmp_path: Path
 ) -> None:

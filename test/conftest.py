@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 # __file__ mismatch breaks the whole run on Windows CI (and elsewhere).
 # Same reasoning as the ``filterwarnings`` comment in ``pyproject.toml``.
 
+collect_ignore = ["spec_helpers.py"]
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add custom command line options."""

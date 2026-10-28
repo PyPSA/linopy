@@ -61,6 +61,7 @@ from linopy.constants import (
     STASHED_UPPER,
 )
 from linopy.containers import LabelContainer
+from linopy.long import Relation
 from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
@@ -764,7 +765,7 @@ class Variable:
 
     def groupby(
         self,
-        group: DataArray,
+        group: DataFrame | pd.Series | DataArray | Relation,
         restore_coord_dims: bool | None = None,
     ) -> LinearExpressionGroupby:
         """
@@ -775,9 +776,12 @@ class Variable:
 
         Parameters
         ----------
-        group : str, DataArray or IndexVariable
+        group : str, DataArray, IndexVariable, pandas.Series, pandas.DataFrame or linopy.Relation
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
+            A :class:`~linopy.long.Relation` maps members to groups, possibly
+            several groups per member: ``sum`` adds each member to each of
+            its groups.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.

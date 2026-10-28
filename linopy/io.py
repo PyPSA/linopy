@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -1043,6 +1044,72 @@ def non_bool_dict(
 DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
 
 
+CODED_ATTR = "_linopy_coded"
+CATEGORIES_SUFFIX = "__categories"
+CATEGORY_DIM_SUFFIX = "__category"
+
+
+def _encode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Write each object-dtype data variable as int32 codes into its own categories.
+
+    A hole is ``-1``. A variable without any present value gets no categories
+    variable, since netCDF3 holds one zero-length (unlimited) dimension only.
+
+    Raises
+    ------
+    TypeError
+        A variable mixes values of different types, e.g. ``str`` and ``int``.
+    """
+    encoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.dtype != object:
+            continue
+        codes, categories = pd.factorize(arr.to_numpy().ravel())
+        inferred = pd.api.types.infer_dtype(categories, skipna=True)
+        if inferred.startswith("mixed"):
+            raise TypeError(
+                f"Cannot write object variable '{name}' holding mixed types ({inferred})."
+            )
+        encoded[name] = xr.DataArray(
+            codes.astype(np.int32).reshape(arr.shape),
+            arr.coords,
+            arr.dims,
+            attrs=arr.attrs | {CODED_ATTR: "object"},
+        )
+        if len(categories):
+            encoded[f"{name}{CATEGORIES_SUFFIX}"] = (
+                f"{name}{CATEGORY_DIM_SUFFIX}",
+                np.asarray(categories.tolist()),
+            )
+    return encoded
+
+
+def _decode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """Restore the object-dtype data variables :func:`_encode_objects` wrote, NaN at the holes."""
+    decoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.attrs.get(CODED_ATTR) != "object":
+            continue
+        table = f"{name}{CATEGORIES_SUFFIX}"
+        codes = arr.to_numpy()
+        values = np.full(codes.shape, np.nan, dtype=object)
+        if table in ds.data_vars:
+            categories = ds[table].to_numpy().astype(object)
+            values[codes >= 0] = categories[codes[codes >= 0]]
+            decoded = decoded.drop_vars(table)
+        attrs = {k: v for k, v in arr.attrs.items() if k != CODED_ATTR}
+        decoded[name] = xr.DataArray(values, arr.coords, arr.dims, attrs=attrs)
+    return decoded
+
+
+def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+    ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+    return ds
+
+
 def to_netcdf(
     m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
 ) -> None:
@@ -1092,12 +1159,6 @@ def to_netcdf(
             stacklevel=2,
         )
 
-    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
-        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-        return ds
-
     vars = [
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
@@ -1120,7 +1181,7 @@ def to_netcdf(
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "parameters")]
+    params = [with_prefix(_encode_objects(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     scalars["sparse"] = m.sparse
@@ -1214,7 +1275,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         return k[len(prefix) + 1 :]
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if owners[str(k)] == prefix]]
+        owned = {c: ds.variables[c] for c in ds.coords if owners[str(c)] == prefix}
+        ds = ds[[k for k in ds if owners[str(k)] == prefix]].assign_coords(owned)
         ds = ds.drop_vars(
             [c for c in ds.coords if ds[c].ndim == 0 and owners[str(c)] != prefix]
         )
@@ -1290,7 +1352,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     )
     m.objective._value = objective.attrs.get("value")
 
-    m.parameters = get_prefix(ds, "parameters")
+    m.parameters = _decode_objects(get_prefix(ds, "parameters"))
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
@@ -1355,7 +1417,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         A deep or shallow copy of the model.
     """
     from linopy.constraints import Constraints
-    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
+    from linopy.expressions import Expressions, copy_expression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
@@ -1383,19 +1445,11 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_expression(
-        expr: LinearExpression | QuadraticExpression,
-    ) -> LinearExpression | QuadraticExpression:
-        if isinstance(expr, LinearExpression):
-            store = expr._store.copy(new_model, deep)
-            return LinearExpression._from_store(store, new_model)
-        return QuadraticExpression(expr._to_dataset().copy(deep=deep), new_model)
-
     def _copy_expr(
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = _copy_expression(expr)
+        new_expr = copy_expression(expr, new_model, deep)
         new_expr.attrs["name"] = name
         return new_expr
 
@@ -1412,7 +1466,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    obj_expr = _copy_expression(m.objective.expression)
+    obj_expr = copy_expression(m.objective.expression, new_model, deep)
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )

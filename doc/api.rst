@@ -117,6 +117,21 @@ IO
    model.Model.to_netcdf
    io.read_netcdf
 
+Building from specs
+-------------------
+
+Build a model from a `mathspec <https://mathspec.readthedocs.io>`__ YAML
+program attached to data, and read its named expressions as functions of the
+spec, the model and the data. Requires ``pip install
+"linopy[spec]"`` (Python >= 3.12). See :doc:`spec-data`.
+
+.. autosummary::
+   :toctree: generated/
+
+   model.Model.from_spec
+   spec.evaluate
+   spec.SpecDataError
+
 
 Variable
 ========
@@ -644,6 +659,8 @@ Utilities
    align
    options
    ABSENT
+   from_long
+   Relation
 
 ``options`` holds these keys:
 
