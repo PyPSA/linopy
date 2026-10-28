@@ -552,7 +552,8 @@ class LinearExpressionGroupby:
         Returns
         -------
         LinearExpression
-            The summed expression, with one entry per group.
+            The summed expression, with one entry per group. A quadratic
+            expression stays a QuadraticExpression.
         """
         if observed and use_fallback:
             raise ValueError(
@@ -588,8 +589,12 @@ class LinearExpressionGroupby:
                 is_1d = isinstance(group, DataArray) and group.ndim == 1
                 grouper = group.to_pandas() if is_1d else group
             coord_dims = store.dims
+            carries_factor = isinstance(self.obj, QuadraticExpression) or (
+                isinstance(self.obj, Dataset) and FACTOR_DIM in self.obj.vars.dims
+            )
             supported = (
                 not use_fallback
+                and not carries_factor
                 and isinstance(grouper, (pd.Series, pd.DataFrame))
                 and grouper.index.name in coord_dims
             )
@@ -668,6 +673,8 @@ class LinearExpressionGroupby:
             ds = grouped.map(func)
 
         ds = _restore_group_dim_position(ds, original_dims, grouped_dims)
+        if FACTOR_DIM in ds.vars.dims:
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
         return LinearExpression(ds, self.model)
 
     def _relation_sum(self, relation: Relation) -> LinearExpression:

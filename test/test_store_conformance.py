@@ -24,7 +24,7 @@ from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint
 from linopy.csr import CSRStore
 from linopy.store import DenseStore
-from linopy.testing import assert_equivalent
+from linopy.testing import assert_equivalent, assert_quadequal
 
 KEPT = "kept"
 ELLIPSIS: Any = ...
@@ -602,6 +602,34 @@ def test_sum_over_missing_dim_raises_without_densifying(
     with no_densify(), pytest.raises(KeyError, match="zzz"):
         expr.sum(dim)
     assert expr.is_sparse == backend.sparse
+
+
+def _squared(sparse: bool) -> LinearExpression | QuadraticExpression:
+    m = Model(sparse=sparse)
+    x = m.add_variables(coords=[A], name="x")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", linopy.PerformanceWarning)
+        return x * x
+
+
+def test_quadratic_groupby_sum_densifies() -> None:
+    group = pd.Series(SERIES)
+    with no_densify():
+        dense = _squared(False).groupby(group).sum()
+    with pytest.warns(
+        linopy.PerformanceWarning,
+        match=re.escape("groupby.sum(grouper without a sparse path)"),
+    ):
+        sparse = _squared(True).groupby(group).sum()
+
+    assert isinstance(dense, QuadraticExpression)
+    assert isinstance(sparse, QuadraticExpression)
+    assert not sparse.is_sparse
+    assert_quadequal(sparse, dense)
+
+    labels = dense.data.vars.sel(_factor=0).values
+    assert set(labels[0][labels[0] >= 0].tolist()) == {0, 2}
+    assert set(labels[1][labels[1] >= 0].tolist()) == {1}
 
 
 DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {
