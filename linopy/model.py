@@ -64,6 +64,7 @@ from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
+    copy_expression,
 )
 from linopy.io import (
     copy,
@@ -117,6 +118,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.spec.api import SpecLike
 
 logger = logging.getLogger(__name__)
 
@@ -428,6 +430,67 @@ class Model:
         parameters = value.copy() if isinstance(value, Dataset) else Dataset(value)
         enforce_no_multiindex(parameters, context="parameters")
         self._parameters = parameters
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        store: bool = False,
+        **model_kwargs: Any,
+    ) -> Model:
+        """
+        A new model built from a mathspec program with its data.
+
+        Requires the ``mathspec`` package (``pip install "linopy[spec]"``).
+        Variables, constraints, the objective and the named expressions
+        holding a variable term are added as the spec declares them; nothing
+        of the spec itself is kept. Read the named expressions with
+        :func:`linopy.spec.evaluate`.
+
+        Parameters
+        ----------
+        spec : str, pathlib.Path, dict or mathspec.Spec
+            The spec: a path, YAML text, a mapping or a loaded ``Spec``. A
+            ``str`` is always YAML text; pass a file as a ``pathlib.Path``.
+            A one-line ``str`` ending in ``.yaml`` or ``.yml`` reads like a
+            file name and is refused.
+        sources : mapping or xarray.Dataset
+            Data keyed by declared name: dimension labels, parameters and
+            relations.
+        store : bool, default False
+            Write the spec's parameters, unfilled with a missing row a NaN
+            hole, and its relations into ``model.parameters`` under their
+            declared names. They travel with the model through netcdf, and
+            ``Model.from_spec(spec, model.parameters, store=True)`` rebuilds
+            the model from them, edits included. An edit reaches the
+            variables, constraints and objective only on that rebuild, while
+            :func:`linopy.spec.evaluate` reads it at once.
+        **model_kwargs
+            Passed to :class:`Model`, such as ``sparse=True``.
+
+        Returns
+        -------
+        linopy.Model
+
+        Raises
+        ------
+        ValueError
+            If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
+        linopy.spec.SpecDataError
+            If the data does not fit the spec.
+
+        Warns
+        -----
+        EvolvingAPIWarning
+            Once per session: the spec API is newly added and may change in
+            minor releases.
+        """
+        from linopy.spec.api import build_into
+
+        model = cls(**model_kwargs)
+        build_into(model, spec, sources, store)
+        return model
 
     @property
     def solution(self) -> Dataset:
@@ -1026,6 +1089,7 @@ class Model:
         if self.chunk:
             expr = expr.chunk(self.chunk)
 
+        expr = copy_expression(expr, self, deep=False)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr

@@ -117,6 +117,8 @@ This package is published under MIT license.
    long-form-inputs
    migrating-to-v1
    manipulating-models
+   building-models-from-specs
+   spec-data
 
 .. toctree::
    :hidden:

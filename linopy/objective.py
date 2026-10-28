@@ -220,6 +220,7 @@ class Objective:
                 " Must be a LinearExpression or QuadraticExpression."
             )
 
+        expr = expressions.copy_expression(expr, self.model, deep=False)
         if len(expr.coord_dims):
             expr = expr.sum()
 

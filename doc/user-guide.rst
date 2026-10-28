@@ -106,6 +106,32 @@ bound, swap a constraint, or copy it for what-if analysis.
   variables.
 
 
+Building a model from a spec
+-----------------------------
+
+Instead of calling ``add_variables`` / ``add_constraints`` directly,
+you can declare a model as a `mathspec
+<https://mathspec.readthedocs.io>`__ YAML program attached to
+data, and let linopy build it.
+
+- :doc:`building-models-from-specs` — ``Model.from_spec``, attaching
+  data to a spec, solving, and folding named expressions with
+  ``linopy.spec.evaluate``. Requires ``pip install "linopy[spec]"``
+  (Python >= 3.12).
+- :doc:`spec-data` — the source contract and missing rows, storing the
+  data in ``model.parameters``, reading results, saving and rebuilding,
+  typesetting and variants.
+
+linopy supports a subset of mathspec. A constraint row that absence
+leaves without terms (a ``missing: absent`` parameter, a ``missing:
+neutral`` parameter such as ``0 == load``, or a ``where:``-masked
+variable inside a sum) is refused, where mathspec skips and reports it;
+linopy is stricter here (`#993
+<https://github.com/PyPSA/linopy/issues/993>`__). ``store=True`` stores
+only relations of one key column and one value column, and raises
+``SpecDataError`` for any other.
+
+
 Where to go next
 ----------------
 

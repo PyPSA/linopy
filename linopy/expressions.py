@@ -3660,6 +3660,15 @@ def merge(
     return cls(merge_datasets(data, dim, join, fill, kwargs, linear), model)
 
 
+def copy_expression(
+    expr: LinearExpression | QuadraticExpression, model: Model, deep: bool = True
+) -> LinearExpression | QuadraticExpression:
+    """*expr* on *model* with its own attributes, its arrays copied if *deep*."""
+    if isinstance(expr, LinearExpression):
+        return LinearExpression._from_store(expr._store.copy(model, deep), model)
+    return QuadraticExpression(expr._to_dataset().copy(deep=deep), model)
+
+
 @dataclass(repr=False)
 class Expressions:
     """
