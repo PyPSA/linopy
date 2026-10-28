@@ -107,6 +107,7 @@ Version 1.0.0
 * ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
 * ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 * ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
+* With ``add_objective(..., scaling=...)``, the solve log reports the objective and the dual bound in model units, matching ``Model.objective.value``. Before, it reported the scaled solver values. (`#1077 <https://github.com/PyPSA/linopy/issues/1077>`__)
 
 **Internal**
 

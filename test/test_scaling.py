@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -230,6 +231,8 @@ def test_assign_result_unscales_solution_objective_and_dual(backend: Model) -> N
 
     m.assign_result(result)
 
+    assert result.solution is not None
+    assert result.solution.objective == 12.3
     np.testing.assert_allclose(x.solution.values, [2.0, 3.0])
     assert float(b.solution) == 1.0
     assert m.objective.value == pytest.approx(1.23)
@@ -319,3 +322,23 @@ def test_scaled_solve_preserves_user_units() -> None:
 
     assert float(sx.solution) == pytest.approx(float(rx.solution))
     assert scaled.objective.value == pytest.approx(reference.objective.value)
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("integer", [False, True])
+def test_scaled_solve_logs_objective_in_user_units(
+    integer: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x", integer=integer)
+    y = m.add_variables(lower=0, name="y", integer=integer)
+    m.add_constraints(x + y >= 1000, name="c")
+    m.add_objective(3 * x + 5 * y, scaling=1e-3)
+
+    with caplog.at_level(logging.INFO, logger="linopy.constants"):
+        m.solve("highs", output_flag=False)
+
+    assert m.objective.value == pytest.approx(3000)
+    assert "Objective: 3.00e+03" in caplog.text
+    if integer:
+        assert "Dual bound: 3.00e+03" in caplog.text
