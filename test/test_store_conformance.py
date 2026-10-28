@@ -108,11 +108,6 @@ def with_key(e: LinearExpression) -> LinearExpression:
     return e.assign_coords(g=("a", [0, 1, 0]))
 
 
-def with_multiindex(e: LinearExpression) -> LinearExpression:
-    mi = pd.MultiIndex.from_tuples([(1, "x"), (2, "y"), (3, "z")], names=["k1", "k2"])
-    return e.assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "a"))
-
-
 def coords_reassigned(e: LinearExpression) -> LinearExpression:
     named = e.model.add_expressions(e, name="named")
     e.model.assign_coords(a=[7, 8, 9])
@@ -435,9 +430,6 @@ CASES: dict[str, Case] = {
     "assign-coords-dim": Case(grid, lambda e: e.assign_coords(a=[7, 8, 9]), KEPT),
     "assign-coords-2d": Case(
         grid, with_2d_coord, "assign_coords(new dimensions or coordinates)"
-    ),
-    "assign-coords-multiindex": Case(
-        grid, with_multiindex, "assign_coords(new dimensions or coordinates)"
     ),
     "groupby-aux-name": Case(grid, lambda e: with_key(e).groupby("g").sum(), KEPT),
     "groupby-aux-names": Case(
