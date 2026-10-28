@@ -70,6 +70,10 @@ Version 1.0.0
 * Vectorised selection keeps a sparse expression sparse: ``isel``, ``sel`` and ``__getitem__`` with DataArray indexers over a new dimension with an index coordinate, and ``where`` with a condition over a new labelled dimension, stay on the CSR store instead of densifying. Indexers over a new dimension without coordinates or with a MultiIndex still densify. (`#1049 <https://github.com/PyPSA/linopy/issues/1049>`__)
 * ``from_long`` and ``Relation`` emit :class:`linopy.EvolvingAPIWarning` once per session: their signature and input format may change in minor releases. Silence with ``warnings.filterwarnings("ignore", message=r"^long-form:", category=linopy.EvolvingAPIWarning)``.
 
+**Features**
+
+* ``Slopes.to_breakpoints()`` accepts slopes and x-points with more than one entity dimension, e.g. snapshot and component, with a scalar or DataArray ``y0`` over those dimensions. Entity coordinates must match exactly; ragged curves use trailing NaN padding. (`#1013 <https://github.com/PyPSA/linopy/pull/1013>`__)
+
 **Deprecations**
 
 * The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
