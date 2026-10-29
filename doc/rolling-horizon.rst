@@ -49,8 +49,11 @@ The rolling-horizon recipe
         solution = window.solution
 
 :meth:`~linopy.Model.restrict` follows :meth:`xarray.Dataset.sel` semantics:
-every container holding the selected dimension is sliced, containers without it
-stay whole. The parent model is unchanged.
+every container's labels are selected along the dimensions it holds, containers
+without them stay whole. Labels, lists, slices and scalars work, and several
+dimensions can be selected at once, e.g.
+``m.restrict(snapshot=slice(t0, t1), bus=["north"])``. The parent model is
+unchanged.
 
 Boundary values
 ---------------
@@ -81,9 +84,12 @@ with no outside terms needs no ``fix``.
    initial state of charge, instead of the loss coefficient used on the other
    rows. ``restrict`` reproduces a slightly different model.
 
-``fix`` values are keyed by variable name and broadcast over the variable's
-coordinates, so a full-horizon DataArray works directly. Values for in-window
-variables are ignored. A ``NaN`` at an outside label counts as missing.
+``fix`` values are keyed by variable name, aligned with the variable by
+coordinate label and broadcast over the dimensions they lack, so a
+full-horizon DataArray, a ``pandas.Series`` or a scalar works directly. Every
+coordinate of the variable must be present, otherwise ``restrict`` raises.
+Values for in-window variables are ignored. A ``NaN`` at an outside label
+counts as missing.
 
 Working with a window
 ---------------------
@@ -106,18 +112,21 @@ Moving the window
 
 :meth:`~linopy.restrict.WindowModel.advance` slices the matrices for the new
 selection and moves the new boundary values to the right-hand side. When the
-new window has the same shape, the solver updates its existing model instead of
-building a new one. Nothing is rebuilt, so a chain of equal-width windows
-keeps that fast path.
+new window's matrix has the same sparsity pattern, the solver updates its
+existing model instead of building a new one, so a chain of equal-width windows
+keeps that fast path. A changed pattern, e.g. a coefficient that is zero in one
+window only, rebuilds the solver model, or raises
+:class:`~linopy.persistent.errors.RebuildRequiredError` with
+``disallow_rebuild=True``.
 
 Limits
 ------
 
-A window slices one dimension. Every container holding that dimension must
-contain the window's labels; otherwise ``restrict`` raises.
+Every container holding a selected dimension must contain the selected labels;
+otherwise ``restrict`` raises :class:`~linopy.restrict.RestrictionError`. A
+slice selects whatever labels each container holds within its bounds.
 
-Several selected dimensions, indicators and quadratic objectives raise
-:class:`~linopy.restrict.RestrictionError` or ``NotImplementedError``.
+Indicators and quadratic objectives raise ``NotImplementedError``.
 
 Native SOS constraints also raise: they are not part of the matrices. Reformulate
 them first with :meth:`Model.apply_sos_reformulation`, though the cardinality row

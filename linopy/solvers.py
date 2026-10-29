@@ -470,73 +470,6 @@ class Solver(ABC, Generic[EnvType]):
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
     accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
     supports_persistent_update: ClassVar[bool] = False
-
-    def solve_window(
-        self,
-        window: Any,
-        previous: Any = None,
-        disallow_rebuild: bool = False,
-        **run_kwargs: Any,
-    ) -> Any:
-        """
-        Solve one matrix window, reusing this solver's model when possible.
-
-        ``previous`` is the window solved last, when the caller can guarantee the
-        two have the same shape; the solver then applies the difference in place.
-        The window reaches the backend through
-        :class:`~linopy.restrict.window.WindowModelView`, so each solver's existing
-        direct build path works unchanged.
-        """
-        if self.io_api != "direct":
-            raise NotImplementedError(
-                f"{self.display_name} window solving requires io_api='direct', "
-                f"got {self.io_api!r}."
-            )
-        from linopy.persistent.diff import ModelDiff
-        from linopy.restrict.matrix import WindowResult
-
-        current = window.matrices
-        view = window.as_model_view()
-        update = (
-            self.supports_persistent_update
-            and previous is not None
-            and previous.A.shape == current.A.shape
-            and getattr(self, "_window_view", None) is not None
-        )
-        if update:
-            self.model = view
-            self.apply_update(
-                ModelDiff.from_windows(previous, current),
-                view.variables.label_index,
-                view.constraints.label_index,
-            )
-        else:
-            # no in-place update, or a different shape: build a fresh native model
-            if getattr(self, "_window_view", None) is not None:
-                reason = (
-                    RebuildReason.STRUCTURAL_LABELS
-                    if previous is not None and previous.A.shape != current.A.shape
-                    else RebuildReason.BACKEND_REJECTED
-                )
-                if disallow_rebuild:
-                    raise RebuildRequiredError(
-                        reason, "the window requires a solver rebuild"
-                    )
-                logger.warning("Window requires a solver rebuild (%s).", reason.value)
-            self.close()
-            self.model = view
-            self._build()
-        self._window_view = view
-        result = self._run_direct(**run_kwargs)
-        solution = result.solution
-        if solution is None:
-            raise RuntimeError("the solver returned no solution for the window")
-        return WindowResult(
-            objective=float(solution.objective),
-            primal=np.asarray(solution.primal),
-            dual=np.asarray(solution.dual),
-        )
-
     supports_sign_update: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
@@ -552,6 +485,69 @@ class Solver(ABC, Generic[EnvType]):
             raise ImportError(msg)
         self._lock: threading.Lock = threading.Lock()
 
+    def solve_window(
+        self,
+        window: Any,
+        previous: Any = None,
+        disallow_rebuild: bool = False,
+        **run_kwargs: Any,
+    ) -> Any:
+        """
+        Solve one matrix window, reusing this solver's model when possible.
+
+        ``previous`` is the window solved last. When the solver's native model
+        was built from it and both share the sparsity pattern of ``A``, the
+        difference is applied in place. The window reaches the backend through
+        :class:`~linopy.restrict.window.WindowModelView`, so each solver's
+        existing direct build path works unchanged.
+        """
+        if self.io_api != "direct":
+            raise NotImplementedError(
+                f"{self.display_name} window solving requires io_api='direct', "
+                f"got {self.io_api!r}."
+            )
+        from linopy.persistent.diff import ModelDiff
+        from linopy.restrict.matrix import WindowResult
+        from linopy.restrict.window import WindowModelView
+
+        current = window.matrices
+        view = window.as_model_view()
+        built = isinstance(self.model, WindowModelView)
+        same_pattern = previous is not None and ModelDiff.same_window_pattern(
+            previous, current
+        )
+        if built and same_pattern and self.supports_persistent_update:
+            self.model = view
+            self.apply_update(
+                ModelDiff.from_windows(previous, current),
+                view.variables.label_index,
+                view.constraints.label_index,
+            )
+        else:
+            if built:
+                reason = (
+                    RebuildReason.STRUCTURAL_LABELS
+                    if previous is not None and not same_pattern
+                    else RebuildReason.BACKEND_REJECTED
+                )
+                if disallow_rebuild:
+                    raise RebuildRequiredError(
+                        reason, "the window requires a solver rebuild"
+                    )
+                logger.warning("Window requires a solver rebuild (%s).", reason.value)
+            self.close()
+            self.model = view
+            self._build()
+        result = self._run_direct(**run_kwargs)
+        solution = result.solution
+        if solution is None:
+            raise RuntimeError("the solver returned no solution for the window")
+        return WindowResult(
+            objective=float(solution.objective),
+            primal=np.asarray(solution.primal),
+            dual=np.asarray(solution.dual),
+        )
+
     def apply_update(
         self,
         diff: ModelDiff,
@@ -564,9 +560,6 @@ class Solver(ABC, Generic[EnvType]):
         Template method: validates the diff up front (a rejected update
         leaves the native model untouched), then walks the sections in a
         fixed order, dispatching to the per-backend ``_apply_*`` hooks.
-
-        Pass ``ctx`` to apply the diff to a native model handled outside the
-        persistent path, as the matrix window does.
         """
         if not self.supports_persistent_update:
             raise UnsupportedUpdate(type(self).__name__)

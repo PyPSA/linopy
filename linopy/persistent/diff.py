@@ -357,16 +357,27 @@ class ModelDiff:
             ignore_dims=ignore_dims,
         )
 
+    @staticmethod
+    def same_window_pattern(previous: Any, current: Any) -> bool:
+        """Whether two matrix windows share the shape and sparsity of ``A``."""
+        return (
+            previous.A.shape == current.A.shape
+            and np.array_equal(previous.A.indptr, current.A.indptr)
+            and np.array_equal(previous.A.indices, current.A.indices)
+        )
+
     @classmethod
     def from_windows(cls, previous: Any, current: Any) -> ModelDiff:
         """
-        Delta between two matrix windows of the same shape.
+        Delta between two matrix windows sharing the sparsity pattern of ``A``.
 
         A rolling-horizon window is already flat, so the difference is a set of
         changed bound, rhs, cost and coefficient entries. Building it here lets
         the window path reuse :meth:`Solver.apply_update` and every backend's
         in-place hooks, instead of a parallel update implementation.
         """
+        if not cls.same_window_pattern(previous, current):
+            raise ValueError("Matrix windows differ in the sparsity pattern of A.")
         columns = np.flatnonzero(
             (current.lb != previous.lb) | (current.ub != previous.ub)
         )
@@ -394,13 +405,7 @@ class ModelDiff:
             ]
             n_coef_updates = int(counts.sum())
 
-        # Windows always carry a per-row sign array, so no scalar handling here.
-        rhs_signs = current.sense[rows]
-        sign_changed = np.flatnonzero(
-            np.broadcast_to(current.sense, current.b.shape)
-            != np.broadcast_to(previous.sense, previous.b.shape)
-        )
-        sign_values = current.sense[sign_changed]
+        sign_changed = np.flatnonzero(current.sense != previous.sense)
 
         types = np.flatnonzero(current.vtypes != previous.vtypes)
         kinds = np.array(
@@ -417,9 +422,9 @@ class ModelDiff:
             n_coef_updates=n_coef_updates,
             con_rhs_indices=rows,
             con_rhs_values=current.b[rows],
-            con_rhs_signs=rhs_signs,
+            con_rhs_signs=current.sense[rows],
             con_sign_indices=sign_changed,
-            con_sign_values=sign_values,
+            con_sign_values=current.sense[sign_changed],
             obj_c_indices=cost if cost.size else None,
             obj_c_values=current.c[cost] if cost.size else None,
             obj_sense=(

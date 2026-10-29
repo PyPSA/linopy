@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model
 from linopy.persistent.diff import ModelDiff
+from linopy.persistent.errors import RebuildRequiredError
 from linopy.restrict import MatrixWindow, RestrictionError, WindowMatrices
 
 TIME = pd.RangeIndex(8, name="time")
+BUS = pd.Index(["a", "b"], name="bus")
+BOUNDARY = xr.DataArray(np.where(TIME == 0, 7.0, 0.0), coords=[TIME])
 
 
 def storage_model() -> Model:
@@ -47,7 +52,7 @@ def test_select_matches_restrict(start: int) -> None:
     m = storage_model()
     window = TIME[start : start + 3]
 
-    matrix = MatrixWindow(m, "time").select(window, fix={"soc": initial()})
+    matrix = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})
     reference = m.restrict(time=window, fix={"soc": initial()}).matrices
 
     assert_same_window(matrix, reference)
@@ -61,7 +66,7 @@ def test_select_without_fix_matches_restrict() -> None:
     m.add_objective(x.sum())
 
     window = TIME[2:5]
-    matrix = MatrixWindow(m, "time").select(window)
+    matrix = MatrixWindow(m).select({"time": window})
     reference = m.restrict(time=window).matrices
 
     assert_same_window(matrix, reference)
@@ -70,26 +75,34 @@ def test_select_without_fix_matches_restrict() -> None:
 def test_window_keeps_parent_labels() -> None:
     m = storage_model()
     window = TIME[1:4]
-    selected = MatrixWindow(m, "time").select(window, fix={"soc": initial()})
+    selected = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})
 
     assert selected.vlabels.size == selected.A.shape[1]
     assert selected.clabels.size == selected.A.shape[0]
     assert np.isin(selected.vlabels, m.variables.label_index.vlabels).all()
 
 
-def test_infeasible_folded_row_raises() -> None:
-    """A pinned row that folds to a violated constant is rejected."""
+@pytest.mark.parametrize(
+    ("sign", "rhs", "satisfied"),
+    [("==", 2, False), (">=", 2, False), ("<=", -2, False), ("<=", 2, True)],
+)
+def test_folded_row_is_checked_against_its_sign(
+    sign: str, rhs: float, satisfied: bool
+) -> None:
+    """A row that loses every term is dropped only when its sign holds."""
     m = Model()
     x = m.add_variables(lower=0, coords=[TIME], name="x")
     m.add_constraints(x == 1, name="eq")
-    # an absolute-index row: it folds away entirely outside its own timestep
-    m.add_constraints(x.isel(time=0) == 2, name="pin")
+    m.add_constraints(x.isel(time=0), sign, rhs, name="pin")
     m.add_objective(x.sum())
 
-    window = TIME[1:3]
+    window = MatrixWindow(m)
     fix = {"x": pd.Series(np.zeros(len(TIME)), index=TIME)}
+    if satisfied:
+        assert window.select({"time": TIME[1:3]}, fix=fix).A.shape[0] == 2
+        return
     with pytest.raises(RestrictionError, match="unsatisfiable"):
-        MatrixWindow(m, "time").select(window, fix=fix)
+        window.select({"time": TIME[1:3]}, fix=fix)
 
 
 def test_binary_integrality_is_preserved() -> None:
@@ -141,8 +154,8 @@ def test_subset_carrier_raises() -> None:
     m.add_constraints(subset <= 1, name="subset_cap")
     m.add_objective(m.variables["x"].sum() + subset.sum())
 
-    with pytest.raises(RestrictionError, match="not carried by every container"):
-        MatrixWindow(m, "time").select(TIME[1:3])
+    with pytest.raises(RestrictionError, match="does not carry the selected labels"):
+        MatrixWindow(m).select({"time": TIME[1:3]})
 
 
 def linear_model() -> Model:
@@ -151,14 +164,6 @@ def linear_model() -> Model:
     m.add_constraints(x <= 5, name="cap")
     m.add_objective(x.sum(), sense="min")
     return m
-
-
-def test_restrict_rejects_multiple_dimensions() -> None:
-    m = linear_model()
-    m.add_variables(coords=[pd.RangeIndex(2, name="other")], name="y")
-
-    with pytest.raises(NotImplementedError, match="one selected dimension"):
-        m.restrict(time=TIME[:2], other=[0])
 
 
 def test_restrict_rejects_unknown_dimension() -> None:
@@ -173,7 +178,7 @@ def test_window_rejects_quadratic_objective() -> None:
     m.add_objective((x * x).sum())
 
     with pytest.raises(NotImplementedError, match="quadratic"):
-        MatrixWindow(m, "time")
+        MatrixWindow(m)
 
 
 def test_window_rejects_indicator_constraints() -> None:
@@ -184,7 +189,7 @@ def test_window_rejects_indicator_constraints() -> None:
     m.add_objective(x.sum())
 
     with pytest.raises(NotImplementedError, match="indicator"):
-        MatrixWindow(m, "time")
+        MatrixWindow(m)
 
 
 def test_window_requires_a_constraint() -> None:
@@ -193,23 +198,154 @@ def test_window_requires_a_constraint() -> None:
     m.add_objective(m.variables["x"].sum())
 
     with pytest.raises(NotImplementedError, match="at least one constraint"):
-        MatrixWindow(m, "time")
+        MatrixWindow(m)
 
 
 def test_fix_must_name_a_variable() -> None:
     with pytest.raises(RestrictionError, match="does not name a variable"):
-        MatrixWindow(linear_model(), "time").select(TIME[:2], fix={"nope": 1.0})
+        MatrixWindow(linear_model()).select({"time": TIME[:2]}, fix={"nope": 1.0})
 
 
-def test_fix_must_match_the_variable_shape() -> None:
-    with pytest.raises(RestrictionError, match="do not match its dimensions"):
-        MatrixWindow(linear_model(), "time").select(TIME[:2], fix={"x": [1.0, 2.0]})
+@pytest.mark.parametrize(
+    "given",
+    [[1.0, 2.0], BOUNDARY.isel(time=slice(0, 4)), BOUNDARY.expand_dims(other=[0])],
+    ids=["wrong-length", "missing-coords", "extra-dim"],
+)
+def test_fix_must_match_the_variable_coordinates(given: object) -> None:
+    with pytest.raises(RestrictionError, match="do not match its coordinates"):
+        MatrixWindow(linear_model()).select({"time": TIME[:2]}, fix={"x": given})
 
 
-def test_advance_must_name_every_selected_dimension() -> None:
-    window = linear_model().restrict(time=TIME[:2])
-    with pytest.raises(RestrictionError, match="missing"):
-        window.advance(other=[0])
+def ramp_model(scaling: float = 1.0) -> Model:
+    """A two-dimensional ramp: every step must not fall below the previous one."""
+    m = Model()
+    x = m.add_variables(0, 100, coords=[TIME, BUS], scaling=scaling, name="x")
+    m.add_constraints(x - x.shift(time=1) >= 0, name="ramp")
+    m.add_objective(x.sum())
+    return m
+
+
+def solve_window(m: Model, fix: object, **selection: object) -> xr.DataArray:
+    window = m.restrict(fix={"x": fix}, **selection)
+    window.solve(solver_name="highs", output_flag=False)
+    return window.solution["x"]
+
+
+@pytest.mark.parametrize("scaling", [1.0, 10.0])
+@pytest.mark.parametrize(
+    "fix",
+    [
+        BOUNDARY,
+        BOUNDARY.isel(time=slice(None, None, -1)),
+        BOUNDARY.broadcast_like(xr.DataArray(BUS, coords=[BUS])).transpose(),
+        BOUNDARY.to_series(),
+        xr.DataArray(BOUNDARY.values, dims=["time"]),
+        7.0,
+    ],
+    ids=["broadcast", "reversed", "transposed", "series", "positional", "scalar"],
+)
+def test_fix_is_aligned_by_coordinates(scaling: float, fix: object) -> None:
+    """Fixed values align by label, broadcast over missing dims, in model units."""
+    solution = solve_window(ramp_model(scaling), fix, time=TIME[1:3])
+
+    assert solution.dims == ("time", "bus")
+    assert np.allclose(solution.values, 7.0)
+
+
+@pytest.mark.parametrize(
+    ("selection", "sizes"),
+    [
+        ({"time": slice(1, 2)}, {"time": 2, "bus": 2}),
+        ({"time": [1, 2]}, {"time": 2, "bus": 2}),
+        ({"time": slice(1, 2), "bus": ["a"]}, {"time": 2, "bus": 1}),
+        ({"time": 1, "bus": "b"}, {}),
+    ],
+    ids=["slice", "list", "multi-dim", "scalars"],
+)
+def test_selection_follows_sel_semantics(
+    selection: dict[str, object], sizes: dict[str, int]
+) -> None:
+    solution = solve_window(ramp_model(), 7.0, **selection)
+
+    assert dict(solution.sizes) == sizes
+    assert np.allclose(solution.values, 7.0)
+    assert solution.coords.to_dataset().equals(
+        ramp_model().variables["x"].labels.sel(selection).coords.to_dataset()
+    )
+
+
+def test_slice_selection_matches_label_selection() -> None:
+    window = MatrixWindow(storage_model())
+    fix = {"soc": initial()}
+
+    assert_same_window(
+        window.select({"time": slice(1, 3)}, fix=fix),
+        window.select({"time": TIME[1:4]}, fix=fix),
+    )
+
+
+def sparse_coupling_model() -> Model:
+    """A coefficient that is zero at one step, so windows differ in sparsity."""
+    m = Model()
+    x = m.add_variables(0, 100, coords=[TIME[:4]], name="x")
+    y = m.add_variables(0, 100, coords=[TIME[:4]], name="y")
+    k = xr.DataArray([1.0, 1.0, 0.0, 1.0], coords=[TIME[:4]])
+    m.add_constraints(x + k * y >= 3, name="c")
+    m.add_objective((x + 2 * y).sum())
+    return m
+
+
+def test_advance_rebuilds_on_a_changed_sparsity_pattern() -> None:
+    window = sparse_coupling_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.advance(time=TIME[2:4])
+
+    with pytest.raises(RebuildRequiredError):
+        window.solve(disallow_rebuild=True)
+    window.solve()
+
+    assert np.allclose(window.solution["x"].values, 3.0)
+    assert np.allclose(window.solution["y"].values, 0.0)
+
+
+def test_from_windows_rejects_a_changed_sparsity_pattern() -> None:
+    m = sparse_coupling_model()
+    window = MatrixWindow(m)
+    first = window.select({"time": TIME[:2]})
+    second = window.select({"time": TIME[2:4]})
+
+    assert first.A.shape == second.A.shape
+    with pytest.raises(ValueError, match="sparsity pattern"):
+        ModelDiff.from_windows(first, second)
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [{"other": [0]}, {"time": TIME[2:4], "bus": ["a"]}],
+    ids=["missing", "extra"],
+)
+def test_advance_must_name_exactly_the_selected_dimensions(
+    selection: dict[str, object],
+) -> None:
+    window = ramp_model().restrict(fix={"x": 0.0}, time=TIME[:2])
+    with pytest.raises(RestrictionError, match="name exactly the dimensions"):
+        window.advance(**selection)
+
+
+@pytest.mark.parametrize(
+    ("selection", "match"),
+    [
+        ({"time": slice(20, 30)}, "is empty"),
+        ({"time": [1, 1]}, "repeats labels"),
+        ({"time": [1, 2], "bus": ["a", "a"]}, "repeats labels"),
+    ],
+    ids=["empty", "repeated", "repeated-multi-dim"],
+)
+def test_select_rejects_degenerate_selections(
+    selection: dict[str, object], match: str
+) -> None:
+    with pytest.raises(RestrictionError, match=match):
+        ramp_model().restrict(fix={"x": 0.0}, **selection)
 
 
 def test_advance_without_selection_keeps_the_window() -> None:
@@ -230,10 +366,15 @@ def test_solve_updates_options_on_later_calls() -> None:
     assert window.objective.value == pytest.approx(0.0)
 
 
-def test_solution_before_solve_raises() -> None:
+@pytest.mark.parametrize(
+    "read",
+    [lambda w: w.solution, lambda w: w.dual, lambda w: w["x"]],
+    ids=["solution", "dual", "getitem"],
+)
+def test_reading_values_before_solve_raises(read: Any) -> None:
     window = linear_model().restrict(time=TIME[:2])
     with pytest.raises(AttributeError, match="has not been solved"):
-        window.solution
+        read(window)
 
 
 def test_dual_size_mismatch_raises() -> None:
@@ -243,14 +384,6 @@ def test_dual_size_mismatch_raises() -> None:
 
     with pytest.raises(AttributeError, match="no dual values"):
         window.dual
-
-
-def test_getitem_before_solve_returns_nan() -> None:
-    window = linear_model().restrict(time=TIME[:2])
-    values = window["x"]
-
-    assert values.sizes["time"] == 2
-    assert np.isnan(values.values).all()
 
 
 def test_getitem_after_solve_returns_values() -> None:
@@ -287,7 +420,7 @@ def test_model_view_exposes_the_builder_surface() -> None:
     assert view._cCounter == len(window.matrices.clabels)
     assert view.nvars == len(window.matrices.vlabels)
     assert view.ncons == len(window.matrices.clabels)
-    assert len(view.constraints) == len(window.matrices.con_blocks)
+    assert len(view.constraints) == len(window.matrices.constraints)
 
 
 def test_model_view_type_is_milp_for_mixed_variables() -> None:
@@ -365,13 +498,13 @@ def test_from_windows_reports_bounds_and_cost_changes() -> None:
 def test_select_without_fix_rejects_dangling_terms() -> None:
     """A window that cuts a coupling must be given the boundary values."""
     with pytest.raises(RestrictionError, match="dangling terms"):
-        MatrixWindow(storage_model(), "time").select(TIME[1:3])
+        MatrixWindow(storage_model()).select({"time": TIME[1:3]})
 
 
 def test_nan_fix_counts_as_missing() -> None:
     fix = {"soc": pd.Series(np.full(len(TIME), np.nan), index=TIME)}
     with pytest.raises(RestrictionError, match="dangling terms"):
-        MatrixWindow(storage_model(), "time").select(TIME[1:3], fix=fix)
+        MatrixWindow(storage_model()).select({"time": TIME[1:3]}, fix=fix)
 
 
 WINDOW_SOLVERS = ("highs", "gurobi", "cplex", "scip", "xpress", "mosek")
@@ -405,8 +538,6 @@ def test_window_solve_across_solvers(solver_name: str) -> None:
 
 
 def test_solve_refuses_a_rebuild_when_asked() -> None:
-    from linopy.persistent.errors import RebuildRequiredError
-
     m = linear_model()
     fix = {"x": pd.Series(np.zeros(len(TIME)), index=TIME)}
     window = m.restrict(time=TIME[:3], fix=fix)
@@ -434,7 +565,7 @@ def test_window_rejects_sos_constraints() -> None:
     m.add_sos_constraints(m.variables["x"], 1, "time")
 
     with pytest.raises(NotImplementedError, match="SOS"):
-        MatrixWindow(m, "time")
+        MatrixWindow(m)
 
 
 def test_window_solves_piecewise_formulations() -> None:

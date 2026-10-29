@@ -8,21 +8,19 @@ materialises variables and constraints only when their values are read.
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 from xarray import DataArray, Dataset
 
-from linopy.restrict.errors import RestrictionError
-from linopy.restrict.matrix import MatrixWindow, WindowMatrices
+from linopy.restrict.matrix import MatrixWindow, RestrictionError, WindowMatrices
 
 if TYPE_CHECKING:
     from linopy.model import Model
     from linopy.solvers import Solver
 
-__all__ = ["WindowModel", "WindowObjective"]
+__all__ = ["WindowModel", "WindowModelView", "WindowObjective", "restrict_model"]
 
 
 class _LabelIndex:
@@ -94,7 +92,7 @@ class _ConstraintsView:
         return None
 
     def __len__(self) -> int:
-        return len(self._window.matrices.con_blocks)
+        return len(self._window.matrices.constraints)
 
     @property
     def label_index(self) -> _LabelIndex:
@@ -202,23 +200,21 @@ class WindowModel:
     A window of a parent model, backed by its flattened matrices.
 
     ``matrices`` is available immediately. ``solution``, ``dual`` and access to a
-    named variable or constraint materialise that container from the flat result
-    vectors, so a caller pays only for what it reads.
+    named variable materialise that container from the flat result vectors, so a
+    caller pays only for what it reads.
     """
 
     def __init__(
         self,
         parent: Model,
-        dim: str,
-        selection: dict[str, Any],
-        fix: dict[str, Any] | None = None,
+        selection: Mapping[str, Any],
+        fix: Mapping[str, Any] | None = None,
     ) -> None:
         self._parent = parent
-        self._dim = dim
-        self._view = MatrixWindow(parent, dim)
+        self._view = MatrixWindow(parent)
         self._fix = fix
         self._selection = dict(selection)
-        self._matrices = self._view.select(pd.Index(selection[dim]), fix)
+        self._matrices = self._view.select(self._selection, fix)
         self._objective = WindowObjective(self)
         self._objective_value: float | None = None
         self._primal: np.ndarray | None = None
@@ -239,22 +235,19 @@ class WindowModel:
         return WindowModelView(self)
 
     def advance(
-        self, fix: dict[str, Any] | None = None, **selection: Any
+        self, fix: Mapping[str, Any] | None = None, **selection: Any
     ) -> WindowModel:
         """Move the window, recomputing the matrices for the new selection."""
         if selection:
-            missing = [dim for dim in self._selection if dim not in selection]
-            if missing:
+            if selection.keys() != self._selection.keys():
                 raise RestrictionError(
-                    "Cannot advance model: the selection must name all dimensions "
-                    f"of the previous selection, missing {missing}."
+                    "Cannot advance model: the selection must name exactly the "
+                    f"dimensions {list(self._selection)} of the previous selection, "
+                    f"got {list(selection)}."
                 )
-            self._selection = {dim: selection[dim] for dim in self._selection}
+            self._selection = selection
         self._fix = fix if fix is not None else self._fix
-        self._previous = self._matrices
-        self._matrices = self._view.select(
-            pd.Index(self._selection[self._dim]), self._fix
-        )
+        self._matrices = self._view.select(self._selection, self._fix)
         self._objective_value = None
         self._primal = None
         self._dual = None
@@ -284,92 +277,70 @@ class WindowModel:
         self._previous = self._matrices
         return self
 
-    # --- materialisation -----------------------------------------------------
-
     @property
     def solution(self) -> Dataset:
         """The window's variable values, one array per variable."""
-        self._require_solve()
-        assert self._primal is not None
-        data = {}
-        for name, var in self._parent.variables.items():
-            start, stop = self._matrices.var_blocks[name]
-            # the solver works in scaled columns; report the model's units
-            values = self._primal[start:stop] / self._matrices.var_scaling[start:stop]
-            data[name] = self._reshape(var, values, self._matrices.var_active[name])
-        return Dataset(data)
+        by_label = self._primal_by_label()
+        return Dataset(
+            {
+                name: _scatter(labels, by_label)
+                for name, labels in self._matrices.variables.items()
+            }
+        )
 
     @property
     def dual(self) -> Dataset:
         """The window's constraint duals, one array per constraint."""
         self._require_solve()
-        expected = sum(
-            stop - start for start, stop in self._matrices.con_blocks.values()
-        )
-        if self._dual is None or self._dual.size != expected:
+        mat = self._matrices
+        if self._dual is None or self._dual.size != mat.clabels.size:
             raise AttributeError("The last solve returned no dual values.")
-        data = {}
-        for name, con in self._parent.constraints.items():
-            start, stop = self._matrices.con_blocks[name]
-            # undo the row and objective scaling the solver applied
-            values = (
-                self._dual[start:stop]
-                * self._matrices.con_scaling[start:stop]
-                / self._matrices.objective_scaling
-            )
-            data[name] = self._reshape(
-                con,
-                values,
-                self._matrices.con_active[name],
-                dims=tuple(con.coord_dims),
-            )
-        return Dataset(data)
-
-    def __getitem__(self, name: str) -> Any:
-        """A variable of the window, materialised on demand."""
-        if name in self._parent.variables:
-            var = self._parent.variables[name]
-            start, stop = self._matrices.var_blocks[name]
-            values = None
-            if self._primal is not None:
-                values = (
-                    self._primal[start:stop] / self._matrices.var_scaling[start:stop]
-                )
-            return self._reshape(var, values, self._matrices.var_active[name])
-        raise KeyError(name)
-
-    def _reshape(
-        self,
-        container: Any,
-        values: np.ndarray | None,
-        active: np.ndarray,
-        dims: tuple[Hashable, ...] | None = None,
-    ) -> DataArray:
-        """Values of one container, scattered to its shape and labelled for the window."""
-        dims = tuple(container.dims) if dims is None else dims
-        sizes = {dim: container.shape[dims.index(dim)] for dim in dims}
-        coords = {}
-        for dim in dims:
-            if dim != self._dim:
-                coords[dim] = container.indexes[dim]
-                continue
-            # a carrier may hold a subset of the window's labels, so size and
-            # coordinates come from the intersection
-            index = container.indexes.get(dim)
-            window = self._matrices.coords[self._dim]
-            coords[dim] = window if index is None else index[index.isin(window)]
-            sizes[dim] = coords[dim].size
-        full = np.full(active.size, np.nan)
-        if values is not None:
-            full[active] = values
-        return DataArray(
-            full.reshape(tuple(sizes[dim] for dim in dims)),
-            coords=coords,
-            dims=list(dims),
+        values = self._dual * mat.con_scaling / mat.objective_scaling
+        by_label = _by_label(mat.clabels, values, self._parent._cCounter)
+        return Dataset(
+            {
+                name: _scatter(labels, by_label)
+                for name, labels in mat.constraints.items()
+            }
         )
 
-    def _require_solve(self) -> None:
+    def __getitem__(self, name: str) -> DataArray:
+        """A variable of the window, materialised on demand."""
+        if name not in self._matrices.variables:
+            raise KeyError(name)
+        return _scatter(self._matrices.variables[name], self._primal_by_label())
+
+    def _primal_by_label(self) -> np.ndarray:
+        """Primal values in model units by parent label."""
+        mat = self._matrices
+        values = self._require_solve() / mat.var_scaling
+        return _by_label(mat.vlabels, values, self._parent._xCounter)
+
+    def _require_solve(self) -> np.ndarray:
         if self._primal is None:
             raise AttributeError(
                 "The window has not been solved. Call `solve()` before reading values."
             )
+        return self._primal
+
+
+def _by_label(labels: np.ndarray, values: np.ndarray, size: int) -> np.ndarray:
+    """Flat values indexed by label, NaN for labels outside the window."""
+    by_label = np.full(size, np.nan)
+    by_label[labels] = values
+    return by_label
+
+
+def _scatter(labels: DataArray, by_label: np.ndarray) -> DataArray:
+    """Values of one container, laid out like its windowed labels."""
+    raw = labels.values
+    return labels.copy(data=np.where(raw != -1, by_label[raw], np.nan))
+
+
+def restrict_model(
+    model: Model,
+    fix: Mapping[str, Any] | None,
+    selection: Mapping[str, Any],
+) -> WindowModel:
+    """Build a matrix-backed window of ``model``, see :meth:`linopy.Model.restrict`."""
+    return WindowModel(model, selection, fix)

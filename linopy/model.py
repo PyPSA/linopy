@@ -2434,14 +2434,17 @@ class Model:
         **selection: Any,
     ) -> WindowModel:
         """
-        Build a matrix-backed window along one coordinate dimension.
+        Build a matrix-backed window of the model by label selection.
 
         A window is a slice of the model's flattened matrices: the parent is
-        built once, and each selection slices its rows and columns. Terms whose
-        variables fall outside the window are folded into the right-hand side at
-        their actual coefficient when ``fix`` supplies their values. Rows that
-        lose every term are dropped when their folded right-hand side satisfies
-        their sign, and raise otherwise.
+        built once, and each selection picks the rows and columns of the
+        selected labels. The selection follows :meth:`xarray.Dataset.sel`
+        semantics per container: labels, lists, slices and scalars work, along
+        one or several dimensions, and containers without a selected dimension
+        stay whole. Terms whose variables fall outside the window are folded
+        into the right-hand side at their actual coefficient when ``fix``
+        supplies their values. Rows that lose every term are dropped when their
+        folded right-hand side satisfies their sign, and raise otherwise.
 
         The returned :class:`~linopy.restrict.WindowModel` exposes ``matrices``
         directly, so solving never rebuilds a container. Variables and
@@ -2450,12 +2453,14 @@ class Model:
         Parameters
         ----------
         fix : mapping, optional
-            Fixed values for out-of-window variables, keyed by variable name and
-            broadcast against the variable's coordinates. Values for in-window
+            Fixed values for out-of-window variables, keyed by variable name.
+            Values are aligned by coordinate label and broadcast over the
+            variable's dimensions they lack; every coordinate of the variable
+            must be present. ``NaN`` counts as unfixed. Values for in-window
             variables are ignored.
         **selection : Any
-            Exactly one dimension and the labels of the window, e.g.
-            ``snapshot=sns[:24]``.
+            Dimensions and the labels of the window, e.g.
+            ``snapshot=sns[:24]`` or ``snapshot=slice(t0, t1), bus=["a"]``.
 
         Returns
         -------
@@ -2465,11 +2470,13 @@ class Model:
         Raises
         ------
         RestrictionError
-            If the dimension does not exist, a carrier does not contain the
-            window's labels, or a fully folded row is unsatisfiable.
+            If a dimension does not exist, a carrier does not contain the
+            selected labels, the fixed values do not match a variable's
+            coordinates, a cut coupling has no fixed values, or a fully folded
+            row is unsatisfiable.
         NotImplementedError
-            If the selection names several dimensions, or the model has
-            indicators, a quadratic objective, SOS or piecewise formulations.
+            If the model has indicators, a quadratic objective or native SOS
+            constraints.
 
         Examples
         --------
