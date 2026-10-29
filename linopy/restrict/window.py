@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from xarray import DataArray, Dataset
 
-from linopy.restrict.matrix import MatrixWindow, RestrictionError, WindowMatrices
+from linopy.restrict.matrix import (
+    MatrixWindow,
+    RestrictionError,
+    WindowMatrices,
+    WindowResult,
+)
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -33,12 +38,8 @@ class _LabelIndex:
     """
 
     def __init__(self, size: int) -> None:
-        labels = np.arange(size)
-        self.vlabels = labels
-        self.clabels = labels
-        self.label_to_pos = labels
-        self.n_active_vars = size
-        self.n_active_cons = size
+        self.vlabels = self.clabels = self.label_to_pos = np.arange(size)
+        self.n_active_vars = self.n_active_cons = size
 
 
 class _KindSet:
@@ -50,9 +51,6 @@ class _KindSet:
     def __len__(self) -> int:
         return int(self.labels.size)
 
-    def __bool__(self) -> bool:
-        return bool(self.labels.size)
-
     def __iter__(self) -> Iterator[Any]:
         return iter(self.labels)
 
@@ -60,27 +58,18 @@ class _KindSet:
 class _VariablesView:
     """The ``model.variables`` surface a solver's direct builder reads."""
 
-    def __init__(self, view: WindowModelView) -> None:
-        self._view = view
-
-    @property
-    def sos(self) -> dict:
-        return {}
-
-    @property
-    def semi_continuous(self) -> _KindSet:
-        return self._view.semi_continuous
-
-    @property
-    def label_index(self) -> _LabelIndex:
-        return _LabelIndex(len(self._view.matrices.vlabels))
+    def __init__(self, semi_continuous: _KindSet, size: int) -> None:
+        self.sos: dict = {}
+        self.semi_continuous = semi_continuous
+        self.label_index = _LabelIndex(size)
 
 
 class _ConstraintsView:
     """The ``model.constraints`` surface a builder reads."""
 
-    def __init__(self, window: WindowModel) -> None:
-        self._window = window
+    def __init__(self, containers: int, size: int) -> None:
+        self._containers = containers
+        self.label_index = _LabelIndex(size)
 
     def sanitize_missings(self) -> None:
         return None
@@ -92,11 +81,7 @@ class _ConstraintsView:
         return None
 
     def __len__(self) -> int:
-        return len(self._window.matrices.constraints)
-
-    @property
-    def label_index(self) -> _LabelIndex:
-        return _LabelIndex(len(self._window.matrices.clabels))
+        return self._containers
 
 
 class WindowModelView:
@@ -108,74 +93,28 @@ class WindowModelView:
     build-from-arrays routine.
     """
 
+    set_names_in_solver_io = False
+    is_quadratic = False
+    indicator_constraints = ()
+
     def __init__(self, window: WindowModel) -> None:
-        self._window = window
-        self.variables = _VariablesView(self)
-        self.constraints = _ConstraintsView(window)
-
-    @property
-    def matrices(self) -> WindowMatrices:
-        return self._window.matrices
-
-    @property
-    def objective(self) -> WindowObjective:
-        return self._window.objective
-
-    @property
-    def sense(self) -> str:
-        return self.matrices.objective_sense
-
-    @property
-    def set_names_in_solver_io(self) -> bool:
-        return False
-
-    @property
-    def is_quadratic(self) -> bool:
-        return False
-
-    @property
-    def nvars(self) -> int:
-        return len(self.matrices.vlabels)
-
-    @property
-    def ncons(self) -> int:
-        return len(self.matrices.clabels)
-
-    @property
-    def _xCounter(self) -> int:
-        return len(self.matrices.vlabels)
-
-    @property
-    def _cCounter(self) -> int:
-        return len(self.matrices.clabels)
-
-    @property
-    def indicator_constraints(self) -> tuple:
-        return ()
-
-    def _of_kind(self, kind: str) -> _KindSet:
-        return _KindSet(np.flatnonzero(self.matrices.vtypes == kind))
-
-    @property
-    def binaries(self) -> _KindSet:
-        return self._of_kind("B")
-
-    @property
-    def integers(self) -> _KindSet:
-        return self._of_kind("I")
-
-    @property
-    def semi_continuous(self) -> _KindSet:
-        return self._of_kind("S")
-
-    @property
-    def continuous(self) -> _KindSet:
-        return self._of_kind("C")
+        mat = window.matrices
+        self.matrices = mat
+        self.objective = window.objective
+        self.sense = mat.objective_sense
+        self.nvars = self._xCounter = mat.vlabels.size
+        self.ncons = self._cCounter = mat.clabels.size
+        kinds = {kind: _KindSet(np.flatnonzero(mat.vtypes == kind)) for kind in "BISC"}
+        self.binaries = kinds["B"]
+        self.integers = kinds["I"]
+        self.semi_continuous = kinds["S"]
+        self.continuous = kinds["C"]
+        self.variables = _VariablesView(self.semi_continuous, self.nvars)
+        self.constraints = _ConstraintsView(len(mat.constraints), self.ncons)
 
     @property
     def type(self) -> str:
-        discrete = bool(self.binaries or self.integers or self.semi_continuous)
-        if not discrete:
+        if not (self.binaries or self.integers or self.semi_continuous):
             return "LP"
         return "MILP" if self.continuous else "ILP"
 
@@ -188,7 +127,8 @@ class WindowObjective:
 
     @property
     def value(self) -> float | None:
-        return self._window._objective_value
+        result = self._window._result
+        return None if result is None else result.objective
 
     @property
     def sense(self) -> str:
@@ -211,20 +151,14 @@ class WindowModel:
         fix: Mapping[str, Any] | None = None,
     ) -> None:
         self._parent = parent
-        self._view = MatrixWindow(parent)
-        self._fix = fix
+        self._matrix_window = MatrixWindow(parent)
         self._selection = dict(selection)
-        self._matrices = self._view.select(self._selection, fix)
-        self._objective = WindowObjective(self)
-        self._objective_value: float | None = None
-        self._primal: np.ndarray | None = None
-        self._dual: np.ndarray | None = None
+        self._fix = fix
+        self._matrices = self._matrix_window.select(self._selection, fix)
+        self.objective = WindowObjective(self)
+        self._result: WindowResult | None = None
         self._solver: Solver | None = None
         self._previous: WindowMatrices | None = None
-
-    @property
-    def objective(self) -> WindowObjective:
-        return self._objective
 
     @property
     def matrices(self) -> WindowMatrices:
@@ -247,10 +181,8 @@ class WindowModel:
                 )
             self._selection = selection
         self._fix = fix if fix is not None else self._fix
-        self._matrices = self._view.select(self._selection, self._fix)
-        self._objective_value = None
-        self._primal = None
-        self._dual = None
+        self._matrices = self._matrix_window.select(self._selection, self._fix)
+        self._result = None
         return self
 
     def solve(
@@ -268,73 +200,56 @@ class WindowModel:
             )
         elif options:
             self._solver.solver_options.update(options)
-        result = self._solver.solve_window(
+        self._result = self._solver.solve_window(
             self, self._previous, disallow_rebuild=disallow_rebuild
         )
-        self._objective_value = result.objective
-        self._primal = result.primal
-        self._dual = result.dual
         self._previous = self._matrices
         return self
 
     @property
     def solution(self) -> Dataset:
         """The window's variable values, one array per variable."""
-        by_label = self._primal_by_label()
-        return Dataset(
-            {
-                name: _scatter(labels, by_label)
-                for name, labels in self._matrices.variables.items()
-            }
-        )
+        return Dataset(self._primal(self._matrices.variables))
 
     @property
     def dual(self) -> Dataset:
         """The window's constraint duals, one array per constraint."""
-        self._require_solve()
+        dual = self._solved().dual
         mat = self._matrices
-        if self._dual is None or self._dual.size != mat.clabels.size:
+        if dual.size != mat.clabels.size:
             raise AttributeError("The last solve returned no dual values.")
-        values = self._dual * mat.con_scaling / mat.objective_scaling
-        by_label = _by_label(mat.clabels, values, self._parent._cCounter)
-        return Dataset(
-            {
-                name: _scatter(labels, by_label)
-                for name, labels in mat.constraints.items()
-            }
-        )
+        values = dual * mat.con_scaling / mat.objective_scaling
+        size = self._parent._cCounter
+        return Dataset(_scatter(mat.constraints, mat.clabels, values, size))
 
     def __getitem__(self, name: str) -> DataArray:
         """A variable of the window, materialised on demand."""
-        if name not in self._matrices.variables:
-            raise KeyError(name)
-        return _scatter(self._matrices.variables[name], self._primal_by_label())
+        return self._primal({name: self._matrices.variables[name]})[name]
 
-    def _primal_by_label(self) -> np.ndarray:
-        """Primal values in model units by parent label."""
+    def _primal(self, variables: dict[str, DataArray]) -> dict[str, DataArray]:
+        """Primal values in model units, laid out like the given labels."""
         mat = self._matrices
-        values = self._require_solve() / mat.var_scaling
-        return _by_label(mat.vlabels, values, self._parent._xCounter)
+        values = self._solved().primal / mat.var_scaling
+        return _scatter(variables, mat.vlabels, values, self._parent._xCounter)
 
-    def _require_solve(self) -> np.ndarray:
-        if self._primal is None:
+    def _solved(self) -> WindowResult:
+        if self._result is None:
             raise AttributeError(
                 "The window has not been solved. Call `solve()` before reading values."
             )
-        return self._primal
+        return self._result
 
 
-def _by_label(labels: np.ndarray, values: np.ndarray, size: int) -> np.ndarray:
-    """Flat values indexed by label, NaN for labels outside the window."""
+def _scatter(
+    containers: dict[str, DataArray], labels: np.ndarray, values: np.ndarray, size: int
+) -> dict[str, DataArray]:
+    """Flat values by label, laid out like each container's windowed labels."""
     by_label = np.full(size, np.nan)
     by_label[labels] = values
-    return by_label
-
-
-def _scatter(labels: DataArray, by_label: np.ndarray) -> DataArray:
-    """Values of one container, laid out like its windowed labels."""
-    raw = labels.values
-    return labels.copy(data=np.where(raw != -1, by_label[raw], np.nan))
+    return {
+        name: raw.copy(data=np.where(raw.values != -1, by_label[raw.values], np.nan))
+        for name, raw in containers.items()
+    }
 
 
 def restrict_model(

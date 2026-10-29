@@ -384,14 +384,13 @@ class ModelDiff:
         rows = np.flatnonzero(current.b != previous.b)
         cost = np.flatnonzero(current.c != previous.c)
 
-        coef_deltas: list[_CoefDelta] = []
-        n_coef_updates = 0
         changed = np.flatnonzero(current.A.data != previous.A.data)
-        if changed.size:
-            changed_rows = np.unique(
-                np.searchsorted(current.A.indptr, changed, side="right") - 1
-            )
-            counts = np.diff(current.A.indptr)[changed_rows]
+        changed_rows = np.unique(
+            np.searchsorted(current.A.indptr, changed, side="right") - 1
+        )
+        n_coef_updates = int(np.diff(current.A.indptr)[changed_rows].sum())
+        coef_deltas: list[_CoefDelta] = []
+        if changed_rows.size:
             buffer = ContainerConBuffers(
                 indptr=current.A.indptr,
                 indices=current.A.indices,
@@ -401,9 +400,8 @@ class ModelDiff:
                 active_labels=np.empty(0, dtype=np.int64),
             )
             coef_deltas = [
-                _CoefDelta(buffer, changed_rows, changed_rows, int(counts.sum()))
+                _CoefDelta(buffer, changed_rows, changed_rows, n_coef_updates)
             ]
-            n_coef_updates = int(counts.sum())
 
         sign_changed = np.flatnonzero(current.sense != previous.sense)
 

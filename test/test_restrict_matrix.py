@@ -380,7 +380,8 @@ def test_reading_values_before_solve_raises(read: Any) -> None:
 def test_dual_size_mismatch_raises() -> None:
     window = linear_model().restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
-    window._dual = np.empty(0)
+    assert window._result is not None
+    window._result = replace(window._result, dual=np.empty(0))
 
     with pytest.raises(AttributeError, match="no dual values"):
         window.dual

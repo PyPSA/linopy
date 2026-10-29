@@ -106,10 +106,8 @@ def _select(containers: Any, selection: Mapping[str, Any]) -> dict[str, DataArra
 
 def _positions(selected: dict[str, DataArray], label_to_pos: np.ndarray) -> np.ndarray:
     """Parent matrix positions of the selected active labels, in container order."""
-    flat = np.concatenate(
-        [np.empty(0, dtype=label_to_pos.dtype)]
-        + [labels.values.ravel() for labels in selected.values()]
-    )
+    empty = np.empty(0, dtype=label_to_pos.dtype)
+    flat = np.concatenate([empty, *(lab.values.ravel() for lab in selected.values())])
     positions = label_to_pos[flat[flat != -1]]
     positions = positions[positions >= 0]
     if np.unique(positions).size != positions.size:
@@ -132,6 +130,25 @@ def _align(given: Any, labels: DataArray, name: str) -> DataArray:
             f"Fixed values for variable {name!r} do not match its coordinates "
             f"({error})."
         ) from error
+
+
+def _check_dropped(
+    rhs: np.ndarray, sense: np.ndarray, magnitude: np.ndarray, clabels: np.ndarray
+) -> None:
+    """Raise when a row that lost every term violates its sign."""
+    tolerance = 1e-9 * np.maximum(1.0, magnitude)
+    violated = (
+        ((sense == "=") & (np.abs(rhs) > tolerance))
+        | ((sense == "<") & (rhs < -tolerance))
+        | ((sense == ">") & (rhs > tolerance))
+    )
+    if violated.any():
+        raise RestrictionError(
+            "Cannot window the matrices: folding the dangling terms makes "
+            f"constraint labels {clabels[violated].tolist()} unsatisfiable "
+            f"(folded rhs {rhs[violated].tolist()} against sign "
+            f"{sense[violated].tolist()})."
+        )
 
 
 class MatrixWindow:
@@ -194,12 +211,14 @@ class MatrixWindow:
 
         outside = np.ones(mat.vlabels.size, dtype=bool)
         outside[cols] = False
-        fixed = self._fixed(fix)
+        boundary = np.where(outside, self._fixed(fix), 0.0)
+        missing = np.isnan(boundary)
+        boundary[missing] = 0.0
         A = self._A[rows]
         magnitude = abs(A)
-        unfixed = magnitude @ (outside & np.isnan(fixed)).astype(float) > 0
-        if unfixed.any():
-            bad = mat.clabels[rows][unfixed]
+        unfixed = rows[magnitude @ missing.astype(float) > 0]
+        if unfixed.size:
+            bad = mat.clabels[unfixed]
             owners = [
                 n for n, lab in constraints.items() if np.isin(lab.values, bad).any()
             ]
@@ -208,28 +227,29 @@ class MatrixWindow:
                 "terms on variables outside the selection without fixed values. "
                 "Pass their values via `fix`."
             )
-        boundary = np.where(outside & ~np.isnan(fixed), fixed, 0.0)
         rhs = mat.b[rows] - A @ boundary
         inner = A[:, cols]
         keep = np.diff(inner.indptr) > 0
-        self._check_dropped(
+        dropped = rows[~keep]
+        _check_dropped(
             rhs[~keep],
-            mat.sense[rows][~keep],
+            mat.sense[dropped],
             (magnitude @ np.abs(boundary))[~keep],
-            mat.clabels[rows][~keep],
+            mat.clabels[dropped],
         )
+        kept = rows[keep]
         return WindowMatrices(
             A=inner[keep],
             b=rhs[keep],
-            sense=mat.sense[rows][keep],
+            sense=mat.sense[kept],
             c=mat.c[cols],
             lb=mat.lb[cols],
             ub=mat.ub[cols],
             vlabels=mat.vlabels[cols],
-            clabels=mat.clabels[rows][keep],
+            clabels=mat.clabels[kept],
             vtypes=mat.vtypes[cols],
             var_scaling=mat.var_scaling[cols],
-            con_scaling=mat.con_scaling[rows][keep],
+            con_scaling=mat.con_scaling[kept],
             objective_scaling=float(m.objective.scaling),
             objective_sense=m.objective.sense,
             variables=variables,
@@ -248,22 +268,3 @@ class MatrixWindow:
             active = labels.values != -1
             by_label[labels.values[active]] = _align(given, labels, name).values[active]
         return by_label[self._matrices.vlabels] * self._matrices.var_scaling
-
-    @staticmethod
-    def _check_dropped(
-        rhs: np.ndarray, sense: np.ndarray, magnitude: np.ndarray, clabels: np.ndarray
-    ) -> None:
-        """Raise when a row that lost every term violates its sign."""
-        tolerance = 1e-9 * np.maximum(1.0, magnitude)
-        violated = (
-            ((sense == "=") & (np.abs(rhs) > tolerance))
-            | ((sense == "<") & (rhs < -tolerance))
-            | ((sense == ">") & (rhs > tolerance))
-        )
-        if violated.any():
-            raise RestrictionError(
-                "Cannot window the matrices: folding the dangling terms makes "
-                f"constraint labels {clabels[violated].tolist()} unsatisfiable "
-                f"(folded rhs {rhs[violated].tolist()} against sign "
-                f"{sense[violated].tolist()})."
-            )

@@ -511,32 +511,32 @@ class Solver(ABC, Generic[EnvType]):
         from linopy.restrict.window import WindowModelView
 
         current = window.matrices
-        view = window.as_model_view()
         built = isinstance(self.model, WindowModelView)
         same_pattern = previous is not None and ModelDiff.same_window_pattern(
             previous, current
         )
-        if built and same_pattern and self.supports_persistent_update:
-            self.model = view
+        update = built and same_pattern and self.supports_persistent_update
+        if built and not update:
+            reason = (
+                RebuildReason.STRUCTURAL_LABELS
+                if previous is not None and not same_pattern
+                else RebuildReason.BACKEND_REJECTED
+            )
+            if disallow_rebuild:
+                raise RebuildRequiredError(
+                    reason, "the window requires a solver rebuild"
+                )
+            logger.warning("Window requires a solver rebuild (%s).", reason.value)
+        view = window.as_model_view()
+        self.model = view
+        if update:
             self.apply_update(
                 ModelDiff.from_windows(previous, current),
                 view.variables.label_index,
                 view.constraints.label_index,
             )
         else:
-            if built:
-                reason = (
-                    RebuildReason.STRUCTURAL_LABELS
-                    if previous is not None and not same_pattern
-                    else RebuildReason.BACKEND_REJECTED
-                )
-                if disallow_rebuild:
-                    raise RebuildRequiredError(
-                        reason, "the window requires a solver rebuild"
-                    )
-                logger.warning("Window requires a solver rebuild (%s).", reason.value)
             self.close()
-            self.model = view
             self._build()
         result = self._run_direct(**run_kwargs)
         solution = result.solution
