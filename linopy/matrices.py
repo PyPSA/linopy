@@ -8,8 +8,9 @@ Created on Mon Oct 10 13:33:55 2022.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
 
 import numpy as np
 import scipy.sparse
@@ -128,125 +129,216 @@ def _indicator_rows(con: Constraint, active: ndarray) -> tuple[ndarray, ndarray]
     return var_labels, np.ravel(con.binary_val)[active].astype(np.intp)
 
 
-class MatrixAccessor:
+@dataclass(frozen=True, eq=False)
+class Matrices:
     """
-    Helper class to quickly access model related vectors and matrices.
+    A model as flat arrays.
 
     All arrays are compact — only active (non-masked) entries are included.
     Position i in variable-side arrays corresponds to vlabels[i].
     Position i in constraint-side arrays corresponds to clabels[i].
 
     The matrix members (``A``, ``b``, ``c``, ``Q``, ``lb``, ``ub``) are in
-    solver-scaled units while the read-back members (``sol``, ``dual``) are in
-    user units, so ``A @ sol`` and ``c @ sol`` do not reconstruct ``b`` or the
-    objective when scaling factors differ from 1.
+    solver-scaled units. ``con_scaling`` is the row scaling applied to ``A``,
+    aligned with ``clabels``; consumers that report duals need it to invert the
+    scaling on the way back.
     """
 
-    def __init__(self, model: Model) -> None:
-        self._parent = model
-        self._build_vars()
-        self._build_cons()
+    vlabels: ndarray
+    clabels: ndarray
+    A: scipy.sparse.csr_array | None
+    b: ndarray
+    sense: ndarray
+    c: ndarray
+    Q: scipy.sparse.csc_matrix | None
+    lb: ndarray
+    ub: ndarray
+    vtypes: ndarray
+    var_scaling: ndarray
+    con_scaling: ndarray
+    objective_scaling: float
+    objective_sense: str
+    indicator_A: scipy.sparse.csr_array | None
+    indicator_b: ndarray
+    indicator_sense: ndarray
+    indicator_binvar: ndarray
+    indicator_binval: ndarray
 
-    def _build_vars(self) -> None:
-        m = self._parent
-        self.vlabels: ndarray = m.variables.label_index.vlabels
-        n = len(self.vlabels)
-        self.var_scaling: ndarray = np.empty(n, dtype=float)
-        self.lb: ndarray = np.empty(n, dtype=float)
-        self.ub: ndarray = np.empty(n, dtype=float)
-        self.vtypes: ndarray = np.empty(n, dtype="U1")
+    def take(self, rows: ndarray, cols: ndarray) -> Matrices:
+        """
+        The matrices restricted to the given row and column positions.
 
-        pos = 0
-        for name, var in m.variables.items():
-            mask = var.labels.values.ravel() != -1
-            cols = slice(pos, pos + int(np.count_nonzero(mask)))
-            if name in m.binaries:
-                vtype = "B"
-            elif name in m.integers:
-                vtype = "I"
-            elif name in m.semi_continuous:
-                vtype = "S"
-            else:
-                vtype = "C"
-            self.vtypes[cols] = vtype
-            self.var_scaling[cols] = var.solver_scaling.values.ravel()[mask]
-            self.lb[cols] = var.lower.values.ravel()[mask]
-            self.ub[cols] = var.upper.values.ravel()[mask]
-            pos = cols.stop
+        Raises when indicator constraints are present, since their binary
+        variables would have to be remapped onto the new columns.
+        """
+        if self.indicator_b.size:
+            raise NotImplementedError(
+                "Taking rows and columns of matrices with indicator constraints "
+                "is not supported."
+            )
+        return Matrices(
+            vlabels=self.vlabels[cols],
+            clabels=self.clabels[rows],
+            A=None if self.A is None else self.A[rows][:, cols],
+            b=self.b[rows],
+            sense=self.sense[rows],
+            c=self.c[cols],
+            Q=None if self.Q is None else self.Q[cols][:, cols],
+            lb=self.lb[cols],
+            ub=self.ub[cols],
+            vtypes=self.vtypes[cols],
+            var_scaling=self.var_scaling[cols],
+            con_scaling=self.con_scaling[rows],
+            objective_scaling=self.objective_scaling,
+            objective_sense=self.objective_sense,
+            indicator_A=None,
+            indicator_b=self.indicator_b,
+            indicator_sense=self.indicator_sense,
+            indicator_binvar=self.indicator_binvar,
+            indicator_binval=self.indicator_binval,
+        )
 
-        if not (self.var_scaling == 1).all():
-            self.lb *= self.var_scaling
-            self.ub *= self.var_scaling
 
-    def _build_cons(self) -> None:
-        m = self._parent
-        label_index = m.variables.label_index
-        label_to_pos = label_index.label_to_pos
-        col_scaling = None if (self.var_scaling == 1).all() else self.var_scaling
+class _VarArrays(TypedDict):
+    vlabels: ndarray
+    var_scaling: ndarray
+    lb: ndarray
+    ub: ndarray
+    vtypes: ndarray
 
-        regular, indicator = [], []
-        binvar, binval = [], []
-        scalings = []
-        for c in m.constraints.data.values():
-            if not c.is_indicator:
-                regular.append(_row_block(c, label_index))
-                scalings.append(c.scaling.values.ravel()[c.active_row_mask()])
-                continue
-            active = c.active_row_mask()
-            indicator.append(_row_block(c, label_index))
-            var_labels, val = _indicator_rows(c, active)
-            binvar.append(label_to_pos[var_labels])
-            binval.append(val)
 
-        self.clabels: ndarray = m.constraints.label_index.clabels
-        #: Row scaling actually applied to ``A``, aligned with ``clabels``. Consumers
-        #: that report duals need it to invert the scaling on the way back.
-        self.con_scaling: ndarray = (
+class _ConArrays(TypedDict):
+    clabels: ndarray
+    con_scaling: ndarray
+    A: scipy.sparse.csr_array | None
+    b: ndarray
+    sense: ndarray
+    indicator_A: scipy.sparse.csr_array | None
+    indicator_b: ndarray
+    indicator_sense: ndarray
+    indicator_binvar: ndarray
+    indicator_binval: ndarray
+
+
+def _build_vars(m: Model) -> _VarArrays:
+    vlabels = m.variables.label_index.vlabels
+    n = len(vlabels)
+    var_scaling = np.empty(n, dtype=float)
+    lb = np.empty(n, dtype=float)
+    ub = np.empty(n, dtype=float)
+    vtypes = np.empty(n, dtype="U1")
+
+    pos = 0
+    for name, var in m.variables.items():
+        mask = var.labels.values.ravel() != -1
+        cols = slice(pos, pos + int(np.count_nonzero(mask)))
+        if name in m.binaries:
+            vtype = "B"
+        elif name in m.integers:
+            vtype = "I"
+        elif name in m.semi_continuous:
+            vtype = "S"
+        else:
+            vtype = "C"
+        vtypes[cols] = vtype
+        var_scaling[cols] = var.solver_scaling.values.ravel()[mask]
+        lb[cols] = var.lower.values.ravel()[mask]
+        ub[cols] = var.upper.values.ravel()[mask]
+        pos = cols.stop
+
+    if not (var_scaling == 1).all():
+        lb *= var_scaling
+        ub *= var_scaling
+    return _VarArrays(
+        vlabels=vlabels, var_scaling=var_scaling, lb=lb, ub=ub, vtypes=vtypes
+    )
+
+
+def _build_cons(m: Model, var_scaling: ndarray) -> _ConArrays:
+    label_index = m.variables.label_index
+    label_to_pos = label_index.label_to_pos
+    col_scaling = None if (var_scaling == 1).all() else var_scaling
+
+    regular, indicator = [], []
+    binvar, binval = [], []
+    scalings = []
+    for c in m.constraints.data.values():
+        if not c.is_indicator:
+            regular.append(_row_block(c, label_index))
+            scalings.append(c.scaling.values.ravel()[c.active_row_mask()])
+            continue
+        active = c.active_row_mask()
+        indicator.append(_row_block(c, label_index))
+        var_labels, val = _indicator_rows(c, active)
+        binvar.append(label_to_pos[var_labels])
+        binval.append(val)
+
+    A, b, sense = _stack(regular, label_index, col_scaling, m)
+    indicator_A, indicator_b, indicator_sense = _stack(
+        indicator, label_index, col_scaling, m
+    )
+    label_dtype = m._dtypes["labels"]
+    return _ConArrays(
+        clabels=m.constraints.label_index.clabels,
+        con_scaling=(
             np.concatenate(scalings) if scalings else np.empty(0, dtype=float)
-        )
-        self.A: scipy.sparse.csr_array | None
-        self.A, self.b, self.sense = _stack(regular, label_index, col_scaling, m)
-        self.indicator_A: scipy.sparse.csr_array | None
-        self.indicator_A, self.indicator_b, self.indicator_sense = _stack(
-            indicator, label_index, col_scaling, m
-        )
-        label_dtype = m._dtypes["labels"]
-        self.indicator_binvar: ndarray = np.concatenate(
-            [np.array([], dtype=label_dtype), *binvar]
-        )
-        self.indicator_binval: ndarray = (
+        ),
+        A=A,
+        b=b,
+        sense=sense,
+        indicator_A=indicator_A,
+        indicator_b=indicator_b,
+        indicator_sense=indicator_sense,
+        indicator_binvar=np.concatenate([np.array([], dtype=label_dtype), *binvar]),
+        indicator_binval=(
             np.concatenate(binval) if binval else np.array([], dtype=np.intp)
+        ),
+    )
+
+
+def _objective(
+    m: Model, vlabels: ndarray, var_scaling: ndarray
+) -> tuple[ndarray, scipy.sparse.csc_matrix | None]:
+    """Linear coefficients and quadratic matrix of the objective, aligned with vlabels."""
+    c = np.zeros(len(vlabels))
+    var_labels, coeffs = m.objective.linear_terms()
+    positions = m.variables.label_index.label_to_pos[var_labels]
+    np.add.at(c, positions, coeffs / var_scaling[positions] * m.objective.scaling)
+
+    expr = m.objective.expression
+    if not isinstance(expr, expressions.QuadraticExpression):
+        return c, None
+    q = expr.to_matrix()[vlabels][:, vlabels]
+    if q.nnz:
+        q = q.multiply(1 / var_scaling[:, np.newaxis])
+        q = q.multiply(1 / var_scaling[np.newaxis, :])
+        q = q * m.objective.scaling
+    return c, q.tocsc()
+
+
+class MatrixAccessor(Matrices):
+    """
+    The flat matrices of a model, with read-back of its solution and duals.
+
+    The read-back members (``sol``, ``dual``) are in user units, so ``A @ sol``
+    and ``c @ sol`` do not reconstruct ``b`` or the objective when scaling
+    factors differ from 1.
+    """
+
+    _parent: Model
+
+    def __init__(self, model: Model) -> None:
+        object.__setattr__(self, "_parent", model)
+        variables = _build_vars(model)
+        c, Q = _objective(model, variables["vlabels"], variables["var_scaling"])
+        super().__init__(
+            **variables,
+            **_build_cons(model, variables["var_scaling"]),
+            c=c,
+            Q=Q,
+            objective_scaling=model.objective.scaling,
+            objective_sense=model.objective.sense,
         )
-
-    @cached_property
-    def c(self) -> ndarray:
-        """Objective coefficients aligned with vlabels."""
-        m = self._parent
-        result = np.zeros(len(self.vlabels))
-
-        label_index = m.variables.label_index
-        label_to_pos = label_index.label_to_pos
-        var_labels, coeffs = m.objective.linear_terms()
-        positions = label_to_pos[var_labels]
-        scaled_coeffs = coeffs / self.var_scaling[positions]
-        scaled_coeffs = scaled_coeffs * m.objective.scaling
-        np.add.at(result, positions, scaled_coeffs)
-        return result
-
-    @cached_property
-    def Q(self) -> scipy.sparse.csc_matrix | None:
-        """Quadratic objective matrix, shape (n_active_vars, n_active_vars)."""
-        m = self._parent
-        expr = m.objective.expression
-        if not isinstance(expr, expressions.QuadraticExpression):
-            return None
-        q = expr.to_matrix()[self.vlabels][:, self.vlabels]
-        if q.nnz:
-            # Quadratic coefficients get one inverse column scaling per factor.
-            q = q.multiply(1 / self.var_scaling[:, np.newaxis])
-            q = q.multiply(1 / self.var_scaling[np.newaxis, :])
-            q = q * self._parent.objective.scaling
-        return q.tocsc()
 
     @cached_property
     def sol(self) -> ndarray:

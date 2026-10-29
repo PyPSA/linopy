@@ -118,6 +118,7 @@ Version 1.0.0
 * The core modules are compacted after the legacy removal: ``Variables`` and ``Constraints`` share a ``LabelContainer`` base, the piecewise formulations share one link builder, and uncalled helpers are removed. ``merge`` no longer accepts bare ``Variable`` operands (pass ``var.to_linexpr()``), ``SolverReport.barrier_iterations`` (never populated) is removed, and ``linopy.common.set_int_index``, ``infer_schema_polars`` and ``require_constant`` are removed.
 * The methods of ``CSRStore`` and ``Grid`` in ``linopy.csr`` use pandas/xarray-style verbs instead of past participles, e.g. ``summed`` is ``sum``, ``reindexed`` is ``reindex``, ``filled`` is ``fillna``, ``contracted`` is ``dot``, ``with_const`` is ``assign_const`` and ``Grid.reordered`` is ``Grid.select``. (`#1018 <https://github.com/PyPSA/linopy/issues/1018>`__)
 * Store fallbacks convert a copy, never the receiver, and merges go through ``linopy.store.merge_stores``; ``_densify_all`` is removed. (`#1052 <https://github.com/PyPSA/linopy/issues/1052>`__)
+* ``linopy.matrices.Matrices`` is a frozen dataclass of a model's flat arrays (``A``, ``b``, ``c``, ``Q``, bounds, labels and scalings) with ``Matrices.take(rows, cols)`` to select rows and columns. ``model.matrices`` (``MatrixAccessor``) subclasses it and builds ``c`` and ``Q`` eagerly. Matrix windows reuse it: ``MatrixWindow.select`` returns the window's ``Matrices`` and the selected labels.
 
 Version 0.10.1
 --------------

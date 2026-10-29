@@ -491,7 +491,7 @@ class Solver(ABC, Generic[EnvType]):
         previous: Any = None,
         disallow_rebuild: bool = False,
         **run_kwargs: Any,
-    ) -> Any:
+    ) -> Solution:
         """
         Solve one matrix window, reusing this solver's model when possible.
 
@@ -507,7 +507,6 @@ class Solver(ABC, Generic[EnvType]):
                 f"got {self.io_api!r}."
             )
         from linopy.persistent.diff import ModelDiff
-        from linopy.restrict.matrix import WindowResult
         from linopy.restrict.window import WindowModelView
 
         current = window.matrices
@@ -538,15 +537,10 @@ class Solver(ABC, Generic[EnvType]):
         else:
             self.close()
             self._build()
-        result = self._run_direct(**run_kwargs)
-        solution = result.solution
+        solution = self._run_direct(**run_kwargs).solution
         if solution is None:
             raise RuntimeError("the solver returned no solution for the window")
-        return WindowResult(
-            objective=float(solution.objective),
-            primal=np.asarray(solution.primal),
-            dual=np.asarray(solution.dual),
-        )
+        return solution
 
     def apply_update(
         self,

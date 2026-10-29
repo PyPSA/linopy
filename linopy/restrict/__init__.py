@@ -17,13 +17,12 @@ primitive of decomposition methods.
 
 from __future__ import annotations
 
-from linopy.restrict.matrix import MatrixWindow, RestrictionError, WindowMatrices
+from linopy.restrict.matrix import MatrixWindow, RestrictionError
 from linopy.restrict.window import WindowModel, WindowObjective, restrict_model
 
 __all__ = [
     "MatrixWindow",
     "RestrictionError",
-    "WindowMatrices",
     "WindowModel",
     "WindowObjective",
     "restrict_model",

@@ -14,14 +14,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from xarray import DataArray, Dataset
 
-from linopy.restrict.matrix import (
-    MatrixWindow,
-    RestrictionError,
-    WindowMatrices,
-    WindowResult,
-)
+from linopy.restrict.matrix import MatrixWindow, RestrictionError
 
 if TYPE_CHECKING:
+    from linopy.constants import Solution
+    from linopy.matrices import Matrices
     from linopy.model import Model
     from linopy.solvers import Solver
 
@@ -110,7 +107,7 @@ class WindowModelView:
         self.semi_continuous = kinds["S"]
         self.continuous = kinds["C"]
         self.variables = _VariablesView(self.semi_continuous, self.nvars)
-        self.constraints = _ConstraintsView(len(mat.constraints), self.ncons)
+        self.constraints = _ConstraintsView(len(window._constraints), self.ncons)
 
     @property
     def type(self) -> str:
@@ -154,14 +151,16 @@ class WindowModel:
         self._matrix_window = MatrixWindow(parent)
         self._selection = dict(selection)
         self._fix = fix
-        self._matrices = self._matrix_window.select(self._selection, fix)
+        self._matrices, self._variables, self._constraints = self._matrix_window.select(
+            self._selection, fix
+        )
         self.objective = WindowObjective(self)
-        self._result: WindowResult | None = None
+        self._result: Solution | None = None
         self._solver: Solver | None = None
-        self._previous: WindowMatrices | None = None
+        self._previous: Matrices | None = None
 
     @property
-    def matrices(self) -> WindowMatrices:
+    def matrices(self) -> Matrices:
         return self._matrices
 
     def as_model_view(self) -> WindowModelView:
@@ -181,7 +180,9 @@ class WindowModel:
                 )
             self._selection = selection
         self._fix = fix if fix is not None else self._fix
-        self._matrices = self._matrix_window.select(self._selection, self._fix)
+        self._matrices, self._variables, self._constraints = self._matrix_window.select(
+            self._selection, self._fix
+        )
         self._result = None
         return self
 
@@ -209,7 +210,7 @@ class WindowModel:
     @property
     def solution(self) -> Dataset:
         """The window's variable values, one array per variable."""
-        return Dataset(self._primal(self._matrices.variables))
+        return Dataset(self._primal(self._variables))
 
     @property
     def dual(self) -> Dataset:
@@ -220,11 +221,11 @@ class WindowModel:
             raise AttributeError("The last solve returned no dual values.")
         values = dual * mat.con_scaling / mat.objective_scaling
         size = self._parent._cCounter
-        return Dataset(_scatter(mat.constraints, mat.clabels, values, size))
+        return Dataset(_scatter(self._constraints, mat.clabels, values, size))
 
     def __getitem__(self, name: str) -> DataArray:
         """A variable of the window, materialised on demand."""
-        return self._primal({name: self._matrices.variables[name]})[name]
+        return self._primal({name: self._variables[name]})[name]
 
     def _primal(self, variables: dict[str, DataArray]) -> dict[str, DataArray]:
         """Primal values in model units, laid out like the given labels."""
@@ -232,7 +233,7 @@ class WindowModel:
         values = self._solved().primal / mat.var_scaling
         return _scatter(variables, mat.vlabels, values, self._parent._xCounter)
 
-    def _solved(self) -> WindowResult:
+    def _solved(self) -> Solution:
         if self._result is None:
             raise AttributeError(
                 "The window has not been solved. Call `solve()` before reading values."

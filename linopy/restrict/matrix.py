@@ -5,7 +5,8 @@ Window a model's flattened matrices.
 selects every container's labels with :meth:`xarray.DataArray.sel`, maps the
 selected labels onto rows and columns of the parent's flattened matrices and
 folds the out-of-window columns into the right-hand side at their fixed values.
-No container is rebuilt.
+The window is a :class:`~linopy.matrices.Matrices` taken from the parent's with
+:meth:`~linopy.matrices.Matrices.take`. No container is rebuilt.
 
 Indicator constraints, quadratic objectives and native SOS constraints raise.
 """
@@ -13,19 +14,19 @@ Indicator constraints, quadratic objectives and native SOS constraints raise.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import scipy.sparse
 from xarray import DataArray
 
 from linopy.alignment import as_dataarray
 
 if TYPE_CHECKING:
+    from linopy.matrices import Matrices
     from linopy.model import Model
 
-__all__ = ["MatrixWindow", "RestrictionError", "WindowMatrices"]
+__all__ = ["MatrixWindow", "RestrictionError"]
 
 
 class RestrictionError(ValueError):
@@ -36,54 +37,6 @@ class RestrictionError(ValueError):
     every selected label, fixed values aligned with their variables, and folded
     boundary terms whose constant rows are satisfiable.
     """
-
-
-@dataclass(frozen=True)
-class WindowMatrices:
-    """
-    One window of a parent model, as flat arrays.
-
-    Columns follow the parent variable labels in ``vlabels``; rows follow the
-    parent constraint labels in ``clabels``. ``variables`` and ``constraints``
-    hold each container's selected labels, onto which flat results are
-    scattered. Out-of-window objective terms are dropped, so the objective value
-    differs from the parent's by a constant.
-    """
-
-    A: scipy.sparse.csr_array
-    b: np.ndarray
-    sense: np.ndarray
-    c: np.ndarray
-    lb: np.ndarray
-    ub: np.ndarray
-    vlabels: np.ndarray
-    clabels: np.ndarray
-    vtypes: np.ndarray
-    var_scaling: np.ndarray
-    con_scaling: np.ndarray
-    objective_scaling: float
-    objective_sense: str
-    variables: dict[str, DataArray]
-    constraints: dict[str, DataArray]
-
-    @property
-    def Q(self) -> None:
-        """No quadratic objective: matrix windows are linear."""
-        return None
-
-    @property
-    def indicator_A(self) -> None:
-        """No indicator constraints: matrix windows reject them."""
-        return None
-
-
-@dataclass(frozen=True)
-class WindowResult:
-    """Flat result of solving one window."""
-
-    objective: float
-    primal: np.ndarray
-    dual: np.ndarray
 
 
 def _select(containers: Any, selection: Mapping[str, Any]) -> dict[str, DataArray]:
@@ -170,7 +123,7 @@ class MatrixWindow:
             raise NotImplementedError(
                 "Matrix windows do not support quadratic objectives."
             )
-        if matrices.indicator_A is not None and matrices.indicator_A.nnz:
+        if matrices.indicator_b.size:
             raise NotImplementedError(
                 "Matrix windows do not support indicator constraints."
             )
@@ -182,15 +135,20 @@ class MatrixWindow:
 
     def select(
         self, selection: Mapping[str, Any], fix: Mapping[str, Any] | None = None
-    ) -> WindowMatrices:
+    ) -> tuple[Matrices, dict[str, DataArray], dict[str, DataArray]]:
         """
-        The window's matrices.
+        The window's matrices and each container's selected labels.
 
         ``selection`` maps dimensions to labels, as for :meth:`Model.restrict`.
         ``fix`` maps variable names to the values of out-of-window terms, which
         are folded into the right-hand side at their actual coefficient; a row
         that loses every term is dropped when its folded right-hand side
         satisfies its sign.
+
+        Columns follow the parent variable labels in ``vlabels``; rows follow the
+        parent constraint labels in ``clabels``. The selected labels are where
+        flat results are scattered back. Out-of-window objective terms are
+        dropped, so the objective value differs from the parent's by a constant.
         """
         m, mat = self._model, self._matrices
         carried = {d for item in m._coordinate_carriers() for d in item.sizes}
@@ -237,24 +195,8 @@ class MatrixWindow:
             (magnitude @ np.abs(boundary))[~keep],
             mat.clabels[dropped],
         )
-        kept = rows[keep]
-        return WindowMatrices(
-            A=inner[keep],
-            b=rhs[keep],
-            sense=mat.sense[kept],
-            c=mat.c[cols],
-            lb=mat.lb[cols],
-            ub=mat.ub[cols],
-            vlabels=mat.vlabels[cols],
-            clabels=mat.clabels[kept],
-            vtypes=mat.vtypes[cols],
-            var_scaling=mat.var_scaling[cols],
-            con_scaling=mat.con_scaling[kept],
-            objective_scaling=float(m.objective.scaling),
-            objective_sense=m.objective.sense,
-            variables=variables,
-            constraints=constraints,
-        )
+        window = replace(mat.take(rows[keep], cols), b=rhs[keep])
+        return window, variables, constraints
 
     def _fixed(self, fix: Mapping[str, Any] | None) -> np.ndarray:
         """Fixed values on the parent's scaled column space, NaN where unfixed."""

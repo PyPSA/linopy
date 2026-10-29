@@ -4,7 +4,7 @@ import enum
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -22,10 +22,12 @@ from linopy.persistent.snapshot import (
 )
 
 if TYPE_CHECKING:
+    import scipy.sparse
     from numpy.typing import DTypeLike
 
     from linopy.common import ConstraintLabelIndex, VariableLabelIndex
     from linopy.constraints import Constraint
+    from linopy.matrices import Matrices
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -65,6 +67,12 @@ def _cat(parts: list[np.ndarray], dtype: DTypeLike) -> np.ndarray:
     if not parts:
         return np.empty(0, dtype=dtype)
     return np.concatenate(parts).astype(dtype, copy=False)
+
+
+def _window_A(window: Matrices) -> scipy.sparse.csr_array:
+    if window.A is None:
+        raise ValueError("Matrix windows require a constraint matrix A.")
+    return window.A
 
 
 def _same(a: np.ndarray, b: np.ndarray) -> bool:
@@ -358,16 +366,17 @@ class ModelDiff:
         )
 
     @staticmethod
-    def same_window_pattern(previous: Any, current: Any) -> bool:
+    def same_window_pattern(previous: Matrices, current: Matrices) -> bool:
         """Whether two matrix windows share the shape and sparsity of ``A``."""
+        before, after = _window_A(previous), _window_A(current)
         return (
-            previous.A.shape == current.A.shape
-            and np.array_equal(previous.A.indptr, current.A.indptr)
-            and np.array_equal(previous.A.indices, current.A.indices)
+            before.shape == after.shape
+            and np.array_equal(before.indptr, after.indptr)
+            and np.array_equal(before.indices, after.indices)
         )
 
     @classmethod
-    def from_windows(cls, previous: Any, current: Any) -> ModelDiff:
+    def from_windows(cls, previous: Matrices, current: Matrices) -> ModelDiff:
         """
         Delta between two matrix windows sharing the sparsity pattern of ``A``.
 
@@ -384,17 +393,16 @@ class ModelDiff:
         rows = np.flatnonzero(current.b != previous.b)
         cost = np.flatnonzero(current.c != previous.c)
 
-        changed = np.flatnonzero(current.A.data != previous.A.data)
-        changed_rows = np.unique(
-            np.searchsorted(current.A.indptr, changed, side="right") - 1
-        )
-        n_coef_updates = int(np.diff(current.A.indptr)[changed_rows].sum())
+        A = _window_A(current)
+        changed = np.flatnonzero(A.data != _window_A(previous).data)
+        changed_rows = np.unique(np.searchsorted(A.indptr, changed, side="right") - 1)
+        n_coef_updates = int(np.diff(A.indptr)[changed_rows].sum())
         coef_deltas: list[_CoefDelta] = []
         if changed_rows.size:
             buffer = ContainerConBuffers(
-                indptr=current.A.indptr,
-                indices=current.A.indices,
-                data=current.A.data,
+                indptr=A.indptr,
+                indices=A.indices,
+                data=A.data,
                 rhs=current.b,
                 sign=current.sense,
                 active_labels=np.empty(0, dtype=np.int64),

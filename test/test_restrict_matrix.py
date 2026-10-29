@@ -11,9 +11,10 @@ import pytest
 import xarray as xr
 
 from linopy import Model
+from linopy.matrices import Matrices
 from linopy.persistent.diff import ModelDiff
 from linopy.persistent.errors import RebuildRequiredError
-from linopy.restrict import MatrixWindow, RestrictionError, WindowMatrices
+from linopy.restrict import MatrixWindow, RestrictionError
 
 TIME = pd.RangeIndex(8, name="time")
 BUS = pd.Index(["a", "b"], name="bus")
@@ -35,7 +36,8 @@ def initial(soc_value: float = 3.0) -> pd.Series:
     return pd.Series(np.full(len(TIME), soc_value), index=TIME)
 
 
-def assert_same_window(window: WindowMatrices, reference: WindowMatrices) -> None:
+def assert_same_window(window: Matrices, reference: Matrices) -> None:
+    assert window.A is not None and reference.A is not None
     assert window.A.shape == reference.A.shape
     assert np.array_equal(window.A.indptr, reference.A.indptr)
     assert np.array_equal(window.A.indices, reference.A.indices)
@@ -52,7 +54,7 @@ def test_select_matches_restrict(start: int) -> None:
     m = storage_model()
     window = TIME[start : start + 3]
 
-    matrix = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})
+    matrix = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})[0]
     reference = m.restrict(time=window, fix={"soc": initial()}).matrices
 
     assert_same_window(matrix, reference)
@@ -66,7 +68,7 @@ def test_select_without_fix_matches_restrict() -> None:
     m.add_objective(x.sum())
 
     window = TIME[2:5]
-    matrix = MatrixWindow(m).select({"time": window})
+    matrix = MatrixWindow(m).select({"time": window})[0]
     reference = m.restrict(time=window).matrices
 
     assert_same_window(matrix, reference)
@@ -75,10 +77,10 @@ def test_select_without_fix_matches_restrict() -> None:
 def test_window_keeps_parent_labels() -> None:
     m = storage_model()
     window = TIME[1:4]
-    selected = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})
+    selected, _, _ = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})
 
-    assert selected.vlabels.size == selected.A.shape[1]
-    assert selected.clabels.size == selected.A.shape[0]
+    assert selected.A is not None
+    assert selected.A.shape == (selected.clabels.size, selected.vlabels.size)
     assert np.isin(selected.vlabels, m.variables.label_index.vlabels).all()
 
 
@@ -99,7 +101,7 @@ def test_folded_row_is_checked_against_its_sign(
     window = MatrixWindow(m)
     fix = {"x": pd.Series(np.zeros(len(TIME)), index=TIME)}
     if satisfied:
-        assert window.select({"time": TIME[1:3]}, fix=fix).A.shape[0] == 2
+        assert window.select({"time": TIME[1:3]}, fix=fix)[0].clabels.size == 2
         return
     with pytest.raises(RestrictionError, match="unsatisfiable"):
         window.select({"time": TIME[1:3]}, fix=fix)
@@ -279,8 +281,8 @@ def test_slice_selection_matches_label_selection() -> None:
     fix = {"soc": initial()}
 
     assert_same_window(
-        window.select({"time": slice(1, 3)}, fix=fix),
-        window.select({"time": TIME[1:4]}, fix=fix),
+        window.select({"time": slice(1, 3)}, fix=fix)[0],
+        window.select({"time": TIME[1:4]}, fix=fix)[0],
     )
 
 
@@ -311,9 +313,10 @@ def test_advance_rebuilds_on_a_changed_sparsity_pattern() -> None:
 def test_from_windows_rejects_a_changed_sparsity_pattern() -> None:
     m = sparse_coupling_model()
     window = MatrixWindow(m)
-    first = window.select({"time": TIME[:2]})
-    second = window.select({"time": TIME[2:4]})
+    first = window.select({"time": TIME[:2]})[0]
+    second = window.select({"time": TIME[2:4]})[0]
 
+    assert first.A is not None and second.A is not None
     assert first.A.shape == second.A.shape
     with pytest.raises(ValueError, match="sparsity pattern"):
         ModelDiff.from_windows(first, second)
@@ -401,7 +404,8 @@ def test_getitem_unknown_variable_raises() -> None:
 
 
 def test_model_view_exposes_the_builder_surface() -> None:
-    window = linear_model().restrict(time=TIME[:2])
+    m = linear_model()
+    window = m.restrict(time=TIME[:2])
     view = window.as_model_view()
 
     view.constraints.sanitize_missings()
@@ -421,7 +425,7 @@ def test_model_view_exposes_the_builder_surface() -> None:
     assert view._cCounter == len(window.matrices.clabels)
     assert view.nvars == len(window.matrices.vlabels)
     assert view.ncons == len(window.matrices.clabels)
-    assert len(view.constraints) == len(window.matrices.constraints)
+    assert len(view.constraints) == len(m.constraints)
 
 
 def test_model_view_type_is_milp_for_mixed_variables() -> None:
@@ -443,12 +447,13 @@ def test_model_view_type_is_ilp_for_discrete_only() -> None:
     assert m.restrict(time=TIME[:2]).as_model_view().type == "ILP"
 
 
-def _window_matrices() -> WindowMatrices:
+def _window_matrices() -> Matrices:
     return linear_model().restrict(time=TIME[:2]).matrices
 
 
 def test_from_windows_reports_coefficient_changes() -> None:
     previous = _window_matrices()
+    assert previous.A is not None
     matrix = previous.A.copy()
     matrix.data = matrix.data + 1.0
 
