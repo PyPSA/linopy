@@ -164,6 +164,13 @@ class Matrices:
     indicator_binvar: ndarray
     indicator_binval: ndarray
 
+    @property
+    def type(self) -> str:
+        """Short string identifying the problem type, as :attr:`Model.type`."""
+        discrete = self.vtypes != "C"
+        variable_type = ("I" if discrete.all() else "MI") if discrete.any() else ""
+        return f"{variable_type}{'L' if self.Q is None else 'Q'}P"
+
     def take(self, rows: ndarray, cols: ndarray) -> Matrices:
         """
         The matrices restricted to the given row and column positions.

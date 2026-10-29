@@ -102,6 +102,27 @@ def test_matrices_float_c() -> None:
     assert np.all(c == np.array([1.5, 1.5]))
 
 
+@pytest.mark.parametrize(
+    ("integer", "binary", "quadratic", "expected"),
+    [
+        (False, False, False, "LP"),
+        (False, True, False, "MILP"),
+        (True, True, False, "ILP"),
+        (False, False, True, "QP"),
+        (False, True, True, "MIQP"),
+    ],
+)
+def test_matrices_type(
+    integer: bool, binary: bool, quadratic: bool, expected: str
+) -> None:
+    m = Model()
+    x = m.add_variables(0, 10, coords=[range(2)], name="x", integer=integer)
+    y = m.add_variables(name="y", binary=binary)
+    m.add_constraints(x.sum() + y >= 1)
+    m.add_objective(x * x + y if quadratic else x.sum() + y)
+    assert m.matrices.type == m.type == expected
+
+
 def test_matrices_sol_aligned_with_vlabels() -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")

@@ -119,6 +119,7 @@ Version 1.0.0
 * The methods of ``CSRStore`` and ``Grid`` in ``linopy.csr`` use pandas/xarray-style verbs instead of past participles, e.g. ``summed`` is ``sum``, ``reindexed`` is ``reindex``, ``filled`` is ``fillna``, ``contracted`` is ``dot``, ``with_const`` is ``assign_const`` and ``Grid.reordered`` is ``Grid.select``. (`#1018 <https://github.com/PyPSA/linopy/issues/1018>`__)
 * Store fallbacks convert a copy, never the receiver, and merges go through ``linopy.store.merge_stores``; ``_densify_all`` is removed. (`#1052 <https://github.com/PyPSA/linopy/issues/1052>`__)
 * ``linopy.matrices.Matrices`` is a frozen dataclass of a model's flat arrays (``A``, ``b``, ``c``, ``Q``, bounds, labels and scalings) with ``Matrices.take(rows, cols)`` to select rows and columns. ``model.matrices`` (``MatrixAccessor``) subclasses it and builds ``c`` and ``Q`` eagerly. Matrix windows reuse it: ``MatrixWindow.select`` returns the window's ``Matrices`` and the selected labels.
+* The direct solver builders consume ``Matrices`` instead of a ``Model``, so windows reach every backend without a model stand-in. ``Model.solve`` applies ``Constraints.sanitize_missings`` for every solver, and the Gurobi and Xpress builders no longer mutate the model.
 
 Version 0.10.1
 --------------

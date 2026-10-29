@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import LinearExpression, Model, merge
 from linopy.matrices import Matrices
 from linopy.persistent.diff import ModelDiff
 from linopy.persistent.errors import RebuildRequiredError
@@ -403,48 +403,34 @@ def test_getitem_unknown_variable_raises() -> None:
         window["nope"]
 
 
-def test_model_view_exposes_the_builder_surface() -> None:
-    m = linear_model()
-    window = m.restrict(time=TIME[:2])
-    view = window.as_model_view()
-
-    view.constraints.sanitize_missings()
-    view.constraints.sanitize_zeros()
-    view.constraints.sanitize_infinities()
-
-    assert view.type == "LP"
-    assert view.sense == "min"
-    assert view.is_quadratic is False
-    assert view.indicator_constraints == ()
-    assert view.variables.sos == {}
-    assert view.continuous
-    assert not view.binaries and not view.integers and not view.semi_continuous
-    assert view.variables.label_index.vlabels.size == len(window.matrices.vlabels)
-    assert view.constraints.label_index.clabels.size == len(window.matrices.clabels)
-    assert view._xCounter == len(window.matrices.vlabels)
-    assert view._cCounter == len(window.matrices.clabels)
-    assert view.nvars == len(window.matrices.vlabels)
-    assert view.ncons == len(window.matrices.clabels)
-    assert len(view.constraints) == len(m.constraints)
-
-
-def test_model_view_type_is_milp_for_mixed_variables() -> None:
+def kinds_model(kinds: str, time: pd.Index) -> Model:
+    """Unit demand split across continuous ``C`` and cheaper integer ``I`` supply."""
     m = Model()
-    x = m.add_variables(lower=0, coords=[TIME], name="x")
-    flag = m.add_variables(binary=True, coords=[TIME], name="flag")
-    m.add_constraints(x + flag <= 5, name="cap")
-    m.add_objective(x.sum() + flag.sum())
+    supply = {
+        kind: m.add_variables(0, 5, coords=[time], integer=kind == "I", name=kind)
+        for kind in kinds
+    }
+    cost = {"C": 1.0, "I": 0.6}
+    lhs = merge([var.to_linexpr() for var in supply.values()], cls=LinearExpression)
+    m.add_constraints(lhs >= 1.5, name="demand")
+    m.add_objective(
+        merge([cost[k] * var.sum() for k, var in supply.items()], cls=LinearExpression)
+    )
+    return m
 
-    assert m.restrict(time=TIME[:2]).as_model_view().type == "MILP"
 
+@pytest.mark.parametrize(
+    "kinds", ["C", "CI", "I"], ids=["continuous", "mixed", "discrete"]
+)
+def test_window_solve_matches_the_restricted_model(kinds: str) -> None:
+    window = kinds_model(kinds, TIME).restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    reference = kinds_model(kinds, TIME[:2])
+    reference.solve(solver_name="highs", output_flag=False)
 
-def test_model_view_type_is_ilp_for_discrete_only() -> None:
-    m = Model()
-    flag = m.add_variables(binary=True, coords=[TIME], name="flag")
-    m.add_constraints(flag <= 1, name="cap")
-    m.add_objective(flag.sum())
-
-    assert m.restrict(time=TIME[:2]).as_model_view().type == "ILP"
+    assert window.objective.value == pytest.approx(reference.objective.value)
+    for kind in kinds:
+        assert np.allclose(window[kind].values, reference.solution[kind].values)
 
 
 def _window_matrices() -> Matrices:

@@ -8,7 +8,7 @@ materialises variables and constraints only when their values are read.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -22,98 +22,7 @@ if TYPE_CHECKING:
     from linopy.model import Model
     from linopy.solvers import Solver
 
-__all__ = ["WindowModel", "WindowModelView", "WindowObjective", "restrict_model"]
-
-
-class _LabelIndex:
-    """
-    Dense positional labels.
-
-    A window's result vectors are positional, so labels are ``0..n-1``. That
-    keeps the solver's label-indexed solution mapping aligned with the flat
-    arrays instead of allocating an array as large as the parent's label space.
-    """
-
-    def __init__(self, size: int) -> None:
-        self.vlabels = self.clabels = self.label_to_pos = np.arange(size)
-        self.n_active_vars = self.n_active_cons = size
-
-
-class _KindSet:
-    """Variables of one kind, with the ``labels`` attribute builders read."""
-
-    def __init__(self, labels: np.ndarray) -> None:
-        self.labels = labels
-
-    def __len__(self) -> int:
-        return int(self.labels.size)
-
-    def __iter__(self) -> Iterator[Any]:
-        return iter(self.labels)
-
-
-class _VariablesView:
-    """The ``model.variables`` surface a solver's direct builder reads."""
-
-    def __init__(self, semi_continuous: _KindSet, size: int) -> None:
-        self.sos: dict = {}
-        self.semi_continuous = semi_continuous
-        self.label_index = _LabelIndex(size)
-
-
-class _ConstraintsView:
-    """The ``model.constraints`` surface a builder reads."""
-
-    def __init__(self, containers: int, size: int) -> None:
-        self._containers = containers
-        self.label_index = _LabelIndex(size)
-
-    def sanitize_missings(self) -> None:
-        return None
-
-    def sanitize_zeros(self) -> None:
-        return None
-
-    def sanitize_infinities(self) -> None:
-        return None
-
-    def __len__(self) -> int:
-        return self._containers
-
-
-class WindowModelView:
-    """
-    The slice of :class:`~linopy.Model` that a solver's direct builder reads.
-
-    Passing this to ``Solver._build`` lets every solver's existing build path
-    consume a window unchanged, instead of each backend growing its own
-    build-from-arrays routine.
-    """
-
-    set_names_in_solver_io = False
-    is_quadratic = False
-    indicator_constraints = ()
-
-    def __init__(self, window: WindowModel) -> None:
-        mat = window.matrices
-        self.matrices = mat
-        self.objective = window.objective
-        self.sense = mat.objective_sense
-        self.nvars = self._xCounter = mat.vlabels.size
-        self.ncons = self._cCounter = mat.clabels.size
-        kinds = {kind: _KindSet(np.flatnonzero(mat.vtypes == kind)) for kind in "BISC"}
-        self.binaries = kinds["B"]
-        self.integers = kinds["I"]
-        self.semi_continuous = kinds["S"]
-        self.continuous = kinds["C"]
-        self.variables = _VariablesView(self.semi_continuous, self.nvars)
-        self.constraints = _ConstraintsView(len(window._constraints), self.ncons)
-
-    @property
-    def type(self) -> str:
-        if not (self.binaries or self.integers or self.semi_continuous):
-            return "LP"
-        return "MILP" if self.continuous else "ILP"
+__all__ = ["WindowModel", "WindowObjective", "restrict_model"]
 
 
 class WindowObjective:
@@ -157,15 +66,10 @@ class WindowModel:
         self.objective = WindowObjective(self)
         self._result: Solution | None = None
         self._solver: Solver | None = None
-        self._previous: Matrices | None = None
 
     @property
     def matrices(self) -> Matrices:
         return self._matrices
-
-    def as_model_view(self) -> WindowModelView:
-        """The window as the slice of ``Model`` a solver's builder consumes."""
-        return WindowModelView(self)
 
     def advance(
         self, fix: Mapping[str, Any] | None = None, **selection: Any
@@ -202,9 +106,8 @@ class WindowModel:
         elif options:
             self._solver.solver_options.update(options)
         self._result = self._solver.solve_window(
-            self, self._previous, disallow_rebuild=disallow_rebuild
+            self._matrices, disallow_rebuild=disallow_rebuild
         )
-        self._previous = self._matrices
         return self
 
     @property

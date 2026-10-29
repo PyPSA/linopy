@@ -121,9 +121,7 @@ def test_unmutated_resolve_diff_is_empty(model: Model) -> None:
 class FakePersistentSolver(FakeSolver):
     supports_persistent_update = True
 
-    def apply_update(
-        self, diff: ModelDiff, var_label_index: Any, con_label_index: Any
-    ) -> None:
+    def apply_update(self, diff: ModelDiff, n_vars: int, n_cons: int) -> None:
         return None
 
 
