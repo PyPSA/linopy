@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Any
 
@@ -334,6 +335,7 @@ def test_advance_rebuilds_when_an_update_is_impossible(
     second: pd.Index,
     reason: RebuildReason,
     expected: dict[str, list[float]],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     window = m.restrict(time=first)
     window.solve(solver_name="highs", output_flag=False)
@@ -344,7 +346,9 @@ def test_advance_rebuilds_when_an_update_is_impossible(
     assert excinfo.value.reason is reason
     rejected = reason is RebuildReason.BACKEND_REJECTED
     assert (excinfo.value.__cause__ is not None) is rejected
-    window.solve()
+    with caplog.at_level(logging.WARNING, logger="linopy.solvers"):
+        window.solve()
+    assert "rebuild required" not in caplog.text
 
     assert window._solver is not None
     assert window._solver._rebuilds == 1

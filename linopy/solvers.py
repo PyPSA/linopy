@@ -581,7 +581,7 @@ class Solver(ABC, Generic[EnvType]):
     ) -> None:
         if disallow_rebuild:
             raise RebuildRequiredError(reason, detail) from cause
-        if detail is not None:
+        if cause is not None and not isinstance(cause, UnsupportedUpdate):
             logger.warning("Solver rebuild required (%s): %s", reason.name, detail)
         rebuild()
         self._rebuilds += 1
