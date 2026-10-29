@@ -366,7 +366,7 @@ def test_from_windows_rejects_a_changed_sparsity_pattern() -> None:
     ids=["missing", "extra"],
 )
 def test_advance_must_name_exactly_the_selected_dimensions(
-    selection: dict[str, object],
+    selection: dict[str, Any],
 ) -> None:
     window = ramp_model().restrict(fix={"x": 0.0}, time=TIME[:2])
     with pytest.raises(RestrictionError, match="name exactly the dimensions"):
