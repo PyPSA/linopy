@@ -68,6 +68,7 @@ from linopy.scaling import ensure_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
+    assign_flat_coords,
     check_user_nan,
     enforce_aux_conflict,
     enforce_no_multiindex,
@@ -1449,7 +1450,7 @@ class Variable:
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(Dataset.assign_attrs)
 
-    assign_coords = varwrap(Dataset.assign_coords)
+    assign_coords = varwrap(assign_flat_coords)
 
     assign = varwrap(assign_fields)
 

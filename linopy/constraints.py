@@ -75,7 +75,7 @@ from linopy.constants import (
 from linopy.containers import LabelContainer
 from linopy.csr import CSRStore, _densify_notice
 from linopy.scaling import validate_scaling
-from linopy.semantics import check_user_nan
+from linopy.semantics import assign_flat_coords, check_user_nan
 from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
 from linopy.types import (
     ConstantLike,
@@ -1307,7 +1307,7 @@ class Constraint:
 
     assign = conwrap(assign_fields)
     assign_attrs = conwrap(Dataset.assign_attrs)
-    assign_coords = conwrap(Dataset.assign_coords)
+    assign_coords = conwrap(assign_flat_coords)
     broadcast_like = conwrap(Dataset.broadcast_like, exclude=[TERM_DIM])
     chunk = conwrap(Dataset.chunk)
     drop_sel = conwrap(Dataset.drop_sel)
