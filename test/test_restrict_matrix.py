@@ -12,9 +12,10 @@ import xarray as xr
 
 from linopy import LinearExpression, Model, merge
 from linopy.matrices import Matrices
-from linopy.persistent.diff import ModelDiff
+from linopy.persistent.diff import ModelDiff, RebuildReason
 from linopy.persistent.errors import RebuildRequiredError
 from linopy.restrict import MatrixWindow, RestrictionError
+from linopy.solvers import Solver
 
 TIME = pd.RangeIndex(8, name="time")
 BUS = pd.Index(["a", "b"], name="bus")
@@ -297,17 +298,54 @@ def sparse_coupling_model() -> Model:
     return m
 
 
-def test_advance_rebuilds_on_a_changed_sparsity_pattern() -> None:
-    window = sparse_coupling_model().restrict(time=TIME[:2])
-    window.solve(solver_name="highs", output_flag=False)
-    window.advance(time=TIME[2:4])
+def alternating_sign_model() -> Model:
+    """Constraint signs alternate in time, so shifted windows differ in sign."""
+    m = Model()
+    x = m.add_variables(0, 10, coords=[TIME], name="x")
+    sign = xr.DataArray(np.where(TIME % 2 == 0, ">=", "<="), coords=[TIME])
+    m.add_constraints(x, sign, 5, name="c")
+    m.add_objective(x.sum())
+    return m
 
-    with pytest.raises(RebuildRequiredError):
+
+@pytest.mark.parametrize(
+    ("m", "first", "second", "reason", "expected"),
+    [
+        (
+            sparse_coupling_model(),
+            TIME[:2],
+            TIME[2:4],
+            RebuildReason.STRUCTURAL_LABELS,
+            {"x": [3, 3], "y": [0, 0]},
+        ),
+        (
+            alternating_sign_model(),
+            TIME[:2],
+            TIME[1:3],
+            RebuildReason.BACKEND_REJECTED,
+            {"x": [0, 5]},
+        ),
+    ],
+    ids=["sparsity", "sign"],
+)
+def test_advance_rebuilds_when_an_update_is_impossible(
+    m: Model,
+    first: pd.Index,
+    second: pd.Index,
+    reason: RebuildReason,
+    expected: dict[str, list[float]],
+) -> None:
+    window = m.restrict(time=first)
+    window.solve(solver_name="highs", output_flag=False)
+    window.advance(time=second)
+
+    with pytest.raises(RebuildRequiredError) as excinfo:
         window.solve(disallow_rebuild=True)
+    assert excinfo.value.reason is reason
     window.solve()
 
-    assert np.allclose(window.solution["x"].values, 3.0)
-    assert np.allclose(window.solution["y"].values, 0.0)
+    for name, values in expected.items():
+        assert np.allclose(window.solution[name].values, values)
 
 
 def test_from_windows_rejects_a_changed_sparsity_pattern() -> None:
@@ -403,7 +441,7 @@ def test_getitem_unknown_variable_raises() -> None:
         window["nope"]
 
 
-def kinds_model(kinds: str, time: pd.Index) -> Model:
+def kinds_model(kinds: str, time: pd.Index, scaling: float = 1.0) -> Model:
     """Unit demand split across continuous ``C`` and cheaper integer ``I`` supply."""
     m = Model()
     supply = {
@@ -414,18 +452,20 @@ def kinds_model(kinds: str, time: pd.Index) -> Model:
     lhs = merge([var.to_linexpr() for var in supply.values()], cls=LinearExpression)
     m.add_constraints(lhs >= 1.5, name="demand")
     m.add_objective(
-        merge([cost[k] * var.sum() for k, var in supply.items()], cls=LinearExpression)
+        merge([cost[k] * var.sum() for k, var in supply.items()], cls=LinearExpression),
+        scaling=scaling,
     )
     return m
 
 
+@pytest.mark.parametrize("scaling", [1.0, 10.0])
 @pytest.mark.parametrize(
     "kinds", ["C", "CI", "I"], ids=["continuous", "mixed", "discrete"]
 )
-def test_window_solve_matches_the_restricted_model(kinds: str) -> None:
-    window = kinds_model(kinds, TIME).restrict(time=TIME[:2])
+def test_window_solve_matches_the_restricted_model(kinds: str, scaling: float) -> None:
+    window = kinds_model(kinds, TIME, scaling).restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
-    reference = kinds_model(kinds, TIME[:2])
+    reference = kinds_model(kinds, TIME[:2], scaling)
     reference.solve(solver_name="highs", output_flag=False)
 
     assert window.objective.value == pytest.approx(reference.objective.value)
@@ -504,7 +544,7 @@ WINDOW_SOLVERS = ("highs", "gurobi", "cplex", "scip", "xpress", "mosek")
 
 @pytest.mark.parametrize("solver_name", WINDOW_SOLVERS)
 def test_window_solve_across_solvers(solver_name: str) -> None:
-    """The window recipe runs on every direct solver available in the environment."""
+    """Every available direct solver updates a same-pattern window in place."""
     from linopy import licensed_solvers
 
     if solver_name not in licensed_solvers:
@@ -514,19 +554,30 @@ def test_window_solve_across_solvers(solver_name: str) -> None:
     x = m.add_variables(lower=0, upper=10, coords=[TIME], name="x")
     y = m.add_variables(lower=0, coords=[TIME], name="y")
     m.add_constraints(x - 0.9 * x.shift(time=1) - y == 0, name="balance")
-    m.add_objective(y.sum())
-    fix = {"x": pd.Series(np.full(len(TIME), 1.0), index=TIME)}
+    m.add_objective((x + y).sum())
+    fix = {"x": pd.Series(TIME + 1.0, index=TIME)}
+    decay = 0.9 ** np.arange(1, 4)
 
-    window = m.restrict(time=TIME[:3], fix=fix)
+    window = m.restrict(time=TIME[1:4], fix=fix)
     try:
         window.solve(solver_name=solver_name)
     except NotImplementedError as exc:  # a file-only backend
         pytest.skip(str(exc))
-    assert window.objective.value == pytest.approx(0.0)
+    assert np.allclose(window.solution["x"].values, decay)
 
-    window.advance(time=TIME[3:6], fix=fix)
-    window.solve(solver_name=solver_name)
-    assert window.solution["x"].sizes["time"] == 3
+    window.advance(time=TIME[4:7], fix=fix)
+    window.solve(disallow_rebuild=True)
+    assert np.allclose(window.solution["x"].values, 4 * decay)
+    assert window.objective.value == pytest.approx(4 * decay.sum())
+
+
+def test_window_solve_detaches_the_solver_from_its_model() -> None:
+    solver = Solver.from_name("highs", io_api="direct", track_updates=True)
+    solver.solve(model=linear_model())
+    solver.solve_window(linear_model().restrict(time=TIME[:2]).matrices)
+
+    with pytest.raises(RuntimeError, match="matrix window"):
+        solver.update(linear_model())
 
 
 def test_solve_refuses_a_rebuild_when_asked() -> None:

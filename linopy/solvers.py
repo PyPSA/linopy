@@ -500,7 +500,8 @@ class Solver(ABC, Generic[EnvType]):
 
         When the solver's native model was built from the window solved last
         and both share the sparsity pattern of ``A``, the difference is applied
-        in place. Otherwise the native model is rebuilt from ``M``, with
+        in place. Otherwise, or when the solver rejects the update, the native
+        model is rebuilt from ``M`` unless ``disallow_rebuild`` is set, with
         positional labels so results stay aligned with the window's arrays.
         """
         if self.io_api != "direct":
@@ -508,30 +509,19 @@ class Solver(ABC, Generic[EnvType]):
                 f"{self.display_name} window solving requires io_api='direct', "
                 f"got {self.io_api!r}."
             )
-        from linopy.persistent.diff import ModelDiff
-
         previous = self._window
-        same_pattern = previous is not None and ModelDiff.same_window_pattern(
-            previous, M
-        )
-        update = same_pattern and self.supports_persistent_update
-        if previous is not None and not update:
-            reason = (
-                RebuildReason.BACKEND_REJECTED
-                if same_pattern
-                else RebuildReason.STRUCTURAL_LABELS
-            )
-            if disallow_rebuild:
-                raise RebuildRequiredError(
-                    reason, "the window requires a solver rebuild"
-                )
-            logger.warning("Window requires a solver rebuild (%s).", reason.value)
         n_vars, n_cons = len(M.vlabels), len(M.clabels)
         self.model = None
-        if update:
-            assert previous is not None
-            self.apply_update(ModelDiff.from_windows(previous, M), n_vars, n_cons)
-        else:
+        self.snapshot = None
+        if previous is not None:
+            try:
+                self._update_window(previous, M, n_vars, n_cons)
+            except RebuildRequiredError as exc:
+                if disallow_rebuild:
+                    raise
+                logger.warning("Window requires a solver rebuild (%s).", exc)
+                previous = None
+        if previous is None:
             self.close()
             self._validate_features(
                 quadratic=M.Q is not None,
@@ -545,6 +535,25 @@ class Solver(ABC, Generic[EnvType]):
         if solution is None:
             raise RuntimeError("the solver returned no solution for the window")
         return solution
+
+    def _update_window(
+        self, previous: Matrices, M: Matrices, n_vars: int, n_cons: int
+    ) -> None:
+        """Apply the difference between two windows in place, or raise for a rebuild."""
+        from linopy.persistent.diff import ModelDiff
+
+        if not ModelDiff.same_window_pattern(previous, M):
+            raise RebuildRequiredError(
+                RebuildReason.STRUCTURAL_LABELS,
+                "the window changes the sparsity pattern",
+            )
+        diff = ModelDiff.from_windows(previous, M)
+        try:
+            self.apply_update(diff, n_vars, n_cons)
+        except Exception as exc:
+            raise RebuildRequiredError(
+                RebuildReason.BACKEND_REJECTED, str(exc)
+            ) from exc
 
     def apply_update(self, diff: ModelDiff, n_vars: int, n_cons: int) -> None:
         """
@@ -1035,7 +1044,11 @@ class Solver(ABC, Generic[EnvType]):
                 snapshot, model, same_model=same_model, ignore_dims=ignore_dims
             )
         baseline = self.model
-        assert baseline is not None
+        if baseline is None:
+            raise RuntimeError(
+                "The solver model was built from a matrix window and cannot be "
+                "updated from a Model. Build a new solver for the Model."
+            )
         return ModelDiff.from_models(baseline, model, ignore_dims=ignore_dims)
 
     def _apply_locked(

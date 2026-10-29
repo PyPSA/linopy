@@ -2251,7 +2251,6 @@ class Model:
                 self.constraints.sanitize_zeros()
             if sanitize_infinities:
                 self.constraints.sanitize_infinities()
-            self.constraints.sanitize_missings()
 
             try:
                 self.solver = None  # closes any previous solver

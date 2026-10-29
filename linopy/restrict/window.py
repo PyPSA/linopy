@@ -34,7 +34,9 @@ class WindowObjective:
     @property
     def value(self) -> float | None:
         result = self._window._result
-        return None if result is None else result.objective
+        if result is None:
+            return None
+        return result.objective / self._window.matrices.objective_scaling
 
     @property
     def sense(self) -> str:
