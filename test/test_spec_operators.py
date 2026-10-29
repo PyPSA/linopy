@@ -6,6 +6,7 @@ predicates that gate which rows exist.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -19,8 +20,14 @@ pytest.importorskip("highspy")
 
 from spec_helpers import TT, WHERE_DATA, WHERE_SPEC, S, solved, with_  # noqa: E402
 
-from linopy import LinearExpression, Model, QuadraticExpression  # noqa: E402
+from linopy import (  # noqa: E402
+    LinearExpression,
+    Model,
+    PerformanceWarning,
+    QuadraticExpression,
+)
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.testing import assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -373,6 +380,47 @@ def test_a_relation_into_its_own_dimension_joins_on_it(
     assert m.solution[built].values.tolist() == pytest.approx(want)
     for folded in evaluate(SELF_MAP_SPEC, m, *folds, sources=data).values():
         assert folded.values.tolist() == pytest.approx(want)
+
+
+RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
+    "into-another-dim": (
+        with_(
+            GROUPED_SPEC,
+            variables={"out": {"dims": ["generator"], "bounds": {"lower": 0}}},
+            expressions={"summed": "sum(out, over=generator, by=gen_bus[bus])"},
+        ),
+        {
+            **grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
+            "gen_bus": pd.Series(["south", "south"], index=GENS),
+        },
+    ),
+    "into-its-own-dim": (
+        {
+            **SELF_MAP_SPEC,
+            "constraints": {},
+            "expressions": {"summed": "sum(x, over=t, by=next_of[next])"},
+        },
+        {
+            "t": TT,
+            "v": pd.Series(V, index=TT),
+            "next_of": pd.Series([1, 2, 2, 0], index=TT),
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("spec", "data"), RELATION_SUMS.values(), ids=list(RELATION_SUMS)
+)
+def test_a_relation_sum_keeps_the_backing_and_matches_dense(
+    backend: Model, spec: dict[str, Any], data: dict[str, Any]
+) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        m = Model.from_spec(spec, data, sparse=backend.sparse)
+    summed = m.expressions["summed"]
+    assert summed.is_sparse == backend.sparse
+    assert_linequal(summed, Model.from_spec(spec, data).expressions["summed"])
 
 
 # ---------------------------------------------------------------------------

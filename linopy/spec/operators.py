@@ -20,7 +20,7 @@ import pandas as pd
 import xarray as xr
 
 from linopy.constants import TERM_DIM
-from linopy.expressions import LinearExpression, QuadraticExpression, merge
+from linopy.expressions import LinearExpression, merge
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
 
@@ -87,10 +87,7 @@ def grouped_sum(
     if isinstance(picked, LinearExpression) and not picked.is_sparse:
         return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
-    summed = keyed.groupby(list(grouped)).sum()
-    if isinstance(expression, QuadraticExpression):
-        summed = QuadraticExpression(summed.data, summed.model)
-    return summed.reindex(onto).fillna(0)
+    return keyed.groupby(list(grouped)).sum().reindex(onto).fillna(0)
 
 
 def _gathered(

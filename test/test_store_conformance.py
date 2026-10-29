@@ -104,6 +104,10 @@ def with_2d_coord(e: LinearExpression) -> LinearExpression:
     return e.assign_coords(two=(("a", "b"), np.arange(6).reshape(3, 2)))
 
 
+def with_key(e: LinearExpression) -> LinearExpression:
+    return e.assign_coords(g=("a", [0, 1, 0]))
+
+
 def coords_reassigned(e: LinearExpression) -> LinearExpression:
     named = e.model.add_expressions(e, name="named")
     e.model.assign_coords(a=[7, 8, 9])
@@ -156,11 +160,6 @@ CASES: dict[str, Case] = {
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
     "roll-coords": Case(grid, lambda e: e.roll(a=1, roll_coords=True), KEPT),
     "sel-scalar": Case(grid, lambda e: e.sel(a=1), KEPT),
-    "sel-2d-aux-densifies": Case(
-        grid,
-        lambda e: with_2d_coord(e).sel(a=[0, 2]),
-        DATA_READ,
-    ),
     "sel-pointwise": Case(
         grid,
         lambda e: e.sel(a=xr.DataArray([0, 1], dims="c")),
@@ -423,6 +422,32 @@ CASES: dict[str, Case] = {
     "equals": Case(grid, lambda e: e.equals(e), "equals(dense comparison)"),
     "iter": Case(grid, lambda e: list(e), KEPT),
     "assign-coords": Case(grid, coords_reassigned, KEPT),
+    "assign-coords-aux": Case(grid, with_key, KEPT),
+    "assign-coords-aux-replace": Case(
+        grid, lambda e: e.assign_coords(tag=("a", ["x", "y", "z"])), KEPT
+    ),
+    "assign-coords-scalar": Case(grid, lambda e: e.assign_coords(s=5), KEPT),
+    "assign-coords-dim": Case(grid, lambda e: e.assign_coords(a=[7, 8, 9]), KEPT),
+    "assign-coords-2d": Case(
+        grid, with_2d_coord, "assign_coords(new dimensions or coordinates)"
+    ),
+    "groupby-aux-name": Case(grid, lambda e: with_key(e).groupby("g").sum(), KEPT),
+    "groupby-aux-names": Case(
+        grid, lambda e: with_key(e).groupby(["tag", "g"]).sum(), KEPT
+    ),
+    "groupby-aux-names-observed": Case(
+        grid, lambda e: with_key(e).groupby(["tag", "g"]).sum(observed=True), KEPT
+    ),
+    "groupby-picked-rows": Case(
+        grid,
+        lambda e: (
+            e.isel(a=AT_R)
+            .assign_coords(g=("r", [0, 1, 0]), h=("r", ["u", "u", "v"]))
+            .groupby(["g", "h"])
+            .sum()
+        ),
+        KEPT,
+    ),
     "loc": Case(grid, lambda e: e.loc[[0, 1]], KEPT),
     "cumsum": Case(grid, lambda e: e.cumsum("a"), DATA_READ),
     "rolling": Case(grid, lambda e: e.rolling(a=2).sum(), DATA_READ),
