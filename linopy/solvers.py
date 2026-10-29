@@ -510,50 +510,82 @@ class Solver(ABC, Generic[EnvType]):
                 f"got {self.io_api!r}."
             )
         previous = self._window
-        n_vars, n_cons = len(M.vlabels), len(M.clabels)
         self.model = None
         self.snapshot = None
-        if previous is not None:
-            try:
-                self._update_window(previous, M, n_vars, n_cons)
-            except RebuildRequiredError as exc:
-                if disallow_rebuild:
-                    raise
-                logger.warning("Window requires a solver rebuild (%s).", exc)
-                previous = None
+        rebuild = functools.partial(self._build_window, M)
         if previous is None:
-            self.close()
-            self._validate_features(
-                quadratic=M.Q is not None,
-                semi_continuous=bool((M.vtypes == "S").any()),
-                indicator=M.indicator_A is not None,
+            rebuild()
+        elif not ModelDiff.same_window_pattern(previous, M):
+            self._fall_back_to_rebuild(
+                RebuildReason.STRUCTURAL_LABELS,
+                rebuild,
+                disallow_rebuild,
+                "the window changes the sparsity pattern",
             )
-            self._load_matrices(M, names=None, sos=[])
-            self._cache_labels(np.arange(n_vars), np.arange(n_cons), n_vars, n_cons)
+        else:
+            self._apply_or_rebuild(
+                ModelDiff.from_windows(previous, M),
+                len(M.vlabels),
+                len(M.clabels),
+                rebuild,
+                disallow_rebuild,
+            )
         self._window = M
         solution = self._run_direct(**run_kwargs).solution
         if solution is None:
             raise RuntimeError("the solver returned no solution for the window")
         return solution
 
-    def _update_window(
-        self, previous: Matrices, M: Matrices, n_vars: int, n_cons: int
-    ) -> None:
-        """Apply the difference between two windows in place, or raise for a rebuild."""
-        from linopy.persistent.diff import ModelDiff
+    def _build_window(self, M: Matrices) -> None:
+        self.close()
+        self._window = None
+        self._validate_features(
+            quadratic=M.Q is not None,
+            semi_continuous=bool((M.vtypes == "S").any()),
+            indicator=M.indicator_A is not None,
+        )
+        self._load_matrices(M, names=None, sos=[])
+        n_vars, n_cons = len(M.vlabels), len(M.clabels)
+        self._cache_labels(np.arange(n_vars), np.arange(n_cons), n_vars, n_cons)
 
-        if not ModelDiff.same_window_pattern(previous, M):
-            raise RebuildRequiredError(
-                RebuildReason.STRUCTURAL_LABELS,
-                "the window changes the sparsity pattern",
-            )
-        diff = ModelDiff.from_windows(previous, M)
+    def _apply_or_rebuild(
+        self,
+        diff: ModelDiff,
+        n_vars: int,
+        n_cons: int,
+        rebuild: Callable[[], None],
+        disallow_rebuild: bool,
+    ) -> bool:
         try:
             self.apply_update(diff, n_vars, n_cons)
         except Exception as exc:
-            raise RebuildRequiredError(
-                RebuildReason.BACKEND_REJECTED, str(exc)
-            ) from exc
+            self._fall_back_to_rebuild(
+                RebuildReason.BACKEND_REJECTED,
+                rebuild,
+                disallow_rebuild,
+                str(exc),
+                cause=exc,
+            )
+            return False
+        self._in_place_updates += 1
+        self._last_rebuild_reason = None
+        return True
+
+    def _fall_back_to_rebuild(
+        self,
+        reason: RebuildReason,
+        rebuild: Callable[[], None],
+        disallow_rebuild: bool,
+        detail: str | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        if disallow_rebuild:
+            raise RebuildRequiredError(reason, detail) from cause
+        if detail is not None:
+            logger.warning("Solver rebuild required (%s): %s", reason.name, detail)
+        rebuild()
+        self._rebuilds += 1
+        self._last_rebuild_reason = reason
 
     def apply_update(self, diff: ModelDiff, n_vars: int, n_cons: int) -> None:
         """
@@ -1057,45 +1089,28 @@ class Solver(ABC, Generic[EnvType]):
         ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
     ) -> ModelDiff | RebuildReason:
+        rebuild = functools.partial(self._rebuild, model)
         if not self.supports_persistent_update:
-            if disallow_rebuild:
-                raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
-            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
-            return RebuildReason.BACKEND_REJECTED
+            reason = RebuildReason.BACKEND_REJECTED
+            self._fall_back_to_rebuild(reason, rebuild, disallow_rebuild)
+            return reason
         diff = self._compute_diff(model, ignore_dims, same_model=model is self.model)
         if isinstance(diff, RebuildReason):
-            if disallow_rebuild:
-                raise RebuildRequiredError(diff)
-            self._rebuild(model, diff)
+            self._fall_back_to_rebuild(diff, rebuild, disallow_rebuild)
             return diff
-        try:
-            self.apply_update(
-                diff,
-                model.variables.label_index.n_active_vars,
-                model.constraints.label_index.n_active_cons,
-            )
-        except Exception as exc:
-            if disallow_rebuild:
-                raise RebuildRequiredError(
-                    RebuildReason.BACKEND_REJECTED, str(exc)
-                ) from exc
-            self._last_rebuild_reason = RebuildReason.BACKEND_REJECTED
-            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
-            return diff
-        self.model = model
-        if self.track_updates:
-            self.snapshot = diff.snapshot
-            clear_coef_dirty(model)
-        self._in_place_updates += 1
-        self._last_rebuild_reason = None
+        n_vars = model.variables.label_index.n_active_vars
+        n_cons = model.constraints.label_index.n_active_cons
+        if self._apply_or_rebuild(diff, n_vars, n_cons, rebuild, disallow_rebuild):
+            self.model = model
+            if self.track_updates:
+                self.snapshot = diff.snapshot
+                clear_coef_dirty(model)
         return diff
 
-    def _rebuild(self, model: Model, reason: RebuildReason) -> None:
+    def _rebuild(self, model: Model) -> None:
         self.close()
         self.model = model
         self._build()
-        self._rebuilds += 1
-        self._last_rebuild_reason = reason
 
     def _run_direct(self, **run_kwargs: Any) -> Result:
         """Run the pre-built native solver model. Override per-solver."""

@@ -342,8 +342,13 @@ def test_advance_rebuilds_when_an_update_is_impossible(
     with pytest.raises(RebuildRequiredError) as excinfo:
         window.solve(disallow_rebuild=True)
     assert excinfo.value.reason is reason
+    rejected = reason is RebuildReason.BACKEND_REJECTED
+    assert (excinfo.value.__cause__ is not None) is rejected
     window.solve()
 
+    assert window._solver is not None
+    assert window._solver._rebuilds == 1
+    assert window._solver._last_rebuild_reason is reason
     for name, values in expected.items():
         assert np.allclose(window.solution[name].values, values)
 
@@ -567,6 +572,8 @@ def test_window_solve_across_solvers(solver_name: str) -> None:
 
     window.advance(time=TIME[4:7], fix=fix)
     window.solve(disallow_rebuild=True)
+    assert window._solver is not None
+    assert window._solver._in_place_updates == 1
     assert np.allclose(window.solution["x"].values, 4 * decay)
     assert window.objective.value == pytest.approx(4 * decay.sum())
 
