@@ -5,6 +5,7 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -698,106 +699,60 @@ def test_parse_glpk_objective_no_value_raises(objective_text: str) -> None:
         solvers.GLPK._parse_objective(objective_text)
 
 
-mosek_installed = pytest.importorskip("mosek", reason="Mosek is not installed")
-
-
 class TestMosekChooseSolution:
-    @staticmethod
-    def _make_task_mock(
-        *,
-        bas_solsta: object | None = None,
-        itr_solsta: object | None = None,
-        itg_solsta: object | None = None,
-    ) -> MagicMock:
-        defined = {
-            mosek_installed.soltype.bas: bas_solsta,
-            mosek_installed.soltype.itr: itr_solsta,
-            mosek_installed.soltype.itg: itg_solsta,
-        }
-        task = MagicMock()
-        task.solutiondef.side_effect = lambda st: defined[st] is not None
-        task.getsolsta.side_effect = lambda st: defined[st]
-        return task
-
     @pytest.mark.parametrize(
-        "kwargs, expected_soltype",
+        "solstas, expected",
         [
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.dual_infeas_cer,
-                ),
-                mosek_installed.soltype.bas,
+                {"bas": "optimal", "itr": "dual_infeas_cer"},
+                "bas",
                 id="prefers_bas_when_itr_is_farkas",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                ),
-                mosek_installed.soltype.itr,
-                id="prefers_itr_on_tie",
+                {"bas": "optimal", "itr": "optimal"}, "itr", id="prefers_itr_on_tie"
             ),
+            pytest.param({"itr": "optimal"}, "itr", id="only_itr_defined"),
+            pytest.param({"bas": "optimal"}, "bas", id="only_bas_defined"),
+            pytest.param({}, None, id="nothing_defined"),
+            pytest.param({"itg": "integer_optimal"}, "itg", id="itg_for_mip"),
             pytest.param(
-                dict(itr_solsta=mosek_installed.solsta.optimal),
-                mosek_installed.soltype.itr,
-                id="only_itr_defined",
-            ),
-            pytest.param(
-                dict(bas_solsta=mosek_installed.solsta.optimal),
-                mosek_installed.soltype.bas,
-                id="only_bas_defined",
-            ),
-            pytest.param(
-                dict(),
-                None,
-                id="nothing_defined",
-            ),
-            pytest.param(
-                dict(itg_solsta=mosek_installed.solsta.integer_optimal),
-                mosek_installed.soltype.itg,
-                id="itg_for_mip",
-            ),
-            pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                    itg_solsta=mosek_installed.solsta.integer_optimal,
-                ),
-                mosek_installed.soltype.itg,
+                {"bas": "optimal", "itr": "optimal", "itg": "integer_optimal"},
+                "itg",
                 id="itg_wins_over_bas_itr",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.unknown,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                ),
-                mosek_installed.soltype.itr,
+                {"bas": "unknown", "itr": "optimal"},
+                "itr",
                 id="optimal_itr_over_unknown_bas",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.unknown,
-                ),
-                mosek_installed.soltype.bas,
+                {"bas": "optimal", "itr": "unknown"},
+                "bas",
                 id="optimal_bas_over_unknown_itr",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.prim_infeas_cer,
-                    itr_solsta=mosek_installed.solsta.dual_infeas_cer,
-                ),
-                mosek_installed.soltype.itr,
+                {"bas": "prim_infeas_cer", "itr": "dual_infeas_cer"},
+                "itr",
                 id="falls_back_to_itr_when_both_non_optimal",
             ),
         ],
     )
     def test_choose_solution(
-        self, kwargs: dict[str, object], expected_soltype: object
+        self, solstas: dict[str, str], expected: str | None
     ) -> None:
-        task = self._make_task_mock(**kwargs)
-        assert solvers.Mosek._choose_solution(task) is expected_soltype
+        mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+        defined = {
+            attrgetter(soltype)(mosek.soltype): attrgetter(solsta)(mosek.solsta)
+            for soltype, solsta in solstas.items()
+        }
+        task = MagicMock()
+        task.solutiondef.side_effect = lambda st: st in defined
+        task.getsolsta.side_effect = defined.get
+        chosen = solvers.Mosek._choose_solution(task)
+        if expected is None:
+            assert chosen is None
+        else:
+            assert chosen is attrgetter(expected)(mosek.soltype)
 
     @pytest.mark.skipif(
         "mosek" not in set(solvers.licensed_solvers),
