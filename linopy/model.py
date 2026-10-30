@@ -94,11 +94,6 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
 from linopy.semantics import check_user_nan, enforce_no_multiindex
-
-try:
-    from linopy.remote import OetcHandler
-except ImportError:
-    OetcHandler = None  # type: ignore
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -2053,7 +2048,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler | None = None,
+        remote: RemoteHandler | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,
@@ -2123,9 +2118,8 @@ class Model:
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
             chunks to avoid memory issues. The default is 2_000_000.
-        remote : linopy.remote.RemoteHandler | linopy.oetc.OetcHandler, optional
-            Remote handler to use for solving model on a server. Note that when
-            solving on a rSee
+        remote : linopy.remote.RemoteHandler, optional
+            Remote handler to use for solving model on a server. See
             linopy.remote.RemoteHandler for more details.
         progress : bool, optional
             Whether to show a progress bar of writing the lp file. The default is
@@ -2175,36 +2169,27 @@ class Model:
         if remote is not None:
             # The remote branch short-circuits before reaching Solver.solve(),
             # which is where the empty-objective check normally fires. Replicate
-            # it here. This duplication becomes obsolete once OETC is folded
-            # into the Solver pipeline (see PyPSA/linopy#683).
+            # it here.
             if self.objective.expression.empty:
                 raise ValueError(
                     "No objective has been set on the model. Use "
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
-            if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(
-                    self,
-                    solver_name=solver_name,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
-            else:
-                solved = remote.solve_on_remote(
-                    self,
-                    solver_name=solver_name,
-                    io_api=io_api,
-                    problem_fn=problem_fn,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    basis_fn=basis_fn,
-                    warmstart_fn=warmstart_fn,
-                    keep_files=keep_files,
-                    sanitize_zeros=sanitize_zeros,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
+            solved = remote.solve_on_remote(
+                self,
+                solver_name=solver_name,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                basis_fn=basis_fn,
+                warmstart_fn=warmstart_fn,
+                keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
+                reformulate_sos=reformulate_sos,
+                **solver_options,
+            )
 
             if solved.objective.value is not None:
                 self.objective.set_value(float(solved.objective.value))
