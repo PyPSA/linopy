@@ -111,6 +111,9 @@ solvers = [
     "pyscipopt; platform_system != 'Darwin'",
     "knitro>=15.1.0",
 ]
+spec = [
+    "mathspec>=0.4,<0.5 ; python_version >= '3.12'",
+]
 # GPU-only solvers kept separate to avoid env clutter.
 # Requires a CUDA 12 driver (>= 525.60.13) and GPU of compute capability >= 7.0.
 gpu = [
@@ -151,6 +154,8 @@ filterwarnings = [
     # collection of ``linopy/variables.py`` in the source tree on
     # Windows CI.
     "ignore:piecewise:FutureWarning",
+    "ignore:long-form:FutureWarning",
+    "ignore:spec:FutureWarning",
 ]
 
 [tool.coverage.run]
@@ -161,7 +166,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*']
+exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*', '^conftest\.py$']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true

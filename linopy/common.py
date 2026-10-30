@@ -7,12 +7,11 @@ This module contains commonly used functions.
 
 from __future__ import annotations
 
-import json
 import operator
 from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import cached_property, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from warnings import warn
 
 import numpy as np
@@ -20,7 +19,6 @@ import pandas as pd
 import polars as pl
 from numpy import nan, signedinteger
 from numpy.typing import DTypeLike
-from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import indexing
@@ -40,23 +38,9 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
-
-
-def set_int_index(series: pd.Series) -> pd.Series:
-    """
-    Convert string index to int index.
-    """
-
-    if not series.empty and not pd.api.types.is_integer_dtype(series.index):
-        cutoff = count_initial_letters(str(series.index[0]))
-        try:
-            series.index = series.index.str[cutoff:].astype(int)
-        except ValueError:
-            series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
-    return series
 
 
 def maybe_replace_sign(sign: str) -> str:
@@ -146,34 +130,6 @@ def check_has_nulls(df: pd.DataFrame, name: str) -> None:
     if any_nan.any():
         fields = ", ".join(df.columns[any_nan].to_list())
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
-
-
-def infer_schema_polars(ds: Dataset) -> dict[str, DataTypeClass]:
-    """
-    Infer the polars data schema from a xarray dataset.
-
-    Args:
-    ----
-        ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
-
-    Returns:
-    -------
-        dict: A dictionary mapping column names to their corresponding Polars data types.
-    """
-    schema: dict[str, DataTypeClass] = {}
-    for name, array in ds.items():
-        name = str(name)
-        if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if array.dtype.itemsize <= 4 else pl.Int64
-        elif np.issubdtype(array.dtype, np.floating):
-            schema[name] = pl.Float64
-        elif np.issubdtype(array.dtype, np.bool_):
-            schema[name] = pl.Boolean
-        elif np.issubdtype(array.dtype, np.object_):
-            schema[name] = pl.Object
-        else:
-            schema[name] = pl.Utf8
-    return schema
 
 
 def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
@@ -315,27 +271,15 @@ def save_join(*dataarrays: DataArray, fill_dtype: DTypeLike | None = None) -> Da
     return Dataset({ds.name: ds for ds in arrs})
 
 
-def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
+def assign_fields(ds: Dataset, **fields: Any) -> Dataset:
     """
-    Assign a field to a xarray Dataset while being safe against warnings about multiindex corruption.
+    Assign data variables to a Dataset, replacing existing ones wholesale.
 
-    See https://github.com/PyPSA/linopy/issues/303 for more information
-
-    Parameters
-    ----------
-    ds : Dataset
-        Dataset to assign the field to
-    keys : Union[str, List[str]]
-        Keys of the fields
-    to_assign : Union[List[DataArray], DataArray, Dataset]
-        New values added to the dataset
-
-    Returns
-    -------
-    Dataset
-        Merged dataset with the new field added
+    Unlike :meth:`xarray.Dataset.assign`, a replaced variable is dropped
+    before the new one is added, so the new value never aligns against
+    the old one (e.g. a ``_term`` dimension may change size).
     """
-    remainders = list(set(ds) - set(fields))
+    remainders = [k for k in ds if k not in fields]
     return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
 
 
@@ -366,8 +310,8 @@ def validate_coords_reassignment(
     Validate values-only coordinate reassignment and convert the new values.
 
     Single-sourced per-item invariants for coordinate reassignment, used by
-    the Dataset-backed (:func:`assign_coords_multiindex_safe`) and the
-    CSR-backed (``CSRConstraint``) paths alike, so every entry point is safe
+    the Dataset-backed (:func:`reassign_coords`) and the
+    CSR-backed (``CSRStore``) paths alike, so every entry point is safe
     on its own. Model-level aggregate checks (dimension exists somewhere in
     the model, consistent lengths across containers) live on top of this.
 
@@ -413,7 +357,7 @@ def validate_coords_reassignment(
     return new_indexes
 
 
-def assign_coords_multiindex_safe(ds: Dataset, **coords: Any) -> Dataset:
+def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
     """
     Reassign coordinate values on an existing Dataset, keeping the shape.
 
@@ -445,39 +389,7 @@ def assign_coords_multiindex_safe(ds: Dataset, **coords: Any) -> Dataset:
     return Dataset(data_vars, coords=ordered, attrs=new.attrs)
 
 
-T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
-
-
-@overload
-def iterate_slices(
-    ds: Dataset,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[Dataset, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: Variable,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[Variable, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: LinearExpression,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[LinearExpression, None, None]: ...
-
-
-@overload
-def iterate_slices(
-    ds: ConstraintBase,
-    slice_size: int | None = 10_000,
-    slice_dims: list | None = None,
-) -> Generator[ConstraintBase, None, None]: ...
+T = TypeVar("T", Dataset, DataArray, "Variable", "LinearExpression", "Constraint")
 
 
 def iterate_slices(
@@ -512,41 +424,36 @@ def iterate_slices(
     if slice_dims is None:
         slice_dims = list(getattr(ds, "coord_dims", ds.dims))
 
-    if not set(slice_dims).issubset(ds.dims):
+    for indexers in slice_indexers(dict(ds.sizes), slice_size, slice_dims):
+        yield ds.isel(indexers) if indexers else ds
+
+
+def slice_indexers(
+    sizes: Mapping[Hashable, int],
+    slice_size: int | None,
+    slice_dims: Sequence[Hashable],
+) -> Generator[dict[Hashable, slice], None, None]:
+    """
+    Positional slices along the largest of ``slice_dims`` cutting an object
+    of ``sizes`` into parts of about ``slice_size`` elements; a single empty
+    indexer where no cut is needed.
+    """
+    if not set(slice_dims).issubset(sizes):
         raise ValueError(
             "Invalid slice dimensions. Must be a subset of the dataset dimensions."
         )
-
-    # Calculate the total number of elements in the dataset
-    size = np.prod([ds.sizes[dim] for dim in ds.dims], dtype=int)
-
-    if slice_size is None or size <= slice_size:
-        yield ds
+    size = np.prod(list(sizes.values()), dtype=int)
+    dims = {dim: sizes[dim] for dim in slice_dims}
+    if slice_size is None or size <= slice_size or not dims:
+        yield {}
         return
 
-    # number of slices
-    n_slices = max((size + slice_size - 1) // slice_size, 1)
-
-    # leading dimension (the dimension with the largest size)
-    sizes = {dim: ds.sizes[dim] for dim in slice_dims}
-    if not sizes:
-        yield ds
-        return
-
-    leading_dim = max(sizes, key=sizes.get)  # type: ignore
-    size_of_leading_dim = ds.sizes[leading_dim]
-
-    if size_of_leading_dim < n_slices:
-        n_slices = size_of_leading_dim
-
-    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
-
-    # Iterate over the Cartesian product of slice indices
+    leading_dim = max(dims, key=dims.get)  # type: ignore
+    n_slices = min(max((size + slice_size - 1) // slice_size, 1), dims[leading_dim])
+    chunk_size = (dims[leading_dim] + n_slices - 1) // n_slices
     for i in range(n_slices):
         start = i * chunk_size
-        end = min(start + chunk_size, size_of_leading_dim)
-        slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)  # type: ignore[attr-defined]
+        yield {leading_dim: slice(start, min(start + chunk_size, dims[leading_dim]))}
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
@@ -670,8 +577,7 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
 
 def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
     """
-    Auxiliary (non-dimension) coords aligned solely to ``dim`` — under v1 the
-    levels a flattened ``pd.MultiIndex`` leaves behind, its flat-dim mirror.
+    Auxiliary (non-dimension) coords aligned solely to ``dim``, its levels.
     """
     return [
         str(name)
@@ -680,29 +586,20 @@ def index_level_coords(ds: Dataset, dim: Hashable) -> list[str]:
     ]
 
 
-def dim_level_names(ds: Dataset, dim: Hashable) -> list[str]:
-    """Level names of ``dim`` — a MultiIndex's own levels, else its aux coords."""
-    index = ds.indexes.get(dim)
-    if isinstance(index, pd.MultiIndex):
-        return [str(name) for name in index.names]
-    return index_level_coords(ds, dim)
-
-
 def get_dims_with_index_levels(
     ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
 
-    A multi-indexed 'station' with levels ['country', 'city'] and a flat 'node'
-    with aux level coords ['region', 'tech'] both render as "dim (l0, l1)":
-    ['time', 'station (country, city)', 'node (region, tech)'].
+    A 'node' with aux level coords ['region', 'tech'] renders as
+    "dim (l0, l1)": ['time', 'node (region, tech)'].
     """
     if dims is None:
         dims = list(ds.dims)
     return [
         f"{dim} ({', '.join(levels)})"
-        if (levels := dim_level_names(ds, dim))
+        if (levels := index_level_coords(ds, dim))
         else str(dim)
         for dim in dims
     ]
@@ -710,8 +607,7 @@ def get_dims_with_index_levels(
 
 def label_coord(obj: Any, dims: Sequence[Hashable], index: Sequence[int]) -> dict:
     """
-    Identifying coordinate for a single flat position, per dimension — a
-    decomposed MultiIndex identifies the same way a first-class one does:
+    Identifying coordinate for a single flat position, per dimension:
     several aux levels stack into a tuple, one level is its bare value.
     """
     coord = {}
@@ -790,32 +686,7 @@ class LabelPositionIndex:
 
     def find_single(self, value: int) -> tuple[str, dict] | tuple[None, None]:
         """Find the name and coordinates for a single label value."""
-        if value == -1:
-            return None, None
-
-        self._build_index()
-        starts = self._starts
-        names = self._names
-        assert starts is not None and names is not None
-
-        # Binary search to find the right range
-        idx = int(np.searchsorted(starts, value, side="right")) - 1
-
-        if idx < 0 or idx >= len(starts):
-            raise ValueError(f"Label {value} is not existent in the model.")
-
-        name = names[idx]
-        val = self._obj[name]
-        start, stop = val.range
-
-        # Verify the value is in range
-        if value < start or value >= stop:
-            raise ValueError(f"Label {value} is not existent in the model.")
-
-        labels = val.labels
-        index = np.unravel_index(value - start, labels.shape)
-        coord = label_coord(labels, labels.dims, index)
-        return name, coord
+        return self.find_single_with_index(value)[:2]
 
     def find_single_with_index(
         self, value: int
@@ -853,50 +724,6 @@ class LabelPositionIndex:
         index = np.unravel_index(value - start, labels.shape)
         coord = label_coord(labels, labels.dims, index)
         return name, coord, index
-
-
-def _get_label_position_linear(
-    obj: Any, values: int | np.ndarray
-) -> (
-    tuple[str, dict]
-    | tuple[None, None]
-    | list[tuple[str, dict] | tuple[None, None]]
-    | list[list[tuple[str, dict] | tuple[None, None]]]
-):
-    """
-    Get tuple of name and coordinate for variable labels.
-
-    This is the original O(n) implementation that scans through all items.
-    Used only for testing/benchmarking comparisons.
-    """
-
-    def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
-        if value == -1:
-            return None, None
-        for name, val in obj.items():
-            labels = val.labels
-            start, stop = val.range
-
-            if value >= start and value < stop:
-                index = np.unravel_index(value - start, labels.shape)
-
-                coord = label_coord(labels, labels.dims, index)
-                return name, coord
-        raise ValueError(f"Label {value} is not existent in the model.")
-
-    if isinstance(values, int):
-        return find_single(values)
-
-    values = np.array(values)
-    ndim = values.ndim
-    if ndim == 0:
-        return find_single(values.item())
-    elif ndim == 1:
-        return [find_single(v) for v in values]
-    elif ndim == 2:
-        return [[find_single(v) for v in _] for _ in values.T]
-    else:
-        raise ValueError("Array's with more than two dimensions is not supported")
 
 
 class VariableLabelIndex:
@@ -1205,24 +1032,6 @@ def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-def require_constant(func: Callable[..., Any]) -> Callable[..., Any]:
-    from linopy import expressions, variables
-
-    @wraps(func)
-    def wrapper(self: Any, arg: Any) -> Any:
-        if isinstance(
-            arg,
-            variables.Variable
-            | variables.ScalarVariable
-            | expressions.LinearExpression
-            | expressions.QuadraticExpression,
-        ):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
-        return func(self, arg)
-
-    return wrapper
-
-
 def forward_as_properties(**routes: list[str]) -> Callable[[type], type]:
     #
     def add_accessor(cls: Any, item: str, attr: str) -> None:
@@ -1264,7 +1073,7 @@ LocT = TypeVar(
     "Variable",
     "LinearExpression",
     "QuadraticExpression",
-    "ConstraintBase",
+    "Constraint",
 )
 
 
@@ -1282,108 +1091,7 @@ class LocIndexer(Generic[LocT]):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
-        return self.object.sel(key)  # type: ignore[attr-defined]
-
-
-class EmptyDeprecationWrapper:
-    """
-    Temporary wrapper for a smooth transition from .empty() to .empty
-
-    Use `bool(expr.empty)` to explicitly unwrap.
-
-    See Also
-    --------
-    https://github.com/PyPSA/linopy/pull/425
-    """
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: bool):
-        self.value = value
-
-    def __bool__(self) -> bool:
-        return self.value
-
-    def __repr__(self) -> str:
-        return repr(self.value)
-
-    def __call__(self) -> bool:
-        warn(
-            "Calling `.empty()` is deprecated, use `.empty` property instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.value
-
-
-def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
-    """
-    Serialize a list of pd.Index (including MultiIndex) to a DataArray dict.
-
-    Suitable for embedding coordinate metadata as plain data variables in a
-    Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
-    The variables are named by position, never by the (possibly dashed)
-    dimension or level names, since the netcdf reader splits variable names
-    on ``-``; the level names of a MultiIndex are stored as a JSON attribute.
-    Reconstruct with :func:`coords_from_dataset`.
-    """
-    data_vars: dict[str, DataArray] = {}
-    for i, c in enumerate(coords):
-        if isinstance(c, pd.MultiIndex):
-            for j, level_values in enumerate(c.levels):
-                data_vars[f"_index{i}_level{j}"] = DataArray(
-                    np.array(level_values), dims=[f"_indexdim{i}_level{j}"]
-                )
-            data_vars[f"_index{i}_codes"] = DataArray(
-                np.array(c.codes).T,
-                dims=[f"_indexdim{i}", f"_indexdim{i}_nlevels"],
-                attrs={"level_names": json.dumps([str(n) for n in c.names])},
-            )
-        else:
-            data_vars[f"_index{i}"] = DataArray(np.array(c), dims=[f"_indexdim{i}"])
-    return data_vars
-
-
-def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
-    """
-    Deserialize a list of pd.Index (including MultiIndex) from a Dataset.
-
-    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`,
-    or by its earlier name-keyed format (``_coord_<dim>``).
-    """
-    coords = []
-    for i, d in enumerate(coord_dims):
-        if f"_index{i}_codes" in ds:
-            codes = ds[f"_index{i}_codes"]
-            level_names = json.loads(codes.attrs["level_names"])
-            level_keys = [f"_index{i}_level{j}" for j in range(len(level_names))]
-            coords.append(_multiindex(ds, codes.values.T, level_keys, level_names, d))
-        elif f"_index{i}" in ds:
-            coords.append(pd.Index(ds[f"_index{i}"].values, name=d))
-        elif f"_coord_{d}_codes" in ds:
-            prefix = f"_coord_{d}_level_"
-            level_names = [
-                str(k)[len(prefix) :] for k in ds if str(k).startswith(prefix)
-            ]
-            level_keys = [prefix + ln for ln in level_names]
-            codes_2d = ds[f"_coord_{d}_codes"].values.T
-            coords.append(_multiindex(ds, codes_2d, level_keys, level_names, d))
-        else:
-            coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
-    return coords
-
-
-def _multiindex(
-    ds: Dataset,
-    codes_2d: np.ndarray,
-    level_keys: list[str],
-    level_names: list[str],
-    name: str,
-) -> pd.MultiIndex:
-    arrays = [ds[k].values[codes_2d[j]] for j, k in enumerate(level_keys)]
-    mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
-    mi.name = name
-    return mi
+        return self.object.sel(key)
 
 
 def is_constant(x: SideLike) -> bool:

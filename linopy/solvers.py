@@ -2665,6 +2665,10 @@ class Xpress(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("xpress")
 
+    @classmethod
+    def _license_probe(cls) -> None:
+        xpress.init()
+
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> None:

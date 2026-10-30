@@ -69,21 +69,18 @@ def test_matrices_duplicated_variables() -> None:
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
-@pytest.mark.parametrize("freeze", [False, True])
-def test_matrices_drops_explicit_zeros(freeze: bool) -> None:
+def test_matrices_drops_explicit_zeros(backend: Model) -> None:
     # https://github.com/PyPSA/linopy/issues/814
     # Expressions that broadcast against a dense coordinate store one coefficient
     # per pair, most of them structurally zero. Those must not reach A, whose
     # stored nnz drives the direct-solver handoff (e.g. highspy.addRows).
-    m = Model()
+    m = backend
 
     x = m.add_variables(coords=[range(4)], name="x")
     coeff = xr.DataArray(
         np.eye(4), dims=["j", "i"], coords={"j": range(4), "i": range(4)}
     )
-    m.add_constraints(
-        (coeff * x.rename(dim_0="i")).sum("i") <= 1, name="c", freeze=freeze
-    )
+    m.add_constraints((coeff * x.rename(dim_0="i")).sum("i") <= 1, name="c")
 
     A = m.matrices.A
     assert A is not None
@@ -120,8 +117,8 @@ def test_matrices_sol_aligned_with_vlabels() -> None:
     np.testing.assert_array_equal(M.sol, [1.0, 3.0, 4.0, 5.0, 6.0])
 
 
-@pytest.mark.parametrize("freeze", [False, True])
-def test_matrices_scaled_masked_mixed_signs(freeze: bool) -> None:
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_matrices_scaled_masked_mixed_signs(sparse: bool) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")
     x = m.add_variables(0, 4, coords=[i], name="x", scaling=[1.0, 2.0, 4.0])
@@ -135,9 +132,9 @@ def test_matrices_scaled_masked_mixed_signs(freeze: bool) -> None:
         name="c",
         scaling=xr.DataArray([10.0, 1.0, 5.0], coords=[i]),
         mask=xr.DataArray([True, False, True], coords=[i]),
-        freeze=freeze,
     )
-    m.add_constraints(x + 3 * y >= 1, name="d", freeze=not freeze)
+    d = m.add_constraints(x + 3 * y >= 1, name="d")
+    (m.constraints["c"] if sparse else d).to_sparse()
     m.add_indicator_constraints(z, 1, x <= 2, name="ind")
     M = m.matrices
 

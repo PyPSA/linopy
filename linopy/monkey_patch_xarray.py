@@ -36,7 +36,6 @@ for _op in (
     "__mul__",
     "__add__",
     "__sub__",
-    "__truediv__",
     "__le__",
     "__ge__",
     "__eq__",

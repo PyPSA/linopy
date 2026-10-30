@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +11,7 @@ import xarray as xr
 
 from linopy import Model, read_netcdf
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
-from linopy.solvers import available_solvers
+from linopy.solvers import licensed_solvers
 
 
 def _dense(matrix: Any) -> np.ndarray:
@@ -19,9 +19,8 @@ def _dense(matrix: Any) -> np.ndarray:
     return matrix.toarray()
 
 
-@pytest.mark.parametrize("freeze", [False, True])
-def test_masked_scaling_in_matrices(freeze: bool) -> None:
-    m = Model()
+def test_masked_scaling_in_matrices(backend: Model) -> None:
+    m = backend
     i = pd.RangeIndex(3, name="i")
     mask = xr.DataArray([True, False, True], coords=[i])
     x = m.add_variables(
@@ -38,7 +37,6 @@ def test_masked_scaling_in_matrices(freeze: bool) -> None:
         name="c",
         mask=mask,
         scaling=xr.DataArray([5.0, 6.0, 7.0], coords=[i]),
-        freeze=freeze,
     )
 
     matrices = m.matrices
@@ -137,8 +135,8 @@ def test_indicator_constraint_scaling_in_matrix() -> None:
     )
 
 
-def test_frozen_constraint_scaling_in_matrix() -> None:
-    m = Model()
+def test_constraint_scaling_in_matrix(backend: Model) -> None:
+    m = backend
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
 
@@ -147,10 +145,9 @@ def test_frozen_constraint_scaling_in_matrix() -> None:
         2 * x >= xr.DataArray([20.0, 40.0], coords=[i]),
         name="c",
         scaling=row_scaling,
-        freeze=True,
     )
 
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse == m.sparse
     np.testing.assert_allclose(m.matrices.b, [40.0, 160.0])
     np.testing.assert_allclose(
         _dense(m.matrices.A),
@@ -212,14 +209,13 @@ def test_indicator_constraint_lp_export_uses_scaled_values(tmp_path: Path) -> No
     assert f"<= {40.0 * 4}" in text
 
 
-@pytest.mark.parametrize("freeze", [False, True])
-def test_assign_result_unscales_solution_objective_and_dual(freeze: bool) -> None:
-    m = Model()
+def test_assign_result_unscales_solution_objective_and_dual(backend: Model) -> None:
+    m = backend
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
     b = m.add_variables(binary=True, name="b", scaling=50.0)
 
-    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0], freeze=freeze)
+    m.add_constraints(x + b >= 1, name="c", scaling=[2.0, 4.0])
     m.add_objective(x.sum() + b, scaling=10.0)
 
     primal = np.full(m._xCounter, np.nan)
@@ -235,17 +231,19 @@ def test_assign_result_unscales_solution_objective_and_dual(freeze: bool) -> Non
 
     m.assign_result(result)
 
+    assert result.solution is not None
+    assert result.solution.objective == 12.3
     np.testing.assert_allclose(x.solution.values, [2.0, 3.0])
     assert float(b.solution) == 1.0
     assert m.objective.value == pytest.approx(1.23)
     np.testing.assert_allclose(m.constraints["c"].dual.values, [0.8, 3.2])
 
 
-def test_scaling_is_preserved_in_netcdf(tmp_path: Path) -> None:
-    m = Model()
+def test_scaling_is_preserved_in_netcdf(tmp_path: Path, backend: Model) -> None:
+    m = backend
     i = pd.Index(["a", "b"], name="i")
     x = m.add_variables(coords=[i], name="x", scaling=[10.0, 100.0])
-    m.add_constraints(x >= 1, name="c", scaling=[2.0, 4.0], freeze=True)
+    m.add_constraints(x >= 1, name="c", scaling=[2.0, 4.0])
     m.add_objective(x.sum(), scaling=5.0)
 
     path = tmp_path / "scaled.nc"
@@ -308,7 +306,7 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_scaled_solve_preserves_user_units() -> None:
     reference = Model()
     rx = reference.add_variables(lower=0, name="x")
@@ -324,3 +322,23 @@ def test_scaled_solve_preserves_user_units() -> None:
 
     assert float(sx.solution) == pytest.approx(float(rx.solution))
     assert scaled.objective.value == pytest.approx(reference.objective.value)
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("integer", [False, True])
+def test_scaled_solve_logs_objective_in_user_units(
+    integer: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x", integer=integer)
+    y = m.add_variables(lower=0, name="y", integer=integer)
+    m.add_constraints(x + y >= 1000, name="c")
+    m.add_objective(3 * x + 5 * y, scaling=1e-3)
+
+    with caplog.at_level(logging.INFO, logger="linopy.constants"):
+        m.solve("highs", output_flag=False)
+
+    assert m.objective.value == pytest.approx(3000)
+    assert "Objective: 3.00e+03" in caplog.text
+    if integer:
+        assert "Dual bound: 3.00e+03" in caplog.text

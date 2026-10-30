@@ -28,7 +28,7 @@ from typing import Literal, TypeAlias
 import numpy as np
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, licensed_solvers
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
@@ -43,10 +43,10 @@ X_LO, X_HI = -100.0, 100.0
 Y_LO, Y_HI = -100.0, 100.0
 
 _sos2_solvers = get_available_solvers_with_feature(
-    SolverFeature.SOS_CONSTRAINTS, available_solvers
+    SolverFeature.SOS_CONSTRAINTS, licensed_solvers
 )
 _any_solvers = [
-    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
+    s for s in ["highs", "gurobi", "glpk", "cplex"] if s in licensed_solvers
 ]
 
 pytestmark = pytest.mark.skipif(

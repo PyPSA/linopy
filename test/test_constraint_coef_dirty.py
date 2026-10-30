@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
-from linopy import Model
+from linopy import Constraint, Model
 
 
 @pytest.fixture
@@ -89,3 +91,23 @@ def test_update_noop_does_not_set_dirty(m_with_c: tuple[Model, str]) -> None:
     c = m.constraints[name]
     c.update()
     assert c._coef_dirty is False
+
+
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [
+        (Constraint.to_dense, Constraint.to_sparse),
+        (Constraint.to_sparse, Constraint.to_dense),
+    ],
+    ids=["dense-to-sparse", "sparse-to-dense"],
+)
+def test_store_conversion_sets_dirty(
+    m_with_c: tuple[Model, str],
+    source: Callable[[Constraint], Constraint],
+    target: Callable[[Constraint], Constraint],
+) -> None:
+    m, name = m_with_c
+    c = source(m.constraints[name])
+    c._coef_dirty = False
+    target(c)
+    assert c._coef_dirty is True
