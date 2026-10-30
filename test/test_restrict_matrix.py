@@ -212,8 +212,13 @@ def test_fix_must_name_a_variable() -> None:
 
 @pytest.mark.parametrize(
     "given",
-    [[1.0, 2.0], BOUNDARY.isel(time=slice(0, 4)), BOUNDARY.expand_dims(other=[0])],
-    ids=["wrong-length", "missing-coords", "extra-dim"],
+    [
+        [1.0, 2.0],
+        BOUNDARY.isel(time=slice(0, 4)),
+        BOUNDARY.expand_dims(other=[0]),
+        xr.DataArray(np.ones(len(TIME) - 1), dims="time"),
+    ],
+    ids=["wrong-length", "missing-coords", "extra-dim", "coordless-wrong-length"],
 )
 def test_fix_must_match_the_variable_coordinates(given: object) -> None:
     with pytest.raises(RestrictionError, match="do not match its coordinates"):

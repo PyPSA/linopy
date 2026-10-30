@@ -2,9 +2,10 @@
 Window a model's flattened matrices.
 
 :class:`MatrixWindow` is built once from a parent model. :meth:`MatrixWindow.select`
-selects every container's labels with :meth:`xarray.DataArray.sel`, maps the
-selected labels onto rows and columns of the parent's flattened matrices and
-folds the out-of-window columns into the right-hand side at their fixed values.
+resolves the selection to positions once per distinct coordinate index, as
+:meth:`xarray.DataArray.sel` would, selects every container's labels with
+:meth:`xarray.DataArray.isel`, maps the selected labels onto rows and columns of
+the parent's flattened matrices and folds the out-of-window columns into the right-hand side at their fixed values.
 The window is a :class:`~linopy.matrices.Matrices` taken from the parent's with
 :meth:`~linopy.matrices.Matrices.take`. No container is rebuilt.
 
@@ -18,7 +19,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 from xarray import DataArray
+from xarray.indexes import PandasIndex
 
 from linopy.alignment import as_dataarray
 
@@ -39,14 +42,49 @@ class RestrictionError(ValueError):
     """
 
 
-def _select(containers: Any, selection: Mapping[str, Any]) -> dict[str, DataArray]:
+def _indexer(index: pd.Index, dim: str, value: Any) -> Any:
+    """Positional indexer of ``value`` on ``index``, a slice when contiguous."""
+    indexer = PandasIndex(index, dim).sel({dim: value}).dim_indexers[dim]
+    if not isinstance(indexer, np.ndarray) or indexer.ndim != 1 or not indexer.size:
+        return indexer
+    if (np.diff(indexer) == 1).all():
+        return slice(int(indexer[0]), int(indexer[-1]) + 1)
+    return indexer
+
+
+class _Indexers:
+    """Positional indexers of a selection, resolved once per distinct index."""
+
+    def __init__(self, selection: Mapping[str, Any]) -> None:
+        self._selection = selection
+        self._cache: dict[str, list[tuple[pd.Index, Any]]] = {}
+        self.distinct = True
+
+    def __call__(self, labels: DataArray) -> dict[str, Any]:
+        return {
+            d: self._resolve(labels.indexes[d], d)
+            for d in self._selection
+            if d in labels.dims
+        }
+
+    def _resolve(self, index: pd.Index, dim: str) -> Any:
+        cached = self._cache.setdefault(dim, [])
+        for known, indexer in cached:
+            if known is index or known.equals(index):
+                return indexer
+        indexer = _indexer(index, dim, self._selection[dim])
+        self.distinct &= isinstance(indexer, int | slice)
+        cached.append((index, indexer))
+        return indexer
+
+
+def _select(containers: Any, indexers: _Indexers) -> dict[str, DataArray]:
     """Each container's labels, selected along the dimensions it carries."""
     selected = {}
     for name, item in containers.items():
         labels = item.labels
-        indexers = {d: v for d, v in selection.items() if d in labels.dims}
         try:
-            selected[name] = labels.sel(indexers)
+            selected[name] = labels.isel(indexers(labels))
         except KeyError as error:
             if (labels.values != -1).any():
                 raise RestrictionError(
@@ -57,13 +95,15 @@ def _select(containers: Any, selection: Mapping[str, Any]) -> dict[str, DataArra
     return selected
 
 
-def _positions(selected: dict[str, DataArray], label_to_pos: np.ndarray) -> np.ndarray:
+def _positions(
+    selected: dict[str, DataArray], label_to_pos: np.ndarray, distinct: bool
+) -> np.ndarray:
     """Parent matrix positions of the selected active labels, in container order."""
     empty = np.empty(0, dtype=label_to_pos.dtype)
     flat = np.concatenate([empty, *(lab.values.ravel() for lab in selected.values())])
     positions = label_to_pos[flat[flat != -1]]
     positions = positions[positions >= 0]
-    if np.unique(positions).size != positions.size:
+    if not distinct and np.unique(positions).size != positions.size:
         raise RestrictionError("Cannot restrict model: the selection repeats labels.")
     return positions
 
@@ -77,12 +117,22 @@ def _align(given: Any, labels: DataArray, name: str) -> DataArray:
             else as_dataarray(given, coords=labels.coords, dims=labels.dims)
         )
         shared = {d: labels.indexes[d] for d in value.indexes if d in labels.indexes}
+        same_shape = value.dims == labels.dims and value.shape == labels.shape
+        if same_shape and _equal(value, shared):
+            return value
         return value.sel(shared).broadcast_like(labels).transpose(*labels.dims)
     except (KeyError, ValueError) as error:
         raise RestrictionError(
             f"Fixed values for variable {name!r} do not match its coordinates "
             f"({error})."
         ) from error
+
+
+def _equal(value: DataArray, indexes: dict[str, pd.Index]) -> bool:
+    """Whether ``value`` carries exactly ``indexes`` on every dimension."""
+    return value.indexes.keys() == indexes.keys() and all(
+        value.indexes[d].equals(index) for d, index in indexes.items()
+    )
 
 
 def _check_dropped(
@@ -132,6 +182,8 @@ class MatrixWindow:
         self._model = model
         self._matrices = matrices
         self._A = matrices.A.tocsr()
+        self._dims = {d for item in model._coordinate_carriers() for d in item.sizes}
+        self._dims |= set(model.parameters.sizes)
 
     def select(
         self, selection: Mapping[str, Any], fix: Mapping[str, Any] | None = None
@@ -151,17 +203,21 @@ class MatrixWindow:
         dropped, so the objective value differs from the parent's by a constant.
         """
         m, mat = self._model, self._matrices
-        carried = {d for item in m._coordinate_carriers() for d in item.sizes}
-        unknown = [d for d in selection if d not in carried | set(m.parameters.sizes)]
+        unknown = [d for d in selection if d not in self._dims]
         if unknown:
             raise RestrictionError(
                 f"Cannot restrict the model along {unknown}: the dimension does "
                 "not exist in the model."
             )
-        variables = _select(m.variables, selection)
-        constraints = _select(m.constraints, selection)
-        cols = _positions(variables, m.variables.label_index.label_to_pos)
-        rows = _positions(constraints, m.constraints.label_index.label_to_pos)
+        indexers = _Indexers(selection)
+        variables = _select(m.variables, indexers)
+        constraints = _select(m.constraints, indexers)
+        cols = _positions(
+            variables, m.variables.label_index.label_to_pos, indexers.distinct
+        )
+        rows = _positions(
+            constraints, m.constraints.label_index.label_to_pos, indexers.distinct
+        )
         if not cols.size:
             raise RestrictionError(
                 f"Cannot restrict model: the selection {dict(selection)} is empty."
