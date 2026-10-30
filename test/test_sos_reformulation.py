@@ -1190,7 +1190,7 @@ class TestRemoteBracket:
         self, observed: dict[str, object], tmp_path: Path
     ) -> RemoteHandler:
         """
-        Non-OetcHandler stand-in with the SSH-shaped `solve_on_remote`.
+        Stand-in with the SSH-shaped `solve_on_remote`.
 
         Records whether the model arrives in reformulated form, then runs
         `model.to_netcdf(...)` and `read_netcdf(...)` (naturally — no
