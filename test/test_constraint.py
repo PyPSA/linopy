@@ -22,6 +22,7 @@ from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, LinearExpression, Model
 from linopy.constants import (
     HELPER_DIMS,
     TERM_DIM,
+    SIGNS_pretty,
     long_EQUAL,
     short_GREATER_EQUAL,
     short_LESS_EQUAL,
@@ -751,6 +752,21 @@ def test_constraint_assignment_with_args_alternative_sign(
         assert m.constraints[f"c{i}"].coeffs.notnull().all()
         assert (m.constraints[f"c{i}"].sign == sign_replace_dict[sign]).all()
         assert (m.constraints[f"c{i}"].rhs == 0).all()
+
+
+@pytest.mark.parametrize("sign", [long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL])
+def test_to_constraint_alternative_sign(backend: Model, sign: str) -> None:
+    x = backend.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = (2 * x).to_constraint(sign, 1)
+    assert (con.sign == sign_replace_dict[sign]).all()
+    assert f"{SIGNS_pretty[sign_replace_dict[sign]]} 1.0" in repr(con)
+    backend.add_constraints(con, name="c")
+    assert (backend.constraints["c"].sign == sign_replace_dict[sign]).all()
+
+
+def test_constraint_from_dataset_alternative_sign(c: Constraint) -> None:
+    ds = c.data.assign(sign=c.sign.copy(data=np.full(c.sign.shape, long_EQUAL)))
+    assert (Constraint.from_dataset(ds, c.model).sign == EQUAL).all()
 
 
 def test_constraint_assignment_assert_sign_rhs_not_none(
