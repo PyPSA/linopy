@@ -225,10 +225,12 @@ def test_fix_must_match_the_variable_coordinates(given: object) -> None:
         MatrixWindow(linear_model()).select({"time": TIME[:2]}, fix={"x": given})
 
 
-def ramp_model(scaling: float = 1.0) -> Model:
+def ramp_model(scaling: float = 1.0, mask: xr.DataArray | None = None) -> Model:
     """A two-dimensional ramp: every step must not fall below the previous one."""
     m = Model()
-    x = m.add_variables(0, 100, coords=[TIME, BUS], scaling=scaling, name="x")
+    x = m.add_variables(
+        0, 100, coords=[TIME, BUS], scaling=scaling, mask=mask, name="x"
+    )
     m.add_constraints(x - x.shift(time=1) >= 0, name="ramp")
     m.add_objective(x.sum())
     return m
@@ -240,6 +242,11 @@ def solve_window(m: Model, fix: object, **selection: object) -> xr.DataArray:
     return window.solution["x"]
 
 
+MASK = xr.DataArray([[True, True]] + [[True, False]] * 7, coords=[TIME, BUS])
+ACTIVE = xr.DataArray([[True, True]] * 8, coords=[TIME, BUS])
+
+
+@pytest.mark.parametrize("mask", [ACTIVE, MASK], ids=["active", "masked"])
 @pytest.mark.parametrize("scaling", [1.0, 10.0])
 @pytest.mark.parametrize(
     "fix",
@@ -253,12 +260,14 @@ def solve_window(m: Model, fix: object, **selection: object) -> xr.DataArray:
     ],
     ids=["broadcast", "reversed", "transposed", "series", "positional", "scalar"],
 )
-def test_fix_is_aligned_by_coordinates(scaling: float, fix: object) -> None:
+def test_fix_is_aligned_by_coordinates(
+    scaling: float, fix: object, mask: xr.DataArray
+) -> None:
     """Fixed values align by label, broadcast over missing dims, in model units."""
-    solution = solve_window(ramp_model(scaling), fix, time=TIME[1:3])
+    solution = solve_window(ramp_model(scaling, mask), fix, time=TIME[1:3])
 
     assert solution.dims == ("time", "bus")
-    assert np.allclose(solution.values, 7.0)
+    assert solution.where(mask).equals(xr.full_like(solution, 7.0).where(mask))
 
 
 @pytest.mark.parametrize(

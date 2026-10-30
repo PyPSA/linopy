@@ -15,18 +15,19 @@ Indicator constraints, quadratic objectives and native SOS constraints raise.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+import scipy.sparse
 from xarray import DataArray
 from xarray.indexes import PandasIndex
 
 from linopy.alignment import as_dataarray
+from linopy.matrices import Matrices
 
 if TYPE_CHECKING:
-    from linopy.matrices import Matrices
     from linopy.model import Model
 
 __all__ = ["MatrixWindow", "RestrictionError"]
@@ -182,6 +183,13 @@ class MatrixWindow:
         self._model = model
         self._matrices = matrices
         self._A = matrices.A.tocsr()
+        frame = {f.name: vars(matrices)[f.name] for f in fields(Matrices)}
+        self._frame = Matrices(**{**frame, "A": None})
+        self._flat = np.empty(model._xCounter, dtype=np.intp)
+        for var in model.variables.data.values():
+            labels = var.labels.values.ravel()
+            active = np.flatnonzero(labels != -1)
+            self._flat[labels[active]] = active
         self._dims = {d for item in model._coordinate_carriers() for d in item.sizes}
         self._dims |= set(model.parameters.sizes)
 
@@ -223,16 +231,18 @@ class MatrixWindow:
                 f"Cannot restrict model: the selection {dict(selection)} is empty."
             )
 
-        outside = np.ones(mat.vlabels.size, dtype=bool)
-        outside[cols] = False
-        boundary = np.where(outside, self._fixed(fix), 0.0)
-        missing = np.isnan(boundary)
-        boundary[missing] = 0.0
         A = self._A[rows]
-        magnitude = abs(A)
-        unfixed = rows[magnitude @ missing.astype(float) > 0]
-        if unfixed.size:
-            bad = mat.clabels[unfixed]
+        position = np.full(mat.vlabels.size, -1, dtype=A.indices.dtype)
+        position[cols] = np.arange(cols.size)
+        mapped = position[A.indices]
+        inside = mapped >= 0
+        entry_rows = np.repeat(np.arange(rows.size), np.diff(A.indptr))
+        outer_rows = entry_rows[~inside]
+        outer_data = A.data[~inside]
+        fixed = self._fixed(fix, A.indices[~inside])
+        missing = np.isnan(fixed) & (outer_data != 0)
+        if missing.any():
+            bad = mat.clabels[np.unique(rows[outer_rows[missing]])]
             owners = [
                 n for n, lab in constraints.items() if np.isin(lab.values, bad).any()
             ]
@@ -241,28 +251,36 @@ class MatrixWindow:
                 "terms on variables outside the selection without fixed values. "
                 "Pass their values via `fix`."
             )
-        rhs = mat.b[rows] - A @ boundary
-        inner = A[:, cols]
-        keep = np.diff(inner.indptr) > 0
+        folded = outer_data * np.nan_to_num(fixed)
+        rhs = mat.b[rows] - np.bincount(outer_rows, folded, minlength=rows.size)
+        counts = np.bincount(entry_rows[inside], minlength=rows.size)
+        keep = counts > 0
+        magnitude = np.bincount(outer_rows, np.abs(folded), minlength=rows.size)
         dropped = rows[~keep]
         _check_dropped(
-            rhs[~keep],
-            mat.sense[dropped],
-            (magnitude @ np.abs(boundary))[~keep],
-            mat.clabels[dropped],
+            rhs[~keep], mat.sense[dropped], magnitude[~keep], mat.clabels[dropped]
         )
-        window = replace(mat.take(rows[keep], cols), b=rhs[keep])
+        indptr = np.zeros(keep.sum() + 1, dtype=A.indptr.dtype)
+        np.cumsum(counts[keep], out=indptr[1:])
+        inner = scipy.sparse.csr_array(
+            (A.data[inside], mapped[inside], indptr), shape=(indptr.size - 1, cols.size)
+        )
+        window = replace(self._frame.take(rows[keep], cols), A=inner, b=rhs[keep])
         return window, variables, constraints
 
-    def _fixed(self, fix: Mapping[str, Any] | None) -> np.ndarray:
-        """Fixed values on the parent's scaled column space, NaN where unfixed."""
-        by_label = np.full(self._model._xCounter, np.nan)
+    def _fixed(self, fix: Mapping[str, Any] | None, cols: np.ndarray) -> np.ndarray:
+        """Fixed values of the given parent columns, scaled, NaN where unfixed."""
+        mat = self._matrices
+        labels = mat.vlabels[cols]
+        values = np.full(cols.size, np.nan)
         for name, given in (fix or {}).items():
             if name not in self._model.variables:
                 raise RestrictionError(
                     f"Cannot fix {name!r}: it does not name a variable of the model."
                 )
-            labels = self._model.variables[name].labels
-            active = labels.values != -1
-            by_label[labels.values[active]] = _align(given, labels, name).values[active]
-        return by_label[self._matrices.vlabels] * self._matrices.var_scaling
+            variable = self._model.variables[name]
+            start, stop = variable.range
+            own = (labels >= start) & (labels < stop)
+            aligned = _align(given, variable.labels, name).values.ravel()
+            values[own] = aligned[self._flat[labels[own]]]
+        return values * mat.var_scaling[cols]
