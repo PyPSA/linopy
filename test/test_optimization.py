@@ -187,21 +187,6 @@ def model_with_duplicated_variables() -> Model:
 
 
 @pytest.fixture
-def model_with_non_aligned_variables() -> Model:
-    m = Model()
-
-    lower = pd.Series(0, range(10))
-    x = m.add_variables(lower=lower, coords=[lower.index], name="x")
-    lower = pd.Series(0, range(8))
-    y = m.add_variables(lower=lower, coords=[lower.index], name="y")
-
-    m.add_constraints(x + y, GREATER_EQUAL, 10.5)
-    m.objective = 1 * x + 0.5 * y
-
-    return m
-
-
-@pytest.fixture
 def milp_binary_model() -> Model:
     m = Model()
 
@@ -307,10 +292,10 @@ def modified_model() -> Model:
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    c = m.add_constraints(x + y, GREATER_EQUAL, 10, freeze=False)
+    c = m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    y.lower = 9
-    c.lhs = 2 * x + y
+    y.update(lower=9)
+    c.update(lhs=2 * x + y)
     m.objective = 2 * x + y
 
     return m
@@ -517,6 +502,27 @@ def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
     assert model.solver_name is None
 
 
+def test_solve_disjoint_labels_on_shared_dim() -> None:
+    """
+    Containers sharing a dim name with disjoint labels solve as long as they
+    are never combined element-wise (PyPSA's shared ``name`` dim, #986).
+    """
+    m = Model()
+    gen = m.add_variables(
+        lower=0, coords=[pd.Index(["gen1", "gen2"], name="name")], name="gen"
+    )
+    store = m.add_variables(
+        lower=0, coords=[pd.Index(["store1"], name="name")], name="store"
+    )
+    m.add_constraints(gen.sum() + store.sum() >= 1, name="balance")
+    m.add_objective(gen.sum() + 2 * store.sum())
+
+    status, _ = m.solve(solver_name="highs")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_default_settings_chunked(
     model_chunked: Model, solver: str, io_api: str, explicit_coordinate_names: bool
@@ -598,41 +604,6 @@ def test_duplicated_variables(
     assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=tol))
 
 
-@pytest.mark.legacy
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_non_aligned_variables(
-    model_with_non_aligned_variables: Model,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
-) -> None:
-    """
-    Legacy-only: var+var on the same dim with different coords (see
-    convention.md §8). Under v1, the model construction itself raises.
-    """
-    status, condition = model_with_non_aligned_variables.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    assert status == "ok"
-
-    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
-
-    with pytest.warns(UserWarning):
-        assert np.isclose(
-            model_with_non_aligned_variables.solution["x"][0], 0, rtol=tol
-        )
-        assert np.isclose(
-            model_with_non_aligned_variables.solution["x"][-1], 10.5, rtol=tol
-        )
-        assert np.isclose(
-            model_with_non_aligned_variables.solution["y"][0], 10.5, rtol=tol
-        )
-        assert np.isnan(model_with_non_aligned_variables.solution["y"][-1])
-
-        for dtype in model_with_non_aligned_variables.solution.dtypes.values():
-            assert np.issubdtype(dtype, np.floating)
-
-
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_set_files(
     tmp_path: Any,
@@ -699,9 +670,6 @@ def test_infeasible_model(
     assert "infeasible" in condition
 
     if solver in ["gurobi", "xpress", "highs"]:
-        # ignore deprecated warning
-        with pytest.warns(DeprecationWarning):
-            model.compute_set_of_infeasible_constraints()
         model.compute_infeasibilities()
         formatted = model.format_infeasibilities()
         assert isinstance(formatted, str)
@@ -997,55 +965,23 @@ def test_modified_model(
     assert (modified_model.solution.y == 10).all()
 
 
-@pytest.mark.legacy
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_masked_variable_model(
+def test_masked_variable_model_drops_constraint(
     masked_variable_model: Model,
     solver: str,
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
     """
-    Legacy-only: asserts that ``x + y >= 10`` with ``y`` masked still
-    binds ``x >= 10`` at the masked slots — which only works because
-    legacy collapses the absent ``y`` to 0. Under v1 §6 the absence in
-    ``y`` propagates into the constraint and the constraint is dropped
-    at the masked slots, so ``x`` is free to be 0 there. The v1 way to
-    express the legacy intent is ``x + y.fillna(0) >= 10``.
-    """
-    masked_variable_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    x = masked_variable_model.variables.x
-    y = masked_variable_model.variables.y
-    assert y.solution[-2:].isnull().all()
-    assert y.solution[:-2].notnull().all()
-    assert x.solution.notnull().all()
-    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
-    assert (np.isclose(x.solution[-2:], 10, rtol=tol)).all()
-    # Squeeze in solution getter for expressions with masked variables
-    assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
-
-
-@pytest.mark.v1
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_masked_variable_model_v1_drops_constraint(
-    masked_variable_model: Model,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
-) -> None:
-    """
-    v1 counterpart of ``test_masked_variable_model``. Under §6 the
-    absence of ``y`` at the last two slots propagates into ``x + y``
+    Under §6 the absence of ``y`` at the last two slots propagates into ``x + y``
     and from there into the constraint, so the constraint drops at
     those slots — ``x`` is no longer pinned to 10 there and the
     objective ``2x + y`` drives it to 0 where it's still bound.
 
     Pin two things together:
     1. Model structure: con0 is masked at the absent slots (its label
-       is -1, no row emitted to the solver). This is the v1 invariant
-       that distinguishes us from legacy and is solver-independent.
+       is -1, no row emitted to the solver). This invariant is
+       solver-independent.
     2. Solver outcome on the bound slots: ``x[:8]`` solves to 0 (the
        constraint binds via ``y[:8] = 10``). ``x[-2:]`` is solver-
        dependent — some solvers presolve away free variables and the
@@ -1065,17 +1001,15 @@ def test_masked_variable_model_v1_drops_constraint(
     assert (np.isclose(x.solution[:-2], 0, atol=tol)).all()
 
 
-@pytest.mark.v1
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_masked_variable_model_v1_fillna_binds(
+def test_masked_variable_model_fillna_binds(
     solver: str,
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
     """
-    §7 escape hatch under v1: ``x + y.fillna(0) >= 10`` revives the
-    masked slots as a present zero, so the constraint binds and the
-    legacy outcome (``x[-2:] == 10``) is recovered. The placement of
+    §7 escape hatch: ``x + y.fillna(0) >= 10`` revives the masked
+    slots as a present zero, so the constraint binds and ``x[-2:] == 10``. The placement of
     ``fillna`` is the caller's explicit statement of intent.
     """
     m = Model()
@@ -1140,6 +1074,16 @@ def test_basis_and_warmstart(
     )
 
 
+@pytest.mark.parametrize("solver", set_names_direct_solvers)
+def test_warmstart_direct_from_lp_basis(
+    tmp_path: Any, model: Model, solver: str
+) -> None:
+    basis_fn = tmp_path / "basis.bas"
+    model.solve(solver, basis_fn=basis_fn, io_api="lp")
+    status, _ = model.solve(solver, warmstart_fn=basis_fn, io_api="direct")
+    assert status == "ok"
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_solution_fn_parent_dir_doesnt_exist(
     model: Model,
@@ -1177,6 +1121,29 @@ def test_solver_attribute_getter(
         rc = model.variables.get_solver_attribute("RC")
         assert isinstance(rc, xr.Dataset)
         assert set(rc) == set(model.variables)
+
+
+@pytest.mark.skipif("gurobi" not in direct_solvers, reason="Gurobi not available")
+@pytest.mark.parametrize(
+    "io_api,set_names", [("lp", None), ("direct", True), ("direct", False)]
+)
+def test_solver_attribute_getter_maps_labels(
+    io_api: str, set_names: bool | None
+) -> None:
+    m = Model()
+    x = m.add_variables(
+        0, 10, coords=[range(4)], name="x", mask=pd.Series([True, False, True, True])
+    )
+    y = m.add_variables(0, 10, name="y")
+    m.add_constraints(x.sum() + y >= 1)
+    m.add_objective(x.sum() + 2 * y)
+    m.solve("gurobi", io_api=io_api, set_names=set_names)
+    obj = m.variables.get_solver_attribute("Obj")
+    np.testing.assert_array_equal(obj.x, [1.0, np.nan, 1.0, 1.0])
+    assert obj.y.item() == 2.0
+    np.testing.assert_array_equal(
+        x.isel(dim_0=[3, 1]).get_solver_attribute("Obj"), [1.0, np.nan]
+    )
 
 
 def assert_semantically_equal_direct_solves(
@@ -1316,75 +1283,6 @@ def test_solver_classes_direct(
     elif not solver_supports(solver, SolverFeature.DIRECT_API):
         with pytest.raises(NotImplementedError):
             solver_.solve_problem(model=model)
-
-
-@pytest.fixture
-def auto_mask_variable_model() -> Model:
-    """Model with auto_mask=True and NaN in variable bounds."""
-    m = Model(auto_mask=True)
-
-    x = m.add_variables(lower=0, coords=[range(10)], name="x")
-    lower = pd.Series([0.0] * 8 + [np.nan, np.nan], range(10))
-    y = m.add_variables(lower=lower, name="y")  # NaN bounds auto-masked
-
-    m.add_constraints(x + y, GREATER_EQUAL, 10)
-    m.add_constraints(y, GREATER_EQUAL, 0)
-    m.add_objective(2 * x + y)
-    return m
-
-
-@pytest.fixture
-def auto_mask_constraint_model() -> Model:
-    """Model with auto_mask=True and NaN in constraint RHS."""
-    m = Model(auto_mask=True)
-
-    x = m.add_variables(lower=0, coords=[range(10)], name="x")
-    y = m.add_variables(lower=0, coords=[range(10)], name="y")
-
-    rhs = pd.Series([10.0] * 8 + [np.nan, np.nan], range(10))
-    m.add_constraints(x + y, GREATER_EQUAL, rhs)  # NaN rhs auto-masked
-    m.add_constraints(x + y, GREATER_EQUAL, 5)
-
-    m.add_objective(2 * x + y)
-    return m
-
-
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_auto_mask_variable_model(
-    auto_mask_variable_model: Model,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
-) -> None:
-    """Test that auto_mask=True correctly masks variables with NaN bounds."""
-    auto_mask_variable_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    y = auto_mask_variable_model.variables.y
-    # Same assertions as test_masked_variable_model
-    assert y.solution[-2:].isnull().all()
-    assert y.solution[:-2].notnull().all()
-
-
-@pytest.mark.legacy
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_auto_mask_constraint_model(
-    auto_mask_constraint_model: Model,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
-) -> None:
-    """
-    Test that auto_mask=True correctly masks constraints with NaN RHS.
-
-    Legacy-only: v1 forbids NaN constraint RHS (see convention.md §5/§12).
-    """
-    auto_mask_constraint_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    # Same assertions as test_masked_constraint_model
-    assert (auto_mask_constraint_model.solution.y[:-2] == 10).all()
-    assert (auto_mask_constraint_model.solution.y[-2:] == 5).all()
 
 
 # def init_model_large():

@@ -53,6 +53,19 @@ def objwrap(
     return _objwrap
 
 
+def linear_part(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Linear terms of a quadratic ``to_polars`` frame, their variable in ``vars``.
+    """
+    linear = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
+    return linear.with_columns(
+        pl.when(pl.col("vars1").eq(-1))
+        .then(pl.col("vars2"))
+        .otherwise(pl.col("vars1"))
+        .alias("vars")
+    )
+
+
 class Objective:
     """
     An objective expression containing all relevant information.
@@ -62,8 +75,6 @@ class Objective:
     __array_ufunc__ = None
     __array_priority__ = 10000
     __pandas_priority__ = 10000
-
-    _fill_value: dict[str, float | int] = {"vars": -1, "coeffs": np.nan, "const": 0}
 
     def __init__(
         self,
@@ -93,11 +104,18 @@ class Objective:
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
 
     @property
+    def name(self) -> str:
+        """
+        Returns the name of the objective, owned by the objective itself.
+        """
+        return "objective"
+
+    @property
     def attrs(self) -> dict[str, Any]:
         """
         Returns the attributes of the objective.
         """
-        return self.expression.attrs
+        return {"name": self.name}
 
     @property
     def coords(self) -> DatasetCoordinates:
@@ -132,6 +150,17 @@ class Objective:
         Returns the objective as a polars DataFrame.
         """
         return self.expression.to_polars(**kwargs)
+
+    def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Returns the variable labels and coefficients of the linear objective
+        terms, see ``LinearExpression.linear_terms``.
+        """
+        return self.expression.linear_terms()
+
+    def to_netcdf_ds(self) -> Dataset:
+        """Returns the objective expression in its netcdf layout, see :func:`linopy.io.to_netcdf`."""
+        return self.expression._to_netcdf_ds().assign_attrs(name=self.name)
 
     @property
     def coeffs(self) -> DataArray:
@@ -191,13 +220,14 @@ class Objective:
                 " Must be a LinearExpression or QuadraticExpression."
             )
 
+        expr = expressions.copy_expression(expr, self.model, deep=False)
         if len(expr.coord_dims):
             expr = expr.sum()
 
         if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
-        expr.attrs["name"] = "objective"
+        expr.attrs["name"] = self.name
         self._expression = expr
 
     @property
@@ -270,7 +300,7 @@ class Objective:
 
     assign = objwrap(expressions.LinearExpression.assign)
 
-    sel = objwrap(expressions.LinearExpression.sel)
+    sel = objwrap(expressions.BaseExpression.sel)
 
     def __add__(
         self, expr: ConstantLike | QuadraticExpression | LinearExpression | Objective

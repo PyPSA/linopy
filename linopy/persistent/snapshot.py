@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from linopy import expressions
-from linopy.constraints import Constraint
-
 if TYPE_CHECKING:
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.model import Model
     from linopy.variables import Variable, VariableLabelIndex
 
@@ -38,19 +35,8 @@ def _objective_linear_vector(model: Model) -> np.ndarray:
     vlabels = model.variables.label_index.vlabels
     label_to_pos = model.variables.label_index.label_to_pos
     result = np.zeros(len(vlabels), dtype=np.float64)
-    expr = model.objective.expression
-    if isinstance(expr, expressions.QuadraticExpression):
-        vars_2d = expr.data.vars.values
-        coeffs_all = expr.data.coeffs.values.ravel()
-        vars1, vars2 = vars_2d[0], vars_2d[1]
-        linear = (vars1 == -1) | (vars2 == -1)
-        var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
-        coeffs = coeffs_all[linear]
-    else:
-        var_labels = expr.data.vars.values.ravel()
-        coeffs = expr.data.coeffs.values.ravel()
-    mask = var_labels != -1
-    np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
+    var_labels, coeffs = model.objective.linear_terms()
+    np.add.at(result, label_to_pos[var_labels], coeffs)
     return result
 
 
@@ -69,19 +55,19 @@ def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
 
 
 def _extract_con_buffers(
-    con: ConstraintBase, var_label_index: VariableLabelIndex
+    con: Constraint, var_label_index: VariableLabelIndex
 ) -> ContainerConBuffers:
     """
     Extract flat constraint buffers without copying.
 
-    Mutable ``Constraint`` objects build fresh arrays in
-    ``to_matrix_with_rhs``, so the buffers are exclusively owned.
-    ``CSRConstraint`` returns its stored ``indptr``/``data`` and a weakly
-    cached positional ``indices`` array: as long as a snapshot holds it and
-    neither the constraint nor the variable label index changed, the same
-    array is returned. The buffers share memory with the constraint, every
-    mutation path rebinds whole arrays (copy-on-write), and the diff uses
-    object identity to skip comparisons on untouched containers.
+    A dense lhs builds fresh arrays in ``to_matrix_with_rhs``, so the
+    buffers are exclusively owned. A sparse (CSR) lhs returns its stored
+    ``indptr``/``data`` and a positional ``indices`` array its store caches
+    by weak reference: as long as a snapshot holds it and neither the lhs
+    store nor the variable label index changed, the same array is returned.
+    The buffers share memory with the store, which is immutable, so every
+    mutation replaces it, and the diff uses object identity to skip
+    comparisons on untouched containers.
     """
     csr, con_labels, b, sense = con.to_matrix_with_rhs(var_label_index)
     return ContainerConBuffers(
@@ -132,7 +118,7 @@ class ContainerConBuffers:
 
 
 def _coord_snapshot(
-    obj: Variable | ConstraintBase,
+    obj: Variable | Constraint,
 ) -> dict[str, tuple[str | None, np.ndarray]]:
     """
     Snapshot a container's coordinate indexes.
@@ -164,8 +150,7 @@ def clear_coef_dirty(model: Model) -> None:
     a later ``same_model=True`` diff silently skip changed coefficients.
     """
     for con in model.constraints.data.values():
-        if isinstance(con, Constraint):
-            con._coef_dirty = False
+        con._coef_dirty = False
 
 
 @dataclass

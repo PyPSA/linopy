@@ -8,18 +8,20 @@ solver-side scaling lookups for variables and constraints.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 from xarray import DataArray, Dataset
 
-from linopy.common import assign_multiindex_safe
+from linopy.common import assign_fields
 
 if TYPE_CHECKING:
     from linopy.model import Model
 
+ScalingT = TypeVar("ScalingT", DataArray, np.ndarray)
 
-def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
+
+def validate_scaling(scaling: ScalingT, label: str = "scaling") -> ScalingT:
     """
     Validate and normalize a scaling array.
 
@@ -27,14 +29,15 @@ def validate_scaling(scaling: DataArray, label: str = "scaling") -> DataArray:
     Column scaling converts variable units, while row and objective scaling
     multiply exported coefficients. They must be finite and strictly positive.
     """
-    scaling = scaling.astype(float)
-    values = scaling.values
+    if scaling.dtype != np.float64:
+        scaling = scaling.astype(float)
+    values = np.asarray(scaling)
     if not np.isfinite(values).all() or (values <= 0).any():
         raise ValueError(f"{label} must contain only finite positive values.")
     return scaling
 
 
-def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
+def ensure_scaling(data: Dataset, like: DataArray) -> Dataset:
     """
     Default-fill the ``scaling`` field of a data set when it is missing.
 
@@ -45,8 +48,7 @@ def ensure_scaling(data: Dataset, like: DataArray, label: str) -> Dataset:
     """
     if "scaling" in data:
         return data
-    scaling = validate_scaling(DataArray(1.0).broadcast_like(like), label)
-    return assign_multiindex_safe(data, scaling=scaling)
+    return assign_fields(data, scaling=DataArray(1.0).broadcast_like(like))
 
 
 def _scatter_active(target: np.ndarray, labels: np.ndarray, values: np.ndarray) -> None:
@@ -66,13 +68,8 @@ def variable_scaling_lookup(model: Model) -> np.ndarray:
 
 def constraint_scaling_lookup(model: Model) -> np.ndarray:
     """Return constraint scaling indexed by raw constraint label."""
-    from linopy.constraints import CSRConstraint
-
     scaling = np.ones(model._cCounter, dtype=float)
     for con in model.constraints.data.values():
-        if isinstance(con, CSRConstraint):
-            scaling[con.active_labels()] = con._scaling
-            continue
         labels = con.labels.values.ravel()
         _scatter_active(scaling, labels, con.scaling.values.ravel())
     return scaling

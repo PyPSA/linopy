@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable
 from importlib.metadata import version
 from io import BufferedWriter
 from pathlib import Path
@@ -29,15 +29,18 @@ from linopy.common import (
     sos_weights,
     to_polars,
 )
-from linopy.constants import CONCAT_DIM, FACTOR_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
-from linopy.objective import Objective
+from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
+from linopy.constraints import Constraint
+from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+from linopy.store import Store
 
 if TYPE_CHECKING:
     from cuopt.linear_programming import DataModel as cuoptDataModel
     from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -45,12 +48,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NETCDF_VERSION_ATTR = "_linopy_version"
+NETCDF_LAYOUT_ATTR = "_linopy_netcdf_layout"
+NETCDF_LAYOUT = 1
 EXPR_TYPE_ATTR = "_linopy_expr_type"
 CONTAINER_ORDER_ATTR = "_linopy_{}_order"
+TZ_ATTR = "_linopy_tz"
 
-
-ufunc_kwargs = dict(vectorize=True)
-concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 
 TQDM_COLOR = "#80bfff"
 
@@ -115,23 +118,30 @@ def _lookup_positive_labels(lookup: np.ndarray, labels: np.ndarray) -> np.ndarra
     return values
 
 
+def _non_identity(lookup: np.ndarray) -> np.ndarray | None:
+    """Return the scaling lookup, or None if all factors are 1."""
+    return None if (lookup == 1).all() else lookup
+
+
 def _scale_objective_dataframe(
-    df: pl.DataFrame, variable_scaling: np.ndarray, objective_scaling: float
+    df: pl.DataFrame, variable_scaling: np.ndarray | None, objective_scaling: float
 ) -> pl.DataFrame:
     """Apply column scaling and row-like objective scaling to objective terms."""
     if df.is_empty():
         return df
 
-    if "vars" in df.columns:
-        scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    else:
-        scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
-        scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
-        scales = scale1 * scale2
+    if variable_scaling is not None:
+        if "vars" in df.columns:
+            scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        else:
+            scale1 = _lookup_positive_labels(variable_scaling, df["vars1"].to_numpy())
+            scale2 = _lookup_positive_labels(variable_scaling, df["vars2"].to_numpy())
+            scales = scale1 * scale2
+        df = df.with_columns(pl.col("coeffs") / pl.Series(scales))
 
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(scales) * objective_scaling).alias("coeffs")
-    )
+    if objective_scaling != 1:
+        df = df.with_columns(pl.col("coeffs") * objective_scaling)
+    return df
 
 
 def _scale_bounds_dataframe(
@@ -150,19 +160,22 @@ def _scale_bounds_dataframe(
 
 def _scale_constraint_dataframe(
     df: pl.DataFrame,
-    variable_scaling: np.ndarray,
-    constraint_scaling: np.ndarray,
+    variable_scaling: np.ndarray | None,
+    constraint_scaling: np.ndarray | None,
 ) -> pl.DataFrame:
     """Divide by column scaling and multiply by row scaling."""
-    if df.is_empty():
-        return df
-    row_scales = _lookup_positive_labels(constraint_scaling, df["labels"].to_numpy())
-    var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
-    row_scale_series = pl.Series(row_scales)
-    return df.with_columns(
-        (pl.col("coeffs") / pl.Series(var_scales) * row_scale_series).alias("coeffs"),
-        (pl.col("rhs") * row_scale_series).alias("rhs"),
-    )
+    if variable_scaling is not None:
+        var_scales = _lookup_positive_labels(variable_scaling, df["vars"].to_numpy())
+        df = df.with_columns(pl.col("coeffs") / pl.Series(var_scales))
+    if constraint_scaling is not None:
+        row_scales = _lookup_positive_labels(
+            constraint_scaling, df["labels"].to_numpy()
+        )
+        row_scale_series = pl.Series(row_scales)
+        df = df.with_columns(
+            pl.col("coeffs") * row_scale_series, pl.col("rhs") * row_scale_series
+        )
+    return df
 
 
 def format_coord(coord: str) -> str:
@@ -190,8 +203,8 @@ def get_printers_scalar(
 
         def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variables(labels: np.ndarray) -> list[str]:
             return np.vectorize(_fmt_var)(labels).tolist()
@@ -224,8 +237,8 @@ def get_printers(
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)  # type: ignore
-            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
+            name = clean_name(name)
+            return f"{name}{format_coord(coord)}#{cons}"
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -277,6 +290,7 @@ def objective_write_quadratic_terms(
 def objective_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
     progress: bool = False,
     explicit_coordinate_names: bool = False,
 ) -> None:
@@ -289,7 +303,6 @@ def objective_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
@@ -301,14 +314,7 @@ def objective_to_file(
 
     elif m.is_quadratic:
         df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
-        linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
-        linear_terms = linear_terms.with_columns(
-            pl.when(pl.col("vars1").eq(-1))
-            .then(pl.col("vars2"))
-            .otherwise(pl.col("vars1"))
-            .alias("vars")
-        )
-        objective_write_linear_terms(f, linear_terms, print_variable)
+        objective_write_linear_terms(f, linear_part(df), print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
         objective_write_quadratic_terms(f, quads, print_variable)
@@ -328,6 +334,7 @@ def _binary_has_nondefault_bounds(var: Variable) -> bool:
 def bounds_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
     progress: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
@@ -351,7 +358,6 @@ def bounds_to_file(
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     f.write(b"\n\nbounds\n\n")
     if progress:
@@ -365,7 +371,8 @@ def bounds_to_file(
         var = m.variables[name]
         for var_slice in var.iterate_slices(slice_size):
             df = var_slice.to_polars()
-            df = _scale_bounds_dataframe(df, variable_scaling)
+            if variable_scaling is not None:
+                df = _scale_bounds_dataframe(df, variable_scaling)
 
             columns = [
                 *signed_number(pl.col("lower")),
@@ -560,6 +567,7 @@ def sos_to_file(
 def indicator_constraints_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray,
     explicit_coordinate_names: bool = False,
 ) -> None:
     """
@@ -577,10 +585,9 @@ def indicator_constraints_to_file(
     print_variable_scalar, _ = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
 
     for con in m.constraints.indicator.data.values():
-        ic_data = con.data
+        ic_data = con._dataset()
         labels_flat = ic_data.labels.values.flatten()
         binary_var_flat = ic_data.binary_var.values.flatten()
         binary_val_flat = np.broadcast_to(
@@ -622,8 +629,9 @@ def indicator_constraints_to_file(
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
+    variable_scaling: np.ndarray | None,
+    constraint_scaling: np.ndarray | None,
     progress: bool = False,
-    lazy: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:
@@ -634,8 +642,7 @@ def constraints_to_file(
     print_variable, print_constraint = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
-    variable_scaling = variable_scaling_lookup(m)
-    constraint_scaling = constraint_scaling_lookup(m)
+    scaled = variable_scaling is not None or constraint_scaling is not None
 
     f.write(b"\n\ns.t.\n\n")
     names = list(regular)
@@ -646,48 +653,52 @@ def constraints_to_file(
             colour=TQDM_COLOR,
         )
 
-    # to make this even faster, we can use polars expression
-    # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
         con = regular[name]
-        for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.to_polars()
-            df = _scale_constraint_dataframe(df, variable_scaling, constraint_scaling)
-
+        for df in map(Constraint.to_polars, con.iterate_slices(slice_size)):
             if df.height == 0:
                 continue
+            if scaled:
+                df = _scale_constraint_dataframe(
+                    df, variable_scaling, constraint_scaling
+                )
+            if not df["labels"].is_sorted():
+                df = df.sort("labels", maintain_order=True)
+            _write_constraint_rows(df, f, print_constraint, print_variable)
 
-            # Sort by labels and mark first/last occurrences
-            df = df.sort("labels").with_columns(
+
+def _write_constraint_rows(
+    df: pl.DataFrame,
+    f: BufferedWriter,
+    print_constraint: Callable,
+    print_variable: Callable,
+) -> None:
+    labels = df["labels"].to_numpy()
+    first = np.empty(len(labels), dtype=bool)
+    first[0] = True
+    np.not_equal(labels[1:], labels[:-1], out=first[1:])
+    last = np.append(first[1:], True)
+    columns = [
+        pl.when(pl.Series(first)).then(
+            pl.concat_str(
+                [*print_constraint(pl.col("labels")), pl.lit(":\n")],
+                ignore_nulls=True,
+            )
+        ),
+        *signed_number(pl.col("coeffs")),
+        *print_variable(pl.col("vars")),
+        pl.when(pl.Series(last)).then(
+            pl.concat_str(
                 [
-                    pl.col("labels").is_first_distinct().alias("is_first_in_group"),
-                    (pl.col("labels") != pl.col("labels").shift(-1))
-                    .fill_null(True)
-                    .alias("is_last_in_group"),
+                    pl.lit("\n"),
+                    pl.col("sign"),
+                    pl.lit(" "),
+                    pl.col("rhs").cast(pl.String),
                 ]
             )
-
-            row_labels = print_constraint(pl.col("labels"))
-            col_labels = print_variable(pl.col("vars"))
-            columns = [
-                pl.when(pl.col("is_first_in_group")).then(row_labels[0]),
-                pl.when(pl.col("is_first_in_group")).then(row_labels[1]),
-                pl.when(pl.col("is_first_in_group")).then(pl.lit(":\n")).alias(":"),
-                *signed_number(pl.col("coeffs")),
-                col_labels[0],
-                col_labels[1],
-                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
-                pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
-                pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
-                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
-            ]
-
-            _format_and_write(df, columns, f)
-
-            # in the future, we could use lazy dataframes when they support appending
-            # tp existent files
-            # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
-            # formatted.sink_csv(f,  **kwargs)
+        ),
+    ]
+    _format_and_write(df, columns, f)
 
 
 def to_lp_file(
@@ -700,13 +711,21 @@ def to_lp_file(
 ) -> None:
     with open(fn, mode="wb") as f:
         start = time.time()
+        variable_scaling = variable_scaling_lookup(m)
+        active_variable_scaling = _non_identity(variable_scaling)
 
         objective_to_file(
-            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
+            m,
+            f,
+            active_variable_scaling,
+            progress=progress,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         constraints_to_file(
             m,
             f=f,
+            variable_scaling=active_variable_scaling,
+            constraint_scaling=_non_identity(constraint_scaling_lookup(m)),
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
@@ -714,11 +733,13 @@ def to_lp_file(
         indicator_constraints_to_file(
             m,
             f=f,
+            variable_scaling=variable_scaling,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
             m,
             f=f,
+            variable_scaling=active_variable_scaling,
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
@@ -801,7 +822,11 @@ def to_file(
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
         h = solvers.Highs._build_solver_model(
-            m, explicit_coordinate_names=explicit_coordinate_names
+            m.matrices,
+            names=get_printers_scalar(
+                m, explicit_coordinate_names=explicit_coordinate_names
+            ),
+            sos=list(solvers._iter_sos_sets(m)),
         )
         h.writeModel(str(fn))
     else:
@@ -816,26 +841,26 @@ def to_mosek(
     m: Model,
     task: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the MOSEK task for `m`."""
     import mosek
 
-    if task is None:
-        task = mosek.Task()
-    return solvers.Mosek._build_solver_model(
+    solver = solvers.Mosek.from_model(
         m,
-        task,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
+        task=mosek.Task() if task is None else task,
     )
+    return solver._detach_solver_model()
 
 
 def to_gurobipy(
     m: Model,
     env: Any | None = None,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the gurobipy.Model for `m`."""
     solver = solvers.Gurobi.from_model(
@@ -851,7 +876,7 @@ def to_gurobipy(
 def to_highspy(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Highs:
     """Build the highspy.Highs instance for `m`."""
     solver = solvers.Highs.from_model(
@@ -866,14 +891,16 @@ def to_highspy(
 def to_xpress(
     m: Model,
     explicit_coordinate_names: bool = False,
-    set_names: bool = True,
+    set_names: bool | None = None,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
-    return solvers.Xpress._build_solver_model(
+    solver = solvers.Xpress.from_model(
         m,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
+    return solver._detach_solver_model()
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:
@@ -1019,7 +1046,125 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
+DEFAULT_NETCDF_COMPRESSION: dict[str, Any] = {"zlib": True, "complevel": 3}
+
+
+CODED_ATTR = "_linopy_coded"
+CATEGORIES_SUFFIX = "__categories"
+CATEGORY_DIM_SUFFIX = "__category"
+
+
+def _encode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Write each object-dtype data variable as int32 codes into its own categories.
+
+    A hole is ``-1``. A variable without any present value gets no categories
+    variable, since netCDF3 holds one zero-length (unlimited) dimension only.
+
+    Raises
+    ------
+    TypeError
+        A variable mixes values of different types, e.g. ``str`` and ``int``.
+    """
+    encoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.dtype != object:
+            continue
+        codes, categories = pd.factorize(arr.to_numpy().ravel())
+        inferred = pd.api.types.infer_dtype(categories, skipna=True)
+        if inferred.startswith("mixed"):
+            raise TypeError(
+                f"Cannot write object variable '{name}' holding mixed types ({inferred})."
+            )
+        encoded[name] = xr.DataArray(
+            codes.astype(np.int32).reshape(arr.shape),
+            arr.coords,
+            arr.dims,
+            attrs=arr.attrs | {CODED_ATTR: "object"},
+        )
+        if len(categories):
+            encoded[f"{name}{CATEGORIES_SUFFIX}"] = (
+                f"{name}{CATEGORY_DIM_SUFFIX}",
+                np.asarray(categories.tolist()),
+            )
+    return encoded
+
+
+def _decode_objects(ds: xr.Dataset) -> xr.Dataset:
+    """Restore the object-dtype data variables :func:`_encode_objects` wrote, NaN at the holes."""
+    decoded = ds.copy()
+    for name, arr in ds.data_vars.items():
+        if arr.attrs.get(CODED_ATTR) != "object":
+            continue
+        table = f"{name}{CATEGORIES_SUFFIX}"
+        codes = arr.to_numpy()
+        values = np.full(codes.shape, np.nan, dtype=object)
+        if table in ds.data_vars:
+            categories = ds[table].to_numpy().astype(object)
+            values[codes >= 0] = categories[codes[codes >= 0]]
+            decoded = decoded.drop_vars(table)
+        attrs = {k: v for k, v in arr.attrs.items() if k != CODED_ATTR}
+        decoded[name] = xr.DataArray(values, arr.coords, arr.dims, attrs=attrs)
+    return decoded
+
+
+def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+    to_rename = set([*ds.dims, *ds.coords, *ds])
+    ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
+    ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+    return ds
+
+
+def _tz_to_naive_utc(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Write timezone-aware datetimes as naive UTC with the zone in ``TZ_ATTR``.
+
+    netCDF has no timezone-aware datetime type. Reverse with
+    :func:`_tz_from_naive_utc`.
+    """
+    naive = {}
+    for name, var in ds.variables.items():
+        if var.dtype != object and not isinstance(var.dtype, pd.DatetimeTZDtype):
+            continue
+        idx = pd.Index(np.ravel(var.data))
+        if not isinstance(idx, pd.DatetimeIndex) or idx.tz is None:
+            continue
+        values = idx.tz_convert("UTC").tz_localize(None).to_numpy()
+        attrs = var.attrs | {TZ_ATTR: str(idx.tz)}
+        naive[name] = xr.Variable(
+            var.dims, values.reshape(var.shape), attrs, var.encoding
+        )
+    return _replace_variables(ds, naive)
+
+
+def _tz_from_naive_utc(ds: xr.Dataset) -> xr.Dataset:
+    """Localize the variables written by :func:`_tz_to_naive_utc`."""
+    aware = {}
+    for name, var in ds.variables.items():
+        if TZ_ATTR not in var.attrs:
+            continue
+        attrs = dict(var.attrs)
+        tz = attrs.pop(TZ_ATTR)
+        idx = pd.DatetimeIndex(np.ravel(var.values)).tz_localize("UTC").tz_convert(tz)
+        if var.dims == (name,):
+            aware[name] = xr.Variable(var.dims, idx, attrs)
+        else:
+            values = idx.astype(object).to_numpy().reshape(var.shape)
+            aware[name] = xr.Variable(var.dims, values, attrs)
+    return _replace_variables(ds, aware)
+
+
+def _replace_variables(
+    ds: xr.Dataset, variables: dict[Hashable, xr.Variable]
+) -> xr.Dataset:
+    coords = {k: v for k, v in variables.items() if k in ds.coords}
+    data = {k: v for k, v in variables.items() if k not in ds.coords}
+    return ds.assign_coords(coords).assign(data)
+
+
+def to_netcdf(
+    m: Model, *args: Any, compression: dict[str, Any] | bool = True, **kwargs: Any
+) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -1029,6 +1174,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Model to write out.
     *args
         Arguments passed to ``xarray.Dataset.to_netcdf``.
+    compression : dict or bool, default True
+        Encoding applied to every array in the file. ``True`` applies
+        ``{"zlib": True, "complevel": 3}``, ``False`` disables
+        compression. It is set as a fallback in each array's
+        ``.encoding``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
@@ -1061,22 +1211,6 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
             stacklevel=2,
         )
 
-    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        to_rename = set([*ds.dims, *ds.coords, *ds])
-        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
-        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
-
-        # Flatten multiindexes
-        for dim in ds.dims:
-            if isinstance(ds[dim].to_index(), pd.MultiIndex):
-                prefix_len = len(prefix) + 1  # leave original index level name
-                names = [n[prefix_len:] for n in ds[dim].to_index().names]
-                ds = ds.reset_index(dim)
-                # scipy netCDF3 backend cannot write unicode-array attrs.
-                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
-
-        return ds
-
     vars = [
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
@@ -1086,13 +1220,12 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ]
     exprs = [
         with_prefix(
-            expr.data.assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
+            expr._to_netcdf_ds().assign_attrs(name=name, **{EXPR_TYPE_ATTR: expr.type}),
             f"expressions-{name}",
         )
         for name, expr in m.expressions.items()
     ]
-    objective = m.objective.data
-    objective = objective.assign_attrs(
+    objective = m.objective.to_netcdf_ds().assign_attrs(
         sense=m.objective.sense,
         scaling=m.objective.scaling,
         **{EXPR_TYPE_ATTR: m.objective.expression.type},
@@ -1100,12 +1233,14 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "parameters")]
+    params = [with_prefix(_encode_objects(m.parameters), "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
+    scalars["sparse"] = m.sparse
     ds = xr.merge(vars + cons + exprs + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs[NETCDF_VERSION_ATTR] = version("linopy")
+    ds.attrs[NETCDF_LAYOUT_ATTR] = NETCDF_LAYOUT
     for kind, container in (
         ("variables", m.variables),
         ("expressions", m.expressions),
@@ -1131,7 +1266,13 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     for k in ds:
         ds[k].attrs = non_bool_dict(ds[k].attrs)
 
-    ds.to_netcdf(*args, **kwargs)
+    if compression is True:
+        compression = DEFAULT_NETCDF_COMPRESSION
+    if compression:
+        for v in ds.variables.values():
+            v.encoding = compression | v.encoding
+
+    _tz_to_naive_utc(ds).to_netcdf(*args, **kwargs)
 
 
 def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
@@ -1152,20 +1293,15 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Notes
     -----
     Variables, expressions and constraints are restored in the insertion
-    order stored by :func:`to_netcdf`. Files written by earlier versions
-    carry no order and are loaded in sorted name order.
+    order stored by :func:`to_netcdf`. Files written by linopy <1.0 raise
+    ``ValueError``.
 
     The SOS reformulation lifecycle token is not persisted by
     :func:`to_netcdf`. If the saved model was in reformulated form,
     the deserialized Model is too, but
     :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
-    from linopy.constraints import (
-        Constraint,
-        ConstraintBase,
-        Constraints,
-        CSRConstraint,
-    )
+    from linopy.constraints import Constraints
     from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
     from linopy.model import Model
     from linopy.variables import Variable, Variables
@@ -1173,52 +1309,47 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     if isinstance(path, str):
         path = Path(path)
 
-    m = Model()
-    ds = xr.load_dataset(path, **kwargs)
-
-    def has_prefix(k: str, prefix: str) -> bool:
-        return k.rsplit("-", 1)[0] == prefix
+    ds = _tz_from_naive_utc(xr.load_dataset(path, **kwargs))
+    if NETCDF_VERSION_ATTR not in ds.attrs:
+        raise ValueError(
+            f"{path} is not a linopy netcdf: it has no {NETCDF_VERSION_ATTR!r} "
+            "attribute."
+        )
+    if ds.attrs.get(NETCDF_LAYOUT_ATTR) != NETCDF_LAYOUT:
+        written_by = ds.attrs[NETCDF_VERSION_ATTR]
+        raise ValueError(
+            f"netcdf written by linopy <1.0 (version {written_by}) cannot be read; "
+            "rebuild the model and write it with linopy >=1.0."
+        )
+    m = Model(sparse=bool(ds.attrs["sparse"]))
 
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
-    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
-        # str = JSON (new); iterable = legacy list from older linopy.
-        if isinstance(value, str):
-            return [str(n) for n in json.loads(value)]
-        return [str(n) for n in value]
-
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
-        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
-        multiindexes = []
-        for dim in ds.dims:
-            attr = ds.attrs.get(f"{dim}_multiindex")
-            if attr is None:
-                continue
-            for name in parse_multiindex_attr(attr):
-                multiindexes.append(prefix + "-" + name)
-        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        owned = {c: ds.variables[c] for c in ds.coords if owners[str(c)] == prefix}
+        ds = ds[[k for k in ds if owners[str(k)] == prefix]].assign_coords(owned)
+        ds = ds.drop_vars(
+            [c for c in ds.coords if ds[c].ndim == 0 and owners[str(c)] != prefix]
+        )
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
             remove_prefix(k, prefix): v
             for k, v in ds.attrs.items()
-            if has_prefix(k, prefix)
+            if owners[k] == prefix
         }
-
-        for dim in ds.dims:
-            if f"{dim}_multiindex" in ds.attrs:
-                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
-
         return ds
+
+    def read_expression(ds: xr.Dataset) -> LinearExpression | QuadraticExpression:
+        if ds.attrs[EXPR_TYPE_ATTR] == QuadraticExpression.__name__:
+            return QuadraticExpression(xr.Dataset(ds.data_vars, ds.coords), m)
+        return LinearExpression._from_store(Store.from_netcdf_vars(ds, m), m)
 
     def container_names(kind: str) -> list[str]:
         found = {str(k).rsplit("-", 1)[0] for k in ds if str(k).startswith(kind)}
-        order_attr = ds.attrs.get(CONTAINER_ORDER_ATTR.format(kind))
-        if order_attr is None:
-            return sorted(found)
-        ordered = [f"{kind}-{name}" for name in json.loads(order_attr)]
+        order = json.loads(ds.attrs[CONTAINER_ORDER_ATTR.format(kind)])
+        ordered = [f"{kind}-{name}" for name in order]
         if len(ordered) != len(found) or set(ordered) != found:
             mismatch = sorted(set(ordered) ^ found)
             raise ValueError(
@@ -1227,58 +1358,53 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             )
         return ordered
 
+    containers = {
+        kind: container_names(kind)
+        for kind in ("variables", "expressions", "constraints")
+    }
+    prefixes = {"objective", "parameters"}.union(*containers.values())
+
+    def owner(k: str) -> str | None:
+        while "-" in k:
+            k = k.rsplit("-", 1)[0]
+            if k in prefixes:
+                return k
+        return None
+
+    owners = {k: owner(k) for k in [*map(str, ds.variables), *ds.attrs]}
+
     variables = {}
-    for k in container_names("variables"):
+    for k in containers["variables"]:
         name = remove_prefix(k, "variables")
         variables[name] = Variable(get_prefix(ds, k), m, name)
 
     m._variables = Variables(variables, m)
 
     expressions: dict[str, LinearExpression | QuadraticExpression] = {}
-    for k in container_names("expressions"):
+    for k in containers["expressions"]:
         name = remove_prefix(k, "expressions")
-        expr_ds = get_prefix(ds, k)
-        expr_type = expr_ds.attrs.pop(EXPR_TYPE_ATTR, None)
-        expr_ds.attrs.pop("name", None)  # re-attached below, after construction
-        expr: LinearExpression | QuadraticExpression
-        if expr_type == "QuadraticExpression" or (
-            expr_type is None and FACTOR_DIM in expr_ds.dims
-        ):
-            expr = QuadraticExpression(expr_ds, m)
-        else:
-            expr = LinearExpression(expr_ds, m)
+        expr = read_expression(get_prefix(ds, k))
         expr.attrs["name"] = name
         expressions[name] = expr
 
     m._expressions = Expressions(expressions, m)
 
-    constraints: dict[str, ConstraintBase] = {}
-    for k in container_names("constraints"):
+    constraints: dict[str, Constraint] = {}
+    for k in containers["constraints"]:
         name = remove_prefix(k, "constraints")
-        con_ds = get_prefix(ds, k)
-        if con_ds.attrs.get("_linopy_format") == "csr":
-            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
-        else:
-            constraints[name] = Constraint(con_ds, m, name)
+        constraints[name] = Constraint.from_netcdf_ds(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    obj_type = objective.attrs.pop(EXPR_TYPE_ATTR, None)
-    obj_cls: type[LinearExpression] | type[QuadraticExpression] = (
-        QuadraticExpression
-        if obj_type == "QuadraticExpression"
-        or (obj_type is None and FACTOR_DIM in objective.dims)
-        else LinearExpression
-    )
     m.objective = Objective(
-        obj_cls(objective, m),
+        read_expression(objective),
         m,
-        objective.attrs.pop("sense"),
-        objective.attrs.pop("scaling", 1),
+        objective.attrs["sense"],
+        objective.attrs["scaling"],
     )
-    m.objective._value = objective.attrs.pop("value", None)
+    m.objective._value = objective.attrs.get("value")
 
-    m.parameters = get_prefix(ds, "parameters")
+    m.parameters = _decode_objects(get_prefix(ds, "parameters"))
 
     for k in m.scalar_attrs:
         if k in ds.attrs:
@@ -1342,8 +1468,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraint, ConstraintBase, Constraints
-    from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
+    from linopy.constraints import Constraints
+    from linopy.expressions import Expressions, copy_expression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
 
@@ -1352,10 +1478,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     new_model = Model(
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
-        auto_mask=m._auto_mask,
-        freeze_constraints=m.freeze_constraints,
         set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
+        sparse=m.sparse,
     )
 
     new_model._variables = Variables(
@@ -1376,8 +1501,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         name: str, expr: LinearExpression | QuadraticExpression
     ) -> LinearExpression | QuadraticExpression:
         # Expressions hold no solve artifacts, so include_solution is irrelevant.
-        new_expr = type(expr)(expr.data.copy(deep=deep), new_model)
-        new_expr.attrs["name"] = name  # __init__ resets the name to None
+        new_expr = copy_expression(expr, new_model, deep)
+        new_expr.attrs["name"] = name
         return new_expr
 
     new_model._expressions = Expressions(
@@ -1385,23 +1510,15 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         new_model,
     )
 
-    def _copy_con_data(con: ConstraintBase) -> xr.Dataset:
-        d = con.mutable().data
-        if include_solution:
-            return d.copy(deep=deep)
-        return d[con.data_attrs].copy(deep=deep)
-
     new_model._constraints = Constraints(
         {
-            name: Constraint(_copy_con_data(con), new_model, name)
+            name: con._copy(new_model, deep, include_solution)
             for name, con in m.constraints.items()
         },
         new_model,
     )
 
-    obj_expr = type(m.objective.expression)(
-        m.objective.expression.data.copy(deep=deep), new_model
-    )
+    obj_expr = copy_expression(m.objective.expression, new_model, deep)
     new_model._objective = Objective(
         obj_expr, new_model, m.objective.sense, m.objective.scaling
     )

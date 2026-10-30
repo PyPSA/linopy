@@ -9,7 +9,7 @@ skew; the build's peak memory is expected to climb steeply with it on the
 current (dense) kernel.
 
 ``nodal_balance_sparse`` builds the identical constraint through the
-CSR-backed path (``sum(sparse=True)`` + ``freeze=True`` under v1): the
+CSR-backed path (``Model(sparse=True)``): the
 grouped sum never materializes the padded rectangle and is realized directly
 as a CSRConstraint, so its peak memory should stay flat across the severity
 sweep — the pair makes the padding cost visible.
@@ -62,15 +62,15 @@ def _build(severity: int, sparse: bool) -> linopy.Model:
     buses = pd.RangeIndex(N_BUS, name="bus")
     rng = np.random.default_rng(1)
 
-    m = linopy.Model()
+    m = linopy.Model(sparse=sparse)
     gen = m.add_variables(lower=0, coords=[gens, time], name="gen")
 
     bus_of_gen = pd.Series(_bus_of_gen(severity), index=gens, name="bus")
-    supply = (1 * gen).groupby(bus_of_gen).sum(sparse=sparse)
+    supply = (1 * gen).groupby(bus_of_gen).sum()
     demand = xr.DataArray(
         rng.uniform(10.0, 100.0, size=(N_BUS, N_TIME)), coords=[buses, time]
     )
-    m.add_constraints(supply == demand, name="balance", freeze=sparse)
+    m.add_constraints(supply == demand, name="balance")
     m.add_objective(gen.sum())
     return m
 
@@ -80,13 +80,8 @@ def build_nodal_balance(severity: int) -> linopy.Model:
 
 
 def build_nodal_balance_sparse(severity: int) -> linopy.Model:
-    """The same balance via the sparse groupby + frozen CSR path (v1-only)."""
-    previous = linopy.options["semantics"]
-    linopy.options["semantics"] = "v1"
-    try:
-        return _build(severity, sparse=True)
-    finally:
-        linopy.options["semantics"] = previous
+    """The same balance via the sparse groupby + frozen CSR path."""
+    return _build(severity, sparse=True)
 
 
 SPEC = register_pattern(

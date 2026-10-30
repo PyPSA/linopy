@@ -15,7 +15,6 @@ import xarray as xr
 
 from linopy import Model
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
 
 sns0 = pd.date_range("2026-01-01", periods=3, freq="h", name="snapshot")
 sns1 = sns0 + pd.Timedelta("1h")
@@ -30,7 +29,7 @@ def m() -> Model:
         coords=[sns0, ["a", "b"]], dims=["snapshot", "spatial"], name="y"
     )
     model.add_constraints(x >= 0, name="dense_c")
-    model.add_constraints(x >= 1, name="frozen_c", freeze=True)
+    model.add_constraints(x >= 1, name="sparse_c").to_sparse()
     model.add_expressions(x * 2 + y.sum(), name="e")
     model.add_objective(1.0 * x)
     model.parameters = xr.Dataset(
@@ -56,14 +55,13 @@ def test_assign_coords_csr_constraint(m: Model) -> None:
     CSR-backed constraints get the new labels on their grid, not only in
     their reconstructed Dataset view.
     """
-    con = m.constraints["frozen_c"]
-    assert isinstance(con, CSRConstraint)
+    con = m.constraints["sparse_c"]
+    assert con.lhs.is_sparse
 
     m.assign_coords(snapshot=sns1)
 
-    con = m.constraints["frozen_c"]
+    con = m.constraints["sparse_c"]
     assert (con.coords["snapshot"].values == sns1.values).all()
-    # CSR-backed container still reconstructs its Dataset with the new coords
     assert (con.data.coords["snapshot"].values == sns1.values).all()
     assert con.labels.sizes["snapshot"] == 3
 
@@ -235,8 +233,8 @@ def test_assign_coords_rejects_scalar_values(m: Model) -> None:
 def test_csr_assign_coords_rejects_wrong_length(m: Model) -> None:
     """The CSR path validates lengths and rejects unknown coordinates too."""
     short = pd.date_range("2026-01-01", periods=2, freq="h", name="snapshot")
-    con = m.constraints["frozen_c"]
-    assert isinstance(con, CSRConstraint)
+    con = m.constraints["sparse_c"]
+    assert con.lhs.is_sparse
 
     with pytest.raises(ValueError, match="length"):
         con._assign_coords(snapshot=short)
@@ -316,114 +314,6 @@ def test_assign_coords_rejects_ambiguous_masters(m: Model) -> None:
 
     with pytest.raises(ValueError, match="matching length carry different"):
         m.assign_coords(snapshot=sns1)
-
-
-@pytest.mark.v1
-def test_solve_rejects_diverged_coords(m: Model) -> None:
-    """
-    v1 solving raises when containers carry incompatible labels on a dim.
-
-    Same length, different values — the mislabeling trap no construction-time
-    §8 check catches (and which the public API cannot build); the pre-solve
-    guard is the backstop. A re-aligned model passes again.
-    """
-    shifted = sns0 + pd.Timedelta("5h")
-    m.variables["x"]._assign_coords(snapshot=shifted)
-
-    with pytest.raises(ValueError, match="incompatible"):
-        m._check_coord_consistency()
-
-    # a consistent model passes
-    m.variables["x"]._assign_coords(snapshot=sns0)
-    m._check_coord_consistency()
-
-
-@pytest.mark.legacy
-def test_check_coord_consistency_legacy_noop(m: Model) -> None:
-    """
-    Under legacy, non-aligned containers are documented positional
-    behavior (convention §8), so the guard is a no-op.
-    """
-    shifted = sns0 + pd.Timedelta("5h")
-    m.variables["x"]._assign_coords(snapshot=shifted)
-
-    m._check_coord_consistency()
-
-
-@pytest.mark.v1
-def test_check_coord_consistency_allows_helper_dim_divergence(m: Model) -> None:
-    """
-    Internal (underscore-prefixed) dims are exempt from the guard.
-
-    The piecewise machinery labels ``_breakpoint_piece`` differently on each
-    container on purpose — that must not trip the guard.
-    """
-    delta = m.add_variables(
-        binary=True,
-        coords=[sns0, [0, 1, 2]],
-        dims=["snapshot", "_breakpoint_piece"],
-        name="delta",
-    )
-    delta_hi = delta.isel(_breakpoint_piece=slice(1, None), drop=True)
-    delta_hi._assign_coords(_breakpoint_piece=[0, 1])
-
-    m._check_coord_consistency()
-
-
-@pytest.mark.v1
-def test_check_coord_consistency_allows_subset_labels(m: Model) -> None:
-    """Containers nesting by inclusion (a gate on a gen subset) pass the guard."""
-    m.add_variables(
-        binary=True,
-        coords=[pd.Index(["a", "c"], name="gen")],
-        name="u",
-    )
-    m.add_variables(
-        coords=[pd.Index(["a", "b", "c"], name="gen")],
-        name="x_gen",
-    )
-
-    m._check_coord_consistency()
-
-
-@pytest.mark.v1
-def test_check_coord_consistency_rejects_partial_overlap(m: Model) -> None:
-    """Labels neither equal nor nested (partial overlap) raise under v1."""
-    m.add_variables(coords=[pd.Index(["a", "c"], name="gen")], name="u")
-    m.add_variables(coords=[pd.Index(["b", "c"], name="gen")], name="v")
-
-    with pytest.raises(ValueError, match="incompatible"):
-        m._check_coord_consistency()
-
-
-@pytest.mark.v1
-def test_check_coord_consistency_subset_order_independent() -> None:
-    """
-    Two valid subsets of a master pass regardless of definition order.
-
-    The guard compares every carrier against the largest (the master), not
-    against whichever container is defined first: a subset defined before the
-    master must not trip the check.
-    """
-    model = Model()
-    model.add_variables(
-        binary=True, coords=[pd.Index(["a", "b"], name="gen")], name="u"
-    )
-    model.add_variables(coords=[pd.Index(["a", "b", "c"], name="gen")], name="x")
-    model.add_variables(
-        binary=True, coords=[pd.Index(["b", "c"], name="gen")], name="v"
-    )
-
-    model._check_coord_consistency()
-
-
-@pytest.mark.v1
-def test_solve_rejects_diverged_coords_end_to_end(m: Model) -> None:
-    """Model.solve() itself raises on diverged coords, before any solver runs."""
-    m.variables["x"]._assign_coords(snapshot=sns0 + pd.Timedelta("5h"))
-
-    with pytest.raises(ValueError, match="incompatible"):
-        m.solve()
 
 
 def test_assign_coords_rejects_duplicate_master_labels() -> None:

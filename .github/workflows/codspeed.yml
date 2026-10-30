@@ -22,6 +22,8 @@ jobs:
     name: Memory (heap)
     runs-on: ubuntu-latest
     continue-on-error: true   # informational, never blocks a merge
+    env:
+      POLARS_MAX_THREADS: 1  # polars' pool allocates per core; runner size varies
     permissions:
       contents: read   # actions/checkout
       id-token: write  # OIDC auth with CodSpeed — no token secret

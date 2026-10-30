@@ -10,7 +10,8 @@ import logging
 import os
 import re
 import warnings
-from collections.abc import Callable, Hashable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -20,7 +21,6 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import xarray as xr
-from deprecation import deprecated
 from numpy import inf
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
@@ -28,23 +28,26 @@ from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import (
+    _as_index,
+    _coords_to_dict,
+    as_dataarray,
+    broadcast_to_coords,
+)
 from linopy.common import (
     _as_renamed_index,
-    assign_coords_multiindex_safe,
-    assign_multiindex_safe,
     assigned_labels,
     best_int,
     coords_reorder_set,
     maybe_replace_sign,
     maybe_replace_signs,
+    reassign_coords,
     replace_by_map,
     to_path,
 )
 from linopy.constants import (
     FACTOR_DIM,
     GREATER_EQUAL,
-    HELPER_DIMS,
     LESS_EQUAL,
     SOS_BIG_M_ATTR,
     SOS_DIM_ATTR,
@@ -57,16 +60,17 @@ from linopy.constants import (
 from linopy.constraints import (
     AnonymousScalarConstraint,
     Constraint,
-    ConstraintBase,
     Constraints,
-    CSRConstraint,
+    model_store,
 )
+from linopy.csr import CSRStore
 from linopy.dualization import dualize
 from linopy.expressions import (
     Expressions,
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
+    copy_expression,
 )
 from linopy.io import (
     copy,
@@ -89,12 +93,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.scaling import validate_scaling
-from linopy.semantics import enforce_no_multiindex, is_v1
-
-try:
-    from linopy.remote import OetcHandler
-except ImportError:
-    OetcHandler = None  # type: ignore
+from linopy.semantics import check_user_nan, enforce_no_multiindex
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -107,6 +106,7 @@ from linopy.sos_reformulation import (
     sos_reformulation_context,
     undo_sos_reformulation,
 )
+from linopy.store import DenseStore, Store, laid_on, on_cells, on_coords
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -119,18 +119,68 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.restrict.window import WindowModel
+    from linopy.spec.api import SpecLike
 
 logger = logging.getLogger(__name__)
 
 DtypeKey = Literal["labels"]
 
 
-def _check_infinities(sign: Any, rhs: Any, name: str) -> None:
+def _check_infinities(
+    sign: Any, rhs: Any, name: str, where: np.ndarray | None = None
+) -> None:
+    sign, rhs = np.asarray(sign), np.asarray(rhs)
+    if not np.isinf(rhs).any():
+        return
     invalid = ((sign == LESS_EQUAL) & (rhs == -np.inf)) | (
         (sign == GREATER_EQUAL) & (rhs == np.inf)
     )
-    if np.any(invalid):
+    if np.any(invalid if where is None else invalid & where):
         raise ValueError(f"Constraint {name} contains incorrect infinite values.")
+
+
+_VARIABLE_FIELDS = ("lower", "upper", "scaling", "labels")
+
+
+def _variables_on(
+    coords: Sequence[Sequence | pd.Index] | Mapping,
+    lower: Any,
+    upper: Any,
+    scaling: DataArray,
+    mask: Any,
+) -> tuple[Dataset, np.ndarray | None] | None:
+    """
+    The dataset of a variable laid out in numpy, with its mask as an array,
+    when ``coords`` labels every dim without auxiliary coordinates and each
+    bound, ``scaling`` and the mask is a number or a DataArray lying on them;
+    else None, for the aligning path.
+    """
+    expected = _coords_to_dict(coords)
+    if not expected or not set(expected).isdisjoint(_VARIABLE_FIELDS):
+        return None
+    if any(
+        isinstance(v, DataArray) and v.coords.keys() - v.dims for v in expected.values()
+    ):
+        return None
+    grid = xr.Coordinates({str(d): _as_index(v) for d, v in expected.items()})
+    like, dims = on_coords({}, grid), tuple(grid.dims)
+    shape = tuple(grid.sizes[d] for d in dims)
+
+    def laid(value: Any) -> np.ndarray | None:
+        if isinstance(value, int | float | np.number):
+            return np.broadcast_to(np.asarray(value), shape)
+        return laid_on(value, dims, like) if isinstance(value, DataArray) else None
+
+    bounds = {"lower": laid(lower), "upper": laid(upper), "scaling": laid(scaling)}
+    on_grid = None if mask is None else laid(mask)
+    if any(v is None for v in bounds.values()) or (mask is not None) is (
+        on_grid is None
+    ):
+        return None
+    fields = {k: xr.Variable(dims, v) for k, v in bounds.items()}
+    fields["labels"] = xr.Variable(dims, np.full(shape, -1))
+    return on_coords(fields, grid), None if on_grid is None else on_grid.astype(bool)
 
 
 class Model:
@@ -169,7 +219,7 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
-    _freeze_constraints: bool
+    _sparse: bool
     _set_names_in_solver_io: bool
     _solver_dir: Path
     __slots__ = (
@@ -196,8 +246,7 @@ class Model:
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
-        "_auto_mask",
-        "_freeze_constraints",
+        "_sparse",
         "_set_names_in_solver_io",
         "_solver_dir",
         "_relaxed_registry",
@@ -231,10 +280,9 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
-        auto_mask: bool = False,
-        freeze_constraints: bool = False,
-        set_names_in_solver_io: bool = True,
+        set_names_in_solver_io: bool = False,
         dtypes: Mapping[DtypeKey, type[np.signedinteger]] | None = None,
+        sparse: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -254,16 +302,10 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
-        auto_mask : bool
-            Whether to automatically mask variables and constraints where
-            bounds, coefficients, or RHS values contain NaN. The default is
-            False.
-        freeze_constraints : bool
-            Whether constraints added to the model should be frozen to the
-            CSR-backed representation by default. The default is False.
         set_names_in_solver_io : bool
             Whether direct solver exports should include variable and
-            constraint names by default. The default is True.
+            constraint names by default. Names cost build time and are not
+            needed to map the solution back. The default is False.
         dtypes : mapping, optional
             Integer dtypes for the model's data, exposed read-only as
             ``Model.dtypes``. Only ``"labels"`` is supported, e.g.
@@ -271,11 +313,20 @@ class Model:
             halves label memory but caps the model at ~2.1 billion labels,
             after which it widens to ``np.int64`` automatically; pass
             ``np.int64`` upfront to avoid that mid-build upcast.
+        sparse : bool
+            Build the model on the sparse (CSR) path, exposed read-only as
+            ``Model.sparse``. Every expression is then built on the CSR store
+            (``Model.store_cls``), from :meth:`Variable.to_linexpr` on:
+            arithmetic, ``groupby(...).sum()``, ``@``/``dot`` and the
+            constraint lhs held by ``add_constraints``. Variables stay dense.
+            Requires no ``chunk``. See :mod:`linopy.csr`. The default is
+            False.
 
         Returns
         -------
         linopy.Model
         """
+        self._sparse: bool = bool(sparse)
         self._dtypes: dict[DtypeKey, type[np.signedinteger]] = self._resolve_dtypes(
             dtypes
         )
@@ -295,10 +346,8 @@ class Model:
         self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
-        self._chunk: T_Chunks = chunk
+        self.chunk = chunk
         self._force_dim_names: bool = bool(force_dim_names)
-        self._auto_mask: bool = bool(auto_mask)
-        self._freeze_constraints: bool = bool(freeze_constraints)
         self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
@@ -428,9 +477,70 @@ class Model:
         """
         Set the parameters of the model.
         """
-        self._parameters = (
-            value.copy() if isinstance(value, Dataset) else Dataset(value)
-        )
+        parameters = value.copy() if isinstance(value, Dataset) else Dataset(value)
+        enforce_no_multiindex(parameters, context="parameters")
+        self._parameters = parameters
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: SpecLike,
+        sources: Mapping[str, Any] | Dataset,
+        store: bool = False,
+        **model_kwargs: Any,
+    ) -> Model:
+        """
+        A new model built from a mathspec program with its data.
+
+        Requires the ``mathspec`` package (``pip install "linopy[spec]"``).
+        Variables, constraints, the objective and the named expressions
+        holding a variable term are added as the spec declares them; nothing
+        of the spec itself is kept. Read the named expressions with
+        :func:`linopy.spec.evaluate`.
+
+        Parameters
+        ----------
+        spec : str, pathlib.Path, dict or mathspec.Spec
+            The spec: a path, YAML text, a mapping or a loaded ``Spec``. A
+            ``str`` is always YAML text; pass a file as a ``pathlib.Path``.
+            A one-line ``str`` ending in ``.yaml`` or ``.yml`` reads like a
+            file name and is refused.
+        sources : mapping or xarray.Dataset
+            Data keyed by declared name: dimension labels, parameters and
+            relations.
+        store : bool, default False
+            Write the spec's parameters, unfilled with a missing row a NaN
+            hole, and its relations into ``model.parameters`` under their
+            declared names. They travel with the model through netcdf, and
+            ``Model.from_spec(spec, model.parameters, store=True)`` rebuilds
+            the model from them, edits included. An edit reaches the
+            variables, constraints and objective only on that rebuild, while
+            :func:`linopy.spec.evaluate` reads it at once.
+        **model_kwargs
+            Passed to :class:`Model`, such as ``sparse=True``.
+
+        Returns
+        -------
+        linopy.Model
+
+        Raises
+        ------
+        ValueError
+            If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
+        linopy.spec.SpecDataError
+            If the data does not fit the spec.
+
+        Warns
+        -----
+        EvolvingAPIWarning
+            Once per session: the spec API is newly added and may change in
+            minor releases.
+        """
+        from linopy.spec.api import build_into
+
+        model = cls(**model_kwargs)
+        build_into(model, spec, sources, store)
+        return model
 
     @property
     def solution(self) -> Dataset:
@@ -489,6 +599,8 @@ class Model:
         """
         Set the chunk sizes of the model.
         """
+        if value and self._sparse:
+            raise ValueError("A sparse model does not support `chunk`.")
         self._chunk = value
 
     @property
@@ -512,28 +624,24 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
-    def auto_mask(self) -> bool:
+    def sparse(self) -> bool:
         """
-        If True, automatically mask variables and constraints where bounds,
-        coefficients, or RHS values contain NaN.
+        Whether the model is built on the sparse (CSR) path, set once by
+        ``Model(sparse=True)``.
         """
-        return self._auto_mask
-
-    @auto_mask.setter
-    def auto_mask(self, value: bool) -> None:
-        """
-        Set whether to automatically mask variables and constraints with NaN values.
-        """
-        self._auto_mask = bool(value)
+        return self._sparse
 
     @property
-    def freeze_constraints(self) -> bool:
-        """Whether constraints are frozen to CSR by default when added."""
-        return self._freeze_constraints
-
-    @freeze_constraints.setter
-    def freeze_constraints(self, value: bool) -> None:
-        self._freeze_constraints = bool(value)
+    def store_cls(self) -> type[Store]:
+        """
+        The store class the construction seam builds on: ``to_linexpr``,
+        ``groupby(...).sum()``, ``@`` and the netcdf reader yield a
+        :class:`~linopy.csr.CSRStore` in a sparse model and a
+        :class:`~linopy.store.DenseStore` otherwise. Quadratic products,
+        ``rolling``, ``cumsum`` and the ``LinearExpression`` constructor
+        build dense.
+        """
+        return CSRStore if self._sparse else DenseStore
 
     @property
     def set_names_in_solver_io(self) -> bool:
@@ -607,8 +715,6 @@ class Model:
             "_connameCounter",
             "_pwlCounter",
             "force_dim_names",
-            "auto_mask",
-            "freeze_constraints",
             "set_names_in_solver_io",
         ]
 
@@ -640,7 +746,9 @@ class Model:
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds: DataArray | Dataset) -> None:
+    def check_force_dim_names(
+        self, ds: DataArray | Dataset | LinearExpression | QuadraticExpression
+    ) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -667,10 +775,10 @@ class Model:
                 "Added data contains non-customized dimension names. This is not "
                 "allowed when setting `force_dim_names` to True."
             )
-        else:
-            return
 
-    def _check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
+    def _check_valid_dim_names(
+        self, ds: DataArray | Dataset | LinearExpression | QuadraticExpression
+    ) -> None:
         """
         Ensure that the added data does not lead to a naming conflict.
 
@@ -780,7 +888,8 @@ class Model:
         ------
         ValueError
             If neither lower bound and upper bound have coordinates, nor
-            `coords` are directly given.
+            `coords` are directly given, or if ``lower`` or ``upper`` contain
+            NaN at a position not excluded by ``mask``.
 
         Returns
         -------
@@ -897,56 +1006,57 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
-        upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
         if np.isscalar(scaling):
             scaling_da = DataArray(scaling)
         else:
             scaling_da = broadcast_to_coords(
                 scaling, coords, label="variable scaling", **kwargs
             )
-        data = Dataset(
-            {
-                "lower": lower_da,
-                "upper": upper_da,
-                "scaling": validate_scaling(scaling_da, "variable scaling"),
-                "labels": -1,
-            }
+        scaling_da = validate_scaling(scaling_da, "variable scaling")
+        laid = (
+            None
+            if coords is None or kwargs
+            else _variables_on(coords, lower, upper, scaling_da, mask)
         )
-        (data,) = xr.broadcast(data)
+        if laid is not None:
+            data, on_grid = laid
+        else:
+            lower_da = broadcast_to_coords(lower, coords, label="lower bound", **kwargs)
+            upper_da = broadcast_to_coords(upper, coords, label="upper bound", **kwargs)
+            data = Dataset(
+                {
+                    "lower": lower_da,
+                    "upper": upper_da,
+                    "scaling": scaling_da,
+                    "labels": -1,
+                }
+            )
+            (data,) = xr.broadcast(data)
+            on_grid = None
+            if mask is not None:
+                on_grid = broadcast_to_coords(
+                    mask,
+                    coords if coords is not None else data.coords,
+                    label="mask",
+                    **kwargs,
+                ).values.astype(bool)
         self.check_force_dim_names(data)
         self._check_valid_dim_names(data)
 
-        if mask is not None:
-            mask = broadcast_to_coords(
-                mask,
-                coords if coords is not None else data.coords,
-                label="mask",
-                **kwargs,
-            ).astype(bool)
-
-        # Auto-mask based on NaN in bounds (use numpy for speed)
-        if self.auto_mask:
-            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
-                data.upper.values
-            )
-            auto_mask_arr = DataArray(
-                auto_mask_values, coords=data.coords, dims=data.dims
-            )
-            if mask is not None:
-                mask = mask & auto_mask_arr
-            else:
-                mask = auto_mask_arr
+        nan_bounds = np.isnan(data.lower.values) | np.isnan(data.upper.values)
+        if on_grid is not None:
+            nan_bounds &= on_grid
+        if nan_bounds.any():
+            check_user_nan("variable bound")
 
         start = self._xCounter
         end = start + data.labels.size
-        data.labels.values = self._allocate_labels(start, end).reshape(
-            data.labels.shape
-        )
+        labels = self._allocate_labels(start, end).reshape(data.labels.shape)
         self._xCounter += data.labels.size
 
-        if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
+        data.labels.values = (
+            labels if on_grid is None else np.where(on_grid, labels, -1)
+        )
 
         data = data.assign_attrs(
             label_range=(start, end),
@@ -1028,8 +1138,8 @@ class Model:
             expr = self.linexpr(*data)
         else:
             expr = data
-        self.check_force_dim_names(expr.data)
-        self._check_valid_dim_names(expr.data)
+        self.check_force_dim_names(expr)
+        self._check_valid_dim_names(expr)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=expr.coords, dims=expr.dims).astype(bool)
@@ -1037,6 +1147,7 @@ class Model:
         if self.chunk:
             expr = expr.chunk(self.chunk)
 
+        expr = copy_expression(expr, self, deep=False)
         expr.attrs["name"] = name
         self.expressions.add(expr)
         return expr
@@ -1124,7 +1235,7 @@ class Model:
         sign: SignLike | None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """Build the anonymous constraint from an ``lhs`` and optional ``sign``/``rhs``."""
         msg_required = (
             f"`sign` and `rhs` are required when `lhs` is a {type(lhs).__name__}."
@@ -1149,7 +1260,7 @@ class Model:
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
             return lhs.to_constraint()
-        elif isinstance(lhs, ConstraintBase):
+        elif isinstance(lhs, Constraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_must_be_none)
             return lhs
@@ -1164,72 +1275,26 @@ class Model:
             )
 
     def _allocate_constraint_labels(
-        self, data: Dataset, name: str, mask: DataArray | None = None
-    ) -> Dataset:
-        """Assign label ranges from the constraint counter and apply an optional mask."""
+        self, like: DataArray, mask: DataArray | None = None
+    ) -> tuple[DataArray, tuple[int, int]]:
+        """
+        Labels shaped like ``like`` from the constraint counter, ``-1`` where
+        the optional ``mask`` is False, and their label range.
+        """
         start = self._cCounter
-        end = start + data.labels.size
-        data.labels.values = self._allocate_labels(start, end).reshape(
-            data.labels.shape
+        end = start + like.size
+        labels = like.copy(
+            deep=False, data=self._allocate_labels(start, end).reshape(like.shape)
         )
-        self._cCounter += data.labels.size
+        self._cCounter = end
         if mask is not None:
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
-        return data.assign_attrs(label_range=(start, end), name=name)
-
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: Literal[False] = ...,
-        scaling: ConstantLike = ...,
-        penalty: ConstantLike | None = ...,
-    ) -> Constraint: ...
-
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: Literal[True] = ...,
-        scaling: ConstantLike = ...,
-        penalty: None = ...,
-    ) -> CSRConstraint: ...
-
-    @overload
-    def add_constraints(
-        self,
-        lhs: VariableLike
-        | ExpressionLike
-        | ConstraintLike
-        | Sequence[tuple[ConstantLike, VariableLike | str]]
-        | Callable,
-        sign: SignLike | None = ...,
-        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
-        name: str | None = ...,
-        coords: Sequence[Sequence | pd.Index] | Mapping | None = ...,
-        mask: MaskLike | None = ...,
-        freeze: bool | None = ...,
-        scaling: ConstantLike = ...,
-        penalty: ConstantLike | None = ...,
-    ) -> ConstraintBase: ...
+            if mask.dims == labels.dims:
+                labels = labels.copy(
+                    deep=False, data=np.where(mask.values, labels.values, -1)
+                )
+            else:
+                labels = labels.where(mask, -1)
+        return labels, (start, end)
 
     def add_constraints(
         self,
@@ -1243,10 +1308,9 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index] | Mapping | None = None,
         mask: MaskLike | None = None,
-        freeze: bool | None = None,
         scaling: ConstantLike = 1,
         penalty: ConstantLike | None = None,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -1258,7 +1322,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.ConstraintBase/callable
+        lhs : linopy.LinearExpression/linopy.Constraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -1280,10 +1344,6 @@ class Model:
             Boolean mask with False values for constraints which are skipped.
             The shape of the mask has to match the shape the added constraints.
             Default is None.
-        freeze : bool, optional
-            If True, convert the constraint to an immutable CSR-backed CSRConstraint
-            for better memory efficiency. If None, uses the model default
-            ``Model.freeze_constraints`` setting (default False).
         scaling : float/array_like, optional
             Positive finite scaling factor(s) for constraint rows. Solver-side
             left-hand-side coefficients and right-hand-side values are multiplied
@@ -1291,69 +1351,34 @@ class Model:
         penalty : constant-like, optional
             If given, soften the constraint right away by calling
             :meth:`Constraint.soften` with this penalty, adding a slack variable
-            and a penalty term to the objective. Not allowed together with
-            ``freeze=True`` (or a model default of ``freeze_constraints=True``),
-            since softening requires a mutable, registered ``Constraint``.
-            The resulting Slack is not returned by this shortcut; retrieve
-            the slack variable(s) from model.variables using the derived
+            and a penalty term to the objective. A sparse lhs is softened
+            on its sparse rows. The resulting Slack is not
+            returned by this shortcut; retrieve the slack variable(s) from
+            model.variables using the derived
             name f"{name}_slack_pos" (and f"{name}_slack_neg" for
             equality constraints).
 
         Returns
         -------
-        constraint : linopy.ConstraintBase
-            The added constraint (Constraint by default, or CSRConstraint if freeze=True).
+        constraint : linopy.Constraint
+            The added constraint, its lhs on the model's store class
+            (:attr:`store_cls`) where it converts.
         """
 
         name = self._resolve_constraint_name(name)
-        if freeze is None:
-            freeze = self.freeze_constraints
-        freeze = freeze and not self.chunk
-
-        if penalty is not None and freeze:
-            raise ValueError(
-                "`penalty` cannot be combined with `freeze=True` (or a model default of `freeze_constraints=True`),"
-                "since `soften` is not supported on frozen constraints."
-            )
 
         if isinstance(sign, str):
             sign = maybe_replace_sign(sign)
         elif sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
-        # Capture original RHS for auto-masking before constraint creation
-        # (NaN values in RHS are lost during constraint creation)
-        # Use numpy for speed instead of xarray's notnull()
-        original_rhs_mask = None
-        if self.auto_mask and rhs is not None:
-            rhs_da = as_dataarray(rhs)
-            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
-
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        if isinstance(con, CSRConstraint) and freeze and mask is None:
-            _check_infinities(con._sign, con._rhs, name)
-            self.check_force_dim_names(con.coords.to_dataset())
-            enforce_no_multiindex(con, context=f"constraint {name!r}")
-            scaling_grid = validate_scaling(
-                broadcast_to_coords(scaling, con.coords, label="constraint scaling"),
-                "constraint scaling",
-            )
-            cindex = self._cCounter
-            self._cCounter += con.full_size
-            con = con.assign_labels(cindex, name, scaling_grid.values.ravel())
-            return self.constraints.add(con)
-        data = con.data
+        _check_infinities(con.sign, con.rhs, name)
 
-        _check_infinities(data.sign, data.rhs, name)
-
-        # ensure helper dimensions are not set as coordinates
-        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
-            # TODO: add a warning here, routines should be safe against this
-            data = data.drop_vars(drop_dims)
-
-        rhs_nan = data.rhs.isnull()
+        rhs = con.rhs
+        rhs_nan = rhs.isnull()
         if rhs_nan.any():
-            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
+            rhs = rhs.fillna(0)
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask
@@ -1361,54 +1386,50 @@ class Model:
                 else (as_dataarray(mask).astype(bool) & rhs_mask)
             )
 
-        data["labels"] = -1
-        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        row_coords = data.labels.coords
-        data = assign_multiindex_safe(
-            data,
-            scaling=validate_scaling(
-                broadcast_to_coords(scaling, row_coords, label="constraint scaling"),
-                "constraint scaling",
-            ),
-        )
+        if isinstance(scaling, int | float | np.number):
+            scaling = DataArray(float(scaling))
+        else:
+            scaling = broadcast_to_coords(
+                scaling, rhs.coords, label="constraint scaling"
+            )
+        row_scaling = validate_scaling(scaling, "constraint scaling")
 
         if mask is not None:
-            mask = broadcast_to_coords(mask, data.coords, label="mask").astype(bool)
-
-        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
-        if self.auto_mask:
-            # Check if expression is null: all vars == -1
-            # Use max() instead of all() - if max == -1, all are -1 (since valid vars >= 0)
-            # This is ~30% faster for large term dimensions
-            vars_all_invalid = data.vars.values.max(axis=-1) == -1
-            auto_mask_values = ~vars_all_invalid
-            if original_rhs_mask is not None:
-                coords, dims, rhs_notnull = original_rhs_mask
-                if rhs_notnull.shape != auto_mask_values.shape:
-                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
-                    rhs_notnull = rhs_da.broadcast_like(data.labels).values
-                auto_mask_values = auto_mask_values & rhs_notnull
-            auto_mask_arr = DataArray(
-                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
+            on_grid = (
+                on_cells(mask, rhs.dims, rhs) if isinstance(mask, DataArray) else None
             )
-            if mask is not None:
-                mask = mask & auto_mask_arr
+            if on_grid is None:
+                mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
             else:
-                mask = auto_mask_arr
+                mask = rhs.copy(deep=False, data=np.asarray(on_grid, dtype=bool))
 
-        self.check_force_dim_names(data)
+        lhs = con.lhs
+        self.check_force_dim_names(lhs)
+        self._check_valid_dim_names(lhs)
 
-        data = self._allocate_constraint_labels(data, name, mask)
+        labels, label_range = self._allocate_constraint_labels(rhs, mask)
+        constraint = con._added(
+            self,
+            name,
+            rhs,
+            labels,
+            row_scaling,
+            {**con.attrs, "label_range": label_range},
+        )
+        enforce_no_multiindex(constraint, context=f"constraint {name!r}")
 
         if self.chunk:
-            data = data.chunk(self.chunk)
+            constraint = constraint.chunk(self.chunk)
 
-        enforce_no_multiindex(data, context=f"constraint {name!r}")
-        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        added = self.constraints.add(constraint, freeze=freeze)
+        return self._soften_added(self.constraints.add(constraint), penalty)
+
+    @staticmethod
+    def _soften_added(
+        constraint: Constraint, penalty: ConstantLike | None
+    ) -> Constraint:
         if penalty is not None:
             constraint.soften(penalty=penalty)
-        return added
+        return constraint
 
     def add_indicator_constraints(
         self,
@@ -1419,7 +1440,7 @@ class Model:
         rhs: ConstantLike | None = None,
         name: str | None = None,
         scaling: ConstantLike = 1,
-    ) -> ConstraintBase:
+    ) -> Constraint:
         """
         Add indicator constraints to the model.
 
@@ -1453,7 +1474,7 @@ class Model:
 
         Returns
         -------
-        linopy.constraints.ConstraintBase
+        linopy.constraints.Constraint
             The added indicator constraint.
         """
         if not binary_var.attrs.get("binary", False):
@@ -1469,30 +1490,29 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
-        data = self._constraint_from_lhs(lhs, sign, rhs).data
-
-        data["binary_var"] = binary_var.labels
-        data["binary_val"] = binary_val
-
-        data["labels"] = -1
-        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
-        row_coords = data.labels.coords
-        data = assign_multiindex_safe(
-            data,
-            scaling=validate_scaling(
-                broadcast_to_coords(
-                    scaling, row_coords, label="indicator constraint scaling"
-                ),
-                "indicator constraint scaling",
+        base = self._constraint_from_lhs(lhs, sign, rhs)
+        rhs_da = base.rhs
+        row_scaling = validate_scaling(
+            broadcast_to_coords(
+                scaling, rhs_da.coords, label="indicator constraint scaling"
             ),
+            "indicator constraint scaling",
         )
-
-        data = self._allocate_constraint_labels(data, name)
-
-        enforce_no_multiindex(data, context=f"constraint {name!r}")
-        con = Constraint(data, name=name, model=self, skip_broadcast=True)
-        freeze = self.freeze_constraints
-        return self.constraints.add(con, freeze=freeze and not self.chunk)
+        labels, label_range = self._allocate_constraint_labels(rhs_da)
+        con = Constraint(
+            LinearExpression._from_store(model_store(base.lhs._store, self), self),
+            base.sign,
+            rhs_da,
+            self,
+            name,
+            labels=labels,
+            scaling=row_scaling,
+            binary_var=binary_var.labels,
+            binary_val=binary_val,
+            attrs={**base.attrs, "label_range": label_range},
+        )
+        enforce_no_multiindex(con, context=f"constraint {name!r}")
+        return self.constraints.add(con)
 
     def remove_indicator_constraints(self, name: str) -> None:
         """
@@ -2028,7 +2048,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler | None = None,
+        remote: RemoteHandler | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,
@@ -2060,8 +2080,10 @@ class Model:
         set_names : bool, optional
             Whether to set variable and constraint names when using the direct
             solver API (io_api='direct'). Setting to False can significantly
-            speed up model export. If None, uses the model default
-            ``Model.set_names_in_solver_io`` setting (default True).
+            speed up model export. If None, names are set when
+            ``warmstart_fn`` or ``basis_fn`` is given, as basis files refer
+            to names, and otherwise the model default
+            ``Model.set_names_in_solver_io`` (default False) applies.
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -2096,9 +2118,8 @@ class Model:
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
             chunks to avoid memory issues. The default is 2_000_000.
-        remote : linopy.remote.RemoteHandler | linopy.oetc.OetcHandler, optional
-            Remote handler to use for solving model on a server. Note that when
-            solving on a rSee
+        remote : linopy.remote.RemoteHandler, optional
+            Remote handler to use for solving model on a server. See
             linopy.remote.RemoteHandler for more details.
         progress : bool, optional
             Whether to show a progress bar of writing the lp file. The default is
@@ -2139,8 +2160,6 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
-        self._check_coord_consistency()
-
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -2150,36 +2169,27 @@ class Model:
         if remote is not None:
             # The remote branch short-circuits before reaching Solver.solve(),
             # which is where the empty-objective check normally fires. Replicate
-            # it here. This duplication becomes obsolete once OETC is folded
-            # into the Solver pipeline (see PyPSA/linopy#683).
+            # it here.
             if self.objective.expression.empty:
                 raise ValueError(
                     "No objective has been set on the model. Use "
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
-            if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(
-                    self,
-                    solver_name=solver_name,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
-            else:
-                solved = remote.solve_on_remote(
-                    self,
-                    solver_name=solver_name,
-                    io_api=io_api,
-                    problem_fn=problem_fn,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    basis_fn=basis_fn,
-                    warmstart_fn=warmstart_fn,
-                    keep_files=keep_files,
-                    sanitize_zeros=sanitize_zeros,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
+            solved = remote.solve_on_remote(
+                self,
+                solver_name=solver_name,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                basis_fn=basis_fn,
+                warmstart_fn=warmstart_fn,
+                keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
+                reformulate_sos=reformulate_sos,
+                **solver_options,
+            )
 
             if solved.objective.value is not None:
                 self.objective.set_value(float(solved.objective.value))
@@ -2236,8 +2246,8 @@ class Model:
             try:
                 self.solver = None  # closes any previous solver
                 if io_api == "direct":
-                    if set_names is None:
-                        set_names = self.set_names_in_solver_io
+                    if set_names is None and (warmstart_fn or basis_fn):
+                        set_names = True
                     build_kwargs: dict[str, Any] = {
                         "explicit_coordinate_names": explicit_coordinate_names,
                         "set_names": set_names,
@@ -2397,9 +2407,7 @@ class Model:
             if "parameters" in indexes
         }
         if parameters_applicable:
-            self._parameters = assign_coords_multiindex_safe(
-                self.parameters, **parameters_applicable
-            )
+            self._parameters = reassign_coords(self.parameters, **parameters_applicable)
 
         return self
 
@@ -2411,45 +2419,75 @@ class Model:
             *self.expressions.data.values(),
         ]
 
-    def _check_coord_consistency(self) -> None:
+    def restrict(
+        self,
+        fix: Mapping[str, Any] | None = None,
+        **selection: Any,
+    ) -> WindowModel:
         """
-        Raise if containers carry incompatible labels on a shared dimension.
+        Build a matrix-backed window of the model by label selection.
 
-        v1-only guard: under v1 semantics (convention §8) shared dimensions
-        must carry identical labels, and models can only diverge through
-        internal-state corruption. Under legacy, non-aligned containers are
-        documented positional behavior and the check is a no-op.
+        A window is a slice of the model's flattened matrices: the parent is
+        built once, and each selection picks the rows and columns of the
+        selected labels. The selection follows :meth:`xarray.Dataset.sel`
+        semantics per container: labels, lists, slices and scalars work, along
+        one or several dimensions, and containers without a selected dimension
+        stay whole. Terms whose variables fall outside the window are folded
+        into the right-hand side at their actual coefficient when ``fix``
+        supplies their values. Rows that lose every term are dropped when their
+        folded right-hand side satisfies their sign, and raise otherwise.
 
-        Allowed are label sets that nest by inclusion (a container may hold a
-        subset of the dimension, like a piecewise commitment gate); what
-        cannot be aligned by subset — same-length relabelings, disjoint or
-        partially overlapping labels — raises. Internal dims
-        (underscore-prefixed, like ``_term`` or ``_breakpoint_piece``) are
-        exempt: they are per-container bookkeeping which the piecewise
-        machinery labels differently on purpose.
+        The returned :class:`~linopy.restrict.WindowModel` exposes ``matrices``
+        directly, so solving never rebuilds a container. Variables and
+        constraints are materialised only when their values are read.
+
+        Parameters
+        ----------
+        fix : mapping, optional
+            Fixed values for out-of-window variables, keyed by variable name.
+            Values are aligned by coordinate label and broadcast over the
+            variable's dimensions they lack; every coordinate of the variable
+            must be present. ``NaN`` counts as unfixed. Values for in-window
+            variables are ignored.
+        **selection : Any
+            Dimensions and the labels of the window, e.g.
+            ``snapshot=sns[:24]`` or ``snapshot=slice(t0, t1), bus=["a"]``.
+
+        Returns
+        -------
+        WindowModel
+            The window, with its matrices computed.
+
+        Raises
+        ------
+        RestrictionError
+            If a dimension does not exist, a carrier does not contain the
+            selected labels, the fixed values do not match a variable's
+            coordinates, a cut coupling has no fixed values, or a fully folded
+            row is unsatisfiable.
+        NotImplementedError
+            If the model has indicators, a quadratic objective or native SOS
+            constraints.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>>
+        >>> sns = pd.date_range("2026-01-01", periods=4, freq="h", name="snapshot")
+        >>> m = linopy.Model()
+        >>> storage = m.add_variables(0, 10, coords=[sns], name="storage")
+        >>> flow = m.add_variables(0, 100, coords=[sns], name="flow")
+        >>> _ = m.add_constraints(storage - flow <= 0, name="cap")
+        >>> _ = m.add_objective(flow.sum(), sense="min")
+        >>>
+        >>> window = m.restrict(snapshot=sns[:2])
+        >>> window.matrices.A.shape
+        (2, 4)
         """
-        if not is_v1():
-            return
-        indexes_by_dim: dict[Hashable, list[tuple[str, pd.Index]]] = {}
-        for item in self._coordinate_carriers():
-            for dim, index in item.indexes.items():
-                if str(dim).startswith("_"):
-                    continue
-                indexes_by_dim.setdefault(dim, []).append((str(item.name), index))
+        from linopy.restrict import restrict_model
 
-        for dim, entries in indexes_by_dim.items():
-            master_name, master_index = max(entries, key=lambda e: len(e[1]))
-            for other_name, other_index in entries:
-                if other_index.isin(master_index).all():
-                    continue
-                raise ValueError(
-                    f"Coordinates for dimension '{dim}' are incompatible "
-                    f"across the model: '{other_name}' carries labels not "
-                    f"contained in the largest carrier '{master_name}', so "
-                    "they are neither equal nor subsets of a shared index. "
-                    "Use Model.assign_coords to relabel the model, or align "
-                    "the containers with `.sel`."
-                )
+        return restrict_model(self, fix, selection)
 
     def assign_result(
         self,
@@ -2479,10 +2517,17 @@ class Model:
         if solver is not None:
             self.solver = solver
 
-        result.info()
+        # Log in model units; ``result`` itself stays in solver units.
+        scaling = self.objective.scaling
+        solution, report = result.solution, result.report
+        if solution is not None:
+            solution = replace(solution, objective=solution.objective / scaling)
+        if report is not None and report.dual_bound is not None:
+            report = replace(report, dual_bound=report.dual_bound / scaling)
+        replace(result, solution=solution, report=report).info()
 
-        if result.solution is not None:
-            self.objective._value = result.solution.objective / self.objective.scaling
+        if solution is not None:
+            self.objective._value = solution.objective
 
         status_value = result.status.status.value
         termination_condition = result.status.termination_condition.value
@@ -2609,22 +2654,16 @@ class Model:
 
     def _compute_infeasibilities_gurobi(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Gurobi solver."""
+        solver = self.solver
+        assert solver is not None
         solver_model.computeIIS()
-        f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
-        solver_model.write(f.name)
-        labels = []
-        pattern = re.compile(r"^ [^:]+#([0-9]+):")
-        for line in f.readlines():
-            line_decoded = line.decode()
-            try:
-                if line_decoded.startswith(" c"):
-                    labels.append(int(line_decoded.split(":")[0][2:]))
-            except ValueError as _:
-                match = pattern.match(line_decoded)
-                if match:
-                    labels.append(int(match.group(1)))
-        f.close()
-        return labels
+        constrs = solver_model.getConstrs()
+        in_iis = np.asarray(solver_model.getAttr("IISConstr", constrs), dtype=bool)
+        if solver.io_api == "direct":
+            clabels = self.constraints.label_index.clabels
+        else:
+            clabels = solvers._names_to_labels([c.ConstrName for c in constrs])
+        return sorted(int(label) for label in clabels[in_iis] if label >= 0)
 
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
         """
@@ -2779,43 +2818,6 @@ class Model:
         return self.constraints.format_labels(
             labels, display_max_terms=display_max_terms
         )
-
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
-        """
-        Print a list of infeasible constraints.
-
-        .. deprecated::
-            Use :meth:`format_infeasibilities` instead.
-        """
-        warn(
-            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        print(self.format_infeasibilities(display_max_terms=display_max_terms))
-
-    @deprecated(
-        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
-    )
-    def compute_set_of_infeasible_constraints(self) -> Dataset:
-        """
-        Compute a set of infeasible constraints.
-
-        This function requires that the model was solved with `gurobi`, `xpress` or `highs`
-        and the termination condition was infeasible.
-
-        Returns
-        -------
-        labels : xr.DataArray
-            Labels of the infeasible constraints. Labels with value -1 are not in the set.
-        """
-        labels = self.compute_infeasibilities()
-        cons = self.constraints.labels.isin(np.array(labels))
-        subset = self.constraints.labels.where(cons, -1)
-        subset = subset.drop_vars(
-            [k for (k, v) in (subset == -1).all().items() if v.item()]
-        )
-        return subset
 
     def reset_solution(self) -> None:
         """

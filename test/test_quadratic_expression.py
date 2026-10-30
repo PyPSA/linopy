@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -203,14 +205,9 @@ def test_quadratic_expression_sum(x: Variable, y: Variable) -> None:
     assert not summed_expr_all.coord_dims
 
 
-def test_quadratic_expression_sum_warn_using_dims(x: Variable) -> None:
-    with pytest.warns(DeprecationWarning):
-        (x**2).sum(dims="dim_0")
-
-
-def test_quadratic_expression_sum_warn_unknown_kwargs(x: Variable) -> None:
-    with pytest.raises(ValueError):
-        (x**2).sum(unknown_kwarg="dim_0")
+def test_quadratic_expression_sum_rejects_dims_kwarg(x: Variable) -> None:
+    with pytest.raises(TypeError):
+        (x**2).sum(dims="dim_0")  # type: ignore[call-arg]
 
 
 def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> None:
@@ -220,12 +217,6 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
     quad = x * x
     with pytest.raises(TypeError):
         quad * quad
-
-
-def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = x * y  # type: ignore
-    with pytest.warns(DeprecationWarning):
-        merge(expr, expr)
 
 
 def test_merge_linear_expression_and_quadratic_expression(
@@ -241,8 +232,8 @@ def test_merge_linear_expression_and_quadratic_expression(
     new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])
     assert isinstance(new_quad_ex, QuadraticExpression)
 
-    with pytest.warns(DeprecationWarning):
-        merge(quadexpr, quadexpr, cls=QuadraticExpression)
+    with pytest.raises(TypeError):
+        merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore[call-overload]
 
     quadexpr_2 = linexpr.to_quadexpr()
     merged_expr = merge([quadexpr_2, quadexpr], cls=QuadraticExpression)
@@ -294,6 +285,18 @@ def test_quadratic_expression_to_polars(x: Variable, y: Variable) -> None:
     assert "vars1" in df.columns
     assert "vars2" in df.columns
     assert len(df) == expr.nterm * 2
+
+
+@pytest.mark.parametrize("factor_last", [False, True])
+def test_quadratic_expression_linear_terms(
+    x: Variable, y: Variable, factor_last: bool
+) -> None:
+    expr = x * y + 3 * x + 0 * y
+    assert isinstance(expr, QuadraticExpression)
+    if factor_last:
+        expr = QuadraticExpression(expr.data.transpose(..., FACTOR_DIM), expr.model)
+    labels, coeffs = expr.linear_terms()
+    assert sorted(zip(labels.tolist(), coeffs.tolist())) == [(0, 3.0), (1, 3.0)]
 
 
 def test_quadratic_expression_constant_to_polars() -> None:
@@ -368,3 +371,18 @@ def test_variable_names(x: Variable, y: Variable) -> None:
 
     expr = 2 * (x * x) + 1
     assert expr.variable_names == {"x"}
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+@pytest.mark.parametrize(
+    "op",
+    [lambda q: q / 0, lambda q: (0 * q + 1) * np.inf],
+    ids=["div-zero", "mul-inf-zero-coeff"],
+)
+def test_nonfinite_constant_op_raises(
+    x: Variable, op: Callable[[QuadraticExpression], QuadraticExpression]
+) -> None:
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+    with pytest.raises(ValueError, match="produced NaN"):
+        op(quad)

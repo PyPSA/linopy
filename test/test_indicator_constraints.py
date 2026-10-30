@@ -7,12 +7,11 @@ import pandas as pd
 import pytest
 
 import linopy
-from linopy import Model, available_solvers
-from linopy.constraints import Constraint, CSRConstraint
+from linopy import Constraint, Model, available_solvers, licensed_solvers
 from linopy.variables import Variable
 
 requires_gurobi = pytest.mark.skipif(
-    "gurobi" not in available_solvers, reason="Gurobi not installed"
+    "gurobi" not in licensed_solvers, reason="Gurobi not installed"
 )
 
 requires_scip = pytest.mark.skipif(
@@ -188,18 +187,13 @@ class TestContainer:
     def test_regular_constraint_has_no_indicator_fields(
         self, mbx: tuple[Model, Variable, Variable]
     ) -> None:
-        """Regular constraints report no indicator metadata, frozen or not."""
+        """Regular constraints report no indicator metadata, sparse or not."""
         m, _, x = mbx
-        m.add_constraints(x <= 5, name="c")
-        con = m.constraints["c"]
-        assert not con.is_indicator
-        assert con.binary_var is None
-        assert con.binary_val is None
-
-        frozen = con.freeze()
-        assert not frozen.is_indicator
-        assert frozen.binary_var is None
-        assert frozen.binary_val is None
+        con = m.add_constraints(x <= 5, name="c")
+        for c in (con, con.to_sparse()):
+            assert not c.is_indicator
+            assert c.binary_var is None
+            assert c.binary_val is None
 
     def test_with_coords(
         self, coords_mbx: tuple[Model, Variable, Variable, pd.RangeIndex]
@@ -211,24 +205,20 @@ class TestContainer:
 
 
 class TestPersistence:
-    """Indicator metadata survives freeze, copy, and netCDF round-trips."""
+    """Indicator metadata survives store conversion, copy, and netCDF round-trips."""
 
-    def test_freeze_roundtrip(self, mbx: tuple[Model, Variable, Variable]) -> None:
-        """is_indicator and binary fields survive freeze and freeze->mutable."""
+    @pytest.mark.parametrize("to", ["to_sparse", "to_dense"])
+    def test_store_conversion_roundtrip(
+        self, mbx: tuple[Model, Variable, Variable], to: str
+    ) -> None:
+        """is_indicator and binary fields survive converting the lhs store."""
         m, b, x = mbx
-        m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
-
-        frozen = m.constraints["ic0"].freeze()
-        assert isinstance(frozen, CSRConstraint)
-        assert frozen.is_indicator
-        assert frozen.binary_var is not None
-        assert frozen.binary_val == 1
-
-        mutable = frozen.mutable()
-        assert isinstance(mutable, Constraint)
-        assert mutable.is_indicator
-        assert mutable.binary_var is not None
-        assert np.all(mutable.binary_val == 1)
+        con = m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+        converted = getattr(con.to_sparse(), to)()
+        assert converted.lhs.is_sparse == (to == "to_sparse")
+        assert converted.is_indicator
+        assert converted.binary_var is not None
+        assert np.all(converted.binary_val == 1)
 
     def test_copy_preserves(self, mbx: tuple[Model, Variable, Variable]) -> None:
         """Model.copy preserves is_indicator and the binary fields."""
@@ -240,10 +230,10 @@ class TestPersistence:
         assert ic.binary_var is not None
         assert np.all(ic.binary_val == 1)
 
-    @pytest.mark.parametrize("freeze_constraints", [False, True])
-    def test_netcdf_roundtrip(self, tmp_path: Path, freeze_constraints: bool) -> None:
+    @pytest.mark.parametrize("sparse", [False, True])
+    def test_netcdf_roundtrip(self, tmp_path: Path, sparse: bool) -> None:
         """is_indicator and binary fields survive a netCDF round-trip."""
-        m = Model(freeze_constraints=freeze_constraints)
+        m = Model(sparse=sparse)
         b = m.add_variables(name="b", binary=True)
         x = m.add_variables(lower=0, upper=10, name="x")
         m.add_constraints(x >= 0, name="regular")
@@ -259,16 +249,16 @@ class TestPersistence:
 
     def test_array_binval_roundtrip(self, tmp_path: Path) -> None:
         """A coords-based indicator has per-element binary_val that round-trips."""
-        m = Model(freeze_constraints=True)
+        m = Model(sparse=True)
         idx = pd.RangeIndex(3, name="i")
         b = m.add_variables(coords=[idx], name="b", binary=True)
         x = m.add_variables(coords=[idx], lower=0, upper=10, name="x")
         m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
 
-        frozen = m.constraints["ic0"]
-        assert isinstance(frozen, CSRConstraint)
-        assert isinstance(frozen.binary_val, np.ndarray) and frozen.binary_val.ndim == 1
-        assert "binary_val" in frozen.data
+        con = m.constraints["ic0"]
+        assert con.lhs.is_sparse
+        assert isinstance(con.binary_val, np.ndarray) and con.binary_val.ndim == 1
+        assert "binary_val" in con.data
 
         fn = tmp_path / "model.nc"
         m.to_netcdf(fn)
