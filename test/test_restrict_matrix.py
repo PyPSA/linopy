@@ -72,6 +72,7 @@ def test_select_matches_dense_reference(window: Any) -> None:
     fixed = np.zeros(mat.vlabels.size)
     fixed[m.variables.label_index.label_to_pos[m.variables["soc"].labels.values]] = 3.0
     fixed[cols] = 0.0
+    assert mat.A is not None
     A = mat.A.toarray()[rows]
 
     window_mat = MatrixWindow(m).select(selection, fix={"soc": initial()})[0]
