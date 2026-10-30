@@ -11,6 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -2455,10 +2456,17 @@ class Model:
         if solver is not None:
             self.solver = solver
 
-        result.info()
+        # Log in model units; ``result`` itself stays in solver units.
+        scaling = self.objective.scaling
+        solution, report = result.solution, result.report
+        if solution is not None:
+            solution = replace(solution, objective=solution.objective / scaling)
+        if report is not None and report.dual_bound is not None:
+            report = replace(report, dual_bound=report.dual_bound / scaling)
+        replace(result, solution=solution, report=report).info()
 
-        if result.solution is not None:
-            self.objective._value = result.solution.objective / self.objective.scaling
+        if solution is not None:
+            self.objective._value = solution.objective
 
         status_value = result.status.status.value
         termination_condition = result.status.termination_condition.value
