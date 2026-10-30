@@ -15,7 +15,7 @@ from test_io import model  # noqa: F401
 
 from linopy import GREATER_EQUAL, Model, solvers
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
+from linopy.constraints import Constraint
 from linopy.solver_capabilities import (
     SOLVER_REGISTRY,
     SolverFeature,
@@ -180,14 +180,14 @@ def test_assign_result_explicit(simple_model: Model) -> None:
     assert float(simple_model.variables["y"].solution) == 2.0
 
 
-def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
+def test_assign_result_with_sparse_constraints_avoids_data_reconstruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    m = Model()
+    m = Model(sparse=True)
     x = m.add_variables(coords=[range(3)], name="x")
-    m.add_constraints(x >= 0, name="c", freeze=True)
+    m.add_constraints(x >= 0, name="c")
     con = m.constraints["c"]
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
 
     primal = np.arange(m._xCounter, dtype=float)
     dual = np.arange(m._cCounter, dtype=float) + 10
@@ -197,10 +197,10 @@ def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
         solver_name="mock",
     )
 
-    def fail_data(self: CSRConstraint) -> None:
-        raise AssertionError("CSRConstraint.data was accessed")
+    def fail_data(self: Constraint) -> None:
+        raise AssertionError("Constraint.data was accessed")
 
-    monkeypatch.setattr(CSRConstraint, "data", property(fail_data))
+    monkeypatch.setattr(Constraint, "data", property(fail_data))
     m.assign_result(result)
 
     np.testing.assert_array_equal(m.variables["x"].solution.values, primal)
@@ -233,7 +233,7 @@ def test_copt_closes_env_per_solve(
     closes: list[object] = []
     original = coptpy.Envr.close
 
-    def close(self: object) -> None:
+    def close(self: Any) -> None:
         closes.append(self)
         original(self)
 
@@ -591,7 +591,7 @@ class TestValidateModelOnBuild:
             solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_solve_without_objective_raises(self) -> None:
         m = Model()
@@ -607,7 +607,7 @@ class TestSolverDoesNotMutateModel:
     """Solver.from_model() must not mutate model state (sanitize stays Model-level)."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_from_model_leaves_constraints_untouched(self) -> None:
         m = Model()
@@ -633,7 +633,7 @@ class TestAssignResultWiring:
     """assign_result(result, solver=...) populates model.solver."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_with_solver_wires_model_solver(self) -> None:
         m = Model()
@@ -649,7 +649,7 @@ class TestAssignResultWiring:
         assert m.solver_model is solver.solver_model
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_without_solver_kwarg_leaves_solver_unset(self) -> None:
         m = Model()

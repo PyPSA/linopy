@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, available_solvers, licensed_solvers
 
 requires_cuopt_gpu = pytest.mark.skipif(
-    not os.environ.get("LINOPY_RUN_GPU_TESTS") or "cuopt" not in available_solvers,
+    not os.environ.get("LINOPY_RUN_GPU_TESTS") or "cuopt" not in licensed_solvers,
     reason="need --run-gpu and an installed cuOpt with a usable GPU",
 )
 
@@ -103,7 +103,7 @@ def test_semi_continuous_with_coords() -> None:
     assert list(m.variables.semi_continuous) == ["x"]
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_semi_continuous_solve_gurobi() -> None:
     """
     Semi-continuous variable solves correctly with Gurobi.
@@ -121,7 +121,7 @@ def test_semi_continuous_solve_gurobi() -> None:
     assert np.isclose(m.objective.value, 0, atol=1e-6)
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_semi_continuous_solve_gurobi_active() -> None:
     """
     Semi-continuous variable takes value in [lb, ub] when beneficial.
@@ -151,7 +151,7 @@ def test_unsupported_solver_raises() -> None:
                 m.solve(solver_name=solver)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 def test_semi_continuous_solve_highs() -> None:
     """
     Semi-continuous variable solves correctly with HiGHS.
@@ -169,7 +169,7 @@ def test_semi_continuous_solve_highs() -> None:
     assert np.isclose(m.objective.value, 0, atol=1e-6)
 
 
-@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
 def test_semi_continuous_solve_highs_active() -> None:
     """
     Semi-continuous variable takes value in [lb, ub] when beneficial with HiGHS.
