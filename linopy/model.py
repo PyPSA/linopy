@@ -152,11 +152,16 @@ def _variables_on(
 ) -> tuple[Dataset, np.ndarray | None] | None:
     """
     The dataset of a variable laid out in numpy, with its mask as an array,
-    when ``coords`` labels every dim and each bound, ``scaling`` and the mask
-    is a number or a DataArray lying on them; else None, for the aligning path.
+    when ``coords`` labels every dim without auxiliary coordinates and each
+    bound, ``scaling`` and the mask is a number or a DataArray lying on them;
+    else None, for the aligning path.
     """
     expected = _coords_to_dict(coords)
     if not expected or not set(expected).isdisjoint(_VARIABLE_FIELDS):
+        return None
+    if any(
+        isinstance(v, DataArray) and v.coords.keys() - v.dims for v in expected.values()
+    ):
         return None
     grid = xr.Coordinates({str(d): _as_index(v) for d, v in expected.items()})
     like, dims = on_coords({}, grid), tuple(grid.dims)
