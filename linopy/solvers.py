@@ -181,9 +181,12 @@ if TYPE_CHECKING:
     import highspy
     import mosek
 
+    from linopy.matrices import Matrices
     from linopy.model import Model
 
 EnvType = TypeVar("EnvType")
+Printers = tuple[Callable, Callable]
+SosSet = tuple[int, np.ndarray, np.ndarray]
 
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
@@ -458,6 +461,7 @@ class Solver(ABC, Generic[EnvType]):
     _n_vars: int = field(init=False, default=0, repr=False)
     _n_cons: int = field(init=False, default=0, repr=False)
     _problem_fn: Path | None = field(init=False, default=None, repr=False)
+    _window: Matrices | None = field(init=False, default=None, repr=False)
 
     snapshot: ModelSnapshot | None = field(init=False, default=None, repr=False)
     _rebuilds: int = field(init=False, default=0, repr=False)
@@ -485,12 +489,105 @@ class Solver(ABC, Generic[EnvType]):
             raise ImportError(msg)
         self._lock: threading.Lock = threading.Lock()
 
-    def apply_update(
+    def solve_window(
+        self,
+        M: Matrices,
+        disallow_rebuild: bool = False,
+        **run_kwargs: Any,
+    ) -> Solution:
+        """
+        Solve one matrix window, reusing this solver's model when possible.
+
+        When the solver's native model was built from the window solved last
+        and both share the sparsity pattern of ``A``, the difference is applied
+        in place. Otherwise, or when the solver rejects the update, the native
+        model is rebuilt from ``M`` unless ``disallow_rebuild`` is set, with
+        positional labels so results stay aligned with the window's arrays.
+        """
+        if self.io_api != "direct":
+            raise NotImplementedError(
+                f"{self.display_name} window solving requires io_api='direct', "
+                f"got {self.io_api!r}."
+            )
+        previous = self._window
+        self.model = None
+        self.snapshot = None
+        rebuild = functools.partial(self._build_window, M)
+        if previous is None:
+            rebuild()
+        elif not ModelDiff.same_window_pattern(previous, M):
+            self._fall_back_to_rebuild(
+                RebuildReason.STRUCTURAL_LABELS,
+                rebuild,
+                disallow_rebuild,
+                "the window changes the sparsity pattern",
+            )
+        else:
+            self._apply_or_rebuild(
+                ModelDiff.from_windows(previous, M),
+                len(M.vlabels),
+                len(M.clabels),
+                rebuild,
+                disallow_rebuild,
+            )
+        self._window = M
+        solution = self._run_direct(**run_kwargs).solution
+        if solution is None:
+            raise RuntimeError("the solver returned no solution for the window")
+        return solution
+
+    def _build_window(self, M: Matrices) -> None:
+        self.close()
+        self._window = None
+        self._validate_features(
+            quadratic=M.Q is not None,
+            semi_continuous=bool((M.vtypes == "S").any()),
+            indicator=M.indicator_A is not None,
+        )
+        self._load_matrices(M, names=None, sos=[])
+        n_vars, n_cons = len(M.vlabels), len(M.clabels)
+        self._cache_labels(np.arange(n_vars), np.arange(n_cons), n_vars, n_cons)
+
+    def _apply_or_rebuild(
         self,
         diff: ModelDiff,
-        var_label_index: Any,
-        con_label_index: Any,
+        n_vars: int,
+        n_cons: int,
+        rebuild: Callable[[], None],
+        disallow_rebuild: bool,
+    ) -> bool:
+        try:
+            self.apply_update(diff, n_vars, n_cons)
+        except Exception as exc:
+            self._fall_back_to_rebuild(
+                RebuildReason.BACKEND_REJECTED,
+                rebuild,
+                disallow_rebuild,
+                str(exc),
+                cause=exc,
+            )
+            return False
+        self._in_place_updates += 1
+        self._last_rebuild_reason = None
+        return True
+
+    def _fall_back_to_rebuild(
+        self,
+        reason: RebuildReason,
+        rebuild: Callable[[], None],
+        disallow_rebuild: bool,
+        detail: str | None = None,
+        cause: Exception | None = None,
     ) -> None:
+        if disallow_rebuild:
+            raise RebuildRequiredError(reason, detail) from cause
+        if cause is not None and not isinstance(cause, UnsupportedUpdate):
+            logger.warning("Solver rebuild required (%s): %s", reason.name, detail)
+        rebuild()
+        self._rebuilds += 1
+        self._last_rebuild_reason = reason
+
+    def apply_update(self, diff: ModelDiff, n_vars: int, n_cons: int) -> None:
         """
         Apply an in-place :class:`ModelDiff` to the built native model.
 
@@ -501,7 +598,7 @@ class Solver(ABC, Generic[EnvType]):
         if not self.supports_persistent_update:
             raise UnsupportedUpdate(type(self).__name__)
         self._validate_update(diff)
-        ctx = self._apply_begin(var_label_index, con_label_index)
+        ctx = self._apply_begin(n_vars, n_cons)
         if diff.var_bounds_indices.size:
             self._apply_var_bounds(
                 ctx,
@@ -537,7 +634,7 @@ class Solver(ABC, Generic[EnvType]):
                 f"{self.display_name} does not support in-place constraint sign change"
             )
 
-    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
+    def _apply_begin(self, n_vars: int, n_cons: int) -> Any:
         """Backend prep + validation; the return value is passed to every hook."""
         return self.solver_model
 
@@ -705,13 +802,14 @@ class Solver(ABC, Generic[EnvType]):
 
         The Solver never mutates ``self.model``. Constraint sanitization
         (``model.constraints.sanitize_zeros()`` /
-        ``.sanitize_infinities()``) and SOS reformulation
+        ``.sanitize_infinities()`` / ``.sanitize_missings()``) and SOS reformulation
         (``model.apply_sos_reformulation()``) are Model-level operations
         the caller applies first; this builder consumes whatever shape it
         is handed.
         """
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
+        self._window = None
         self._validate_model()
         if self.io_api == "direct":
             if build_kwargs.get("set_names") is None:
@@ -727,15 +825,31 @@ class Solver(ABC, Generic[EnvType]):
         """Pre-build checks on whether this solver can handle ``self.model``."""
         model = self.model
         assert model is not None
+        self._validate_features(
+            quadratic=model.is_quadratic,
+            semi_continuous=bool(model.variables.semi_continuous),
+            indicator=bool(model.indicator_constraints),
+        )
+        if model.variables.sos and not self.supports(SolverFeature.SOS_CONSTRAINTS):
+            raise ValueError(
+                f"Solver {self.solver_name.value} does not support SOS constraints. "
+                "Reformulate first via `Model.solve(reformulate_sos=True)` or "
+                "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
+            )
+
+    def _validate_features(
+        self, *, quadratic: bool, semi_continuous: bool, indicator: bool
+    ) -> None:
+        """Check the problem features this solver must support, model or window."""
         solver_name = self.solver_name.value
         cls = type(self)
 
-        if model.is_quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
+        if quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
-        if model.variables.semi_continuous and not cls.supports(
+        if semi_continuous and not cls.supports(
             SolverFeature.SEMI_CONTINUOUS_VARIABLES
         ):
             raise ValueError(
@@ -743,23 +857,57 @@ class Solver(ABC, Generic[EnvType]):
                 "Use a solver that supports them (gurobi, cplex, highs)."
             )
 
-        if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
-            raise ValueError(
-                f"Solver {solver_name} does not support SOS constraints. "
-                "Reformulate first via `Model.solve(reformulate_sos=True)` or "
-                "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
-            )
-
-        if model.indicator_constraints and not cls.supports(
-            SolverFeature.INDICATOR_CONSTRAINTS
-        ):
+        if indicator and not cls.supports(SolverFeature.INDICATOR_CONSTRAINTS):
             raise ValueError(
                 f"Solver {solver_name} does not support indicator constraints. "
                 "Use a solver that supports them."
             )
 
-    def _build_direct(self, *, set_names: bool, **build_kwargs: Any) -> None:
-        """Build the native solver model from ``self.model``. Override per-solver."""
+    def _build_direct(
+        self,
+        *,
+        set_names: bool = False,
+        explicit_coordinate_names: bool = False,
+        **build_kwargs: Any,
+    ) -> None:
+        """Build the native solver model from the matrices of ``self.model``."""
+        model = self.model
+        assert model is not None
+        M = model.matrices
+        names = (
+            linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            if set_names
+            else None
+        )
+        sos = list(_iter_sos_sets(model))
+        self._load_matrices(M, names=names, sos=sos, **build_kwargs)
+        self._cache_labels(M.vlabels, M.clabels, model._xCounter, model._cCounter)
+
+    def _load_matrices(
+        self,
+        M: Matrices,
+        *,
+        names: Printers | None,
+        sos: list[SosSet],
+        **build_kwargs: Any,
+    ) -> None:
+        self.solver_model = self._new_solver_model(
+            M, names=names, sos=sos, **build_kwargs
+        )
+        self.io_api = "direct"
+        self.sense = M.objective_sense
+
+    def _new_solver_model(
+        self,
+        M: Matrices,
+        *,
+        names: Printers | None,
+        sos: list[SosSet],
+        **build_kwargs: Any,
+    ) -> Any:
+        """Create the native solver model from ``M``. Override per-solver."""
         raise NotImplementedError(
             f"Solver {self.solver_name.value} does not support direct API model export."
         )
@@ -928,7 +1076,11 @@ class Solver(ABC, Generic[EnvType]):
                 snapshot, model, same_model=same_model, ignore_dims=ignore_dims
             )
         baseline = self.model
-        assert baseline is not None
+        if baseline is None:
+            raise RuntimeError(
+                "The solver model was built from a matrix window and cannot be "
+                "updated from a Model. Build a new solver for the Model."
+            )
         return ModelDiff.from_models(baseline, model, ignore_dims=ignore_dims)
 
     def _apply_locked(
@@ -937,45 +1089,28 @@ class Solver(ABC, Generic[EnvType]):
         ignore_dims: Iterable[str] = (),
         disallow_rebuild: bool = False,
     ) -> ModelDiff | RebuildReason:
+        rebuild = functools.partial(self._rebuild, model)
         if not self.supports_persistent_update:
-            if disallow_rebuild:
-                raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
-            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
-            return RebuildReason.BACKEND_REJECTED
+            reason = RebuildReason.BACKEND_REJECTED
+            self._fall_back_to_rebuild(reason, rebuild, disallow_rebuild)
+            return reason
         diff = self._compute_diff(model, ignore_dims, same_model=model is self.model)
         if isinstance(diff, RebuildReason):
-            if disallow_rebuild:
-                raise RebuildRequiredError(diff)
-            self._rebuild(model, diff)
+            self._fall_back_to_rebuild(diff, rebuild, disallow_rebuild)
             return diff
-        try:
-            self.apply_update(
-                diff,
-                model.variables.label_index,
-                model.constraints.label_index,
-            )
-        except Exception as exc:
-            if disallow_rebuild:
-                raise RebuildRequiredError(
-                    RebuildReason.BACKEND_REJECTED, str(exc)
-                ) from exc
-            self._last_rebuild_reason = RebuildReason.BACKEND_REJECTED
-            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
-            return diff
-        self.model = model
-        if self.track_updates:
-            self.snapshot = diff.snapshot
-            clear_coef_dirty(model)
-        self._in_place_updates += 1
-        self._last_rebuild_reason = None
+        n_vars = model.variables.label_index.n_active_vars
+        n_cons = model.constraints.label_index.n_active_cons
+        if self._apply_or_rebuild(diff, n_vars, n_cons, rebuild, disallow_rebuild):
+            self.model = model
+            if self.track_updates:
+                self.snapshot = diff.snapshot
+                clear_coef_dirty(model)
         return diff
 
-    def _rebuild(self, model: Model, reason: RebuildReason) -> None:
+    def _rebuild(self, model: Model) -> None:
         self.close()
         self.model = model
         self._build()
-        self._rebuilds += 1
-        self._last_rebuild_reason = reason
 
     def _run_direct(self, **run_kwargs: Any) -> Result:
         """Run the pre-built native solver model. Override per-solver."""
@@ -1103,12 +1238,14 @@ class Solver(ABC, Generic[EnvType]):
             env=env,
         )
 
-    def _cache_model_labels(self, model: Model) -> None:
+    def _cache_labels(
+        self, vlabels: np.ndarray, clabels: np.ndarray, n_vars: int, n_cons: int
+    ) -> None:
         """Cache vlabels/clabels and total label counts for label-indexed solutions."""
-        self._vlabels = model.variables.label_index.vlabels
-        self._clabels = model.constraints.label_index.clabels
-        self._n_vars = model._xCounter
-        self._n_cons = model._cCounter
+        self._vlabels = vlabels
+        self._clabels = clabels
+        self._n_vars = n_vars
+        self._n_cons = n_cons
 
     def _cache_model_sizes(self, model: Model) -> None:
         """Cache total label counts only (file-based solvers parse names)."""
@@ -1151,7 +1288,7 @@ class Solver(ABC, Generic[EnvType]):
         self._env_stack = None
 
     def __getstate__(self) -> dict[str, Any]:
-        drop = {"solver_model", "env", "_env_stack", "snapshot", "_lock"}
+        drop = {"solver_model", "env", "_env_stack", "snapshot", "_lock", "_window"}
         return {k: v for k, v in self.__dict__.items() if k not in drop}
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -1160,6 +1297,7 @@ class Solver(ABC, Generic[EnvType]):
         self.env = None
         self._env_stack = None
         self.snapshot = None
+        self._window = None
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
@@ -1613,6 +1751,11 @@ class Highs(Solver[None]):
     ) -> None:
         ctx.changeColsBounds(indices.size, indices, lower, upper)
 
+    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
+        lower, upper = diff.con_rhs_as_bounds()
+        for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
+            ctx.changeRowBounds(int(pos), float(lo), float(up))
+
     def _apply_var_types(
         self, ctx: Any, positions: np.ndarray, kinds: np.ndarray
     ) -> None:
@@ -1623,11 +1766,6 @@ class Highs(Solver[None]):
             count=positions.size,
         )
         ctx.changeColsIntegrality(positions.size, positions, integrality)
-
-    def _apply_con_rhs(self, ctx: Any, diff: ModelDiff) -> None:
-        lower, upper = diff.con_rhs_as_bounds()
-        for pos, lo, up in zip(diff.con_rhs_indices, lower, upper):
-            ctx.changeRowBounds(int(pos), float(lo), float(up))
 
     def _apply_con_coefs(
         self, ctx: Any, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray
@@ -1646,21 +1784,20 @@ class Highs(Solver[None]):
         )
         ctx.changeObjectiveSense(native)
 
-    def _build_direct(
+    def _new_solver_model(
         self,
-        explicit_coordinate_names: bool = False,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
         log_fn: Path | None = None,
         **kwargs: Any,
-    ) -> None:
-        model = self.model
-        assert model is not None
+    ) -> highspy.Highs:
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
             "pdlp",
-        ] and model.type in [
+        ] and M.type in [
             "QP",
             "MILP",
         ]:
@@ -1668,44 +1805,31 @@ class Highs(Solver[None]):
                 "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
-
-        h = self._build_solver_model(
-            model,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
-        )
+        h = self._build_solver_model(M, names=names, sos=sos)
         self._set_solver_params(h, log_fn)
-        self.solver_model = h
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        return h
 
     @staticmethod
     def _build_solver_model(
-        model: Model,
-        explicit_coordinate_names: bool = False,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
     ) -> highspy.Highs:
-        """Build a highspy.Highs instance that mirrors the linopy `model`."""
-        if model.variables.sos:
+        """Build a highspy.Highs instance from the matrices ``M``."""
+        if sos:
             raise NotImplementedError(
                 "SOS constraints are not supported by the HiGHS direct API. "
                 "Use io_api='lp' instead."
             )
 
-        M = model.matrices
         h = highspy.Highs()
         h.addVars(len(M.vlabels), M.lb, M.ub)
-        if (
-            len(model.binaries)
-            + len(model.integers)
-            + len(list(model.variables.semi_continuous))
-        ):
-            vtypes = M.vtypes
-            integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
-            int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
-            labels = np.arange(len(vtypes))[int_mask]
+        vtypes = M.vtypes
+        int_mask = vtypes != "C"
+        if int_mask.any():
+            integrality_map = {"B": 1, "I": 1, "S": 2}
+            labels = np.flatnonzero(int_mask)
             integrality = np.array(
                 [integrality_map[v] for v in vtypes[int_mask]], dtype=np.uint8
             )
@@ -1722,15 +1846,13 @@ class Highs(Solver[None]):
             upper = np.where(M.sense != ">", M.b, np.inf)
             h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
 
-        if set_names:
-            print_variables, print_constraints = linopy.io.get_printers_scalar(
-                model, explicit_coordinate_names=explicit_coordinate_names
-            )
-            lp = h.getLp()
-            lp.col_names_ = print_variables(M.vlabels)
+        if names is not None:
+            print_variables, print_constraints = names
+            mdl = h.getModel()
+            mdl.lp_.col_names_ = print_variables(M.vlabels)
             if len(M.clabels):
-                lp.row_names_ = print_constraints(M.clabels)
-            h.passModel(lp)
+                mdl.lp_.row_names_ = print_constraints(M.clabels)
+            h.passModel(mdl)
 
         Q = M.Q
         if Q is not None:
@@ -1738,7 +1860,7 @@ class Highs(Solver[None]):
             num_vars = Q.shape[0]
             h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
 
-        if model.objective.sense == "max":
+        if M.objective_sense == "max":
             h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
         return h
@@ -1988,72 +2110,53 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         assert self._env_stack is not None
         return self._env_stack.enter_context(m)
 
-    def _build_direct(
+    def _new_solver_model(
         self,
-        explicit_coordinate_names: bool = False,
-        env: gurobipy.Env | dict[str, Any] | None = None,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
+        env: gurobipy.Env | dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> None:
-        model = self.model
-        assert model is not None
-        env_ = self._resolve_env(env)
+    ) -> gurobipy.Model:
         m = self._build_solver_model(
-            model,
-            env=env_,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
+            M, env=self._resolve_env(env), names=names, sos=sos
         )
-        self.solver_model = self._register_solver_model(m)
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        return self._register_solver_model(m)
 
     @staticmethod
     def _build_solver_model(
-        model: Model,
+        M: Matrices,
         env: gurobipy.Env | None = None,
-        explicit_coordinate_names: bool = False,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
     ) -> gurobipy.Model:
-        """Build a gurobipy.Model that mirrors the linopy `model`."""
-        model.constraints.sanitize_missings()
+        """Build a gurobipy.Model from the matrices ``M``."""
         gm = gurobipy.Model(env=env)
 
-        M = model.matrices
-
         kwargs: dict[str, Any] = {}
-        if set_names:
-            print_variables, print_constraints = linopy.io.get_printers_scalar(
-                model, explicit_coordinate_names=explicit_coordinate_names
-            )
+        if names is not None:
+            print_variables, print_constraints = names
             kwargs["name"] = print_variables(M.vlabels)
-        if (
-            len(model.binaries.labels)
-            + len(model.integers.labels)
-            + len(list(model.variables.semi_continuous))
-        ):
+        if (M.vtypes != "C").any():
             kwargs["vtype"] = M.vtypes
         x = gm.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
 
-        if model.is_quadratic:
-            assert M.Q is not None
+        if M.Q is not None:
             gm.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
         else:
             gm.setObjective(M.c @ x)
 
-        if model.objective.sense == "max":
+        if M.objective_sense == "max":
             gm.ModelSense = -1
 
         if M.A is not None:
             c = gm.addMConstr(M.A, x, M.sense, M.b)
-            if set_names:
-                names = print_constraints(M.clabels)
-                c.setAttr("ConstrName", names)
+            if names is not None:
+                c.setAttr("ConstrName", print_constraints(M.clabels))
 
-        for sos_type, positions, weights in _iter_sos_sets(model):
+        for sos_type, positions, weights in sos:
             gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
 
         if M.indicator_A is not None:
@@ -2093,13 +2196,13 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     }
     _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
 
-    def _apply_begin(self, var_label_index: Any, con_label_index: Any) -> Any:
+    def _apply_begin(self, n_vars: int, n_cons: int) -> Any:
         gm = self.solver_model
         gurobi_vars = gm.getVars()
         gurobi_cons = gm.getConstrs()
-        if len(gurobi_vars) != var_label_index.n_active_vars:
+        if len(gurobi_vars) != n_vars:
             raise UnsupportedUpdate("gurobi var count mismatch")
-        if len(gurobi_cons) != con_label_index.n_active_cons:
+        if len(gurobi_cons) != n_cons:
             raise UnsupportedUpdate("gurobi con count mismatch")
         return _GurobiApplyCtx(gm, gurobi_vars, gurobi_cons)
 
@@ -2665,6 +2768,10 @@ class Xpress(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("xpress")
 
+    @classmethod
+    def _license_probe(cls) -> None:
+        xpress.init()
+
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> None:
@@ -2743,37 +2850,29 @@ class Xpress(Solver[None]):
         except AttributeError:  # Fallback to old API
             ctx.chgobjsense(direction)
 
-    def _build_direct(
+    def _new_solver_model(
         self,
-        explicit_coordinate_names: bool = False,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
         **kwargs: Any,
-    ) -> None:
-        model = self.model
-        assert model is not None
+    ) -> xpress.problem:
         self.close()
         self._env_stack = contextlib.ExitStack()
-        problem = self._build_solver_model(
-            model,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
-        )
+        problem = self._build_solver_model(M, names=names, sos=sos)
         self._env_stack.enter_context(problem)
-        self.solver_model = problem
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        return problem
 
     @staticmethod
     def _build_solver_model(
-        model: Model,
-        explicit_coordinate_names: bool = False,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
     ) -> xpress.problem:
         """
-        Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``.
+        Build an ``xpress.problem`` from the matrices ``M`` via ``loadproblem``.
 
         ``loadproblem`` is Xpress' universal native-array entry point loading LP/QP/MIQP
         in a single call; see the parameter reference at
@@ -2781,10 +2880,8 @@ class Xpress(Solver[None]):
         SOS arguments are left ``None`` and sets are added afterwards via ``addSOS`` so
         multi-dim ``add_sos_constraints`` can be grouped natively.
         """
-        model.constraints.sanitize_missings()
         problem = xpress.problem()
 
-        M = model.matrices
         A = M.A
         Q = M.Q
 
@@ -2799,10 +2896,8 @@ class Xpress(Solver[None]):
             rowind = np.empty(0, dtype=np.int64)
             rowcoef = np.empty(0, dtype=float)
 
-        lb = np.asarray(M.lb, dtype=float)
-        ub = np.asarray(M.ub, dtype=float)
-        np.place(lb, np.isneginf(lb), -xpress.infinity)
-        np.place(ub, np.isposinf(ub), xpress.infinity)
+        lb = np.where(np.isneginf(M.lb), -xpress.infinity, M.lb)
+        ub = np.where(np.isposinf(M.ub), xpress.infinity, M.ub)
 
         rowtype: np.ndarray
         rhs: np.ndarray
@@ -2910,16 +3005,14 @@ class Xpress(Solver[None]):
                 refval=None,
             )
 
-        if model.objective.sense == "max":
+        if M.objective_sense == "max":
             try:  # Try new API first (Xpress 9.8+)
                 problem.chgObjSense(xpress.maximize)
             except AttributeError:  # Fallback to old API
                 problem.chgobjsense(xpress.maximize)
 
-        if set_names:
-            print_variable, print_constraint = linopy.io.get_printers_scalar(
-                model, explicit_coordinate_names=explicit_coordinate_names
-            )
+        if names is not None:
+            print_variable, print_constraint = names
             vnames = print_variable(M.vlabels)
             if vnames:
                 try:  # Try new API first (Xpress 9.8+)
@@ -2937,7 +3030,7 @@ class Xpress(Solver[None]):
                 except AttributeError:  # Fallback to old API
                     problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
-        for sos_type, positions, weights in _iter_sos_sets(model):
+        for sos_type, positions, weights in sos:
             problem.addSOS(positions.tolist(), weights.tolist(), type=sos_type)
 
         return problem
@@ -3469,115 +3562,95 @@ class Mosek(Solver[None]):
             sense=self.sense,
         )
 
-    def _build_direct(
+    def _new_solver_model(
         self,
-        explicit_coordinate_names: bool = False,
+        M: Matrices,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
         task: mosek.Task | None = None,
         **kwargs: Any,
-    ) -> None:
-        model = self.model
-        assert model is not None
+    ) -> mosek.Task:
         self.close()
         self._env_stack = contextlib.ExitStack()
         if task is None:
             env = self._env_stack.enter_context(mosek.Env())
             task = self._env_stack.enter_context(env.Task(0, 0))
-        m = self._build_solver_model(
-            model,
-            task,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
-        )
-        self.solver_model = m
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        return self._build_solver_model(M, task, names=names, sos=sos)
 
     @staticmethod
     def _build_solver_model(
-        model: Model,
+        M: Matrices,
         task: mosek.Task,
-        explicit_coordinate_names: bool = False,
         *,
-        set_names: bool,
+        names: Printers | None,
+        sos: list[SosSet],
     ) -> mosek.Task:
-        """Populate an empty MOSEK task with the contents of `model`."""
-        if model.variables.sos:
+        """Populate an empty MOSEK task with the matrices ``M``."""
+        if sos:
             raise NotImplementedError("SOS constraints are not supported by MOSEK.")
-        if model.variables.semi_continuous:
+        if (M.vtypes == "S").any():
             raise NotImplementedError(
                 "Semi-continuous variables are not supported by MOSEK. "
                 "Use a solver that supports them (gurobi, cplex, highs)."
             )
 
-        task.appendvars(model.nvars)
-        task.appendcons(model.ncons)
+        n_vars, n_cons = len(M.vlabels), len(M.clabels)
+        task.appendvars(n_vars)
+        task.appendcons(n_cons)
 
-        M = model.matrices
-
-        if set_names:
-            print_variables, print_constraints = linopy.io.get_printers_scalar(
-                model, explicit_coordinate_names=explicit_coordinate_names
-            )
+        if names is not None:
+            print_variables, print_constraints = names
             labels = print_variables(M.vlabels)
             task.generatevarnames(
                 np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
             )
 
-        bkx = [
-            (
-                (
-                    (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
-                    if ub < np.inf
-                    else mosek.boundkey.lo
-                )
-                if (lb > -np.inf)
-                else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
-            )
-            for (lb, ub) in zip(M.lb, M.ub)
-        ]
-        blx = [b if b > -np.inf else 0.0 for b in M.lb]
-        bux = [b if b < np.inf else 0.0 for b in M.ub]
-        task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+        bk = mosek.boundkey
+        keys = np.array([bk.fr, bk.lo, bk.up, bk.fx, bk.ra], dtype=object)
+        lb_fin = M.lb > -np.inf
+        ub_fin = M.ub < np.inf
+        bkx_code = np.select(
+            [lb_fin & ub_fin & (M.lb < M.ub), lb_fin & ub_fin, lb_fin, ub_fin],
+            [4, 3, 1, 2],
+            default=0,
+        )
+        blx = np.where(lb_fin, M.lb, 0.0)
+        bux = np.where(ub_fin, M.ub, 0.0)
+        task.putvarboundslice(0, n_vars, keys[bkx_code].tolist(), blx, bux)
 
-        if len(model.binaries.labels) + len(model.integers.labels) > 0:
-            idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+        idx = np.flatnonzero(np.isin(M.vtypes, ["B", "I"])).astype(np.int32)
+        if idx.size:
             task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
 
-        if len(model.constraints) > 0:
-            if set_names:
-                names = print_constraints(M.clabels)
-                for i, n in enumerate(names):
-                    task.putconname(i, n)
-            bkc = [
-                (
-                    (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
-                    if s == "<"
-                    else (
-                        (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
-                        if s == ">"
-                        else mosek.boundkey.fx
-                    )
+        if n_cons:
+            if names is not None:
+                cnames = print_constraints(M.clabels)
+                task.generateconnames(
+                    np.arange(0, len(cnames)), "%0", [len(cnames)], None, [0], cnames
                 )
-                for s, b in zip(M.sense, M.b)
-            ]
-            blc = [b if b > -np.inf else 0.0 for b in M.b]
-            buc = [b if b < np.inf else 0.0 for b in M.b]
+            b_lo = M.b > -np.inf
+            b_up = M.b < np.inf
+            leq = M.sense == "<"
+            geq = M.sense == ">"
+            bkc_code = np.select(
+                [leq & b_up, leq, geq & b_lo, geq], [2, 0, 1, 2], default=3
+            )
+            blc = np.where(b_lo, M.b, 0.0)
+            buc = np.where(b_up, M.b, 0.0)
             if M.A is not None:
                 A = M.A.tocsr()
                 task.putarowslice(
-                    0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+                    0, n_cons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
                 )
-                task.putconboundslice(0, model.ncons, bkc, blc, buc)
+                task.putconboundslice(0, n_cons, keys[bkc_code].tolist(), blc, buc)
 
         if M.Q is not None:
             Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
             task.putqobj(Q.row, Q.col, Q.data)
-        task.putclist(list(np.arange(model.nvars)), M.c)
+        task.putclist(np.arange(n_vars, dtype=np.int32), M.c)
 
-        if model.objective.sense == "max":
+        if M.objective_sense == "max":
             task.putobjsense(mosek.objsense.maximize)
         else:
             task.putobjsense(mosek.objsense.minimize)
@@ -4239,35 +4312,40 @@ class cuPDLPx(Solver[None]):
             env=env,
         )
 
-    def _build_direct(self, **kwargs: Any) -> None:
-        model = self.model
-        assert model is not None
-        if model.type in ["QP", "MILP"]:
-            msg = "cuPDLPx does not currently support QP or MILP problems."
-            raise NotImplementedError(msg)
-        if kwargs.get("explicit_coordinate_names"):
+    def _build_direct(
+        self, *, explicit_coordinate_names: bool = False, **kwargs: Any
+    ) -> None:
+        if explicit_coordinate_names:
             warnings.warn(
                 "cuPDLPx does not support named variables/constraints. "
                 "The explicit_coordinate_names parameter is ignored.",
                 UserWarning,
                 stacklevel=2,
             )
-        cu_model = self._build_solver_model(model)
-        self.solver_model = cu_model
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        super()._build_direct(**kwargs)
+
+    def _new_solver_model(
+        self,
+        M: Matrices,
+        *,
+        names: Printers | None,
+        sos: list[SosSet],
+        **kwargs: Any,
+    ) -> cupdlpx.Model:
+        if M.type in ["QP", "MILP"]:
+            msg = "cuPDLPx does not currently support QP or MILP problems."
+            raise NotImplementedError(msg)
+        return self._build_solver_model(M)
 
     @staticmethod
-    def _build_solver_model(model: Model) -> cupdlpx.Model:
-        """Build a cupdlpx.Model that mirrors the linopy `model`."""
-        if model.variables.semi_continuous:
+    def _build_solver_model(M: Matrices) -> cupdlpx.Model:
+        """Build a cupdlpx.Model from the matrices ``M``."""
+        if (M.vtypes == "S").any():
             raise NotImplementedError(
                 "Semi-continuous variables are not supported by cuPDLPx. "
                 "Use a solver that supports them (gurobi, cplex, highs)."
             )
 
-        M = model.matrices
         if M.A is None:
             raise ValueError("Model has no constraints, cannot export to cuPDLPx.")
         A = M.A.tocsr()
@@ -4291,7 +4369,7 @@ class cuPDLPx(Solver[None]):
             variable_upper_bound=M.ub,
         )
 
-        if model.objective.sense == "max":
+        if M.objective_sense == "max":
             cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
 
         return cu_model
@@ -4624,37 +4702,43 @@ class cuOpt(Solver[None]):
         build_kwargs.pop("progress", None)
         self._build_direct(**build_kwargs)
 
-    def _build_direct(self, **kwargs: Any) -> None:
-        model = self.model
-        assert model is not None
-        if model.type in ("MIQP", "IQP"):
-            msg = (
-                "cuOpt does not support quadratic objectives together with "
-                "integer or semi-continuous variables. Use a solver that "
-                "supports MIQP (gurobi, xpress, mosek)."
-            )
-            raise NotImplementedError(msg)
-        if kwargs.get("explicit_coordinate_names"):
+    def _build_direct(
+        self, *, explicit_coordinate_names: bool = False, **kwargs: Any
+    ) -> None:
+        if explicit_coordinate_names:
             warnings.warn(
                 "cuOpt does not support named variables/constraints. "
                 "The explicit_coordinate_names parameter is ignored.",
                 UserWarning,
                 stacklevel=2,
             )
-        self.solver_model = self._build_solver_model(model)
-        self.io_api = "direct"
-        self.sense = model.sense
-        self._cache_model_labels(model)
+        super()._build_direct(**kwargs)
+
+    def _new_solver_model(
+        self,
+        M: Matrices,
+        *,
+        names: Printers | None,
+        sos: list[SosSet],
+        **kwargs: Any,
+    ) -> cuopt.linear_programming.DataModel:
+        if M.type in ("MIQP", "IQP"):
+            msg = (
+                "cuOpt does not support quadratic objectives together with "
+                "integer or semi-continuous variables. Use a solver that "
+                "supports MIQP (gurobi, xpress, mosek)."
+            )
+            raise NotImplementedError(msg)
+        return self._build_solver_model(M)
 
     @staticmethod
-    def _build_solver_model(model: Model) -> cuopt.linear_programming.DataModel:
-        """Build a cuopt DataModel that mirrors the linopy `model`."""
-        M = model.matrices
+    def _build_solver_model(M: Matrices) -> cuopt.linear_programming.DataModel:
+        """Build a cuopt DataModel from the matrices ``M``."""
         # Always transform to minimize problem: `min -obj`. Don't use cuOpt's
         # `set_maximize(True)`, whose presolve path returns negated duals
         # (see class Notes). `_solve` flips back the sign when needed
         # (negates objective, duals and MIP bound - primal untouched).
-        sign = -1.0 if model.objective.sense == "max" else 1.0
+        sign = -1.0 if M.objective_sense == "max" else 1.0
 
         lower = np.where(
             np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
