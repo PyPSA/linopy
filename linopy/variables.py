@@ -1458,7 +1458,7 @@ class Variable:
 
     assign_coords = varwrap(assign_flat_coords)
 
-    assign = varwrap(assign_fields)
+    assign = varwrap(assign_fields)  # type: ignore[arg-type]
 
     broadcast_like = varwrap(Dataset.broadcast_like)
 
