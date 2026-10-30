@@ -138,6 +138,12 @@ def test_matrices_sol_aligned_with_vlabels() -> None:
     np.testing.assert_array_equal(M.vlabels, [0, 2, 3, 4, 5])
     np.testing.assert_array_equal(M.sol, [1.0, 3.0, 4.0, 5.0, 6.0])
 
+    stale = m.matrices
+    z = m.add_variables(coords=[i], name="z")
+    z.solution = xr.DataArray([7.0, 8.0, 9.0], coords=[i])
+    with pytest.raises(ValueError, match="expected 5"):
+        stale.sol
+
 
 @pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
 def test_matrices_scaled_masked_mixed_signs(sparse: bool) -> None:

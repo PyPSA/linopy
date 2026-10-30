@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
+from linopy.csr import repeat_per_row
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
@@ -568,8 +569,7 @@ class _DiffBuilder:
         if not (skip_coef_compare or new_buf.data is base_buf.data):
             data_diff = new_buf.data != base_buf.data
             if data_diff.any():
-                nnz_per_row = np.diff(new_buf.indptr)
-                row_of_nnz = np.repeat(np.arange(n_rows), nnz_per_row)
+                row_of_nnz = repeat_per_row(np.arange(n_rows), new_buf.indptr)
                 changed_rows = np.unique(row_of_nnz[data_diff])
 
         rhs_idx = None

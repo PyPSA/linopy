@@ -17,7 +17,7 @@ import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
-from linopy.csr import index_dtype
+from linopy.csr import index_dtype, keep_entries, repeat_per_row
 
 if TYPE_CHECKING:
     from linopy.common import VariableLabelIndex
@@ -36,20 +36,29 @@ class _RowBlock(NamedTuple):
     nnz: int
     rhs: ndarray
     sign: ndarray
-    row_scaling: ndarray | None
+    scaling: ndarray
 
 
-def _row_block(con: Constraint, label_index: VariableLabelIndex) -> _RowBlock:
-    active = con.active_row_mask()
+def _non_unit(scaling: ndarray) -> ndarray | None:
+    """``scaling`` where any factor differs from 1, else None."""
+    return None if (scaling == 1).all() else scaling
+
+
+def _concat(arrays: list[ndarray]) -> ndarray:
+    return np.concatenate(arrays) if arrays else np.empty(0, dtype=float)
+
+
+def _row_block(
+    con: Constraint, active: ndarray, label_index: VariableLabelIndex
+) -> _RowBlock:
     store = con.lhs._store
-    scaling = con.scaling.values.ravel()[active]
     return _RowBlock(
         partial(store.positional_csr, label_index, active, con.name),
         int(active.sum()),
         store.nnz(active),
         con.rhs.values.ravel()[active],
         con.sign.values.ravel()[active].astype("U1"),
-        None if (scaling == 1).all() else scaling,
+        con.scaling.values.ravel()[active],
     )
 
 
@@ -93,20 +102,19 @@ def _stack(
             source.indptr,
         )
         if count < source.nnz:
-            keep = block_data != 0
-            block_data, block_indices = block_data[keep], block_indices[keep]
-            block_indptr = np.concatenate([[0], np.cumsum(keep)])[block_indptr]
+            block_data, block_indices, block_indptr = keep_entries(
+                block_data, block_indices, block_indptr, block_data != 0
+            )
         rows = slice(row, row + source.shape[0])
         entries = slice(pos, pos + count)
-        if block.row_scaling is None:
+        row_scaling = _non_unit(block.scaling)
+        if row_scaling is None:
             data[entries] = block_data
             b[rows] = block.rhs
         else:
-            row_counts = np.diff(block_indptr)
-            np.multiply(
-                block_data, np.repeat(block.row_scaling, row_counts), out=data[entries]
-            )
-            np.multiply(block.rhs, block.row_scaling, out=b[rows])
+            per_row = repeat_per_row(row_scaling, block_indptr)
+            np.multiply(block_data, per_row, out=data[entries])
+            np.multiply(block.rhs, row_scaling, out=b[rows])
         if col_scaling is not None:
             data[entries] /= col_scaling[block_indices]
         indices[entries] = block_indices
@@ -253,7 +261,7 @@ def _build_vars(m: Model) -> _VarArrays:
         ub[cols] = var.upper.values.ravel()[mask]
         pos = cols.stop
 
-    if not (var_scaling == 1).all():
+    if _non_unit(var_scaling) is not None:
         lb *= var_scaling
         ub *= var_scaling
     return _VarArrays(
@@ -261,21 +269,19 @@ def _build_vars(m: Model) -> _VarArrays:
     )
 
 
-def _build_cons(m: Model, var_scaling: ndarray) -> _ConArrays:
+def _build_cons(m: Model, col_scaling: ndarray | None) -> _ConArrays:
     label_index = m.variables.label_index
     label_to_pos = label_index.label_to_pos
-    col_scaling = None if (var_scaling == 1).all() else var_scaling
 
     regular, indicator = [], []
     binvar, binval = [], []
-    scalings = []
     for c in m.constraints.data.values():
-        if not c.is_indicator:
-            regular.append(_row_block(c, label_index))
-            scalings.append(c.scaling.values.ravel()[c.active_row_mask()])
-            continue
         active = c.active_row_mask()
-        indicator.append(_row_block(c, label_index))
+        block = _row_block(c, active, label_index)
+        if not c.is_indicator:
+            regular.append(block)
+            continue
+        indicator.append(block)
         var_labels, val = _indicator_rows(c, active)
         binvar.append(label_to_pos[var_labels])
         binval.append(val)
@@ -287,9 +293,7 @@ def _build_cons(m: Model, var_scaling: ndarray) -> _ConArrays:
     label_dtype = m._dtypes["labels"]
     return _ConArrays(
         clabels=m.constraints.label_index.clabels,
-        con_scaling=(
-            np.concatenate(scalings) if scalings else np.empty(0, dtype=float)
-        ),
+        con_scaling=_concat([block.scaling for block in regular]),
         A=A,
         b=b,
         sense=sense,
@@ -340,7 +344,7 @@ class MatrixAccessor(Matrices):
         c, Q = _objective(model, variables["vlabels"], variables["var_scaling"])
         super().__init__(
             **variables,
-            **_build_cons(model, variables["var_scaling"]),
+            **_build_cons(model, _non_unit(variables["var_scaling"])),
             c=c,
             Q=Q,
             objective_scaling=model.objective.scaling,
@@ -352,15 +356,16 @@ class MatrixAccessor(Matrices):
         """Solution values aligned with vlabels."""
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
-        m = self._parent
-        result = np.full(len(self.vlabels), np.nan)
-        label_index = m.variables.label_index
-        label_to_pos = label_index.label_to_pos
-        for _, var in m.variables.items():
-            labels = var.labels.values.ravel()
-            mask = labels != -1
-            positions = label_to_pos[labels[mask]]
-            result[positions] = var.solution.values.ravel()[mask]
+        values = [
+            var.solution.values.ravel()[var.labels.values.ravel() != -1]
+            for _, var in self._parent.variables.items()
+        ]
+        result = _concat(values)
+        if result.size != len(self.vlabels):
+            raise ValueError(
+                f"Solution holds {result.size} active values, expected "
+                f"{len(self.vlabels)} aligned with vlabels."
+            )
         return result
 
     @cached_property

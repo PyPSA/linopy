@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, final
 import numpy as np
 import pandas as pd
 import scipy.sparse
+from numpy.typing import ArrayLike, DTypeLike
 from xarray import DataArray, Dataset, broadcast
 
 from linopy.common import lookup_table
@@ -394,8 +395,7 @@ class CSRStore(Store):
         shape = (vars_.size, model._xCounter)
         dtype = index_dtype(vars_.size, shape, model)
         present = vars_ != -1
-        indptr = np.zeros(vars_.size + 1, dtype=dtype)
-        np.cumsum(present, out=indptr[1:])
+        indptr = indptr_from_counts(present, dtype)
         if not present.all():
             vars_, coeffs = vars_[present], coeffs[present]
         indices = vars_.astype(dtype, copy=False)
@@ -540,7 +540,7 @@ class CSRStore(Store):
         return np.diff(self.csr.indptr) > 0
 
     def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        cells = np.repeat(np.arange(self.n_cells), np.diff(self.csr.indptr))
+        cells = repeat_per_row(np.arange(self.n_cells), self.csr.indptr)
         keep = self.live_terms()
         return cells[keep], self.csr.indices[keep], self.csr.data[keep]
 
@@ -607,7 +607,7 @@ class CSRStore(Store):
         Mask over the stored terms: the cell is present and the coefficient
         is nonzero.
         """
-        present = np.repeat(~np.isnan(self.const), np.diff(self.csr.indptr))
+        present = repeat_per_row(~np.isnan(self.const), self.csr.indptr)
         return present & (self.csr.data != 0)
 
     def prune(self, tol: float = 0.0) -> CSRStore:
@@ -641,7 +641,7 @@ class CSRStore(Store):
         """Apply ``op`` with a scalar or per-cell ``factor`` to every coefficient."""
         per_term = factor
         if np.ndim(factor):
-            per_term = np.repeat(factor, np.diff(self.csr.indptr))
+            per_term = repeat_per_row(factor, self.csr.indptr)
         with np.errstate(divide="ignore", invalid="ignore"):
             data = op(self.csr.data, per_term)
         check_arithmetic_nan(data, op, per_term)
@@ -688,7 +688,8 @@ class CSRStore(Store):
         if not counts[cells].any():
             return self
         keep = np.repeat(~cells, counts)
-        indptr = np.concatenate([[0], np.cumsum(np.where(cells, 0, counts))])
+        kept = np.where(cells, 0, counts)
+        indptr = indptr_from_counts(kept, self.csr.indptr.dtype)
         csr = scipy.sparse.csr_array(
             (self.csr.data[keep], self.csr.indices[keep], indptr),
             shape=self.csr.shape,
@@ -942,6 +943,26 @@ def index_dtype(nnz: int, shape: tuple[int, ...], model: Model) -> np.dtype:
     return dtype if max(nnz, *shape) <= np.iinfo(dtype).max else np.dtype(np.int64)
 
 
+def indptr_from_counts(counts: np.ndarray, dtype: DTypeLike) -> np.ndarray:
+    """Row pointers of rows holding ``counts`` entries, in ``dtype``."""
+    indptr = np.zeros(counts.size + 1, dtype=dtype)
+    np.cumsum(counts, out=indptr[1:])
+    return indptr
+
+
+def repeat_per_row(values: ArrayLike, indptr: np.ndarray) -> np.ndarray:
+    """``values``, one per row, repeated for every entry of its row."""
+    return np.repeat(values, np.diff(indptr))
+
+
+def keep_entries(
+    data: np.ndarray, indices: np.ndarray, indptr: np.ndarray, keep: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """CSR arrays holding only the entries in the mask ``keep``, rows unchanged."""
+    kept = indptr_from_counts(keep, indptr.dtype)
+    return data[keep], indices[keep], kept[indptr]
+
+
 def column_compacted_matmul(
     left: scipy.sparse.csr_array, right: scipy.sparse.csr_array
 ) -> scipy.sparse.csr_array:
@@ -1055,7 +1076,7 @@ def _label_ordered(csr: scipy.sparse.csr_array) -> scipy.sparse.csr_array:
     """
     if _is_sorted(csr, strict=False):
         return csr
-    rows = np.repeat(np.arange(csr.shape[0], dtype=np.int64), np.diff(csr.indptr))
+    rows = repeat_per_row(np.arange(csr.shape[0], dtype=np.int64), csr.indptr)
     order = np.argsort(rows * csr.shape[1] + csr.indices, kind="stable")
     arrays = (csr.data[order], csr.indices[order], csr.indptr)
     return scipy.sparse.csr_array(arrays, shape=csr.shape)
@@ -1093,14 +1114,13 @@ def csr_to_term_arrays(
     output row ``row_positions[i]`` of an ``n_rows``-row output, for a CSR that
     holds only the active rows of a larger grid.
     """
-    counts = np.diff(csr.indptr)
     n_rows = csr.shape[0] if n_rows is None else n_rows
     vars_ = np.full((n_rows, nterm), -1, dtype=label_dtype)
     coeffs = np.full((n_rows, nterm), np.nan, dtype=coeff_dtype)
     if csr.nnz:
         positions = np.arange(csr.shape[0]) if row_positions is None else row_positions
-        rows = np.repeat(positions, counts)
-        cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
+        rows = repeat_per_row(positions, csr.indptr)
+        cols = np.arange(csr.nnz) - repeat_per_row(csr.indptr[:-1], csr.indptr)
         vars_[rows, cols] = csr.indices
         coeffs[rows, cols] = csr.data
     return vars_, coeffs

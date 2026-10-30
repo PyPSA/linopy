@@ -26,6 +26,7 @@ from xarray.indexes import PandasIndex
 
 from linopy.alignment import as_dataarray
 from linopy.common import lookup_table
+from linopy.csr import indptr_from_counts, repeat_per_row
 from linopy.matrices import Matrices
 
 if TYPE_CHECKING:
@@ -231,7 +232,7 @@ class MatrixWindow:
         position = lookup_table(cols, mat.vlabels.size, dtype=A.indices.dtype)
         mapped = position[A.indices]
         inside = mapped >= 0
-        entry_rows = np.repeat(np.arange(rows.size), np.diff(A.indptr))
+        entry_rows = repeat_per_row(np.arange(rows.size), A.indptr)
         outer_rows = entry_rows[~inside]
         outer_data = A.data[~inside]
         fixed = self._fixed(fix, A.indices[~inside])
@@ -255,8 +256,7 @@ class MatrixWindow:
         _check_dropped(
             rhs[~keep], mat.sense[dropped], magnitude[~keep], mat.clabels[dropped]
         )
-        indptr = np.zeros(keep.sum() + 1, dtype=A.indptr.dtype)
-        np.cumsum(counts[keep], out=indptr[1:])
+        indptr = indptr_from_counts(counts[keep], A.indptr.dtype)
         inner = scipy.sparse.csr_array(
             (A.data[inside], mapped[inside], indptr), shape=(indptr.size - 1, cols.size)
         )
