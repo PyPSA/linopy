@@ -11,6 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from types import MappingProxyType
@@ -123,6 +124,7 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
+    from linopy.restrict.window import WindowModel
     from linopy.spec.api import SpecLike
 
 logger = logging.getLogger(__name__)
@@ -2434,6 +2436,76 @@ class Model:
             *self.expressions.data.values(),
         ]
 
+    def restrict(
+        self,
+        fix: Mapping[str, Any] | None = None,
+        **selection: Any,
+    ) -> WindowModel:
+        """
+        Build a matrix-backed window of the model by label selection.
+
+        A window is a slice of the model's flattened matrices: the parent is
+        built once, and each selection picks the rows and columns of the
+        selected labels. The selection follows :meth:`xarray.Dataset.sel`
+        semantics per container: labels, lists, slices and scalars work, along
+        one or several dimensions, and containers without a selected dimension
+        stay whole. Terms whose variables fall outside the window are folded
+        into the right-hand side at their actual coefficient when ``fix``
+        supplies their values. Rows that lose every term are dropped when their
+        folded right-hand side satisfies their sign, and raise otherwise.
+
+        The returned :class:`~linopy.restrict.WindowModel` exposes ``matrices``
+        directly, so solving never rebuilds a container. Variables and
+        constraints are materialised only when their values are read.
+
+        Parameters
+        ----------
+        fix : mapping, optional
+            Fixed values for out-of-window variables, keyed by variable name.
+            Values are aligned by coordinate label and broadcast over the
+            variable's dimensions they lack; every coordinate of the variable
+            must be present. ``NaN`` counts as unfixed. Values for in-window
+            variables are ignored.
+        **selection : Any
+            Dimensions and the labels of the window, e.g.
+            ``snapshot=sns[:24]`` or ``snapshot=slice(t0, t1), bus=["a"]``.
+
+        Returns
+        -------
+        WindowModel
+            The window, with its matrices computed.
+
+        Raises
+        ------
+        RestrictionError
+            If a dimension does not exist, a carrier does not contain the
+            selected labels, the fixed values do not match a variable's
+            coordinates, a cut coupling has no fixed values, or a fully folded
+            row is unsatisfiable.
+        NotImplementedError
+            If the model has indicators, a quadratic objective or native SOS
+            constraints.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import linopy
+        >>>
+        >>> sns = pd.date_range("2026-01-01", periods=4, freq="h", name="snapshot")
+        >>> m = linopy.Model()
+        >>> storage = m.add_variables(0, 10, coords=[sns], name="storage")
+        >>> flow = m.add_variables(0, 100, coords=[sns], name="flow")
+        >>> _ = m.add_constraints(storage - flow <= 0, name="cap")
+        >>> _ = m.add_objective(flow.sum(), sense="min")
+        >>>
+        >>> window = m.restrict(snapshot=sns[:2])
+        >>> window.matrices.A.shape
+        (2, 4)
+        """
+        from linopy.restrict import restrict_model
+
+        return restrict_model(self, fix, selection)
+
     def assign_result(
         self,
         result: Result,
@@ -2462,10 +2534,17 @@ class Model:
         if solver is not None:
             self.solver = solver
 
-        result.info()
+        # Log in model units; ``result`` itself stays in solver units.
+        scaling = self.objective.scaling
+        solution, report = result.solution, result.report
+        if solution is not None:
+            solution = replace(solution, objective=solution.objective / scaling)
+        if report is not None and report.dual_bound is not None:
+            report = replace(report, dual_bound=report.dual_bound / scaling)
+        replace(result, solution=solution, report=report).info()
 
-        if result.solution is not None:
-            self.objective._value = result.solution.objective / self.objective.scaling
+        if solution is not None:
+            self.objective._value = solution.objective
 
         status_value = result.status.status.value
         termination_condition = result.status.termination_condition.value

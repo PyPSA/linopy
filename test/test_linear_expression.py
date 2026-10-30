@@ -640,6 +640,47 @@ def test_linear_expression_multiplication(
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Sparse \\(CSR\\) backing densified:linopy.PerformanceWarning"
+)
+def test_constant_expression_times_multi_term_expression(backend: Model) -> None:
+    # A constant LinearExpression acts like a scalar factor on either side (#1055).
+    x = backend.add_variables(name="x")
+    y = backend.add_variables(name="y")
+    c = LinearExpression(3, backend)
+    expr = 2 * x + 3 * y
+
+    left = c * expr
+    assert isinstance(left, LinearExpression)
+    assert_linequal(left, expr * c)
+    assert_linequal(left, 3 * expr)
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Sparse \\(CSR\\) backing densified:linopy.PerformanceWarning"
+)
+def test_one_term_expression_times_multi_term_expression(backend: Model) -> None:
+    # A one-term factor gives the same quadratic expression on either side (#1055).
+    x = backend.add_variables(name="x")
+    y = backend.add_variables(name="y")
+    one_term = 4 * x + 3
+    expr = 2 * x + 3 * y
+
+    left = one_term * expr
+    assert isinstance(left, QuadraticExpression)
+    assert_quadequal(left, expr * one_term)
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Sparse \\(CSR\\) backing densified:linopy.PerformanceWarning"
+)
+def test_multi_term_times_multi_term_expression_raises(backend: Model) -> None:
+    x = backend.add_variables(name="x")
+    y = backend.add_variables(name="y")
+    with pytest.raises(TypeError):
+        (x + y) * (x + y)
+
+
 def test_matmul_variable_and_const(x: Variable, y: Variable) -> None:
     const = np.array([1, 2])
     expr = x @ const
