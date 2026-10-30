@@ -141,6 +141,7 @@ This package is published under MIT license.
    restrict
    numerical-scaling
    testing-framework
+   plasmo-benders
 
 .. toctree::
    :hidden:
