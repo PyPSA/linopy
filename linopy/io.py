@@ -821,7 +821,11 @@ def to_file(
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
         h = solvers.Highs._build_solver_model(
-            m, explicit_coordinate_names=explicit_coordinate_names, set_names=True
+            m.matrices,
+            names=get_printers_scalar(
+                m, explicit_coordinate_names=explicit_coordinate_names
+            ),
+            sos=list(solvers._iter_sos_sets(m)),
         )
         h.writeModel(str(fn))
     else:

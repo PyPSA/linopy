@@ -9,11 +9,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
+from linopy.csr import repeat_per_row
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
     ModelSnapshot,
     StructuralKey,
+    VarKind,
     _coord_snapshot,
     _extract_con_buffers,
     _extract_var_buffers,
@@ -21,12 +23,23 @@ from linopy.persistent.snapshot import (
 )
 
 if TYPE_CHECKING:
+    import scipy.sparse
     from numpy.typing import DTypeLike
 
     from linopy.common import ConstraintLabelIndex, VariableLabelIndex
     from linopy.constraints import Constraint
+    from linopy.matrices import Matrices
     from linopy.model import Model
     from linopy.variables import Variable
+
+
+#: Matrix column kinds (``vtypes``) mapped onto the persistent diff's enum.
+_VAR_KIND = {
+    "C": VarKind.CONTINUOUS,
+    "B": VarKind.BINARY,
+    "I": VarKind.INTEGER,
+    "S": VarKind.SEMI_CONTINUOUS,
+}
 
 
 class RebuildReason(enum.Enum):
@@ -55,6 +68,12 @@ def _cat(parts: list[np.ndarray], dtype: DTypeLike) -> np.ndarray:
     if not parts:
         return np.empty(0, dtype=dtype)
     return np.concatenate(parts).astype(dtype, copy=False)
+
+
+def _window_A(window: Matrices) -> scipy.sparse.csr_array:
+    if window.A is None:
+        raise ValueError("Matrix windows require a constraint matrix A.")
+    return window.A
 
 
 def _same(a: np.ndarray, b: np.ndarray) -> bool:
@@ -143,7 +162,7 @@ class ModelDiff:
     #: buffers the diff walk already extracted — adopting it after a
     #: successful apply replaces a full re-capture. Note: holding a diff
     #: therefore pins all container buffers for its lifetime.
-    snapshot: ModelSnapshot
+    snapshot: ModelSnapshot | None
 
     @property
     def is_empty(self) -> bool:
@@ -347,6 +366,84 @@ class ModelDiff:
             ignore_dims=ignore_dims,
         )
 
+    @staticmethod
+    def same_window_pattern(previous: Matrices, current: Matrices) -> bool:
+        """Whether two matrix windows share the shape and sparsity of ``A``."""
+        before, after = _window_A(previous), _window_A(current)
+        return (
+            before.shape == after.shape
+            and np.array_equal(before.indptr, after.indptr)
+            and np.array_equal(before.indices, after.indices)
+        )
+
+    @classmethod
+    def from_windows(cls, previous: Matrices, current: Matrices) -> ModelDiff:
+        """
+        Delta between two matrix windows sharing the sparsity pattern of ``A``.
+
+        A rolling-horizon window is already flat, so the difference is a set of
+        changed bound, rhs, cost and coefficient entries. Building it here lets
+        the window path reuse :meth:`Solver.apply_update` and every backend's
+        in-place hooks, instead of a parallel update implementation.
+        """
+        if not cls.same_window_pattern(previous, current):
+            raise ValueError("Matrix windows differ in the sparsity pattern of A.")
+        columns = np.flatnonzero(
+            (current.lb != previous.lb) | (current.ub != previous.ub)
+        )
+        rows = np.flatnonzero(current.b != previous.b)
+        cost = np.flatnonzero(current.c != previous.c)
+
+        A = _window_A(current)
+        changed = np.flatnonzero(A.data != _window_A(previous).data)
+        changed_rows = np.unique(np.searchsorted(A.indptr, changed, side="right") - 1)
+        n_coef_updates = int(np.diff(A.indptr)[changed_rows].sum())
+        coef_deltas: list[_CoefDelta] = []
+        if changed_rows.size:
+            buffer = ContainerConBuffers(
+                indptr=A.indptr,
+                indices=A.indices,
+                data=A.data,
+                rhs=current.b,
+                sign=current.sense,
+                active_labels=np.empty(0, dtype=np.int64),
+            )
+            coef_deltas = [
+                _CoefDelta(buffer, changed_rows, changed_rows, n_coef_updates)
+            ]
+
+        sign_changed = np.flatnonzero(current.sense != previous.sense)
+
+        types = np.flatnonzero(current.vtypes != previous.vtypes)
+        kinds = np.array(
+            [_VAR_KIND[kind] for kind in current.vtypes[types]], dtype=object
+        )
+
+        return cls(
+            var_bounds_indices=columns,
+            var_bounds_lower=current.lb[columns],
+            var_bounds_upper=current.ub[columns],
+            var_type_positions=types,
+            var_type_kinds=kinds,
+            coef_deltas=coef_deltas,
+            n_coef_updates=n_coef_updates,
+            con_rhs_indices=rows,
+            con_rhs_values=current.b[rows],
+            con_rhs_signs=current.sense[rows],
+            con_sign_indices=sign_changed,
+            con_sign_values=current.sense[sign_changed],
+            obj_c_indices=cost if cost.size else None,
+            obj_c_values=current.c[cost] if cost.size else None,
+            obj_sense=(
+                current.objective_sense
+                if current.objective_sense != previous.objective_sense
+                else None
+            ),
+            var_slices={},
+            con_slices={},
+            snapshot=None,
+        )
+
 
 class _DiffBuilder:
     """Accumulates per-container deltas and finalizes them into a ModelDiff."""
@@ -472,8 +569,7 @@ class _DiffBuilder:
         if not (skip_coef_compare or new_buf.data is base_buf.data):
             data_diff = new_buf.data != base_buf.data
             if data_diff.any():
-                nnz_per_row = np.diff(new_buf.indptr)
-                row_of_nnz = np.repeat(np.arange(n_rows), nnz_per_row)
+                row_of_nnz = repeat_per_row(np.arange(n_rows), new_buf.indptr)
                 changed_rows = np.unique(row_of_nnz[data_diff])
 
         rhs_idx = None
