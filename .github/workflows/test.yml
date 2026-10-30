@@ -82,7 +82,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         python -m pip install uv
-        uv pip install --system "$(ls dist/*.whl)[dev,solvers,oetc,spec]"
+        uv pip install --system "$(ls dist/*.whl)[dev,solvers,spec]"
 
     - name: Fetch mathspec examples
       if: matrix.python-version != '3.11'
