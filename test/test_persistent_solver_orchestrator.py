@@ -121,9 +121,7 @@ def test_unmutated_resolve_diff_is_empty(model: Model) -> None:
 class FakePersistentSolver(FakeSolver):
     supports_persistent_update = True
 
-    def apply_update(
-        self, diff: ModelDiff, var_label_index: Any, con_label_index: Any
-    ) -> None:
+    def apply_update(self, diff: ModelDiff, n_vars: int, n_cons: int) -> None:
         return None
 
 
@@ -201,11 +199,11 @@ def test_update_apply_false_does_not_block_running_solve(
 def test_preview_detects_raw_mutation_apply_skips_it(model: Model) -> None:
     """
     Pins the documented preview/apply asymmetry for unsupported raw
-    ``.values[...]`` coefficient mutations on the build-time model.
+    ``.values`` coefficient mutations on the build-time model.
     """
     s = _built_persistent(model)
     c = model.constraints["c1"]
-    c.coeffs.values[...] = c.coeffs.values * 2
+    c.coeffs.variable.values = c.coeffs.values * 2
     assert c._coef_dirty is False
 
     preview = s.update(model, apply=False)

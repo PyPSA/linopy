@@ -60,6 +60,11 @@ Inspecting a model
    model.Model.type
    model.Model.is_linear
    model.Model.is_quadratic
+   model.Model.sparse
+   model.Model.store_cls
+
+The backing stores are internal; ``Model.store_cls`` and
+``LinearExpression.is_sparse`` are the public entry points.
 
 Modifying a model
 -----------------
@@ -73,6 +78,7 @@ Modifying a model
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.assign_coords
+   model.Model.restrict
    model.Model.copy
    model.Model.apply_sos_reformulation
    model.Model.undo_sos_reformulation
@@ -115,6 +121,21 @@ IO
    model.Model.to_file
    model.Model.to_netcdf
    io.read_netcdf
+
+Building from specs
+-------------------
+
+Build a model from a `mathspec <https://mathspec.readthedocs.io>`__ YAML
+program attached to data, and read its named expressions as functions of the
+spec, the model and the data. Requires ``pip install
+"linopy[spec]"`` (Python >= 3.12). See :doc:`spec-data`.
+
+.. autosummary::
+   :toctree: generated/
+
+   model.Model.from_spec
+   spec.evaluate
+   spec.SpecDataError
 
 
 Variable
@@ -279,6 +300,8 @@ Operations
    expressions.LinearExpression.where
    expressions.LinearExpression.groupby
    expressions.LinearExpression.rolling
+   expressions.LinearExpression.simplify
+   expressions.LinearExpression.densify_terms
 
 Structure
 ---------
@@ -292,6 +315,7 @@ Structure
    expressions.LinearExpression.const
    expressions.LinearExpression.nterm
    expressions.LinearExpression.has_terms
+   expressions.LinearExpression.is_sparse
 
 Conversion
 ----------
@@ -356,8 +380,10 @@ Post-solve access
 Constraint
 ==========
 
-Subclass of ``xarray.DataArray`` carrying labels for a multi-dimensional
-constraint.
+A multi-dimensional constraint ``lhs sign rhs`` with labels. Its lhs holds a
+dense store, or in a sparse model (``Model(sparse=True)``) a memory-efficient
+CSR store; ``to_sparse`` and ``to_dense`` convert it. See the
+:doc:`creating-constraints` and :doc:`sparse-models` guides for usage.
 
 .. autosummary::
    :toctree: generated/
@@ -376,19 +402,23 @@ Structure
    constraints.Constraint.scaling
    constraints.Constraint.coeffs
    constraints.Constraint.vars
+   constraints.Constraint.ncons
+   constraints.Constraint.nterm
+   constraints.Constraint.labels
 
 Modification
 ------------
 
-``Constraint.update`` is the canonical mutation API. The legacy ``lhs`` /
-``sign`` / ``rhs`` / ``coeffs`` / ``vars`` setters still forward to
-``update`` but emit a ``DeprecationWarning`` and will be removed in a
-future release.
+``Constraint.update`` is the canonical mutation API.
 
 .. autosummary::
    :toctree: generated/
 
    constraints.Constraint.update
+   constraints.Constraint.soften
+   constraints.Constraint.sanitize_zeros
+   constraints.Constraint.sanitize_infinities
+   constraints.Constraint.sanitize_missings
 
 Post-solve access
 -----------------
@@ -405,50 +435,17 @@ Conversion
    :toctree: generated/
 
    constraints.Constraint.to_polars
+   constraints.Constraint.to_sparse
+   constraints.Constraint.to_dense
+   constraints.Constraint.to_matrix
 
-
-CSRConstraint
-=============
-
-Memory-efficient, immutable constraint representation backed by a scipy
-CSR sparse matrix. Opt in via ``Model(sparse=True)`` or
-``Model.add_constraints(..., freeze=True)``. See the
-:doc:`creating-constraints` guide for usage.
+Construction
+------------
 
 .. autosummary::
    :toctree: generated/
 
-   constraints.CSRConstraint
-
-Structure
----------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.coeffs
-   constraints.CSRConstraint.vars
-   constraints.CSRConstraint.sign
-   constraints.CSRConstraint.rhs
-   constraints.CSRConstraint.scaling
-   constraints.CSRConstraint.ncons
-   constraints.CSRConstraint.nterm
-
-Post-solve access
------------------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.dual
-
-Conversion
-----------
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint.to_polars
+   constraints.Constraint.from_dataset
 
 
 Constraints
@@ -683,6 +680,38 @@ Utilities
    align
    options
    ABSENT
+   from_long
+   Relation
+   Relation.group_of
+   Relation.members
+   Relation.groups
+
+``options`` holds these keys:
+
+- ``display_max_rows``, ``display_max_terms``: size of the printed repr.
+- ``warn_on_densify``: the conversion notice, a ``PerformanceWarning`` when
+  a sparse (CSR) backing is converted to dense or a dense operand is
+  converted to sparse for a merge with a sparse one. ``None`` (default)
+  warns in a sparse model, ``True`` always warns, ``False`` never warns.
+  Only implicit conversions warn; ``Constraint.to_dense()`` and
+  ``Constraint.to_sparse()`` never do. See :doc:`sparse-models`.
+
+
+Testing
+=======
+
+Assertion helpers for comparing linopy objects in tests.
+
+.. autosummary::
+   :toctree: generated/
+
+   testing.assert_varequal
+   testing.assert_linequal
+   testing.assert_exprequal
+   testing.assert_quadequal
+   testing.assert_conequal
+   testing.assert_model_equal
+   testing.assert_equivalent
 
 
 Warnings
