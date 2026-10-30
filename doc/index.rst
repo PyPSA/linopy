@@ -138,6 +138,7 @@ This package is published under MIT license.
 
    sos-constraints
    piecewise-linear-constraints
+   restrict
    numerical-scaling
    testing-framework
 
