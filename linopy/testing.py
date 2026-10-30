@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
+import pandas as pd
+import scipy.sparse
 import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
-from linopy.constraints import ConstraintBase, _con_unwrap
+from linopy.constraints import Constraint, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
+
+if TYPE_CHECKING:
+    from mathspec import program as ms
+
+    from linopy.spec.api import SpecLike
 
 
 def _align_dim_order(target: xr.Dataset, other: xr.Dataset) -> xr.Dataset:
@@ -63,6 +72,40 @@ def assert_linequal(
     return assert_equal(a_ds, _align_dim_order(a_ds, b_ds))
 
 
+def _cell_matrix(expr: LinearExpression, n_vars: int) -> scipy.sparse.csr_array:
+    """Per-cell term matrix with duplicate labels summed and zeros pruned."""
+    cells, vars_, coeffs = expr._store.terms()
+    shape = (int(expr.const.size), n_vars)
+    matrix = scipy.sparse.coo_array((coeffs, (cells, vars_)), shape=shape).tocsr()
+    matrix.eliminate_zeros()
+    return matrix
+
+
+def assert_equivalent(a: LinearExpression, b: LinearExpression) -> None:
+    """
+    Assert that two linear expressions are equivalent independently of their
+    backing (dense or sparse) and term layout.
+
+    Compares the coordinates including auxiliary ones, the dimension order,
+    the absence mask, the constants and the per-cell term matrix after
+    summing duplicate variables and dropping zero coefficients. ``nterm``
+    and the term order are ignored. Never densifies a sparse operand.
+    """
+    assert isinstance(a, LinearExpression)
+    assert isinstance(b, LinearExpression)
+    xr.testing.assert_identical(
+        xr.Dataset(coords=a.coords), xr.Dataset(coords=b.coords)
+    )
+    assert a.coord_dims == b.coord_dims
+    xr.testing.assert_identical(a.isnull(), b.isnull())
+    xr.testing.assert_allclose(a.const, b.const)
+    n_vars = max(a.model._xCounter, b.model._xCounter)
+    got, want = _cell_matrix(a, n_vars), _cell_matrix(b, n_vars)
+    np.testing.assert_array_equal(got.indptr, want.indptr)
+    np.testing.assert_array_equal(got.indices, want.indices)
+    np.testing.assert_allclose(got.data, want.data)
+
+
 def assert_quadequal(
     a: LinearExpression | QuadraticExpression, b: LinearExpression | QuadraticExpression
 ) -> None:
@@ -90,7 +133,7 @@ def assert_exprequal(
         assert_linequal(a, b)
 
 
-def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -> None:
+def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
     """
     Assert that two constraints are equal.
 
@@ -101,12 +144,14 @@ def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -
         b: Constraint
             The second constraint.
         strict: bool
-            Whether to compare the constraints strictly. If not, only compare mathematically relevant parts.
+            Whether to compare the constraints strictly. If not, only compare
+            mathematically relevant parts: the lhs by :func:`assert_equivalent`,
+            independently of its store, and the sign and rhs.
     """
     if strict:
         assert_equal(_con_unwrap(a), _con_unwrap(b))
     else:
-        assert_linequal(a.lhs, b.lhs)
+        assert_equivalent(a.lhs, b.lhs)
         assert_equal(a.sign, b.sign)
         assert_equal(a.rhs, b.rhs)
 
@@ -138,3 +183,73 @@ def assert_model_equal(a: Model, b: Model) -> None:
     assert a.termination_condition == b.termination_condition
 
     assert a.type == b.type
+
+
+_START = "2030-01-01"
+
+
+def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
+    """
+    Dense data for every declaration of *spec*, *n* labels per dimension.
+
+    *spec* takes every form :meth:`Model.from_spec` does: a path, YAML text,
+    a mapping or a ``mathspec.Spec``.
+
+    Labels are numbered after their dimension, parameters are a linear ramp,
+    and each relation holds a row for every key tuple, each value column
+    cycling through the labels it maps into on its own stride, so that a sum
+    grouping by several columns reaches every group.
+
+    Raises
+    ------
+    TypeError
+        *spec* is none of these, such as a lowered ``Program``.
+    """
+    from linopy.spec.api import normalize_spec
+
+    program = normalize_spec(spec)
+
+    sources: dict[str, Any] = {
+        dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
+    }
+    for name, relation in program.relations.items():
+        labels = [sources[relation.dim(role)] for role in relation.key]
+        grid = pd.MultiIndex.from_product(labels, names=relation.key)
+        rows = grid.to_frame(index=False)
+        for j, role in enumerate(relation.values):
+            into = sources[relation.dim(role)].to_numpy()
+            turn = sum((1 + j * k) * np.asarray(c) for k, c in enumerate(grid.codes))
+            rows[role] = into[turn % len(into)]
+        sources[name] = rows
+    for name, parameter in program.parameters.items():
+        sources[name] = _parameter(name, parameter, sources, n)
+    return sources
+
+
+def _labels(name: str, dtype: str | None, n: int) -> pd.Index:
+    """*n* labels of the declared dtype, named after what they label."""
+    if dtype == "int":
+        return pd.Index(range(n), name=name)
+    if dtype == "datetime":
+        return pd.date_range(_START, periods=n, freq="h", name=name)
+    return pd.Index([f"{name}{i}" for i in range(n)], name=name)
+
+
+def _parameter(
+    name: str, declared: ms.Parameter, sources: dict[str, Any], n: int
+) -> Any:
+    dims = declared.dims
+    shape = [n] * len(dims)
+    if declared.dtype == "bool":
+        values: Any = np.ones(shape, dtype=bool)
+    elif declared.dtype == "int":
+        values = np.ones(shape, dtype=int)
+    elif declared.dtype == "str":
+        values = np.full(shape, "a", dtype=object)
+    elif dims:
+        values = np.broadcast_to(1.0 + np.arange(n), shape).copy()
+    else:
+        values = np.array(1.0)
+    if not dims:
+        return values.item()
+    return xr.DataArray(values, coords={d: sources[d] for d in dims}, dims=list(dims))

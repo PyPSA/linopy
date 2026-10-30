@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from linopy.constants import short_GREATER_EQUAL, short_LESS_EQUAL
-from linopy.constraints import Constraint
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
 
     from linopy.common import ConstraintLabelIndex, VariableLabelIndex
-    from linopy.constraints import ConstraintBase
+    from linopy.constraints import Constraint
     from linopy.model import Model
     from linopy.variables import Variable
 
@@ -303,7 +302,7 @@ class ModelDiff:
                 return reason
 
         for name, con in model.constraints.items():
-            skip = same_model and isinstance(con, Constraint) and not con._coef_dirty
+            skip = same_model and not con._coef_dirty
             reason = builder.diff_con(
                 name,
                 con,
@@ -449,7 +448,7 @@ class _DiffBuilder:
     def diff_con(
         self,
         name: str,
-        con: ConstraintBase,
+        con: Constraint,
         base_buf: ContainerConBuffers,
         base_coords: dict[str, tuple[str | None, np.ndarray]],
         skip_coef_compare: bool,

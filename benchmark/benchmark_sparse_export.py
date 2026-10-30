@@ -61,7 +61,6 @@ class Phases:
 
 
 def run(mode: str, n_bus: int, n_t: int, n_gen: int, n_line: int, n_sto: int) -> None:
-    linopy.options["semantics"] = "v1"
     linopy.options["warn_on_densify"] = True
     rng = np.random.default_rng(0)
 

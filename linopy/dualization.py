@@ -191,24 +191,10 @@ def _add_dual_variables(m: Model, m_dual: Model) -> dict:
 
 def _build_flat_con_to_dual_label_lookup(m: Model, dual_vars: dict) -> np.ndarray:
     """
-    Build a lookup from flat primal constraint labels to flat dual variable labels.
+    Map flat primal constraint labels to flat dual variable labels.
 
-    The returned array maps each flat constraint label to the corresponding
-    flat dual variable label from ``dual_vars``. Entries are -1 for constraints
-    not in ``dual_vars`` or with masked labels.
-
-    Parameters
-    ----------
-    m : Model
-        Primal model.
-    dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
-
-    Returns
-    -------
-    np.ndarray of int64
-        Lookup array of length ``max_flat_con_label + 1``; empty if no valid
-        constraint labels exist.
+    Entries are -1 for constraints not in ``dual_vars`` or with masked labels;
+    the array is empty if no valid constraint labels exist.
     """
     max_flat_con = -1
     for con_name in dual_vars:
@@ -238,32 +224,8 @@ def _extract_dual_feas_entries(
     flat_con_to_dual: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Return ``(flat_var_label, flat_dual_label, coeff)`` for each included
-    nonzero entry of ``A``.
-
-    Converts sparse matrix ``A`` to coordinate format, maps rows/columns to
-    flat labels via ``clabels`` / ``vlabels``, and drops entries that are masked
-    or belong to a constraint without a dual variable.
-
-    Parameters
-    ----------
-    A : scipy sparse matrix
-        Primal constraint matrix in any scipy sparse format.
-    vlabels : np.ndarray of int64
-        Flat variable label per column of ``A``; -1 for masked columns.
-    clabels : np.ndarray of int64
-        Flat constraint label per row of ``A``; -1 for masked rows.
-    flat_con_to_dual : np.ndarray of int64
-        Lookup array as returned by ``_build_flat_con_to_dual_label_lookup()``.
-
-    Returns
-    -------
-    flat_v : np.ndarray of int64
-        Flat primal variable label for each retained nonzero entry.
-    flat_d : np.ndarray of int64
-        Corresponding flat dual variable label.
-    coeffs : np.ndarray of float64
-        Corresponding coefficient from ``A``.
+    Return ``(flat_var_label, flat_dual_label, coeff)`` per nonzero of ``A``,
+    dropping masked entries and constraints without a dual variable.
     """
     A_coo = A.tocoo()
     flat_v = vlabels[A_coo.col].astype(np.int64)
@@ -281,24 +243,8 @@ def _extract_dual_feas_entries(
 
 def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarray:
     """
-    Build a lookup from flat variable labels to objective coefficients.
-
-    The returned array maps each valid flat variable label to its objective
-    coefficient. Labels that do not occur in ``vlabels`` but fall within the
-    lookup range have value 0.0.
-
-    Parameters
-    ----------
-    vlabels : np.ndarray of int64
-        Flat variable label per column of ``A``; -1 for masked columns.
-    c_vec : np.ndarray of float64
-        Objective coefficient per column, in the same ordering as ``vlabels``.
-
-    Returns
-    -------
-    np.ndarray of float64
-        Lookup array of length ``max_flat_var_label + 1``; empty if no valid
-        variable labels exist.
+    Map flat variable labels to objective coefficients; absent labels get 0.0,
+    and the array is empty if no valid variable labels exist.
     """
     valid_mask = vlabels != -1
     valid_vlabels = vlabels[valid_mask]
@@ -312,14 +258,8 @@ def _build_obj_coeff_lookup(vlabels: np.ndarray, c_vec: np.ndarray) -> np.ndarra
 
 def _build_label_to_flat_index_lookup(labels: np.ndarray) -> np.ndarray:
     """
-    Build a lookup from flat labels to flat indices.
-
-    ``labels`` is expected to contain nonnegative integer labels, with -1 used
-    as the masked-label sentinel.
-
-    ``lookup[label]`` gives the flat index of ``label`` in ``labels``.
-    Labels that do not occur in ``labels`` map to -1. If no valid labels exist,
-    returns an empty int64 array.
+    Map flat labels to their flat index in ``labels``; absent labels map to -1,
+    and the array is empty if no valid labels exist.
     """
     valid = labels != -1
     if not valid.any():
@@ -345,15 +285,7 @@ def _gather_with_default(
 
 
 def _lookup_flat_indices(labels: np.ndarray, lookup: np.ndarray) -> np.ndarray:
-    """
-    Look up flat indices for flat labels.
-
-    ``labels`` is expected to contain nonnegative integer labels, with -1 used
-    as the masked-label sentinel. ``lookup`` is expected to be an array as
-    returned by ``_build_label_to_flat_index_lookup()``.
-
-    Labels outside the lookup range, including masked labels, map to -1.
-    """
+    """Look up flat indices for flat labels; out-of-range labels map to -1."""
     return _gather_with_default(labels, lookup, -1, np.int64)
 
 
@@ -388,31 +320,8 @@ def _build_dual_feas_lhs(
     m_dual: Model,
 ) -> LinearExpression:
     """
-    Build the dual-feasibility LHS for one primal variable.
-
-    For each coordinate of ``var``, constructs the linear expression
-    ``sum_j A[j, var] * lambda[j]`` over the corresponding dual variables.
-
-    Parameters
-    ----------
-    var : linopy.Variable
-        Primal variable whose dual-feasibility LHS is being constructed.
-    flat_v : np.ndarray of int64
-        Flat primal variable labels for all included nonzero entries, as returned
-        by ``_extract_dual_feas_entries()``.
-    flat_d : np.ndarray of int64
-        Corresponding flat dual variable labels.
-    nnz_data : np.ndarray of float64
-        Corresponding nonzero coefficients from the primal constraint matrix.
-    m_dual : Model
-        Dual model owning the dual variables.
-
-    Returns
-    -------
-    LinearExpression
-        Dual-feasibility LHS over ``var``'s coordinate space. Returns an empty
-        expression, equivalent to constant zero, when ``var`` has no included
-        constraint-matrix entries.
+    Build ``sum_j A[j, var] * lambda[j]`` over ``var``'s coordinates; empty
+    (constant zero) when ``var`` has no included constraint-matrix entries.
     """
     var_flat = var.labels.values.ravel().astype(np.int64)
     n_elements = len(var_flat)
@@ -462,22 +371,12 @@ def _add_dual_feasibility_constraints(
     dual_vars: dict,
 ) -> None:
     """
-    Add the stationarity constraint ``sum_i(A_ji * lambda_i) = c_j`` for each
-    primal variable.
+    Add the stationarity constraint ``sum_i(A_ji * lambda_i) = c_j`` per primal
+    variable.
 
-    Sign conventions are already encoded in the dual variable bounds produced by
-    ``_add_dual_variables()``, so raw A coefficients are used without adjustment.
-    Variables with no constraint connections (e.g. unconstrained free variables)
-    are skipped; the dual is infeasible for such problems if ``c_j != 0``.
-
-    Parameters
-    ----------
-    m : Model
-        Primal model.
-    m_dual : Model
-        Dual model to populate.
-    dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
+    Sign conventions are already encoded in the dual variable bounds, so raw A
+    coefficients are used. Variables with no constraint connections are skipped;
+    the dual is infeasible for such problems if ``c_j != 0``.
     """
     M = m.matrices
     A = M.A
@@ -546,18 +445,8 @@ def _add_dual_objective(
     so ``rhs * lambda`` contributes negatively without an explicit sign flip.
     This aligns with linopy's native dual convention, so
     ``m_dual.variables[con_name].solution`` can be compared directly with
-    ``m.constraints[con_name].dual`` after solving.
-
-    The objective sense is flipped: ``min`` primal → ``max`` dual, and vice versa.
-
-    Parameters
-    ----------
-    m : Model
-        Primal model.
-    m_dual : Model
-        Dual model to populate.
-    dual_vars : dict
-        ``{constraint_name: dual_variable}`` as returned by ``_add_dual_variables()``.
+    ``m.constraints[con_name].dual`` after solving. The objective sense is
+    flipped.
     """
     dual_obj: LinearExpression = LinearExpression(None, m_dual)
     sense = "max" if m.objective.sense == "min" else "min"

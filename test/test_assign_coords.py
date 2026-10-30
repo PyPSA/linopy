@@ -15,7 +15,6 @@ import xarray as xr
 
 from linopy import Model
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
 
 sns0 = pd.date_range("2026-01-01", periods=3, freq="h", name="snapshot")
 sns1 = sns0 + pd.Timedelta("1h")
@@ -30,7 +29,7 @@ def m() -> Model:
         coords=[sns0, ["a", "b"]], dims=["snapshot", "spatial"], name="y"
     )
     model.add_constraints(x >= 0, name="dense_c")
-    model.add_constraints(x >= 1, name="frozen_c", freeze=True)
+    model.add_constraints(x >= 1, name="sparse_c").to_sparse()
     model.add_expressions(x * 2 + y.sum(), name="e")
     model.add_objective(1.0 * x)
     model.parameters = xr.Dataset(
@@ -56,14 +55,13 @@ def test_assign_coords_csr_constraint(m: Model) -> None:
     CSR-backed constraints get the new labels on their grid, not only in
     their reconstructed Dataset view.
     """
-    con = m.constraints["frozen_c"]
-    assert isinstance(con, CSRConstraint)
+    con = m.constraints["sparse_c"]
+    assert con.lhs.is_sparse
 
     m.assign_coords(snapshot=sns1)
 
-    con = m.constraints["frozen_c"]
+    con = m.constraints["sparse_c"]
     assert (con.coords["snapshot"].values == sns1.values).all()
-    # CSR-backed container still reconstructs its Dataset with the new coords
     assert (con.data.coords["snapshot"].values == sns1.values).all()
     assert con.labels.sizes["snapshot"] == 3
 
@@ -235,8 +233,8 @@ def test_assign_coords_rejects_scalar_values(m: Model) -> None:
 def test_csr_assign_coords_rejects_wrong_length(m: Model) -> None:
     """The CSR path validates lengths and rejects unknown coordinates too."""
     short = pd.date_range("2026-01-01", periods=2, freq="h", name="snapshot")
-    con = m.constraints["frozen_c"]
-    assert isinstance(con, CSRConstraint)
+    con = m.constraints["sparse_c"]
+    assert con.lhs.is_sparse
 
     with pytest.raises(ValueError, match="length"):
         con._assign_coords(snapshot=short)

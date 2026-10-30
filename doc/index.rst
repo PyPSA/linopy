@@ -114,8 +114,12 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
+   sparse-models
+   long-form-inputs
    migrating-to-v1
    manipulating-models
+   building-models-from-specs
+   spec-data
 
 .. toctree::
    :hidden:
@@ -135,7 +139,6 @@ This package is published under MIT license.
    sos-constraints
    piecewise-linear-constraints
    numerical-scaling
-   sparse-models
    testing-framework
 
 .. toctree::
@@ -180,4 +183,3 @@ This package is published under MIT license.
 
    design/convention
    design/goals
-   design/legacy-removal

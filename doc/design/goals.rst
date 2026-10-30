@@ -1,7 +1,7 @@
-The v1 convention — design & transitioning goals
-================================================
+The arithmetic convention — design goals
+========================================
 
-Goals for linopy's strict ("v1") convention. The bugs that motivate
+Goals for linopy's strict arithmetic convention. The bugs that motivate
 it are catalogued in `#714 <https://github.com/PyPSA/linopy/issues/714>`__; the convention itself is in
 :doc:`convention`.
 
@@ -28,19 +28,3 @@ The convention serves four goals, in priority order:
    join — not invent linopy-specific rules. Auxiliary coordinates the user
    attached are the user's; linopy validates and carries them through,
    never silently dropped or rewritten.
-
-Transitioning goals
--------------------
-
-1. **Non-breaking.** Existing code keeps working — legacy stays available and
-   unchanged until it is removed at linopy 1.0.
-2. **Actionable warnings.** Warn every legacy user about behaviour changes —
-   what changes under v1, and how to fix it — aiming for 100% coverage.
-3. **No silent change.** Opting into v1 never silently changes a model — every
-   difference is either raised, or was warned about in legacy mode.
-
-**Schedule:**
-
-1. linopy 0.10 — introduce v1 as opt-in. Warn about behaviour changes on
-   legacy, raise if opted into v1.
-2. linopy 1.0 — make v1 the only convention and drop legacy entirely.
