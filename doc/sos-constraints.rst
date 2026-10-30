@@ -214,7 +214,7 @@ You can easily identify and access variables with SOS constraints:
 
     # Get all variables with SOS constraints
     sos_variables = m.variables.sos
-    print(f"SOS variables: {list(sos_variables.keys())}")
+    print(f"SOS variables: {list(sos_variables)}")
 
     # Check SOS properties of a variable
     for var_name in sos_variables:
@@ -232,7 +232,7 @@ Variables with SOS constraints show their SOS information in string representati
 
     print(build)
     # Output: Variable (locations: 4) - sos1 on locations
-    # -----------------------------------------------
+    # -------------------------------------------
     # [0]: build[0] ∈ [0, 1]
     # [1]: build[1] ∈ [0, 1]
     # [2]: build[2] ∈ [0, 1]
@@ -247,34 +247,30 @@ The generated LP file will include a SOS section:
 
     sos
 
-    s0: S1 ::  x0:0  x1:1  x2:2
-    s3: S2 ::  x3:0.0  x4:1.0  x5:2.0
+    s2: S1 ::  x0:0  x1:1  x2:2
+    s5: S2 ::  x3:0  x4:1  x5:2
 
 Solver Compatibility
 --------------------
 
-SOS constraints are supported by most modern mixed-integer programming solvers through the LP file format:
+Only Gurobi, CPLEX and Xpress support SOS constraints natively. Check a solver
+with ``linopy.solvers.Gurobi.supports(linopy.solvers.SolverFeature.SOS_CONSTRAINTS)``.
 
-**Supported solvers (via LP file):**
+**Supported solvers:**
 
-- Gurobi
-- CPLEX
-- COIN-OR CBC
-- SCIP
-- Xpress
-
-**Direct API support:**
-
-- Gurobi (via ``gurobipy``)
+- Gurobi (direct API via ``gurobipy``, or LP file)
+- Xpress (direct API via ``xpress``, or LP file)
+- CPLEX (LP file)
 
 **Unsupported solvers:**
 
-- HiGHS (does not support SOS constraints)
-- GLPK
-- MOSEK
-- MindOpt
+HiGHS, GLPK, CBC, SCIP, MOSEK, MindOpt, Knitro, COPT, cuOpt, cuPDLPx and all
+others. With ``reformulate_sos=False`` (the default), solving a model with SOS
+constraints on one of these raises an error.
 
-For unsupported solvers, use automatic reformulation (see below).
+For unsupported solvers, use reformulation (see below). With
+``reformulate_sos="auto"``, linopy reformulates only if the chosen solver lacks
+SOS support, and passes the SOS constraints on unchanged otherwise.
 
 .. _sos-reformulation:
 

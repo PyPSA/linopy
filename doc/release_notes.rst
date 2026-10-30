@@ -1,102 +1,280 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
-
-
-*Strict "v1" arithmetic semantics (opt-in)*
-
-* A new, stricter convention for how linopy arithmetic aligns coordinates and treats missing data is available behind ``linopy.options["semantics"] = "v1"``. Legacy behaviour remains the **default** in this release; v1 is opt-in. In short, under v1:
-
-  * shared dimensions align by label with ``join="exact"`` — a differing label set *or* a pure reorder (same labels, different order) raises instead of silently filling, dropping, or pairing by position. Resolve explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass an explicit ``join=`` to the named ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq`` methods.
-  * an *unlabeled* operand (a numpy array, list, or polars ``Series``) pairs with the linopy operand's dimensions by size; an ambiguous match (a square array, or two equal-length dimensions) or no size match raises instead of guessing. Wrap it in a ``DataArray`` to name the dimensions. (https://github.com/PyPSA/linopy/issues/736)
-  * a ``NaN`` in a user-supplied constant raises, rather than being silently filled (with a value that used to differ per operator).
-  * *absence* — masked, reindexed, or shifted-in slots — is a first-class state that propagates through every operator, instead of collapsing to zero.
-  * conflicting auxiliary coordinates raise, instead of being silently dropped.
-  * a reindexing ``join=`` fills the positions it creates per side: the linopy operand contributes the zero expression, the constant operand contributes ``fill_value=`` (new on ``.add`` / ``.sub`` / ``.mul`` / ``.div``), which defaults to "does not apply here" — so a missing divisor zeroes the term instead of leaving it unscaled, and a missing numerator no longer comes out as ``1 / divisor``. Absence carried in by an operand is untouched and still propagates. Pass ``fill_value=linopy.ABSENT`` to opt out of the fill altogether — the join's coordinates are kept but every position it creates stays absent, on constant and expression operands alike (``linopy.merge`` included). (https://github.com/PyPSA/linopy/issues/890)
-  * a first-class ``pd.MultiIndex`` dimension is rejected in favour of a flat dimension with the levels as auxiliary coordinates.
-  * a ``groupby`` grouper aligns to the grouped dimension by label — a grouper whose labels differ in set or order from the dimension raises instead of being matched positionally, and a multi-key grouper yields a flat ``group`` dimension (keys as aux coords) rather than a stacked ``group`` MultiIndex. (https://github.com/PyPSA/linopy/issues/827)
-
-* Every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` under legacy, naming the fix — so a model can be migrated incrementally before opting in. The full rules are specified in :doc:`the arithmetic convention <design/convention>`.
-
-
-*Numerical scaling*
-
-* Variables, constraints and the objective accept a ``scaling`` factor that rewrites the problem into better-behaved units for the solver, without changing the answer. Variable scaling is column-like, constraint and objective scaling are row-like, and primal values, duals and the objective are transformed back to the original units after solving. See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.
-
-*New solver: NVIDIA cuOpt*
-
-* Added support for the GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ solver for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``. Install it with ``pip install "linopy[gpu]"`` — Linux only, and requires an NVIDIA GPU of compute capability 7.0 or higher with a CUDA 12 driver (525.60.13 or newer). See :doc:`gpu-acceleration` for the supported problem classes and the known limitations.
-
-*New feature: constraint softening*
-
-* A constraint can now be softened with ``Constraint.soften(penalty, max_violation=None, name=None)``, which adds a slack variable (a positive/negative pair for equality constraints) to the constraint's ``lhs`` and a penalty term to the objective, returning a ``Slack`` named tuple. It is not supported on detached copies from ``.mutable()``, ``.sel()``, or ``.isel()``. ``model.add_constraints(..., penalty=...)`` is a shortcut that softens the constraint right after creation.
-* A frozen ``CSRConstraint`` is softened natively, without densifying: the slack terms are appended to its sparse rows in place, so ``add_constraints(..., penalty=..., freeze=True)`` works as well. The slack is kept by ``to_dense()``/``mutable()``, ``Constraint.freeze()`` and the netcdf round trip. (`#975 <https://github.com/PyPSA/linopy/issues/975>`__)
-* The slack variable(s) created by ``soften()`` can be retrieved afterwards via the new ``slack`` property of ``Constraint`` and ``CSRConstraint``.
-
-*Sparse model*
-
-* New read-only model key ``Model(sparse=True)`` turns on the whole sparse (CSR) path for one model: ``groupby(...).sum()`` and ``@``/``dot`` against a constant return CSR-backed expressions, and ``add_constraints`` freezes every constraint unless ``freeze=False`` is passed. It requires the v1 semantics: ``Model(sparse=True)`` raises under legacy, and so do ``groupby(...).sum()`` and ``@`` on a sparse model, and ``read_netcdf`` of one, once the semantics are switched back to legacy. It rejects ``chunk``. The key is kept by ``Model.copy`` and the netcdf round trip. ``@`` no longer reads ``linopy.options["sparse_groupby"]``. (`#976 <https://github.com/PyPSA/linopy/issues/976>`__)
-* ``@``/``dot`` against a sparse constant no longer scales with the total number of variables in the model: each chunk of the sparse product now runs on only the variables it uses, which removes several seconds of allocation overhead on models with millions of variables. (`#990 <https://github.com/PyPSA/linopy/pull/990>`__)
-* Deprecated in favour of ``Model(sparse=True)``, each with a ``FutureWarning`` and to be removed with the legacy semantics: ``Model(freeze_constraints=...)`` and the ``Model.freeze_constraints`` setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. They keep their current behaviour until then, except that ``@`` ignores ``sparse_groupby``, and netcdf files that store ``freeze_constraints`` still load. (`#976 <https://github.com/PyPSA/linopy/issues/976>`__)
-* Adding a frozen constraint from a sparse expression no longer copies the lhs matrix when every row stays active, and picks the mask and the row scaling at the active rows without expanding them over the full coordinate grid. This roughly halves the peak memory of ``add_constraints`` on a sparse model. (`#977 <https://github.com/PyPSA/linopy/issues/977>`__)
-
-*Other*
-
-* New method :meth:`linopy.Model.assign_coords` reassigns coordinate values across an existing model — variables, constraints (dense and CSR-backed), expressions and parameters — without changing the model's shape: ``m.assign_coords(snapshot=new_snapshots)``. Values-only: the new values must match the length of the dimension's full-index container, and containers holding subsets of the dimension are mapped by label, preserving the subset relation. Dataset variable order is preserved. Typical use is advancing the window in rolling-horizon optimization with the persistent solver interface. (https://github.com/PyPSA/linopy/issues/767)
-
-* ``add_piecewise_formulation`` gained a ``mask`` parameter declaring which breakpoint slots hold a real breakpoint. It is needed for **ragged** curves — entities with different numbers of breakpoints — which are stored densely with the surplus slots left absent. Under v1 that absence must be declared (``mask=x_pts.notnull()``) rather than read off the NaN padding. (https://github.com/PyPSA/linopy/issues/884)
-* ``Model.compute_infeasibilities`` now also supports HiGHS, via ``Highs.getIis``. (https://github.com/PyPSA/linopy/issues/956)
-
-*Internal*
-
-* The sparse backing of a ``LinearExpression`` moved from ``linopy.sparse_expression`` to ``linopy.csr`` and the class ``CSRExpression`` was renamed to ``CSRLinearExpression``. Dense/sparse conversion is now spelled the same way on both CSR types: ``CSRLinearExpression.from_dense`` / ``.to_dense`` and ``CSRConstraint.from_dense`` (previously ``CSRConstraint.from_mutable``) / ``.to_dense``. ``Constraint.freeze()`` and ``CSRConstraint.mutable()`` are unchanged.
-* The first constructor argument of ``LinearExpressionGroupby`` is now named ``obj`` (previously ``data``), as it holds a ``Dataset`` or an expression; ``LinearExpressionGroupby(data=...)`` must be spelled ``LinearExpressionGroupby(obj=...)``.
-
-*Documentation*
-
-* The example notebooks now opt into the v1 arithmetic convention (``linopy.options["semantics"] = "v1"``). The coordinate-alignment and expression tutorials were reworked to teach strict label-based alignment: a mismatch on a shared dimension raises rather than silently filling or pairing by position, and is resolved explicitly with ``.sel`` / ``.reindex`` / ``.assign_coords`` or an explicit ``join=`` on the named ``.add`` / ``.mul`` / ``.le`` / … methods.
-
-**Performance**
-
-* Direct solver APIs no longer set variable and constraint names by default: ``Model.set_names_in_solver_io`` now defaults to ``False``, and ``to_highspy``, ``to_gurobipy``, ``to_mosek`` and ``to_xpress`` follow it when ``set_names`` is not given. The default names ``x{label}``/``c{label}`` carry no information, and the solution is mapped back by position. ``Model.solve`` still sets them when ``warmstart_fn`` or ``basis_fn`` is given, as basis files refer to names. Setting them made ``to_highspy`` about 2x slower and cost ~100 ms in ``to_gurobipy`` on a model with 200k variables. **Behaviour change:** pass ``set_names=True`` or ``Model(set_names_in_solver_io=True)`` to keep names on the native solver model, e.g. to write it to a file. (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
-* ``@``/``dot`` against a constant matrix that holds zeros no longer densifies the result to one term per contracted member. The zero-coefficient terms are dropped, so the term dimension shrinks to the widest non-zero cell. On PyPSA's Kirchhoff Voltage Law constraint (a cycle matrix with ~3 branches per cycle) this cuts the expression from 852 to 3 terms — 284x fewer cells — which in turn shrinks the downstream ``merge``. A constant without zeros is unaffected. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
-* ``densify_terms`` (used by ``sum(drop_zeros=True)`` and the sparse ``@`` path) is now fully vectorised. It previously counted the non-zero positions with a Python loop that scaled quadratically in the number of non-zero terms — 127 s for a (2000 x 60) expression, now 3 ms — and allocated the compacted output at the full original term width. It now allocates only the compacted width and returns the expression unchanged when it holds no zeros.
-* Under v1, ``@``/``dot`` against a constant now runs as sparse linear algebra instead of building the dense broadcast intermediate (``self * other`` then ``.sum()``): peak memory scales with ``nnz(C) x nterm`` rather than with the full broadcast shape. A ``CSRLinearExpression``-backed operand (from ``groupby(...).sum(sparse=True)``) stays CSR-backed through ``@``, and the result is the compact canonical form (duplicate variables summed, terms label-ordered, explicit zeros pruned — cell activeness is carried by ``const`` alone). (`#748 <https://github.com/PyPSA/linopy/issues/748>`__, `#756 <https://github.com/PyPSA/linopy/issues/756>`__, `#925 <https://github.com/PyPSA/linopy/issues/925>`__)
-* Reading metadata of a CSR-backed ``LinearExpression`` (``repr()``, ``shape``, ``sizes``, ``dims``, ``coords``, ``indexes``, ``isnull()``) no longer converts it to dense; it is served from the sparse backing, auxiliary coordinates included. (`#962 <https://github.com/PyPSA/linopy/issues/962>`__)
-* New ``LinearExpression.is_sparse`` tells whether an expression is CSR-backed, and its repr header reads ``LinearExpression (sparse)``. The opt-in option ``linopy.options["warn_on_densify"]`` (default ``False``) emits a ``PerformanceWarning`` naming the reason whenever a sparse backing is dropped, e.g. on ``.data``, an operation without a sparse path, or ``CSRConstraint.mutable()``. (`#969 <https://github.com/PyPSA/linopy/issues/969>`__)
-* Multiplying, dividing, adding or subtracting a non-scalar constant (``DataArray``, ``Series``, ``ndarray``, …) keeps a CSR-backed ``LinearExpression`` sparse: the coefficients are scaled per cell and only the constant changes, instead of expanding the dense rectangle. The constant is aligned exactly as on the dense path (NaN, label mismatch, joins and auxiliary coordinates); an operand that adds dimensions still densifies. ``expr.const`` is now served from the sparse backing as well. (`#965 <https://github.com/PyPSA/linopy/issues/965>`__)
-* ``sum(dim=...)`` and a further ``groupby(...).sum()`` keep a CSR-backed ``LinearExpression`` sparse: summed rows are merged in the sparse backing instead of stacking the summed dimensions into the term dimension of the dense rectangle. Auxiliary coordinates, absent cells and the constant follow the dense path; ``groupby(...).sum(sparse=False)`` still densifies. (`#964 <https://github.com/PyPSA/linopy/issues/964>`__)
-* ``where``, ``sel``, ``isel``, ``loc`` and ``[]`` keep a CSR-backed ``LinearExpression`` sparse: the selection is evaluated on the grid's row numbers with the dense (xarray) semantics, including ``drop=``, ``method=``, scalar coordinates left by a scalar selection and auxiliary coordinates, and the selected rows are gathered from the sparse backing; masked cells become absent. A condition or indexer that introduces dimensions still densifies. A merge of differing grids now stays sparse when operands carry auxiliary coordinates, which are checked for conflicts as on the dense path. (`#966 <https://github.com/PyPSA/linopy/issues/966>`__)
-* ``Model.add_constraints(..., mask=..., freeze=True)`` with a CSR-backed left-hand side, or with a ``CSRConstraint`` built beforehand, applies the mask sparsely and returns a ``CSRConstraint`` instead of expanding the dense rectangle. An expression on the right-hand side (``lhs <= other_expr`` or ``add_constraints(lhs, "<=", other_expr)``) no longer densifies a CSR-backed left-hand side: it is moved to the left-hand side, its constant becoming the right-hand side, as on the dense path. ``penalty=`` stays unsupported together with ``freeze=True`` and raises. (`#970 <https://github.com/PyPSA/linopy/issues/970>`__)
-* ``LinearExpression.flat`` and ``LinearExpression.to_polars`` on a CSR-backed expression are emitted directly from the sparse backing instead of expanding the dense rectangle; the rows equal those of the dense path, with absent cells and zero coefficients dropped. (`#968 <https://github.com/PyPSA/linopy/issues/968>`__)
-* A CSR-backed linear objective stays sparse when set with ``Model.add_objective`` and when the model is exported or solved: the objective vector ``matrices.c``, LP/MPS files, netcdf output, ``Model.copy``, persistent snapshots and direct solver APIs all read it without expanding the dense rectangle, with results equal to the dense objective. The objective name is now owned by the ``Objective`` itself (``Objective.name`` and ``Objective.attrs``) instead of being written into the expression's attributes. (`#967 <https://github.com/PyPSA/linopy/issues/967>`__)
-* Persistent snapshots of tz-aware ``DatetimeIndex`` coordinates no longer materialise an object array of ``Timestamp`` per container per capture and diff. Coordinates are stored as UTC-ns arrays with the timezone identity carried alongside, making snapshot capture ~24x and warm-start diffs ~33x faster on tz-aware models, while naive and tz-aware coordinates — and differing timezones — stay correctly unequal. (`#960 <https://github.com/PyPSA/linopy/pull/960>`__)
-
-**Bug fixes**
-
-* ``Variable.get_solver_attribute`` for Gurobi now maps values by position for the direct API. It parsed labels from the solver's variable names, which returned the values of the wrong variables when names were off and a variable was masked. (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
-* ``densify_terms`` no longer raises on expressions without coordinate dimensions (``expr.sum(drop_zeros=True)`` over all dimensions) and now works on ``QuadraticExpression``, where it previously indexed the ``_factor`` axis as the term axis.
-* ``sum()`` over a dimension no longer raises when another dimension of the expression has size 0; it returns an expression without terms over the kept coordinates, as summing over the empty dimension itself already did. (https://github.com/PyPSA/linopy/issues/906)
-* A multi-key ``groupby`` now returns its groups sorted by key tuple, like the single-key path. The key combinations were numbered by iterating a ``set``, so the group order was arbitrary and changed between processes with ``PYTHONHASHSEED``.
-* The ``linopy.options`` context manager now restores the values that were active on entry instead of resetting all options to their defaults.
-* ``Model.copy`` (and the ``copy.copy``/``copy.deepcopy`` protocols) no longer downgrades a quadratic objective to a linear one. The objective was rebuilt as a ``LinearExpression`` regardless of its type, so the copy silently solved a different problem. ``linopy.testing.assert_model_equal`` now compares the objective by expression type as well, which it could not do before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
-* ``Model.to_netcdf``/``linopy.read_netcdf`` downgraded a quadratic objective the same way; the expression type is now stored alongside the objective and restored on read. Files written by earlier versions are read as before. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
-* ``linopy.read_netcdf`` now restores variables, expressions and constraints in their original insertion order instead of alphabetically, so ``matrices.A`` of a round-tripped model is no longer a row/column permutation of the original. The order is stored in the file; files written by earlier versions still load in sorted order. ``linopy.testing.assert_model_equal`` now also compares container order. (`#934 <https://github.com/PyPSA/linopy/issues/934>`__)
-* Adding or removing variables after a constraint was added with ``freeze=True`` no longer breaks ``model.matrices``. The frozen constraint stored dense variable positions as its matrix columns, so blocks frozen at different times disagreed on their width and stacking them raised ``ValueError: inconsistent shapes``. Raw variable labels are stored instead and mapped to positions when the matrix is assembled. Frozen constraints in netCDF files written by earlier versions are read as before. (`#926 <https://github.com/PyPSA/linopy/issues/926>`__)
-* A ``CSRConstraint`` built from a CSR-backed expression now keeps its auxiliary coordinates, e.g. the key levels of a multi-key ``groupby(..., observed=True).sum(sparse=True)`` or a scalar coordinate left by a scalar selection, so its ``coords`` equal those of the dense constraint. They are kept by ``to_dense()``/``mutable()`` and written to and read from netcdf, and ``Constraint.freeze()`` keeps them as well. (`#941 <https://github.com/PyPSA/linopy/issues/941>`__)
-* ``linopy.read_netcdf`` no longer fails for a whole model when a frozen constraint has a dimension or MultiIndex level whose name contains ``-``: the coordinate metadata of a ``CSRConstraint`` is now stored under positional variable names with the names as attributes. Files written by earlier versions are read as before.
-* ``CSRConstraint.loc``, ``update`` and ``from_rule``, and assigning to ``coeffs``, ``vars`` or ``sign``, now raise an ``AttributeError`` saying the operation is not supported on a frozen constraint and naming ``.mutable()`` as the way out (for ``from_rule``: build with ``Constraint.from_rule`` and ``.freeze()`` the result), like the read-only ``rhs``, ``lhs`` and ``scaling`` setters, instead of a bare ``AttributeError``. (`#963 <https://github.com/PyPSA/linopy/issues/963>`__)
-* ``linopy.merge`` with ``join="outer"``, ``"left"`` or ``"right"`` no longer raises an xarray ``MergeError`` when only one operand carries an auxiliary coordinate on a joined dimension. The constant was reindexed with a fill value of ``0`` that was also written into the auxiliary coordinate, so it no longer matched the coefficients' copy. The coordinate now follows its rows onto the joined grid and is NaN where no operand provides it, under both semantics. The same holds for ``.add`` / ``.sub`` / ``.mul`` / ``.div`` with a constant and a reindexing ``join=``.
-* A frozen constraint caches the label-to-position mapping of its matrix columns by weak reference and only rebuilds it when the constraint or the set of variables changes. While a persistent snapshot holds the arrays, repeated matrix assembly on an unchanged model returns the same objects, so the snapshot diff can again skip the comparison of untouched frozen constraints by object identity; one-off exports such as ``to_file`` retain no extra memory. (`#933 <https://github.com/PyPSA/linopy/issues/933>`__)
-* ``Model.copy`` (and the ``copy.copy``/``copy.deepcopy`` protocols) keeps frozen constraints as ``CSRConstraint`` instead of rebuilding them as dense ``Constraint``; ``deep=True`` copies their arrays, and duals are copied only with ``include_solution=True``. A CSR-backed objective is now deep-copied with ``deep=True`` as well. The auxiliary coordinates of a CSR grid are stored read-only, so a copy can share them safely. (`#981 <https://github.com/PyPSA/linopy/issues/981>`__)
-* Solving a MILP from a file with SCIP no longer asks SCIP for dual values. A MILP has none, so SCIP printed errors such as ``cannot get reduced costs, because node LP is not processed`` and linopy returned meaningless duals. They are now left empty, as with the other solvers. The SCIP interface also works with PySCIPOpt older than 5 again: it read the original constraints with ``getConss(False)``, whose argument those versions don't accept, so every solve raised a ``TypeError``.
-* ``Solver.close()`` no longer leaves dangling native handles behind. The solver model is now dropped before the environment that owns it, instead of after. And the COPT and MindOpt file interfaces no longer hand back a model they already disposed: after a file-based COPT or MindOpt solve, ``model.solver_model`` is ``None`` rather than a handle into freed memory. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+Version 1.0.0
+-------------
 
 **Breaking Changes**
 
-* A solver is no longer released automatically when the model is garbage-collected, withdrawing a guarantee announced in 0.8.0. The finalizer that did so ran mid-collection and could tear down native state inside an unrelated call stack, aborting the interpreter. Release the solver explicitly instead, with ``model.solver.close()``, ``model.solver = None``, or ``contextlib.closing(model.solver)``. A new ``solve()`` still closes the solver it replaces, so a re-solve loop needs no change. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+* The legacy arithmetic semantics are removed: the v1 convention (:doc:`the arithmetic convention <design/convention>`) is the only behaviour. Code that relied on legacy behaviour now raises or, where absence propagates, gives different results; see :doc:`migrating-to-v1`.
+* ``linopy.options["semantics"]`` is deprecated: setting ``"v1"`` is a no-op that emits a ``FutureWarning``, setting ``"legacy"`` raises ``ValueError``. The option is removed in 1.1.
+* ``LinopySemanticsWarning`` is no longer emitted. The class stays importable so existing warning filters keep working, and is removed in 1.1.
+* ``broadcast_to_coords`` no longer accepts ``warn_reorder``.
+* The OETC (OET Cloud) remote handler is removed together with the ``oetc`` extra: ``OetcHandler``, ``OetcSettings`` and ``OetcCredentials`` no longer exist. Use ``linopy.remote.RemoteHandler`` (SSH) for remote solving. (`#1086 <https://github.com/PyPSA/linopy/issues/1086>`__)
+* Setting ``Objective.expression`` (also through ``add_objective``) stores a shallow copy of the expression and leaves the caller's object untouched; a scalar objective expression no longer gets ``attrs["name"]`` written onto it.
+* The legacy helpers ``is_v1``, ``warn_legacy``, ``legacy_warnings_muted`` and ``warn_legacy_absence`` are removed from ``linopy.semantics``, and ``check_user_nan`` no longer accepts ``op_kind=``, takes an optional ``context`` message argument and always raises.
+* ``LinearExpressionGroupby.map`` no longer accepts the deprecated ``shortcut`` argument.
+* The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``.
+* ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead.
+* NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
+* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters``, constant operands and ``assign_coords`` on variables, expressions and constraints reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
+* The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
+* Long-deprecated shims are removed:
+
+  * ``LinearExpression.sum`` and ``Variable.sum`` no longer accept the deprecated ``dims`` keyword; use ``dim``. Unknown keywords raise a ``TypeError``.
+  * ``linopy.merge`` takes a single list of expressions; the ``merge(a, b)`` positional form is removed and ``dim``, ``cls``, ``join`` and ``fill_value`` are keyword-only.
+  * ``LinearExpression.from_tuples`` no longer accepts one-element tuples ``(const,)`` as constants; pass the constant directly.
+  * ``LinearExpression.empty`` and ``QuadraticExpression.empty`` are plain ``bool`` properties; the ``.empty()`` call form is removed.
+  * ``Variable.sol`` is removed; use ``Variable.solution``.
+  * The ``Variable.lower`` and ``Variable.upper`` setters are removed; use ``Variable.update(lower=..., upper=...)``.
+  * The ``Constraint.coeffs``, ``.vars``, ``.sign``, ``.rhs`` and ``.lhs`` setters are removed; use ``Constraint.update(...)``.
+  * ``Constraint.update(variables=...)`` only accepts a ``Variable``; a ``DataArray`` of labels raises a ``TypeError``.
+  * ``Constraint.flat`` is removed; use ``Constraint.to_polars()``. ``Constraints.flat`` is unchanged.
+  * ``Variables.print_labels``, ``Constraints.print_labels``, ``Model.print_infeasibilities`` and ``Model.compute_set_of_infeasible_constraints`` are removed; use ``format_labels``, ``Model.compute_infeasibilities`` and ``Model.format_infeasibilities``.
+  * The unused ``Variables.dataset_names``, ``Constraints.dataset_names`` and ``LinearExpression.sanitize`` are removed.
+
+* ``linopy.csr.CSRLinearExpression`` is renamed to ``CSRStore`` without an alias. A ``LinearExpression`` now always holds a store from the new ``linopy.store`` module, a ``DenseStore`` or a ``CSRStore``, in place of the private ``_csr`` attribute. ``CSRStore.to_dense()`` returns a ``DenseStore`` instead of a ``LinearExpression``. Writing a model with a sparse objective to netcdf or copying the model no longer converts the objective to dense, and emits no densify notice. On both backends, a cell whose constant becomes NaN, e.g. by ``where``, ``reindex`` or a join with ``fill_value=linopy.ABSENT``, drops its terms, so its variables no longer reach ``sum()``, a constraint or the objective. The ``const`` setter and ``assign(const=...)`` of ``LinearExpression`` and ``QuadraticExpression`` raise ``ValueError`` when the assigned value holds a NaN or does not cover every coordinate of the expression. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+* An operation without a sparse path on a CSR-backed ``LinearExpression``, including reading ``.data``, now works on a dense copy and no longer converts the expression itself, which stays sparse; only assigning ``vars``, ``coeffs`` or an off-grid ``const`` replaces its store. The densify notice names the operation and the case as ``op(case)``, e.g. ``Sparse (CSR) backing densified: reindex(method=...)``, so filters matching the former reason texts need updating. A named sparse expression stays sparse through ``Model.add_expressions`` and ``Model.copy`` and keeps its name through assignments. ``densify_terms``, ``reset_const`` (so also ``Constraint.update(rhs=...)``) and ``Model.assign_coords`` keep a sparse expression sparse. ``LinearExpression.where`` and ``QuadraticExpression.where`` take ``drop`` as their only keyword argument instead of forwarding ``**kwargs`` to ``xarray.Dataset.where``, which accepts no other. (`#1020 <https://github.com/PyPSA/linopy/issues/1020>`__)
+* ``Model.store_cls`` names the store class a model builds expressions on, ``CSRStore`` in a sparse model and ``DenseStore`` otherwise. ``Variable.to_linexpr`` always returns an expression on it; the private ``_dense`` keyword is removed. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* A dense operand in a merge with a CSR-backed one is converted up through the new ``Store.to_sparse(reason)``; a merge that stays sparse emits one ``Dense backing sparsified: merge with a sparse operand`` notice, under the same ``warn_on_densify`` option as the densify notice. A dense operand with coordinates the sparse grid cannot hold, e.g. two-dimensional auxiliary ones, now falls the whole merge back to dense with the reason ``merge(coordinates the Grid cannot hold: <names>)``. A merge of dense operands stays dense, also in a sparse model. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* A constant operation that produces NaN in a live cell, e.g. ``0 * inf``, ``0 / 0`` or ``inf - inf`` from multiplying, dividing, adding or subtracting a constant, now raises ``ValueError`` on both backends. Before, the cell kept its terms under a NaN constant. linopy trusts NaN only as absence, so mark cells to drop with ``.where(...)`` or ``mask=`` instead. Cells that were absent before stay absent. A sparse division by zero no longer emits numpy ``RuntimeWarning``\ s. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* Cells with a NaN constant now drop their terms when a ``LinearExpression`` or ``QuadraticExpression`` is built from a dataset or its ``vars`` or ``coeffs`` are assigned, so neither a dataset with terms under a NaN constant nor a ``vars`` assignment can revive an absent cell. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
+* ``Solver.apply_update`` takes ``(diff, n_vars, n_cons)``, the number of active variables and constraints, instead of the variable and constraint label indexes.
+* ``expand_dims`` on an expression now puts the new dim first in ``coord_dims`` and in the dims of its dataset, matching the layout of its arrays. Before, it came after the existing dims. Selecting by dim name is unaffected. (`#1078 <https://github.com/PyPSA/linopy/pull/1078>`__)
+
+**Breaking Changes: constraints on stores**
+
+.. note::
+
+   The following content was generated by AI.
+
+* ``Constraint`` holds its left-hand side as a ``LinearExpression`` with a zero constant and its store in canonical form, next to ``sign``, ``rhs``, ``labels``, ``scaling``, ``dual``, ``binary_var``, ``binary_val`` and ``blocks`` as DataArrays on the grid of the lhs. ``Constraint.data`` is derived on each access, so writing into it, e.g. ``con.data["sign"] = ...``, no longer changes the constraint; use ``Constraint.update(...)``. ``Constraint.lhs`` returns a new expression on the held store on each access. (`#1046 <https://github.com/PyPSA/linopy/issues/1046>`__)
+* The ``Constraint`` constructor takes the fields instead of a dataset: ``Constraint(lhs, sign, rhs, model, name="", labels=None, scaling=1.0, dual=None, binary_var=None, binary_val=None, blocks=None, attrs=None)``; an lhs with a nonzero constant raises. Build a constraint from its dataset layout with ``Constraint.from_dataset(ds, model, name)``; the ``skip_broadcast`` argument is removed. A field with dimensions outside the lhs or with coordinates differing from those of the lhs raises, instead of broadcasting the lhs or filling the field with NaN. (`#1046 <https://github.com/PyPSA/linopy/issues/1046>`__)
+* ``Constraint.assign`` and the other wrapped xarray methods reject data variables other than the constraint fields, and ``Constraint.broadcast_like`` no longer broadcasts the fields over ``_term``. After ``Constraint.update(coeffs=...)`` or ``update(variables=...)``, ``coeffs`` and ``vars`` keep the ``_term`` dimension, a value without it is spread over the terms. (`#1046 <https://github.com/PyPSA/linopy/issues/1046>`__)
+* ``Constraints.set_blocks`` stores the block numbers as the ``blocks`` field of each constraint, read as ``con.data.blocks``. (`#1046 <https://github.com/PyPSA/linopy/issues/1046>`__)
+* ``CSRConstraint``, ``ConstraintBase`` and the freeze API are removed without aliases: ``Model.add_constraints(freeze=...)``, ``Constraints.add(freeze=...)``, ``Constraint.freeze()``, ``CSRConstraint.mutable()``, ``CSRConstraint.from_dense``/``from_csr`` and the "frozen constraint" ``AttributeError``. A constraint in a sparse model is a ``Constraint`` whose lhs holds a ``CSRStore``; replace ``isinstance(c, CSRConstraint)`` with ``c.lhs.is_sparse``. It supports the whole ``Constraint`` API, e.g. ``update``, the ``scaling`` setter, ``sanitize_*``, ``set_blocks`` and the wrapped xarray methods; ``update`` and ``soften`` keep a sparse lhs sparse (`#1033 <https://github.com/PyPSA/linopy/issues/1033>`__). Reading ``coeffs`` or ``vars`` of a sparse constraint, ``update(coeffs=..., variables=...)`` and ``set_blocks`` work on a dense copy with a densify notice. (`#1047 <https://github.com/PyPSA/linopy/issues/1047>`__)
+* In a sparse model, ``add_constraints`` and ``add_indicator_constraints`` hold the lhs on a ``CSRStore`` whenever the grid can hold its coordinates, also for a dense lhs, and ``Constraint.from_dataset`` reads into the model's store class. ``Constraint.to_sparse()`` and ``Constraint.to_dense()`` replace the lhs store in place. Explicit conversions emit no notice at all, so ``warn_on_densify=True`` no longer flags them; the ``explicit`` argument of the conversion notice is removed. (`#1047 <https://github.com/PyPSA/linopy/issues/1047>`__)
+* A sparse constraint keeps ``rhs``, ``sign``, ``scaling`` and ``dual`` on its full grid like a dense one, instead of on its active rows; masked rows have label ``-1`` and rows without terms stay labelled but inactive. A masked row with an invalid infinite rhs now raises in a sparse model too. ``Constraint.active_labels``, ``to_matrix`` and ``to_polars`` raise ``ValueError`` on a constraint without labels. A sparse lhs reads its coefficients back as ``float64``. (`#1047 <https://github.com/PyPSA/linopy/issues/1047>`__)
+* ``Constraint.sanitize_zeros`` drops near-zero terms from the lhs store (``Store.prune`` takes a tolerance), so the ``_term`` dimension of a dense constraint can shrink, instead of marking the terms ``-1``/NaN. ``Constraint.iterate_slices`` slices the lhs store with ``Store.isel`` and keeps a sparse lhs sparse. ``MatrixAccessor`` and the dual write-back of ``Model.assign_result`` treat both stores alike. (`#1047 <https://github.com/PyPSA/linopy/issues/1047>`__)
+* Netcdf: one layout for every linear expression, constraint lhs and the objective, written from its store: a ``_linopy_store_kind`` attribute (``"dense"`` or ``"csr"``), ``const`` on the grid dimensions with their coordinates, and either ``coeffs``/``vars`` on the grid dimensions and ``_term`` or the CSR arrays ``data``/``indices``/``indptr``. Constraint fields (``labels``, ``sign``, ``rhs``, ``scaling``, ``dual``, ``binary_var``, ``binary_val``, ``blocks``) lie on the grid dimensions. Each lhs, expression and objective reads back on the store class it was written with, so a dense constraint in a sparse model stays dense and vice versa. The ``_linopy_format``/``_csr_columns`` CSR layout and the active-row and multiindex legacy readers are removed. (`#1048 <https://github.com/PyPSA/linopy/issues/1048>`__)
+* ``read_netcdf`` refuses files written by linopy <1.0 with a ``ValueError``; files carry the layout version in the ``_linopy_netcdf_layout`` attribute next to ``_linopy_version``. Rebuild the model and write it again with linopy >=1.0. (`#1048 <https://github.com/PyPSA/linopy/issues/1048>`__)
+* ``linopy.testing.assert_conequal(strict=False)`` compares the lhs with ``assert_equivalent``, independently of its store and term layout, instead of comparing the dense datasets. (`#1047 <https://github.com/PyPSA/linopy/issues/1047>`__)
+* ``Constraint.update`` raises a ``ValueError`` when the new ``lhs`` or ``rhs`` expression adds dimensions to the constraint; broadcasting a constraint to a larger grid is not supported. Before, the update was accepted and the labels stayed on the old dimensions, which left an inconsistent constraint.
+
+**Long-form inputs**
+
+.. note::
+
+   The following content was generated by AI.
+
+* ``linopy.from_long(frame, coords, default=None)`` pivots a long-form pandas or polars frame, key columns plus one value column, into a DataArray named after the value column to pass wherever a constant is accepted, e.g. bounds, coefficients, right-hand sides and penalties. The key columns are the columns named after a dimension of ``coords``, e.g. ``coords=var.coords``, exactly one other column must remain as the value column; the result is the full cube over the key dimensions with their full coordinates, and linopy broadcasts it over the dimensions without a key column. Key combinations missing from the frame raise, naming the first one, unless ``default`` fills them. No key column, zero or several value columns (a misspelled key column counts as a value column), null or duplicate keys, keys outside ``coords``, coordinates with duplicate labels, a non-numeric value column and key dtypes (numeric, datetime, date, duration, string) differing from the coordinates raise. (`#1049 <https://github.com/PyPSA/linopy/issues/1049>`__)
+* ``expr.groupby(linopy.Relation(frame, member, group, groups=None)).sum()`` sums over a many-to-many relation, a pandas or polars frame of exactly the member columns and a group column whose rows may repeat a member cell: every row adds its member cell's terms to its group, e.g. ``Relation(ports, ["link", "port"], "bus")`` adds each link port to its bus, without an incidence matrix and ``@``. ``member`` names one or several columns, each a dimension of the expression; members not listed drop out; the group dimension takes the position of the foremost member dimension in the expression. ``groups`` fixes the group axis of the result, groups without a member are zero and groups outside it raise. ``Relation.group_of(coords)`` returns the group of each member cell as a DataArray over the member dimensions, e.g. to select nodal prices for generators with ``dual.sel(bus=relation.group_of([gens]))``; every member cell must be listed exactly once. Null values, members outside the dimension and coordinates with duplicate labels raise. The sum stays sparse on a sparse expression; a quadratic expression raises ``NotImplementedError``. (`#1049 <https://github.com/PyPSA/linopy/issues/1049>`__)
+* Vectorised selection keeps a sparse expression sparse: ``isel``, ``sel`` and ``__getitem__`` with DataArray indexers over a new dimension with an index coordinate, and ``where`` with a condition over a new labelled dimension, stay on the CSR store instead of densifying. Indexers over a new dimension without coordinates or with a MultiIndex still densify. (`#1049 <https://github.com/PyPSA/linopy/issues/1049>`__)
+* ``from_long`` and ``Relation`` emit :class:`linopy.EvolvingAPIWarning` once per session: their signature and input format may change in minor releases. Silence with ``warnings.filterwarnings("ignore", message=r"^long-form:", category=linopy.EvolvingAPIWarning)``.
+
+**Deprecations**
+
+* The ``active_fill`` parameter of ``add_piecewise_formulation`` is deprecated and emits a ``FutureWarning``; it is removed in 1.1. Pad a partial gate explicitly instead, e.g. ``active=status.reindex(gen=gens).fillna(1)``, which gives the same model. A partial ``active`` without padding still raises.
+
+**Sparse models**
+
+* A merge of a CSR-backed expression with operands over a subset or superset of its dimensions stays sparse: each operand is broadcast over the union of the dimensions, joined as on the dense path, with the dimension order and absent cells of the dense result. Non-unique labels still densify.
+* Variables enter arithmetic as CSR-backed expressions in a sparse model: ``2 * x``, ``x + y`` and ``1 * x + 2 * y`` are sparse. Variable operations without a sparse path, such as quadratic products, ``rolling`` and ``cumsum``, build the dense expression directly, without a ``PerformanceWarning``.
+* Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
+* ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
+* ``assign_coords`` keeps a CSR-backed ``LinearExpression`` sparse when the coordinates lie on its grid: new labels for a dimension, and one-dimensional or scalar auxiliary coordinates. A ``groupby`` over such auxiliary coordinates then stays sparse too, so ``Model.from_spec(..., sparse=True)`` no longer densifies relation sums. Coordinates over several dimensions or over dimensions outside the grid still densify.
+* ``linopy.testing.assert_equivalent`` compares two linear expressions independently of their backing (dense or sparse) and term layout: coordinates including auxiliary ones, dimension order, absent cells, constants and the per-cell terms after summing duplicate variables and dropping zero coefficients. It never densifies a sparse operand. A conformance suite checks that every operation on a sparse expression either stays sparse or names its densify fallback, and that both backends agree. (`#1044 <https://github.com/PyPSA/linopy/issues/1044>`__)
+
+*Build a model from a mathspec program*
+
+* ``Model.from_spec`` builds a model from a `mathspec <https://github.com/energy-models/mathspec>`__ program attached to data. The spec is a ``pathlib.Path``, YAML text, a mapping or a ``mathspec.Spec``; a ``str`` is always YAML text, and a one-line ``str`` ending in ``.yaml`` or ``.yml`` raises a ``ValueError`` pointing to ``pathlib.Path``. The sources are any mapping keyed by declared name, read once per key, or an ``xarray.Dataset``. Requires mathspec 0.4 (``pip install "linopy[spec]"``, Python >= 3.12). The API emits an :class:`linopy.EvolvingAPIWarning` once per session while it stabilises. See :doc:`building-models-from-specs` and :doc:`spec-data`.
+* ``Model.from_spec(spec, sources, store=True)`` writes the spec's parameters, unfilled with a missing row a NaN hole, and its relations into ``model.parameters`` under their declared names; by default ``model.parameters`` is left untouched. Nothing else of the spec is kept on the model: ``to_netcdf`` / ``read_netcdf`` carry the stored data like any other parameters, and ``Model.from_spec(Path("x.yaml"), read_netcdf(f).parameters, store=True)`` rebuilds the model. An edit to the stored parameters reaches the model's variables, constraints and objective only on such a rebuild, while ``evaluate`` reads it at once.
+* ``linopy.spec.evaluate(spec, model, *names, sources=None)`` folds the spec's named expressions over the model's solution, with the data read from ``sources`` or, when none is given, from the stored ``model.parameters``.
+* A ``NaN`` in a ``DataArray``, a ``Dataset`` or a wide ``DataFrame`` source is a missing row, which the parameter's ``missing:`` decides on; tables (``Series``, ``dict``, tidy ``DataFrame``) refuse a ``NaN`` row. An ``int`` or ``bool`` grid with holes arrives as floats.
+* A missing row of a ``missing: refused`` parameter (the default) is refused only where a declaration reads it: a variable's bounds and a constraint's sides on the rows their ``where:`` keeps, the objective and named expressions everywhere, followed through ``shift``, lookups, windows and ``cases:`` regions. A ``where:`` that excludes every row reading a hole excuses it, and so does a masked variable or an ``absent`` parameter row the hole's term meets: ``w * x`` reads no ``w`` where ``x`` does not exist. The ``SpecDataError`` names the declaration, the parameter and the missing coordinates; ``evaluate`` refuses the same way.
+* Typesetting is mathspec's: ``mathspec.typeset(spec, fmt)`` for a whole spec, ``mathspec.typeset_line(spec, name, fmt)`` for one declaration.
+* A relation may be bare (key columns only), keyed by several columns or carry several value columns, and its source may be a ``DataFrame`` with one column per declared column. ``at(..., by=rel[col])``, ``sum(..., over=..., by=rel[col, ...])`` and conditions on a column follow mathspec's join semantics. A relation is held as its rows, never as a grid over its key, so a bare relation over two columns of one long dimension stays as small as its data. mathspec's ``operators/at_columns.yaml``, ``sum_by_columns.yaml`` and ``sum_by_column_lists.yaml`` build (`#1063 <https://github.com/PyPSA/linopy/issues/1063>`__, `#1071 <https://github.com/PyPSA/linopy/issues/1071>`__).
+* ``linopy.testing.synthetic_sources`` makes up dense data for every declaration of a spec, given in any form ``Model.from_spec`` takes, for tests and benchmarks.
+* Three limits apply. A constraint row that absence leaves without terms (from a ``missing: absent`` parameter, a ``missing: neutral`` parameter such as ``0 == load``, or a ``where:``-masked variable inside a sum) is refused with an error, where mathspec skips and reports it; linopy is stricter here (`#993 <https://github.com/PyPSA/linopy/issues/993>`__). With ``store=True``, only a relation of one key column and one value column is stored; a bare relation or one with several key or value columns raises ``SpecDataError`` before anything is written. A constraint may multiply two variables only where the data leaves the product no live row, through a zero coefficient, an absent term in a sum or a ``where:``; such a row keeps its linear terms, and a live product raises ``NotImplementedError``, as linopy carries a quadratic term in the objective only.
+* A constraint whose ``where:`` keeps no row adds no constraint group to the model and reserves no labels; ``dual(...)`` of such a constraint reads as all NaN.
+
+**Performance**
+
+* Building a model is faster on the dense path: ``add_variables``, ``add_constraints``, arithmetic between variables and constants, ``where``, subtraction and ``merge`` skip xarray alignment and copies when the operands already share their coordinates. PyPSA's own ``create_model`` builds about twice as fast.
+* ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
+
+**Bug fixes**
+
+* SCIP no longer queries dual values for MILPs, which printed errors and returned meaningless values, and works again with PySCIPOpt < 5. (`#1004 <https://github.com/PyPSA/linopy/pull/1004>`__)
+* Object-dtype data in ``model.parameters``, such as strings with ``NaN`` holes, round-trips through ``to_netcdf`` / ``read_netcdf`` with its holes on both the ``netcdf4`` and the ``scipy`` engine; before, a hole came back as an empty string. An object array mixing types is refused on write with a ``TypeError``.
+* Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
+* ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.
+* ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
+* ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
+* With ``add_objective(..., scaling=...)``, the solve log reports the objective and the dual bound in model units, matching ``Model.objective.value``. Before, it reported the scaled solver values. (`#1077 <https://github.com/PyPSA/linopy/issues/1077>`__)
+* Multiplying a constant or one-term ``LinearExpression`` by a multi-term ``LinearExpression`` no longer raises ``TypeError`` and gives the same result as the mirrored product, on both the dense and sparse backends. (`#1055 <https://github.com/PyPSA/linopy/issues/1055>`__)
+* ``to_netcdf`` no longer raises on timezone-aware datetimes in indexes, auxiliary coordinates, sparse (CSR) constraints and ``Model.parameters``; they are written as naive UTC with the zone in an attribute and restored by ``read_netcdf``. (`#1021 <https://github.com/PyPSA/linopy/pull/1021>`__)
+* The repr of an expression with more terms than ``linopy.options["display_max_terms"]`` now shows the last terms of a ``QuadraticExpression`` after the ``...`` instead of repeating the first ones, and prints the constant once at the end instead of also before the ``...``. (`#1023 <https://github.com/PyPSA/linopy/pull/1023>`__)
+
+**Features**
+
+* :meth:`linopy.Model.restrict` cuts a subproblem out of a model, e.g. a time slice for rolling-horizon optimization, a region for spatial decomposition or a part of the model for fix-and-optimize heuristics. ``m.restrict(snapshot=window, fix=...)`` selects labels along one or several dimensions with ``Dataset.sel`` semantics and returns a :class:`~linopy.restrict.WindowModel` built from a slice of the parent's matrices: constraint terms referencing variables outside the window are folded into the right-hand side at their actual matrix coefficient, ``rhs -= coeff * fixed_value``, and rows that lose every term are checked for feasibility and dropped. Because the window is a row and column selection of the parent's ``A``, ``b``, ``c``, ``lb`` and ``ub``, creating or moving it costs a slice rather than a rebuild of every variable and constraint. ``window.solve()`` hands those arrays to the solver and updates the existing solver model in place when consecutive windows share the sparsity pattern of ``A``, through the same :class:`~linopy.persistent.diff.ModelDiff` delta and per-backend apply hooks as the persistent interface. ``window.advance(snapshot=next, fix=...)`` moves the window to a new selection. Solutions and duals are built per container only when read. See the new :doc:`restrict` guide. (https://github.com/PyPSA/linopy/issues/768)
+
+**Internal**
+
+* The core modules are compacted after the legacy removal: ``Variables`` and ``Constraints`` share a ``LabelContainer`` base, the piecewise formulations share one link builder, and uncalled helpers are removed. ``merge`` no longer accepts bare ``Variable`` operands (pass ``var.to_linexpr()``), ``SolverReport.barrier_iterations`` (never populated) is removed, and ``linopy.common.set_int_index``, ``infer_schema_polars`` and ``require_constant`` are removed.
+* The methods of ``CSRStore`` and ``Grid`` in ``linopy.csr`` use pandas/xarray-style verbs instead of past participles, e.g. ``summed`` is ``sum``, ``reindexed`` is ``reindex``, ``filled`` is ``fillna``, ``contracted`` is ``dot``, ``with_const`` is ``assign_const`` and ``Grid.reordered`` is ``Grid.select``. (`#1018 <https://github.com/PyPSA/linopy/issues/1018>`__)
+* Store fallbacks convert a copy, never the receiver, and merges go through ``linopy.store.merge_stores``; ``_densify_all`` is removed. (`#1052 <https://github.com/PyPSA/linopy/issues/1052>`__)
+* ``linopy.matrices.Matrices`` is a frozen dataclass of a model's flat arrays (``A``, ``b``, ``c``, ``Q``, bounds, labels and scalings) with ``Matrices.take(rows, cols)`` to select rows and columns. ``model.matrices`` (``MatrixAccessor``) subclasses it and builds ``c`` and ``Q`` eagerly. Matrix windows reuse it: ``MatrixWindow.select`` returns the window's ``Matrices`` and the selected labels.
+* The direct solver builders consume ``Matrices`` instead of a ``Model``, so windows reach every backend without a model stand-in. The Gurobi and Xpress builders no longer call ``Constraints.sanitize_missings``, so the builders do not mutate the model; empty constraint rows are excluded from the matrices instead.
+
+Version 0.10.1
+--------------
+
+**Bug fixes**
+
+* ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
+* ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
+* ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
+
+Version 0.10.0
+--------------
+
+This release adds an opt-in strict arithmetic convention (v1), an end-to-end sparse model path, numerical scaling, constraint softening and the GPU solver NVIDIA cuOpt. Read **Breaking changes** before upgrading.
+
+.. important::
+
+   **Switch to v1 now.** linopy 1.0 will make the v1 semantics the only behaviour and remove the legacy path. Opt in with ``linopy.options["semantics"] = "v1"``, fix every ``LinopySemanticsWarning`` your model emits, and follow :doc:`migrating-to-v1`.
+
+**Strict "v1" arithmetic (opt-in)**
+
+Enable it with ``linopy.options["semantics"] = "v1"``. Legacy stays the default in 0.10 but is removed in 1.0, so we recommend switching now. Under legacy, every operation whose result changes under v1 emits a ``LinopySemanticsWarning`` that names the fix, so a model can migrate step by step. The warnings fire exactly where the two results diverge, once per operation, and point at the user's code. The full rules are in :doc:`the arithmetic convention <design/convention>`. Under v1:
+
+* **Exact alignment.** Shared dimensions align by label with ``join="exact"``. Differing labels or a pure reorder raise. Resolve with ``.sel`` / ``.reindex`` / ``.assign_coords``, or pass ``join=`` to ``.add`` / ``.sub`` / ``.mul`` / ``.div`` / ``.le`` / ``.ge`` / ``.eq``.
+* **Unlabeled operands.** Numpy arrays, lists and polars ``Series`` pair with dimensions by size. An ambiguous match (square array, equal-length dimensions) or no match raises. Wrap the operand in a ``DataArray`` to name its dimensions. (https://github.com/PyPSA/linopy/issues/736)
+* **NaN constants raise** instead of being filled with a value that differed per operator.
+* **Absence propagates.** Masked, reindexed and shifted-in slots stay absent through every operator instead of collapsing to zero.
+* **Explicit fill on joins.** A reindexing ``join=`` fills the positions it creates per side: the linopy operand with the zero expression, the constant with the new ``fill_value=`` of ``.add`` / ``.sub`` / ``.mul`` / ``.div``. The default means "does not apply": a missing divisor zeroes the term, and a missing numerator no longer gives ``1 / divisor``. ``fill_value=linopy.ABSENT`` keeps all created positions absent, also in ``linopy.merge``. (https://github.com/PyPSA/linopy/issues/890)
+* **Conflicting auxiliary coordinates raise** instead of being dropped silently.
+* **Aligned quadratic products.** ``x * y`` or ``expr * expr`` over shared dimensions with differing or reordered labels raises instead of an outer join by label. Align the factors first with ``.sel`` / ``.reindex`` / ``linopy.align``, as the product takes no ``join=``.
+* **No MultiIndex dimensions.** Use a flat dimension with the levels as auxiliary coordinates.
+* **Label-aligned groupby.** A grouper must match the grouped dimension's labels in set and order. A multi-key grouper gives a flat ``group`` dimension with the keys as auxiliary coordinates. (https://github.com/PyPSA/linopy/issues/827)
+
+**Sparse models**
+
+* **One switch.** ``Model(sparse=True)`` turns on the sparse (CSR, compressed sparse row) path for a model. ``groupby(...).sum()`` and ``@``/``dot`` against a constant return CSR-backed expressions, and ``add_constraints`` freezes every constraint unless ``freeze=False`` is passed. The key requires v1 and rejects ``chunk``. ``Model.copy`` and the netcdf round trip keep it. (`#976 <https://github.com/PyPSA/linopy/issues/976>`__)
+* **Sparse groupby-sum.** It builds from the ungrouped terms, so no padded term rectangle exists and build memory no longer depends on the largest group: 6-9x less peak memory on the hub-bus case. Multi-key groupers work; ``observed=True`` keeps only observed key combinations. (`#745 <https://github.com/PyPSA/linopy/issues/745>`__, `#870 <https://github.com/PyPSA/linopy/pull/870>`__, `#940 <https://github.com/PyPSA/linopy/pull/940>`__)
+* **Stays sparse.** A CSR-backed expression is no longer densified by:
+
+  * metadata reads: ``repr()``, ``shape``, ``sizes``, ``dims``, ``coords``, ``indexes``, ``isnull()``, ``const``, ``has_terms`` and ``drop_vars`` of auxiliary coordinates (`#962 <https://github.com/PyPSA/linopy/issues/962>`__, `#1003 <https://github.com/PyPSA/linopy/pull/1003>`__)
+  * arithmetic with a non-scalar constant, aligned as on the dense path (`#965 <https://github.com/PyPSA/linopy/issues/965>`__)
+  * ``shift``, ``roll`` and ``diff``; ``shift`` with a ``fill_value`` still densifies (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
+  * ``linopy.merge(..., dim=<grid dimension>)``, with the coordinates of the dense ``xr.concat`` (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
+  * ``sum(dim=...)`` and a further ``groupby(...).sum()`` (`#964 <https://github.com/PyPSA/linopy/issues/964>`__)
+  * ``where``, ``sel``, ``isel``, ``loc`` and ``[]``, with the dense semantics; masked cells become absent (`#966 <https://github.com/PyPSA/linopy/issues/966>`__)
+  * ``linopy.merge`` of differing grids with auxiliary coordinates (`#966 <https://github.com/PyPSA/linopy/issues/966>`__)
+  * ``@``/``dot`` against a constant, which returns the compact canonical form (`#748 <https://github.com/PyPSA/linopy/issues/748>`__, `#756 <https://github.com/PyPSA/linopy/issues/756>`__, `#925 <https://github.com/PyPSA/linopy/issues/925>`__)
+  * ``add_constraints(..., mask=..., freeze=True)`` and an expression on the right-hand side (`#970 <https://github.com/PyPSA/linopy/issues/970>`__)
+  * ``flat``, ``to_polars`` and ``solution`` (`#968 <https://github.com/PyPSA/linopy/issues/968>`__)
+  * use as linear objective, through ``matrices.c``, LP/MPS, netcdf, ``Model.copy``, persistent snapshots and direct solver APIs (`#967 <https://github.com/PyPSA/linopy/issues/967>`__)
+
+  An operand or indexer that adds dimensions still densifies.
+* **Visibility.** ``LinearExpression.is_sparse`` tells if an expression is CSR-backed, and its repr reads ``LinearExpression (sparse)``. ``linopy.options["warn_on_densify"]`` emits a ``PerformanceWarning`` with the reason whenever a sparse backing is dropped. It is on by default in a sparse model, where it also flags a merge of operands over different dimensions. Explicit conversions such as ``to_dense()`` or ``freeze=False`` warn only when the option is ``True``; ``False`` silences it. (`#969 <https://github.com/PyPSA/linopy/issues/969>`__)
+* **Guide.** The new :doc:`sparse-models` guide covers how to opt in, which operations stay sparse and which densify. (`#971 <https://github.com/PyPSA/linopy/issues/971>`__)
+
+**Numerical scaling**
+
+* Variables, constraints and the objective accept a ``scaling`` factor that moves the problem into better-behaved units for the solver. Variable scaling acts on columns, constraint and objective scaling on rows.
+* Primal values, duals and the objective are mapped back to the original units after the solve. Solver tolerances apply to the scaled problem.
+* See the :doc:`numerical-scaling` tutorial and the *Numerical scaling* section of the :doc:`user-guide`.
+
+**Constraint softening**
+
+* ``Constraint.soften(penalty, max_violation=None, name=None)`` adds a slack variable to the ``lhs`` (a positive/negative pair for equality constraints) and a penalty term to the objective. It returns a ``Slack`` named tuple; the ``slack`` property gives it back later.
+* ``add_constraints(..., penalty=...)`` softens the constraint on creation, also with ``freeze=True``.
+* A frozen ``CSRConstraint`` is softened natively by appending the slack terms to its sparse rows. ``to_dense()``/``mutable()``, ``Constraint.freeze()`` and netcdf keep the slack. (`#975 <https://github.com/PyPSA/linopy/issues/975>`__)
+* Detached copies from ``.mutable()``, ``.sel()`` or ``.isel()`` cannot be softened.
+
+**New solver: NVIDIA cuOpt**
+
+* GPU-accelerated `NVIDIA cuOpt <https://docs.nvidia.com/cuopt/>`__ for linear, mixed-integer and convex quadratic problems, via ``model.solve("cuopt", io_api="direct")``.
+* Install with ``pip install "linopy[gpu]"``. Requires Linux, an NVIDIA GPU of compute capability 7.0+ and a CUDA 12 driver (525.60.13+). See :doc:`gpu-acceleration` for supported problem classes and limitations.
+
+**Other features**
+
+* :meth:`linopy.Model.assign_coords` replaces coordinate values across a model (variables, constraints, expressions, parameters) without changing its shape, e.g. ``m.assign_coords(snapshot=new_snapshots)``. Containers on a subset of the dimension are mapped by label. Typical use: advancing the window in rolling-horizon runs with the persistent solver interface. (https://github.com/PyPSA/linopy/issues/767)
+* ``add_piecewise_formulation(..., mask=...)`` declares which breakpoint slots are real, for **ragged** curves with different breakpoint counts per entity. Under v1 the mask is required (``mask=x_pts.notnull()``) instead of reading NaN padding. (https://github.com/PyPSA/linopy/issues/884)
+* ``Model.compute_infeasibilities`` supports HiGHS, via ``Highs.getIis``. (https://github.com/PyPSA/linopy/issues/956)
+* ``Model.to_netcdf(compression=...)`` applies one encoding to every array, so compression no longer needs linopy's internal variable names. ``True`` (default) means ``{"zlib": True, "complevel": 3}``, ``False`` turns it off, and explicit ``encoding`` entries win. (`#1007 <https://github.com/PyPSA/linopy/pull/1007>`__)
+
+**Performance**
+
+*Model build*
+
+* ``@``/``dot`` against a constant with zeros drops the zero terms instead of keeping one term per contracted member: 852 to 3 terms on PyPSA's KVL (Kirchhoff Voltage Law) constraint. (`#748 <https://github.com/PyPSA/linopy/issues/748>`__)
+* Sparse ``@``/``dot`` runs each chunk on only the variables it uses, which removes seconds of overhead on models with millions of variables. Chunks are sized by nonzeros. (`#990 <https://github.com/PyPSA/linopy/pull/990>`__)
+* Sparse ``shift`` on an uneven ``groupby`` result (2000 x 720 cells, 800 terms wide) takes 14 ms and 54 MB instead of 1 s and 4.4 GB. (`#1011 <https://github.com/PyPSA/linopy/issues/1011>`__)
+* ``densify_terms`` (``sum(drop_zeros=True)``) is vectorised: 127 s to 3 ms on a (2000 x 60) expression.
+* An N-way ``linopy.merge`` of CSR-backed expressions runs in one pass and scales with the nonzeros, not quadratically with the operand count: about 30% faster for three operands. A sparse ``reindex`` that only reorders cells gathers the rows directly, about 4x faster. (`#1010 <https://github.com/PyPSA/linopy/issues/1010>`__)
+* ``add_constraints`` on a sparse model no longer copies the lhs matrix or expands the mask and scaling over the full grid: about half the peak memory. (`#977 <https://github.com/PyPSA/linopy/issues/977>`__)
+* Freezing a dense constraint builds the CSR matrix directly and sorts only rows with more than one term: 465 to 185 ms and 1.74 to 0.25 GB on a 2M-variable nodal balance. (`#1009 <https://github.com/PyPSA/linopy/issues/1009>`__)
+
+*Matrices, export and solvers*
+
+* ``Model.matrices`` assembles constraint blocks in one pass into preallocated CSR buffers, without full-grid scaling lookups or ``eliminate_zeros``: 45% faster with 200 MB less peak memory on an 8M-row model, with identical output. (`#1008 <https://github.com/PyPSA/linopy/issues/1008>`__)
+* Duals of frozen constraints are read back on the active rows only. A masked freeze gathers rows once, and mixed-sign senses convert vectorised.
+* The LP writer writes constraints about 2x faster with byte-identical output.
+* The MOSEK direct API builds bounds and names vectorised.
+* Direct solver APIs no longer set variable and constraint names by default, which made ``to_highspy`` about 2x faster (see **Breaking changes**). (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
+* Persistent snapshots of tz-aware ``DatetimeIndex`` coordinates store UTC-ns arrays plus the timezone: capture ~24x and warm-start diffs ~33x faster. (`#960 <https://github.com/PyPSA/linopy/pull/960>`__)
+
+**Bug fixes**
+
+*Copy and I/O*
+
+* ``Model.copy`` (and ``copy.copy``/``copy.deepcopy``) no longer turns a quadratic objective into a linear one. ``assert_model_equal`` now compares the objective type. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
+* ``to_netcdf``/``read_netcdf`` keep a quadratic objective quadratic. (`#903 <https://github.com/PyPSA/linopy/issues/903>`__)
+* ``read_netcdf`` restores containers in insertion order, so a round trip no longer permutes ``matrices.A``. ``assert_model_equal`` now compares the order. (`#934 <https://github.com/PyPSA/linopy/issues/934>`__)
+* ``read_netcdf`` no longer fails when a frozen constraint has a dimension or level name with ``-``.
+* ``Model.copy`` keeps frozen constraints frozen; ``deep=True`` copies their arrays and a CSR-backed objective. (`#981 <https://github.com/PyPSA/linopy/issues/981>`__)
+
+Files from earlier versions load as before.
+
+*Frozen constraints*
+
+* Adding or removing variables after ``freeze=True`` no longer breaks ``model.matrices`` with ``inconsistent shapes``. (`#926 <https://github.com/PyPSA/linopy/issues/926>`__)
+* A ``CSRConstraint`` from a CSR-backed expression keeps its auxiliary coordinates through ``to_dense()``, ``freeze()`` and netcdf. (`#941 <https://github.com/PyPSA/linopy/issues/941>`__)
+* Unsupported ``CSRConstraint`` operations (``loc``, ``update``, ``from_rule``, setting ``coeffs``/``vars``/``sign``) raise an ``AttributeError`` that points to ``.mutable()``. (`#963 <https://github.com/PyPSA/linopy/issues/963>`__)
+* Repeated matrix builds on an unchanged model reuse the cached column mapping again, so persistent snapshot diffs skip untouched frozen constraints. (`#933 <https://github.com/PyPSA/linopy/issues/933>`__)
+
+*Expressions*
+
+* ``sum()`` no longer raises when another dimension has size 0. (https://github.com/PyPSA/linopy/issues/906)
+* A multi-key ``groupby`` returns groups sorted by key, not in an order that changed with ``PYTHONHASHSEED``.
+* ``linopy.merge`` with ``join="outer"``/``"left"``/``"right"`` no longer raises a ``MergeError`` when only one operand has an auxiliary coordinate on a joined dimension. The same holds for ``.add`` / ``.sub`` / ``.mul`` / ``.div`` with a reindexing ``join=``.
+* ``densify_terms`` works on expressions without coordinate dimensions and on ``QuadraticExpression``.
+
+*Solvers and options*
+
+* ``Variable.get_solver_attribute`` for Gurobi maps values by position. It returned values of the wrong variables when names were off and a variable was masked. (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
+* ``Solver.close()`` drops the solver model before its environment. After a file-based COPT or MindOpt solve, ``model.solver_model`` is ``None`` instead of a handle into freed memory. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+* The ``linopy.options`` context manager restores the values active on entry, not the defaults.
+
+**Breaking changes**
+
+* **No automatic solver release.** Garbage collection no longer closes the solver, as the finalizer could abort the interpreter. Call ``model.solver.close()``, set ``model.solver = None`` or use ``contextlib.closing(model.solver)``. A new ``solve()`` still closes the previous solver. (`#899 <https://github.com/PyPSA/linopy/pull/899>`__)
+* **No solver names by default.** ``Model.set_names_in_solver_io`` defaults to ``False`` for ``to_highspy``, ``to_gurobipy``, ``to_mosek`` and ``to_xpress``. ``solve()`` still sets names with ``warmstart_fn`` or ``basis_fn``. Pass ``set_names=True`` or ``Model(set_names_in_solver_io=True)`` to keep them. (`#978 <https://github.com/PyPSA/linopy/issues/978>`__)
+* **Compressed netcdf by default.** ``Model.to_netcdf`` compresses with zlib level 3; pass ``compression=False`` for the old output. (`#1007 <https://github.com/PyPSA/linopy/pull/1007>`__)
+* **Renamed sparse internals.** ``linopy.sparse_expression`` is now ``linopy.csr``, ``CSRExpression`` is ``CSRLinearExpression`` and ``CSRConstraint.from_mutable`` is ``CSRConstraint.from_dense``.
+* **Other API changes.** ``LinearExpressionGroupby(data=...)`` is now ``LinearExpressionGroupby(obj=...)``. The objective name lives on ``Objective.name``/``Objective.attrs``, not in the expression's attributes (`#967 <https://github.com/PyPSA/linopy/issues/967>`__). ``matrices.clabels`` and ``matrices.indicator_binvar`` are ``int32`` by default.
+
+**Deprecations**
+
+* In favour of ``Model(sparse=True)``, with a ``FutureWarning``: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. They keep working until linopy 1.0 removes them together with the legacy semantics; only ``@`` ignores ``sparse_groupby`` already. (`#976 <https://github.com/PyPSA/linopy/issues/976>`__)
+
+**Documentation**
+
+* The example notebooks use v1 semantics. The coordinate-alignment and expression tutorials teach strict label-based alignment and explicit ``join=``.
 
 Version 0.9.1
 -------------

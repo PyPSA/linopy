@@ -7,9 +7,11 @@ Created on Mon Oct 10 14:21:23 2022.
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, Model
+from linopy.matrices import Matrices
 
 
 def test_basic_matrices() -> None:
@@ -68,12 +70,12 @@ def test_matrices_duplicated_variables() -> None:
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
-def test_matrices_drops_explicit_zeros() -> None:
+def test_matrices_drops_explicit_zeros(backend: Model) -> None:
     # https://github.com/PyPSA/linopy/issues/814
     # Expressions that broadcast against a dense coordinate store one coefficient
     # per pair, most of them structurally zero. Those must not reach A, whose
     # stored nnz drives the direct-solver handoff (e.g. highspy.addRows).
-    m = Model()
+    m = backend
 
     x = m.add_variables(coords=[range(4)], name="x")
     coeff = xr.DataArray(
@@ -98,3 +100,141 @@ def test_matrices_float_c() -> None:
 
     c = m.matrices.c
     assert np.all(c == np.array([1.5, 1.5]))
+
+
+@pytest.mark.parametrize(
+    ("integer", "binary", "quadratic", "expected"),
+    [
+        (False, False, False, "LP"),
+        (False, True, False, "MILP"),
+        (True, True, False, "ILP"),
+        (False, False, True, "QP"),
+        (False, True, True, "MIQP"),
+    ],
+)
+def test_matrices_type(
+    integer: bool, binary: bool, quadratic: bool, expected: str
+) -> None:
+    m = Model()
+    x = m.add_variables(0, 10, coords=[range(2)], name="x", integer=integer)
+    y = m.add_variables(name="y", binary=binary)
+    m.add_constraints(x.sum() + y >= 1)
+    m.add_objective(x * x + y if quadratic else x.sum() + y)
+    assert m.matrices.type == m.type == expected
+
+
+def test_matrices_sol_aligned_with_vlabels() -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x", mask=pd.Series([True, False, True], i))
+    y = m.add_variables(coords=[i], name="y")
+    m.add_constraints(x + y >= 0, name="c")
+    with pytest.raises(ValueError, match="not optimized"):
+        m.matrices.sol
+    m._mock_solve()
+    x.solution = xr.DataArray([1.0, np.nan, 3.0], coords=[i])
+    y.solution = xr.DataArray([4.0, 5.0, 6.0], coords=[i])
+    M = m.matrices
+    np.testing.assert_array_equal(M.vlabels, [0, 2, 3, 4, 5])
+    np.testing.assert_array_equal(M.sol, [1.0, 3.0, 4.0, 5.0, 6.0])
+
+    stale = m.matrices
+    z = m.add_variables(coords=[i], name="z")
+    z.solution = xr.DataArray([7.0, 8.0, 9.0], coords=[i])
+    with pytest.raises(ValueError, match="expected 5"):
+        stale.sol
+
+
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_matrices_scaled_masked_mixed_signs(sparse: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(0, 4, coords=[i], name="x", scaling=[1.0, 2.0, 4.0])
+    y = m.add_variables(coords=[i], name="y")
+    z = m.add_variables(coords=[i], name="z", binary=True)
+    sign = xr.DataArray(["<=", ">=", "="], coords=[i])
+    m.add_constraints(
+        2 * x + y - y,
+        sign,
+        xr.DataArray([1.0, 2.0, 3.0], coords=[i]),
+        name="c",
+        scaling=xr.DataArray([10.0, 1.0, 5.0], coords=[i]),
+        mask=xr.DataArray([True, False, True], coords=[i]),
+    )
+    d = m.add_constraints(x + 3 * y >= 1, name="d")
+    (m.constraints["c"] if sparse else d).to_sparse()
+    m.add_indicator_constraints(z, 1, x <= 2, name="ind")
+    M = m.matrices
+
+    assert M.A is not None and M.indicator_A is not None
+    col_scaling = np.array([1.0, 0.5, 0.25])
+    expected = np.zeros((5, 9))
+    expected[0, 0], expected[1, 2] = 20.0, 2.5
+    expected[2:, :3] = np.diag(col_scaling)
+    expected[2:, 3:6] = 3 * np.eye(3)
+    np.testing.assert_array_equal(M.A.toarray(), expected)
+    assert M.A.nnz == 8
+    np.testing.assert_array_equal(M.b, [10.0, 15.0, 1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(M.sense, ["<", "=", ">", ">", ">"])
+    np.testing.assert_array_equal(M.clabels, [0, 2, 3, 4, 5])
+    expected_ind = np.zeros((3, 9))
+    expected_ind[:, :3] = np.diag(col_scaling)
+    np.testing.assert_array_equal(M.indicator_A.toarray(), expected_ind)
+    np.testing.assert_array_equal(M.indicator_b, [2.0, 2.0, 2.0])
+    np.testing.assert_array_equal(M.indicator_binvar, [6, 7, 8])
+    np.testing.assert_array_equal(M.lb[:3], [0.0, 0.0, 0.0])
+    np.testing.assert_array_equal(M.ub[:3], [4.0, 8.0, 16.0])
+
+
+@pytest.mark.parametrize(
+    ("rows", "cols"),
+    [([0, 2], [1, 5, 6]), ([4, 1, 3], [7, 0, 2]), ([], [3])],
+    ids=["subset", "reordered", "no-rows"],
+)
+def test_matrices_take(rows: list[int], cols: list[int]) -> None:
+    m = Model()
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(0, 4, coords=[i], name="x", scaling=[1.0, 2.0, 4.0, 1.0])
+    y = m.add_variables(coords=[i], name="y", integer=True)
+    m.add_constraints(x + 2 * y >= 1, name="c", scaling=[1.0, 3.0, 1.0, 2.0])
+    m.add_constraints(x.sum() <= 3, name="d")
+    m.add_objective((x * x).sum() + 3 * y.sum(), sense="max")
+    M = m.matrices
+    r, c = np.array(rows, dtype=np.intp), np.array(cols, dtype=np.intp)
+
+    taken = M.take(r, c)
+
+    assert type(taken) is Matrices
+    assert taken.A is not None and M.A is not None
+    assert taken.Q is not None and M.Q is not None
+    np.testing.assert_array_equal(taken.A.toarray(), M.A.toarray()[np.ix_(r, c)])
+    np.testing.assert_array_equal(taken.Q.toarray(), M.Q.toarray()[np.ix_(c, c)])
+    for column_side, full in [
+        (taken.vlabels, M.vlabels),
+        (taken.c, M.c),
+        (taken.lb, M.lb),
+        (taken.ub, M.ub),
+        (taken.vtypes, M.vtypes),
+        (taken.var_scaling, M.var_scaling),
+    ]:
+        np.testing.assert_array_equal(column_side, full[c])
+    for row_side, full in [
+        (taken.clabels, M.clabels),
+        (taken.b, M.b),
+        (taken.sense, M.sense),
+        (taken.con_scaling, M.con_scaling),
+    ]:
+        np.testing.assert_array_equal(row_side, full[r])
+    assert (taken.objective_scaling, taken.objective_sense) == (1.0, "max")
+
+
+def test_matrices_take_rejects_indicator_constraints() -> None:
+    m = Model()
+    x = m.add_variables(0, 4, coords=[range(2)], name="x")
+    z = m.add_variables(coords=[range(2)], name="z", binary=True)
+    m.add_constraints(x >= 0, name="c")
+    m.add_indicator_constraints(z, 1, x <= 2, name="ind")
+    rows, cols = np.arange(1), np.arange(2)
+
+    with pytest.raises(NotImplementedError, match="indicator"):
+        m.matrices.take(rows, cols)
