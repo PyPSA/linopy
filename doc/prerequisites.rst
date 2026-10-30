@@ -25,6 +25,37 @@ or
    conda install -c conda-forge linopy
 
 
+Optional dependencies
+---------------------
+
+The base install pulls numpy, scipy, xarray, pandas, packaging and bottleneck.
+Three features need an extra:
+
+``linopy[polars]``
+    The LP file writer and the ``to_polars()`` export methods. This is required
+    by the default ``Model.solve()``, which writes an LP file. Install it if you
+    want the default solve path or any polars export:
+
+    .. code:: bash
+
+        uv pip install "linopy[polars]"
+
+    Without it, ``Model.solve()`` raises ``ImportError``. Pass
+    ``io_api="direct"`` to solve without writing a file, or ``io_api="mps"`` to
+    write an MPS file instead (the MPS writer uses highspy).
+
+``linopy[dask]``
+    Chunked (dask-backed) arrays, for example via ``Variable.chunk()``. Plain
+    numpy and xarray models do not need it.
+
+``linopy[progress]``
+    Progress bars while writing LP files. Without it, LP export runs silently.
+
+.. code:: bash
+
+    uv pip install "linopy[polars,dask,progress]"
+
+
 Install a solver
 ----------------
 

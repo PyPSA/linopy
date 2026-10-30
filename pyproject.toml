@@ -30,15 +30,12 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
-    "bottleneck",
-    "toolz",
-    "numexpr",
     "xarray>=2024.2.0",
-    "dask>=0.18.0",
-    "polars>=1.31.1",
-    "tqdm",
-    "deprecation",
+    "pandas",
     "packaging",
+    # Variable.ffill/bfill go through xarray's push, which imports bottleneck
+    # directly with no numpy fallback.
+    "bottleneck",
 ]
 
 [project.urls]
@@ -46,6 +43,19 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
+# Needed for the LP file writer (the default `Model.solve()` export path) and
+# for the `to_polars()` export methods.
+polars = [
+    "polars>=1.31.1",
+]
+# Needed only for chunked (dask-backed) arrays, e.g. `Variable.chunk()`.
+dask = [
+    "dask>=0.18.0",
+]
+# Progress bars while writing LP files.
+progress = [
+    "tqdm",
+]
 oetc = [
     "google-cloud-storage",
     "requests",
@@ -67,6 +77,8 @@ docs = [
     "ipykernel==7.3.0",
     "matplotlib==3.11.0",
     "highspy>=1.7.1",
+    # The example notebooks call solve()/to_file(), which need the LP writer.
+    "linopy[polars]",
 ]
 dev = [
     "pytest",
@@ -81,6 +93,7 @@ dev = [
     "highspy",
     "jupyter",
     "matplotlib",
+    "linopy[polars,dask,progress]",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.
