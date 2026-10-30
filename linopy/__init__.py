@@ -38,11 +38,6 @@ from linopy.remote import RemoteHandler
 from linopy.semantics import ABSENT
 from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
-try:
-    from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
-except ImportError:
-    pass
-
 __all__ = (
     "ABSENT",
     "Constraints",
@@ -56,7 +51,6 @@ __all__ = (
     "LinopySemanticsWarning",
     "Model",
     "Objective",
-    "OetcHandler",
     "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",

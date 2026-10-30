@@ -334,6 +334,7 @@ def test_diff_snapshot_matches_capture(baseline: Model, mutate: str) -> None:
         baseline.add_objective(3 * x.sum() + 2 * y.sum(), overwrite=True)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(baseline))
 
 
@@ -350,6 +351,7 @@ def test_diff_snapshot_matches_capture_under_ignore_dims() -> None:
     snap = ModelSnapshot.capture(m1)
     diff = ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"})
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
 
 
@@ -364,6 +366,7 @@ def test_from_models_snapshot_matches_capture() -> None:
     m1, m2 = build(4.0), build(7.0)
     diff = ModelDiff.from_models(m1, m2)
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
 
 

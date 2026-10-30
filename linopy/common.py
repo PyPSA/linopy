@@ -511,6 +511,24 @@ def assigned_labels(labels: np.ndarray | DataArray) -> np.ndarray:
     return flat[flat != -1]
 
 
+def lookup_table(
+    keys: np.ndarray,
+    size: int,
+    values: np.ndarray | None = None,
+    dtype: DTypeLike = np.intp,
+) -> np.ndarray:
+    """
+    Table of length ``size`` mapping ``keys`` to ``values``, -1 elsewhere.
+
+    Without ``values``, each key maps to its position in ``keys``, which inverts
+    a label-to-position array. Index the table only with keys in ``[0, size)``:
+    a -1 sentinel would read the last entry.
+    """
+    table = np.full(size, -1, dtype=dtype)
+    table[keys] = np.arange(keys.size) if values is None else values
+    return table
+
+
 def contains_labels(values: np.ndarray, labels: np.ndarray) -> bool:
     """
     Whether any entry of ``values`` is one of ``labels``.
@@ -777,9 +795,7 @@ class VariableLabelIndex:
         vlabels = self.vlabels
         model = self._variables.model
         dtype = model._dtypes["labels"]
-        label_to_pos = np.full(model._xCounter, -1, dtype=dtype)
-        label_to_pos[vlabels] = np.arange(len(vlabels), dtype=dtype)
-        return label_to_pos
+        return lookup_table(vlabels, model._xCounter, dtype=dtype)
 
     @property
     def n_active_vars(self) -> int:
@@ -820,9 +836,7 @@ class ConstraintLabelIndex:
         clabels = self.clabels
         model = self._constraints.model
         dtype = model._dtypes["labels"]
-        label_to_pos = np.full(model._cCounter, -1, dtype=dtype)
-        label_to_pos[clabels] = np.arange(len(clabels), dtype=dtype)
-        return label_to_pos
+        return lookup_table(clabels, model._cCounter, dtype=dtype)
 
     @property
     def n_active_cons(self) -> int:
@@ -997,12 +1011,13 @@ def format_single_expression(
         truncate = max_terms // 2
         positions = model.variables.get_label_position(v[..., :truncate])
         expr = list(zip(c[:truncate], positions))
-        res = format_line(expr, const)
+        # the constant is printed once, after the last terms
+        res = format_line(expr, np.nan)
         res += " ... "
         expr = list(
             zip(
                 c[-truncate:],
-                model.variables.get_label_position(v[-truncate:]),
+                model.variables.get_label_position(v[..., -truncate:]),
             )
         )
         residual = format_line(expr, const)
