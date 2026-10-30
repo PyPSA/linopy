@@ -149,7 +149,6 @@ This package is published under MIT license.
 
    using-solvers
    solve-on-remote
-   solve-on-oetc
    gpu-acceleration
 
 .. toctree::

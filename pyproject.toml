@@ -46,10 +46,6 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
-oetc = [
-    "google-cloud-storage",
-    "requests",
-]
 remote = [
     "paramiko",
 ]
@@ -76,7 +72,6 @@ dev = [
     "netcdf4",
     "paramiko",
     "types-paramiko",
-    "types-requests",
     "gurobipy",
     "highspy",
     "jupyter",
