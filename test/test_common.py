@@ -21,6 +21,7 @@ from linopy.common import (
     iterate_slices,
     label_coord,
     maybe_group_terms_polars,
+    set_data_var,
 )
 
 
@@ -50,6 +51,21 @@ def test_assign_fields_replaces_without_aligning() -> None:
     assert list(result) == ["const", "vars", "scaling"]
     assert result.sizes["_term"] == 1
     assert result.attrs == {"a": 1}
+
+
+@pytest.mark.parametrize("name", ["solution", "dual"])
+def test_set_data_var(name: str) -> None:
+    ds = xr.Dataset({"solution": (("a", "b"), np.zeros((2, 3)))})
+    out = set_data_var(ds, name, ("a", "b"), np.ones((2, 3)))
+    assert out[name].dims == ("a", "b")
+    assert (out[name] == 1).all()
+    assert (ds["solution"] == 0).all()
+
+
+def test_set_data_var_shape_mismatch_raises() -> None:
+    ds = xr.Dataset({"solution": (("a", "b"), np.zeros((2, 3)))})
+    with pytest.raises(ValueError, match="does not match"):
+        set_data_var(ds, "solution", ("a", "b"), np.ones((3, 2)))
 
 
 def test_iterate_slices_basic() -> None:

@@ -960,6 +960,17 @@ class Constraint:
         """
         return self.has_labels(assigned_labels(variable.labels))
 
+    def _assign_dual(self, values: np.ndarray) -> None:
+        """
+        Write dual values without rebuilding the DataArray.
+
+        Internal: values-only overwrite used by :meth:`Model.assign_result`. The
+        values already have the row shape and order, so the alignment and
+        broadcasting checks in the public setter are pure overhead.
+        """
+        template = self._grid_template()
+        self._dual = DataArray(values, coords=template.coords, dims=template.dims)
+
     def has_labels(self, labels: np.ndarray) -> bool:
         """
         Check if the constraint references any of the given variable labels.

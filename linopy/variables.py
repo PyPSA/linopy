@@ -49,6 +49,7 @@ from linopy.common import (
     iterate_slices,
     reassign_coords,
     save_join,
+    set_data_var,
     to_dataframe,
     to_polars,
 )
@@ -1149,6 +1150,16 @@ class Variable:
         """
         value = DataArray(value).broadcast_like(self.labels)
         self._data = assign_fields(self.data, solution=value)
+
+    def _assign_solution(self, values: np.ndarray) -> None:
+        """
+        Write solution values without rebuilding the dataset.
+
+        Internal: values-only overwrite used by :meth:`Model.assign_result`. The
+        variable's shape and coordinates are already correct, so constructing a
+        ``DataArray`` and merging it costs more than writing the array.
+        """
+        self._data = set_data_var(self._data, "solution", self.dims, values)
 
     @has_optimized_model
     def get_solver_attribute(self, attr: str) -> DataArray:
