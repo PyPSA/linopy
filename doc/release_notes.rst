@@ -138,6 +138,10 @@ Version 0.10.1
 
 * ``Model.assign_coords`` no longer relabels containers through a Python dict. It maps full-length containers straight to the new values and locates subset containers' labels with a positional ``get_indexer`` / ``take``: on a tz-aware ``DatetimeIndex`` — the rolling-horizon case it is built for — the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~3 ms, down from ~817 ms.
 
+**Bug fixes**
+
+* The repr of an expression with more terms than ``linopy.options["display_max_terms"]`` now shows the last terms of a ``QuadraticExpression`` after the ``...`` instead of repeating the first ones, and prints the constant once at the end instead of also before the ``...``. (`#1023 <https://github.com/PyPSA/linopy/pull/1023>`__)
+
 Version 0.10.0
 --------------
 
