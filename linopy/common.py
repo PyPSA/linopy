@@ -81,8 +81,9 @@ def maybe_replace_signs(sign: DataArray, allow_null: bool = False) -> DataArray:
         np.ndarray: The replaced signs.
     """
     values = sign.values
+    stored = values[tuple(slice(None) if s else slice(1) for s in values.strides)]
     is_str = values.dtype.kind == "U"
-    candidates = values.ravel() if is_str else pd.unique(values.ravel())
+    candidates = stored.ravel() if is_str else pd.unique(stored.ravel())
     other = candidates[~np.isin(candidates, list(SIGNS))]
     if allow_null:
         other = other[pd.notna(other)]
