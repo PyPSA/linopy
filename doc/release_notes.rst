@@ -16,7 +16,7 @@ Version 1.0.0
 * The deprecated sparse opt-ins are removed: ``Model(freeze_constraints=...)``, the ``Model.freeze_constraints`` property and setter, ``groupby(...).sum(sparse=...)`` and ``linopy.options["sparse_groupby"]``. Use ``Model(sparse=True)`` instead and read ``Model.sparse``.
 * ``Model(auto_mask=...)`` and the ``Model.auto_mask`` property are removed: user-supplied NaN no longer masks variables or constraints. NaN in coefficients or RHS values raises; pass ``mask=`` instead.
 * NaN in a user-supplied variable bound (``lower``/``upper`` in ``add_variables``, ``Variable.update``, ``fix``) now raises a ``ValueError``; exclude positions explicitly with ``mask=``.
-* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters`` and constant operands reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
+* ``MultiIndex`` coordinates are unsupported everywhere: besides ``add_variables``, ``add_constraints`` and ``add_objective``, ``Model.parameters``, constant operands and ``assign_coords`` on variables, expressions and constraints reject them with the ``reset_index`` hint. ``broadcast_to_coords`` no longer projects inputs indexed by the levels of a ``MultiIndex`` dimension onto it.
 * The ``assign_multiindex_safe`` methods of ``Variable``, ``LinearExpression``, ``QuadraticExpression`` and ``Constraint`` are removed; use ``assign``. The helpers ``linopy.common.assign_multiindex_safe`` and ``linopy.common.assign_coords_multiindex_safe`` are renamed to ``assign_fields`` and ``reassign_coords``.
 * Long-deprecated shims are removed:
 
@@ -80,6 +80,7 @@ Version 1.0.0
 * Variables enter arithmetic as CSR-backed expressions in a sparse model: ``2 * x``, ``x + y`` and ``1 * x + 2 * y`` are sparse. Variable operations without a sparse path, such as quadratic products, ``rolling`` and ``cumsum``, build the dense expression directly, without a ``PerformanceWarning``.
 * Sparse merges and sums are faster: terms are interleaved or stacked row-wise without a COO round trip, and rows are brought into canonical form (terms ordered by variable label, duplicate variables summed) only once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and its ``nterm`` counts the stored terms.
 * ``fillna`` with an expression on a sparse expression emits one densify notice instead of two.
+* ``assign_coords`` keeps a CSR-backed ``LinearExpression`` sparse when the coordinates lie on its grid: new labels for a dimension, and one-dimensional or scalar auxiliary coordinates. A ``groupby`` over such auxiliary coordinates then stays sparse too, so ``Model.from_spec(..., sparse=True)`` no longer densifies relation sums. Coordinates over several dimensions or over dimensions outside the grid still densify.
 * ``linopy.testing.assert_equivalent`` compares two linear expressions independently of their backing (dense or sparse) and term layout: coordinates including auxiliary ones, dimension order, absent cells, constants and the per-cell terms after summing duplicate variables and dropping zero coefficients. It never densifies a sparse operand. A conformance suite checks that every operation on a sparse expression either stays sparse or names its densify fallback, and that both backends agree. (`#1044 <https://github.com/PyPSA/linopy/issues/1044>`__)
 
 *Build a model from a mathspec program*
@@ -108,6 +109,7 @@ Version 1.0.0
 * ``Variables.fix`` validates every variable before fixing any, so a failing variable leaves all variables unfixed.
 * ``Model.add_constraints`` rejects dimensions named after reserved fields (``sign``, ``rhs``, ``scaling``, ...) with a ``ValueError``, consistent with ``add_variables`` and ``add_expressions``.
 * With ``add_objective(..., scaling=...)``, the solve log reports the objective and the dual bound in model units, matching ``Model.objective.value``. Before, it reported the scaled solver values. (`#1077 <https://github.com/PyPSA/linopy/issues/1077>`__)
+* Multiplying a constant or one-term ``LinearExpression`` by a multi-term ``LinearExpression`` no longer raises ``TypeError`` and gives the same result as the mirrored product, on both the dense and sparse backends. (`#1055 <https://github.com/PyPSA/linopy/issues/1055>`__)
 
 **Internal**
 

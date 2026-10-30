@@ -281,6 +281,13 @@ def enforce_no_multiindex(obj: Any, *, context: str = "input") -> None:
         raise ValueError(_multiindex_message(str(dim), context))
 
 
+def assign_flat_coords(ds: Dataset, *args: Any, **kwargs: Any) -> Dataset:
+    """``Dataset.assign_coords``, rejecting a MultiIndex dimension on the result."""
+    ds = ds.assign_coords(*args, **kwargs)
+    enforce_no_multiindex(ds, context="assign_coords")
+    return ds
+
+
 def first_mismatched_dim(
     a: DataArray | Dataset, b: DataArray | Dataset
 ) -> tuple[str, Any, Any] | None:
