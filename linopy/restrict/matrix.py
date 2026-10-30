@@ -25,6 +25,7 @@ from xarray import DataArray
 from xarray.indexes import PandasIndex
 
 from linopy.alignment import as_dataarray
+from linopy.common import lookup_table
 from linopy.matrices import Matrices
 
 if TYPE_CHECKING:
@@ -182,14 +183,9 @@ class MatrixWindow:
             raise NotImplementedError("Matrix windows require at least one constraint.")
         self._model = model
         self._matrices = matrices
-        self._A = matrices.A.tocsr()
+        self._A = matrices.A
         frame = {f.name: vars(matrices)[f.name] for f in fields(Matrices)}
         self._frame = Matrices(**{**frame, "A": None})
-        self._flat = np.empty(model._xCounter, dtype=np.intp)
-        for var in model.variables.data.values():
-            labels = var.labels.values.ravel()
-            active = np.flatnonzero(labels != -1)
-            self._flat[labels[active]] = active
         self._dims = {d for item in model._coordinate_carriers() for d in item.sizes}
         self._dims |= set(model.parameters.sizes)
 
@@ -232,8 +228,7 @@ class MatrixWindow:
             )
 
         A = self._A[rows]
-        position = np.full(mat.vlabels.size, -1, dtype=A.indices.dtype)
-        position[cols] = np.arange(cols.size)
+        position = lookup_table(cols, mat.vlabels.size, dtype=A.indices.dtype)
         mapped = position[A.indices]
         inside = mapped >= 0
         entry_rows = np.repeat(np.arange(rows.size), np.diff(A.indptr))
@@ -282,5 +277,5 @@ class MatrixWindow:
             start, stop = variable.range
             own = (labels >= start) & (labels < stop)
             aligned = _align(given, variable.labels, name).values.ravel()
-            values[own] = aligned[self._flat[labels[own]]]
+            values[own] = aligned[labels[own] - start]
         return values * mat.var_scaling[cols]

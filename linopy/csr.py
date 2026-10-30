@@ -50,6 +50,7 @@ import pandas as pd
 import scipy.sparse
 from xarray import DataArray, Dataset, broadcast
 
+from linopy.common import lookup_table
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
@@ -752,8 +753,7 @@ class CSRStore(Store):
         """
         row_map, valid = grid.indexer(self.grid)
         if valid.all() and grid.size == self.n_cells:
-            source = np.full(grid.size, -1, dtype=row_map.dtype)
-            source[row_map] = np.arange(grid.size)
+            source = lookup_table(row_map, grid.size, dtype=row_map.dtype)
             if (source >= 0).all():
                 return self.take(source, self.grid.conform(grid))
 

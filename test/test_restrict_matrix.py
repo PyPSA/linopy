@@ -51,15 +51,35 @@ def assert_same_window(window: Matrices, reference: Matrices) -> None:
     assert np.array_equal(window.sense, reference.sense)
 
 
-@pytest.mark.parametrize("start", [0, 1, 3])
-def test_select_matches_restrict(start: int) -> None:
+@pytest.mark.parametrize(
+    "window",
+    [TIME[0:3], TIME[1:4], TIME[3:6], [3, 1], [1, 3, 6], [6, 2, 4]],
+    ids=["head", "inner", "tail", "reversed", "gapped", "unordered"],
+)
+def test_select_matches_dense_reference(window: Any) -> None:
     m = storage_model()
-    window = TIME[start : start + 3]
+    mat = m.matrices
+    selection = {"time": window}
 
-    matrix = MatrixWindow(m).select({"time": window}, fix={"soc": initial()})[0]
-    reference = m.restrict(time=window, fix={"soc": initial()}).matrices
+    def positions(containers: Any) -> np.ndarray:
+        flat = [
+            c.labels.sel(selection).values.ravel() for c in containers.data.values()
+        ]
+        labels = np.concatenate(flat)
+        return containers.label_index.label_to_pos[labels[labels != -1]]
 
-    assert_same_window(matrix, reference)
+    rows, cols = positions(m.constraints), positions(m.variables)
+    fixed = np.zeros(mat.vlabels.size)
+    fixed[m.variables.label_index.label_to_pos[m.variables["soc"].labels.values]] = 3.0
+    fixed[cols] = 0.0
+    A = mat.A.toarray()[rows]
+
+    window_mat = MatrixWindow(m).select(selection, fix={"soc": initial()})[0]
+
+    assert window_mat.A is not None
+    assert np.allclose(window_mat.A.toarray(), A[:, cols])
+    assert np.allclose(window_mat.b, mat.b[rows] - A @ fixed)
+    assert np.allclose(window_mat.c, mat.c[cols])
 
 
 def test_select_without_fix_matches_restrict() -> None:
