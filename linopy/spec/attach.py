@@ -320,15 +320,9 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
 
 
 def _pandas(obj: Any) -> Any:
-    """
-    *obj*, a polars DataFrame or Series, as its pandas counterpart; anything else as it is.
-
-    Read column by column through numpy, so no pyarrow is needed.
-    """
-    if isinstance(obj, pl.DataFrame):
-        return pd.DataFrame({c: obj.get_column(c).to_numpy() for c in obj.columns})
-    if isinstance(obj, pl.Series):
-        return pd.Series(obj.to_numpy(), name=obj.name)
+    """*obj*, a polars DataFrame or Series, as its pandas counterpart; anything else as it is."""
+    if isinstance(obj, (pl.DataFrame, pl.Series)):
+        return obj.to_pandas()
     return obj
 
 
