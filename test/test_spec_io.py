@@ -111,12 +111,12 @@ TAGGED_SPEC = with_(
 )
 DTYPE_DATA: dict[str, Any] = {
     "s1": S1,
-    "count": pd.Series([1, 2, 3], index=S1),
-    "flag": pd.Series([True, False, True], index=S1),
-    "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
-    "tag": pd.Series(["u", "v", "w"], index=S1),
-    "sparse_count": pd.Series([1, 2], index=S1[:2]),
-    "sparse_flag": pd.Series([True, False], index=S1[:2]),
+    "count": pd.DataFrame({"s1": S1, "count": [1, 2, 3]}),
+    "flag": pd.DataFrame({"s1": S1, "flag": [True, False, True]}),
+    "cost": pd.DataFrame({"s1": S1, "cost": [1.0, 2.0, 3.0]}),
+    "tag": pd.DataFrame({"s1": S1, "tag": ["u", "v", "w"]}),
+    "sparse_count": pd.DataFrame({"s1": S1[:2], "sparse_count": [1, 2]}),
+    "sparse_flag": pd.DataFrame({"s1": S1[:2], "sparse_flag": [True, False]}),
 }
 
 
@@ -127,12 +127,15 @@ def relation_sources(mapped: int) -> dict[str, Any]:
         "s2": S2,
         "i1": I1,
         "i2": I2,
-        "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
+        "cost": pd.DataFrame({"s1": S1, "cost": [1.0, 2.0, 3.0]}),
     }
     for name, over in RELATION_OVER.items():
         into = RELATION_INTO[name]
-        sources[name] = pd.Series(
-            [into[i % len(into)] for i in range(mapped)], index=over[:mapped]
+        sources[name] = pd.DataFrame(
+            {
+                over.name: over[:mapped],
+                into.name: [into[i % len(into)] for i in range(mapped)],
+            }
         )
     return sources
 
@@ -260,7 +263,9 @@ def test_a_hole_round_trips_and_is_compared(
 REBUILT: dict[str, tuple[Any, Any]] = {
     "dispatch": (EXAMPLE_DISPATCH, DISPATCH_DATA),
     "dtypes": (DTYPE_SPEC, DTYPE_DATA),
+    "relations-unmapped": (RELATION_SPEC, relation_sources(0)),
     "relations": (RELATION_SPEC, relation_sources(2)),
+    "relations-mapped": (RELATION_SPEC, relation_sources(3)),
     "tagged": (TAGGED_SPEC, WHERE_DATA),
 }
 
