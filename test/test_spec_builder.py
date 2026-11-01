@@ -556,6 +556,58 @@ def test_absence_takes_the_row_with_it(spec: dict[str, Any], name: str) -> None:
     assert int(m.constraints[name].labels.sel(f="b")) == -1
 
 
+def ramp(expression: str, where: str | None = None) -> dict[str, Any]:
+    """One row per ``s`` reading ``p`` and ``q``, as the holes section of the spec-data docs writes it."""
+    row: dict[str, Any] = {"dims": ["s"], "expression": expression}
+    return {
+        "dimensions": {"s": {"dtype": "int", "ordered": True}},
+        "variables": {
+            v: {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}} for v in "pq"
+        },
+        "constraints": {"ramp": row if where is None else {**row, "where": where}},
+        "objective": {"sense": "minimize", "expression": "sum(p, over=s)"},
+    }
+
+
+S = {"s": pd.Index([0, 1, 2, 3], name="s")}
+
+
+@pytest.mark.parametrize(
+    ("expression", "where", "dropped"),
+    [
+        pytest.param("p <= shift(p, along=s, offset=1)", None, [0], id="shift"),
+        pytest.param("p <= shift(p, along=s, offset=2)", None, [0, 1], id="offset-2"),
+        pytest.param(
+            "p + q <= shift(p, along=s, offset=1)", None, [0], id="beside-a-term"
+        ),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1)", "position(s) > 0", [0], id="where"
+        ),
+        pytest.param("p <= shift(p, along=s, offset=1, edge=0)", None, [], id="edge"),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1, edge='wrap')", None, [], id="wrap"
+        ),
+        pytest.param(
+            "p <= sum(shift(q, along=s, offset=1), over=s)", None, [], id="in-a-sum"
+        ),
+        pytest.param("sum_back(p, along=s, window=3) <= q", None, [], id="sum-back"),
+    ],
+)
+def test_the_rows_an_operator_vacates_are_dropped_as_documented(
+    expression: str, where: str | None, dropped: list[int]
+) -> None:
+    """The cases ``doc/spec-data.rst`` lists under holes that operators create."""
+    labels = Model.from_spec(ramp(expression, where), S).constraints["ramp"].labels
+    assert labels.s[labels == -1].values.tolist() == dropped
+
+
+def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
+    m = Model.from_spec(ramp("p <= shift(p, along=s, offset=1, edge=0)"), S)
+    first = m.constraints["ramp"].sel(s=0)
+    assert (first.vars == m.variables["p"].labels.sel(s=0)).any()
+    assert float(first.rhs) == 0.0
+
+
 def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
     """A zero absence leaves ``0 <= relmax`` standing, which linopy cannot carry and a solver would never see."""
     with pytest.raises(
@@ -597,6 +649,10 @@ SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
         pytest.param("x + a - a >= 1", INF_AT_0, "t=0", id="beside-a-term"),
         pytest.param("a - x - a >= 1", INF_AT_0, "t=0", id="across-a-term"),
         pytest.param("x + a >= a", INF_AT_0, "t=0", id="across-sides"),
+        pytest.param("(x + a) * 2 - 2 * a >= 1", INF_AT_0, "t=0", id="scaled-term"),
+        pytest.param("2 * (x + a) - 2 * a >= 1", INF_AT_0, "t=0", id="scaled-left"),
+        pytest.param("(x + a) / 2 - a / 2 >= 1", INF_AT_0, "t=0", id="divided-term"),
+        pytest.param("(x + a) * 2 >= 2 * a", INF_AT_0, "t=0", id="scaled-across-sides"),
         pytest.param(
             "x + sum(a, over=t) - sum(a, over=t) >= 1",
             INF_AT_0,
