@@ -21,8 +21,9 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.semantics import warn_outside_linopy
 from linopy.spec.context import Context, Term, Value, as_expression
-from linopy.spec.errors import SpecDataError, first_coordinates
+from linopy.spec.errors import AbsentRowsWarning, SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
     carried,
     constant_of,
@@ -134,16 +135,17 @@ def _constraints(ctx: Context) -> None:
         term = cast(Term, term)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        _check_live(name, row, term, other, rows, ctx)
+        warned = _check_live(name, row, term, other, rows, ctx)
         if isinstance(other, xr.DataArray):
             const = constant_of(term)
             refuse_made(
                 "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
             )
             term, other = carried(term, other)
-        ctx.model.add_constraints(
+        built = ctx.model.add_constraints(
             _framed(term, row.dims), sense, other, name=name, mask=mask
         )
+        _warn_absent(name, (built.labels == -1) & rows & ~warned)
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
@@ -177,7 +179,7 @@ def _check_live(
     other: Value,
     rows: xr.DataArray,
     ctx: Context,
-) -> None:
+) -> xr.DataArray:
     """
     Refuse a row the data emptied of every variable term.
 
@@ -188,14 +190,18 @@ def _check_live(
     An absent row is not emptied: absence spread through arithmetic, a masked
     variable or a vacated translation, takes the row with it. A bare variable
     term is never emptied: a row of it exists exactly where the variable does.
+
+    Returns the emptied rows it only warned about, so they are not reported
+    again as dropped by absence.
     """
+    none = xr.DataArray(False)
     if isinstance(term, Variable):
-        return
+        return none
     store = cast(LinearExpression, term)._store
     alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
     dead = rows & ~alive
     if not bool(dead.any()):
-        return
+        return none
     said = (
         f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
         f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
@@ -212,7 +218,7 @@ def _check_live(
             UserWarning,
             stacklevel=2,
         )
-        return
+        return dead
     supply = (
         "  Supply the rows of the variables, if the row is meant to bind."
         if neutral
@@ -222,6 +228,27 @@ def _check_live(
         f"{said}\n"
         f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
         f"{supply}"
+    )
+
+
+def _warn_absent(name: str, dropped: xr.DataArray) -> None:
+    """
+    Warn, once for constraint *name*, of the rows absence emptied and the build dropped.
+
+    Absence spread through arithmetic takes the row with it, as mathspec
+    says, so the row is not refused; but it leaves the problem, and the
+    constraint does not bind there.
+    """
+    count = int(dropped.sum())
+    if not count:
+        return
+    warn_outside_linopy(
+        f"constraint '{name}': {count} row(s) are dropped because absence emptied them, "
+        f"the first at {first_coordinates(dropped, 3)}. The constraint does not bind there.\n"
+        f"  Mask them out with a where on the constraint, or give shift an edge, if the drop "
+        f"is intended; silence this with "
+        f"warnings.filterwarnings('ignore', category=linopy.spec.AbsentRowsWarning).",
+        AbsentRowsWarning,
     )
 
 

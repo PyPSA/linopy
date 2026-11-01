@@ -21,6 +21,6 @@ if find_spec("mathspec") is None:
     raise ImportError(message)
 
 from linopy.spec.api import evaluate
-from linopy.spec.errors import SpecDataError
+from linopy.spec.errors import AbsentRowsWarning, SpecDataError
 
-__all__ = ["SpecDataError", "evaluate"]
+__all__ = ["AbsentRowsWarning", "SpecDataError", "evaluate"]

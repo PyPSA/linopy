@@ -162,7 +162,11 @@ def test_from_spec_passes_model_kwargs() -> None:
 
 def test_the_spec_package_exports() -> None:
     assert isinstance(linopy.spec.attach, types.ModuleType)
-    assert set(linopy.spec.__all__) == {"SpecDataError", "evaluate"}
+    assert set(linopy.spec.__all__) == {
+        "AbsentRowsWarning",
+        "SpecDataError",
+        "evaluate",
+    }
     assert callable(linopy.spec.evaluate)
 
 
