@@ -107,6 +107,7 @@ Version 1.0.0
 
 **Bug fixes**
 
+* Mosek: setting ``log_fn`` no longer disables the console log; solver output is written to both stdout and the log file, consistent with HiGHS. (`#948 <https://github.com/PyPSA/linopy/issues/948>`__)
 * Object-dtype data in ``model.parameters``, such as strings with ``NaN`` holes, round-trips through ``to_netcdf`` / ``read_netcdf`` with its holes on both the ``netcdf4`` and the ``scipy`` engine; before, a hole came back as an empty string. An object array mixing types is refused on write with a ``TypeError``.
 * Arithmetic and comparisons between a variable or expression and a constant ``DataArray`` over a ``MultiIndex`` dimension now raise the same error as ``add_variables``, with the ``reset_index`` hint. Before, they failed with an opaque xarray error or silently produced an expression over the ``MultiIndex``.
 * ``Variable.fix`` no longer rejects a masked binary variable whose fix value is NaN or outside 0/1 at masked positions.

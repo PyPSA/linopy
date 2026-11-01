@@ -5,6 +5,7 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import sys
 from operator import attrgetter
 from pathlib import Path
 from typing import Any
@@ -753,6 +754,30 @@ class TestMosekChooseSolution:
             assert chosen is None
         else:
             assert chosen is attrgetter(expected)(mosek.soltype)
+
+    @pytest.mark.parametrize("log_fn", [None, Path("mosek.log")])
+    def test_log_stream_console_and_file(
+        self, log_fn: Path | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mocked task and module: runs without an installed or licensed Mosek.
+        fake_mosek = MagicMock()
+        monkeypatch.setattr(solvers, "mosek", fake_mosek)
+        monkeypatch.setattr(
+            solvers.Mosek, "is_available", classmethod(lambda cls: True)
+        )
+        task = MagicMock()
+        solver = solvers.Mosek()
+        # Only the stream setup matters; the rest of the solve runs on mocks.
+        solver._solve(task, None, log_fn, None, None, "direct", "min")
+
+        log = fake_mosek.streamtype.log
+        task.set_Stream.assert_called_once_with(log, sys.stdout.write)
+        if log_fn is None:
+            task.linkfiletostream.assert_not_called()
+        else:
+            task.linkfiletostream.assert_called_once_with(
+                log, solvers.path_to_string(log_fn), 0
+            )
 
     @pytest.mark.skipif(
         "mosek" not in set(solvers.licensed_solvers),
