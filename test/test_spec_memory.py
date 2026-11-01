@@ -82,3 +82,25 @@ def test_an_unread_parameter_is_still_checked(sparse: pd.DataFrame) -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", EvolvingAPIWarning)
             Model.from_spec(DECLARATIONS, {"t": T, "g": G, "c": stray})
+
+
+def test_a_build_frees_the_grids_it_read_when_it_returns(
+    sparse: pd.DataFrame,
+) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", EvolvingAPIWarning)
+        Model.from_spec(SUMMED, {"t": T, "g": G, "c": sparse})
+        gc.collect()
+        gc.disable()
+        tracemalloc.start()
+        try:
+            # mathspec caches what it parses, and only a fresh parse leaves
+            # the cycles that kept the build's frame and its grids alive
+            fresh = SUMMED.replace("over=t)", "over=t) * 1")
+            model = Model.from_spec(fresh, {"t": T, "g": G, "c": sparse})
+            held = tracemalloc.get_traced_memory()[0]
+        finally:
+            tracemalloc.stop()
+            gc.enable()
+    assert model.constraints["k"].shape == (len(G),)
+    assert held < 0.25 * GRID

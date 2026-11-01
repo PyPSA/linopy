@@ -618,7 +618,8 @@ def _from_dense(
                 f"values against its labels, so every dimension needs an index coordinate."
             )
         _refuse_duplicate_coordinates(name, (d,), arr.indexes[d])
-        _refuse_strangers(name, d, arr.indexes[d], coords[d])
+        if not arr.indexes[d].equals(coords[d]):
+            _refuse_strangers(name, d, arr.indexes[d], coords[d])
     onto = {d: coords[d] for d in dims}
     return functools.partial(_aligned, arr.transpose(*dims), onto)
 
