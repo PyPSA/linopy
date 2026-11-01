@@ -386,3 +386,38 @@ def test_nonfinite_constant_op_raises(
     assert isinstance(quad, QuadraticExpression)
     with pytest.raises(ValueError, match="produced NaN"):
         op(quad)
+
+
+@pytest.fixture
+def quad_groupby_expr() -> QuadraticExpression:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+    return quad
+
+
+def test_quadratic_groupby_sum_keeps_type(
+    quad_groupby_expr: QuadraticExpression,
+) -> None:
+    q = quad_groupby_expr
+    g = DataArray([0, 0, 1, 1], coords=[q.coords["i"]], name="g")
+    coord_q = q.assign_coords(c=("i", [0, 0, 1, 1]))
+    for res in [
+        q.groupby("i").sum(),
+        q.groupby(g).sum(),
+        q.groupby(g.to_series()).sum(),
+        coord_q.groupby("c").sum(),
+    ]:
+        assert isinstance(res, QuadraticExpression)
+        assert FACTOR_DIM in res.data.vars.dims
+
+
+def test_quadratic_groupby_map_keeps_type(
+    quad_groupby_expr: QuadraticExpression,
+) -> None:
+    q = quad_groupby_expr
+    g = DataArray([0, 0, 1, 1], coords=[q.coords["i"]], name="g")
+    res = q.groupby(g).map(lambda ds: ds.isel(i=[0]))
+    assert isinstance(res, QuadraticExpression)
+    assert FACTOR_DIM in res.data.vars.dims
