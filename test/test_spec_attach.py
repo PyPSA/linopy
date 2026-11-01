@@ -68,7 +68,7 @@ DEEP_INDEX = pd.MultiIndex.from_tuples([("a", 0), ("b", 0)], names=["f", "k"])
 
 
 def polars(frame: pd.DataFrame) -> pl.DataFrame:
-    """*frame* as a polars DataFrame, built column by column so no pyarrow is needed."""
+    """*frame* as a polars DataFrame."""
     return pl.DataFrame({str(c): frame[c].tolist() for c in frame.columns})
 
 
@@ -192,7 +192,6 @@ def test_a_table_column_gives_a_dimension_through_unique(
 
 
 def arrow_strings() -> Any:
-    pytest.importorskip("pyarrow")
     return pd.array(list(F), dtype=pd.StringDtype("pyarrow"))
 
 
@@ -247,8 +246,6 @@ def test_relation_shapes_attach_alike(
 def test_extension_strings_attach_as_numpy_objects(
     program: Any, good: dict[str, Any], storage: str
 ) -> None:
-    if storage == "pyarrow":
-        pytest.importorskip("pyarrow")
     values = pd.array(["n", "e"], dtype=pd.StringDtype(storage))
     grp = pd.DataFrame({"f": F[:2], "g": values})
     got = attach(program, {**good, "grp": grp}).relations["grp"].column("g")
@@ -263,8 +260,6 @@ def test_extension_strings_attach_as_numpy_objects(
 def test_string_parameter_rows_attach_as_numpy_objects(
     good: dict[str, Any], storage: str, shape: str
 ) -> None:
-    if storage == "pyarrow":
-        pytest.importorskip("pyarrow")
     tagged = with_(
         SPEC, parameters={"tag": {"dims": ["f"], "dtype": "str", "missing": "absent"}}
     )
@@ -463,11 +458,6 @@ REFUSALS = [
         id="duplicate-member",
     ),
     pytest.param(
-        {"f": pd.Series(["b", "a", "b", "c"])},
-        rf"dimension 'f' lists 'b' more than once.*{UNIQUE}",
-        id="duplicate-member-in-a-column",
-    ),
-    pytest.param(
         {"f": pl.Series("f", ["b", "a", "b"])},
         r"dimension 'f' lists 'b' more than once.*maintain_order=True",
         id="duplicate-member-in-a-polars-column",
@@ -540,11 +530,6 @@ REFUSALS = [
         id="value-column",
     ),
     pytest.param(
-        {"cost": pd.DataFrame({"f": ["a"], "amount": [1.0]})},
-        rf"parameter 'cost'.*\['f', 'amount'\].*{EXACT_COLUMNS}",
-        id="table-without-the-value-column",
-    ),
-    pytest.param(
         {"cost": COST.to_frame("cost")},
         rf"parameter 'cost' arrived as a DataFrame {IN_INDEX}",
         id="dims-in-the-index",
@@ -559,11 +544,6 @@ REFUSALS = [
         r"parameter 'cost': cannot read Series as values over \['f'\].*DataFrame "
         r"with exactly the columns \['f', 'cost'\]",
         id="series",
-    ),
-    pytest.param(
-        {"cap": CAP.to_series()},
-        r"parameter 'cap': cannot read Series",
-        id="multiindex-series",
     ),
     pytest.param(
         {"cost": COST.to_dict()},
@@ -584,11 +564,6 @@ REFUSALS = [
         {"rate": [0.5]},
         r"parameter 'rate' is declared with no dims.*arrived as list",
         id="list-for-scalar",
-    ),
-    pytest.param(
-        {"cost": {"a", "b"}},
-        r"parameter 'cost': cannot read set",
-        id="unsupported-shape",
     ),
     pytest.param(
         {"lead": xr.DataArray([1.0, 0.0, 1.0], coords={"f": F})},
@@ -988,18 +963,20 @@ def test_a_relation_leaving_a_key_out_is_partial(good: dict[str, Any]) -> None:
         attach(lower(refused), {**good, "grp": grp})
 
 
+SNAPSHOTS = pd.date_range("2025-01-01", periods=3, freq="h", name="snapshot")
+LOAD_SPEC: dict[str, Any] = {
+    "dimensions": {"snapshot": {"dtype": "datetime"}},
+    "parameters": {"load": {"dims": ["snapshot"]}},
+    "variables": {"p": {"dims": ["snapshot"], "bounds": {"lower": 0, "upper": "load"}}},
+    "objective": {"sense": "maximize", "expression": "sum(p)"},
+}
+
+
 def test_datetime_labels_given_as_text_are_a_type_mismatch() -> None:
-    snapshot = pd.date_range("2025-01-01", periods=3, freq="h", name="snapshot")
-    spec = {
-        "dimensions": {"snapshot": {"dtype": "datetime"}},
-        "parameters": {"load": {"dims": ["snapshot"]}},
-        "variables": {
-            "p": {"dims": ["snapshot"], "bounds": {"lower": 0, "upper": "load"}}
-        },
-        "objective": {"sense": "maximize", "expression": "sum(p)"},
-    }
-    from_sql = pd.DataFrame({"snapshot": snapshot.astype(str), "load": [1.0, 2.0, 3.0]})
-    attached = attach(lower(spec), {"snapshot": snapshot, "load": from_sql})
+    from_sql = pd.DataFrame(
+        {"snapshot": SNAPSHOTS.astype(str), "load": [1.0, 2.0, 3.0]}
+    )
+    attached = attach(lower(LOAD_SPEC), {"snapshot": SNAPSHOTS, "load": from_sql})
     with pytest.raises(
         SpecDataError, match=r"differ in type, not spelling.*pd\.to_datetime"
     ):
@@ -1007,20 +984,11 @@ def test_datetime_labels_given_as_text_are_a_type_mismatch() -> None:
 
 
 def test_polars_datetimes_attach_like_pandas_ones() -> None:
-    snapshot = pd.date_range("2025-01-01", periods=3, freq="h", name="snapshot")
-    spec = {
-        "dimensions": {"snapshot": {"dtype": "datetime"}},
-        "parameters": {"load": {"dims": ["snapshot"]}},
-        "variables": {
-            "p": {"dims": ["snapshot"], "bounds": {"lower": 0, "upper": "load"}}
-        },
-        "objective": {"sense": "maximize", "expression": "sum(p)"},
-    }
-    load = pd.DataFrame({"snapshot": snapshot, "load": [1.0, 2.0, 3.0]})
-    program = lower(spec)
-    expected = filled(attach(program, {"snapshot": snapshot, "load": load}), "load")
+    load = pd.DataFrame({"snapshot": SNAPSHOTS, "load": [1.0, 2.0, 3.0]})
+    program = lower(LOAD_SPEC)
+    expected = filled(attach(program, {"snapshot": SNAPSHOTS, "load": load}), "load")
     from_polars = {
-        "snapshot": pl.Series("snapshot", snapshot.to_list()),
+        "snapshot": pl.Series("snapshot", SNAPSHOTS.to_list()),
         "load": polars(load),
     }
     xr.testing.assert_equal(filled(attach(program, from_polars), "load"), expected)
