@@ -161,8 +161,8 @@ did:
 
 .. code-block:: python
 
-    sources["c_total"] = c.groupby("g", as_index=False)["c"].sum().rename(
-        columns={"c": "c_total"}
+    sources["c_total"] = (
+        c.groupby("g", as_index=False)["c"].sum().rename(columns={"c": "c_total"})
     )
 
 Keep the table on your side rather than in ``m.parameters``:
