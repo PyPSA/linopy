@@ -392,7 +392,9 @@ def test_nonfinite_constant_op_raises(
 def quad_groupby_expr() -> QuadraticExpression:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
-    return x * x
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+    return quad
 
 
 def test_quadratic_groupby_sum_keeps_type(
