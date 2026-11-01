@@ -520,9 +520,13 @@ class LinearExpressionGroupby:
         Returns
         -------
         LinearExpression
-            The result of applying the function to the groupby object.
+            The result of applying the function to the groupby object. A
+            quadratic expression stays a QuadraticExpression.
         """
-        return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
+        ds = self.groupby.map(func, args=args, **kwargs)
+        if FACTOR_DIM in ds.vars.dims:
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
+        return LinearExpression(ds, self.model)
 
     def sum(
         self,
