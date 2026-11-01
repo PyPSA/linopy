@@ -506,8 +506,12 @@ class Model:
             A one-line ``str`` ending in ``.yaml`` or ``.yml`` reads like a
             file name and is refused.
         sources : mapping or xarray.Dataset
-            Data keyed by declared name: dimension labels, parameters and
-            relations.
+            Data keyed by declared name. A dimension is a flat sequence of
+            unique labels. A parameter is a pandas or polars ``DataFrame``
+            with exactly one column per dimension and its values under its
+            own name, a ``DataArray`` over its dimensions, or one number if
+            it has none. A relation is a pandas or polars ``DataFrame`` with
+            exactly its declared columns. See :doc:`spec-data`.
         store : bool, default False
             Write the spec's parameters, unfilled with a missing row a NaN
             hole, and its relations into ``model.parameters`` under their

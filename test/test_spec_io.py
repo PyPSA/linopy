@@ -37,6 +37,8 @@ from spec_helpers import (  # noqa: E402
 
 from linopy import Model, read_netcdf  # noqa: E402
 from linopy.spec import evaluate  # noqa: E402
+from linopy.spec.api import lower  # noqa: E402
+from linopy.spec.attach import attach  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_linequal,
     assert_model_equal,
@@ -111,12 +113,12 @@ TAGGED_SPEC = with_(
 )
 DTYPE_DATA: dict[str, Any] = {
     "s1": S1,
-    "count": pd.Series([1, 2, 3], index=S1),
-    "flag": pd.Series([True, False, True], index=S1),
-    "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
-    "tag": pd.Series(["u", "v", "w"], index=S1),
-    "sparse_count": pd.Series([1, 2], index=S1[:2]),
-    "sparse_flag": pd.Series([True, False], index=S1[:2]),
+    "count": pd.DataFrame({"s1": S1, "count": [1, 2, 3]}),
+    "flag": pd.DataFrame({"s1": S1, "flag": [True, False, True]}),
+    "cost": pd.DataFrame({"s1": S1, "cost": [1.0, 2.0, 3.0]}),
+    "tag": pd.DataFrame({"s1": S1, "tag": ["u", "v", "w"]}),
+    "sparse_count": pd.DataFrame({"s1": S1[:2], "sparse_count": [1, 2]}),
+    "sparse_flag": pd.DataFrame({"s1": S1[:2], "sparse_flag": [True, False]}),
 }
 
 
@@ -127,12 +129,15 @@ def relation_sources(mapped: int) -> dict[str, Any]:
         "s2": S2,
         "i1": I1,
         "i2": I2,
-        "cost": pd.Series([1.0, 2.0, 3.0], index=S1),
+        "cost": pd.DataFrame({"s1": S1, "cost": [1.0, 2.0, 3.0]}),
     }
     for name, over in RELATION_OVER.items():
         into = RELATION_INTO[name]
-        sources[name] = pd.Series(
-            [into[i % len(into)] for i in range(mapped)], index=over[:mapped]
+        sources[name] = pd.DataFrame(
+            {
+                over.name: over[:mapped],
+                into.name: [into[i % len(into)] for i in range(mapped)],
+            }
         )
     return sources
 
@@ -260,7 +265,9 @@ def test_a_hole_round_trips_and_is_compared(
 REBUILT: dict[str, tuple[Any, Any]] = {
     "dispatch": (EXAMPLE_DISPATCH, DISPATCH_DATA),
     "dtypes": (DTYPE_SPEC, DTYPE_DATA),
+    "relations-unmapped": (RELATION_SPEC, relation_sources(0)),
     "relations": (RELATION_SPEC, relation_sources(2)),
+    "relations-mapped": (RELATION_SPEC, relation_sources(3)),
     "tagged": (TAGGED_SPEC, WHERE_DATA),
 }
 
@@ -275,6 +282,25 @@ def test_a_model_rebuilds_from_its_netcdf_parameters(
         spec, roundtrip(m, tmp_path, engine).parameters, store=True
     )
     assert_model_equal(rebuilt, m)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("mapped", [0, 2, 3])
+def test_a_stored_relation_reads_back_as_its_rows_at_their_dtype(
+    tmp_path: Path, engine: str, mapped: int
+) -> None:
+    sources = relation_sources(mapped)
+    stored = roundtrip(
+        Model.from_spec(RELATION_SPEC, sources, store=True), tmp_path, engine
+    ).parameters
+    program = lower(RELATION_SPEC)
+    given, read = attach(program, sources), attach(program, stored)
+    for name, into in RELATION_INTO.items():
+        rows = read.relations[name].rows
+        pd.testing.assert_frame_equal(
+            rows, given.relations[name].rows, check_dtype=False, check_index_type=False
+        )
+        assert rows[into.name].dtype.kind == into.dtype.kind
 
 
 def copied(deep: bool) -> Callable[[Model, Path, str], Model]:

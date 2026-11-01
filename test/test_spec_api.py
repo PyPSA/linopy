@@ -223,7 +223,7 @@ def test_a_missing_parameter_is_refused() -> None:
     with pytest.raises(SpecDataError, match="no data provided for parameter 'spare'"):
         Model.from_spec(spec, DISPATCH_DATA)
 
-    spare = pd.Series([1.0, 2.0], index=GENERATOR)
+    spare = pd.DataFrame({"generator": GENERATOR, "spare": [1.0, 2.0]})
     m = Model.from_spec(spec, {**DISPATCH_DATA, "spare": spare}, store=True)
     assert "spare" in m.parameters
 
@@ -315,7 +315,8 @@ def test_evaluate_reads_given_sources_over_stored_parameters() -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)
     unstored = m.copy(include_solution=True)
     unstored.parameters = xr.Dataset()
-    cheap = {**DISPATCH_DATA, "cost": DISPATCH_DATA["cost"] / 2}
+    cost = DISPATCH_DATA["cost"]
+    cheap = {**DISPATCH_DATA, "cost": cost.assign(cost=cost["cost"] / 2)}
     stored = evaluate(yaml_dict(), m, "spend")["spend"]
     given = evaluate(yaml_dict(), unstored, "spend", sources=DISPATCH_DATA)["spend"]
     xr.testing.assert_allclose(given, stored)
@@ -353,7 +354,7 @@ def test_evaluate_applies_missing_in_a_condition() -> None:
         },
     }
     t = TT[:3]
-    m = solved(spec, {"t": t, "v": pd.Series([1.0, 9.0], index=t[:2])})
+    m = solved(spec, {"t": t, "v": pd.DataFrame({"t": t[:2], "v": [1.0, 9.0]})})
     assert evaluate(spec, m, "big")["big"].values.tolist() == [1.0, 0.0, 0.0]
 
 
