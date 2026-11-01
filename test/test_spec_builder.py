@@ -7,7 +7,6 @@ expressions and the assumptions checked against the data.
 from __future__ import annotations
 
 import glob
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +41,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
-from linopy.spec import AbsentRowsWarning, SpecDataError, evaluate  # noqa: E402
+from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import assert_conequal, synthetic_sources  # noqa: E402
 
@@ -553,25 +552,19 @@ def test_a_bare_variable_in_a_where_asks_whether_it_exists() -> None:
     ],
 )
 def test_absence_takes_the_row_with_it(spec: dict[str, Any], name: str) -> None:
-    with pytest.warns(
-        AbsentRowsWarning, match=rf"constraint '{name}': 1 row\(s\) .* first at f='b'"
-    ):
-        m = Model.from_spec(spec, ENVELOPE_DATA)
+    m = Model.from_spec(spec, ENVELOPE_DATA)
     assert int(m.constraints[name].labels.sel(f="b")) == -1
 
 
-def ramp(*constraints: str, edge: str = "") -> dict[str, Any]:
-    """Rows over ``s`` that compare ``p`` with its past, the first ones of which a bare ``shift`` empties."""
+def ramp(expression: str, where: str | None = None) -> dict[str, Any]:
+    """One row per ``s`` reading ``p`` and ``q``, as the holes section of the spec-data docs writes it."""
+    row: dict[str, Any] = {"dims": ["s"], "expression": expression}
     return {
         "dimensions": {"s": {"dtype": "int", "ordered": True}},
-        "variables": {"p": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}}},
-        "constraints": {
-            f"ramp{offset}": {
-                "dims": ["s"],
-                "expression": f"p <= shift(p, along=s, offset={offset}{edge})",
-            }
-            for offset in constraints
+        "variables": {
+            v: {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}} for v in "pq"
         },
+        "constraints": {"ramp": row if where is None else {**row, "where": where}},
         "objective": {"sense": "minimize", "expression": "sum(p, over=s)"},
     }
 
@@ -579,71 +572,40 @@ def ramp(*constraints: str, edge: str = "") -> dict[str, Any]:
 S = {"s": pd.Index([0, 1, 2, 3], name="s")}
 
 
-def absent_rows(record: list[warnings.WarningMessage]) -> list[str]:
-    return [str(w.message) for w in record if issubclass(w.category, AbsentRowsWarning)]
-
-
-def test_rows_absence_drops_are_warned_about_once_per_constraint() -> None:
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        m = Model.from_spec(ramp("1", "2"), S)
-    said = absent_rows(record)
-    assert len(said) == 2
-    assert said[0].startswith("constraint 'ramp1': 1 row(s) are dropped")
-    assert "first at s=0." in said[0]
-    assert said[1].startswith("constraint 'ramp2': 2 row(s) are dropped")
-    assert "first at s=0; s=1." in said[1]
-    assert m.constraints["ramp1"].labels.values.tolist()[0] == -1
-    assert (m.constraints["ramp2"].labels.values[:2] == -1).all()
-
-
-def test_the_absent_rows_warning_points_at_the_caller() -> None:
-    with pytest.warns(AbsentRowsWarning) as record:
-        Model.from_spec(ramp("1"), S)
-    assert record[0].filename == __file__
-
-
-def test_the_absent_rows_warning_filters_by_its_class_and_changes_nothing() -> None:
-    assert issubclass(AbsentRowsWarning, UserWarning)
-    assert AbsentRowsWarning is linopy.spec.AbsentRowsWarning
-    with pytest.warns(AbsentRowsWarning):
-        warned = Model.from_spec(ramp("1"), S)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", AbsentRowsWarning)
-        warnings.filterwarnings("ignore", category=AbsentRowsWarning)
-        silenced = Model.from_spec(ramp("1"), S)
-    assert_conequal(warned.constraints["ramp1"], silenced.constraints["ramp1"])
-
-
 @pytest.mark.parametrize(
-    ("spec", "data"),
+    ("expression", "where", "dropped"),
     [
-        pytest.param(ramp("1", edge=", edge=0"), S, id="an-edge"),
+        pytest.param("p <= shift(p, along=s, offset=1)", None, [0], id="shift"),
+        pytest.param("p <= shift(p, along=s, offset=2)", None, [0, 1], id="offset-2"),
         pytest.param(
-            with_(
-                ramp("1"),
-                constraints={
-                    "ramp1": {
-                        "dims": ["s"],
-                        "where": "position(s) > 0",
-                        "expression": "p <= shift(p, along=s, offset=1)",
-                    }
-                },
-            ),
-            S,
-            id="a-where",
+            "p + q <= shift(p, along=s, offset=1)", None, [0], id="beside-a-term"
         ),
-        pytest.param(sized("neutral", "size >= 0"), ENVELOPE_DATA, id="an-emptied-row"),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1)", "position(s) > 0", [0], id="where"
+        ),
+        pytest.param("p <= shift(p, along=s, offset=1, edge=0)", None, [], id="edge"),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1, edge='wrap')", None, [], id="wrap"
+        ),
+        pytest.param(
+            "p <= sum(shift(q, along=s, offset=1), over=s)", None, [], id="in-a-sum"
+        ),
+        pytest.param("sum_back(p, along=s, window=3) <= q", None, [], id="sum-back"),
     ],
 )
-def test_no_row_dropped_by_absence_is_not_warned_about(
-    spec: dict[str, Any], data: dict[str, Any]
+def test_the_rows_an_operator_vacates_are_dropped_as_documented(
+    expression: str, where: str | None, dropped: list[int]
 ) -> None:
-    """An emptied row already warned as trivially true is not counted again as dropped."""
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        Model.from_spec(spec, data)
-    assert absent_rows(record) == []
+    """The cases ``doc/spec-data.rst`` lists under holes that operators create."""
+    labels = Model.from_spec(ramp(expression, where), S).constraints["ramp"].labels
+    assert labels.s[labels == -1].values.tolist() == dropped
+
+
+def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
+    m = Model.from_spec(ramp("p <= shift(p, along=s, offset=1, edge=0)"), S)
+    first = m.constraints["ramp"].sel(s=0)
+    assert (first.vars == m.variables["p"].labels.sel(s=0)).any()
+    assert float(first.rhs) == 0.0
 
 
 def test_a_row_the_data_emptied_of_variables_is_refused() -> None:

@@ -274,6 +274,54 @@ rows. To switch a feature off, say so with ``where:``, over a
   the constraint and its first such rows.
 
 
+Holes that operators create
+---------------------------
+
+Data the sources hold in full can still leave a hole in an expression: an
+operator that reads along a dimension, or through a relation, finds nothing at
+some rows. Such a hole is absence, and it behaves as above: outside a sum it
+takes the row with it, also beside other terms, and inside a sum it is a term
+left out. The model builds without an error or a warning, so a spec states
+what each edge means. Take a ramp over an ordered dimension ``s``:
+
+.. code-block:: yaml
+
+    constraints:
+      ramp:
+        dims: [s]
+        expression: p <= shift(p, along=s, offset=1)
+
+``shift(p, along=s, offset=1)`` reads nothing at the first ``s``, so ``ramp``
+has no row there; ``offset=2`` vacates the first two rows, ``offset=-1`` the
+last one. ``p + q <= shift(p, along=s, offset=1)`` loses the same row: the
+present ``p + q`` does not keep it. Pick what the edge means:
+
+- ``edge=0``, or any number, reads that number at the vacated rows, so the row
+  stays: ``shift(p, along=s, offset=1, edge=0)`` gives ``p[0] <= 0`` at the
+  first ``s``.
+- ``edge='wrap'`` reads from the other end, as on a cyclic horizon. With
+  ``within=rel[col]`` each group of a relation closes on itself.
+- ``where: position(s) > 0`` on the constraint keeps the drop and says so in
+  the spec. The rows built are the same as without it. For ``offset=2`` write
+  ``position(s) >= 2``, for ``offset=-1`` ``position(s) != -1``.
+
+The other operators read past an edge in their own way:
+
+- ``sum_back(p, along=s, window=3)`` is a sum, so it shortens its window at the
+  start rather than dropping the row: the first ``s`` reads ``p[0]`` alone.
+  ``edge='wrap'`` reaches back into the end, ``within=rel[col]`` stops at each
+  group's edge.
+- ``at(p, by=rel[col])`` reads nothing for a member the relation maps nowhere,
+  and the row goes with it. ``where: rel`` on the constraint names the rows it
+  keeps.
+- Inside a sum a hole is a term left out, so
+  ``sum(shift(q, along=s, offset=1), over=s)`` builds every row.
+
+A row the data leaves present but without a variable term is the other case,
+refused as described above. To see which rows a built constraint lacks, read
+``m.constraints["ramp"].labels == -1``: a row absence dropped or a ``where:``
+masked has no label.
+
 Storing the data in ``m.parameters``
 ------------------------------------
 

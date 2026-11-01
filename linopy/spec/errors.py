@@ -18,23 +18,6 @@ class SpecDataError(ValueError):
     """
 
 
-class AbsentRowsWarning(UserWarning):
-    """
-    Rows of a constraint that absence emptied and the build therefore dropped.
-
-    Absence spread through arithmetic takes the row with it: the first row of
-    a bare ``shift``, a masked variable, a missing ``absent`` parameter. Such a
-    row leaves the problem, so the constraint does not bind there. One warning
-    is emitted per constraint, naming how many rows were dropped and the first
-    of them. The model builds exactly as without it.
-
-    It is a :class:`UserWarning`, so it shows by default, and filters on that
-    class still apply. To silence it where the drop is intended::
-
-        warnings.filterwarnings("ignore", category=linopy.spec.AbsentRowsWarning)
-    """
-
-
 def unknown(kind: str, name: str, known: Iterable[str]) -> KeyError:
     """The error for a *name* no *kind* of the spec carries, with the nearest declared one."""
     return KeyError(f"unknown {kind} '{name}'. " + did_you_mean(name, known))
