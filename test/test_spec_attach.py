@@ -1005,3 +1005,18 @@ def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:
         read_all(program, sources)
     assert "int64" not in str(error.value)
+
+
+def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:
+    program = lower(
+        {
+            "dimensions": {"y": {"dtype": "int"}},
+            "parameters": {"p": {"dims": ["y"]}},
+            "variables": {"x": {"dims": ["y"], "bounds": {"lower": 0, "upper": 1}}},
+            "objective": {"sense": "maximize", "expression": "sum(x)"},
+        }
+    )
+    rows = pd.DataFrame({"y": pd.Series([True], dtype=object), "p": [1.0]})
+    attached = attach(program, {"y": pd.Index([1, 2], name="y"), "p": rows})
+    with pytest.raises(SpecDataError, match="in value but not in type: True"):
+        attached.check("p")

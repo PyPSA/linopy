@@ -52,11 +52,14 @@ def sum_over(array: Array, over: str) -> Array:
     """
     Sum *array* over *over*; a term beside an empty dimension is built as the constant zero.
 
-    A hole in data adds nothing. It is filled with 0 before summing, which
-    copies the array once, where xarray's NaN-skipping sum copies it twice.
+    A hole in data adds nothing. An array that can hold one is filled with 0
+    before summing, which copies it once, where xarray's NaN-skipping sum
+    copies it twice.
     """
     if isinstance(array, xr.DataArray):
-        return array.fillna(0).sum(over, skipna=False)
+        if array.dtype.kind in "fcO":
+            array = array.fillna(0)
+        return array.sum(over, skipna=False)
     if any(not array.sizes[dim] for dim in array.coord_dims if dim != over):
         return _zeros(array, (over,))
     return array.sum(over)

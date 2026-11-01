@@ -67,13 +67,11 @@ def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> N
     program = normalize_spec(spec)
     attached = attach(program, sources)
     relations = _storable(attached) if store else {}
-    raw = functools.cache(attached.read)
+    laid_out = {name: attached.check(name) for name in program.parameters}
+    raw = functools.cache(lambda name: laid_out[name]())
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
-    else:
-        for name in program.parameters:
-            attached.check(name)
     build(_context(attached, model, raw, solved=False))
 
 

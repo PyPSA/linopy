@@ -165,30 +165,34 @@ class Attached:
             coordinate, a null value in a table row, values of another type
             than declared.
         """
-        arr, present = self._checked(name)()
-        if self.program.parameters[name].dtype == "bool" and not bool(present.all()):
-            arr = arr.astype(float)
-        return Parameter(arr, present)
+        return self.check(name)()
 
-    def check(self, name: str) -> None:
+    def check(self, name: str) -> Callable[[], Parameter]:
         """
-        Refuse the data of parameter *name* as :meth:`read` would, without laying it out on the grid.
+        Refuse the data of parameter *name* as :meth:`read` would, and return the call laying it out on ``coords``.
+
+        The check reads the data's rows or cells and leaves the grid to the
+        call, so a parameter no declaration reads is checked without a grid.
 
         Raises
         ------
         KeyError, SpecDataError
             What :meth:`read` raises.
         """
-        self._checked(name)
-
-    def _checked(self, name: str) -> Callable[[], Parameter]:
-        """The data of parameter *name* checked, and the call laying it out on ``coords``."""
         if name not in self.program.parameters:
             raise unknown("parameter", name, self.program.parameters)
         if name not in self.keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         declared = self.program.parameters[name]
-        return _as_array(name, declared, self.sources[name], self.coords)
+        lay_out = _as_array(name, declared, self.sources[name], self.coords)
+        if declared.dtype != "bool":
+            return lay_out
+
+        def read() -> Parameter:
+            arr, present = lay_out()
+            return Parameter(arr if bool(present.all()) else arr.astype(float), present)
+
+        return read
 
 
 def strict_parameters(program: ms.Program) -> frozenset[str]:
@@ -663,28 +667,41 @@ def _from_table(
         )
     _check_value_dtype(name, declared.dtype, series.dtype)
     _refuse_duplicate_coordinates(name, dims, series.index)
-    for d in dims:
-        _refuse_strangers(name, d, series.index.get_level_values(d), coords[d])
-    return functools.partial(_on_grid, series, {d: coords[d] for d in dims})
+    onto = {d: coords[d] for d in dims}
+    positions = []
+    for d, index in onto.items():
+        labels = series.index.get_level_values(d)
+        _refuse_strangers(name, d, labels, index)
+        positions.append(_positions(name, d, labels, index))
+    at = np.ravel_multi_index(positions, tuple(len(i) for i in onto.values()))
+    return functools.partial(_on_grid, at, series.to_numpy(), onto)
 
 
-def _on_grid(series: pd.Series, onto: Mapping[str, pd.Index]) -> Parameter:
+def _positions(name: str, dim: str, labels: pd.Index, index: pd.Index) -> np.ndarray:
+    """The position of each of *labels* in *index*, refusing a label equal to a coordinate in value only."""
+    found = index.get_indexer(labels)
+    if (found >= 0).all():
+        return found
+    raise SpecDataError(
+        f"parameter '{name}' has label(s) in dimension '{dim}' that equal coordinates of it in "
+        f"value but not in type: {shown(labels[found < 0].unique().tolist())}, and '{dim}' holds "
+        f"'{_kind_name(index.dtype)}' labels. Cast them to the dimension's type."
+    )
+
+
+def _on_grid(
+    at: np.ndarray, values: np.ndarray, onto: Mapping[str, pd.Index]
+) -> Parameter:
     """
-    The rows of *series* placed straight onto the grid *onto*, a missing row a hole.
+    The *values* placed at the flat positions *at* of the grid *onto*, a cell no value reaches a hole.
 
     One array the size of the grid is allocated, beside the mask of where a
     row is: the grid of a table is its dims' full product, whatever few rows
     it holds.
     """
     shape = tuple(len(index) for index in onto.values())
-    labels = (series.index.get_level_values(d) for d in onto)
-    at = np.ravel_multi_index(
-        [index.get_indexer(level) for index, level in zip(onto.values(), labels)],
-        shape,
-    )
     present = np.zeros(int(np.prod(shape)), dtype=bool)
     present[at] = True
-    values = series.to_numpy()
     if len(at) == present.size:
         grid = np.empty(present.size, dtype=values.dtype)
     else:
@@ -697,16 +714,12 @@ def _on_grid(series: pd.Series, onto: Mapping[str, pd.Index]) -> Parameter:
     )
 
 
-def _hole(dtype: np.dtype) -> tuple[Any, Any]:
-    """The value a hole takes in an array of *dtype*'s values, and the array's dtype: NaN in a float array, NaT in a datetime one, NaN in an object one."""
+def _hole(dtype: np.dtype) -> tuple[float, Any]:
+    """A hole, NaN, and the dtype of an array holding *dtype*'s values beside one: float for a number, object for a string."""
     if dtype.kind == "f":
         return np.nan, dtype
     if dtype.kind in "iub":
         return np.nan, np.float64
-    if dtype.kind in "Mm":
-        return np.datetime64("NaT") if dtype.kind == "M" else np.timedelta64(
-            "NaT"
-        ), dtype
     return np.nan, object
 
 
