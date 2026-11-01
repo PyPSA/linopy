@@ -140,6 +140,33 @@ with mathspec's semantics: an unnamed key column is joined on and kept, and
 ``by=`` may name a list of columns. ``within=`` partitions by one value column
 of a relation keyed by the stepped dimension alone.
 
+Memory
+~~~~~~
+
+A parameter is different: linopy lays every parameter out on the full grid of
+its dimensions, whatever shape it arrives in, and every operator reading it,
+a ``sum`` included, works on that grid. Its memory follows the grid, not the
+rows a table supplies: a table of 50,000 rows over 8,760 snapshots and 2,000
+generators takes about 1 MB as rows and 140 MB as the grid of its 17.5 million
+cells, and a sum over it peaks at a few times that. This follows from linopy's
+data model, in which variables, expressions and constraints are grids as well;
+``store=True`` stores the grid too.
+
+For data whose grid does not fit in memory, reduce it before attaching it:
+where the spec only reads ``sum(c, over=t)``, declare that sum as its own
+parameter ``c_total: {dims: [g], missing: neutral}`` and pass it summed on your
+side; a generator without rows has no ``c_total`` row and reads 0, as the sum
+did:
+
+.. code-block:: python
+
+    sources["c_total"] = c.groupby("g", as_index=False)["c"].sum().rename(
+        columns={"c": "c_total"}
+    )
+
+Keep the table on your side rather than in ``m.parameters``:
+build with ``store=False`` and pass it to ``evaluate(spec, m, sources=...)``.
+
 Missing rows
 ~~~~~~~~~~~~
 
