@@ -37,6 +37,8 @@ from spec_helpers import (  # noqa: E402
 
 from linopy import Model, read_netcdf  # noqa: E402
 from linopy.spec import evaluate  # noqa: E402
+from linopy.spec.api import lower  # noqa: E402
+from linopy.spec.attach import attach  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_linequal,
     assert_model_equal,
@@ -280,6 +282,25 @@ def test_a_model_rebuilds_from_its_netcdf_parameters(
         spec, roundtrip(m, tmp_path, engine).parameters, store=True
     )
     assert_model_equal(rebuilt, m)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("mapped", [0, 2, 3])
+def test_a_stored_relation_reads_back_as_its_rows_at_their_dtype(
+    tmp_path: Path, engine: str, mapped: int
+) -> None:
+    sources = relation_sources(mapped)
+    stored = roundtrip(
+        Model.from_spec(RELATION_SPEC, sources, store=True), tmp_path, engine
+    ).parameters
+    program = lower(RELATION_SPEC)
+    given, read = attach(program, sources), attach(program, stored)
+    for name, into in RELATION_INTO.items():
+        rows = read.relations[name].rows
+        pd.testing.assert_frame_equal(
+            rows, given.relations[name].rows, check_dtype=False, check_index_type=False
+        )
+        assert rows[into.name].dtype.kind == into.dtype.kind
 
 
 def copied(deep: bool) -> Callable[[Model, Path, str], Model]:

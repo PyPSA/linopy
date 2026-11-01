@@ -210,7 +210,9 @@ def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
     Its indexes are dimension sources and its data variables parameters. A
     relation of one key and one value column is stored as its value column
     over the key's dimension, NaN where a label is unmapped, and is read back
-    into its rows. Any other relation variable stays as it is and is refused.
+    into its rows, its values at the dtype of the dimension they label, which
+    the NaN of an unmapped label turns to float. Any other relation variable
+    stays as it is and is refused.
     """
     out: dict[str, Any] = {str(k): v for k, v in data.indexes.items()}
     out.update({str(k): v for k, v in data.data_vars.items()})
@@ -220,6 +222,8 @@ def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
         (key,), (value,) = rel.key, rel.values
         if out[name].dims == (rel.dim(key),):
             rows = out[name].to_series().dropna().rename(value)
+            if (into := out.get(rel.dim(value))) is not None:
+                rows = rows.astype(into.dtype)
             out[name] = rows.rename_axis(key).reset_index()
     return out
 
