@@ -95,8 +95,9 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
     sources
         Data keyed by declared name. Any mapping works: membership is
         read off ``keys()``, never by iterating, and values by key. An
-        ``xr.Dataset`` is accepted too: its indexes are dimension sources,
-        its data variables parameters and relations.
+        ``xr.Dataset`` is read the way ``store=True`` writes
+        ``model.parameters``: its indexes are dimension sources, its data
+        variables parameters and relations.
 
     Raises
     ------
@@ -214,18 +215,12 @@ def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
     out: dict[str, Any] = {str(k): v for k, v in data.indexes.items()}
     out.update({str(k): v for k, v in data.data_vars.items()})
     for name, rel in program.relations.items():
-        arr = out.get(name)
-        if (
-            not isinstance(arr, xr.DataArray)
-            or len(rel.key) != 1
-            or len(rel.values) != 1
-        ):
+        if name not in out or len(rel.key) != 1 or len(rel.values) != 1:
             continue
-        key, value = rel.key[0], rel.values[0]
-        if arr.dims != (rel.dim(key),):
-            continue
-        rows = arr.to_series().dropna().rename(value).rename_axis(key)
-        out[name] = rows.reset_index()
+        (key,), (value,) = rel.key, rel.values
+        if out[name].dims == (rel.dim(key),):
+            rows = out[name].to_series().dropna().rename(value)
+            out[name] = rows.rename_axis(key).reset_index()
     return out
 
 
@@ -326,26 +321,20 @@ def _pandas(obj: Any) -> Any:
     return obj
 
 
-def _refuse_index_labels(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
-    """Refuse a table carrying labels in a named index, where they are neither read nor checked."""
+def _check_table(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
+    """Refuse a table carrying labels in a named index, or whose columns are not exactly *columns*."""
     named = [n for n in df.index.names if n is not None]
-    if not named:
-        return
-    raise SpecDataError(
-        f"{what} arrived as a DataFrame indexed by {named}, and a table carries its labels in "
-        f"columns, never in its index. Move them into columns with reset_index(), so that the "
-        f"table has the columns {list(columns)}."
-    )
-
-
-def _refuse_other_columns(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
-    """Refuse a table whose columns are not exactly *columns*."""
-    if len(df.columns) == len(columns) and set(df.columns) == set(columns):
-        return
-    raise SpecDataError(
-        f"{what} arrived as a DataFrame with the columns {list(df.columns)}, and it is read "
-        f"from exactly the columns {list(columns)}. Select them, e.g. table[{list(columns)}]."
-    )
+    if named:
+        raise SpecDataError(
+            f"{what} arrived as a DataFrame indexed by {named}, and a table carries its labels in "
+            f"columns, never in its index. Move them into columns with reset_index(), so that the "
+            f"table has the columns {list(columns)}."
+        )
+    if len(df.columns) != len(columns) or set(df.columns) != set(columns):
+        raise SpecDataError(
+            f"{what} arrived as a DataFrame with the columns {list(df.columns)}, and it is read "
+            f"from exactly the columns {list(columns)}. Select them, e.g. table[{list(columns)}]."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -455,9 +444,7 @@ def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> pd.DataFrame:
             f"relation '{name}': cannot read rows out of {type(obj).__name__}; pass "
             f"{_relation_shapes(rel)}, one row per key tuple."
         )
-    what = f"relation '{name}'"
-    _refuse_index_labels(what, obj, roles)
-    _refuse_other_columns(what, obj, roles)
+    _check_table(f"relation '{name}'", obj, roles)
     return obj[roles].reset_index(drop=True)
 
 
@@ -638,10 +625,7 @@ def _from_table(
     is refused, since it says the coordinate exists and denies it at once.
     """
     dims = declared.dims
-    columns = [*dims, name]
-    what = f"parameter '{name}'"
-    _refuse_index_labels(what, df, columns)
-    _refuse_other_columns(what, df, columns)
+    _check_table(f"parameter '{name}'", df, [*dims, name])
     series = df.set_index(list(dims))[name]
     if series.empty:
         series = series.astype(_EMPTY_DTYPES[declared.dtype])

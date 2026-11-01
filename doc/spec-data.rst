@@ -129,10 +129,9 @@ key columns and several value columns all arrive this way:
     # ends: {key: line, values: {bus0: bus, bus1: bus}}
     sources["ends"] = pd.DataFrame({"line": ["l0"], "bus0": ["b0"], "bus1": ["b1"]})
 
-Each key tuple takes one row at most,
-a null in any column is refused, and every label must be a member of its
-column's dimension. Under ``missing: refused`` (the default) every key tuple
-needs a row.
+Each key tuple takes one row at most, a null in any column is refused, and every
+label must be a member of its column's dimension. Under ``missing: refused``
+(the default) every key tuple needs a row.
 
 linopy holds a relation as its rows and never lays it out as a grid over its
 key, so a bare relation over two columns of one long dimension stays as small
@@ -146,11 +145,12 @@ Missing rows
 
 A missing row is a member with no value. How it is spelt depends on the shape:
 
-- In a **table**, a missing row is a row that is not there. A ``NaN`` in a table is refused: the row says
-  the coordinate exists and denies it in the same breath. Drop the row instead.
+- In a **table**, a missing row is a row that is not there. A ``NaN`` in a
+  table is refused: the row says the coordinate exists and denies it in the
+  same breath. Drop the row instead.
 - In a **grid** (a ``DataArray`` or a ``Dataset`` data variable), every
-  coordinate has a cell, so a ``NaN`` (``NaT`` for a
-  datetime, ``NaN`` in an object array for a string) is a missing row.
+  coordinate has a cell, so a ``NaN`` (``NaT`` for a datetime, ``NaN`` in an
+  object array for a string) is a missing row.
 
 A grid cannot hold a hole in an integer or boolean array, so an ``int`` or
 ``bool`` parameter with holes arrives as floats with ``NaN``: an ``int`` passes
