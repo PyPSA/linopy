@@ -797,3 +797,12 @@ class TestMosekChooseSolution:
         assert result.solution is not None
         assert math.isfinite(result.solution.objective)
         assert result.solution.objective == pytest.approx(5.0, abs=1e-3)
+
+
+def test_cplex_unscaled_infeasibilities_is_imprecise_but_ok() -> None:
+    """CPLEX 'optimal with unscaled infeasibilities' must keep its solution (#368)."""
+    condition = "optimal with unscaled infeasibilities"
+    tc = solvers.Cplex.CONDITION_MAP[condition]
+    status = Status.from_termination_condition(tc)
+    assert status.termination_condition == "imprecise"
+    assert status.is_ok

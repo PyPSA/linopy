@@ -2470,6 +2470,25 @@ class Cplex(Solver[None]):
     """
 
     display_name: ClassVar[str] = "CPLEX"
+
+    # "optimal with unscaled infeasibilities": the solution is usable but
+    # violates constraints slightly after unscaling, so flag it as imprecise.
+    CONDITION_MAP: ClassVar[dict[str, str]] = {
+        "optimal with unscaled infeasibilities": "imprecise",
+        "integer optimal solution": "optimal",
+        "integer optimal, tolerance": "optimal",
+        "integer infeasible": "infeasible",
+        "time limit exceeded": "time_limit",
+        "time limit exceeded, no integer solution": "infeasible",
+        "error termination": "error",
+        "error termination, no integer solution": "error",
+        "memory limit exceeded": "internal_solver_error",
+        "memory limit exceeded, no integer solution": "internal_solver_error",
+        "aborted": "user_interrupt",
+        "integer unbounded": "unbounded",
+        "integer infeasible or unbounded": "infeasible_or_unbounded",
+        "Unknown status value": "unknown",
+    }
     features: ClassVar[frozenset[SolverFeature]] = frozenset(
         {
             SolverFeature.INTEGER_VARIABLES,
@@ -2498,21 +2517,6 @@ class Cplex(Solver[None]):
     ) -> Result:
         problem_fn = self._problem_fn
         assert problem_fn is not None
-        CONDITION_MAP = {
-            "integer optimal solution": "optimal",
-            "integer optimal, tolerance": "optimal",
-            "integer infeasible": "infeasible",
-            "time limit exceeded": "time_limit",
-            "time limit exceeded, no integer solution": "infeasible",
-            "error termination": "error",
-            "error termination, no integer solution": "error",
-            "memory limit exceeded": "internal_solver_error",
-            "memory limit exceeded, no integer solution": "internal_solver_error",
-            "aborted": "user_interrupt",
-            "integer unbounded": "unbounded",
-            "integer infeasible or unbounded": "infeasible_or_unbounded",
-            "Unknown status value": "unknown",
-        }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
@@ -2549,7 +2553,7 @@ class Cplex(Solver[None]):
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
         condition = m.solution.get_status_string()
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = self.CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
