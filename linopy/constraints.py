@@ -26,6 +26,7 @@ from typing import (
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import scipy.sparse
 import xarray as xr
 from numpy import array
@@ -33,11 +34,6 @@ from xarray import DataArray, Dataset
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
-
-try:
-    import polars as pl
-except ImportError:  # pragma: no cover
-    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 from linopy import expressions, variables
 from linopy.alignment import as_dataarray, broadcast_to_coords

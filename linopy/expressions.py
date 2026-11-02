@@ -36,6 +36,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import scipy
 import xarray as xr
 import xarray.core.groupby
@@ -58,11 +59,6 @@ except ImportError:
     from xarray.core.rolling import DatasetRolling  # type: ignore[no-redef]
 
 from types import EllipsisType, NotImplementedType
-
-try:
-    import polars as pl
-except ImportError:  # pragma: no cover
-    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 
 from linopy import constraints, variables
 from linopy.alignment import (

@@ -10,32 +10,19 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TypeAlias
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from xarray import DataArray
 
 from linopy.alignment import _as_index, _coords_to_dict
 from linopy.constants import _warn_evolving_api
 from linopy.types import CoordsLike
 
-if TYPE_CHECKING:
-    import polars as pl
-
-    Frame: TypeAlias = pl.DataFrame | pd.DataFrame
-    Column: TypeAlias = pl.Series | pd.Series
-else:
-    try:
-        import polars as pl
-
-        Frame = pl.DataFrame | pd.DataFrame
-        Column = pl.Series | pd.Series
-    except ImportError:
-        from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
-
-        Frame = pd.DataFrame
-        Column = pd.Series | pd.Index
+Frame: TypeAlias = pl.DataFrame | pd.DataFrame
+Column: TypeAlias = pl.Series | pd.Series
 
 KIND_FAMILIES = {
     "b": "boolean",

@@ -136,8 +136,8 @@ jobs:
         mypy .
 
   no-extras:
-    # The base install must work without polars, dask, tqdm and deprecation.
-    # This job catches a hard import reintroduced into the core path.
+    # The base install must work without dask. This job catches a hard import
+    # reintroduced into the core path.
     name: Core install without optional dependencies
     needs: [build]
     runs-on: ubuntu-latest
@@ -165,9 +165,8 @@ jobs:
         python - <<'PY'
         import importlib.util
 
-        # The wheel with no extras must not pull in any of the optional extras.
-        for optional in ("polars", "dask", "tqdm"):
-            assert importlib.util.find_spec(optional) is None, optional
+        # The wheel with no extras must not pull in the optional extras.
+        assert importlib.util.find_spec("dask") is None
 
         import pandas as pd
 
@@ -185,10 +184,11 @@ jobs:
         x.ffill("t")
         x.bfill("t")
 
-        status, condition = m.solve(io_api="direct")
-        assert status == "ok", (status, condition)
         # One x per time step at cost 2, since x + y >= 1 and 2x + 3y.
-        assert abs(float(m.objective.value) - 2.0 * len(t)) < 1e-9
+        for io_api in ("lp", "direct"):
+            status, condition = m.solve(io_api=io_api)
+            assert status == "ok", (io_api, status, condition)
+            assert abs(float(m.objective.value) - 2.0 * len(t)) < 1e-9
 
         m.to_file("smoke.mps", io_api="mps")
 

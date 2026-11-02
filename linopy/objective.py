@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import polars as pl
 from numpy import float64
 from pandas.core.frame import DataFrame
 from scipy.sparse._csc import csc_matrix
@@ -19,11 +20,6 @@ from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
 from xarray.core.indexes import Indexes
-
-try:
-    import polars as pl
-except ImportError:  # pragma: no cover
-    from linopy._polars import missing_polars as pl  # type: ignore[no-redef]
 from xarray.core.utils import Frozen
 
 from linopy import expressions

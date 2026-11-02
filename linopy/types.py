@@ -4,14 +4,10 @@ from collections.abc import Hashable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, TypeAlias, Union, get_args
 
 import numpy
+import polars as pl
 from pandas import DataFrame, Index, Series
 from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
-
-try:
-    import polars as pl
-except ImportError:  # pragma: no cover
-    pl = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -27,38 +23,20 @@ CoordsLike: TypeAlias = (
 )
 DimsLike: TypeAlias = str | Iterable[Hashable]
 
-# polars is optional. When it is missing, `pl` is None and the polars entries
-# drop out of the aliases and the runtime type tuples below, so `isinstance`
-# checks keep working and simply never match a polars input.
-POLARS_SERIES_TYPES: tuple[type, ...] = (pl.Series,) if pl is not None else ()
-
-if pl is None:  # pragma: no cover
-    ConstantLike: TypeAlias = (
-        int
-        | float
-        | numpy.floating
-        | numpy.integer
-        | numpy.ndarray
-        | DataArray
-        | Series
-        | DataFrame
-    )
-    UnlabeledLike: TypeAlias = numpy.ndarray | list
-else:
-    ConstantLike: TypeAlias = (  # type: ignore[misc,no-redef]
-        int
-        | float
-        | numpy.floating
-        | numpy.integer
-        | numpy.ndarray
-        | DataArray
-        | Series
-        | DataFrame
-        | pl.Series
-    )
-    UnlabeledLike: TypeAlias = numpy.ndarray | list | pl.Series  # type: ignore[misc,no-redef]
-
+ConstantLike: TypeAlias = (
+    int
+    | float
+    | numpy.floating
+    | numpy.integer
+    | numpy.ndarray
+    | DataArray
+    | Series
+    | DataFrame
+    | pl.Series
+)
 CONSTANT_TYPES: tuple[type, ...] = get_args(ConstantLike)
+
+UnlabeledLike: TypeAlias = numpy.ndarray | list | pl.Series
 UNLABELED_TYPES = get_args(UnlabeledLike)
 
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
