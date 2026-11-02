@@ -493,6 +493,7 @@ class Solver(ABC, Generic[EnvType]):
         self,
         M: Matrices,
         disallow_rebuild: bool = False,
+        warm_start: bool = True,
         **run_kwargs: Any,
     ) -> Result:
         """
@@ -503,6 +504,10 @@ class Solver(ABC, Generic[EnvType]):
         in place. Otherwise, or when the solver rejects the update, the native
         model is rebuilt from ``M`` unless ``disallow_rebuild`` is set, with
         positional labels so results stay aligned with the window's arrays.
+
+        With ``warm_start=False`` an in-place update also discards the basis
+        and solution of the previous solve, so the solver starts from scratch.
+        Solvers that cannot discard them rebuild the native model instead.
 
         Returns the solver's :class:`~linopy.constants.Result`, whose status
         tells whether the window was solved; its solution is indexed by window
@@ -527,15 +532,37 @@ class Solver(ABC, Generic[EnvType]):
                 "the window changes the sparsity pattern",
             )
         else:
-            self._apply_or_rebuild(
+            updated = self._apply_or_rebuild(
                 ModelDiff.from_windows(previous, M),
                 len(M.vlabels),
                 len(M.clabels),
                 rebuild,
                 disallow_rebuild,
             )
+            if updated and not warm_start:
+                self._discard_warm_start_or_rebuild(rebuild, disallow_rebuild)
         self._window = M
         return self._run_direct(**run_kwargs)
+
+    def _discard_warm_start_or_rebuild(
+        self, rebuild: Callable[[], None], disallow_rebuild: bool
+    ) -> None:
+        try:
+            self._discard_warm_start()
+        except UnsupportedUpdate as exc:
+            self._fall_back_to_rebuild(
+                RebuildReason.BACKEND_REJECTED,
+                rebuild,
+                disallow_rebuild,
+                str(exc),
+                cause=exc,
+            )
+
+    def _discard_warm_start(self) -> None:
+        """Drop the basis and solution kept from the last solve of the native model."""
+        raise UnsupportedUpdate(
+            f"{self.display_name} cannot discard the warm start in place"
+        )
 
     def _build_window(self, M: Matrices) -> None:
         self.close()
@@ -1737,6 +1764,9 @@ class Highs(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("highspy")
 
+    def _discard_warm_start(self) -> None:
+        self.solver_model.clearSolver()
+
     @classmethod
     @functools.cache
     def _vtype_map(cls) -> dict[VarKind, Any]:
@@ -2209,6 +2239,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
     def _apply_end(self, ctx: Any) -> None:
         ctx.gm.update()
+
+    def _discard_warm_start(self) -> None:
+        self.solver_model.reset(0)
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
