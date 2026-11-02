@@ -9,6 +9,7 @@ materialises variables and constraints only when their values are read.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -33,10 +34,11 @@ class WindowObjective:
 
     @property
     def value(self) -> float | None:
-        result = self._window._result
-        if result is None or result.solution is None:
+        """The objective value, ``None`` unless the last solve returned a solution."""
+        solution = self._window._solution()
+        if solution is None:
             return None
-        return result.solution.objective / self._window.matrices.objective_scaling
+        return solution.objective / self._window.matrices.objective_scaling
 
     @property
     def sense(self) -> str:
@@ -134,10 +136,12 @@ class WindowModel:
             )
         elif options:
             self._solver.solver_options.update(options)
-        self._result = self._solver.solve_window(
+        self._result = None  # a solve that raises leaves no stale result behind
+        result = self._solver.solve_window(
             self._matrices, disallow_rebuild=disallow_rebuild, warm_start=warm_start
         )
-        self._result.info()
+        self._result = result
+        _log_in_model_units(result, self._matrices.objective_scaling)
         return self
 
     @property
@@ -171,14 +175,23 @@ class WindowModel:
         values = self._solved().primal / mat.var_scaling
         return _scatter(variables, mat.vlabels, values, self._parent._xCounter)
 
-    def _solved(self) -> Solution:
+    def _solution(self) -> Solution | None:
+        """The last solve's solution, ``None`` unless it succeeded with values."""
         result = self._result
-        if result is None:
+        if result is None or not result.status.is_ok:
+            return None
+        solution = result.solution
+        if solution is None or solution.primal.size != self._matrices.vlabels.size:
+            return None
+        return solution
+
+    def _solved(self) -> Solution:
+        if self._result is None:
             raise AttributeError(
                 "The window has not been solved. Call `solve()` before reading values."
             )
-        solution = result.solution
-        if solution is None or solution.primal.size != self._matrices.vlabels.size:
+        solution = self._solution()
+        if solution is None:
             raise AttributeError(
                 "The last solve returned no solution (status "
                 f"'{self.status}', termination condition "
@@ -206,3 +219,13 @@ def restrict_model(
 ) -> WindowModel:
     """Build a matrix-backed window of ``model``, see :meth:`linopy.Model.restrict`."""
     return WindowModel(model, selection, fix)
+
+
+def _log_in_model_units(result: Result, objective_scaling: float) -> None:
+    """Log *result* like :meth:`Model.solve`, with the objective in model units."""
+    solution, report = result.solution, result.report
+    if solution is not None:
+        solution = replace(solution, objective=solution.objective / objective_scaling)
+    if report is not None and report.dual_bound is not None:
+        report = replace(report, dual_bound=report.dual_bound / objective_scaling)
+    replace(result, solution=solution, report=report).info()
