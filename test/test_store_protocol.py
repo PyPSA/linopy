@@ -20,7 +20,6 @@ from test_store_conformance import (
     COND,
     OVER_AB,
     SERIES,
-    A,
     B,
     C,
     grid,
@@ -331,7 +330,11 @@ TERM_BUILDS = {**BUILDS, "zero-coeff": zero_coeff}
 @pytest.mark.parametrize("build", list(TERM_BUILDS))
 def test_terms_agree(build: str, active: bool) -> None:
     expr = TERM_BUILDS[build](Model())
-    stores = [cls.from_dense(expr.data, expr.model) for cls in STORE_CLASSES]
+    stores: list[Store] = []
+    for cls in STORE_CLASSES:
+        store = cls.from_dense(expr.data, expr.model)
+        assert isinstance(store, cls)
+        stores.append(store)
     n_cells = stores[0].n_cells
     mask = np.arange(n_cells) % 3 != 0 if active else None
     dense, sparse = (s.terms(mask) for s in stores)
@@ -353,7 +356,9 @@ def test_terms_counts_match_stored_cells(cls: type[Store]) -> None:
     counts, labels, coeffs = store.terms()
     cells = np.repeat(np.arange(store.n_cells), counts)
     for cell, label, coeff in zip(cells, labels, coeffs):
-        cell_coeffs, cell_labels, _ = store.cell(np.unravel_index(cell, store.shape))
+        cell_coeffs, cell_labels, _ = store.cell(
+            np.unravel_index(cell, store.grid.shape)
+        )
         assert coeff in cell_coeffs[cell_labels == label]
 
 
