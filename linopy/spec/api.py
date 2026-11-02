@@ -64,12 +64,24 @@ def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> N
         A constraint multiplies two variable-carrying operands.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
-    program = normalize_spec(spec)
+    _build(model, normalize_spec(spec), sources, store)
+
+
+def _build(model: Model, program: ms.Program, sources: Sources, store: bool) -> None:
+    """
+    The body of :func:`build_into`, in a frame of its own.
+
+    Lowering a spec leaves reference cycles in pyparsing's exceptions that
+    keep the frame of the caller of :func:`normalize_spec` alive until the
+    garbage collector runs. That frame holds no data, so the parameter grids
+    read here are freed as soon as the build returns.
+    """
     attached = attach(program, sources)
     relations = _storable(attached) if store else {}
-    raw = functools.cache(attached.read)
-    unfilled = {name: raw(name).values for name in program.parameters}
+    laid_out = {name: attached.check(name) for name in program.parameters}
+    raw = functools.cache(lambda name: laid_out[name]())
     if store:
+        unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
     build(_context(attached, model, raw, solved=False))
 
@@ -127,7 +139,13 @@ def evaluate(
         ``missing: refused`` parameter.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
-    program = normalize_spec(spec)
+    return _folded(normalize_spec(spec), model, names, sources)
+
+
+def _folded(
+    program: ms.Program, model: Model, names: tuple[str, ...], sources: Sources | None
+) -> dict[str, xr.DataArray]:
+    """The body of :func:`evaluate`, in a frame of its own for the reason :func:`_build` gives."""
     for name in names:
         if name not in program.expressions:
             raise unknown("expression", name, program.expressions)

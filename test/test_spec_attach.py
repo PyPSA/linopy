@@ -388,18 +388,22 @@ def grid_spec(**parameters: Any) -> Any:
     )
 
 
-@pytest.mark.parametrize("source", ["dataarray", "dataset"])
+ROW_DTYPES = {"float": float, "int": int, "bool": bool, "str": object}
+
+
+@pytest.mark.parametrize("source", ["dataarray", "dataset", "table"])
 @pytest.mark.parametrize(("dtype", "missing", "expected"), HOLES)
 def test_a_hole_in_a_labelled_source_is_a_missing_row(
     dtype: str, missing: Any, expected: Any, source: str
 ) -> None:
     program = grid_spec(p={"dims": ["f"], "dtype": dtype, "missing": missing})
     p = xr.DataArray(HELD.get(dtype, STR_HOLE), coords={"f": F})
-    sources = (
-        xr.Dataset({"p": p}, coords={"f": F})
-        if source == "dataset"
-        else {"f": F, "p": p}
-    )
+    rows = p.to_series().dropna().astype(ROW_DTYPES[dtype])
+    sources: Any = {
+        "dataarray": {"f": F, "p": p},
+        "dataset": xr.Dataset({"p": p}, coords={"f": F}),
+        "table": {"f": F, "p": rows.rename("p").reset_index()},
+    }[source]
     attached = attach(program, sources)
     assert attached.read("p").present.values.tolist() == [True, False, True]
     got = filled(attached, "p")
@@ -1001,3 +1005,18 @@ def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:
         read_all(program, sources)
     assert "int64" not in str(error.value)
+
+
+def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:
+    program = lower(
+        {
+            "dimensions": {"y": {"dtype": "int"}},
+            "parameters": {"p": {"dims": ["y"]}},
+            "variables": {"x": {"dims": ["y"], "bounds": {"lower": 0, "upper": 1}}},
+            "objective": {"sense": "maximize", "expression": "sum(x)"},
+        }
+    )
+    rows = pd.DataFrame({"y": pd.Series([True], dtype=object), "p": [1.0]})
+    attached = attach(program, {"y": pd.Index([1, 2], name="y"), "p": rows})
+    with pytest.raises(SpecDataError, match="in value but not in type: True"):
+        attached.check("p")

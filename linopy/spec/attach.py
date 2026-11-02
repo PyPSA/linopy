@@ -25,7 +25,7 @@ from __future__ import annotations
 import difflib
 import functools
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -165,15 +165,34 @@ class Attached:
             coordinate, a null value in a table row, values of another type
             than declared.
         """
+        return self.check(name)()
+
+    def check(self, name: str) -> Callable[[], Parameter]:
+        """
+        Refuse the data of parameter *name* as :meth:`read` would, and return the call laying it out on ``coords``.
+
+        The check reads the data's rows or cells and leaves the grid to the
+        call, so a parameter no declaration reads is checked without a grid.
+
+        Raises
+        ------
+        KeyError, SpecDataError
+            What :meth:`read` raises.
+        """
         if name not in self.program.parameters:
             raise unknown("parameter", name, self.program.parameters)
         if name not in self.keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         declared = self.program.parameters[name]
-        arr, present = _as_array(name, declared, self.sources[name], self.coords)
-        if declared.dtype == "bool" and not bool(present.all()):
-            arr = arr.astype(float)
-        return Parameter(arr, present)
+        lay_out = _as_array(name, declared, self.sources[name], self.coords)
+        if declared.dtype != "bool":
+            return lay_out
+
+        def read() -> Parameter:
+            arr, present = lay_out()
+            return Parameter(arr if bool(present.all()) else arr.astype(float), present)
+
+        return read
 
 
 def strict_parameters(program: ms.Program) -> frozenset[str]:
@@ -539,7 +558,8 @@ def _as_array(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
+    """*obj* checked as the data of parameter *name*, and the call laying it out on *coords*."""
     obj = _pandas(obj)
     dims = declared.dims
     if isinstance(obj, xr.DataArray):
@@ -561,7 +581,9 @@ def _as_array(
     )
 
 
-def _from_scalar(name: str, declared: ms.Parameter, obj: Any) -> Parameter:
+def _from_scalar(
+    name: str, declared: ms.Parameter, obj: Any
+) -> Callable[[], Parameter]:
     if pd.isna(obj):
         raise SpecDataError(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
@@ -572,7 +594,8 @@ def _from_scalar(name: str, declared: ms.Parameter, obj: Any) -> Parameter:
     if declared.dtype == "float":
         value = value.astype(float)
     arr = xr.DataArray(value, name=name)
-    return Parameter(arr, xr.ones_like(arr, dtype=bool))
+    parameter = Parameter(arr, xr.ones_like(arr, dtype=bool))
+    return lambda: parameter
 
 
 def _from_dense(
@@ -580,7 +603,7 @@ def _from_dense(
     declared: ms.Parameter,
     arr: xr.DataArray,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
     dims = declared.dims
     _check_dense_dtype(name, declared.dtype, arr)
     if set(arr.dims) != set(dims):
@@ -595,8 +618,10 @@ def _from_dense(
                 f"values against its labels, so every dimension needs an index coordinate."
             )
         _refuse_duplicate_coordinates(name, (d,), arr.indexes[d])
+        if not arr.indexes[d].equals(coords[d]):
+            _refuse_strangers(name, d, arr.indexes[d], coords[d])
     onto = {d: coords[d] for d in dims}
-    return _aligned(name, _numpy(arr.transpose(*dims)), onto)
+    return functools.partial(_aligned, arr.transpose(*dims), onto)
 
 
 def _check_dense_dtype(name: str, declared: str, arr: xr.DataArray) -> None:
@@ -621,7 +646,7 @@ def _from_table(
     declared: ms.Parameter,
     df: pd.DataFrame,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
     """
     A table of rows, one column per dim and the values under the parameter's name.
 
@@ -643,10 +668,60 @@ def _from_table(
         )
     _check_value_dtype(name, declared.dtype, series.dtype)
     _refuse_duplicate_coordinates(name, dims, series.index)
-    for d in dims:
-        _refuse_strangers(name, d, series.index.get_level_values(d), coords[d])
-    arr = _numpy(xr.DataArray.from_series(series))
-    return _aligned(name, arr.transpose(*dims), {d: coords[d] for d in dims})
+    onto = {d: coords[d] for d in dims}
+    positions = []
+    for d, index in onto.items():
+        labels = series.index.get_level_values(d)
+        _refuse_strangers(name, d, labels, index)
+        positions.append(_positions(name, d, labels, index))
+    at = np.ravel_multi_index(positions, tuple(len(i) for i in onto.values()))
+    return functools.partial(_on_grid, at, series.to_numpy(), onto)
+
+
+def _positions(name: str, dim: str, labels: pd.Index, index: pd.Index) -> np.ndarray:
+    """The position of each of *labels* in *index*, refusing a label equal to a coordinate in value only."""
+    found = index.get_indexer(labels)
+    if (found >= 0).all():
+        return found
+    raise SpecDataError(
+        f"parameter '{name}' has label(s) in dimension '{dim}' that equal coordinates of it in "
+        f"value but not in type: {shown(labels[found < 0].unique().tolist())}, and '{dim}' holds "
+        f"'{_kind_name(index.dtype)}' labels. Cast them to the dimension's type."
+    )
+
+
+def _on_grid(
+    at: np.ndarray, values: np.ndarray, onto: Mapping[str, pd.Index]
+) -> Parameter:
+    """
+    The *values* placed at the flat positions *at* of the grid *onto*, a cell no value reaches a hole.
+
+    One array the size of the grid is allocated, beside the mask of where a
+    row is: the grid of a table is its dims' full product, whatever few rows
+    it holds.
+    """
+    shape = tuple(len(index) for index in onto.values())
+    present = np.zeros(int(np.prod(shape)), dtype=bool)
+    present[at] = True
+    if len(at) == present.size:
+        grid = np.empty(present.size, dtype=values.dtype)
+    else:
+        grid = np.full(present.size, *_hole(values.dtype))
+    grid[at] = values
+    dims = list(onto)
+    return Parameter(
+        xr.DataArray(grid.reshape(shape), coords=onto, dims=dims),
+        xr.DataArray(present.reshape(shape), coords=onto, dims=dims),
+    )
+
+
+def _hole(dtype: np.dtype) -> tuple[float, Any]:
+    """A hole, NaN, and the dtype of an array holding *dtype*'s values beside one: float for a number, object for a string."""
+    if dtype.kind == "f":
+        return np.nan, dtype
+    if dtype.kind in "iub":
+        return np.nan, np.float64
+    return np.nan, object
 
 
 def _refuse_duplicate_coordinates(
@@ -695,15 +770,15 @@ def _refuse_label_type(what: str, dim: str, labels: pd.Index, known: pd.Index) -
     )
 
 
-def _aligned(name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index]) -> Parameter:
+def _aligned(arr: xr.DataArray, onto: Mapping[str, pd.Index]) -> Parameter:
+    """The grid *arr* on the master coordinates *onto*, without copying one already on them."""
+    arr = _numpy(arr)
     present = arr.notnull()
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
         if stale:
             return Parameter(arr.assign_coords(stale), present.assign_coords(stale))
         return Parameter(arr, present)
-    for d, index in onto.items():
-        _refuse_strangers(name, d, arr.indexes[d], index)
     return Parameter(
         arr.reindex(onto, fill_value=np.nan), present.reindex(onto, fill_value=False)
     )
