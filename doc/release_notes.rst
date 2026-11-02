@@ -127,6 +127,7 @@ Version 1.0.0
 **Features**
 
 * :meth:`linopy.Model.restrict` cuts a subproblem out of a model, e.g. a time slice for rolling-horizon optimization. ``m.restrict(snapshot=window, fix=...)`` returns a :class:`~linopy.restrict.WindowModel`; terms on variables outside the window move to the right-hand side at their ``fix`` values. ``window.advance(...)`` moves the window and ``window.solve()`` updates the solver model in place where possible, without a warm start unless ``warm_start=True``. ``solution`` and ``dual`` are dictionaries of ``DataArray``; check ``window.status`` after solving. See the new :doc:`restrict` guide. (https://github.com/PyPSA/linopy/issues/768)
+* The ``Variable`` methods that wrap an ``xarray.Dataset`` method, such as ``sel``, ``isel``, ``shift``, ``rename`` and ``stack``, now carry the wrapped method's parameters and return ``Variable`` for type checkers and IDEs, instead of an untyped ``Callable``. (`#1029 <https://github.com/PyPSA/linopy/pull/1029>`__)
 
 **Internal**
 
