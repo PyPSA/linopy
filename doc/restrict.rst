@@ -128,11 +128,15 @@ A long-horizon problem is often solved one time slice at a time: solve a slice
     initial = xr.DataArray([50.0] * 8760, dims=["snapshot"])
 
     window = m.restrict(snapshot=sns[:24], fix={"soc": initial})
-    window.solve(solver_name="highs")
 
-    for start in range(24, 8760 - 24, 24):
-        window.advance(snapshot=sns[start : start + 24], fix={"soc": initial})
+    for start in range(0, 8760, 24):
+        if start:
+            window.advance(snapshot=sns[start : start + 24], fix={"soc": initial})
         window.solve(solver_name="highs")
+        if window.status != "ok":
+            raise RuntimeError(
+                f"window starting at {start} failed: {window.termination_condition}"
+            )
 
         # containers are built when you read them
         solution = window.solution
@@ -157,9 +161,18 @@ directly:
 * :attr:`~linopy.restrict.WindowModel.matrices` holds ``A``, ``b``, ``sense``,
   ``c``, ``lb``, ``ub`` and the labels of its rows and columns.
 * :attr:`~linopy.restrict.WindowModel.solution` and
-  :attr:`~linopy.restrict.WindowModel.dual` are ``Dataset`` objects with one
-  array per variable or constraint. They are built when you read them.
-* :attr:`~linopy.restrict.WindowModel.objective` is the last solve's value.
+  :attr:`~linopy.restrict.WindowModel.dual` are dictionaries with one
+  ``DataArray`` per variable or constraint, each with its own coordinates. They
+  are built when you read them.
+* :attr:`~linopy.restrict.WindowModel.objective` is the last solve's value,
+  ``None`` when the solve returned no solution.
+* :attr:`~linopy.restrict.WindowModel.status` and
+  :attr:`~linopy.restrict.WindowModel.termination_condition` report the outcome
+  of the last solve, as on :class:`~linopy.Model`. An infeasible window does
+  not raise on ``solve()``, but reading its values does, so check that
+  ``status`` is ``"ok"`` in a loop. A status of ``"ok"`` does not imply an
+  optimum: a MIP stopped by its time limit is ``"ok"`` with the termination
+  condition ``"time_limit"``.
 
 Terms outside the window are dropped from the objective, so the window's value
 differs from the full model's by a constant.
@@ -174,6 +187,14 @@ the solver updates its existing model instead of building a new one, so a
 chain of equal-sized windows keeps that fast path. A changed pattern, e.g. a
 coefficient that is zero in one window only, rebuilds the solver model, or
 raises :class:`~linopy.persistent.errors.RebuildRequiredError` with
+``disallow_rebuild=True``.
+
+Each solve starts from scratch: the basis left by the previous window is
+discarded, because a window shifted in time usually makes it a poor start that
+slows the solver down. Pass ``warm_start=True`` to ``solve`` to keep it, e.g.
+when re-solving the same window with slightly changed fixed values. HiGHS and
+Gurobi discard the basis in place; other solvers rebuild their model instead,
+or raise :class:`~linopy.persistent.errors.RebuildRequiredError` with
 ``disallow_rebuild=True``.
 
 Limits

@@ -246,9 +246,9 @@ def _assert_replay_equals_fresh(
         fresh.solve(solver_name="highs", output_flag=False)
 
         assert fresh.objective.value == pytest.approx(results[i]["objective"])
-        for name, da in fresh.solution.data_vars.items():
+        for name, da in fresh.solution.items():
             assert_allclose(da.values, results[i]["solution"][name].values, rtol=1e-7)
-        for name, da in fresh.dual.data_vars.items():
+        for name, da in fresh.dual.items():
             assert_allclose(da.values, results[i]["dual"][name].values, rtol=1e-6)
         for name in case.fix_vars:
             carried[name].loc[{case.dim: window}] = fresh.solution[name].values

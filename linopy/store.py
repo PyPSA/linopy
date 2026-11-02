@@ -188,8 +188,19 @@ class Store(ABC):
         """Coefficients, variable labels and constant of the cell at ``indices``."""
 
     @abstractmethod
-    def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Cell, variable label and coefficient of the live terms."""
+    def terms(
+        self, active: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Live terms in cell order: the number per cell, and their variable
+        labels and coefficients.
+
+        A term is live when its cell is present and, if given, ``active``
+        (one boolean per cell), its label is not ``-1`` and its coefficient
+        is nonzero. The counts hold one entry per cell, so a per-cell value
+        reaches each term by ``np.repeat(values, counts)`` without a
+        per-term index.
+        """
 
     @abstractmethod
     def variable_labels(self) -> np.ndarray:
@@ -721,11 +732,15 @@ class DenseStore(Store):
         coeffs, vars_ = ds.coeffs.values[indices], ds.vars.values[indices]
         return coeffs, vars_, float(ds.const.values[indices])
 
-    def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        coeffs, vars_, keep = self._active_mask(~np.isnan(self.const))
-        cells = np.flatnonzero(keep)
-        cells //= self.nterm
-        return cells, vars_[keep], coeffs[keep]
+    def terms(
+        self, active: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        present = ~np.isnan(self.const)
+        if active is not None:
+            present &= active
+        coeffs, vars_, keep = self._active_mask(present)
+        counts = np.count_nonzero(keep, axis=-1).reshape(-1)
+        return counts, vars_[keep], coeffs[keep]
 
     def variable_labels(self) -> np.ndarray:
         return self.ds.vars.values.ravel()

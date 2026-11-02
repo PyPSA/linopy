@@ -15,7 +15,7 @@ from linopy import LinearExpression, Model, merge
 from linopy.matrices import Matrices
 from linopy.persistent.diff import ModelDiff, RebuildReason
 from linopy.persistent.errors import RebuildRequiredError
-from linopy.restrict import MatrixWindow, RestrictionError
+from linopy.restrict import MatrixWindow, RestrictionError, WindowModel
 from linopy.solvers import Solver
 
 TIME = pd.RangeIndex(8, name="time")
@@ -465,11 +465,151 @@ def test_reading_values_before_solve_raises(read: Any) -> None:
 def test_dual_size_mismatch_raises() -> None:
     window = linear_model().restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
-    assert window._result is not None
-    window._result = replace(window._result, dual=np.empty(0))
+    assert window._result is not None and window._result.solution is not None
+    solution = replace(window._result.solution, dual=np.empty(0))
+    window._result = replace(window._result, solution=solution)
 
     with pytest.raises(AttributeError, match="no dual values"):
         window.dual
+
+
+def test_status_before_solve() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+
+    assert window.status == "initialized"
+    assert window.termination_condition == ""
+    assert window.objective.value is None
+
+
+def test_status_after_optimal_solve() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.status == "ok"
+    assert window.termination_condition == "optimal"
+
+
+def infeasible_window() -> WindowModel:
+    sns = pd.RangeIndex(4, name="snapshot")
+    m = Model()
+    x = m.add_variables(0, 1, coords=[sns], name="x")
+    m.add_constraints(x >= 2, name="infeasible")
+    m.add_objective(x.sum())
+    return m.restrict(snapshot=sns[:2])
+
+
+@pytest.mark.parametrize(
+    "read",
+    [lambda w: w.solution, lambda w: w.dual, lambda w: w["x"]],
+    ids=["solution", "dual", "getitem"],
+)
+def test_infeasible_window_reports_status_and_raises_on_read(read: Any) -> None:
+    window = infeasible_window()
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.status == "warning"
+    assert window.termination_condition == "infeasible"
+    with pytest.raises(AttributeError, match="termination condition 'infeasible'"):
+        read(window)
+
+
+def test_infeasible_window_has_no_objective_value() -> None:
+    window = infeasible_window()
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.objective.value is None
+
+
+def solved_window() -> WindowModel:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    assert window._result is not None
+    return window
+
+
+def test_ok_solve_without_a_solution_raises_on_read() -> None:
+    window = solved_window()
+    assert window._result is not None
+    window._result = replace(window._result, solution=None)
+
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="returned no solution"):
+        window.solution
+
+
+def test_failed_status_hides_returned_values() -> None:
+    from linopy.constants import Status
+
+    window = solved_window()
+    assert window._result is not None
+    window._result = replace(
+        window._result, status=Status.from_termination_condition("infeasible")
+    )
+
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="termination condition 'infeasible'"):
+        window.solution
+
+
+def test_solve_that_raises_drops_the_previous_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = solved_window()
+    assert window._solver is not None
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("solver crashed")
+
+    monkeypatch.setattr(window._solver, "solve_window", broken)
+    with pytest.raises(RuntimeError, match="solver crashed"):
+        window.solve()
+
+    assert window.status == "initialized"
+    assert window.objective.value is None
+
+
+def test_solve_logs_the_objective_in_model_units(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    window = kinds_model("C", TIME, scaling=10.0).restrict(time=TIME[:2])
+    with caplog.at_level(logging.INFO, logger="linopy.constants"):
+        window.solve(solver_name="highs", output_flag=False)
+
+    assert window.objective.value == pytest.approx(3.0)
+    assert "Objective: 3.00e+00" in caplog.text
+
+
+def test_status_resets_on_advance() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.advance(time=TIME[1:3])
+
+    assert window.status == "initialized"
+    assert window.termination_condition == ""
+
+
+def test_solution_keeps_per_variable_coords_on_shared_dims() -> None:
+    sns = pd.RangeIndex(2, name="snapshot")
+    m = Model()
+    a = m.add_variables(
+        0, 1, coords=[sns, pd.Index(["g1", "g2"], name="name")], name="a"
+    )
+    b = m.add_variables(0, 1, coords=[sns, pd.Index(["s1"], name="name")], name="b")
+    m.add_constraints(a.sum("name") + b.sum("name") >= 1, name="demand")
+    m.add_constraints(a >= 0, name="a_lb")
+    m.add_constraints(b >= 0, name="b_lb")
+    m.add_objective(a.sum() + 2 * b.sum())
+    window = m.restrict(snapshot=sns[:1])
+    window.solve(solver_name="highs", output_flag=False)
+
+    solution, dual = window.solution, window.dual
+    assert list(solution["a"].indexes["name"]) == ["g1", "g2"]
+    assert list(solution["b"].indexes["name"]) == ["s1"]
+    assert solution["b"].identical(window["b"])
+    assert not solution["b"].isnull().any()
+    assert list(dual["a_lb"].indexes["name"]) == ["g1", "g2"]
+    assert list(dual["b_lb"].indexes["name"]) == ["s1"]
+    assert not dual["b_lb"].isnull().any()
 
 
 def test_getitem_after_solve_returns_values() -> None:
@@ -610,11 +750,77 @@ def test_window_solve_across_solvers(solver_name: str) -> None:
     assert np.allclose(window.solution["x"].values, decay)
 
     window.advance(time=TIME[4:7], fix=fix)
-    window.solve(disallow_rebuild=True)
+    window.solve(disallow_rebuild=True, warm_start=True)
     assert window._solver is not None
     assert window._solver._in_place_updates == 1
     assert np.allclose(window.solution["x"].values, 4 * decay)
     assert window.objective.value == pytest.approx(4 * decay.sum())
+
+
+def simplex_iterations(window: WindowModel) -> int:
+    assert window._solver is not None
+    return window._solver.solver_model.getInfo().simplex_iteration_count
+
+
+@pytest.mark.parametrize("warm_start", [None, False, True])
+def test_window_solve_discards_the_warm_start_by_default(
+    warm_start: bool | None,
+) -> None:
+    window = storage_model().restrict(time=TIME[1:4], fix={"soc": initial()})
+    window.solve(solver_name="highs", presolve="off")
+    assert simplex_iterations(window) > 0
+
+    window.advance()
+    if warm_start is None:
+        window.solve(disallow_rebuild=True)
+    else:
+        window.solve(disallow_rebuild=True, warm_start=warm_start)
+    assert window._solver is not None
+    assert window._solver._in_place_updates == 1
+    assert (simplex_iterations(window) == 0) == bool(warm_start)
+    assert window.status == "ok"
+
+
+@pytest.mark.parametrize("solver_name", ["highs", "gurobi"])
+def test_cold_window_solve_updates_in_place(solver_name: str) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+
+    fix = {"soc": initial()}
+    window = storage_model().restrict(time=TIME[1:4], fix=fix)
+    window.solve(solver_name=solver_name)
+    window.advance(time=TIME[4:7], fix=fix)
+    window.solve(disallow_rebuild=True)
+
+    assert window._solver is not None
+    assert window._solver._in_place_updates == 1
+    fresh = storage_model().restrict(time=TIME[4:7], fix=fix).solve(solver_name)
+    assert window.objective.value == pytest.approx(fresh.objective.value)
+
+
+def test_cold_window_solve_rebuilds_without_backend_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from linopy.persistent.errors import UnsupportedUpdate
+    from linopy.solvers import Highs
+
+    def unsupported(self: Highs) -> None:
+        raise UnsupportedUpdate("no reset")
+
+    monkeypatch.setattr(Highs, "_discard_warm_start", unsupported)
+    fix = {"soc": initial()}
+    window = storage_model().restrict(time=TIME[1:4], fix=fix)
+    window.solve(solver_name="highs")
+    window.advance(time=TIME[4:7], fix=fix)
+    with pytest.raises(RebuildRequiredError):
+        window.solve(disallow_rebuild=True)
+
+    window.solve()
+    assert window._solver is not None
+    assert window._solver._last_rebuild_reason is RebuildReason.BACKEND_REJECTED
+    assert window.status == "ok"
 
 
 def test_window_solve_detaches_the_solver_from_its_model() -> None:

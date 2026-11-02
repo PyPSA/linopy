@@ -58,14 +58,19 @@ SNAPSHOT = pd.Index([0, 1, 2], name="snapshot")
 DISPATCH_DATA: dict[str, Any] = {
     "snapshot": SNAPSHOT,
     "generator": GENERATOR,
-    "p_max": pd.Series([100.0, 200.0], index=GENERATOR),
-    "load": pd.Series([80.0, 150.0, 50.0], index=SNAPSHOT),
-    "cost": pd.Series([0.0, 50.0], index=GENERATOR),
+    "p_max": pd.DataFrame({"generator": GENERATOR, "p_max": [100.0, 200.0]}),
+    "load": pd.DataFrame({"snapshot": SNAPSHOT, "load": [80.0, 150.0, 50.0]}),
+    "cost": pd.DataFrame({"generator": GENERATOR, "cost": [0.0, 50.0]}),
 }
 DISPATCH_P = xr.DataArray(
     [[80.0, 0.0], [100.0, 50.0], [50.0, 0.0]],
     coords={"snapshot": SNAPSHOT, "generator": GENERATOR},
 )
+
+
+def table(series: pd.Series, column: str) -> pd.DataFrame:
+    """*series* as a spec table: its named index levels as label columns, its values under *column*."""
+    return series.rename(column).reset_index()
 
 
 def solved(spec: Any, sources: Any, store: bool = True, **kwargs: Any) -> Model:
@@ -116,12 +121,12 @@ WHERE_DATA: dict[str, Any] = {
     "t": TT,
     "s": S,
     "d": DAYS,
-    "season_of": pd.Series(["a", "a", "b"], index=TT[:3]),
-    "other_of": pd.Series(["a", "b", "b", "a"], index=TT),
-    "flag": pd.Series([True, False], index=TT[:2]),
-    "cost": pd.Series([1.0, float("inf"), 3.0], index=TT[:3]),
-    "label": pd.Series(["u", "v"], index=TT[1:3]),
-    "day_cost": pd.Series([1.0, 2.0, 3.0, 4.0], index=DAYS),
+    "season_of": pd.DataFrame({"t": TT[:3], "s": ["a", "a", "b"]}),
+    "other_of": pd.DataFrame({"t": TT, "s": ["a", "b", "b", "a"]}),
+    "flag": pd.DataFrame({"t": TT[:2], "flag": [True, False]}),
+    "cost": pd.DataFrame({"t": TT[:3], "cost": [1.0, float("inf"), 3.0]}),
+    "label": pd.DataFrame({"t": TT[1:3], "label": ["u", "v"]}),
+    "day_cost": pd.DataFrame({"d": DAYS, "day_cost": [1.0, 2.0, 3.0, 4.0]}),
 }
 
 BP = pd.Index([0, 1, 2, 3], name="bp")
@@ -173,9 +178,10 @@ MASKED_CURVE_SPEC = with_(
 )
 
 
-def curve(points: dict[tuple[str, int], float]) -> pd.Series:
+def curve(points: dict[tuple[str, int], float]) -> xr.DataArray:
+    """Breakpoints as a grid over (generator, bp), NaN where a curve has none."""
     index = pd.MultiIndex.from_tuples(list(points), names=["generator", "bp"])
-    return pd.Series(list(points.values()), index=index)
+    return xr.DataArray.from_series(pd.Series(list(points.values()), index=index))
 
 
 FULL_X = curve(
@@ -202,6 +208,6 @@ CURVE_DATA: dict[str, Any] = {
     "snapshot": [0],
     "generator": UNITS,
     "bp": BP,
-    "p_max": pd.Series([40.0, 80.0], index=UNITS),
-    "load": pd.Series([50.0], index=pd.Index([0], name="snapshot")),
+    "p_max": pd.DataFrame({"generator": UNITS, "p_max": [40.0, 80.0]}),
+    "load": pd.DataFrame({"snapshot": [0], "load": [50.0]}),
 }

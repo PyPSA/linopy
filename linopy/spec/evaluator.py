@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import operator
 from collections.abc import Callable, Sequence
-from typing import TypeVar, assert_never, cast
+from typing import TypeAlias, TypeVar, assert_never, cast
 
 import numpy as np
 import xarray as xr
@@ -18,7 +18,7 @@ from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
 
-_Binary = ms.Add | ms.Multiply | ms.Divide | ms.Power
+_Binary: TypeAlias = ms.Add | ms.Multiply | ms.Divide | ms.Power
 _OPERATORS: dict[type, Callable[[Value, Value], Value]] = {
     ms.Add: operator.add,
     ms.Multiply: operator.mul,

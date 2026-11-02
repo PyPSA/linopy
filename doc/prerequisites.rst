@@ -25,6 +25,18 @@ or
    conda install -c conda-forge linopy
 
 
+Optional dependencies
+---------------------
+
+The base install pulls numpy, scipy, xarray, pandas, polars, tqdm, packaging
+and bottleneck. Chunked (dask-backed) arrays, for example via
+``Variable.chunk()``, need the ``dask`` extra:
+
+.. code:: bash
+
+    uv pip install "linopy[dask]"
+
+
 Install a solver
 ----------------
 

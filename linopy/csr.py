@@ -539,10 +539,22 @@ class CSRStore(Store):
     def has_terms(self) -> np.ndarray:
         return np.diff(self.csr.indptr) > 0
 
-    def terms(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        cells = repeat_per_row(np.arange(self.n_cells), self.csr.indptr)
-        keep = self.live_terms()
-        return cells[keep], self.csr.indices[keep], self.csr.data[keep]
+    def terms(
+        self, active: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        indptr, data = self.csr.indptr, self.csr.data
+        present = ~np.isnan(self.const)
+        if active is not None:
+            present &= active
+        keep = repeat_per_row(present, indptr)
+        zeros = np.flatnonzero(data == 0)
+        zeros = zeros[keep[zeros]]
+        keep[zeros] = False
+        counts = np.where(present, np.diff(indptr), 0)
+        if zeros.size:
+            rows = np.searchsorted(indptr, zeros, side="right") - 1
+            counts -= np.bincount(rows, minlength=self.n_cells).astype(counts.dtype)
+        return counts, self.csr.indices[keep], data[keep]
 
     def variable_labels(self) -> np.ndarray:
         return self.csr.indices

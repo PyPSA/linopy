@@ -520,9 +520,13 @@ class LinearExpressionGroupby:
         Returns
         -------
         LinearExpression
-            The result of applying the function to the groupby object.
+            The result of applying the function to the groupby object. A
+            quadratic expression stays a QuadraticExpression.
         """
-        return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
+        ds = self.groupby.map(func, args=args, **kwargs)
+        if FACTOR_DIM in ds.vars.dims:
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
+        return LinearExpression(ds, self.model)
 
     def sum(
         self,
@@ -2988,9 +2992,9 @@ class LinearExpression(BaseExpression):
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
-        cells, vars_, coeffs = self._store.terms()
+        counts, vars_, coeffs = self._store.terms()
         return {
-            "const": self._store.const[cells],
+            "const": np.repeat(self._store.const, counts),
             "coeffs": coeffs.astype(float),
             "vars": vars_.astype(self.model._dtypes["labels"]),
         }
