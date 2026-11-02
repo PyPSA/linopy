@@ -2992,9 +2992,9 @@ class LinearExpression(BaseExpression):
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
-        cells, vars_, coeffs = self._store.terms()
+        counts, vars_, coeffs = self._store.terms()
         return {
-            "const": self._store.const[cells],
+            "const": np.repeat(self._store.const, counts),
             "coeffs": coeffs.astype(float),
             "vars": vars_.astype(self.model._dtypes["labels"]),
         }
