@@ -111,10 +111,16 @@ class WindowModel:
         self,
         solver_name: str | None = None,
         disallow_rebuild: bool = False,
+        warm_start: bool = False,
         **options: Any,
     ) -> WindowModel:
         """
         Solve the window, updating an existing solver model in place when possible.
+
+        By default each solve starts from scratch: after :meth:`advance` the
+        previous window's basis is usually a poor starting point and slows the
+        solver down. Pass ``warm_start=True`` to keep it, e.g. when re-solving
+        the same window with slightly changed fixed values.
 
         Check :attr:`status` and :attr:`termination_condition` afterwards: an
         infeasible or otherwise failed window does not raise, but reading its
@@ -129,7 +135,7 @@ class WindowModel:
         elif options:
             self._solver.solver_options.update(options)
         self._result = self._solver.solve_window(
-            self._matrices, disallow_rebuild=disallow_rebuild
+            self._matrices, disallow_rebuild=disallow_rebuild, warm_start=warm_start
         )
         self._result.info()
         return self

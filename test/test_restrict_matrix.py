@@ -684,11 +684,76 @@ def test_window_solve_across_solvers(solver_name: str) -> None:
     assert np.allclose(window.solution["x"].values, decay)
 
     window.advance(time=TIME[4:7], fix=fix)
-    window.solve(disallow_rebuild=True)
+    window.solve(disallow_rebuild=True, warm_start=True)
     assert window._solver is not None
     assert window._solver._in_place_updates == 1
     assert np.allclose(window.solution["x"].values, 4 * decay)
     assert window.objective.value == pytest.approx(4 * decay.sum())
+
+
+def simplex_iterations(window: WindowModel) -> int:
+    assert window._solver is not None
+    return window._solver.solver_model.getInfo().simplex_iteration_count
+
+
+@pytest.mark.parametrize(
+    ("warm_start", "warm"), [({}, False), ({"warm_start": True}, True)]
+)
+def test_window_solve_discards_the_warm_start_by_default(
+    warm_start: dict[str, bool], warm: bool
+) -> None:
+    window = storage_model().restrict(time=TIME[1:4], fix={"soc": initial()})
+    window.solve(solver_name="highs", presolve="off")
+    assert simplex_iterations(window) > 0
+
+    window.advance()
+    window.solve(disallow_rebuild=True, **warm_start)
+    assert window._solver is not None
+    assert window._solver._in_place_updates == 1
+    assert (simplex_iterations(window) == 0) == warm
+    assert window.status == "ok"
+
+
+@pytest.mark.parametrize("solver_name", ["highs", "gurobi"])
+def test_cold_window_solve_updates_in_place(solver_name: str) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+
+    fix = {"soc": initial()}
+    window = storage_model().restrict(time=TIME[1:4], fix=fix)
+    window.solve(solver_name=solver_name)
+    window.advance(time=TIME[4:7], fix=fix)
+    window.solve(disallow_rebuild=True)
+
+    assert window._solver is not None
+    assert window._solver._in_place_updates == 1
+    fresh = storage_model().restrict(time=TIME[4:7], fix=fix).solve(solver_name)
+    assert window.objective.value == pytest.approx(fresh.objective.value)
+
+
+def test_cold_window_solve_rebuilds_without_backend_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from linopy.persistent.errors import UnsupportedUpdate
+    from linopy.solvers import Highs
+
+    def unsupported(self: Highs) -> None:
+        raise UnsupportedUpdate("no reset")
+
+    monkeypatch.setattr(Highs, "_discard_warm_start", unsupported)
+    fix = {"soc": initial()}
+    window = storage_model().restrict(time=TIME[1:4], fix=fix)
+    window.solve(solver_name="highs")
+    window.advance(time=TIME[4:7], fix=fix)
+    with pytest.raises(RebuildRequiredError):
+        window.solve(disallow_rebuild=True)
+
+    window.solve()
+    assert window._solver is not None
+    assert window._solver._last_rebuild_reason is RebuildReason.BACKEND_REJECTED
+    assert window.status == "ok"
 
 
 def test_window_solve_detaches_the_solver_from_its_model() -> None:
