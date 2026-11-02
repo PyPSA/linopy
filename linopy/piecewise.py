@@ -1512,6 +1512,14 @@ class _PwlLinks:
     signed_expr: LinearExpression | None
     signed_bp: DataArray | None
 
+    @property
+    def entity_mask(self) -> DataArray | None:
+        """Entities with at least one present breakpoint (``None`` if unmasked)."""
+        if self.bp_mask is None:
+            return None
+        dims = [d for d in (BREAKPOINT_DIM, SEGMENT_DIM) if d in self.bp_mask.dims]
+        return self.bp_mask.any(dim=dims)
+
 
 def _build_links(model: Model, inputs: _PwlInputs) -> _PwlLinks:
     """Stack ``inputs`` into the link representation."""
@@ -1648,7 +1656,14 @@ def _add_links(
     ]
     for expr, bp, sign, suffix in sides:
         if expr is not None and bp is not None:
-            _add_signed_link(model, expr, weighted(bp), sign, f"{name}{suffix}")
+            _add_signed_link(
+                model,
+                expr,
+                weighted(bp),
+                sign,
+                f"{name}{suffix}",
+                mask=links.entity_mask,
+            )
 
 
 def _add_sos2(
@@ -1679,7 +1694,9 @@ def _add_sos2(
     )
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
     model.add_constraints(
-        lambda_var.sum(dim=dim) == rhs, name=f"{name}{PWL_CONVEX_SUFFIX}"
+        lambda_var.sum(dim=dim) == rhs,
+        name=f"{name}{PWL_CONVEX_SUFFIX}",
+        mask=None if extra_dims else links.entity_mask,
     )
 
     def weighted(bp: DataArray) -> LinearExpression:
@@ -1809,6 +1826,7 @@ def _add_disjunctive(
     model.add_constraints(
         binary_var.sum(dim=SEGMENT_DIM) == rhs,
         name=f"{name}{PWL_SELECT_SUFFIX}",
+        mask=links.entity_mask,
     )
     _add_sos2(model, name, links, binary_var, [SEGMENT_DIM])
 

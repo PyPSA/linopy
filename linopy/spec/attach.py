@@ -9,9 +9,15 @@ are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out is a missing row, and the parameter's ``missing:`` says what it
 means: refused, absent (NaN, ``False`` for ``bool``), neutral (0) or a value.
-A NaN in a grid (a DataArray, a Dataset variable or a wide DataFrame) is a
-missing row too, while a table says a row is missing by leaving it out. Read
-leaves a missing row a hole, and :func:`fill` applies ``missing:``.
+A NaN in a grid (a DataArray or a Dataset variable) is a missing row too,
+while a table says a row is missing by leaving it out. Read leaves a missing
+row a hole, and :func:`fill` applies ``missing:``.
+
+Each kind of data takes one shape, and anything else is refused rather than
+guessed at. A table is a pandas or polars DataFrame carrying its labels in
+columns named after the dimensions or roles, never in its index, and no
+column beyond those it is read for. A grid is a DataArray over the declared
+dimensions. A dimension is a flat sequence of unique labels.
 """
 
 from __future__ import annotations
@@ -19,12 +25,13 @@ from __future__ import annotations
 import difflib
 import functools
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 from mathspec import program as ms
 from mathspec.program import parameters_of, walk
@@ -55,13 +62,11 @@ _EMPTY_DTYPES: dict[str, Any] = {
 }
 _NEUTRAL: dict[str, Any] = {"float": 0.0, "int": 0, "bool": False}
 _SCALARS = (bool, int, float, str, np.number, np.bool_)
-_DIMENSION_SHAPES = (
-    "a pandas Index, a list, a tuple, a set (read sorted), a 1-D numpy or pandas array, "
-    "a pandas Series or a 1-D DataArray"
-)
-_PARAMETER_SHAPES = (
-    "a DataArray over {dims}, a pandas Series whose (Multi)Index levels are {dims}, "
-    "a DataFrame with columns {columns} or in wide form, a dict keyed by label, or one number"
+_DIMENSION_SHAPES = "a pandas Index, a list, a tuple, a 1-D numpy or pandas array, or a pandas or polars Series"
+_UNIQUE_HINT = (
+    "To take a dimension's labels from a table column, pass its unique values in order of "
+    "first appearance: table['{dim}'].unique() for pandas, "
+    "table['{dim}'].unique(maintain_order=True) for polars."
 )
 
 
@@ -90,8 +95,9 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
     sources
         Data keyed by declared name. Any mapping works: membership is
         read off ``keys()``, never by iterating, and values by key. An
-        ``xr.Dataset`` is accepted too: its indexes are dimension sources,
-        its data variables parameters and relations.
+        ``xr.Dataset`` is read the way ``store=True`` writes
+        ``model.parameters``: its indexes are dimension sources, its data
+        variables parameters and relations.
 
     Raises
     ------
@@ -106,8 +112,7 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
             "linopy builds a spec on its own, with no host model to look them up in."
         )
     if isinstance(sources, xr.Dataset):
-        tabular = (*sources.indexes.items(), *sources.data_vars.items())
-        sources = {str(k): v for k, v in tabular}
+        sources = _from_dataset(program, sources)
     keys = frozenset(sources.keys())
     _warn_near_misses(keys, program)
     coords = _master_coords(program, sources, keys)
@@ -160,15 +165,34 @@ class Attached:
             coordinate, a null value in a table row, values of another type
             than declared.
         """
+        return self.check(name)()
+
+    def check(self, name: str) -> Callable[[], Parameter]:
+        """
+        Refuse the data of parameter *name* as :meth:`read` would, and return the call laying it out on ``coords``.
+
+        The check reads the data's rows or cells and leaves the grid to the
+        call, so a parameter no declaration reads is checked without a grid.
+
+        Raises
+        ------
+        KeyError, SpecDataError
+            What :meth:`read` raises.
+        """
         if name not in self.program.parameters:
             raise unknown("parameter", name, self.program.parameters)
         if name not in self.keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         declared = self.program.parameters[name]
-        arr, present = _as_array(name, declared, self.sources[name], self.coords)
-        if declared.dtype == "bool" and not bool(present.all()):
-            arr = arr.astype(float)
-        return Parameter(arr, present)
+        lay_out = _as_array(name, declared, self.sources[name], self.coords)
+        if declared.dtype != "bool":
+            return lay_out
+
+        def read() -> Parameter:
+            arr, present = lay_out()
+            return Parameter(arr if bool(present.all()) else arr.astype(float), present)
+
+        return read
 
 
 def strict_parameters(program: ms.Program) -> frozenset[str]:
@@ -196,6 +220,31 @@ def _bare(node: ms.Expression) -> ms.Expression:
 # ---------------------------------------------------------------------------
 # sources and keys
 # ---------------------------------------------------------------------------
+
+
+def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
+    """
+    *data* keyed by name, read the way ``model.parameters`` stores a spec's data.
+
+    Its indexes are dimension sources and its data variables parameters. A
+    relation of one key and one value column is stored as its value column
+    over the key's dimension, NaN where a label is unmapped, and is read back
+    into its rows, its values at the dtype of the dimension they label, which
+    the NaN of an unmapped label turns to float. Any other relation variable
+    stays as it is and is refused.
+    """
+    out: dict[str, Any] = {str(k): v for k, v in data.indexes.items()}
+    out.update({str(k): v for k, v in data.data_vars.items()})
+    for name, rel in program.relations.items():
+        if name not in out or len(rel.key) != 1 or len(rel.values) != 1:
+            continue
+        (key,), (value,) = rel.key, rel.values
+        if out[name].dims == (rel.dim(key),):
+            rows = out[name].to_series().dropna().rename(value)
+            if (into := out.get(rel.dim(value))) is not None:
+                rows = rows.astype(into.dtype)
+            out[name] = rows.rename_axis(key).reset_index()
+    return out
 
 
 def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
@@ -242,15 +291,21 @@ def _master_coords(
             raise SpecDataError(
                 f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
                 f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
-                f"one a mistyped label is indistinguishable from a new one."
+                f"one a mistyped label is indistinguishable from a new one. "
+                + _UNIQUE_HINT.format(dim=dim)
             )
     return coords
 
 
 def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
+    obj = _pandas(obj)
     if isinstance(obj, (set, frozenset)):
-        obj = _sorted(dim, obj)
-    if isinstance(obj, (pd.Series, xr.DataArray, np.ndarray)):
+        raise SpecDataError(
+            f"index for dimension '{dim}' arrived as a {type(obj).__name__}, which has no "
+            f"order, and a dimension's order is the source's. Pass an ordered sequence, "
+            f"e.g. sorted(...)."
+        )
+    if isinstance(obj, (pd.Series, np.ndarray)):
         if obj.ndim != 1:
             raise SpecDataError(
                 f"index for dimension '{dim}' is {obj.ndim}-dimensional; pass {_DIMENSION_SHAPES}."
@@ -276,19 +331,33 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
         twice = _twice(index)
         raise SpecDataError(
             f"dimension '{dim}' lists {shown(twice)} more than once. A dimension's members are a set: "
-            f"each label appears once, in the order the source gives it."
+            f"each label appears once, in the order the source gives it. "
+            + _UNIQUE_HINT.format(dim=dim)
         )
     return index
 
 
-def _sorted(dim: str, members: set[Any] | frozenset[Any]) -> list[Any]:
-    try:
-        return sorted(members)
-    except TypeError as error:
+def _pandas(obj: Any) -> Any:
+    """*obj*, a polars DataFrame or Series, as its pandas counterpart; anything else as it is."""
+    if isinstance(obj, (pl.DataFrame, pl.Series)):
+        return obj.to_pandas()
+    return obj
+
+
+def _check_table(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
+    """Refuse a table carrying labels in a named index, or whose columns are not exactly *columns*."""
+    named = [n for n in df.index.names if n is not None]
+    if named:
         raise SpecDataError(
-            f"index for dimension '{dim}' arrived as a {type(members).__name__}, which has no "
-            f"order, and its labels {shown(list(members))} do not sort; pass an ordered sequence."
-        ) from error
+            f"{what} arrived as a DataFrame indexed by {named}, and a table carries its labels in "
+            f"columns, never in its index. Move them into columns with reset_index(), so that the "
+            f"table has the columns {list(columns)}."
+        )
+    if len(df.columns) != len(columns) or set(df.columns) != set(columns):
+        raise SpecDataError(
+            f"{what} arrived as a DataFrame with the columns {list(df.columns)}, and it is read "
+            f"from exactly the columns {list(columns)}. Select them, e.g. table[{list(columns)}]."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -360,14 +429,7 @@ def _relations(
 
 
 def _relation_shapes(rel: ms.Relation) -> str:
-    table = f"a DataFrame with the columns {list(rel.roles)}"
-    if len(rel.values) != 1:
-        return table
-    key, dims = _named(rel.key), [rel.dim(role) for role in rel.key]
-    return (
-        f"{table}, a pandas Series indexed by {key}, a dict keyed by {key} labels, "
-        f"or a DataArray over {dims}"
-    )
+    return f"a pandas or polars DataFrame with exactly the columns {list(rel.roles)}"
 
 
 def _named(roles: Sequence[Any]) -> str:
@@ -399,52 +461,14 @@ def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
 def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> pd.DataFrame:
     """*obj* as the relation's rows, one column per role."""
     roles = list(rel.roles)
-    if isinstance(obj, pd.DataFrame):
-        tidy = obj.reset_index() if set(obj.index.names) & set(roles) else obj
-        if not set(roles) <= set(tidy.columns):
-            raise SpecDataError(
-                f"relation '{name}' arrived as a DataFrame with columns {list(tidy.columns)}, "
-                f"and a table for '{name}' carries the columns {roles}, one per column "
-                f"of its declaration and named after it."
-            )
-        return tidy[roles].reset_index(drop=True)
-    if len(rel.values) != 1:
+    obj = _pandas(obj)
+    if not isinstance(obj, pd.DataFrame):
         raise SpecDataError(
-            f"relation '{name}': cannot adapt {type(obj).__name__} to a table; pass "
-            f"{_relation_shapes(rel)}."
+            f"relation '{name}': cannot read rows out of {type(obj).__name__}; pass "
+            f"{_relation_shapes(rel)}, one row per key tuple."
         )
-    series = _keyed_series(name, rel, obj)
-    return series.rename(rel.values[0]).reset_index()[roles]
-
-
-def _keyed_series(name: str, rel: ms.Relation, obj: Any) -> pd.Series:
-    """*obj*, a map into one value column, as a Series whose index levels are the key's roles."""
-    key = list(rel.key)
-    if isinstance(obj, xr.DataArray):
-        dims = [rel.dim(role) for role in key]
-        if set(obj.dims) != set(dims) or not set(dims) <= set(obj.indexes):
-            raise SpecDataError(
-                f"relation '{name}' arrived as a DataArray over {list(obj.dims)}, and it is a "
-                f"map out of {dims}: pass a DataArray with {dims} as its labelled dimensions."
-            )
-        series = obj.to_series().dropna()
-        return series.rename_axis([key[dims.index(d)] for d in series.index.names])
-    if isinstance(obj, Mapping):
-        obj = pd.Series(dict(obj))
-    if not isinstance(obj, pd.Series):
-        raise SpecDataError(
-            f"relation '{name}': cannot adapt {type(obj).__name__} to a map; pass "
-            f"{_relation_shapes(rel)}."
-        )
-    names = list(obj.index.names)
-    if all(n is None for n in names) and len(names) == len(key):
-        return obj.rename_axis(key)
-    if set(names) != set(key):
-        raise SpecDataError(
-            f"relation '{name}' is a Series indexed by {_named(names)}, and it is a map out "
-            f"of {_named(key)}: index it by {_named(key)} labels."
-        )
-    return obj
+    _check_table(f"relation '{name}'", obj, roles)
+    return obj[roles].reset_index(drop=True)
 
 
 def _check_relation(
@@ -534,38 +558,32 @@ def _as_array(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
+    """*obj* checked as the data of parameter *name*, and the call laying it out on *coords*."""
+    obj = _pandas(obj)
+    dims = declared.dims
     if isinstance(obj, xr.DataArray):
         return _from_dense(name, declared, obj, coords)
-    if isinstance(obj, pd.DataFrame):
-        return _from_frame(name, declared, obj, coords)
-    if isinstance(obj, pd.Series):
-        return _from_rows(name, declared, obj, coords)
-    if isinstance(obj, Mapping):
-        return _from_rows(name, declared, pd.Series(dict(obj)), coords)
-    if isinstance(obj, _SCALARS):
-        return _from_scalar(name, declared, obj, coords)
-    dims = declared.dims
+    if dims and isinstance(obj, pd.DataFrame):
+        return _from_table(name, declared, obj, coords)
+    if not dims and isinstance(obj, _SCALARS):
+        return _from_scalar(name, declared, obj)
+    if not dims:
+        raise SpecDataError(
+            f"parameter '{name}' is declared with no dims, which means one value, and it "
+            f"arrived as {type(obj).__name__}. Pass one number, or declare the dims it is "
+            f"indexed by."
+        )
     raise SpecDataError(
-        f"parameter '{name}': cannot adapt {type(obj).__name__} to an array over {list(dims)}; "
-        f"pass {_parameter_shapes(name, dims)}."
+        f"parameter '{name}': cannot read {type(obj).__name__} as values over {list(dims)}; "
+        f"pass a pandas or polars DataFrame with exactly the columns {[*dims, name]}, or a "
+        f"DataArray over {list(dims)}."
     )
 
 
-def _parameter_shapes(name: str, dims: Sequence[str]) -> str:
-    return _PARAMETER_SHAPES.format(dims=list(dims), columns=_columns(name, dims))
-
-
-def _columns(name: str, dims: Sequence[str]) -> str:
-    return f"{[*dims, name]} or {[*dims, 'value']}"
-
-
 def _from_scalar(
-    name: str,
-    declared: ms.Parameter,
-    obj: Any,
-    coords: Mapping[str, pd.Index],
-) -> Parameter:
+    name: str, declared: ms.Parameter, obj: Any
+) -> Callable[[], Parameter]:
     if pd.isna(obj):
         raise SpecDataError(
             f"parameter '{name}' is one value and that value is a hole (null or NaN). "
@@ -576,9 +594,8 @@ def _from_scalar(
     if declared.dtype == "float":
         value = value.astype(float)
     arr = xr.DataArray(value, name=name)
-    if declared.dims:
-        arr = arr.expand_dims({d: coords[d] for d in declared.dims})
-    return Parameter(arr, xr.ones_like(arr, dtype=bool))
+    parameter = Parameter(arr, xr.ones_like(arr, dtype=bool))
+    return lambda: parameter
 
 
 def _from_dense(
@@ -586,7 +603,7 @@ def _from_dense(
     declared: ms.Parameter,
     arr: xr.DataArray,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
     dims = declared.dims
     _check_dense_dtype(name, declared.dtype, arr)
     if set(arr.dims) != set(dims):
@@ -601,8 +618,10 @@ def _from_dense(
                 f"values against its labels, so every dimension needs an index coordinate."
             )
         _refuse_duplicate_coordinates(name, (d,), arr.indexes[d])
+        if not arr.indexes[d].equals(coords[d]):
+            _refuse_strangers(name, d, arr.indexes[d], coords[d])
     onto = {d: coords[d] for d in dims}
-    return _aligned(name, _numpy(arr.transpose(*dims)), onto)
+    return functools.partial(_aligned, arr.transpose(*dims), onto)
 
 
 def _check_dense_dtype(name: str, declared: str, arr: xr.DataArray) -> None:
@@ -622,63 +641,21 @@ def _check_dense_dtype(name: str, declared: str, arr: xr.DataArray) -> None:
     )
 
 
-def _from_frame(
+def _from_table(
     name: str,
     declared: ms.Parameter,
     df: pd.DataFrame,
     coords: Mapping[str, pd.Index],
-) -> Parameter:
+) -> Callable[[], Parameter]:
+    """
+    A table of rows, one column per dim and the values under the parameter's name.
+
+    A coordinate the table leaves out is a missing row; a row holding no value
+    is refused, since it says the coordinate exists and denies it at once.
+    """
     dims = declared.dims
-    tidy = df if set(dims) <= set(df.columns) else df.reset_index()
-    column = name if name in tidy.columns else "value"
-    if column in tidy.columns and set(dims) <= set(tidy.columns):
-        indexed = tidy.set_index(list(dims)) if dims else tidy
-        return _from_rows(name, declared, indexed[column], coords)
-    if len(dims) == 2:
-        wide = xr.DataArray(_wide(name, dims, df))
-        return _from_dense(name, declared, wide, coords)
-    raise SpecDataError(
-        f"parameter '{name}' arrived as a DataFrame with columns {list(df.columns)}; a table for "
-        f"'{name}' carries columns {_columns(name, dims)}."
-    )
-
-
-def _wide(name: str, dims: tuple[str, ...], df: pd.DataFrame) -> pd.DataFrame:
-    names = (df.index.name, df.columns.name)
-    if names == (None, None):
-        if len(df.index) == len(df.columns):
-            raise SpecDataError(
-                f"parameter '{name}' arrived as a {len(df.index)}x{len(df.columns)} wide DataFrame "
-                f"with neither axis named, and '{name}' is over {list(dims)}. A square frame does "
-                f"not say which axis is which. Name the index and columns after the two dims, or "
-                f"pass a table with columns {_columns(name, dims)}."
-            )
-        return df.rename_axis(index=dims[0], columns=dims[1])
-    if set(names) == set(dims):
-        return df
-    raise SpecDataError(
-        f"parameter '{name}' arrived as a wide DataFrame with index '{names[0]}' and columns "
-        f"'{names[1]}', and '{name}' is over {list(dims)}. Name the index and columns after the "
-        f"two dims, or pass a table with columns {_columns(name, dims)}."
-    )
-
-
-def _from_rows(
-    name: str,
-    declared: ms.Parameter,
-    series: pd.Series,
-    coords: Mapping[str, pd.Index],
-) -> Parameter:
-    dims = declared.dims
-    if not dims:
-        if len(series) != 1:
-            raise SpecDataError(
-                f"parameter '{name}' is declared with no dims, which means one value broadcast "
-                f"everywhere, but its source has {len(series)} rows. Declare the dims it is indexed "
-                f"by, or pass one number."
-            )
-        return _from_scalar(name, declared, series.iloc[0], coords)
-    series = _with_dims(name, dims, series)
+    _check_table(f"parameter '{name}'", df, [*dims, name])
+    series = df.set_index(list(dims))[name]
     if series.empty:
         series = series.astype(_EMPTY_DTYPES[declared.dtype])
     holes = series.isna()
@@ -691,31 +668,60 @@ def _from_rows(
         )
     _check_value_dtype(name, declared.dtype, series.dtype)
     _refuse_duplicate_coordinates(name, dims, series.index)
-    for d in dims:
-        _refuse_strangers(name, d, series.index.get_level_values(d), coords[d])
-    arr = _numpy(xr.DataArray.from_series(series.rename(name)))
-    return _aligned(name, arr.transpose(*dims), {d: coords[d] for d in dims})
+    onto = {d: coords[d] for d in dims}
+    positions = []
+    for d, index in onto.items():
+        labels = series.index.get_level_values(d)
+        _refuse_strangers(name, d, labels, index)
+        positions.append(_positions(name, d, labels, index))
+    at = np.ravel_multi_index(positions, tuple(len(i) for i in onto.values()))
+    return functools.partial(_on_grid, at, series.to_numpy(), onto)
 
 
-def _with_dims(name: str, dims: tuple[str, ...], series: pd.Series) -> pd.Series:
-    index = series.index
-    if index.nlevels != len(dims):
-        raise SpecDataError(
-            f"parameter '{name}': a Series or dict carries one label per level, and its index has "
-            f"{index.nlevels} level(s) where '{name}' is over {list(dims)}. "
-            f"Pass {_parameter_shapes(name, dims)}."
-        )
-    names = list(index.names)
-    if all(n is None for n in names):
-        return series.set_axis(index.set_names(list(dims)))
-    if set(names) != set(dims):
-        raise SpecDataError(
-            f"parameter '{name}' is indexed by {names}, and '{name}' is over {list(dims)}. "
-            f"Name the index levels after the declared dims."
-        )
-    if tuple(names) != dims:
-        series = series.reorder_levels(list(dims))
-    return series
+def _positions(name: str, dim: str, labels: pd.Index, index: pd.Index) -> np.ndarray:
+    """The position of each of *labels* in *index*, refusing a label equal to a coordinate in value only."""
+    found = index.get_indexer(labels)
+    if (found >= 0).all():
+        return found
+    raise SpecDataError(
+        f"parameter '{name}' has label(s) in dimension '{dim}' that equal coordinates of it in "
+        f"value but not in type: {shown(labels[found < 0].unique().tolist())}, and '{dim}' holds "
+        f"'{_kind_name(index.dtype)}' labels. Cast them to the dimension's type."
+    )
+
+
+def _on_grid(
+    at: np.ndarray, values: np.ndarray, onto: Mapping[str, pd.Index]
+) -> Parameter:
+    """
+    The *values* placed at the flat positions *at* of the grid *onto*, a cell no value reaches a hole.
+
+    One array the size of the grid is allocated, beside the mask of where a
+    row is: the grid of a table is its dims' full product, whatever few rows
+    it holds.
+    """
+    shape = tuple(len(index) for index in onto.values())
+    present = np.zeros(int(np.prod(shape)), dtype=bool)
+    present[at] = True
+    if len(at) == present.size:
+        grid = np.empty(present.size, dtype=values.dtype)
+    else:
+        grid = np.full(present.size, *_hole(values.dtype))
+    grid[at] = values
+    dims = list(onto)
+    return Parameter(
+        xr.DataArray(grid.reshape(shape), coords=onto, dims=dims),
+        xr.DataArray(present.reshape(shape), coords=onto, dims=dims),
+    )
+
+
+def _hole(dtype: np.dtype) -> tuple[float, Any]:
+    """A hole, NaN, and the dtype of an array holding *dtype*'s values beside one: float for a number, object for a string."""
+    if dtype.kind == "f":
+        return np.nan, dtype
+    if dtype.kind in "iub":
+        return np.nan, np.float64
+    return np.nan, object
 
 
 def _refuse_duplicate_coordinates(
@@ -764,15 +770,15 @@ def _refuse_label_type(what: str, dim: str, labels: pd.Index, known: pd.Index) -
     )
 
 
-def _aligned(name: str, arr: xr.DataArray, onto: Mapping[str, pd.Index]) -> Parameter:
+def _aligned(arr: xr.DataArray, onto: Mapping[str, pd.Index]) -> Parameter:
+    """The grid *arr* on the master coordinates *onto*, without copying one already on them."""
+    arr = _numpy(arr)
     present = arr.notnull()
     if all(arr.indexes[d].equals(index) for d, index in onto.items()):
         stale = {d: i for d, i in onto.items() if arr.indexes[d].dtype != i.dtype}
         if stale:
             return Parameter(arr.assign_coords(stale), present.assign_coords(stale))
         return Parameter(arr, present)
-    for d, index in onto.items():
-        _refuse_strangers(name, d, arr.indexes[d], index)
     return Parameter(
         arr.reindex(onto, fill_value=np.nan), present.reindex(onto, fill_value=False)
     )

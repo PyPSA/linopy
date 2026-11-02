@@ -2,6 +2,8 @@
 This module contains examples of linear programming models using the linopy library.
 """
 
+from typing import Any
+
 import xarray as xr
 from numpy import arange
 
@@ -68,6 +70,8 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
         Model: The created linear programming model.
     """
     m = Model()
+    naxis: Any
+    maxis: Any
     if integerlabels:
         naxis, maxis = [arange(n, dtype=int), arange(n, dtype=int)]
     else:

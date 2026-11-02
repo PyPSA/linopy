@@ -214,6 +214,49 @@ def test_model_to_netcdf_round_trip_keeps_stores(
     assert_model_equal(m, p)
 
 
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_coords(tz: str, sparse: bool, tmp_path: Path) -> None:
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz, name="time")
+    m = Model(sparse=sparse)
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_objective(x.sum())
+    m.parameters = m.parameters.assign(snapshots=("snapshot", time.rename(None)))
+
+    fn = tmp_path / "tz.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+    assert p.parameters.equals(m.parameters)
+    assert str(pd.DatetimeIndex(p.parameters["snapshots"].values).tz) == tz
+    for obj in (p.variables["x"], p.constraints["c"]):
+        assert obj.indexes["time"].equals(time)
+        assert str(obj.indexes["time"].tz) == tz
+
+
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", "Europe/Amsterdam"])
+def test_model_to_netcdf_tz_aware_aux_coords(
+    tz: str, sparse: bool, tmp_path: Path
+) -> None:
+    time = pd.date_range("2020-03-29", periods=4, freq="h", tz=tz)
+    coords = xr.Coordinates({"snapshot": np.arange(4), "time": ("snapshot", time)})
+    m = Model(sparse=sparse)
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "tz_aux.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+    for obj in (p.variables["x"], p.constraints["c"]):
+        aux = pd.DatetimeIndex(obj.coords["time"].values)
+        assert aux.equals(time)
+        assert str(aux.tz) == tz
+
+
 def test_read_netcdf_pre_1_0_file_raises() -> None:
     with pytest.raises(ValueError, match="linopy <1.0"):
         read_netcdf(Path(__file__).parent / "data" / "pre-1.0-model.nc")

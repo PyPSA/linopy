@@ -174,13 +174,13 @@ SPARSE_SPEC: dict[str, Any] = {
     "constraints": {"cap": {"dims": ["t"], "expression": "w * x <= c"}},
     "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
 }
-FULL_W = pd.Series([1.0, 1.0, 1.0], index=T)
-FULL_C = pd.Series([0.0, 4.0, 5.0], index=T)
-HOLE_AT_0 = pd.Series([4.0, 5.0], index=T[1:])
-W_HOLE_AT_0 = pd.Series([1.0, 1.0], index=T[1:])
+FULL_W = xr.DataArray([1.0, 1.0, 1.0], coords=[T])
+FULL_C = xr.DataArray([0.0, 4.0, 5.0], coords=[T])
+HOLE_AT_0 = xr.DataArray([4.0, 5.0], coords=[T[1:]])
+W_HOLE_AT_0 = xr.DataArray([1.0, 1.0], coords=[T[1:]])
 
 
-C_HOLE_AT_2 = FULL_C.iloc[:2]
+C_HOLE_AT_2 = FULL_C[:2]
 LATER = {"dims": ["t"], "where": "t > 0"}
 X_LATER = {**LATER, "bounds": {"lower": 0, "upper": 10}}
 CAP_LATER = with_(
@@ -269,7 +269,7 @@ def in_region(when: str) -> dict[str, Any]:
         ),
         pytest.param(
             in_region("t >= 0"),
-            {"w": FULL_W, "c": FULL_C.iloc[1:]},
+            {"w": FULL_W, "c": FULL_C[1:]},
             "expression 'region' reads parameter 'c' at t=0",
             id="cases-region",
         ),
@@ -331,7 +331,7 @@ def test_a_refused_row_a_live_row_reads_is_refused(
         ),
         pytest.param(
             in_region("t > 0"),
-            {"w": FULL_W, "c": FULL_C.iloc[1:]},
+            {"w": FULL_W, "c": FULL_C[1:]},
             "c",
             0,
             id="cases-region",
@@ -373,9 +373,9 @@ ABSENT_SPEC: dict[str, Any] = {
 ABSENT_DATA: dict[str, Any] = {
     "t": T,
     "s": GROUPS,
-    "grp": pd.Series(["p", "p", "q"], index=T),
-    "a": pd.Series([2.0, 3.0], index=T[1:]),
-    "z": pd.Series([5.0], index=GROUPS[1:]),
+    "grp": pd.DataFrame({"t": T, "s": ["p", "p", "q"]}),
+    "a": xr.DataArray([2.0, 3.0], coords=[T[1:]]),
+    "z": xr.DataArray([5.0], coords=[GROUPS[1:]]),
 }
 
 
@@ -440,7 +440,7 @@ def test_a_masked_variable_bound_needs_no_row_where_it_is_masked() -> None:
             "cap": {"dims": ["t"], "where": "live", "expression": "w * x <= c"}
         },
     )
-    live = pd.Series([True, True], index=T[1:])
+    live = xr.DataArray([True, True], coords=[T[1:]])
     m = Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0, "live": live})
     assert int(m.variables["x"].labels.count()) == 3
     assert int((m.variables["x"].labels != -1).sum()) == 2
@@ -509,8 +509,8 @@ ENVELOPE_SPEC: dict[str, Any] = {
 }
 ENVELOPE_DATA: dict[str, Any] = {
     "f": F,
-    "gate": pd.Series([True], index=F[:1]),
-    "relmax": pd.Series([0.5, 0.5], index=F),
+    "gate": xr.DataArray([True], coords=[F[:1]]),
+    "relmax": xr.DataArray([0.5, 0.5], coords=[F]),
 }
 DEFINED_SPEC = with_(
     ENVELOPE_SPEC,
@@ -556,6 +556,58 @@ def test_absence_takes_the_row_with_it(spec: dict[str, Any], name: str) -> None:
     assert int(m.constraints[name].labels.sel(f="b")) == -1
 
 
+def ramp(expression: str, where: str | None = None) -> dict[str, Any]:
+    """One row per ``s`` reading ``p`` and ``q``, as the holes section of the spec-data docs writes it."""
+    row: dict[str, Any] = {"dims": ["s"], "expression": expression}
+    return {
+        "dimensions": {"s": {"dtype": "int", "ordered": True}},
+        "variables": {
+            v: {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}} for v in "pq"
+        },
+        "constraints": {"ramp": row if where is None else {**row, "where": where}},
+        "objective": {"sense": "minimize", "expression": "sum(p, over=s)"},
+    }
+
+
+S = {"s": pd.Index([0, 1, 2, 3], name="s")}
+
+
+@pytest.mark.parametrize(
+    ("expression", "where", "dropped"),
+    [
+        pytest.param("p <= shift(p, along=s, offset=1)", None, [0], id="shift"),
+        pytest.param("p <= shift(p, along=s, offset=2)", None, [0, 1], id="offset-2"),
+        pytest.param(
+            "p + q <= shift(p, along=s, offset=1)", None, [0], id="beside-a-term"
+        ),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1)", "position(s) > 0", [0], id="where"
+        ),
+        pytest.param("p <= shift(p, along=s, offset=1, edge=0)", None, [], id="edge"),
+        pytest.param(
+            "p <= shift(p, along=s, offset=1, edge='wrap')", None, [], id="wrap"
+        ),
+        pytest.param(
+            "p <= sum(shift(q, along=s, offset=1), over=s)", None, [], id="in-a-sum"
+        ),
+        pytest.param("sum_back(p, along=s, window=3) <= q", None, [], id="sum-back"),
+    ],
+)
+def test_the_rows_an_operator_vacates_are_dropped_as_documented(
+    expression: str, where: str | None, dropped: list[int]
+) -> None:
+    """The cases ``doc/spec-data.rst`` lists under holes that operators create."""
+    labels = Model.from_spec(ramp(expression, where), S).constraints["ramp"].labels
+    assert labels.s[labels == -1].values.tolist() == dropped
+
+
+def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
+    m = Model.from_spec(ramp("p <= shift(p, along=s, offset=1, edge=0)"), S)
+    first = m.constraints["ramp"].sel(s=0)
+    assert (first.vars == m.variables["p"].labels.sel(s=0)).any()
+    assert float(first.rhs) == 0.0
+
+
 def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
     """A zero absence leaves ``0 <= relmax`` standing, which linopy cannot carry and a solver would never see."""
     with pytest.raises(
@@ -576,8 +628,12 @@ def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
     }
 
 
-ZERO_AT_0 = {"t": T, "a": pd.Series([0.0, 1.0, 1.0], index=T), "b": FULL_C}
-INF_AT_0 = {"t": T, "a": pd.Series([float("inf"), 1.0, 1.0], index=T), "b": FULL_C}
+ZERO_AT_0 = {"t": T, "a": xr.DataArray([0.0, 1.0, 1.0], coords=[T]), "b": FULL_C}
+INF_AT_0 = {
+    "t": T,
+    "a": xr.DataArray([float("inf"), 1.0, 1.0], coords=[T]),
+    "b": FULL_C,
+}
 
 
 SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
@@ -593,6 +649,10 @@ SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
         pytest.param("x + a - a >= 1", INF_AT_0, "t=0", id="beside-a-term"),
         pytest.param("a - x - a >= 1", INF_AT_0, "t=0", id="across-a-term"),
         pytest.param("x + a >= a", INF_AT_0, "t=0", id="across-sides"),
+        pytest.param("(x + a) * 2 - 2 * a >= 1", INF_AT_0, "t=0", id="scaled-term"),
+        pytest.param("2 * (x + a) - 2 * a >= 1", INF_AT_0, "t=0", id="scaled-left"),
+        pytest.param("(x + a) / 2 - a / 2 >= 1", INF_AT_0, "t=0", id="divided-term"),
+        pytest.param("(x + a) * 2 >= 2 * a", INF_AT_0, "t=0", id="scaled-across-sides"),
         pytest.param(
             "x + sum(a, over=t) - sum(a, over=t) >= 1",
             INF_AT_0,
@@ -641,7 +701,7 @@ def test_a_coefficient_needs_no_row_where_its_variable_is_absent() -> None:
         parameters={"relmax": {"dims": ["f"], "missing": "absent"}},
         expressions={"sized": "relmax * size"},
     )
-    data = {**ENVELOPE_DATA, "relmax": pd.Series([0.5], index=F[:1])}
+    data = {**ENVELOPE_DATA, "relmax": xr.DataArray([0.5], coords=[F[:1]])}
     m = solved(spec, data)
     assert float(m.solution["x"].sel(f="a")) == pytest.approx(25.0)
     sized = evaluate(spec, m, "sized")["sized"]
@@ -695,7 +755,7 @@ def test_a_constraint_is_framed_in_its_declared_order(expression: str) -> None:
 def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
     spec = with_(SPARSE_SPEC, constraints={"budget": {"dims": [], "expression": row}})
     empty = pd.Index([], name="t", dtype=int)
-    none = pd.Series([], index=empty, dtype=float)
+    none = xr.DataArray(np.array([], dtype=float), coords=[empty])
     with pytest.raises(
         SpecDataError, match="constraint 'budget'.*hold no variable term"
     ):
@@ -715,7 +775,9 @@ def test_a_neutral_hole_in_a_where_reads_as_false() -> None:
         },
         "objective": {"sense": "maximize", "expression": "sum(x)"},
     }
-    m = Model.from_spec(spec, {"f": ["a", "b"], "count": pd.Series({"a": 0})})
+    m = Model.from_spec(
+        spec, {"f": ["a", "b"], "count": pd.DataFrame({"f": ["a"], "count": [0]})}
+    )
     assert (m.variables["x"].labels != -1).values.tolist() == [True, False]
 
 
@@ -730,7 +792,7 @@ def test_a_fold_reads_a_masked_slot_the_way_its_absence_says(
     spec = yaml_dict()
     spec["variables"]["p"]["missing"] = missing
     spec["expressions"] = {"spend_by_unit": "p * cost"}
-    data = {**DISPATCH_DATA, "p_max": pd.Series([200.0, 0.0], index=GENERATOR)}
+    data = {**DISPATCH_DATA, "p_max": xr.DataArray([200.0, 0.0], coords=[GENERATOR])}
     spend = evaluate(spec, solved(spec, data), "spend_by_unit")["spend_by_unit"]
     masked = spend.sel(generator="gas")
     assert bool(masked.isnull().all()) is masked_reads_nan
@@ -847,7 +909,7 @@ def capped(expression: str) -> dict[str, Any]:
 def test_a_quadratic_constraint_the_data_linearises_builds(
     expression: str, k: list[float]
 ) -> None:
-    data = {"t": T, "k": pd.Series(k, index=T[: len(k)])}
+    data = {"t": T, "k": xr.DataArray(k, coords=[T[: len(k)]])}
     m = Model.from_spec(capped(expression), data)
     linear = Model.from_spec(capped("x <= 5"), data)
     assert_conequal(m.constraints["cap"], linear.constraints["cap"], strict=False)
@@ -860,7 +922,7 @@ def test_a_quadratic_constraint_the_data_keeps_is_refused(expression: str) -> No
         match="constraint 'cap': 1 row.*quadratic term in the objective only",
     ):
         Model.from_spec(
-            capped(expression), {"t": T, "k": pd.Series([0.0, 0.0, 2.0], index=T)}
+            capped(expression), {"t": T, "k": xr.DataArray([0.0, 0.0, 2.0], coords=[T])}
         )
 
 
@@ -870,7 +932,7 @@ def test_a_quadratic_objective_builds() -> None:
         constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
         objective={"sense": "maximize", "expression": "sum(x * y, over=t)"},
     )
-    m = Model.from_spec(spec, {"t": T, "k": 0.0})
+    m = Model.from_spec(spec, {"t": T, "k": xr.zeros_like(FULL_C)})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
 
 
@@ -910,8 +972,9 @@ def test_a_piecewise_cost_lands_on_the_curve(
     assert m.objective.value == pytest.approx(spend)
 
 
-def without(series: pd.Series, *keys: tuple[str, int]) -> pd.Series:
-    return series.drop(index=list(keys))
+def without(arr: xr.DataArray, *keys: tuple[str, int]) -> xr.DataArray:
+    """*arr* with the rows at *keys* missing."""
+    return xr.DataArray.from_series(arr.to_series().dropna().drop(index=list(keys)))
 
 
 @pytest.mark.parametrize(

@@ -3214,3 +3214,24 @@ class TestEvolvingAPIWarning:
         evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
         assert len(evolving) == 1
         assert evolving[0].filename.endswith("test_piecewise_constraints.py")
+
+
+class TestFullyMaskedEntity:
+    """``mask=False`` builds no formulation, so masked variables stay free (#1090)."""
+
+    @pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS not installed")
+    def test_fully_masked_entity_is_skipped(self) -> None:
+        m = Model()
+        g = pd.Index(["a", "b"], name="g")
+        x = m.add_variables(lower=0, upper=10, coords=[g], name="x")
+        y = m.add_variables(lower=0, upper=10, coords=[g], name="y")
+        mask = xr.DataArray([True, False], coords=[g])
+        m.add_piecewise_formulation(
+            (x, [0, 5, 10]), (y, [0, 4, 10]), name="pwl", mask=mask
+        )
+        for con in ("pwl_convex", "pwl_link"):
+            labels = m.constraints[con].labels.sel(g="b")
+            assert (labels == -1).all()
+        m.add_objective(-x.sum())
+        m.solve("highs", reformulate_sos=True)
+        np.testing.assert_allclose(m.solution["x"].values, [10, 10])

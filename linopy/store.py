@@ -864,17 +864,13 @@ class DenseStore(Store):
         Coefficients, raw variable labels and row pointers of the live terms
         of the cells selected by the boolean ``active_rows``, in CSR layout.
         """
-        from linopy.csr import index_dtype
+        from linopy.csr import index_dtype, indptr_from_counts
 
         coeffs, vars_, valid = self._active_mask(active_rows)
         labels, data = vars_[valid], coeffs[valid]
         counts = valid.sum(axis=-1).reshape(-1)[active_rows]
-        indptr = np.empty(
-            len(counts) + 1, index_dtype(len(data), counts.shape, self.model)
-        )
-        indptr[0] = 0
-        np.cumsum(counts, out=indptr[1:])
-        return data, labels, indptr
+        dtype = index_dtype(len(data), counts.shape, self.model)
+        return data, labels, indptr_from_counts(counts, dtype)
 
     def positional_csr(
         self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str

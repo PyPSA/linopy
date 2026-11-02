@@ -520,9 +520,13 @@ class LinearExpressionGroupby:
         Returns
         -------
         LinearExpression
-            The result of applying the function to the groupby object.
+            The result of applying the function to the groupby object. A
+            quadratic expression stays a QuadraticExpression.
         """
-        return LinearExpression(self.groupby.map(func, args=args, **kwargs), self.model)
+        ds = self.groupby.map(func, args=args, **kwargs)
+        if FACTOR_DIM in ds.vars.dims:
+            return cast(LinearExpression, QuadraticExpression(ds, self.model))
+        return LinearExpression(ds, self.model)
 
     def sum(
         self,
@@ -1052,9 +1056,6 @@ class BaseExpression(ABC):
         if isinstance(other, ScalarLinearExpression):
             other = other.to_linexpr()
 
-        if other.nterm > 1:
-            raise TypeError("Multiplication of multiple terms is not supported.")
-
         if other.is_constant:
             return cast(
                 LinearExpression, self._apply_constant_op(other.const, operator.mul)
@@ -1063,6 +1064,13 @@ class BaseExpression(ABC):
             return cast(
                 LinearExpression, other._apply_constant_op(self.const, operator.mul)
             )
+
+        if other.nterm > 1:
+            if self.nterm > 1:
+                raise TypeError("Multiplication of multiple terms is not supported.")
+            # The product is symmetric, so a one-term factor on the left is handled
+            # the same way as on the right.
+            return other._multiply_by_linear_expression(cast(LinearExpression, self))
 
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants

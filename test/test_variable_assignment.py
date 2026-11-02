@@ -77,6 +77,18 @@ def test_variable_assignment_by_coords() -> None:
     assert x.shape == target_shape
 
 
+@pytest.mark.parametrize(
+    "as_coords",
+    [lambda c: c, lambda c: xr.DataArray(range(3), c).coords, lambda c: {"i": c["i"]}],
+    ids=["coordinates", "dataarray-coords", "dict-of-dataarray"],
+)
+def test_variable_assignment_keeps_auxiliary_coords(as_coords: Any) -> None:
+    labels = ("i", [f"t{j}" for j in range(3)])
+    coords = xr.Coordinates({"i": range(3), "label": labels})
+    x = Model().add_variables(lower=0, coords=as_coords(coords), name="x")
+    assert x.coords["label"].equals(coords["label"])
+
+
 def test_variable_assignment_with_dataframes() -> None:
     # setting bounds with pd.DataFrames
     m = Model()

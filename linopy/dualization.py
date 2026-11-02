@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import xarray as xr
 
+from linopy.common import lookup_table
 from linopy.expressions import LinearExpression
 
 if TYPE_CHECKING:
@@ -265,9 +266,8 @@ def _build_label_to_flat_index_lookup(labels: np.ndarray) -> np.ndarray:
     if not valid.any():
         return np.array([], dtype=np.int64)
 
-    lookup = np.full(int(labels[valid].max()) + 1, -1, dtype=np.int64)
-    lookup[labels[valid].astype(np.int64)] = np.where(valid)[0].astype(np.int64)
-    return lookup
+    keys = labels[valid].astype(np.int64)
+    return lookup_table(keys, int(keys.max()) + 1, np.flatnonzero(valid), np.int64)
 
 
 def _gather_with_default(

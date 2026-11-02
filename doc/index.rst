@@ -138,6 +138,7 @@ This package is published under MIT license.
 
    sos-constraints
    piecewise-linear-constraints
+   restrict
    numerical-scaling
    testing-framework
 
@@ -148,7 +149,6 @@ This package is published under MIT license.
 
    using-solvers
    solve-on-remote
-   solve-on-oetc
    gpu-acceleration
 
 .. toctree::
