@@ -118,6 +118,7 @@ Version 1.0.0
 **Features**
 
 * :meth:`linopy.Model.restrict` cuts a subproblem out of a model, e.g. a time slice for rolling-horizon optimization, a region for spatial decomposition or a part of the model for fix-and-optimize heuristics. ``m.restrict(snapshot=window, fix=...)`` selects labels along one or several dimensions with ``Dataset.sel`` semantics and returns a :class:`~linopy.restrict.WindowModel` built from a slice of the parent's matrices: constraint terms referencing variables outside the window are folded into the right-hand side at their actual matrix coefficient, ``rhs -= coeff * fixed_value``, and rows that lose every term are checked for feasibility and dropped. Because the window is a row and column selection of the parent's ``A``, ``b``, ``c``, ``lb`` and ``ub``, creating or moving it costs a slice rather than a rebuild of every variable and constraint. ``window.solve()`` hands those arrays to the solver and updates the existing solver model in place when consecutive windows share the sparsity pattern of ``A``, through the same :class:`~linopy.persistent.diff.ModelDiff` delta and per-backend apply hooks as the persistent interface. ``window.advance(snapshot=next, fix=...)`` moves the window to a new selection. Solutions and duals are built per container only when read. See the new :doc:`restrict` guide. (https://github.com/PyPSA/linopy/issues/768)
+* The ``Variable`` methods that wrap an ``xarray.Dataset`` method, such as ``sel``, ``isel``, ``shift``, ``rename`` and ``stack``, now carry the wrapped method's parameters and return ``Variable`` for type checkers and IDEs, instead of an untyped ``Callable``. (`#1029 <https://github.com/PyPSA/linopy/pull/1029>`__)
 
 **Internal**
 
@@ -135,10 +136,6 @@ Version 0.10.1
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
 * ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
 * ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
-
-*Improve type hints for Variable methods inherited from xarray*
-
-* Now the type checker properly understands the wrapped functions
 
 Version 0.10.0
 --------------
