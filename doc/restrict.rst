@@ -184,6 +184,14 @@ coefficient that is zero in one window only, rebuilds the solver model, or
 raises :class:`~linopy.persistent.errors.RebuildRequiredError` with
 ``disallow_rebuild=True``.
 
+Each solve starts from scratch: the basis left by the previous window is
+discarded, because a window shifted in time usually makes it a poor start that
+slows the solver down. Pass ``warm_start=True`` to ``solve`` to keep it, e.g.
+when re-solving the same window with slightly changed fixed values. HiGHS and
+Gurobi discard the basis in place; other solvers rebuild their model instead,
+or raise :class:`~linopy.persistent.errors.RebuildRequiredError` with
+``disallow_rebuild=True``.
+
 Limits
 ------
 
