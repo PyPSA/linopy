@@ -30,15 +30,14 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
-    "bottleneck",
-    "toolz",
-    "numexpr",
     "xarray>=2024.2.0",
-    "dask>=0.18.0",
+    "pandas",
     "polars>=1.31.1",
     "tqdm",
-    "deprecation",
     "packaging",
+    # Variable.ffill/bfill go through xarray's push, which imports bottleneck
+    # directly with no numpy fallback.
+    "bottleneck",
 ]
 
 [project.urls]
@@ -46,6 +45,10 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
+# Needed only for chunked (dask-backed) arrays, e.g. `Variable.chunk()`.
+dask = [
+    "dask>=0.18.0",
+]
 remote = [
     "paramiko",
 ]
@@ -76,6 +79,7 @@ dev = [
     "highspy",
     "jupyter",
     "matplotlib",
+    "linopy[dask]",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.
