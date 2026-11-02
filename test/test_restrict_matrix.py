@@ -696,21 +696,22 @@ def simplex_iterations(window: WindowModel) -> int:
     return window._solver.solver_model.getInfo().simplex_iteration_count
 
 
-@pytest.mark.parametrize(
-    ("warm_start", "warm"), [({}, False), ({"warm_start": True}, True)]
-)
+@pytest.mark.parametrize("warm_start", [None, False, True])
 def test_window_solve_discards_the_warm_start_by_default(
-    warm_start: dict[str, bool], warm: bool
+    warm_start: bool | None,
 ) -> None:
     window = storage_model().restrict(time=TIME[1:4], fix={"soc": initial()})
     window.solve(solver_name="highs", presolve="off")
     assert simplex_iterations(window) > 0
 
     window.advance()
-    window.solve(disallow_rebuild=True, **warm_start)
+    if warm_start is None:
+        window.solve(disallow_rebuild=True)
+    else:
+        window.solve(disallow_rebuild=True, warm_start=warm_start)
     assert window._solver is not None
     assert window._solver._in_place_updates == 1
-    assert (simplex_iterations(window) == 0) == warm
+    assert (simplex_iterations(window) == 0) == bool(warm_start)
     assert window.status == "ok"
 
 
