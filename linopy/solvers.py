@@ -494,7 +494,7 @@ class Solver(ABC, Generic[EnvType]):
         M: Matrices,
         disallow_rebuild: bool = False,
         **run_kwargs: Any,
-    ) -> Solution:
+    ) -> Result:
         """
         Solve one matrix window, reusing this solver's model when possible.
 
@@ -503,6 +503,10 @@ class Solver(ABC, Generic[EnvType]):
         in place. Otherwise, or when the solver rejects the update, the native
         model is rebuilt from ``M`` unless ``disallow_rebuild`` is set, with
         positional labels so results stay aligned with the window's arrays.
+
+        Returns the solver's :class:`~linopy.constants.Result`, whose status
+        tells whether the window was solved; its solution is indexed by window
+        position.
         """
         if self.io_api != "direct":
             raise NotImplementedError(
@@ -531,10 +535,7 @@ class Solver(ABC, Generic[EnvType]):
                 disallow_rebuild,
             )
         self._window = M
-        solution = self._run_direct(**run_kwargs).solution
-        if solution is None:
-            raise RuntimeError("the solver returned no solution for the window")
-        return solution
+        return self._run_direct(**run_kwargs)
 
     def _build_window(self, M: Matrices) -> None:
         self.close()

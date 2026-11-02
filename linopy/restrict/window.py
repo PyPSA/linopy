@@ -12,12 +12,12 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from xarray import DataArray, Dataset
+from xarray import DataArray
 
 from linopy.restrict.matrix import MatrixWindow, RestrictionError
 
 if TYPE_CHECKING:
-    from linopy.constants import Solution
+    from linopy.constants import Result, Solution
     from linopy.matrices import Matrices
     from linopy.model import Model
     from linopy.solvers import Solver
@@ -34,9 +34,9 @@ class WindowObjective:
     @property
     def value(self) -> float | None:
         result = self._window._result
-        if result is None:
+        if result is None or result.solution is None:
             return None
-        return result.objective / self._window.matrices.objective_scaling
+        return result.solution.objective / self._window.matrices.objective_scaling
 
     @property
     def sense(self) -> str:
@@ -49,7 +49,8 @@ class WindowModel:
 
     ``matrices`` is available immediately. ``solution``, ``dual`` and access to a
     named variable materialise that container from the flat result vectors, so a
-    caller pays only for what it reads.
+    caller pays only for what it reads. ``status`` and ``termination_condition``
+    report the outcome of the last solve, like on :class:`~linopy.Model`.
     """
 
     def __init__(
@@ -66,12 +67,26 @@ class WindowModel:
             self._selection, fix
         )
         self.objective = WindowObjective(self)
-        self._result: Solution | None = None
+        self._result: Result | None = None
         self._solver: Solver | None = None
 
     @property
     def matrices(self) -> Matrices:
         return self._matrices
+
+    @property
+    def status(self) -> str:
+        """Solver status of the last solve, ``"initialized"`` before any solve."""
+        if self._result is None:
+            return "initialized"
+        return self._result.status.status.value
+
+    @property
+    def termination_condition(self) -> str:
+        """Termination condition of the last solve, ``""`` before any solve."""
+        if self._result is None:
+            return ""
+        return self._result.status.termination_condition.value
 
     def advance(
         self, fix: Mapping[str, Any] | None = None, **selection: Any
@@ -98,7 +113,13 @@ class WindowModel:
         disallow_rebuild: bool = False,
         **options: Any,
     ) -> WindowModel:
-        """Solve the window, updating an existing solver model in place when possible."""
+        """
+        Solve the window, updating an existing solver model in place when possible.
+
+        Check :attr:`status` and :attr:`termination_condition` afterwards: an
+        infeasible or otherwise failed window does not raise, but reading its
+        values does.
+        """
         from linopy.solvers import Solver
 
         if self._solver is None:
@@ -110,23 +131,29 @@ class WindowModel:
         self._result = self._solver.solve_window(
             self._matrices, disallow_rebuild=disallow_rebuild
         )
+        self._result.info()
         return self
 
     @property
-    def solution(self) -> Dataset:
-        """The window's variable values, one array per variable."""
-        return Dataset(self._primal(self._variables))
+    def solution(self) -> dict[str, DataArray]:
+        """
+        The window's variable values, one array per variable.
+
+        A mapping rather than a ``Dataset``, so that variables sharing a
+        dimension name with different coordinates keep their own coordinates.
+        """
+        return self._primal(self._variables)
 
     @property
-    def dual(self) -> Dataset:
-        """The window's constraint duals, one array per constraint."""
+    def dual(self) -> dict[str, DataArray]:
+        """The window's constraint duals, one array per constraint, see :attr:`solution`."""
         dual = self._solved().dual
         mat = self._matrices
         if dual.size != mat.clabels.size:
             raise AttributeError("The last solve returned no dual values.")
         values = dual * mat.con_scaling / mat.objective_scaling
         size = self._parent._cCounter
-        return Dataset(_scatter(self._constraints, mat.clabels, values, size))
+        return _scatter(self._constraints, mat.clabels, values, size)
 
     def __getitem__(self, name: str) -> DataArray:
         """A variable of the window, materialised on demand."""
@@ -139,11 +166,19 @@ class WindowModel:
         return _scatter(variables, mat.vlabels, values, self._parent._xCounter)
 
     def _solved(self) -> Solution:
-        if self._result is None:
+        result = self._result
+        if result is None:
             raise AttributeError(
                 "The window has not been solved. Call `solve()` before reading values."
             )
-        return self._result
+        solution = result.solution
+        if solution is None or solution.primal.size != self._matrices.vlabels.size:
+            raise AttributeError(
+                "The last solve returned no solution (status "
+                f"'{self.status}', termination condition "
+                f"'{self.termination_condition}')."
+            )
+        return solution
 
 
 def _scatter(
