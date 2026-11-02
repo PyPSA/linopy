@@ -140,6 +140,14 @@ with mathspec's semantics: an unnamed key column is joined on and kept, and
 ``by=`` may name a list of columns. ``within=`` partitions by one value column
 of a relation keyed by the stepped dimension alone.
 
+.. note::
+
+   A parameter, unlike a relation, is laid out on the full grid of its
+   dimensions once a declaration reads it, so its memory follows the grid, not
+   the rows of its table; ``store=True`` stores that grid. Reduce sparse data on
+   a large grid before attaching it, e.g. pass ``sum(c, over=t)`` as its own
+   parameter, summed with pandas.
+
 Missing rows
 ~~~~~~~~~~~~
 

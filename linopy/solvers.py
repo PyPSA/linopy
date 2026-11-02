@@ -3792,10 +3792,10 @@ class Mosek(Solver[None]):
         for k, v in self.solver_options.items():
             m.putparam(k, str(v))
 
+        # Always log to the console; additionally write to ``log_fn`` if given.
+        m.set_Stream(mosek.streamtype.log, sys.stdout.write)
         if log_fn is not None:
             m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
-        else:
-            m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
         if warmstart_fn is not None:
             m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
