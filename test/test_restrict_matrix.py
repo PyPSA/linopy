@@ -513,6 +513,72 @@ def test_infeasible_window_reports_status_and_raises_on_read(read: Any) -> None:
         read(window)
 
 
+def test_infeasible_window_has_no_objective_value() -> None:
+    window = infeasible_window()
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.objective.value is None
+
+
+def solved_window() -> WindowModel:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    assert window._result is not None
+    return window
+
+
+def test_ok_solve_without_a_solution_raises_on_read() -> None:
+    window = solved_window()
+    assert window._result is not None
+    window._result = replace(window._result, solution=None)
+
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="returned no solution"):
+        window.solution
+
+
+def test_failed_status_hides_returned_values() -> None:
+    from linopy.constants import Status
+
+    window = solved_window()
+    assert window._result is not None
+    window._result = replace(
+        window._result, status=Status.from_termination_condition("infeasible")
+    )
+
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="termination condition 'infeasible'"):
+        window.solution
+
+
+def test_solve_that_raises_drops_the_previous_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = solved_window()
+    assert window._solver is not None
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("solver crashed")
+
+    monkeypatch.setattr(window._solver, "solve_window", broken)
+    with pytest.raises(RuntimeError, match="solver crashed"):
+        window.solve()
+
+    assert window.status == "initialized"
+    assert window.objective.value is None
+
+
+def test_solve_logs_the_objective_in_model_units(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    window = kinds_model("C", TIME, scaling=10.0).restrict(time=TIME[:2])
+    with caplog.at_level(logging.INFO, logger="linopy.constants"):
+        window.solve(solver_name="highs", output_flag=False)
+
+    assert window.objective.value == pytest.approx(3.0)
+    assert "Objective: 3.00e+00" in caplog.text
+
+
 def test_status_resets_on_advance() -> None:
     window = linear_model().restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
